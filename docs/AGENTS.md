@@ -138,6 +138,12 @@ Always pass the exception object `e` (not `e.message`) as the last argument to `
 
 Never push to `origin` (or any remote) without an explicit instruction from the user to do so. Completing a commit or merge does not imply permission to push. After every local commit, stop and wait for the user's next instruction — do not chain `git push` unless the user's message explicitly asked for it.
 
+Never run `git push --force`, `git push --force-with-lease`, or any other force push without explicit user approval. Ask first even when fixing a mistaken push or rewriting history.
+
+When the user asks to squash commits before push, squash only commits not yet on the remote (`git log origin/<branch>..HEAD`), using `git reset --soft origin/<branch>` on the current branch. Do not rewrite the full repository history (`git checkout --orphan`) unless the user explicitly asks for that.
+
+Before pushing to a public repository, audit commit messages in the push range for `Co-authored-by:` trailers and employer or client brand names in subjects (keep employer references in local `facts.md` only). Scan file content too; see the `done` skill Step 2.7.
+
 ## Text Output Formatting
 
 Never use em dashes (—) in any generated text: code comments, PR review comments, commit messages, documentation, plans, or conversational replies. Use alternatives: commas, semicolons, colons, parentheses, or split into separate sentences. This rule applies unconditionally to all output surfaces.
@@ -275,6 +281,7 @@ Always run the `learn` skill before triggering or allowing context compaction. C
 - GitOps reconcilers revert imperative changes: a `kubectl rollout restart` (or similar) on an Argo CD / Flux-managed resource gets reverted on the next sync; the reliable path is to commit the change to git. Check for `argocd.argoproj.io/instance` labels before troubleshooting restart-didn't-restart symptoms. See `agent_workflow_guidelines.md` #32.
 - Follow the project PR template when automation depends on it: custom PR descriptions can silently disable CI behaviour gated on template fields (`[x]` checkbox, `isRestartRequired: true` metadata); preserve the template's machine-readable blocks. Squash-merge with a cleaned commit body is the second failure mode of the same rule: warn the user at PR creation and at merge time not to squash-merge with a cleared body. See `agent_workflow_guidelines.md` #33.
 - Check internal runbooks (Confluence, repo wiki, README) before diagnosing platform tooling: a 5-minute read often settles questions that would take an hour of cluster probing. See `agent_workflow_guidelines.md` #34.
+- Public repo push hygiene: never force-push without explicit approval; squash only unpushed commits unless the user asks for full history rewrite; audit commit messages and skills for `Co-authored-by:` trailers and employer brand names before push. See `agent_workflow_guidelines.md` #44.
 
 ## Brag document activity
 

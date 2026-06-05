@@ -164,8 +164,10 @@ gh api graphql -f query='{ repository(owner:"OWNER", name:"REPO") { pullRequest(
 
 Use when the user asks to squash a multi-commit feature branch into a single clean commit for PR review (e.g. with a `-squashed` postfix).
 
+**Scope:** squash only commits ahead of the remote base (`origin/<base>..HEAD`). On the current branch, `git reset --soft origin/<base>` then one commit is the default. Do not rewrite the entire repository history with `git checkout --orphan` unless the user explicitly asks for a full history squash.
+
 ### Steps
-1. Identify the base branch (check `git branch -a`; default may be `master` not `main`).
+1. Identify the base branch (check `git branch -a`; default may be `master` not `main`). Fetch and confirm the remote tip before squashing.
 2. Detect format-only files — exclude them from the commit to avoid cluttering the PR:
    ```bash
    git diff -w --ignore-blank-lines <base>..HEAD -- <file>

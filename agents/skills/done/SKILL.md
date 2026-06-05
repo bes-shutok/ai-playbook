@@ -93,10 +93,12 @@ Before committing, scan all uncommitted changes (including untracked files) for 
 **Check for:**
 - Hardcoded absolute paths containing usernames (e.g., `/Users/john/`, `/home/john/`)
 - Organization-specific domains, internal URLs, or service names
-- Employee names, email addresses, or identifiers
+- Employee names, email addresses, or identifiers (except copyright lines in `LICENSE.txt`)
 - API keys, tokens, passwords, or credentials
 - Project-specific ticket prefixes or internal naming that reveals client/employer identity
 - Environment names or internal infrastructure references
+- `Co-authored-by:` / `Co-Authored-By:` trailers in commit messages being pushed
+- Employer or client brand names in commit subjects (especially in vendored skills)
 
 **How to scan:**
 1. List all changed/untracked files: `git status --short`
@@ -105,6 +107,13 @@ Before committing, scan all uncommitted changes (including untracked files) for 
    git diff --cached -U0 | grep -iE '/Users/|/home/|\.atlassian\.net|@[a-z]+\.(com|io|net)|api[_-]?key|token|password|secret'
    ```
 3. For untracked files being staged, scan their full content.
+4. When a push is planned, audit commits in the push range (`origin/<branch>..HEAD` or the squashed commit about to be pushed):
+   ```bash
+   git log origin/<branch>..HEAD --format='%B---' | grep -iE 'Co-authored-by|Co-Authored-By|<employer-brand-from-facts>'
+   git log origin/<branch>..HEAD --format='%s' | grep -iE '<employer-brand-from-facts>'
+   rg -i '<employer-brand-from-facts>' --glob '!**/LICENSE.txt' agents/skills/
+   ```
+   Resolve employer-brand patterns from the user's facts document; never hardcode them in skill files.
 
 **If found:**
 - Replace personal paths with facts-document references or generic placeholders (e.g., `<your-org>.atlassian.net`, `~/Projects/<project>/`)

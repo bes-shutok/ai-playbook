@@ -613,3 +613,13 @@ Cross-project coding and workflow guidelines belong in version control at `instr
 43.1. Do not use a different repo folder name (for example `docs/projects/`) when runtime `shared_docs_dir` is already `~/Projects/.ai-playbook/`.
 
 43.2. Wire runtime with one directory symlink: `ln -sfn "<instructions_repo>/projects/.ai-playbook" ~/Projects/.ai-playbook` (see `agent-runtime-layout.md`).
+
+## 44. Public Repository Push Hygiene
+
+Before pushing to a public repository (especially vendored skills), verify both file content and commit history in the push range.
+
+44.1. Never force-push without explicit user approval, even when correcting a mistaken push.
+
+44.2. When asked to squash before push, squash only unpushed commits (`origin/<branch>..HEAD` via `git reset --soft origin/<branch>`). Do not rewrite the full repository history unless the user explicitly asks.
+
+44.3. Audit commit subjects and bodies in the push range for `Co-authored-by:` trailers and employer or client brand names. Scan vendored skill files for the same patterns. Copyright lines in `LICENSE.txt` are exempt.
