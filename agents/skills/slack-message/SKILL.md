@@ -1,16 +1,18 @@
 ---
 name: slack-message
-description: Use this skill whenever the user wants to send, post, draft, or update a Slack message. Triggers on phrases like "post to Slack", "send to channel", "put this in Slack", "message the team", "update the Slack post", or any time the user provides message content and a Slack channel or URL. Always draft first and show a formatted preview before posting. Never send without explicit user approval.
+description: Use this skill whenever the user wants to send, post, draft, or update a Slack message. Triggers on phrases like "post to Slack", "send to channel", "put this in Slack", "message the team", "update the Slack post", or any time the user provides message content and a Slack channel or URL. Always draft first, show a formatted preview, then save to Slack Drafts only. Never call slack_send_message; the user sends from the Slack client to avoid "Sent using @Cursor" attribution.
 ---
 
 # Slack Message Skill
 
 ## Core workflow
 
-1. **Draft first, always.** Format the message and show it in a fenced block for review. Never post without explicit approval.
+1. **Draft first, always.** Format the message and show it in a fenced block for review.
 2. Format the message per the rules below.
 3. Show the preview and ask: "Does this look good, or any changes?"
-4. Post only after approval.
+4. After approval, save with `slack_send_message_draft` only. Tell the user to open Slack → **Drafts & Sent** and click **Send** themselves.
+
+**Never use `slack_send_message`.** Direct MCP send adds a "Sent using @Cursor" footer. Draft-only keeps the post attributed to the user when they send from Slack.
 
 ## Showing the draft (required)
 
@@ -78,6 +80,12 @@ Slack's API does not support editing sent messages. When the user asks to edit o
 
 Extract the ID directly from a Slack URL: `https://.../archives/C0A7AKQT9AL` means the channel ID is `C0A7AKQT9AL`. Use `slack_search_channels` if only a channel name is given.
 
-## Sending
+## Saving the draft (required delivery method)
 
-Use `slack_send_message` with the channel ID. For thread replies, set `thread_ts` to the parent message timestamp.
+Use **`slack_send_message_draft`** with the channel ID and approved message text. Return the `channel_link` from the tool response so the user can open Slack and send.
+
+- For thread replies, set `thread_ts` to the parent message timestamp.
+- If a draft already exists for that channel, tell the user to edit or delete it in Slack first, then retry.
+- **`slack_send_message` is forbidden** in this skill, even when the user says "post", "send", or "notify". Those words mean save a draft and instruct the user to send from Slack.
+
+After saving, remind the user: *Open Slack → Drafts & Sent → review → Send.*
