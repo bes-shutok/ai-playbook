@@ -1,0 +1,300 @@
+---
+name: plans
+description: "Full plan lifecycle — create, edit, and complete implementation plans. Use when writing a new plan, updating an existing one, or marking a plan done (moving to docs/plans/completed/). Trigger phrases — \"create a plan\", \"create plan\", \"write a plan\", \"write plan\", \"make a plan\", \"implementation plan\", \"update the plan\", \"update plan\", \"plan for\", \"plan as per\", \"plan based on\", \"plan is done\", \"mark plan complete\", \"plan complete\"."
+---
+
+# Plans
+
+**Announce at start:** "I'm using the plans skill to create the implementation plan."
+
+**Exploration discipline:** When creating a plan, use targeted grep/glob to find file paths, class names, and method signatures. Do not read full test files or deeply explore implementation details beyond what is needed to write accurate file paths and test method names in plan tasks. Produce the plan file promptly — do not keep exploring after you have enough to write the tasks. **Before writing any exact file path in a plan task, verify it exists** with glob/bash — an unverified path is a review blocker that only the quality gate catches.
+
+**For detailed plan quality guidance:** If the project has `docs/domain/plan_quality_guidelines.md`, consult it for domain-specific examples and patterns. Otherwise, see Universal Patterns below.
+
+**When updating or optimizing an existing plan:** compare the plan against the current code shape, the RFC/PRD, and any predecessor phase plans before editing. Prefer patching the plan directly when improvements are clear. **Also verify all required sections are present** (`## Gist & Examples`, `## Review Scope`, `## Validation Commands`) — pre-existing plans may be missing them; add any absent sections before making other edits. **When the update notes that a code change is "already done", read the actual source file to verify the claim** — do not rely on session summaries or memory; an incorrect "already done" note becomes a review blocker.
+
+**Save plans to:** `docs/plans/<STORY-KEY>-<feature-name>.md` (story key prefix) or `docs/plans/YYYY-MM-DD-<feature-name>.md` (date prefix when no story key applies).
+
+**CRITICAL:** Plans go in `docs/plans/` in the project repository — never in tool-default locations (`.claude/plans/`, `.opencode/plans/`, `.codex/`, `.cursor/`, etc.). When a tool suggests its own default path, override it and write to `docs/plans/` instead.
+
+**For YourCompany projects:** Design RFCs go in `docs/rfcs/`. When a plan implements an RFC, add a one-line reference to it in the plan header (the optional line below the `# Plan:` title).
+When an RFC phase already has its own implementation Jira task, use that phase task key in the plan filename and title instead of the parent RFC/story key; keep the RFC reference line in the header for traceability.
+
+## Plan Format
+
+Every plan follows this exact structure — no variations:
+
+```markdown
+# Plan: <Feature Name>
+
+[Optional: one-line reference to RFC/PRD/ticket]
+
+## Gist & Examples
+
+[Human-readable explanation of what changes and why, with concrete examples]
+
+## Review Scope
+
+Files directly changed as part of this plan. Review feedback is accepted **only** for the files listed here.
+Any finding about a file not in this list must be rejected as out of scope.
+
+**Production code — in scope:**
+- `path/to/NewFile.ext` *(new)*
+- `path/to/ExistingFile.ext`
+
+**Tests — in scope:**
+- `path/to/NewTest.ext` *(new)*
+
+**Out of scope — reject all review feedback:**
+- `path/to/UnrelatedFile.ext` — reason
+
+## Validation Commands
+
+```bash
+<test-command>
+```
+
+### Task 1: [Name]
+
+Files:
+- `path/to/NewFile.ext` *(new)*
+- `path/to/ExistingFile.ext`
+
+- [ ] `SomeClassTest#methodName` — given `<input/scenario>`, expects `<outcome>`
+- [ ] `SomeClassTest#methodName_edgeCase` — given `<boundary condition>`, expects `<outcome>`
+- [ ] Run → expect RED: `<test-command>`
+- [ ] Write minimal implementation
+- [ ] Run → expect GREEN
+- [ ] Commit: `feat: <short description>`
+```
+
+**Test item format — required:**
+
+Every test item must be self-contained so a reader can understand what will be verified without reading the code:
+
+```
+- [ ] `ClassName#method_name` — given <scenario/inputs>, expects <outcome>
+```
+
+Examples:
+```
+- [ ] `DividendParserTest#test_usd_dividend_with_wht` — given a USD dividend row paired with a withholding-tax row, expects gross=50 EUR, wht=7.50 EUR, net=42.50 EUR using the configured rate
+- [ ] `DividendParserTest#test_missing_isin` — given a dividend row whose symbol has no ISIN in the security map, expects processing continues with `MISSING_ISIN_REQUIRES_ATTENTION` and an ERROR log
+- [ ] `CryptoFifoTest#test_partial_sell_placeholder` — given two buy lots of 1 BTC each and a sell of 3 BTC, expects a placeholder-buy entry for the unmatched 1 BTC with a warning log
+```
+
+**Never write a bare method name** (`SomeClassTest#method`) without the given/expects description — that tells the reader nothing about what the test covers or why it matters.
+
+**Rules:**
+- Title is always `# Plan: <name>` — no other heading format.
+- Every item is `- [ ]` — concrete and verifiable, never vague.
+- For behavior changes: use the RED → GREEN → commit TDD cycle above.
+- For non-behavior changes (config, docs, SQL): use concise `- [ ]` action items with exact file paths.
+- Include inline code snippets when the implementation pattern is non-obvious.
+- No meta-tasks ("review docs", "confirm scope").
+- When the RFC or rollout defines multiple deployable safe-ship phases, create one plan file per phase instead of one monolithic plan. Prefix filenames and titles with the explicit phase order (for example `phase-1`, `Phase 1 - ...`).
+- When a plan builds on prior completed phases, include a **Design Invariants (CR Guard)** section after the header listing prior-phase decisions that must not be compromised during code review, with specific rationale for each (e.g. RFC constraint ID, elimination trail reference).
+- Before finalizing a CR Guard, cross-check every design decision source (RFC rules, design notes, prior phase decisions, PRD constraints, team agreements) against the guard lines. Guards should protect both prohibitions ("must not do X") and positive design decisions ("must preserve Y", e.g. ungated fallthrough for future extensibility).
+- Every plan must include a **Review Scope** section (see below).
+- Every plan must include a **Gist & Examples** section (see Universal Patterns).
+- Before finalizing, verify pre-computation bug pattern checks are addressed (see Universal Patterns).
+
+## Documentation Impact Assessment
+
+Before writing any tasks, scan the project's `docs/` directory and identify which existing docs need updating for this feature. Route new content to the right place — never use `README.md` as a catch-all.
+
+**Step: list existing docs**
+```bash
+ls docs/
+```
+
+**Routing rules:**
+| What the feature introduces | Where it goes |
+|---|---|
+| New config properties, defaults, validation | `README.md` — config section only |
+| New metrics (counters, latency, reservations) | `docs/metrics.md` (or equivalent metrics reference) |
+| New architectural/engineering conventions | `docs/project-guidelines.md` as a numbered rule |
+| New workflow steps or pipeline behavior | The relevant workflow doc |
+| New API contracts or BO behavior | The relevant API or workflow doc |
+| Time-bounded migration/rollout instructions | PR description only — never a permanent doc |
+| Operational runbook content (rollout steps, debugging tips) | Ops wiki or PR description — not `README.md` or `docs/` |
+
+**For each affected existing doc:** add an explicit `- [ ]` task in the plan with the exact file path and what section to update.
+
+**For genuinely new reference material with no existing home:** add a `- [ ]` task to create the appropriate doc under `docs/` with the correct canonical name.
+
+**Do not document in `README.md`:** time-bounded migration notes, out-of-scope changes, operational runbook content, changes from prior phases mislabelled as this one, or unverified runtime/startup behavior claims.
+
+## Review Scope
+
+Every plan must contain a `## Review Scope` section that explicitly lists which files are in scope for code review. Review agents must reject all findings about files not in this list.
+
+**When to generate it:**
+- At plan creation time: list every file referenced in the plan's Tasks sections. Mark new files with *(new)*.
+- When updating a plan mid-feature: re-derive from `git diff <base-branch>..HEAD --name-only` and classify each file as in-scope or out-of-scope based on whether it was changed to implement this feature's tasks.
+
+**How to derive in-scope files when building on a prior branch:**
+```bash
+git diff <prior-phase-branch>..HEAD --name-only
+```
+Classify each file as:
+- **In scope** — changed to implement a task defined in this plan (new feature code, tests for it, config, docs).
+- **Out of scope** — present in the diff due to incidental cleanup, review-driven fixes of pre-existing issues in unrelated components, or formatter noise. List these explicitly with a one-line reason.
+
+**Format:**
+```markdown
+## Review Scope
+
+Files directly changed as part of this plan. Review feedback is accepted **only** for the files listed here.
+Any finding about a file not in this list must be rejected as out of scope.
+
+**Production code — in scope:**
+- `path/to/NewFile.ext` *(new)*
+- `path/to/ExistingFile.ext`
+
+**Tests — in scope:**
+- `path/to/NewTest.ext` *(new)*
+- `path/to/ExistingTest.ext`
+
+**Documentation — scope-linked (not a closed file list):**
+
+List production code and tests explicitly (review is file-scoped). For documentation, use a **scope-linked** policy instead of enumerating every doc path:
+
+- Any file under `docs/` (and `README.md` only when it catalogs endpoints or auth touched by the feature) may be edited when the change is **substantively required** to keep docs aligned with the feature (same change set as OpenAPI/transport; project-guidelines.md #70).
+- Task 6 (or equivalent doc-closure task) must include `rg`/`grep` over `docs/` for stale references, not only pre-listed files.
+- Review accepts doc feedback that meets the scope bar; reject unrelated doc refactors.
+- Give **likely touch points** as examples, not an exhaustive allow-list — omitting paths (e.g. BFF contract docs) must not block required sync.
+
+**Out of scope — reject all review feedback:**
+- `path/to/UnrelatedFile.ext` — one-line reason
+```
+
+**Placement:** immediately after the plan header (RFC reference line) and before `## Design Invariants` (if present) or `## Validation Commands`.
+
+**Partially-in-scope files:** when a large existing file is in scope for only specific methods, name those methods explicitly and add a freeze note: "All other methods in this file are frozen — reject any review finding that touches them." A file listed as in scope without a method-level constraint is treated as fully open, which invites out-of-scope fixes during review. See `agent_workflow_guidelines.md §15`.
+
+**Out-of-scope bug findings:** when a reviewer raises a real bug in a method that is frozen or out of scope, document it as a separate ticket with the file, method, and a one-line description. Decline the finding with "out of scope for this PR — tracked as [ticket/note]". Do not fix it in-place. See `agent_workflow_guidelines.md §15`.
+
+**How to revert out-of-scope files to the base branch:**
+
+Before reverting any candidate file, verify that no in-scope file calls any API (function/method signature, parameter type, property name) that was changed in it. If such a dependency exists, the file is in-scope — do not revert it; move it to the in-scope list with a one-line reason instead. See `agent_workflow_guidelines.md §11`.
+
+For modified files:
+```bash
+git checkout <prior-phase-branch> -- path/to/file.ext
+```
+For newly added files (not present in the base branch):
+```bash
+git rm path/to/NewFile.ext
+```
+Verify the build compiles after reverting. A compile error is hard evidence of a missed API dependency — un-revert the file and reclassify it.
+
+## Plan Quality Gate
+
+Before finalizing a new or updated plan, run the `review-plan` skill as a sub-agent:
+
+**Execution:** Launch a `general-purpose` background agent (via the `task` tool) with the full plan content and `review-plan` skill instructions. The agent performs the review independently using 9 parallel sub-agents from the shared review-agents catalog (quality, implementation, architecture, testing, simplification, documentation, security, concurrency, premortem) plus an inline consistency agent, and returns structured findings. Do NOT run the review inline — always delegate to a sub-agent so the main context stays clean.
+
+**Sub-agent prompt template:**
+```
+You are running the review-plan skill. Review the following implementation plan by launching
+9 parallel sub-agents from the shared review-agents catalog (quality, implementation, architecture,
+testing, simplification, documentation, security, concurrency, premortem) plus an inline consistency
+agent, as described in the skill instructions.
+
+Read the actual source files referenced in the plan to verify assumptions about data types,
+function signatures, pipeline ordering, and return contracts.
+
+Write the review output to: docs/reviews/YYYY-MM-DD-plan-review-<feature-name>.md
+
+Then amend the plan with any Blocker fixes and Mitigation additions.
+
+<plan content here>
+```
+
+**If the sub-agent has not completed within 15 minutes**, proceed with an inline spot-check: read the files referenced in the plan, verify branch counts (count all conditional branches in branching constructs), verify helper signatures against actual function definitions, and verify all mutated parameters are listed. Continue working; incorporate the agent's findings when it eventually completes. Do not wait idle.
+
+**After the sub-agent completes**, incorporate findings into the plan from the review artifact — do not re-run plan analysis inline:
+1. **Block** findings → add or revise plan tasks to address them
+2. **Mitigate** findings → add as test cases or validation steps
+3. **Monitor** findings → note in the plan's `## Monitor` section; **always resolve ownership**: if an existing plan task or high-level task doc covers the area, assign the item there and cross-reference both ways; if no relevant task exists, suggest creating a new story/task. Never leave a Monitor item as "tracked for a follow-up" without naming its owner task or proposing a new one.
+4. Review output is saved to `docs/reviews/YYYY-MM-DD-plan-review-<feature-name>.md`
+5. Add a reference line in the plan header: `Plan review: docs/reviews/<filename>.md`
+6. Re-check the plan after incorporating findings
+7. **Repeat until zero blockers:** after incorporating all findings, re-run the review sub-agent with a new numbered review file (e.g. `…-r2.md`, `…-r3.md`). Continue the loop until the review returns zero blockers. One review round is not sufficient when the plan has multiple new or substantially rewritten tasks.
+
+Then verify these structural failure modes and fix them in the plan:
+
+- **Current ownership:** if a prior phase extracted or renamed the owner of behavior, put new work in the final owner, not the old location. Avoid "implement in A, then move to B" churn unless the refactor itself is the goal.
+- **Coherent commits:** each task ending in a commit must leave the code compiling. Do not split one required model/signature propagation across multiple commits when the intermediate state cannot compile.
+- **Right-layer tests:** place failing tests at the layer that can observe the behavior. A mocked downstream collaborator cannot verify logic owned by that collaborator.
+- **Side-effect safety:** when adding a guard around an irreversible side effect, specify failure semantics explicitly (claim/confirm/release, fail-open/fail-closed, TTL) so retries do not skip work that never succeeded.
+- **Existing constants and config:** verify whether metrics, properties, flags, or key prefixes already exist before planning new ones. Reuse existing names unless the RFC requires a new external contract.
+- **Validation minimality:** avoid redundant validation commands. Prefer the narrowest command that proves the task, and a final scoped `verify` when it subsumes compile/test.
+- **Language-specific testing traps:** before finalizing test tasks, link to the language guidelines for this project (e.g. `kotlin_guidelines.md`, `python_guidelines.md`) in the plan header so the implementer has the relevant silent-failure patterns at hand. For metrics coverage, also link to the applicable company or project guidelines.
+- **Branch count verification:** when specifying helper extraction from a branching function, count all conditional branches in the function body before writing the task. An incomplete branch list silently omits emission paths.
+
+## TDD Task Ordering
+
+Plan tasks MUST be ordered so that failing tests come before implementation:
+1. **RED tasks first** — write failing tests for the new behavior
+2. **GREEN tasks after** — implement the minimal code to pass
+3. **Refactor tasks last** — DDD extraction, naming, cleanup
+
+Never place implementation tasks before their corresponding test tasks. Group related RED/GREEN pairs when tests and implementation are tightly coupled.
+When a phase plan contains multiple code changes, order tasks so earlier tasks establish prerequisites for later ones within that same phase (for example retry semantics before activating new traffic paths).
+
+**Pure-refactoring tasks (no new behavior):** use concise `- [ ]` action items instead of RED→GREEN cycles. However, when the refactor risks breaking unstated invariants (ordering, error attribution, mutable side effects, pre-condition checks), add characterization test items in `given/expects` format. These run GREEN before the refactor and must remain GREEN after. Write them as `- [ ] Run → expect GREEN (characterization: captures existing behaviour before refactor)`, not RED→GREEN. Reference existing tests by class and method name where they cover the invariant; add a new test only for invariants with no existing coverage.
+
+## DDD Extraction
+
+When a plan modifies domain types (value objects, entities, enums) that live in a large file (>1k lines), include a task for evaluating extraction to a dedicated domain module. Specifically:
+- If the affected types form a cohesive aggregate (e.g., related domain types that work together), propose extracting them to a new module under `domain/` or `application/`.
+- Place the extraction task AFTER the GREEN tasks (implementation works) but BEFORE the final validation task.
+- The extraction task must verify no circular imports and update all import paths in tests and production code.
+
+## Plan Lifecycle
+
+- When all items are `[x]`, move the file to `docs/plans/completed/`.
+- When superseded, delete rather than leaving stale `[ ]` items.
+
+## Universal Patterns
+
+Core plan quality principles applicable across all projects and languages:
+
+- **Gist & Examples section**: Every plan must include a human-readable "Gist & Examples" section after the header that explains: what changes (plain language), why the change is needed (problem statement or context), concrete input/output examples showing before/after behavior, and edge cases that motivated design decisions. This serves as the on-ramp for both implementers and reviewers who need context before diving into tasks.
+
+- **Core concepts**: Edge cases (boundary conditions requiring explicit handling), negative requirements (what must NOT be done), acceptance criteria (definition of done), validation sequence (ordered steps in which processing must occur).
+
+- **Pattern-specific specifications**: Use exact pattern matching with start/end anchors (not `startswith()` or broad regex), include examples of what NOT to match, explicitly state what is out of scope.
+
+- **Data classification specifications**: Define the source of truth, list explicit exclusions with reasons, handle edge cases (collisions, ambiguous values), specify fallback behavior.
+
+- **Error handling specifications**: State what exception type to raise, what cleanup must occur before re-raising, what must NOT happen (silent continuation, partial output).
+
+- **Pre-computation bug pattern checks**: Before finalizing tasks involving data processing, verify: unit verification (correct units), temporal gating (earlier events cannot consume later state), empty string handling (aggregation min/max filters), boundary values (tests at exact threshold), zero-cost propagation (flagged with review reason), fee/completeness (all components included), error scope (row-level parse errors caught per-row).
+
+- **Stateful helper contracts:** when specifying a helper function that mutates shared state (dict, set, deque passed by reference), list ALL mutated parameters in the function signature spec — including those mutated as side effects that do not appear in the return type. A helper signature that omits a mutated parameter is an incomplete contract and will produce incorrect extraction.
+
+- **Test specification format**: Every test item must use the `given/expects` format: `` `ClassName#method` — given <scenario>, expects <outcome> ``. Include positive tests (happy path), negative tests (what must NOT happen), edge case tests (boundary conditions), and error path tests (exception handling and cleanup). A bare method name without a scenario description is not acceptable — the plan must be readable without opening the test file.
+
+- **Integration testing requirements**: For multi-step pipelines, include integration tests that exercise the full flow, not just unit tests for individual components.
+
+- **Boundary test checklist**: When implementing threshold-based logic (>=, <=, >, <), always include tests at the exact boundary value. Off-by-one errors at boundaries are common sources of incorrect behavior.
+
+Projects with detailed plan quality guidelines should document them in a `docs/domain/` or equivalent location; the generic skill provides only the universal patterns above.
+
+## Execution Handoff
+
+After saving, offer:
+
+> "Plan saved to `docs/plans/<filename>.md`. Ready to execute with `execute-plan`, in this session manually, or hand off to a new session?"
+
+**Automated execution:** Use the `execute-plan` skill. It orchestrates sub-agents to implement one task at a time (tests must pass), mark checkboxes, run `done` after each task, then run review/fix loops (with `done` after each review iteration) until **two consecutive** clear review rounds (zero remaining Medium+ after `receiving-code-review` triage), archive the plan to `docs/plans/completed/`, and remove `docs/tmp/execute-plan/<slug>/` on success only. The parent agent must not implement tasks inline or batch commits — see `execute-plan` anti-patterns.
+
+**Manual execution in this session:** Use `tdd-guide` and `unit-test-runner` per task (fresh output before marking the task complete). One task per commit. Use `done` only when the user ends the session (learn + commit across repos). Do not use this path when the user asked for `execute-plan` / `/execute-plan`.
+
+## Integration Points
+
+### With `execute-plan` skill
+Consumer of plan format, task order, `## Validation Commands`, `## Review Scope`, per-task commit lines, and completed-plan archival. After plan creation or update, hand off to `execute-plan` when the user wants automated iterative implementation with per-task commits and post-implementation review loops.

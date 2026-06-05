@@ -1,0 +1,34 @@
+# Repo facts (docs/facts.md) — example
+
+Copy to `docs/facts.md` in each repo (gitignore `docs/facts.md` if the repo is public and facts are sensitive).
+
+## Repo identity
+
+- **Repository**: `<name>`
+- **Purpose**: one-line description
+
+## Related Jira tasks
+
+Internal scoping only — do not cite this file from RFCs, PRs, or code comments.
+
+| Ticket | Relevance |
+|--------|-----------|
+| `CRM-NNNN` | Primary story for current work |
+
+## Workspace path keys (machine-specific)
+
+Usually defined in `~/.ai-playbook/facts.md`, not in public repos:
+
+| Key | Purpose |
+|-----|---------|
+| `instructions_repo` | Clone path of this playbook (for Codex/Claude/Cursor `@` entrypoints) |
+| `personal_projects_root` | Root directory for personal / pet-project repositories |
+| `company_projects_root` | Root directory for company work repositories |
+
+## Environment-specific keys (optional)
+
+Used by shared skills when this repo defines overrides:
+
+| Key | Value |
+|-----|-------|
+| `shared_docs_dir` | `~/Projects/.ai-playbook/` |

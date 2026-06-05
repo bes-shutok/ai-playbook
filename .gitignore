@@ -1,0 +1,6 @@
+/.idea/
+.DS_Store
+
+# Local facts override (use docs/facts.md.example as template)
+/docs/facts.md
+/docs/reviews
