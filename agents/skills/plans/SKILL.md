@@ -221,7 +221,8 @@ Then amend the plan with any Blocker fixes and Mitigation additions.
 4. Review output is saved to `docs/reviews/YYYY-MM-DD-plan-review-<feature-name>.md`
 5. Add a reference line in the plan header: `Plan review: docs/reviews/<filename>.md`
 6. Re-check the plan after incorporating findings
-7. **Repeat until zero blockers:** after incorporating all findings, re-run the review sub-agent with a new numbered review file (e.g. `…-r2.md`, `…-r3.md`). Continue the loop until the review returns zero blockers. One review round is not sufficient when the plan has multiple new or substantially rewritten tasks.
+7. **Repeat until zero blockers (minimum 2 rounds):** after incorporating all findings, re-run the review sub-agent with a new numbered review file (e.g. `…-r2.md`, `…-r3.md`). Continue the loop until the review returns zero blockers. One review round is not sufficient when the plan has multiple new or substantially rewritten tasks.
+8. **Minimum two reviews:** run at least two complete review rounds (r1, r2) even if the first review returns zero blockers. This catches issues that emerge only after applying fixes from the first review (new blockers, incomplete fixes, or cascading changes). Only stop when both: (a) the latest review round has zero blockers, AND (b) at least two review rounds have completed.
 
 Then verify these structural failure modes and fix them in the plan:
 
