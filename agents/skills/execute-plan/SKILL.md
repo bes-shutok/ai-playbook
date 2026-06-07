@@ -15,7 +15,7 @@ description: >
 
 **Announce at start:** "I'm using the execute-plan skill to implement `<plan-path>`."
 
-Orchestrate plan execution from the main agent. Delegate heavy work to sub-agents so context stays clean. Do not implement tasks inline unless a sub-agent fails and you must recover.
+Orchestrate plan execution from the main agent. Always run Phase 0 (branch setup) first — do not skip it. Delegate heavy work to sub-agents so context stays clean. Do not implement tasks inline unless a sub-agent fails and you must recover.
 
 **Announcement is not execution.** Saying you are using this skill does not satisfy it. The parent agent must run the Phase 1 loop (implement sub-agent → verify → mark checkboxes → **done sub-agent** → report) for **each** task. Passing tests or marking all checkboxes in one parent session is **not** a substitute for per-task `done` commits.
 
@@ -23,6 +23,7 @@ Orchestrate plan execution from the main agent. Delegate heavy work to sub-agent
 
 | Anti-pattern | Why it violates the skill |
 |--------------|---------------------------|
+| Skip Phase 0 and start Phase 1 immediately | Branch setup is mandatory — work must happen on a known, tracked branch with user confirmation; skipping risks mixing plan work with unrelated changes or detached HEAD |
 | Parent implements Task 1–N inline in one turn | Skips implement sub-agents and per-task `done`; only inline recovery after sub-agent failure is allowed |
 | Green tests → mark all `[x]` → archive plan | Checkboxes and archive belong **after** each task's `done`, not batched at the end |
 | Skip Step 1.4 because "code already works" | `done` is the **only** commit path during Phase 1; tests passing does not commit |
@@ -55,6 +56,95 @@ See [agent-logs.md](agent-logs.md) for path convention, required sections, and m
 
 **Read first:** [subagent-prompts.md](subagent-prompts.md) for copy-paste prompt templates; [agent-logs.md](agent-logs.md) for log paths and handoff rules.
 
+## Phase 0: Branch Setup (Run Once at Start)
+
+Before any implementation work, verify and set up a clean branch for this plan execution.
+
+**Announce at start:** "Before executing the plan, I'll set up a dedicated branch. This ensures clean history and allows safe review/rollback."
+
+### Step 0.1 — Propose branch creation
+
+Ask the user for confirmation to create a new branch:
+
+**Branch naming convention:**
+
+1. Extract Jira task ID from plan name if present (pattern: `[A-Z]+-\d+`, e.g. `PROJ-1234`)
+2. If found: branch name = `<JIRA-TASKID>-<short-description>`
+3. If not found: branch name = `YYYY-MM-DD-<short-description>`
+
+`<short-description>` is derived from the plan title, kebab-case, max ~40 chars.
+
+Ask the user:
+
+```
+I'll create a new branch for this plan execution:
+- Base: current branch (<current-branch>)
+- New branch name: <computed-branch-name>
+- This branch will track origin (push -u on first commit)
+
+Proceed with branch creation? (yes/no)
+```
+
+Wait for explicit user confirmation before proceeding.
+
+### Step 0.2 — Create and push the branch
+
+If the user confirms (yes):
+
+```bash
+# Read plan title (first heading after "#")
+PLAN_TITLE="$(grep -m1 '^# ' <plan-path> | sed 's/^# //' | sed 's/ .*//')"
+PLAN_BASE="$(basename -s .md <plan-path> | sed 's/docs\/plans\///')"
+
+# Extract Jira task ID if present (pattern: LETTERS-NUMBERS, e.g. PROJ-1234)
+JIRA_ID="$(echo "$PLAN_TITLE" | grep -oE '[A-Z]+-[0-9]+' | head -1)"
+
+# Derive branch name
+if [ -n "$JIRA_ID" ]; then
+    # Use Jira ID + kebab-case short description from plan title
+    SHORT_DESC="$(echo "$PLAN_TITLE" | sed 's/'"$JIRA_ID"'[:// ]*\([^A-Z].*\)/\1/' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g' | sed 's/-$//')"
+    BRANCH_NAME="${JIRA_ID}-${SHORT_DESC}"
+else
+    # Use date + kebab-case short description from plan slug/title
+    SHORT_DESC="$(echo "$PLAN_BASE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g' | cut -c1-40)"
+    BRANCH_NAME="$(date +%Y-%m-%d)-${SHORT_DESC}"
+fi
+
+# Create the new branch from the current HEAD
+git checkout -b "$BRANCH_NAME"
+
+# Set up tracking and push to origin (empty branch, before any work)
+git push -u origin "$BRANCH_NAME"
+
+# Report success
+echo "Created and pushed branch: $BRANCH_NAME (tracking origin/$BRANCH_NAME)"
+```
+
+If the user declines (no):
+
+```
+Understood. I'll proceed on the current branch: <current-branch>
+Note: This means plan work will mix with any existing uncommitted changes.
+```
+
+### Step 0.3 — Verify branch state
+
+Before proceeding to Phase 1:
+
+```bash
+# Verify we're on a branch (not detached HEAD)
+git rev-parse --abbrev-ref HEAD
+
+# If origin tracking exists, verify it matches the current branch
+git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "No tracking branch yet"
+```
+
+If detached HEAD: refuse to proceed and ask the user to create or switch to a branch first.
+
+Report the final branch state to the user before starting Phase 1.
+
+**Hard gate:** Do not proceed to Phase 1 until branch setup is complete or explicitly declined by the user.
+
 ## Configuration (from facts document)
 
 | Key | Purpose | Fallback |
@@ -66,13 +156,14 @@ See [agent-logs.md](agent-logs.md) for path convention, required sections, and m
 
 The main agent (you) only:
 
-1. Loads and parses the plan file.
-2. Identifies the **topmost incomplete task** (first `### Task N:` that still has any `- [ ]` item).
-3. Launches sub-agents in sequence (never parallel for implement/done/review-fix).
-4. Verifies sub-agent exit criteria before advancing (artifact exists, tests pass, log non-empty) — **does not redo sub-agent work** (see `how-to-write-skills` Orchestrator / Sub-Agent Boundary).
-5. Updates plan checkboxes (`- [ ]` → `- [x]`) after a task passes verification.
-6. Launches the **`done` sub-agent after every task** (Step 1.4) and after **every review iteration** (Step 3.4).
-7. Reports progress to the user between phases (include last commit SHA when `done` finished; summarize worker outcomes by path/count — do not paste full worker logs into orchestrator context).
+1. Runs Phase 0 (branch setup) at the start, with user confirmation, before any implementation work.
+2. Loads and parses the plan file.
+3. Identifies the **topmost incomplete task** (first `### Task N:` that still has any `- [ ]` item).
+4. Launches sub-agents in sequence (never parallel for implement/done/review-fix).
+5. Verifies sub-agent exit criteria before advancing (artifact exists, tests pass, log non-empty) — **does not redo sub-agent work** (see `how-to-write-skills` Orchestrator / Sub-Agent Boundary).
+6. Updates plan checkboxes (`- [ ]` → `- [x]`) after a task passes verification.
+7. Launches the **`done` sub-agent after every task** (Step 1.4) and after **every review iteration** (Step 3.4).
+8. Reports progress to the user between phases (include last commit SHA when `done` finished; summarize worker outcomes by path/count — do not paste full worker logs into orchestrator context).
 
 Do not skip verification. Do not mark checkboxes before tests pass. Do not start the next task until Step 1.4 succeeds. Do not re-implement, re-review, or re-analyze inline what a sub-agent was launched to do.
 
@@ -303,15 +394,16 @@ Report successful plan completion to the user, including that session tmp logs w
 
 ## Hard Gates
 
-1. **No checkbox without green tests** — never mark `- [x]` before validation passes.
-2. **One task per implement iteration** — do not batch multiple tasks in one implement sub-agent.
-3. **Done after every task** — launch the `done` **sub-agent** (Step 1.4) and verify a commit at HEAD before starting the next task; overrides the plans skill handoff default of session-end-only `done`. Parent-agent implementation does not satisfy this gate.
-4. **Done after every review iteration** — launch the `done` **sub-agent** (Step 3.4) before the next review round; address-review fixes must not accumulate uncommitted across iterations.
-5. **Review scope is law** — reject or drop out-of-scope review findings per the plan's `## Review Scope`.
-6. **Two consecutive clear review rounds** — Phase 3 exits only when the last two iterations had zero **remaining Medium+** after `receiving-code-review` triage (`consecutive_clear_rounds >= 2`); provisional `doing-code-review` counts alone do not satisfy this gate.
-7. **Fresh test output** — never cite stale run results; re-run commands before claiming pass.
-8. **Preceding-step logs before learn** — worker sub-agents write logs; each `done` reads only its immediately prior step's log(s). Missing required log blocks commit.
-9. **Tmp cleanup on success only** — remove `docs/tmp/execute-plan/<PLAN_SLUG>/` in Phase 5 after the success checklist passes; never on failure, safety-cap stop, or user interrupt.
+1. **Branch setup before implementation** — Phase 0 must run and complete (branch created with tracking or explicitly declined by user) before Phase 1 begins. Never skip branch setup or start work on an unknown/unverified branch state.
+2. **No checkbox without green tests** — never mark `- [x]` before validation passes.
+3. **One task per implement iteration** — do not batch multiple tasks in one implement sub-agent.
+4. **Done after every task** — launch the `done` **sub-agent** (Step 1.4) and verify a commit at HEAD before starting the next task; overrides the plans skill handoff default of session-end-only `done`. Parent-agent implementation does not satisfy this gate.
+5. **Done after every review iteration** — launch the `done` **sub-agent** (Step 3.4) before the next review round; address-review fixes must not accumulate uncommitted across iterations.
+6. **Review scope is law** — reject or drop out-of-scope review findings per the plan's `## Review Scope`.
+7. **Two consecutive clear review rounds** — Phase 3 exits only when the last two iterations had zero **remaining Medium+** after `receiving-code-review` triage (`consecutive_clear_rounds >= 2`); provisional `doing-code-review` counts alone do not satisfy this gate.
+8. **Fresh test output** — never cite stale run results; re-run commands before claiming pass.
+9. **Preceding-step logs before learn** — worker sub-agents write logs; each `done` reads only its immediately prior step's log(s). Missing required log blocks commit.
+10. **Tmp cleanup on success only** — remove `docs/tmp/execute-plan/<PLAN_SLUG>/` in Phase 5 after the success checklist passes; never on failure, safety-cap stop, or user interrupt.
 
 ## User Interruption
 
