@@ -554,6 +554,7 @@ api-design-principles/
 - ✅ Test skill discovery and triggering
 - ✅ Use lowercase-with-hyphens for names
 - ✅ Place skills in `.Codex/skills/`
+- ✅ Write agent-agnostic skills — describe required capabilities (WHAT) without prescribing specific tool implementations (HOW)
 
 ### DON'T:
 - ❌ Write vague descriptions without triggers
@@ -563,6 +564,7 @@ api-design-principles/
 - ❌ Forget to test the skill
 - ❌ Use camelCase or spaces in names
 - ❌ Mix details with essentials
+- ❌ Hardcode tool references — instead of "use Task tool with mode: background", write "use your agent's sub-agent execution capability (e.g., Agent tool with subagent_type, Task tool with mode, or equivalent)"
 
 ## Security Considerations
 

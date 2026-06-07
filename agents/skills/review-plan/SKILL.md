@@ -42,8 +42,9 @@ Do not use for:
 
 ## Step 2: Launch Sub-Agents in Parallel
 
-Launch ALL review agents simultaneously using the `task` tool with `mode: "background"`,
-agent type `general-purpose`. Wait for all to complete before proceeding.
+Launch ALL review agents simultaneously using your agent's parallel execution capability
+(e.g., background execution mode, parallel sub-agent launch, or equivalent mechanism).
+Wait for all agents to complete before proceeding.
 
 Each agent receives:
 1. The full plan content

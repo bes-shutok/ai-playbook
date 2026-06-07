@@ -185,7 +185,9 @@ Rules:
 
 ### Step 1.2 — Launch implement sub-agent
 
-Launch a `generalPurpose` background agent via the `Task` tool. Use the **Implement Task** template from [subagent-prompts.md](subagent-prompts.md).
+Launch a general-purpose sub-agent using your agent's background execution capability
+(e.g., Agent tool with subagent_type, Task tool with mode, or equivalent mechanism).
+Use the **Implement Task** template from [subagent-prompts.md](subagent-prompts.md).
 
 Pass: plan file path, task number/title, full task section text, `## Validation Commands`, `Files:` list, and `<IMPLEMENT_LOG_PATH>` (see [agent-logs.md](agent-logs.md)).
 
@@ -205,7 +207,8 @@ After verification passes, update the plan file: change every completed `- [ ]` 
 
 ### Step 1.4 — Launch done sub-agent
 
-Launch a `generalPurpose` sub-agent with the **Done (per task)** template from [subagent-prompts.md](subagent-prompts.md).
+Launch a general-purpose sub-agent using your agent's sub-agent execution capability.
+Use the **Done (per task)** template from [subagent-prompts.md](subagent-prompts.md).
 
 Pass the plan's commit line when present (e.g. `Commit: feat: ...`), `<IMPLEMENT_LOG_PATH>` for the task just completed, and `manifest.md` path. The sub-agent **reads the implement log before `learn`**, then runs the full `done` skill (learn → docs-branch → commit) scoped to this task's changes.
 
@@ -241,7 +244,8 @@ Repeat iterations until the Step 3.3/3.4 exit condition is met (two consecutive 
 
 ### Step 3.1 — Launch review sub-agent
 
-Launch a `generalPurpose` sub-agent with the **Code Review** template from [subagent-prompts.md](subagent-prompts.md).
+Launch a general-purpose sub-agent using your agent's sub-agent execution capability.
+Use the **Code Review** template from [subagent-prompts.md](subagent-prompts.md).
 
 The sub-agent runs `doing-code-review` in **branch review** mode (not PR mode unless the user supplied a PR URL). It must honor the plan's `## Review Scope` — findings outside scope are dropped.
 
@@ -275,7 +279,8 @@ Compare rounds: if a finding is identical to a prior round and was already fixed
 
 If any Critical/High/Medium `pending` findings exist from Step 3.2:
 
-Launch a `generalPurpose` sub-agent with the **Address Review** template from [subagent-prompts.md](subagent-prompts.md).
+Launch a general-purpose sub-agent using your agent's sub-agent execution capability.
+Use the **Address Review** template from [subagent-prompts.md](subagent-prompts.md).
 
 The sub-agent runs `receiving-code-review` against the staging doc (not GitHub threads unless a PR exists). It triages provisional findings: implements valid fixes, marks false positives/out-of-scope as `drop`, marks addressed items `done`, and re-runs validation commands.
 
@@ -311,7 +316,8 @@ Record the current count in `manifest.md`.
 
 **Loop exit condition:** `consecutive_clear_rounds >= 2` after updating the streak for this round. One clear round is **not** enough — after the first, run `done` below, then start the next review round (Step 3.1 with `N+1`) before exiting Phase 3.
 
-Launch a `generalPurpose` sub-agent with the **Done (per review iteration)** template from [subagent-prompts.md](subagent-prompts.md).
+Launch a general-purpose sub-agent using your agent's sub-agent execution capability.
+Use the **Done (per review iteration)** template from [subagent-prompts.md](subagent-prompts.md).
 
 Pass review round number, review doc path, whether address-review ran, and **preceding-step log paths only**:
 
@@ -379,14 +385,15 @@ Report successful plan completion to the user, including that session tmp logs w
 
 ## Sub-Agent Launch Rules
 
-| Sub-agent | Tool | `subagent_type` | Parallel OK? |
-|-----------|------|-----------------|--------------|
-| Implement task | `Task` | `generalPurpose` | No |
-| Done (per task / per review iteration) | `Task` | `generalPurpose` | No |
-| Code review | `Task` | `generalPurpose` | No |
-| Address review | `Task` | `generalPurpose` | No |
+| Sub-agent | Type | Parallel OK? |
+|-----------|------|--------------|
+| Implement task | General-purpose | No |
+| Done (per task / per review iteration) | General-purpose | No |
+| Code review | General-purpose | No |
+| Address review | General-purpose | No |
 
 - Always wait for each sub-agent to finish before launching the next.
+- Use your agent's sub-agent execution capability (e.g., Agent tool with subagent_type, Task tool with mode, or equivalent mechanism).
 - Pass absolute plan path and task excerpt in every prompt.
 - Sub-agents must read the referenced skills (`tdd-guide`, `unit-test-runner`, `done`, `doing-code-review`, `receiving-code-review`) from `~/.agents/skills/` (or `agents/skills/` in the playbook repo).
 
