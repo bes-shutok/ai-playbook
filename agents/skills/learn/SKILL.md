@@ -47,7 +47,7 @@ Classify each lesson as exactly one:
 - LLM-only example/playbook
 - Temporary artifact
 
-**Important: style and wording corrections are lessons too.** If a user corrects the tone, phrasing, vocabulary, or formatting of generated output (e.g. "remove long dashes", "use simpler words", "prefer globish"), treat it as a lesson and capture it as a skill rule — not just apply it to the current artifact and move on.
+**Important: style and wording corrections are lessons too.** If a user corrects the tone, phrasing, vocabulary, or formatting of generated output (e.g. "remove long dashes", "use simpler words", "prefer globish", "use API contract not wire contract"), treat it as a lesson and capture it as a skill rule — not just apply it to the current artifact and move on. Vocabulary replacements that apply across projects go in `agent_workflow_guidelines.md` §45.2; recurring workspace terms go in the relevant `dictionary.md` or repo `docs/glossary.md`.
 
 ### Source-check self-audit
 When the user corrects a factual detail or asks what could have been learned by digging deeper, explicitly ask:
@@ -225,6 +225,32 @@ Intra-document requirements:
 - every non-trivial document starts with `Core Concepts`, `Key Concepts`, or `Terminology`
 - define each core concept once
 - later sections reference earlier definitions instead of re-defining
+
+## Step 4.5: Add Cross-References for Lesson Discoverability
+
+After placing a lesson in `docs/domain/development_lessons.md`, immediately add a cross-reference
+to the relevant instruction file (`CLAUDE.md` or `AGENTS.md`) so the lesson is discoverable when
+agents work on related code. Lessons are only useful if agents know to look for them.
+
+**Process:**
+1. Identify which instruction section the lesson relates to (e.g., crypto constraints, repository conventions, agent workflow)
+2. Find the best location within that section — group with related rules for context
+3. Add a concise cross-reference: `See development_lessons.md #N` or `See lesson #N in development_lessons.md`
+4. If the lesson introduces a new domain concept, consider also updating `docs/domain/crypto_reporting_guidelines.md`
+   or other domain docs that agents should read before working in that area
+
+**Why this matters:** The instruction files are always loaded during tasks, but `development_lessons.md`
+is loaded only when explicitly mentioned. Without cross-references, a lesson may exist in the corpus but never be
+consulted when it's most relevant. Cross-references bridge this gap.
+
+**Example:** Lesson #67 (Futures/Derivatives Liquidation Mechanics) should be referenced in the crypto capital gains
+constraints section because that's where agents work with derivatives reporting. Lesson #68 (Decision Point Flags)
+should be referenced near decision points and configuration rules.
+
+**Topic-sibling check:** When adding a cross-reference, scan nearby rules for the same topic domain.
+If multiple rules reference the same lesson, that's good — it reinforces the lesson's importance.
+If you find a pattern where many lessons in one section all reference different docs, consider whether the lesson
+could be consolidated or whether the instruction section could be reorganized for better flow.
 
 ## Step 5: Module Layout and Skill Workflow Lessons
 - Keep module docs grouped under `docs/<module>/`.

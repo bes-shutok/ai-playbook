@@ -6,6 +6,8 @@ description: >
 
 # GitHub PR Workflow
 
+**Writing:** Follow `agent_workflow_guidelines.md` §45. PR summaries use plain English (e.g. "API response shape", not "wire contract"). Add `## Terms` when using 3+ project-specific words.
+
 Rules for PR description/stats authoring, splitting a branch diff into appropriately sized PR chunks, creating the actual GitHub PR branches, rebasing stacked PRs, and shared GitHub PR operations used by review skills.
 
 ## Routing Boundary

@@ -5,6 +5,8 @@ description: Use this skill whenever the user wants to send, post, draft, or upd
 
 # Slack Message Skill
 
+**Writing:** Follow `agent_workflow_guidelines.md` §45 (plain English, globish-friendly).
+
 ## Core workflow
 
 1. **Draft first, always.** Format the message and show it in a fenced block for review.
@@ -78,7 +80,7 @@ Slack's API does not support editing sent messages. When the user asks to edit o
 
 ## Finding channel IDs
 
-Extract the ID directly from a Slack URL: `https://.../archives/C0A7AKQT9AL` means the channel ID is `C0A7AKQT9AL`. Use `slack_search_channels` if only a channel name is given.
+Extract the ID directly from a Slack URL: `https://.../archives/C0123456789` means the channel ID is `C0123456789`. Use `slack_search_channels` if only a channel name is given.
 
 ## Saving the draft (required delivery method)
 

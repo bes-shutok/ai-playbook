@@ -60,11 +60,23 @@ See [agent-logs.md](agent-logs.md) for path convention, required sections, and m
 
 Before any implementation work, verify and set up a clean branch for this plan execution.
 
+If the `plans` skill already ran Phase 0 on a feature branch for this work, run Step 0.3 first, report the current branch, and ask whether to **continue on the current branch** or create a fresh branch. Do not propose a second branch without that choice.
+
 **Announce at start:** "Before executing the plan, I'll set up a dedicated branch. This ensures clean history and allows safe review/rollback."
 
 ### Step 0.1 — Propose branch creation
 
-Ask the user for confirmation to create a new branch:
+If already on a non-default feature branch (not `main`, `master`, or `develop`) that plausibly matches this plan (Jira ID or plan slug in the branch name), ask:
+
+```
+You're already on: <current-branch>
+Continue on this branch for plan execution? (yes/no)
+```
+
+- **yes** → skip to Step 0.3
+- **no** → proceed with new-branch proposal below
+
+Otherwise, ask the user for confirmation to create a new branch:
 
 **Branch naming convention:**
 
@@ -425,7 +437,7 @@ If the user stops mid-plan:
 ## Integration Points
 
 ### Consumes `plans` skill
-Reads plan format, task order, validation commands, review scope, and commit messages. Archives to `docs/plans/completed/` when finished.
+Reads plan format, task order, validation commands, review scope, and commit messages. Archives to `docs/plans/completed/` when finished. If `plans` Phase 0 already created a feature branch, Phase 0 here verifies state and offers to continue on it instead of creating another.
 
 ### Consumes `tdd-guide` + `unit-test-runner` (via implement sub-agent)
 Implement sub-agent follows RED → GREEN → Refactor for behavioral tasks; runs validation commands with fresh output.

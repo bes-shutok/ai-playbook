@@ -11,6 +11,8 @@ description: >
 # Intent: Produce a concise, actionable, implementation-ready RFC suitable for linking into Jira stories.
 # Note: Command verbosity is acceptable. Output must be succinct and implementation-oriented.
 
+**Writing:** Follow `agent_workflow_guidelines.md` §45. RFC prose uses plain English; add `## Terms` when using 3+ project-specific words. Transport/code docs may keep "wire format" where the team already uses it.
+
 ## Core Concepts
 - Hard gate: a mandatory stop point where RFC generation cannot continue without explicit user confirmation.
 - Coverage checklist: a pre-generation scope contract that confirms in-scope surfaces and MVP boundaries.

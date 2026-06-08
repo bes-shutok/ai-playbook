@@ -576,7 +576,7 @@ When generating any text artifact (PR descriptions, READMEs, skill docs, commit 
 
 39.1. Do not use em dashes (—). Use a colon, a period, or rewrite the sentence.
 
-39.2. Use plain, direct English (globish): short sentences, common words, active voice. Avoid complex punctuation or literary constructions.
+39.2. Use plain, direct English (globish): short sentences, common words, active voice. Avoid complex punctuation or literary constructions. For vocabulary replacements and `## Terms` rules, see §45.
 
 ## 40. Named Tools and Skills Must Be Visually Listed, Not Only Inline
 
@@ -623,3 +623,42 @@ Before pushing to a public repository (especially vendored skills), verify both 
 44.2. When asked to squash before push, squash only unpushed commits (`origin/<branch>..HEAD` via `git reset --soft origin/<branch>`). Do not rewrite the full repository history unless the user explicitly asks.
 
 44.3. Audit commit subjects and bodies in the push range for `Co-authored-by:` trailers and employer or client brand names. Scan vendored skill files for the same patterns. Copyright lines in `LICENSE.txt` are exempt.
+
+## 45. Plain Language for Human-Facing Artifacts
+
+Applies to plans, RFCs, PR descriptions, BFF/API docs, Confluence pages, Slack drafts, and any other text meant for humans to read (not code comments or internal transport-layer notes).
+
+45.1. **Default vocabulary:** use common English when it carries the same meaning as insider jargon. Short sentences, active voice. Complements §39 (globish); §45 adds actionable replacements and glossary rules.
+
+45.2. **Prefer plain terms in human-facing docs** (use the right column unless the audience is transport/OpenAPI code). Examples in this table use generic placeholders per §20 — not real endpoints, fields, or domain nouns from one project.
+
+| Avoid in plans, RFCs, PRs | Prefer |
+|---|---|
+| wire contract / wire format | **API contract**, **public API response shape**, **JSON request/response** |
+| wire names / wire enums | **JSON field names**, **API enum values** |
+| snapshot (alone) | **read result**, **GET response payload** — or name the endpoint |
+| gate term (alone) | name the endpoint (e.g. `POST /v1/<resource>-checks`) or **validation API** |
+| transport layer | **HTTP/API layer** (e.g. `app` module) |
+| orchestration shell | **coordinates steps**; name what it calls |
+| normalization-aware | **compare values after formatting them the same way** |
+| enum-sourced message | **error text from a fixed enum**, not exception text |
+| partial-empty | describe literally (e.g. `items: []`, `isHidden: true`) |
+| INNER JOIN gap | **database join misses rows** when stored values do not match exactly |
+| RED / GREEN (in Gist only) | OK in plan **tasks**; in Gist use **failing test first**, **make test pass** |
+
+45.3. **Code vs docs split:** "wire format" and similar transport vocabulary are fine in `project-guidelines.md`, OpenAPI descriptions, and Java transport comments where the team already uses them. Do not use them in plan **Gist & Examples**, PR summaries, or BFF docs when a plain equivalent exists.
+
+45.4. **`## Terms` section (required when needed):** add immediately after the document title (before the main body) when the doc uses **three or more** project-specific terms, acronyms, or jargon that a new reader might not know. Format:
+
+```markdown
+## Terms
+| Term | Meaning |
+|------|---------|
+| ... | One-line plain English |
+```
+
+45.5. **First-use rule:** when a niche term must appear and a `## Terms` section is not warranted (one or two terms only), spell it out on first use: **"user read result (`GET /v1/users/{userId}`)"**.
+
+45.6. **Shared dictionary:** recurring workspace terms belong in the ownership `dictionary.md` (company or personal-projects `.ai-playbook/`) or repo `docs/glossary.md` when present. Document-level `## Terms` tables are for one-off context; do not duplicate long glossary entries inline.
+
+45.7. **Skill and instruction hooks:** writing-heavy skills (`plans`, `github-pr-workflow`, `rfc-design`, `review-confluence-doc`, `slack-message`) must reference this section. When `learn` captures a wording correction, add the replacement to the table in 45.2 (if universal) or the relevant `dictionary.md` / `docs/glossary.md`.

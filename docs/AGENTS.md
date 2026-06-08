@@ -282,6 +282,7 @@ Always run the `learn` skill before triggering or allowing context compaction. C
 - Follow the project PR template when automation depends on it: custom PR descriptions can silently disable CI behaviour gated on template fields (`[x]` checkbox, `isRestartRequired: true` metadata); preserve the template's machine-readable blocks. Squash-merge with a cleaned commit body is the second failure mode of the same rule: warn the user at PR creation and at merge time not to squash-merge with a cleared body. See `agent_workflow_guidelines.md` #33.
 - Check internal runbooks (Confluence, repo wiki, README) before diagnosing platform tooling: a 5-minute read often settles questions that would take an hour of cluster probing. See `agent_workflow_guidelines.md` #34.
 - Public repo push hygiene: never force-push without explicit approval; squash only unpushed commits unless the user asks for full history rewrite; audit commit messages and skills for `Co-authored-by:` trailers and employer brand names before push. See `agent_workflow_guidelines.md` #44.
+- Plain language for human-facing artifacts: prefer "API contract" / "public API response shape" over "wire contract"; add a `## Terms` section when using 3+ project-specific words; capture new replacements via `learn` into `agent_workflow_guidelines.md` #45. See `agent_workflow_guidelines.md` #45.
 
 ## Brag document activity
 

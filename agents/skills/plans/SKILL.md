@@ -5,7 +5,13 @@ description: "Full plan lifecycle — create, edit, and complete implementation 
 
 # Plans
 
-**Announce at start:** "I'm using the plans skill to create the implementation plan."
+**Announce at start (create):** "I'm using the plans skill to create the implementation plan."
+
+**Announce at start (update / complete):** "I'm using the plans skill to update the plan." (or "…mark the plan complete.")
+
+**Create vs update:** Run **Phase 0 (branch setup)** only when **creating** a new plan. Skip Phase 0 for plan updates or completion unless the repo is in detached HEAD or the user asks to switch branches.
+
+**Writing:** Follow `agent_workflow_guidelines.md` §45. Use plain English in **Gist & Examples** and **Design Invariants** (e.g. "public API response shape unchanged", not "wire contract stable"). Add `## Terms` after the title when the plan uses 3+ project-specific words. TDD labels (RED/GREEN) stay in task checklists only.
 
 **Exploration discipline:** When creating a plan, use targeted grep/glob to find file paths, class names, and method signatures. Do not read full test files or deeply explore implementation details beyond what is needed to write accurate file paths and test method names in plan tasks. Produce the plan file promptly — do not keep exploring after you have enough to write the tasks. **Before writing any exact file path in a plan task, verify it exists** with glob/bash — an unverified path is a review blocker that only the quality gate catches.
 
@@ -20,6 +26,80 @@ description: "Full plan lifecycle — create, edit, and complete implementation 
 **For YourCompany projects:** Design RFCs go in `docs/rfcs/`. When a plan implements an RFC, add a one-line reference to it in the plan header (the optional line below the `# Plan:` title).
 When an RFC phase already has its own implementation Jira task, use that phase task key in the plan filename and title instead of the parent RFC/story key; keep the RFC reference line in the header for traceability.
 
+## Phase 0: Branch Setup (Run Once at Plan Creation Start)
+
+Before writing the plan file, set up a dedicated branch when appropriate. Planning often overlaps with early exploration, scaffolding, and the first commits — isolating that work on a feature branch keeps `main`/`develop` clean and aligns the plan with the branch that will carry implementation.
+
+**Announce:** "Before creating the plan, I'll set up a dedicated branch. This keeps planning and implementation isolated from other work."
+
+### Step 0.1 — Propose branch creation
+
+Ask the user for confirmation to create a new branch:
+
+**Branch naming convention:**
+
+1. Extract Jira task ID from user context if present (pattern: `[A-Z]+-\d+`, e.g. `PROJ-1234`)
+2. If found: branch name = `<JIRA-TASKID>-<short-description>`
+3. If not found: branch name = `YYYY-MM-DD-<short-description>`
+
+`<short-description>` is derived from the feature name or planned plan slug, kebab-case, max ~40 chars.
+
+Ask the user:
+
+```
+I'll create a new branch for this plan:
+- Base: current branch (<current-branch>)
+- New branch name: <computed-branch-name>
+- This branch will track origin (push -u on first commit)
+
+Proceed with branch creation? (yes/no)
+```
+
+Wait for explicit user confirmation before proceeding.
+
+### Step 0.2 — Create and push the branch
+
+If the user confirms (yes):
+
+```bash
+# From user context / ticket / proposed filename
+JIRA_ID="<PROJ-1234-or-empty>"
+FEATURE_DESC="<short feature description>"
+
+if [ -n "$JIRA_ID" ]; then
+    SHORT_DESC="$(echo "$FEATURE_DESC" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g' | sed 's/-$//' | cut -c1-40)"
+    BRANCH_NAME="${JIRA_ID}-${SHORT_DESC}"
+else
+    SHORT_DESC="$(echo "$FEATURE_DESC" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g' | sed 's/-$//' | cut -c1-40)"
+    BRANCH_NAME="$(date +%Y-%m-%d)-${SHORT_DESC}"
+fi
+
+git checkout -b "$BRANCH_NAME"
+git push -u origin "$BRANCH_NAME"
+```
+
+If the user declines (no):
+
+```
+Understood. I'll proceed on the current branch: <current-branch>
+Note: Plan work and any early commits will mix with existing changes on this branch.
+```
+
+### Step 0.3 — Verify branch state
+
+Before writing the plan file:
+
+```bash
+git rev-parse --abbrev-ref HEAD
+git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "No tracking branch yet"
+```
+
+If detached HEAD: refuse to proceed and ask the user to create or switch to a branch first.
+
+Report the final branch state to the user before continuing.
+
+**Hard gate:** Do not write the plan file until branch setup is complete or explicitly declined by the user.
+
 ## Plan Format
 
 Every plan follows this exact structure — no variations:
@@ -28,6 +108,8 @@ Every plan follows this exact structure — no variations:
 # Plan: <Feature Name>
 
 [Optional: one-line reference to RFC/PRD/ticket]
+
+[Optional: ## Terms — required when 3+ project-specific terms; see agent_workflow_guidelines.md §45]
 
 ## Gist & Examples
 
@@ -291,11 +373,11 @@ After saving, offer:
 
 > "Plan saved to `docs/plans/<filename>.md`. Ready to execute with `execute-plan`, in this session manually, or hand off to a new session?"
 
-**Automated execution:** Use the `execute-plan` skill. It orchestrates sub-agents to implement one task at a time (tests must pass), mark checkboxes, run `done` after each task, then run review/fix loops (with `done` after each review iteration) until **two consecutive** clear review rounds (zero remaining Medium+ after `receiving-code-review` triage), archive the plan to `docs/plans/completed/`, and remove `docs/tmp/execute-plan/<slug>/` on success only. The parent agent must not implement tasks inline or batch commits — see `execute-plan` anti-patterns.
+**Automated execution:** Use the `execute-plan` skill. If Phase 0 already created a feature branch, `execute-plan` Phase 0 verifies that branch and offers to continue on it instead of creating another. It orchestrates sub-agents to implement one task at a time (tests must pass), mark checkboxes, run `done` after each task, then run review/fix loops (with `done` after each review iteration) until **two consecutive** clear review rounds (zero remaining Medium+ after `receiving-code-review` triage), archive the plan to `docs/plans/completed/`, and remove `docs/tmp/execute-plan/<slug>/` on success only. The parent agent must not implement tasks inline or batch commits — see `execute-plan` anti-patterns.
 
 **Manual execution in this session:** Use `tdd-guide` and `unit-test-runner` per task (fresh output before marking the task complete). One task per commit. Use `done` only when the user ends the session (learn + commit across repos). Do not use this path when the user asked for `execute-plan` / `/execute-plan`.
 
 ## Integration Points
 
 ### With `execute-plan` skill
-Consumer of plan format, task order, `## Validation Commands`, `## Review Scope`, per-task commit lines, and completed-plan archival. After plan creation or update, hand off to `execute-plan` when the user wants automated iterative implementation with per-task commits and post-implementation review loops.
+Consumer of plan format, task order, `## Validation Commands`, `## Review Scope`, per-task commit lines, and completed-plan archival. Shares Phase 0 branch-setup semantics: `plans` runs it at plan creation; `execute-plan` runs it at implementation start and reuses an existing feature branch when appropriate. After plan creation or update, hand off to `execute-plan` when the user wants automated iterative implementation with per-task commits and post-implementation review loops.

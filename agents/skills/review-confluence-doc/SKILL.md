@@ -9,6 +9,8 @@ description: >
 
 # Review Confluence Document
 
+**Writing:** Follow `agent_workflow_guidelines.md` §45 when suggesting rewrites. Feedback should prefer plain English (e.g. "API contract", not "wire contract") and recommend a `## Terms` section when the page uses 3+ project-specific words.
+
 Review an RFC or TDD document hosted on Confluence. Provide quality feedback focused on clarity, actionability, and missing context.
 
 ## Configuration (from facts document)
