@@ -107,3 +107,19 @@ profile.patchIdentities(List.copyOf(identities));
 // Correct — aggregate owns the defensive copy
 profile.patchIdentities(identities);  // aggregate calls List.copyOf internally
 ```
+
+## 12. Mockito Stubs for Multi-Method Mapper Interfaces
+
+MyBatis `@Mapper` interfaces declare multiple methods and are **not** functional interfaces. A lambda
+assigned to such a type fails compilation (`incompatible types: lambda expression is not a functional
+interface`).
+
+In unit tests that inject a mapper collaborator, use explicit Mockito stubs:
+
+```java
+OrderMapper mapper = mock(OrderMapper.class);
+when(mapper.findByCustomerId(customerId))
+    .thenReturn(Optional.of(order));
+```
+
+Do not assign a lambda to the mapper type even when only one method is exercised in the test.
