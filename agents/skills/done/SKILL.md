@@ -11,6 +11,8 @@ description: >
 
 Run `/learn` to capture lessons from this session, then commit all uncommitted changes across all repositories touched during the session.
 
+**Workflow continuity:** This skill executes as a continuous sequence of steps (1 → 2 → 2.5 → 2.6 → 2.7 → 3 → 4 → 5). After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification.
+
 ## Configuration (from facts document)
 
 | Key | Purpose | Fallback |
@@ -21,11 +23,15 @@ Run `/learn` to capture lessons from this session, then commit all uncommitted c
 
 Invoke the `learn` skill now to extract lessons and update the documentation corpus before committing.
 
+**After learn completes, immediately continue to Step 2.** Do not stop or wait for user input — the workflow is continuous and all steps should execute in sequence.
+
 ## Step 2: Preserve Gitignored Docs and Instructions
 
 Invoke the `docs-branch` skill now. It will:
 1. Stash all gitignored LLM artifact paths (`docs/`, `.github/docs/`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `COPILOT.md`, `.claude/`) so they survive branch switches, then re-apply the stash so files remain on disk.
 2. Sync those files to the permanent `docs` orphan branch, creating it if it doesn't exist.
+
+**After docs-branch completes, immediately continue to Step 2.5.** Do not stop or wait for user input — the workflow is continuous and all steps should execute in sequence.
 
 > All implementation details, edge cases, and the full bash script live in `docs-branch/SKILL.md`. Refer there for the canonical script when executing.
 

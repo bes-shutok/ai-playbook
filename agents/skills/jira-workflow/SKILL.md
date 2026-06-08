@@ -14,6 +14,12 @@ description: Jira workflow — creating/updating Jira stories and creating git b
 - When a user wants a ticket to stand on its own, describe the substance of the change directly instead of relying on rollout labels or phase names as shorthand.
 - When adding links in Jira descriptions or comments, use standard markdown link syntax: put the title in `[]` and the URL in `()`.
 - Before proposing a manual verification scenario, verify that the induced failure exercises the component under change rather than only a downstream dependency.
+- When replanning a sequential backlog, reuse existing placeholder Jira keys when the user asks for ticket-number parity with implementation order; do not create new keys unless placeholders are exhausted or the user requests new issues.
+- When updating repurposed tickets, prefer **Goal / In scope / Acceptance criteria / References** sections; omit **Out of scope** sections when the user flags them as unwanted.
+- Match MVP product vocabulary in ticket text to canonical repo docs (for example Sporty-only MVP — avoid multi-tenant ingestion language when docs state Sporty is the sole source).
+- When replanning a sequential backlog, reuse existing placeholder Jira keys when the user asks for ticket-number parity with implementation order; do not create new keys unless placeholders are exhausted or the user requests new issues.
+- When updating repurposed tickets, prefer **Goal / In scope / Acceptance criteria / References** sections; omit **Out of scope** sections when the user flags them as unwanted.
+- Match MVP product vocabulary in ticket text to canonical repo docs (for example Sporty-only MVP — avoid multi-tenant ingestion language when docs state Sporty is the sole source).
 - When repurposing an existing Jira issue, review older comments for stale scope. If your own older comments now conflict with the active story body and Jira comment deletion is available, delete the outdated comments instead of leaving superseding clarification comments that keep obsolete guidance visible.
 - When cleaning up Jira comments after a story-scope change, do not touch comments left by other people unless the user explicitly asks for that.
 - When a Jira story/comment cites a specific Slack discussion as scope evidence, include the Slack permalink in that comment rather than referring to the discussion indirectly.

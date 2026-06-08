@@ -264,9 +264,21 @@ For lessons about a skill's workflow/style or output/content requirements:
 - do **not** place these in `docs/project-guidelines.md`, `docs/company-guidelines.md`, or instruction files — those are for project engineering conventions, not skill behavior
 - the skill files under `~/.agents/skills/` and `~/.claude/skills/` may be hard-linked; preserve parity when editing them
 
+**Skill-scope detection:** When a lesson explicitly mentions a skill by name or describes a workflow that clearly belongs to a skill (e.g., "plans must investigate...", "execute-plan should...", "review feedback requires..."), detect this as a skill-scope lesson. Apply dual placement:
+1. Place the generalized lesson in the project's `development_lessons.md` with cross-references
+2. Also update the skill's `SKILL.md` in `~/Projects/myrepos/ai-playbook/agents/skills/<skill>/` with the generalized requirement
+
+**Generalization before skill placement:** Before writing to a skill's `SKILL.md`, apply the generalization pass (Step 1.2) rigorously. Examples in skill files must be generic enough to apply across projects. Replace:
+- Project-specific terms (e.g., "Koinly Other Gains Report", "FIFO matching") → generic equivalents ("Source Report A", "data matching algorithm")
+- Concrete dates/IDs → placeholders ("2025-01-13" → "<specific date>")
+- Domain-specific assets → generic concepts ("BTC/USDT" → "asset pairs")
+
+**Commit workflow:** Skills are in the `ai-playbook` repo (`~/Projects/myrepos/ai-playbook`). Commit skill changes separately from project changes with a clear commit message.
+
 Examples:
 - RFC section-content requirements belong in `~/.agents/skills/rfc-design/SKILL.md`
 - done-workflow rules belong in `~/.agents/skills/done/SKILL.md`
+- Investigation quality requirements belong in `~/.agents/skills/plans/SKILL.md` (not just in project docs)
 
 ### Skill Output Improvement (corrected/retracted/downgraded outputs)
 

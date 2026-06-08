@@ -466,6 +466,8 @@ For branch reviews, skip the posting step — the staging doc is the complete de
 
 Each finding must be posted as an **inline comment** at its specific file and line (for PR reviews). Never consolidate multiple findings into a single top-level review body comment (that makes findings hard to locate and resolve).
 
+**Exception — multi-key deploy checklists:** when several Low findings describe ordered BO/ops steps across different config keys (for example credentials key + routing key), we may post one PR thread comment with the full ordered checklist and delete the superseded inline comments. Keep code-specific inline comments (naming, missing beans) separate.
+
 If a posted comment is later found to be incorrect, delete it entirely via the GitHub API. Do not update it with a strikethrough retraction; retracted comments add noise to the PR thread.
 
 Post with `event: "COMMENT"` (non-blocking) unless a finding is Critical or High severity with clear production risk.
