@@ -1,6 +1,6 @@
 # Execute Plan — Sub-Agent Prompt Templates
 
-Copy the relevant template, fill placeholders, and launch via the `Task` tool (`subagent_type: generalPurpose`).
+Copy the relevant template, fill placeholders, and launch via your agent's sub-agent execution capability.
 
 Placeholders:
 
@@ -180,7 +180,9 @@ Branch review (no PR unless user provided a PR URL). **Required deliverable:** a
 
 <REVIEW_DOC_PATH>
 
-Example: docs/reviews/2026-06-05-plan-review-<PLAN_SLUG>-r<REVIEW_ROUND>.md
+Example: docs/reviews/2026-06-05-<PLAN_SLUG>-code-review-r<REVIEW_ROUND>.md
+
+(Use `-code-review-r` — not `-plan-review-r`, which is reserved for pre-execution plan reviews from the `plans` skill.)
 
 Create `docs/reviews/` if missing. Follow `doing-code-review` staging-doc format (Summary, per-finding sections with Severity and Status). A chat-only summary is not a substitute.
 

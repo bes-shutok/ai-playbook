@@ -1,6 +1,6 @@
 ---
 name: slack-message
-description: Use this skill whenever the user wants to send, post, draft, or update a Slack message. Triggers on phrases like "post to Slack", "send to channel", "put this in Slack", "message the team", "update the Slack post", or any time the user provides message content and a Slack channel or URL. Always draft first, show a formatted preview, then save to Slack Drafts only. Never call slack_send_message; the user sends from the Slack client to avoid "Sent using @Cursor" attribution.
+description: Use this skill whenever the user wants to send, post, draft, or update a Slack message. Triggers on phrases like "post to Slack", "send to channel", "put this in Slack", "message the team", "update the Slack post", or any time the user provides message content and a Slack channel or URL. Always draft first, show a formatted preview, then save to Slack Drafts only. Never post immediately; the user sends from the Slack client so the message stays user-attributed.
 ---
 
 # Slack Message Skill
@@ -12,9 +12,9 @@ description: Use this skill whenever the user wants to send, post, draft, or upd
 1. **Draft first, always.** Format the message and show it in a fenced block for review.
 2. Format the message per the rules below.
 3. Show the preview and ask: "Does this look good, or any changes?"
-4. After approval, save with `slack_send_message_draft` only. Tell the user to open Slack → **Drafts & Sent** and click **Send** themselves.
+4. After approval, save to **Slack Drafts** using your environment's **draft-save** Slack integration only. Tell the user to open Slack → **Drafts & Sent** and click **Send** themselves.
 
-**Never use `slack_send_message`.** Direct MCP send adds a "Sent using @Cursor" footer. Draft-only keeps the post attributed to the user when they send from Slack.
+**Never use immediate/direct send.** Some integrations add an agent attribution footer on direct send. Draft-only keeps the post attributed to the user when they send from Slack.
 
 ## Showing the draft (required)
 
@@ -50,7 +50,7 @@ Does this look good, or any changes?
 
 - **Inline backticks are fine** inside the preview fence for endpoints, field names, and status text (e.g. `PATCH /v1/consent-updates`, `decision: "DENY"`).
 
-- The **posted Slack message** is plain text with Slack markdown; only the **Cursor preview** uses the outer code fence for copy-paste.
+- The **posted Slack message** is plain text with Slack markdown; only the **chat preview** uses the outer code fence for copy-paste.
 
 ## Formatting rules (inside the Slack message)
 
@@ -80,14 +80,14 @@ Slack's API does not support editing sent messages. When the user asks to edit o
 
 ## Finding channel IDs
 
-Extract the ID directly from a Slack URL: `https://.../archives/C0123456789` means the channel ID is `C0123456789`. Use `slack_search_channels` if only a channel name is given.
+Extract the ID directly from a Slack URL: `https://.../archives/C0123456789` means the channel ID is `C0123456789`. If only a channel name is given, search for the channel using your Slack integration.
 
 ## Saving the draft (required delivery method)
 
-Use **`slack_send_message_draft`** with the channel ID and approved message text. Return the `channel_link` from the tool response so the user can open Slack and send.
+Use the **draft-save** Slack integration with the channel ID and approved message text. Return any draft or channel link the integration provides so the user can open Slack and send.
 
-- For thread replies, set `thread_ts` to the parent message timestamp.
+- For thread replies, pass the parent message timestamp when the integration supports it.
 - If a draft already exists for that channel, tell the user to edit or delete it in Slack first, then retry.
-- **`slack_send_message` is forbidden** in this skill, even when the user says "post", "send", or "notify". Those words mean save a draft and instruct the user to send from Slack.
+- **Immediate/direct send is forbidden** in this skill, even when the user says "post", "send", or "notify". Those words mean save a draft and instruct the user to send from Slack.
 
 After saving, remind the user: *Open Slack → Drafts & Sent → review → Send.*

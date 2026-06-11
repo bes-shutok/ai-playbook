@@ -189,3 +189,13 @@ log.error("Failed for userId={}", userId, e)
 
 This applies even in intentionally fail-open catch blocks: an infrastructure error is still
 an ERROR, and the stack trace is the primary debugging signal.
+
+## 7. Request DTO Validation — Do Not Duplicate Bean Validation Constraints
+
+When Jakarta Bean Validation annotations on a request DTO already express a constraint
+(`@NotNull`, `@Size`, `@Pattern`, etc.), do not re-implement the same check in a controller,
+mapper, or transport converter.
+
+In company-scoped repos see `company-guidelines.md` #12. In contract-first OpenAPI CRM
+services see the owning repo's `project-guidelines.md` input validation trust boundary rule
+for schema-as-source and test guardrails.

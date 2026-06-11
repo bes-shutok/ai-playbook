@@ -22,6 +22,26 @@ Do not use this skill for implementing, triaging, or replying to existing review
 
 **Always produce the staging doc**, regardless of mode. For local branch reviews (not GitHub PRs), use branch-based naming. The staging doc serves as both approval artifact (for PRs) and persistent record (for all reviews).
 
+### Hard Gates (apply before and after every step)
+
+1. **Launch all relevant sub-agents before assessing findings.** Do not replace the sub-agent pipeline with manual analysis, grep scans, or inline investigation regardless of how narrow the user's request seems.
+2. **Write the staging doc before reporting any findings to the user.** The staging doc is the deliverable. Conversation-only findings do not count.
+3. **Do not skip the staging doc because findings seem too few or too simple.** Even zero findings must be recorded in the staging doc.
+
+### Focused Reviews
+
+When the user provides a specific concern in their request (e.g., "check for secrets", "look for performance issues", "make sure there is no personal data"), this does **not** narrow the review scope. The user's concern is a priority lens, not a scope filter. Launch all relevant sub-agents as usual; the user's focus area often surfaces findings that a narrow scan would miss.
+
+If the user explicitly says "only check X" or "skip everything except X", honor that request but still write the staging doc with whatever findings result.
+
+User args (e.g., "check for secrets", "against branch X") provide context for the review, not a mode selection. The review mode (Staged/Direct/Fix) is determined by trigger phrases, not by the content of the args.
+
+### Anti-patterns
+
+- Launching fewer sub-agents because the user's request seems narrow or focused. The user asked for a review; launch the full agent set unless an explicit skip rule applies.
+- Reporting grep results, manual scans, or inline analysis as the review output. Sub-agents provide coverage a single pass cannot; the staging doc is the deliverable.
+- Replacing the sub-agent pipeline with a targeted scan because "the user only asked about X." A focused scan cannot find what it was not asked to look for; the full agent set can.
+
 ## Step 1: Gather Context
 
 For a GitHub PR URL, use `github-pr-workflow` to resolve owner, repo, PR number, base branch, head branch, changed files, diff, and existing review comments.
@@ -53,7 +73,7 @@ Load the matching overlay file from this skill's directory (e.g. `java-spring.md
 
 ## Step 3: Launch Sub-Agents in Parallel
 
-Launch ALL sub-agents simultaneously using the `task` tool with `mode: "background"`. Wait for all to complete before proceeding.
+Launch all review worker agents **in parallel** using your agent's sub-agent execution capability (parallel launches when supported). Wait for all to complete before proceeding.
 
 Each agent receives:
 1. Its own prompt (from the corresponding `.md` file in `~/.agents/skills/review-agents/`)
@@ -218,14 +238,14 @@ Severity reflects user impact and operability risk, not how thorough the comment
 Posted PR comments are public and must not cite documents that do not exist on the PR's base branch. The author and external reviewers cannot read them, and citing them either looks like a broken reference or projects private rules onto someone else's code.
 
 Before posting each comment, scan the body for references to any of the following and rewrite or drop:
-- Project-local instruction files that are gitignored in this repo: `CLAUDE.md`, `AGENTS.md`, `docs/project-guidelines.md`, `docs/company-guidelines.md`, `docs/glossary.md`, `docs/facts.md`
+- Project-local instruction files that are gitignored in this repo: `CLAUDE.md`, `AGENTS.md`, `docs/project-guidelines.md`, `docs/company-guidelines.md`, `docs/glossary.md`
 - User-level instruction files: anything under `~/.claude/`, `~/.codex/`, `~/.agents/`
-- Cross-project shared docs that are gitignored on the target repo: `~/Projects/.ai-playbook/*` (e.g. `coding_guidelines.md`, `jvm_guidelines.md`, `kotlin_guidelines.md`, `python_guidelines.md`, `agent_workflow_guidelines.md`), company ownership docs under `company_projects_root/.ai-playbook/` (see `~/.ai-playbook/facts.md`; `facts.md`, `dictionary.md`, `company-guidelines.md`)
+- Cross-project shared docs that are gitignored on the target repo: files under `shared_docs_dir` in `~/.ai-playbook/facts.md` (e.g. `coding_guidelines.md`, `jvm_guidelines.md`, `kotlin_guidelines.md`, `python_guidelines.md`, `agent_workflow_guidelines.md`), company ownership docs under `company_projects_root/.ai-playbook/` (see `~/.ai-playbook/facts.md`; `facts.md`, `dictionary.md`, `company-guidelines.md`)
 
 Quick scan command before posting:
 ```bash
 awk '/^#### Comment/{p=1;next} /^#### Analysis/{p=0} p' docs/reviews/PR-<N>.md | \
-  grep -nE "project-guidelines|company-guidelines|coding_guidelines|jvm_guidelines|kotlin_guidelines|python_guidelines|CLAUDE\.md|AGENTS\.md|agent_workflow_guidelines|~/Projects/.ai-playbook|~/\.claude|~/\.codex"
+  grep -nE "project-guidelines|company-guidelines|coding_guidelines|jvm_guidelines|kotlin_guidelines|python_guidelines|CLAUDE\.md|AGENTS\.md|agent_workflow_guidelines|shared_docs_dir|~/\.claude|~/\.codex|~/\.agents"
 ```
 
 Rewrite rules:

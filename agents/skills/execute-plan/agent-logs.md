@@ -79,6 +79,8 @@ Include enough detail for `learn` to extract friction and corrections — not ju
 
 ## Manifest (orchestrator maintains)
 
+**Bootstrap:** When the user chooses execute-plan, create `docs/tmp/execute-plan/<PLAN_SLUG>/manifest.md` immediately (before Phase 0 and before plan-scoped production/test edits). Manual and read-only runs do not create this directory.
+
 After each sub-agent completes, append to `manifest.md`:
 
 ```markdown

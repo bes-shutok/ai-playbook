@@ -1,22 +1,22 @@
 ---
 name: how-to-write-skills
-description: Comprehensive guide for creating effective Codex Skills. Use when writing new skills, restructuring existing skills, or understanding skill patterns and best practices.
+description: Comprehensive guide for creating effective agent skills. Use when writing new skills, restructuring existing skills, or understanding skill patterns and best practices.
 ---
 
-# How to Write Codex Skills
+# How to Write Agent Skills
 
-Master the art of creating effective, discoverable, and well-structured Codex Skills that enhance AI capabilities for your projects.
+Master creating effective, discoverable, well-structured agent skills that work across AI coding environments.
 
 ## Quick Start
 
 Create your first skill in under 5 minutes:
 
 ```bash
-# 1. Create skill directory
-mkdir -p .Codex/skills/my-skill
+# 1. Create skill directory (under skills_repo_path from user facts — typically agents/skills/)
+mkdir -p agents/skills/my-skill
 
 # 2. Create SKILL.md with frontmatter
-cat > .Codex/skills/my-skill/SKILL.md << 'EOF'
+cat > agents/skills/my-skill/SKILL.md << 'EOF'
 ---
 name: my-skill
 description: What this skill does. Use when [trigger contexts like specific keywords, tasks, or scenarios].
@@ -49,7 +49,7 @@ model: haiku                     # Use faster model for simple tasks
 ---
 ```
 
-That's it! Codex will automatically discover and use your skill.
+That's it! Agents discover skills from configured skill paths and load them when triggered.
 
 ## Core Principles
 
@@ -128,7 +128,7 @@ my-skill/
 
 **Use case**: When you need both quick reference and detailed documentation.
 
-**Official Note**: Codex discovers supporting files through links in SKILL.md. Files are loaded only when referenced.
+**Note:** Agents load supporting files through links in `SKILL.md`. Files are loaded only when referenced.
 
 ### Skill with Utility Scripts
 
@@ -256,6 +256,18 @@ For multi-phase workflows that chain existing skills (for example implement → 
 
 **Return-payload rule:** every sub-agent return must let the orchestrator advance without re-doing the same reads. Include file paths, line anchors, quoted contract text, verification notes, and fix suggestions in the sub-agent artifact — not in orchestrator chat context.
 
+### Optional IDE / CLI enforcement (outside skills)
+
+Skills define **agent-agnostic contracts** (files to create, gates, forbidden actions). Optional hooks, shell wrappers, or IDE policies may enforce those contracts locally — document them in user `AGENTS.md` or IDE config, **not** inside shared skills.
+
+| Worth optional local enforcement | Usually not worth hooks |
+|----------------------------------|-------------------------|
+| Execute-plan bootstrap (`manifest.md` before plan-scoped edits when session dir exists) | `plans`, `learn`, `tdd-guide`, review triage — need judgment, not deterministic block |
+| Git safety (`git reset --hard`, co-author trailers, force-push prompts) | Orchestration skills (`done`, `execute-plan` sub-agent launches) — hooks cannot replace workflow |
+| Secrets in prompts (if IDE supports it) | `unit-test-runner`, `systematic-debugging` — must run freely |
+
+Do not reference hook filenames, MCP wire names, or vendor UI tools inside skill bodies.
+
 Reference implementations: `doing-code-review` (§ Orchestrator Boundary), `execute-plan` (worker logs + orchestrator duties), `review-plan` (Step 3 synthesis).
 
 ## When to Use Reference Files
@@ -290,7 +302,7 @@ description: What + When      # Required: max 1024 chars
 **Validation Rules:**
 - `name` must use lowercase letters, numbers, and hyphens only (max 64 chars)
 - `name` should match the directory name
-- `description` must answer two questions: (1) What does it do? (2) When should Codex use it?
+- `description` must answer two questions: (1) What does it do? (2) When should an agent use it?
 - Frontmatter must start with `---` on line 1 (no blank lines before)
 - Frontmatter must end with `---` before the Markdown content
 - Use spaces for indentation, not tabs
@@ -376,13 +388,11 @@ description: Generate technical documentation from code. Use when user mentions 
 
 **Problem**: Skill not discovered because it's in the wrong directory.
 
-**Solution**:
-- **Project skills**: `.Codex/skills/` (in project root)
-  - Use for project-specific skills
-  - Takes precedence over global skills when names conflict
-- **Global skills**: `~/.Codex/skills/` (fully supported in 2025)
-  - Use for skills you want available across all projects
-  - Great for personal workflows and common patterns
+**Solution** — resolve paths from `user_facts_path` (`skills_repo_path`, local agent mirrors); do not hardcode one vendor directory as canonical in skill text:
+
+- **Shared catalog:** `skills_repo_path` → `agents/skills/<name>/` (canonical source to edit first)
+- **Local mirrors:** sync to agent-specific install paths (Cursor, Claude Code, Codex, etc.) after editing the catalog
+- **Project-local skills:** only when your agent supports a project skill directory; document the convention in user or repo facts, not in generic skill bodies
 
 ### 5. Duplicate Content
 
@@ -553,7 +563,7 @@ api-design-principles/
 - ✅ Link to references and assets
 - ✅ Test skill discovery and triggering
 - ✅ Use lowercase-with-hyphens for names
-- ✅ Place skills in `.Codex/skills/`
+- ✅ Place skills under the shared catalog (`agents/skills/` in `skills_repo_path`) and sync mirrors
 - ✅ Write agent-agnostic skills — describe required capabilities (WHAT) without prescribing specific tool implementations (HOW)
 
 ### DON'T:
@@ -564,7 +574,8 @@ api-design-principles/
 - ❌ Forget to test the skill
 - ❌ Use camelCase or spaces in names
 - ❌ Mix details with essentials
-- ❌ Hardcode tool references — instead of "use Task tool with mode: background", write "use your agent's sub-agent execution capability (e.g., Agent tool with subagent_type, Task tool with mode, or equivalent)"
+- ❌ Hardcode tool references — describe capabilities instead (sub-agent execution, draft-save integration, structured user choice)
+- ❌ Name vendor-specific tools or UI (`AskQuestion`, `Task`, MCP wire names, IDE hook paths) inside skills — optional enforcement belongs in user `AGENTS.md` / IDE config, not skill bodies
 
 ## Security Considerations
 
@@ -649,10 +660,10 @@ Don't restrict when:
 **Symptoms**: Skill doesn't appear in available skills list
 
 **Solutions**:
-1. Check file location: `.Codex/skills/skill-name/SKILL.md`
+1. Check file location: `agents/skills/<skill-name>/SKILL.md` in `skills_repo_path` (and local mirrors if used)
 2. Verify frontmatter syntax (valid YAML)
 3. Check file name is `SKILL.md` (uppercase)
-4. Restart Codex session
+4. Reload skills per your agent environment (restart session or refresh skill index)
 
 ### Skill Not Triggering
 
@@ -686,10 +697,10 @@ Don't restrict when:
 
 | Task | Command/Action |
 |------|----------------|
-| Create skill | `mkdir -p .Codex/skills/my-skill` |
+| Create skill | `mkdir -p agents/skills/my-skill` (under `skills_repo_path`) |
 | Test discovery | Ask "What skills are available?" |
 | Test triggering | Ask task matching description |
-| Check size | `wc -l .Codex/skills/my-skill/SKILL.md` |
+| Check size | `wc -l agents/skills/my-skill/SKILL.md` |
 | Add references | Create `references/` directory |
 | Add assets | Create `assets/` directory |
 
@@ -697,7 +708,7 @@ Don't restrict when:
 
 1. **Description matters**: Include WHAT + WHEN with trigger keywords
 2. **Size matters**: Keep SKILL.md focused, use references for details
-3. **Location matters**: Use `.Codex/skills/` for project skills
+3. **Location matters**: canonical home is `skills_repo_path` → `agents/skills/`; sync local mirrors after edits
 4. **Structure matters**: Follow progressive disclosure pattern
 5. **Testing matters**: Verify discovery, triggering, and execution
 

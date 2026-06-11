@@ -1,6 +1,6 @@
 # Frontmatter Guide
 
-Complete guide to YAML frontmatter for Claude Code Skills.
+Complete guide to YAML frontmatter for Agent Skills.
 
 ## Required Fields
 
@@ -282,7 +282,7 @@ If description is very long (approaching 1024 chars), you can use YAML multi-lin
 
 ```yaml
 description: >
-  Comprehensive guide for creating effective Claude Code Skills.
+  Comprehensive guide for creating effective Agent Skills.
   Use when writing new skills, restructuring existing skills, or
   understanding skill patterns and best practices.
 ```

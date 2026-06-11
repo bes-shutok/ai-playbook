@@ -36,3 +36,4 @@ The SessionStart hook injects the following principles into every session:
 3. **Analyze before adding new components** - Read existing module patterns and align with those guideline files before introducing new types or packages
 4. **Always run tests after writing code** - Use `unit-test-runner` (see language guidelines for runner commands)
 5. **Always verify before claiming completion** - Re-run `unit-test-runner` (or project checks) with fresh output before claiming done; use `done` at session end
+6. **Plan file reference** - A path under `docs/plans/` alone is not an execute-plan trigger. Route through the plan-path gate in the `execute-plan` skill (execute-plan / manual / read-only) before editing production code. See `execute-plan` skill "Implicit triggers and plan-path gate".

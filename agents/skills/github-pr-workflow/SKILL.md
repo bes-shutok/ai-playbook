@@ -10,6 +10,8 @@ description: >
 
 Rules for PR description/stats authoring, splitting a branch diff into appropriately sized PR chunks, creating the actual GitHub PR branches, rebasing stacked PRs, and shared GitHub PR operations used by review skills.
 
+**Prerequisite:** GitHub CLI (`gh`) installed and authenticated. Commands below use `gh` syntax.
+
 ## Routing Boundary
 
 This skill owns **GitHub PR mechanics** and reusable GitHub API details.

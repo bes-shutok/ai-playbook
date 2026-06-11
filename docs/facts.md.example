@@ -1,34 +1,51 @@
-# Repo facts (docs/facts.md) — example
+# Repo facts — example (`docs/facts.md` in each repository)
 
-Copy to `docs/facts.md` in each repo (gitignore `docs/facts.md` if the repo is public and facts are sensitive).
+Repo-specific scope (platform position, module topology, repo Jira scoping) lives in **`docs/facts.md`** inside the repository. **Machine paths belong only in `user_facts_path`** — do not add `~/…` paths to repo facts.
 
-## Repo identity
+Resolve path via facts key **`repo_facts_rel`** (default: `docs/facts.md`).
+
+## Load order (company repo example)
+
+1. `user_facts_path`
+2. `company_ownership_facts` when company-scoped
+3. `docs/facts.md` (this file pattern)
+4. repo `AGENTS.md`
+
+## Template (copy into `<repo>/docs/facts.md`)
+
+```markdown
+# <repo-name> — Agent Facts
+
+Repo-specific agent context. **Machine paths and workspace keys live in `user_facts_path` only**.
+
+## Load order
+
+1. `user_facts_path`
+2. `company_ownership_facts` (when company-scoped; key in user facts)
+3. `docs/facts.md` (this file)
+4. `AGENTS.md`
+
+## Core Concepts
 
 - **Repository**: `<name>`
 - **Purpose**: one-line description
 
-## Related Jira tasks
-
-Internal scoping only — do not cite this file from RFCs, PRs, or code comments.
+## Related Jira tasks (internal scoping)
 
 | Ticket | Relevance |
 |--------|-----------|
-| `CRM-NNNN` | Primary story for current work |
+| `PROJ-NNNN` | Primary story for current work |
+```
 
-## Workspace path keys (machine-specific)
+## Facts keys (user/workspace scope)
 
-Usually defined in `~/.ai-playbook/facts.md`, not in public repos:
+Defined in **`user_facts_path`** only — **Workspace roots** and **Agent skill keys** tables:
 
 | Key | Purpose |
 |-----|---------|
-| `instructions_repo` | Clone path of this playbook (for Codex/Claude/Cursor `@` entrypoints) |
+| `instructions_repo` | Clone path of the playbook (Codex/Claude/Cursor entrypoints) |
 | `personal_projects_root` | Root directory for personal / pet-project repositories |
 | `company_projects_root` | Root directory for company work repositories |
-
-## Environment-specific keys (optional)
-
-Used by shared skills when this repo defines overrides:
-
-| Key | Value |
-|-----|-------|
-| `shared_docs_dir` | `~/Projects/.ai-playbook/` |
+| `company_ownership_facts` | Company inventory and team context |
+| `user_facts_path` | User/workspace facts file |
+| `repo_facts_rel` | Repo-specific facts file in the current repository |

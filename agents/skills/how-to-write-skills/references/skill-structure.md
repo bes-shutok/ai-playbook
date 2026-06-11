@@ -1,6 +1,6 @@
 # Skill Structure Guide
 
-Complete guide to organizing your Claude Code Skills for maximum effectiveness and maintainability.
+Complete guide to organizing your Agent Skills for maximum effectiveness and maintainability.
 
 ## Directory Organization Patterns
 

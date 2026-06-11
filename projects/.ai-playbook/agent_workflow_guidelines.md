@@ -359,7 +359,7 @@ ln -s ../agents/skills claude/skills
 cp -r agents/skills/ claude/skills/   # creates a copy that drifts
 ```
 
-This mirrors the canonical layout in `ai-playbook` where `claude/skills -> ../agents/skills`.
+In the skills repository (`skills_repo_path` in `~/.ai-playbook/facts.md`), `claude/skills` must symlink to `../agents/skills`.
 
 ## 20. Skill and Doc Examples — Always Use Placeholder Values, Never Real Identifiers
 
@@ -574,9 +574,11 @@ Before writing any documentation, PR description, or explanation that describes 
 
 When generating any text artifact (PR descriptions, READMEs, skill docs, commit messages, comments):
 
-39.1. Do not use em dashes (—). Use a colon, a period, or rewrite the sentence.
+39.1. Do not use em dashes (—). Use a colon, a comma, a semicolon, a period, or rewrite the sentence. This applies to Jira issue descriptions and comments, Confluence pages, and any other content sent through MCP tools, not only files on disk.
 
 39.2. Use plain, direct English (globish): short sentences, common words, active voice. Avoid complex punctuation or literary constructions. For vocabulary replacements and `## Terms` rules, see §45.
+
+39.3. **Self-check before saving or sending.** Before writing a ticket/page/PR body or committing, scan the composed text for `—` and replace every occurrence. Treat this as a mandatory step when a skill composes an artifact (for example `jira-workflow`).
 
 ## 40. Named Tools and Skills Must Be Visually Listed, Not Only Inline
 
@@ -662,3 +664,48 @@ Applies to plans, RFCs, PR descriptions, BFF/API docs, Confluence pages, Slack d
 45.6. **Shared dictionary:** recurring workspace terms belong in the ownership `dictionary.md` (company or personal-projects `.ai-playbook/`) or repo `docs/glossary.md` when present. Document-level `## Terms` tables are for one-off context; do not duplicate long glossary entries inline.
 
 45.7. **Skill and instruction hooks:** writing-heavy skills (`plans`, `github-pr-workflow`, `rfc-design`, `review-confluence-doc`, `slack-message`) must reference this section. When `learn` captures a wording correction, add the replacement to the table in 45.2 (if universal) or the relevant `dictionary.md` / `docs/glossary.md`.
+
+45.8. **Document results, not deliberation.** In long-lived artifacts (canonical docs, high-level task docs, issue trackers) record the decision and its current-state outcome, not the reasoning path that produced it (why alternatives were rejected, what was extracted/renamed/split from where, phrases like "former Slice 2", or transient caveats like "not exercised yet in the current state"). Keep rationale and alternatives in the single designated decisions/ADR doc; everywhere else state only the result. In an issue/ticket description, describe only that ticket's own scope; do not narrate adjacent or follow-up tickets, extraction history, or prioritization reasoning. State the split/mapping as a plain pointer when needed, not as a justification.
+
+## 46. Maintain Workflow Invariants Until Explicitly Paused
+
+When a workflow (plan review, TDD cycle, PR process) has an explicit exit condition
+(e.g., "Repeat until Blockers=0 AND Medium=0"), the agent must:
+
+46.1. Track whether the exit condition is met. Maintain this invariant as active
+until it is satisfied.
+
+46.2. NOT stop when only a formatting/content constraint is given (e.g., "TEXT ONLY",
+"no tool calls", "respond in plain text"). Such constraints are output format
+requirements, not pause signals.
+
+46.3. Clarify with the user whether they want to continue or pause the workflow
+when uncertain. State the workflow's current state and next step explicitly.
+
+46.4. To pause, the user must say "pause", "stop", or give an equivalent explicit
+instruction. A format constraint alone does not override a workflow's exit condition.
+
+46.5. When uncertain: acknowledge the constraint, state the workflow invariant and
+next step, and ask whether to proceed.
+
+**Examples of correctly handling format constraints vs pause requests:**
+
+| User says | Workflow state | Correct response |
+|----------|----------------|------------------|
+| "TEXT ONLY" | Review Round 2 has Medium=2, exit condition requires Medium=0 | Acknowledge, state "Round 2 has Medium=2, must continue to Round 3. Proceed with fixes?" |
+| "pause" | Any state | Stop workflow, await explicit continuation signal |
+| "no tool calls" | Review Round 2 has Medium=2 | Provide text summary of fixes needed, ask whether to apply them |
+
+**Why this matters:** Multi-step workflows like plan review have quality gates
+that must be satisfied. Stopping early due to a misinterpreted format constraint
+produces incomplete output that fails downstream quality checks.
+
+## 47. Shared Skill References in Generic Instructions
+
+47.1. **Runtime edit path:** `~/.agents/skills/<skill>/SKILL.md`. When `~/.claude/skills` is symlinked to `~/.agents/skills`, both resolve to one tree — edit once; do not maintain duplicate sync rules.
+
+47.2. **Commit/mirror target:** resolve the skills repository from `skills_repo_path` in `~/.ai-playbook/facts.md`, or deduce via `readlink -f ~/.agents/skills`. Do not hardcode local clone names or paths in generic skills or cross-project instruction files.
+
+47.3. **Project repo instruction files:** defer shared skill maintenance with a one-liner (for example: follow self-maintenance rules in `~/.agents/skills/learn/SKILL.md`). Do not restate multi-path sync recipes or vendor-specific command copies.
+
+47.4. **Migrated skills:** workflows moved to the shared registry (for example `learn`) are skill-only. Remove stale `.opencode/command/<skill>.md` references and local command copies when encountered.

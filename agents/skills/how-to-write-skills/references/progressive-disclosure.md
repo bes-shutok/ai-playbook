@@ -1,12 +1,12 @@
 # Progressive Disclosure Guide
 
-Understanding and implementing progressive disclosure in Claude Code Skills for optimal context management and user experience.
+Understanding and implementing progressive disclosure in Agent Skills for optimal context management and user experience.
 
 ## What is Progressive Disclosure?
 
 Progressive disclosure is a design pattern that reveals information gradually, showing only what's necessary at each level and providing more details on demand.
 
-In Claude Code Skills, this means:
+In Agent Skills, this means:
 - **Level 1**: Metadata (name, description) - always visible
 - **Level 2**: SKILL.md body - loaded when skill triggers
 - **Level 3**: References and assets - loaded when explicitly needed

@@ -53,7 +53,7 @@ Each agent receives:
 4. The project's CLAUDE.md content (for repository conventions)
 5. **Repo-specific overrides take precedence**: if `CLAUDE.md`, `docs/project-guidelines.md`, or any loaded company/project guideline defines complexity, naming, comment, or layering rules that conflict with the generic pattern catalog, the agent MUST apply the repo-specific value, not the catalog default. Example: catalog says "functions >50 lines" but `company-guidelines.md #17` says "≤30 lines per method" — apply the 30-line rule.
 6. **Execution framing**: "You are reviewing an IMPLEMENTATION PLAN, not a code diff. Read the plan tasks and the referenced source files to understand what is being proposed. Apply your pattern catalog to identify whether the proposed changes would introduce the issues you are responsible for detecting."
-7. **Output format**: for each finding provide `{location_in_plan, issue, severity: Block/Mitigate/Monitor/Accept, fix, evidence}` — no `path/line/side` fields (those are for code review). **`issue` and `evidence` must be self-contained**: name the plan task, quote or paraphrase the contradicting plan text, cite what the referenced source file shows, and state the concrete fix. Do not return stubs the orchestrator must research.
+7. **Output format**: for each finding provide `{location_in_plan, issue, severity: Blocker/Medium/Low/Monitor, fix, evidence}` — no `path/line/side` fields (those are for code review). **`issue` and `evidence` must be self-contained**: name the plan task, quote or paraphrase the contradicting plan text, cite what the referenced source file shows, and state the concrete fix. Do not return stubs the orchestrator must research.
 
 ### Shared agents (from `~/.agents/skills/review-agents/`)
 
@@ -92,11 +92,15 @@ Check:
    (e.g. "Tasks 1–N", "see Task M") for staleness. A path that still says `domain/`
    after the file moved to `application/`, or a "Tasks 1–7" reference after the plan
    grew to 10 tasks, must be flagged.
+7. Evaluation Criteria substance: Does the plan's Evaluation Criteria section contain
+   specific, verifiable criteria (e.g. "API returns 404 for unknown IDs", "batch completes
+   within 5s at 10k records")? Vague criteria like "it should work" or "tests pass" must
+   be flagged as a Medium finding.
 
 For each finding, provide:
 - The two contradicting statements (with task numbers)
 - Which one is correct (based on source code and domain rules)
-- Severity: Block / Mitigate / Note
+- Severity: Blocker / Medium / Low
 - Evidence: what was read in source files or plan text that supports the finding
 - Suggested resolution
 ```
@@ -107,29 +111,31 @@ After all sub-agents complete, **synthesize from agent returns only** — do not
 
 1. **Deduplicate**: Merge findings that describe the same root issue from different angles
 2. **Rank by severity**:
-   - **Block** — must address before execution
-   - **Mitigate** — should add safeguard, test, or step to plan
+   - **Blocker** — must address before execution
+   - **Medium** — should add safeguard, test, or step to plan
+   - **Low** — minor improvement, optional in plan revision
    - **Monitor** — note as risk, add observability
-   - **Accept** — documented, no action needed
 3. **Cross-reference with plan**: For each finding, note whether the plan already
    addresses it (and mark as "Already mitigated" if so)
 4. **Incomplete agent output**: if a finding lacks `evidence` or a concrete `fix`, relaunch that agent focused on the gap — do not fill it inline
 
 ## Step 4: Output
 
-Write the review to `docs/reviews/YYYY-MM-DD-plan-review-<feature-name>.md`:
+Write the review to `docs/reviews/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md` (use `-r1`, `-r2`, … per loop iteration):
 
 ```markdown
 # Plan Review: <Plan Title>
 
 **Date:** YYYY-MM-DD
 **Plan:** `docs/plans/<filename>.md`
+**Prior:** `docs/reviews/<prior-rN>.md` *(omit on r1)*
 **Agents:** quality, implementation, architecture, testing, simplification, documentation, security, concurrency, premortem, consistency
 
 ## Summary
 
 <1-2 sentence overall assessment>
-Blockers: N | Mitigations: N | Notes: N
+**Counts:** Blockers: N | Medium: N | Low: N | Monitor: N
+**Ready for execution:** Yes/No (Yes only when Blocker=0 AND Medium=0)
 
 ## Blockers
 
@@ -140,13 +146,21 @@ Blockers: N | Mitigations: N | Notes: N
 - **Evidence:** <what the source code shows>
 - **Fix:** <specific change to the plan>
 
-## Mitigations
+## Medium
 
 ### 1. <Title>
-- **Agent:** ...
+- **Agents:** ...
 - **Location:** ...
 - **Issue:** ...
-- **Suggested addition:** <new step or test to add>
+- **Suggested addition:** <new step, invariant, test, or scope entry required before execution>
+
+## Low
+
+### 1. <Title>
+- **Agents:** ...
+- **Location:** ...
+- **Issue:** ...
+- **Fix:** <optional one-line plan clarification>
 
 ## Monitor
 
@@ -158,7 +172,7 @@ Blockers: N | Mitigations: N | Notes: N
 ## Accepted Risks
 
 ### 1. <Title>
-- **Rationale:** ...
+- **Rationale:** ... (Low findings the plan author chooses not to address)
 
 ## Amendments
 
@@ -171,28 +185,29 @@ Blockers: N | Mitigations: N | Notes: N
 
 After writing the review document:
 
-1. For each **Blocker**: update the affected plan task directly
-2. For each **Mitigation**: add verification steps or tests to the plan
-3. Add a reference line to the plan header: `Plan review: docs/reviews/<filename>.md`
-4. If the plan has a final validation task, add verification commands for each finding
+1. For each **Blocker**: update the affected plan task directly (mandatory before next review round)
+2. For each **Medium**: update tasks, invariants, tests, or Review Scope (mandatory before next review round)
+3. For each **Low**: fold trivial fixes into the plan; otherwise leave in the review artifact
+4. For each **Monitor**: add/update the plan's `## Monitor` section with named owner
+5. Add a reference line to the plan header: `Plan review: docs/reviews/<latest-rN>.md (latest, ready) · …`
+6. If the plan has a final validation task, add verification commands for each Blocker/Medium finding
 
 Report to user:
-> "Plan review complete: N blockers (fixed in plan), M mitigations (added as steps).
-> Review saved to `docs/reviews/<filename>.md`."
+> "Plan review r<N> complete: B blockers, M medium (fixed in plan), L low, Mon monitor.
+> Review saved to `docs/reviews/<filename>-r<N>.md`.
+> Ready for execution: Yes/No (requires Blocker=0 and Medium=0)."
 
-## Iteration Discipline
+## Iteration Discipline (plans skill gate)
 
-When the user asks to iterate review-plan until findings are "negligible or unrelated":
+When the user asks to run reviews until clean (e.g. "no medium problems", "until ready"):
 
-1. **Treat a clean review as data, not as a terminal verdict.** A 0-blocker outcome can mean either (a) the plan is correct, or (b) the agent catalog lacks the patterns to detect the defects in this plan. Distinguish the two before stopping.
-
-2. **Run a brief self-audit alongside the agent review.** Before declaring iteration complete, scan the change types introduced by the latest plan revision (new domain types, decomposed methods, replaced classes, modified existing methods, restructured tasks) and verify the catalog has an active pattern for each. If a change type has no corresponding pattern in `~/.agents/skills/review-agents/*.md`, the agents cannot detect defects of that class.
-
-3. **Catalog gap discovered → update the skill before re-iterating.** If the self-audit identifies a missing pattern (e.g. "no agent owns 'type-boundary discipline'", "no agent enumerates switches", "no agent checks for superseded code"), add the pattern to the relevant agent file FIRST, then re-run the review. Patching the plan around a catalog gap leaves the gap for future plans.
-
-4. **Stop when both conditions hold**: the latest review reports negligible findings AND a self-audit against the change types in the plan finds no additional concerns the catalog would have missed.
-
-5. **Record self-audit gaps as catalog improvements**, not as one-off plan patches. When the self-audit found something the catalog missed, the fix is two-part: patch the plan AND update the agent file or `SKILL.md`. The catalog improvement is the persistent gain; the plan patch is local.
+1. **Exit condition and minimum rounds:** see `plans` skill Plan Quality Gate (Blocker=0 AND Medium=0, minimum two rounds).
+2. **Severity alignment:** agents emit Blocker/Medium/Low/Monitor directly; no mapping step needed.
+3. **Treat a clean review as data, not as a terminal verdict.** A 0 Blocker / 0 Medium outcome can mean either (a) the plan is correct, or (b) the agent catalog lacks patterns to detect defects. Run the self-audit below before stopping after only one round.
+4. **Run a brief self-audit alongside the agent review.** Before declaring iteration complete, scan the change types introduced by the latest plan revision (new domain types, decomposed methods, replaced classes, modified existing methods, restructured tasks) and verify the catalog has an active pattern for each. If a change type has no corresponding pattern in `~/.agents/skills/review-agents/*.md`, the agents cannot detect defects of that class.
+5. **Catalog gap discovered → update the skill before re-iterating.** If the self-audit identifies a missing pattern (e.g. "no agent owns 'type-boundary discipline'", "no agent enumerates switches", "no agent checks for superseded code"), add the pattern to the relevant agent file FIRST, then re-run the review. Patching the plan around a catalog gap leaves the gap for future plans.
+6. **Stop when both conditions hold**: the latest review reports Blocker=0 AND Medium=0 (minimum two rounds completed) AND a self-audit against the change types in the plan finds no additional concerns the catalog would have missed.
+7. **Record self-audit gaps as catalog improvements**, not as one-off plan patches. When the self-audit found something the catalog missed, the fix is two-part: patch the plan AND update the agent file or `SKILL.md`. The catalog improvement is the persistent gain; the plan patch is local.
 
 ## Signal-to-Noise Rules
 

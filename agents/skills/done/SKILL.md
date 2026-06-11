@@ -17,7 +17,7 @@ Run `/learn` to capture lessons from this session, then commit all uncommitted c
 
 | Key | Purpose | Fallback |
 |-----|---------|----------|
-| `skills_repo_path` | Path to the ai-playbook / skills repository | `~/.agents/scripts/commit-skills.sh` default |
+| `skills_repo_path` | Path to the skills repository | `~/.agents/scripts/commit-skills.sh` default |
 
 ## Step 1: Run Learn
 
@@ -148,7 +148,7 @@ After learn and stash steps complete:
    Gitignored files belong on the `docs` branch only (handled in Step 2.1), not on the working feature branch.
 5. Stage relevant non-ignored files. Prefer adding specific files by name; never use `git add -A` or `git add .` unless the user explicitly requests it.
 6. Write a concise commit message. If there is a story key, prefix with `[<STORY-KEY>]`; otherwise use a plain descriptive subject. Focus on the "why" not the "what".
-7. Commit using a HEREDOC. **Never** add `Co-Authored-By:` or `Co-authored-by:` trailers (including `Co-authored-by: Cursor <cursoragent@cursor.com>`). Do not use `git commit --trailer`. In Cursor IDE, Attribution must be off (**Settings → Agent → Attribution**).
+7. Commit using a HEREDOC. **Never** add `Co-Authored-By:` or `Co-authored-by:` trailers or use `git commit --trailer` for agent attribution. See user `AGENTS.md` (Git Commit Trailer Policy). If your IDE adds co-author trailers automatically, disable agent attribution in its settings.
 8. Run `git status` after the commit to confirm success.
 
 ### Commit message format
@@ -187,7 +187,7 @@ If there are changes, run:
 <skills_repo_path>/scripts/commit-skills.sh
 ```
 
-This commits any pending skill edits to the ai-playbook repo with an auto-generated message. You may pass a custom message as the first argument if the default is not descriptive enough.
+This commits any pending skill edits in the skills repository with an auto-generated message. You may pass a custom message as the first argument if the default is not descriptive enough.
 
 ## Step 5: Commit Pending Facts and Docs Changes
 
@@ -229,7 +229,7 @@ Invoked as a sub-agent after **each** completed plan task (per-task commit) and 
 - Invoke `docs-branch` skill for all docs/instructions preservation — do not inline the stash or branch logic here.
 - Always verify that new or revised reusable docs, reference material, and explanatory artifacts added in the session are referenced from instructions or related canonical docs where future agents will need them.
 - Never stage or commit a file that is gitignored, even if it appears in `git diff` (it was previously force-tracked). Use `git rm --cached` to remove it from tracking; do not commit it on the feature branch.
-- Never add `Co-Authored-By:` or `Co-authored-by:` trailers (including Cursor's `cursoragent@cursor.com` trailer). Do not use `git commit --trailer`; disable Cursor **Agent → Attribution**.
+- Never add `Co-Authored-By:` or `Co-authored-by:` trailers or use `git commit --trailer` for agent attribution. See user `AGENTS.md` (Git Commit Trailer Policy). Disable automatic agent attribution in IDE settings when present.
 - Never use `--no-verify`.
 - Never commit secrets, PII files (`.env`, credential files), or personal/org-specific information into public repositories.
 - Never hardcode personal paths, org domains, or project-specific identifiers in skill files — externalize to facts documents.

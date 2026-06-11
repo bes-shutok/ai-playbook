@@ -1,6 +1,6 @@
 ---
 name: jira-workflow
-description: Jira workflow — creating/updating Jira stories and creating git branches from Jira tickets. Trigger phrases — "create a Jira story", "update Jira ticket", "create a branch for PROJ-XXXXX".
+description: Jira workflow for creating/updating Jira stories and creating git branches from Jira tickets. Trigger phrases: "create a Jira story", "update Jira ticket", "create a branch for PROJ-XXXXX".
 ---
 
 # Jira Workflow
@@ -15,11 +15,11 @@ description: Jira workflow — creating/updating Jira stories and creating git b
 - When adding links in Jira descriptions or comments, use standard markdown link syntax: put the title in `[]` and the URL in `()`.
 - Before proposing a manual verification scenario, verify that the induced failure exercises the component under change rather than only a downstream dependency.
 - When replanning a sequential backlog, reuse existing placeholder Jira keys when the user asks for ticket-number parity with implementation order; do not create new keys unless placeholders are exhausted or the user requests new issues.
-- When updating repurposed tickets, prefer **Goal / In scope / Acceptance criteria / References** sections; omit **Out of scope** sections when the user flags them as unwanted.
-- Match MVP product vocabulary in ticket text to canonical repo docs (for example Sporty-only MVP — avoid multi-tenant ingestion language when docs state Sporty is the sole source).
-- When replanning a sequential backlog, reuse existing placeholder Jira keys when the user asks for ticket-number parity with implementation order; do not create new keys unless placeholders are exhausted or the user requests new issues.
-- When updating repurposed tickets, prefer **Goal / In scope / Acceptance criteria / References** sections; omit **Out of scope** sections when the user flags them as unwanted.
-- Match MVP product vocabulary in ticket text to canonical repo docs (for example Sporty-only MVP — avoid multi-tenant ingestion language when docs state Sporty is the sole source).
+- When updating repurposed tickets, prefer **Goal / Problem / Product decisions / Deliverables / Acceptance criteria / References** sections. Do **not** add **Out of scope** sections unless the user explicitly asks for them.
+- Do **not** add a separate **Dependencies** section that lists follow-up Jira keys for parallel or later stories. Mention cutover or timing coordination inline under the relevant deliverable slice only when it helps humans (for example "timed with profile batch migration follow-up").
+- A ticket describes only its **own** scope. Omit extraction/split history ("former Slice 2"), prioritization reasoning ("lowest near-term priority"), and transient current-state caveats; that meta belongs in planning/decision docs, not the ticket. See agent_workflow_guidelines.md §45.8 (document results, not deliberation).
+- **Writing style (mandatory):** no em dashes (`—`) in ticket summaries, descriptions, or comments; use commas, semicolons, colons, or short sentences, and prefer globish. Before saving a ticket body via your Atlassian integration, scan the composed text for `—` and replace every occurrence. See agent_workflow_guidelines.md §39 and §45.
+- Match MVP product vocabulary in ticket text to canonical repo docs (for example single-client MVP; avoid multi-tenant ingestion language when docs state Sporty is the sole source).
 - When repurposing an existing Jira issue, review older comments for stale scope. If your own older comments now conflict with the active story body and Jira comment deletion is available, delete the outdated comments instead of leaving superseding clarification comments that keep obsolete guidance visible.
 - When cleaning up Jira comments after a story-scope change, do not touch comments left by other people unless the user explicitly asks for that.
 - When a Jira story/comment cites a specific Slack discussion as scope evidence, include the Slack permalink in that comment rather than referring to the discussion indirectly.
@@ -36,35 +36,19 @@ When the user provides a Jira ticket URL (e.g., `https://your-org.atlassian.net/
 
 ### Step 0: Pre-requisite Checks
 
-#### Check 1: Verify Atlassian MCP Installation
-1. Check if atlassian MCP tools are available by attempting to call `mcp__atlassian__getJiraIssue` with a test parameter
-2. If atlassian MCP is NOT installed, show this message:
+#### Check 1: Verify Atlassian integration
+
+1. Verify you can read Jira issues via your environment's **Atlassian integration** (issue fetch capability).
+2. If the integration is unavailable, tell the user:
    ```
-   ⚠️  Atlassian MCP is not installed!
+   ⚠️  Atlassian integration is not available.
 
-   Codex:
-   codex mcp add atlassian
-   (authenticate when prompted, then restart Codex)
-
-   Claude Code:
-   claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp
-   (authenticate when prompted, then restart Claude Code)
-
-   After installation, retry this command.
+   Install and authenticate Jira/Atlassian access for your agent environment,
+   then retry this workflow. See user AGENTS.md or your agent setup docs if present.
    ```
-3. STOP execution and wait for user to install the MCP server
-4. If atlassian MCP is installed but the call fails with Atlassian OAuth refresh errors such as `invalid_grant`, `Invalid refresh token`, or `OAuth token refresh failed`, tell the user to reset the stored Atlassian credentials:
-
-   Codex:
-   ```
-   codex mcp logout atlassian
-   codex mcp login atlassian
-   ```
-
-   Claude Code: remove and re-add the `atlassian` MCP server, then authenticate again.
-
-   Then retry the Jira command after the new login completes.
-5. If atlassian MCP IS installed and authenticated, continue to Step 1
+3. STOP execution until the integration works.
+4. If calls fail with OAuth refresh errors such as `invalid_grant`, `Invalid refresh token`, or `OAuth token refresh failed`, tell the user to re-authenticate the Atlassian integration, then retry.
+5. When the integration is authenticated, continue to Step 1.
 
 #### Check 2: Verify Git Repository
 1. Check if the current directory is a git repository using `git status`
@@ -84,7 +68,7 @@ When the user provides a Jira ticket URL (e.g., `https://your-org.atlassian.net/
    - Ask user: "Please provide the Jira ticket URL or ticket key (e.g., PROJ-12345)"
 
 ### Step 2: Fetch Jira Ticket Details
-1. Use `mcp__atlassian__getJiraIssue` with:
+1. Fetch the Jira issue via your Atlassian integration with:
    - `cloudId`: extracted from URL or provided by user
    - `issueIdOrKey`: extracted ticket key
 2. Extract the following information:
@@ -176,7 +160,7 @@ User: https://your-org.atlassian.net/browse/PROJ-12345
 ```
 
 Expected flow:
-1. Check Atlassian MCP is installed ✓
+1. Check Atlassian integration is available ✓
 2. Extract: cloudId = `your-org.atlassian.net`, issueKey = `PROJ-12345`
 3. Fetch ticket → Type: "large work item", Summary: "BE - service refactor"
 4. Determine type: `feature/` (epic maps to feature)
@@ -202,19 +186,19 @@ Expected flow:
 8. User confirms
 9. Create branch with custom name
 
-### Example 3: MCP not installed
+### Example 3: Atlassian integration unavailable
 ```
 User: https://your-org.atlassian.net/browse/PROJ-12345
 ```
 
-If Atlassian MCP not installed:
-- Show installation instructions
+If the Atlassian integration is unavailable:
+- Tell the user to install and authenticate Jira access for their agent environment
 - Stop execution
-- Wait for user to install and retry
+- Wait for the user to retry
 
 ## Notes
 
-- This skill requires Atlassian MCP to be installed and authenticated
+- This skill requires an authenticated Atlassian integration for Jira read/write
 - The branch naming convention follows: `<type>/<TICKET-KEY>-<description>`
 - Common types: `fix/`, `feature/`, `refactor/`, `chore/`
 - The skill always creates branches from the master branch
@@ -242,13 +226,13 @@ When creating bug or incident tickets, use this constrained format.
 
 ## Required Sections (plain text, no markdown headers in Jira)
 
-1. **Incident Summary** — 1-2 sentences: what is broken, who is impacted, why it matters now
-2. **Impact** — 1 short paragraph or 2 bullets: user/business impact, duration/frequency
-3. **Current Behavior** — observable behavior based on errors/logs/metrics
-4. **Expected Behavior** — outcome-focused, testable, no solution design
-5. **Acceptance Criteria** — 2-4 bullets, outcome-based, independently verifiable
-6. **Technical References** — short list of class/API/method names only
-7. **Supporting Material** — reference to the temporary Markdown document
+1. **Incident Summary**: 1-2 sentences. What is broken, who is impacted, why it matters now.
+2. **Impact**: 1 short paragraph or 2 bullets. User/business impact, duration/frequency.
+3. **Current Behavior**: observable behavior based on errors/logs/metrics.
+4. **Expected Behavior**: outcome-focused, testable, no solution design.
+5. **Acceptance Criteria**: 2-4 bullets, outcome-based, independently verifiable.
+6. **Technical References**: short list of class/API/method names only.
+7. **Supporting Material**: reference to the temporary Markdown document.
 
 ## Supporting Markdown Document
 Contains everything excluded from Jira: domain concepts, timelines, logs, code walkthroughs, reproduction steps, assumptions, risks.

@@ -52,9 +52,14 @@ Use it when:
 - Runtime entrypoint: `~/.cursor/rules/global-user-instructions.mdc` (`@` reference)
 
 ### Facts files (local, not in public AGENTS.md)
-- User + workspace: `~/.ai-playbook/facts.md` — identity, GitHub accounts, workspace roots, `shared_docs_dir`, skill keys, brag paths, instruction entrypoints
-- Ownership: personal-projects and company-work trees (paths in `~/.ai-playbook/facts.md`): each scope's `.ai-playbook/facts.md`, `dictionary.md`, and company `company-guidelines.md` / runbooks where applicable
-- Repo: `docs/facts.md` (use `docs/facts.md.example` as template in public repos)
+- User + workspace: `user_facts_path` facts key → `~/.ai-playbook/facts.md` — identity, GitHub accounts, workspace roots, **guideline canonical keys**, skill keys, brag paths, instruction entrypoints. **Load first every task** (Cursor: `load-facts-at-task-start.mdc`).
+- Ownership: personal-projects and company-work trees (`personal_ownership_docs_dir`, `company_ownership_docs_dir` keys): each scope's `facts.md`, `dictionary.md`, and **`company_guidelines_master`** / runbooks where applicable
+- Repo: `repo_facts_rel` in the current repository (typically `docs/facts.md`; see `docs/facts.md.example`)
+
+### Guideline masters vs repo mirrors (facts keys)
+- Cross-project: `shared_docs_dir` — canonical JVM/coding guideline files
+- Company: `company_guidelines_master` — canonical; repo `company_guidelines_repo_mirror_rel` is sync-only
+- Project: `project_guidelines_rel` in the current repo — canonical for that repo
 
 ## Entrypoint verification
 
@@ -118,5 +123,5 @@ rsync -a --delete --exclude '.DS_Store' ~/.agents/skills/ ./agents/skills/
 - `README.md`: overview and usage index for this repository.
 - `AGENTS.md` (repo root): guidance for maintaining **this** command-spec repository only.
 - `docs/AGENTS.md`: version-controlled **user-level** cross-project instructions (canonical source for Codex, Claude Code, Copilot CLI, Cursor).
-- `docs/facts.md.example`: public template for per-repo `docs/facts.md`.
+- `docs/facts.md.example`: template for repo `docs/facts.md` (`repo_facts_rel`; no machine paths in repo).
 - `projects/.ai-playbook/`: canonical shared cross-project guidelines and this runtime-layout doc; runtime directory symlink at `~/Projects/.ai-playbook/`.

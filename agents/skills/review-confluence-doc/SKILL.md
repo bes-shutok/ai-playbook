@@ -26,36 +26,19 @@ If a key is missing from facts, fall back to asking the user or using sensible d
 
 ## Workflow
 
-### Step 0 – Pre-requisite: Verify Atlassian MCP
+### Step 0 – Pre-requisite: Verify Atlassian integration
 
-1. Verify Atlassian MCP tools are available by calling `mcp__atlassian__getConfluencePage` (or listing available Atlassian tools).
-2. If Atlassian MCP is NOT installed:
+1. Verify you can read Confluence pages via your environment's **Atlassian integration** (page fetch capability).
+2. If the integration is unavailable:
    ```
-   ⚠️  Atlassian MCP is not installed!
+   ⚠️  Atlassian integration is not available.
 
-   Codex:
-   codex mcp add atlassian
-   (authenticate when prompted, then restart Codex)
-
-   Claude Code:
-   claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp
-   (authenticate when prompted, then restart Claude Code)
-
-   After installation, retry this command.
+   Install and authenticate Confluence/Atlassian access for your agent environment,
+   then retry this workflow. See user AGENTS.md or your agent setup docs if present.
    ```
-   STOP and wait for user.
-3. If Atlassian MCP returns OAuth refresh errors (`invalid_grant`, `Invalid refresh token`, `OAuth token refresh failed`):
-
-   Codex:
-   ```
-   codex mcp logout atlassian
-   codex mcp login atlassian
-   ```
-
-   Claude Code: remove and re-add the `atlassian` MCP server, then authenticate again.
-
-   Then retry after re-authentication.
-4. If Atlassian MCP is installed and authenticated, proceed to Step 1.
+   STOP and wait for the user.
+3. If calls fail with OAuth refresh errors (`invalid_grant`, `Invalid refresh token`, `OAuth token refresh failed`), tell the user to re-authenticate the Atlassian integration, then retry.
+4. When the integration is authenticated, proceed to Step 1.
 
 ---
 
@@ -76,7 +59,7 @@ Extract:
 
 ### Step 2 – Fetch the Document
 
-1. Use `mcp__atlassian__getConfluencePage` (or equivalent) to retrieve the page content.
+1. Fetch the page via your Atlassian integration (HTML or markdown content as supported).
 2. If the page has child pages that form part of the document (e.g., appendices, sub-sections), fetch those as well.
 3. If the fetch fails, show the error and ask the user to verify the URL/permissions.
 
@@ -248,7 +231,7 @@ After presenting feedback on console:
 
 #### 6.1 Inline vs footer comments
 
-**Load the inline comment tool before posting any comment.** The Atlassian MCP loads `createConfluenceFooterComment` by default, but `createConfluenceInlineComment` is a separate tool that must be loaded explicitly (e.g. via ToolSearch with `confluence inline comment`). Posting footer comments by default because the inline tool wasn't loaded is a workflow bug, not a design choice. Comments are not editable or deletable through the MCP, so a wrong-format post can only be fixed by manual deletion in Confluence UI.
+**Prefer inline comments** anchored to specific page text when your integration supports them. Some environments expose footer comments separately from inline comments; confirm you are using the inline capability before posting, not footer-only by accident. Posted comments may not be editable through the integration; wrong-format posts may require manual cleanup in Confluence UI.
 
 - **Default: inline comment** anchored to specific text in the page. This gives the reader immediate context; the comment appears right next to the relevant section.
 - **Footer comment**: only when a finding spans many unrelated sections and has no single natural anchor point.
@@ -269,7 +252,7 @@ Apply these to every comment regardless of severity:
 
 - **Never add a self-correction reply** ("Correction to the above:"). If a posted comment needs correction, tell the user and ask them to delete the original. Then repost the clean version.
 - **Never add unsolicited notes or replies** to existing comment threads unless the user specifically asks.
-- The Atlassian MCP does not expose comment edit or delete APIs. Acknowledge this limitation to the user when a correction is needed.
+- The Atlassian integration may not expose comment edit or delete. Acknowledge this limitation to the user when a correction is needed.
 - Confirm each successful post: `✅ Comment posted on <anchor text>.`
 
 ---

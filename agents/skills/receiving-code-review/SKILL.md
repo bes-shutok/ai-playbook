@@ -137,6 +137,21 @@ FOR multi-item feedback:
   4. Verify no regressions
 ```
 
+## Same-change-set scope for optional Low findings
+
+When a review finding is marked optional/Low but references files or classes already modified in the active branch or session, list the in-scope Low findings you plan to implement and ask the user for confirmation before acting.
+
+```
+IF finding severity is Low AND reviewer labels it "optional":
+  IF finding touches files already changed on this branch/session:
+    REPORT to user: list each in-scope Low finding and the proposed fix
+    WAIT for user confirmation before implementing
+  ELSE IF finding is cross-cutting or new subsystem:
+    PRESENT to user before deferring
+```
+
+"Optional" means lower delivery priority, not permission to skip when the diff is already open on those paths. But it also does not mean silent auto-implementation: report what you plan to fix and get a brief confirmation first.
+
 ## Triage Decision Rule
 
 When classifying findings for user questions (design decisions, architectural changes, refactors):
@@ -250,6 +265,7 @@ Use `github-pr-workflow` for the exact GitHub GraphQL commands.
 
 Rules:
 - Reply in the review thread, not as a top-level PR comment.
+- Do not reply "Fixed" or cite a follow-up branch until the change exists in the working tree or a pushed commit on that branch.
 - Bot or automated threads: reply, then resolve in the same step.
 - Human reviewer threads: reply only. Never resolve them.
 - Never silently resolve any thread.

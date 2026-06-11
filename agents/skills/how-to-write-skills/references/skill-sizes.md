@@ -4,7 +4,7 @@ Guidelines for determining optimal skill size and when to split content across m
 
 ## Size Analysis of Production Skills
 
-Based on analysis of 50+ production skills from official Claude Code plugins:
+Based on analysis of 50+ production skills from official agent skill plugins:
 
 | Size Category | Line Range | Percentage | Examples |
 |---------------|------------|------------|----------|

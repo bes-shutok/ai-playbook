@@ -98,23 +98,23 @@ When `.ralphex/progress/` exists in the current project directory:
 
 1. Read the 5 most recent `*.txt` files from `.ralphex/progress/` (by modification time).
 2. For each log, extract recurring patterns:
-   - **Rate-limit hits** — phase where the limit was hit (task/review/codex), frequency, reset window noted in the log.
+   - **Rate-limit hits** — phase where the limit was hit (task/review/automation), frequency, reset window noted in the log.
    - **Review-phase warnings** — `first review pass did not complete cleanly` (non-fatal; flag if frequent).
    - **Already-done detection** — agent found work pre-completed in a prior commit; note if it caused repeated plan runs.
    - **Environment/tool gaps** — tool not found inside container (Maven, Python, etc.) during a phase that assumed it was available.
-   - **Codex loop failures** — codex review parse or exit errors.
+   - **Automated review loop failures** — external review parse or exit errors.
 3. Classify each extracted pattern using the same Step 1 categories (human guidance, module knowledge, LLM rule, or temporary).
 4. Feed classified patterns into the placement workflow (Steps 2–6) alongside lessons from communication.
 
 **Specific placement guidance for common patterns:**
 - Frequent rate-limit hits → `docs/BEST_PRACTICES.md` or cross-project shared docs (from facts `shared_docs_dir`): plan size guidelines, recommended run windows.
 - Container tool gaps → project `AGENTS.md` / `CLAUDE.md`: document which tools are available in which execution phase.
-- Codex loop failures → note `codex_enabled = false` as a config workaround in project or user-level docs.
+- Automated review loop failures → note disabling the external review loop in project or user-level docs when applicable.
 - Non-fatal review warnings → no action needed unless they occur in every run; if so, note as known pattern in project docs.
 
 ## Step 1.6: Internet Research Capture
 
-When research is conducted via WebSearch or other external sources:
+When research is conducted via web search or other external sources:
 
 **Always capture findings to dedicated documentation:**
 - Create or update canonical docs in `docs/` with numbered chapters/clauses
@@ -134,13 +134,26 @@ When research is conducted via WebSearch or other external sources:
 - Examples file should reference main doc, not duplicate it
 
 **When to create new research docs:**
-- After WebSearch for best practices, technical comparisons, tool selection
+- After web search for best practices, technical comparisons, tool selection
 - When user asks for research on a topic
 - When the same questions recur across sessions
 - Before making technical decisions with alternatives
 
 ## Step 2: Hard Placement Rules
 Apply these without discretion.
+
+### Guideline file roles (resolve from facts keys only)
+
+At learn start, read `user_facts_path`. Skills must **not** hardcode machine paths for guideline masters.
+
+| Role | Facts key | Edit when |
+|------|-----------|-----------|
+| Cross-project JVM/coding | `shared_docs_dir` + filename | Universal or JVM/Spring rule |
+| Company master | `company_guidelines_master` | Cross-repo company convention |
+| Company repo mirror | `company_guidelines_repo_mirror_rel` | Sync only — after master edit; never canonical |
+| Project (current repo) | `project_guidelines_rel` | Repo stack/domain rule |
+
+**Company rule workflow:** edit `company_guidelines_master` first, then sync mirrors in affected company repos. **Multi-tier generalization** (JVM + company + project) updates each canonical home — not the repo mirror alone.
 
 ### Temporary artifacts
 - Temporary artifacts may exist only under `docs/tmp/`.
@@ -211,9 +224,9 @@ Required outcomes:
 - subtopics as sections inside canonical docs (not fragmented duplicates)
 - overview docs reference canonical docs instead of restating content
 - no canonical docs referencing `docs/tmp/`
-- command-spec docs contain workflow guidance only; do not append raw command outputs unless they improve the command itself
+- workflow-spec docs contain workflow guidance only; do not append raw command outputs unless they improve the workflow itself
 - canonical docs and normative instructions avoid brittle exact class-name references unless they are intentionally canonical or operationally necessary
-- when changing the learn workflow itself, keep `~/.agents/skills/learn/SKILL.md` and `~/.claude/skills/learn/SKILL.md` synchronized, allowing only wrapper/context differences such as front matter, title, and "skill" vs "command" wording
+- when changing the learn workflow itself, edit `~/.agents/skills/learn/SKILL.md` and commit in the skills repository (`skills_repo_path` in `~/.ai-playbook/facts.md`)
 
 Topic-sibling update rule:
 - When placing new content in any document, **scan all other docs in the repo** (`docs/`, instruction files, READMEs) for documents that already cover the same topic or a parent/sibling concept.
@@ -262,18 +275,18 @@ For lessons about a skill's workflow/style or output/content requirements:
 - update `docs/examples/` only when an example/playbook is needed to demonstrate the rule
 - do not treat rewriting generated artifacts as the primary fix
 - do **not** place these in `docs/project-guidelines.md`, `docs/company-guidelines.md`, or instruction files — those are for project engineering conventions, not skill behavior
-- the skill files under `~/.agents/skills/` and `~/.claude/skills/` may be hard-linked; preserve parity when editing them
+- edit skills at `~/.agents/skills/` (runtime source; `~/.claude/skills` resolves to the same tree when symlinked)
 
 **Skill-scope detection:** When a lesson explicitly mentions a skill by name or describes a workflow that clearly belongs to a skill (e.g., "plans must investigate...", "execute-plan should...", "review feedback requires..."), detect this as a skill-scope lesson. Apply dual placement:
 1. Place the generalized lesson in the project's `development_lessons.md` with cross-references
-2. Also update the skill's `SKILL.md` in `~/Projects/myrepos/ai-playbook/agents/skills/<skill>/` with the generalized requirement
+2. Also update the skill's `SKILL.md` under `agents/skills/<skill>/` in the skills repository (`skills_repo_path` in `~/.ai-playbook/facts.md`, or deduce via `readlink -f ~/.agents/skills`)
 
 **Generalization before skill placement:** Before writing to a skill's `SKILL.md`, apply the generalization pass (Step 1.2) rigorously. Examples in skill files must be generic enough to apply across projects. Replace:
 - Project-specific terms (e.g., "Koinly Other Gains Report", "FIFO matching") → generic equivalents ("Source Report A", "data matching algorithm")
 - Concrete dates/IDs → placeholders ("2025-01-13" → "<specific date>")
 - Domain-specific assets → generic concepts ("BTC/USDT" → "asset pairs")
 
-**Commit workflow:** Skills are in the `ai-playbook` repo (`~/Projects/myrepos/ai-playbook`). Commit skill changes separately from project changes with a clear commit message.
+**Commit workflow:** Commit skill changes in the skills repository (`skills_repo_path` in `~/.ai-playbook/facts.md`), separately from project changes with a clear commit message.
 
 Examples:
 - RFC section-content requirements belong in `~/.agents/skills/rfc-design/SKILL.md`
@@ -333,16 +346,16 @@ Instruction consolidation pass (required):
 - If two rules are both needed, make scopes non-overlapping and clearly distinguish baseline rule vs exception rule.
 
 Compaction pass (required):
-- When an instruction rule restates or elaborates a convention already fully documented in `docs/company-guidelines.md` or `docs/project-guidelines.md`, replace the rule body with a compact reference (for example `see company-guidelines.md #N` or `see project-guidelines.md #N`) and keep only the incremental constraint or local exception in the instruction file.
+- When an instruction rule restates or elaborates a convention already fully documented in company or project guidelines, replace the rule body with a compact reference (for example `see company-guidelines.md #N` or `see project-guidelines.md #N`) and keep only the incremental constraint or local exception in the instruction file. Edit the **canonical** file for the tier (`company_guidelines_master` or `project_guidelines_rel` per facts keys) — not a repo company mirror alone.
 - When a rule in a project-level instruction file (`repo AGENTS.md`) duplicates content already present in user-level instructions (`~/.codex/AGENTS.md`), remove the project-level duplicate or reduce it to a one-line cross-reference. User-level rules are always loaded; restating them per-project adds no enforcement value and creates drift risk.
-- When adding a NEW project-specific technical or architectural convention (for example persistence configuration, test infrastructure pattern, schema layout, tool-specific settings), place the detailed content as a numbered rule in `docs/project-guidelines.md` first; add only a one-line `see project-guidelines.md #N` reference in instruction files. Full-text rules in instruction files are reserved for cross-cutting reasoning guards that have no suitable canonical doc home.
-- When adding a NEW cross-repository convention or baseline standard, choose the canonical home by scope. Resolve the shared docs directory from the user's facts document (key: `shared_docs_dir`):
+- When adding a NEW project-specific technical or architectural convention (for example persistence configuration, test infrastructure pattern, schema layout, tool-specific settings), place the detailed content as a numbered rule in the current repo's project guidelines (`project_guidelines_rel` facts key) first; add only a one-line `see project-guidelines.md #N` reference in instruction files. Full-text rules in instruction files are reserved for cross-cutting reasoning guards that have no suitable canonical doc home.
+- When adding a NEW cross-repository convention or baseline standard, choose the canonical home by scope. Read `user_facts_path` and resolve:
   - **Universal coding principle** (applies in any language, any company): `<shared_docs_dir>/coding_guidelines.md`
   - **Ecosystem-specific** (shared across JVM languages, Spring Boot patterns, Reactor/Mono): `<shared_docs_dir>/jvm_guidelines.md` — not in `coding_guidelines.md` because ecosystem rules are irrelevant to Python/Go/Rust projects.
   - **Language/framework-specific** (Kotlin stdlib idiom, MockK, Java Optional): `<shared_docs_dir>/kotlin_guidelines.md` / `java_guidelines.md` etc.
-  - **Company-specific convention** (naming, error code format, logging policy shared across repos but not universal): `docs/company-guidelines.md`
-  - Do NOT default to `company-guidelines.md` for general programming principles — that file is for company-specific conventions only.
-  - Add only a one-line `see <file> #N` reference in instruction files.
+  - **Company-specific convention** (naming, error code format, logging policy shared across company repos but not universal): **`company_guidelines_master`** (facts key) — not `company_guidelines_repo_mirror_rel`; sync repo mirrors after editing the master.
+  - Do NOT default to company guidelines for general programming principles — that file is for company-specific conventions only.
+  - Add only a one-line `see company-guidelines.md #N` reference in instruction files (repo-relative label for humans; canonical edit target remains the facts key).
 - When multiple instruction bullets share the same governing principle, merge into one generalized rule with examples rather than keeping N specific variants.
 - When a rule can be stated more concisely without losing its enforceable meaning, shorten it; prefer one-sentence rules over multi-sentence explanations.
 - When an instruction rule is only needed for specific infrequent task types (for example Jira story creation, PR description writing, PR chunk splitting), move it to a dedicated skill such as `jira-pr-workflow` rather than keeping it in the always-loaded instruction files; add or update the trigger description in the skill's front matter.
@@ -362,12 +375,12 @@ Before finishing, verify:
 - no `docs/` references to `docs/tmp/`
 - no duplicate concept definitions inside changed documents
 - instruction-rule updates are grouped/deduplicated with no overlapping or contradictory bullets for the same intent
-- no instruction rule restates a convention already documented in full in `docs/company-guidelines.md` or `docs/project-guidelines.md`; full text lives in the canonical doc, instruction file holds only the incremental constraint or a reference
+- no instruction rule restates a convention already documented in full in company or project guidelines; full text lives in the canonical file for that tier (`company_guidelines_master`, `project_guidelines_rel`, or `shared_docs_dir` file per facts keys); instruction files hold only the incremental constraint or a reference
 - no project-level instruction rule duplicates a rule already present in user-level instructions (`~/.codex/AGENTS.md`); project-level copies are reduced to a cross-reference or removed
-- every new full-text rule added to instruction files is either (a) a cross-cutting reasoning guard with no suitable canonical doc home, or (b) already has its detailed content in `docs/project-guidelines.md` or `docs/company-guidelines.md` with only a `see project-guidelines.md #N` / `see company-guidelines.md #N` reference in the instruction file
+- every new full-text rule added to instruction files is either (a) a cross-cutting reasoning guard with no suitable canonical doc home, or (b) already has its detailed content in the tier-appropriate canonical guideline file with only a `see … #N` reference in the instruction file
 - instruction files (`CLAUDE.md`, `AGENTS.md`) do not exceed 30,720 bytes each; if they do, apply the compaction pass again targeting the largest remaining rules for cross-ref replacement or occasional-skill extraction
 - exact class names appear only where operationally useful or intentionally canonical; normative instructions and canonical docs use role-based wording instead
-- if the learn workflow changed, `~/.agents/skills/learn/SKILL.md` and `~/.claude/skills/learn/SKILL.md` are synchronized apart from wrapper/context wording
-- RFC-workflow lessons updated in command/example files where applicable
+- if the learn workflow changed, `~/.agents/skills/learn/SKILL.md` is updated and committed in the skills repository (`skills_repo_path` in `~/.ai-playbook/facts.md`)
+- RFC-workflow lessons updated in skill/example files where applicable
 - changed API docs and OpenAPI artifacts remain synchronized
 - the learn counter file (`/tmp/learn-counter-${PPID}-<dir_hash>`) has been deleted so the nudge timer restarts

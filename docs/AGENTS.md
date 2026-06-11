@@ -40,14 +40,27 @@ If `~/.codex/AGENTS.md` is a regular file, back it up, then `ln -sf <instruction
 | Tier | Rules (`AGENTS.md`) | Facts (`facts.md`) |
 |------|---------------------|-------------------|
 | User + workspace | `docs/AGENTS.md` in this repo (this file) | `~/.ai-playbook/facts.md` (local only: identity, roots, `shared_docs_dir`, skill keys) |
-| Ownership | repo `AGENTS.md` | personal-projects or company ownership `facts.md` when scope matches (paths in `~/.ai-playbook/facts.md`) |
-| Repo | repo `AGENTS.md` | `docs/facts.md` in the current repo (copy from `docs/facts.md.example` when needed) |
+| Ownership | repo `AGENTS.md` | company or personal ownership facts when scope matches (keys in `user_facts_path`) |
+| Repo | repo `AGENTS.md` | `repo_facts_rel` in the current repo (typically `docs/facts.md`; no machine paths) |
 
-At task start, load applicable `facts.md` files for the current repo scope before relying on path or account assumptions.
+At task start, load applicable `facts.md` files for the current repo scope before relying on path or account assumptions. **Cursor agents:** this is mandatory — see `load-facts-at-task-start` user rule; read `user_facts_path` before path-dependent work.
 
 1. **User-level rules** — this file; tool entrypoints symlink or `@`-reference it.
 2. **Project-level rules** — repo `AGENTS.md` only; `CLAUDE.md` symlink or thin `@AGENTS.md`.
-3. **Repo docs** — `docs/project-guidelines.md`, `docs/project-decisions.md`, etc.
+3. **Repo docs** — project guidelines and decisions in the current repo (`project_guidelines_rel` facts key).
+
+### Guideline canonical homes (paths in facts only)
+
+Resolve from `user_facts_path` keys table — skills must reference **keys**, not machine paths.
+
+| Scope | Facts key | Role |
+|-------|-----------|------|
+| Cross-project JVM/coding | `shared_docs_dir` | Canonical language/JVM guideline files |
+| Company | `company_guidelines_master` | **Canonical** company guidelines — edit here |
+| Company repo | `company_guidelines_repo_mirror_rel` | Mirror only — sync after master edit |
+| Current repo project | `project_guidelines_rel` | **Canonical** project guidelines |
+
+When a change spans tiers (for example JVM + company + project), update each canonical home — not the repo company mirror alone.
 
 ### Placement rules
 - When a rule is requested "for the project and for the user": place the full text as a numbered rule in `docs/project-guidelines.md`, add a one-line `see docs/project-guidelines.md #N` reference in project `AGENTS.md`, and copy the full rule text to user-level instructions in `ai-playbook`.
@@ -68,6 +81,7 @@ At task start, load applicable `facts.md` files for the current repo scope befor
 
 - **Global:** `~/.cursor/rules/global-user-instructions.mdc` `@`-references this file via `instructions_repo` (or `~/.codex/AGENTS.md` symlink).
 - **Per-repo:** repo `AGENTS.md` only for project deltas; do not duplicate user rules.
+- **Optional IDE hooks (Cursor):** `~/.cursor/hooks.json` may enforce shared git safety (`git reset --hard`, Co-authored-by trailers, force-push prompts) and the execute-plan manifest bootstrap contract (`manifest.md` must exist before plan-scoped edits when `docs/tmp/execute-plan/<PLAN_SLUG>/` exists). Hook wiring is IDE-specific; skill contracts stay in `execute-plan` / `agent-logs.md`.
 
 ## Path References in Instruction and Documentation Files
 
@@ -80,6 +94,7 @@ Always use `~/` (home-relative) paths, never absolute `/Users/<name>/` paths, in
 - Generic skills must remain language-agnostic and project-agnostic. Code examples should use generic descriptions (e.g., "exact pattern matching with start/end anchors") not language-specific syntax (e.g., `re.match("^PATTERN$")` for Python, `Pattern.matches()` for Java). References to project-specific docs (e.g., `docs/domain/plan_quality_guidelines.md`) should be optional/cross-references only, not assumed to exist.
 - Language-specific skill content: When a skill quality gate or checklist includes language-specific patterns (testing traps, idioms, framework-specific stubs), replace them with a cross-reference to the relevant language guidelines file (`kotlin_guidelines.md`, `python_guidelines.md`, etc.) rather than inlining. Inlining causes drift as guidelines evolve independently.
 - "Language-agnostic" means replacing build-tool commands (e.g. `mvn`, `pytest`) and file extensions (`.kt`, `.py`) with generic placeholders (`<test-command>`, `.ext`). It does NOT mean removing project-doc references (e.g. `docs/metrics.md`, `docs/project-guidelines.md`) or domain terminology (e.g. `BO`) — those are concrete contextual examples that provide useful guidance and should be kept.
+- **Agent-agnostic skills:** shared skill bodies must describe capabilities (sub-agent execution, Atlassian integration, draft-save) — not vendor tools (`AskQuestion`, `Task`, MCP wire names) or IDE hook paths. Optional local enforcement belongs in user `AGENTS.md` / IDE config; see `how-to-write-skills` skill.
 
 ## Implementation Plans
 
@@ -137,6 +152,10 @@ Always pass the exception object `e` (not `e.message`) as the last argument to `
 ## Git Push Policy
 
 Never push to `origin` (or any remote) without an explicit instruction from the user to do so. Completing a commit or merge does not imply permission to push. After every local commit, stop and wait for the user's next instruction — do not chain `git push` unless the user's message explicitly asked for it.
+
+## Execute-plan commit authorization
+
+When the user selects **execute-plan** (explicit trigger phrase or the execute-plan option in the plan-path gate), per-task and per-review-iteration commits via the `done` skill are **authorized for that execute-plan run** without an additional "commit this" prompt. This overrides generic "commit only when requested" for the duration of that run only. Do not push without explicit user instruction. See `execute-plan` skill "Implicit triggers and plan-path gate" and "Commit authorization".
 
 Never run `git push --force`, `git push --force-with-lease`, or any other force push without explicit user approval. Ask first even when fixing a mistaken push or rewriting history.
 
@@ -221,21 +240,26 @@ Documentation files are self-contained by default. Referencing one document from
 
 ## Jira Task Context Ledger
 
-When Jira task context is needed for a feature (for example, to distinguish the primary ticket from parallel or follow-up stories), record the relevant ticket IDs and a one-line relevance summary in `docs/facts.md` under **Related Jira Tasks**. Use that section only for internal scoping clarity; do not cite `docs/facts.md` from RFCs, PR descriptions, or code comments. Any human-facing document that needs Jira context must restate the relevant ticket IDs inline.
+When Jira task context is needed for a feature (for example, to distinguish the primary ticket from parallel or follow-up stories), record the relevant ticket IDs and a one-line relevance summary under **Related Jira tasks** in the repo's `docs/facts.md` (`repo_facts_rel`). Use that section only for internal scoping clarity; do not cite `docs/facts.md` from RFCs, PR descriptions, or code comments. Any human-facing document that needs Jira context must restate the relevant ticket IDs inline.
 
 ## Guidelines and facts loading
 
-At task start, read applicable **facts** (see hierarchy table above) and **guidelines** for the current context.
+At task start, read applicable **facts** (see hierarchy table above) and **guidelines** for the current context. **Mandatory:** read `user_facts_path` before path-dependent work (Cursor: `load-facts-at-task-start` rule).
 
 ### Facts (environment-specific)
 
-1. `~/.ai-playbook/facts.md` — git author, GitHub accounts, workspace roots, `shared_docs_dir`, skill keys, brag paths, instruction entrypoints.
-2. Ownership: company or personal-projects ownership `facts.md` when the repo path matches (paths in `~/.ai-playbook/facts.md`).
-3. Repo: `docs/facts.md` when present in the current repository.
+1. `user_facts_path` — git author, GitHub accounts, workspace roots, guideline canonical keys, skill keys, brag paths, instruction entrypoints.
+2. Ownership facts when scope matches (`company_ownership_facts`, personal ownership facts).
+3. `repo_facts_rel` in the current repository — repo-specific scope (no machine paths).
 
 ### Guidelines (public rules)
 
-Load from `shared_docs_dir` in `~/.ai-playbook/facts.md` (directory symlink to `instructions_repo/projects/.ai-playbook/`): `agent_workflow_guidelines.md`, `coding_guidelines.md`, and language files (`jvm`, `kotlin`, `java`, `python`) as applicable; add `company-guidelines.md` from the company ownership docs directory when scope applies. Load `docs/project-guidelines.md` in the current repo when it exists.
+Resolve paths from facts keys — do not hardcode masters in skills.
+
+- Cross-project: files under `shared_docs_dir` (`coding_guidelines.md`, `jvm_guidelines.md`, language files, `agent_workflow_guidelines.md`).
+- Company master: `company_guidelines_master` when the repo is company-scoped.
+- Project: `project_guidelines_rel` in the current repo when it exists.
+- Company repo mirror: `company_guidelines_repo_mirror_rel` is evidence/sync only — edit `company_guidelines_master` first.
 
 ### Deduplication
 

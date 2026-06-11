@@ -9,7 +9,7 @@ description: "Full plan lifecycle — create, edit, and complete implementation 
 
 **Announce at start (update / complete):** "I'm using the plans skill to update the plan." (or "…mark the plan complete.")
 
-**Create vs update:** Run **Phase 0 (branch setup)** only when **creating** a new plan. Skip Phase 0 for plan updates or completion unless the repo is in detached HEAD or the user asks to switch branches.
+**Create vs update:** Run **Phase 0 (branch setup)** and **Phase 1 (requirements discovery)** only when **creating** a new plan. Skip both phases for plan updates or completion unless the repo is in detached HEAD or the user asks to switch branches.
 
 **Writing:** Follow `agent_workflow_guidelines.md` §45. Use plain English in **Gist & Examples** and **Design Invariants** (e.g. "public API response shape unchanged", not "wire contract stable"). Add `## Terms` after the title when the plan uses 3+ project-specific words. TDD labels (RED/GREEN) stay in task checklists only.
 
@@ -17,13 +17,13 @@ description: "Full plan lifecycle — create, edit, and complete implementation 
 
 **For detailed plan quality guidance:** If the project has `docs/domain/plan_quality_guidelines.md`, consult it for domain-specific examples and patterns. Otherwise, see Universal Patterns below.
 
-**When updating or optimizing an existing plan:** compare the plan against the current code shape, the RFC/PRD, and any predecessor phase plans before editing. Prefer patching the plan directly when improvements are clear. **Also verify all required sections are present** (`## Gist & Examples`, `## Review Scope`, `## Validation Commands`) — pre-existing plans may be missing them; add any absent sections before making other edits. **When the update notes that a code change is "already done", read the actual source file to verify the claim** — do not rely on session summaries or memory; an incorrect "already done" note becomes a review blocker.
+**When updating or optimizing an existing plan:** compare the plan against the current code shape, the RFC/PRD, and any predecessor phase plans before editing. Prefer patching the plan directly when improvements are clear. **Also verify all required sections are present** (`## Gist & Examples`, `## Evaluation Criteria`, `## Review Scope`, `## Validation Commands`) — pre-existing plans may be missing them; add any absent sections before making other edits. **When the update notes that a code change is "already done", read the actual source file to verify the claim** — do not rely on session summaries or memory; an incorrect "already done" note becomes a review blocker.
 
 **Save plans to:** `docs/plans/<STORY-KEY>-<feature-name>.md` (story key prefix) or `docs/plans/YYYY-MM-DD-<feature-name>.md` (date prefix when no story key applies).
 
 **CRITICAL:** Plans go in `docs/plans/` in the project repository — never in tool-default locations (`.claude/plans/`, `.opencode/plans/`, `.codex/`, `.cursor/`, etc.). When a tool suggests its own default path, override it and write to `docs/plans/` instead.
 
-**For YourCompany projects:** Design RFCs go in `docs/rfcs/`. When a plan implements an RFC, add a one-line reference to it in the plan header (the optional line below the `# Plan:` title).
+**For company projects:** Design RFCs go in `docs/rfcs/`. When a plan implements an RFC, add a one-line reference to it in the plan header (the optional line below the `# Plan:` title).
 When an RFC phase already has its own implementation Jira task, use that phase task key in the plan filename and title instead of the parent RFC/story key; keep the RFC reference line in the header for traceability.
 
 ## Phase 0: Branch Setup (Run Once at Plan Creation Start)
@@ -100,6 +100,87 @@ Report the final branch state to the user before continuing.
 
 **Hard gate:** Do not write the plan file until branch setup is complete or explicitly declined by the user.
 
+## Phase 1: Requirements Discovery & Validation (Run Once at Plan Creation Start)
+
+After branch setup and before writing the plan content, interview the user to validate requirements, scope, and key decisions. This prevents wasted effort on misunderstood goals or over-scoped plans.
+
+**Announce:** "Now I'll validate requirements and key decisions before writing the plan. This ensures we build the right thing with clear boundaries."
+
+### Step 1.1: Discover the real goal
+
+Ask targeted questions to uncover the actual objective, not just the surface request:
+
+1. **What problem does this solve?** Ask for the motivating problem or user pain point
+2. **What does success look like?** Ask for concrete examples of the working end state
+3. **Who is this for?** Ask which user, component, or system will consume this work
+4. **What stays the same?** Ask what must NOT change (invariants, existing behavior, API contracts)
+
+Bias the user toward **small, compartmentalized specs**:
+- If the scope covers multiple independent concerns, suggest splitting into separate plans
+- If the plan mixes refactoring with new behavior, suggest separating them
+- If the plan touches multiple layers (UI, business logic, data), ask which layer is the primary goal
+
+### Step 1.2: Verify key decisions explicitly
+
+Before proceeding, explicitly confirm each critical decision with the user. When the decision involves a trade-off with multiple reasonable paths, present structured options to the user:
+
+**Confirm these elements:**
+1. **Scope boundaries:** what is IN vs OUT
+2. **Primary success criterion:** the one observable behavior that defines "done"
+3. **Key invariants:** what must NOT break or change
+4. **External dependencies:** what teams, systems, or migrations this depends on
+5. **Rollout strategy:** single deploy vs phased rollout
+
+**Example confirmation questions:**
+
+- "Is this correct? The primary goal is X. Success means Y. We must not break Z."
+- "Should this plan handle both A and B, or just A (with B deferred to a separate plan)?"
+- "Is the rollout a single deploy or phased across multiple releases?"
+- "Does this depend on any external work (other teams, migrations, infra changes)?"
+
+For each confirmed decision, record it to a temporary notes buffer (write to `docs/tmp/plan-requirements-<slug>.md`). This becomes input for the `## Gist & Examples` section.
+
+### Step 1.3: Define evaluation criteria
+
+Before writing tasks, define explicit criteria for evaluating whether the final product is high-quality. Ask the user to refine:
+
+**Ask:**
+1. **What quality dimensions matter most for this change?** (examples: correctness, performance, maintainability, security, test coverage, observability)
+2. **What metrics or checks will verify success?** (examples: specific test commands, load test targets, latency SLO checks, security scan results)
+3. **What are the release gates?** (examples: code review approval, CI passing, performance regression tests, security sign-off)
+
+Write these to the requirements buffer as `## Evaluation Criteria`. This becomes a required section in the final plan.
+
+### Step 1.4: Confirm and proceed
+
+Present the validated requirements and evaluation criteria back to the user in summary form:
+
+```
+## Validated Requirements
+
+**Goal:** <one-sentence objective>
+
+**Scope boundaries:**
+- IN: <what this plan delivers>
+- OUT: <what is explicitly deferred>
+
+**Success criterion:** <primary observable behavior that defines done>
+
+**Key invariants:** <what must not break>
+
+**Evaluation criteria:**
+- <quality dimension>: <specific check or metric>
+- <quality dimension>: <specific check or metric>
+
+**Release gates:** <what must pass before this can ship>
+
+Proceed with writing the plan? (yes/no; if no, tell me what to adjust)
+```
+
+Wait for explicit confirmation before proceeding to write the plan file. If the user asks to adjust, update the requirements buffer and reconfirm.
+
+**Hard gate:** Do not write the plan file until requirements are validated and confirmed.
+
 ## Plan Format
 
 Every plan follows this exact structure — no variations:
@@ -114,6 +195,17 @@ Every plan follows this exact structure — no variations:
 ## Gist & Examples
 
 [Human-readable explanation of what changes and why, with concrete examples]
+
+## Evaluation Criteria
+
+[Specific criteria for evaluating whether the final product is high-quality]
+
+**Quality dimensions:**
+- <dimension> (e.g., correctness, performance, maintainability): <specific check or metric>
+- <dimension>: <specific check or metric>
+
+**Release gates:**
+- <what must pass before this can ship>
 
 ## Review Scope
 
@@ -179,6 +271,7 @@ Examples:
 - Before finalizing a CR Guard, cross-check every design decision source (RFC rules, design notes, prior phase decisions, PRD constraints, team agreements) against the guard lines. Guards should protect both prohibitions ("must not do X") and positive design decisions ("must preserve Y", e.g. ungated fallthrough for future extensibility).
 - Every plan must include a **Review Scope** section (see below).
 - Every plan must include a **Gist & Examples** section (see Universal Patterns).
+- Every plan must include an **Evaluation Criteria** section defining quality dimensions and release gates (see Phase 1).
 - Before finalizing, verify pre-computation bug pattern checks are addressed (see Universal Patterns).
 
 ## Documentation Impact Assessment
@@ -243,7 +336,7 @@ Any finding about a file not in this list must be rejected as out of scope.
 List production code and tests explicitly (review is file-scoped). For documentation, use a **scope-linked** policy instead of enumerating every doc path:
 
 - Any file under `docs/` (and `README.md` only when it catalogs endpoints or auth touched by the feature) may be edited when the change is **substantively required** to keep docs aligned with the feature (same change set as OpenAPI/transport; project-guidelines.md #70).
-- Task 6 (or equivalent doc-closure task) must include `rg`/`grep` over `docs/` for stale references, not only pre-listed files.
+- Task 6 (or equivalent doc-closure task) must include grep/search over `docs/` for stale references, not only pre-listed files.
 - Review accepts doc feedback that meets the scope bar; reject unrelated doc refactors.
 - Give **likely touch points** as examples, not an exhaustive allow-list — omitting paths (e.g. BFF contract docs) must not block required sync.
 
@@ -251,7 +344,7 @@ List production code and tests explicitly (review is file-scoped). For documenta
 - `path/to/UnrelatedFile.ext` — one-line reason
 ```
 
-**Placement:** immediately after the plan header (RFC reference line) and before `## Design Invariants` (if present) or `## Validation Commands`.
+**Placement:** immediately after `## Evaluation Criteria` and before `## Design Invariants` (if present) or `## Validation Commands`.
 
 **Partially-in-scope files:** when a large existing file is in scope for only specific methods, name those methods explicitly and add a freeze note: "All other methods in this file are frozen — reject any review finding that touches them." A file listed as in scope without a method-level constraint is treated as fully open, which invites out-of-scope fixes during review. See `agent_workflow_guidelines.md §15`.
 
@@ -275,7 +368,7 @@ Verify the build compiles after reverting. A compile error is hard evidence of a
 
 Before finalizing a new or updated plan, run the `review-plan` skill as a sub-agent:
 
-**Execution:** Launch a `general-purpose` background agent (via the `task` tool) with the full plan content and `review-plan` skill instructions. The agent performs the review independently using 9 parallel sub-agents from the shared review-agents catalog (quality, implementation, architecture, testing, simplification, documentation, security, concurrency, premortem) plus an inline consistency agent, and returns structured findings. Do NOT run the review inline — always delegate to a sub-agent so the main context stays clean.
+**Execution:** Launch a sub-agent with the full plan content and `review-plan` skill instructions. The agent performs the review independently using 9 parallel sub-agents from the shared review-agents catalog (quality, implementation, architecture, testing, simplification, documentation, security, concurrency, premortem) plus an inline consistency agent, and returns structured findings. Do NOT run the review inline — always delegate to a sub-agent so the main context stays clean.
 
 **Sub-agent prompt template:**
 ```
@@ -287,24 +380,43 @@ agent, as described in the skill instructions.
 Read the actual source files referenced in the plan to verify assumptions about data types,
 function signatures, pipeline ordering, and return contracts.
 
-Write the review output to: docs/reviews/YYYY-MM-DD-plan-review-<feature-name>.md
+Classify every finding as Blocker, Medium, Low, or Monitor (see severity rules below).
 
-Then amend the plan with any Blocker fixes and Mitigation additions.
+Write the review output to: docs/reviews/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md
+(use `-r1`, `-r2`, … for each loop iteration)
+
+Return in the review Summary:
+- counts: Blockers | Medium | Low | Monitor
+- ready=yes only when Blocker=0 AND Medium=0
 
 <plan content here>
 ```
 
-**If the sub-agent has not completed within 15 minutes**, proceed with an inline spot-check: read the files referenced in the plan, verify branch counts (count all conditional branches in branching constructs), verify helper signatures against actual function definitions, and verify all mutated parameters are listed. Continue working; incorporate the agent's findings when it eventually completes. Do not wait idle.
+**Review severity (plan gate):**
+
+| Severity | Meaning | Plan action before next round |
+|----------|---------|-------------------------------|
+| **Blocker** | Plan is wrong or unimplementable as written; execution would fail or violate invariants | Revise tasks, invariants, or scope — mandatory |
+| **Medium** | Plan is implementable but missing wiring, tests, concurrency guards, or has internal contradictions that will cause rework | Revise tasks or add explicit steps/tests — mandatory |
+| **Low** | Doc nits, redundant bullets, minor test gaps with safe fallbacks elsewhere | Fold into plan when trivial; optional same round |
+| **Monitor** | Accepted deferred risk with named owner | Add/update `## Monitor` with owner cross-reference |
+
+Map review-plan agent output when synthesizing: **Block** → Blocker; **Mitigate** that would cause implementation rework or silent failure → Medium; remaining **Mitigate** → Low or Monitor depending on whether a plan step is required.
+
+**If the sub-agent has not completed within 15 minutes**, proceed with an inline spot-check: read the files referenced in the plan, verify branch counts (count all conditional branches in branching constructs), verify helper signatures against actual function definitions, and verify all mutated parameters are listed. Classify inline findings with the same Blocker/Medium/Low/Monitor taxonomy. Continue working; incorporate the agent's findings when it eventually completes. Do not wait idle.
 
 **After the sub-agent completes**, incorporate findings into the plan from the review artifact — do not re-run plan analysis inline:
-1. **Block** findings → add or revise plan tasks to address them
-2. **Mitigate** findings → add as test cases or validation steps
-3. **Monitor** findings → note in the plan's `## Monitor` section; **always resolve ownership**: if an existing plan task or high-level task doc covers the area, assign the item there and cross-reference both ways; if no relevant task exists, suggest creating a new story/task. Never leave a Monitor item as "tracked for a follow-up" without naming its owner task or proposing a new one.
-4. Review output is saved to `docs/reviews/YYYY-MM-DD-plan-review-<feature-name>.md`
-5. Add a reference line in the plan header: `Plan review: docs/reviews/<filename>.md`
-6. Re-check the plan after incorporating findings
-7. **Repeat until zero blockers (minimum 2 rounds):** after incorporating all findings, re-run the review sub-agent with a new numbered review file (e.g. `…-r2.md`, `…-r3.md`). Continue the loop until the review returns zero blockers. One review round is not sufficient when the plan has multiple new or substantially rewritten tasks.
-8. **Minimum two reviews:** run at least two complete review rounds (r1, r2) even if the first review returns zero blockers. This catches issues that emerge only after applying fixes from the first review (new blockers, incomplete fixes, or cascading changes). Only stop when both: (a) the latest review round has zero blockers, AND (b) at least two review rounds have completed.
+1. **Blocker** findings → add or revise plan tasks to address them (mandatory)
+2. **Medium** findings → add or revise plan tasks, tests, invariants, or Review Scope entries (mandatory — same bar as Blockers for loop exit)
+3. **Low** findings → fold into plan when the fix is a one-line clarification; otherwise leave noted in the review artifact
+4. **Monitor** findings → note in the plan's `## Monitor` section; **always resolve ownership**: if an existing plan task or high-level task doc covers the area, assign the item there and cross-reference both ways; if no relevant task exists, suggest creating a new story/task. Never leave a Monitor item as "tracked for a follow-up" without naming its owner task or proposing a new one.
+5. Review output is saved to `docs/reviews/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md`
+6. Add a reference line in the plan header: `Plan review: docs/reviews/<latest-rN>.md (latest, ready) · …`
+7. Re-check the plan after incorporating findings
+8. **Repeat until zero Blockers AND zero Medium (minimum 2 rounds):** after incorporating all Blocker and Medium findings, re-run the review sub-agent with the next numbered review file (`…-r2.md`, `…-r3.md`, …). Continue the loop until the latest review reports **Blocker=0 AND Medium=0**. One review round is not sufficient when the plan has multiple new or substantially rewritten tasks, or when the prior round had any Medium+ finding.
+9. **Minimum two reviews:** run at least two complete review rounds (r1, r2) even if the first review returns zero Blockers and zero Medium. This catches issues that emerge only after applying fixes from the first review (new Blockers, incomplete Medium fixes, or cascading changes). Only stop when both: (a) the latest review round has **Blocker=0 AND Medium=0**, AND (b) at least two review rounds have completed.
+
+**Ready for execution** means the latest review artifact explicitly states `ready=yes` (or equivalent verdict) with Blocker=0 and Medium=0. Low and Monitor counts do not block handoff to `execute-plan`.
 
 Then verify these structural failure modes and fix them in the plan:
 
@@ -361,6 +473,8 @@ Core plan quality principles applicable across all projects and languages:
 
 - **Gist & Examples section**: Every plan must include a human-readable "Gist & Examples" section after the header that explains: what changes (plain language), why the change is needed (problem statement or context), concrete input/output examples showing before/after behavior, and edge cases that motivated design decisions. This serves as the on-ramp for both implementers and reviewers who need context before diving into tasks.
 
+- **Evaluation Criteria section**: Every plan must include an "Evaluation Criteria" section that defines how quality will be assessed for the final product. This includes quality dimensions (correctness, performance, maintainability, security, test coverage, observability) with specific checks or metrics for each, and release gates (what must pass before the change can ship). Criteria must be precise and verifiable — not vague statements like "it should work" but concrete tests, commands, or metrics.
+
 - **Core concepts**: Edge cases (boundary conditions requiring explicit handling), negative requirements (what must NOT be done), acceptance criteria (definition of done), validation sequence (ordered steps in which processing must occur).
 
 - **Pattern-specific specifications**: Use exact pattern matching with start/end anchors (not `startswith()` or broad regex), include examples of what NOT to match, explicitly state what is out of scope.
@@ -387,7 +501,9 @@ After saving, offer:
 
 > "Plan saved to `docs/plans/<filename>.md`. Ready to execute with `execute-plan`, in this session manually, or hand off to a new session?"
 
-**Automated execution:** Use the `execute-plan` skill. If Phase 0 already created a feature branch, `execute-plan` Phase 0 verifies that branch and offers to continue on it instead of creating another. It orchestrates sub-agents to implement one task at a time (tests must pass), mark checkboxes, run `done` after each task, then run review/fix loops (with `done` after each review iteration) until **two consecutive** clear review rounds (zero remaining Medium+ after `receiving-code-review` triage), archive the plan to `docs/plans/completed/`, and remove `docs/tmp/execute-plan/<slug>/` on success only. The parent agent must not implement tasks inline or batch commits — see `execute-plan` anti-patterns.
+**Plan path without trigger phrase:** If the user references an existing plan file (`docs/plans/…`, `@` mention, or filename only) without saying execute-plan / implement plan / run plan, **do not** assume implementation. Run the three-way gate from the `execute-plan` skill (execute-plan / manual / read-only) before any production code edits.
+
+**Automated execution:** Use the `execute-plan` skill. If Phase 0 already created a feature branch, `execute-plan` Phase 0 verifies that branch and offers to continue on it instead of creating another. It orchestrates sub-agents to implement one task at a time (tests must pass), mark checkboxes, run `done` after each task, then run review/fix loops (with `done` after each review iteration) until **two consecutive** clear review rounds (zero remaining Medium+ after `receiving-code-review` triage), **minimum two** and **maximum ten** review rounds, archive the plan to `docs/plans/completed/`, and remove `docs/tmp/execute-plan/<slug>/` on success only. The parent agent must not implement tasks inline or batch commits — see `execute-plan` anti-patterns. Selecting execute-plan authorizes per-task `done` commits without a separate commit prompt for that run (push still requires explicit user instruction).
 
 **Manual execution in this session:** Use `tdd-guide` and `unit-test-runner` per task (fresh output before marking the task complete). One task per commit. Use `done` only when the user ends the session (learn + commit across repos). Do not use this path when the user asked for `execute-plan` / `/execute-plan`.
 
