@@ -4,3 +4,7 @@
 # Local facts override (use docs/facts.md.example as template)
 /docs/facts.md
 /docs/reviews
+
+# Ephemeral session scratch (see docs/AGENTS.md)
+/docs/tmp/
+

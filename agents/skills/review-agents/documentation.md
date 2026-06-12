@@ -46,9 +46,9 @@ If changes relate to an existing plan:
 
 When review finds current code behavior that module docs, BFF contracts, or high-level tasks do not capture (narrower read path than another API, missing edge case, accepted tech debt):
 
-- Flag the owning module high-level tasks file (crm-profile: `docs/profile/profile-service-high-level-tasks.md`, `docs/consent/consent-service-high-level-tasks.md`).
+- Flag the owning module high-level tasks file. Resolve path from `{guidelines_path}` / project guidelines — do not assume legacy `docs/<module>/` layout on migration-complete repos (legacy pattern: `docs/<module>/<service>-high-level-tasks.md`).
 - Recommend a **tech debt** or **implementation fix** bullet under the relevant Task (or Core Concepts), with target task key when known.
-- Do not treat gitignored `docs/reviews/` staging as sufficient backlog; high-level tasks is the durable tracker (crm-profile `project-guidelines.md` #77).
+- Do not treat gitignored `{reviews_dir}/` staging as sufficient backlog; module high-level tasks docs (path from project guidelines) are the durable tracker.
 
 
 Report problems only. No positive observations.

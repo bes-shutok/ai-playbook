@@ -13,6 +13,18 @@ description: Preserve gitignored LLM docs and instruction files by stashing them
 - **Single-branch invariant**: The shadow history for gitignored docs must live on one branch named exactly `docs`. Branches such as `docs/master` or `docs/<feature>` are incorrect and must be consolidated back into `docs`, not reused.
 - **`RESTORE_TMP`**: A temp directory snapshot taken before any branch switch, used as the reliable restore mechanism when returning to the working branch.
 
+## Documentation paths
+
+Resolve gitignored doc roots per `_shared/doc-paths.md` (`{reviews_dir}`, `{tmp_dir}`, etc.). The `SHADOW_PATHS` loops below list **common** candidates; extend with any gitignored path under `docs/` discovered during resolution. Do not assume `docs/history/reviews/` if the project still uses `docs/reviews/`.
+
+## Related
+
+- [`doc-hierarchy`](../doc-hierarchy/SKILL.md) — company service documentation hierarchy schema
+- [`doc-hierarchy-migrate`](../doc-hierarchy-migrate/SKILL.md) — migration workflow (references this skill for gitignored doc preservation)
+- [`doc-hierarchy-upkeep`](../doc-hierarchy-upkeep/SKILL.md) — Layer 1/2 upkeep after migration
+- [`_shared/doc-paths.md`](../_shared/doc-paths.md) — path resolution protocol (`{reviews_dir}`, `{tmp_dir}`, etc.)
+- `done` — invokes this skill automatically before committing
+
 ## When to Use
 
 - Called from the `done` skill as Step 2 (before committing).
@@ -28,7 +40,7 @@ Stash all gitignored LLM artifact paths so they survive branch switches. Only in
 ```bash
 STASH_ARGS=()
 PRESTASH_TMP=$(mktemp -d)
-for p in docs/ .github/docs/ docs/personal/ docs/tmp/ docs/reviews/ AGENTS.md CLAUDE.md GEMINI.md COPILOT.md; do
+for p in docs/ .github/docs/ docs/personal/ docs/tmp/ docs/reviews/ docs/history/reviews/ AGENTS.md CLAUDE.md GEMINI.md COPILOT.md; do
   clean="${p%/}"
   if [ -e "$clean" ] && git check-ignore -q "$clean"; then
     STASH_ARGS+=("$p")
@@ -72,7 +84,7 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 DOCS_BRANCH="docs"
 
 SHADOW_PATHS=()
-for path in docs/ .github/docs/ docs/personal/ docs/tmp/ docs/reviews/ AGENTS.md CLAUDE.md GEMINI.md COPILOT.md; do
+for path in docs/ .github/docs/ docs/personal/ docs/tmp/ docs/reviews/ docs/history/reviews/ AGENTS.md CLAUDE.md GEMINI.md COPILOT.md; do
   if [ -e "${path%/}" ] && git check-ignore -q "${path%/}"; then
     SHADOW_PATHS+=("$path")
   fi
@@ -130,7 +142,7 @@ if [ ${#SHADOW_PATHS[@]} -gt 0 ]; then
   # Sync .gitignore from the working branch, then strip any rules that exclude the
   # paths this branch exists to track. Use grep -vE (reliable on macOS and Linux).
   if [ -e "${RESTORE_TMP}/.gitignore" ]; then
-    grep -vE '^/?\.?github/docs/?$|^/docs/?$|^/AGENTS\.md$|^/CLAUDE\.md$|^/GEMINI\.md$|^/COPILOT\.md$|^AGENTS\.md$|^GEMINI\.md$|^CLAUDE\.md$|^/?docs/personal/?$|^/?docs/tmp/?$|^/?docs/reviews/?$' "${RESTORE_TMP}/.gitignore" > ./.gitignore || true
+    grep -vE '^/?\.?github/docs/?$|^/docs/?$|^/AGENTS\.md$|^/CLAUDE\.md$|^/GEMINI\.md$|^/COPILOT\.md$|^AGENTS\.md$|^GEMINI\.md$|^CLAUDE\.md$|^/?docs/personal/?$|^/?docs/tmp/?$|^/?docs/reviews/?$|^/?docs/history/reviews/?$' "${RESTORE_TMP}/.gitignore" > ./.gitignore || true
   fi
   git add .gitignore 2>/dev/null || true
 

@@ -11,7 +11,7 @@ description: >
 
 ## Boundary
 
-Use this skill for **reviewing implementation plan documents** (`docs/plans/*.md`).
+Use this skill for **reviewing implementation plan documents** under resolved `{plans_dir}/` (see `_shared/doc-paths.md`).
 
 Do not use for:
 - Reviewing actual code diffs (use `doing-code-review`)
@@ -51,7 +51,7 @@ Each agent receives:
 2. Relevant source file excerpts (signatures, data structure definitions, pipeline structure)
 3. Its specific review lens from `~/.agents/skills/review-agents/<agent>.md`
 4. The project's CLAUDE.md content (for repository conventions)
-5. **Repo-specific overrides take precedence**: if `CLAUDE.md`, `docs/project-guidelines.md`, or any loaded company/project guideline defines complexity, naming, comment, or layering rules that conflict with the generic pattern catalog, the agent MUST apply the repo-specific value, not the catalog default. Example: catalog says "functions >50 lines" but `company-guidelines.md #17` says "≤30 lines per method" — apply the 30-line rule.
+5. **Repo-specific overrides take precedence**: if `CLAUDE.md`, `{guidelines_path}` (resolved per `_shared/doc-paths.md`; typically `docs/maintenance/project-guidelines.md`), or any loaded company/project guideline defines complexity, naming, comment, or layering rules that conflict with the generic pattern catalog, the agent MUST apply the repo-specific value, not the catalog default. Example: catalog says "functions >50 lines" but `company-guidelines.md #17` says "≤30 lines per method" — apply the 30-line rule.
 6. **Execution framing**: "You are reviewing an IMPLEMENTATION PLAN, not a code diff. Read the plan tasks and the referenced source files to understand what is being proposed. Apply your pattern catalog to identify whether the proposed changes would introduce the issues you are responsible for detecting."
 7. **Output format**: for each finding provide `{location_in_plan, issue, severity: Blocker/Medium/Low/Monitor, fix, evidence}` — no `path/line/side` fields (those are for code review). **`issue` and `evidence` must be self-contained**: name the plan task, quote or paraphrase the contradicting plan text, cite what the referenced source file shows, and state the concrete fix. Do not return stubs the orchestrator must research.
 
@@ -121,14 +121,14 @@ After all sub-agents complete, **synthesize from agent returns only** — do not
 
 ## Step 4: Output
 
-Write the review to `docs/reviews/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md` (use `-r1`, `-r2`, … per loop iteration):
+Write the review to `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md` (resolve `{reviews_dir}` per `_shared/doc-paths.md`; use `-r1`, `-r2`, … per loop iteration):
 
 ```markdown
 # Plan Review: <Plan Title>
 
 **Date:** YYYY-MM-DD
-**Plan:** `docs/plans/<filename>.md`
-**Prior:** `docs/reviews/<prior-rN>.md` *(omit on r1)*
+**Plan:** `{plans_dir}/<filename>.md`
+**Prior:** `{reviews_dir}/<prior-rN>.md` *(omit on r1)*
 **Agents:** quality, implementation, architecture, testing, simplification, documentation, security, concurrency, premortem, consistency
 
 ## Summary
@@ -189,12 +189,12 @@ After writing the review document:
 2. For each **Medium**: update tasks, invariants, tests, or Review Scope (mandatory before next review round)
 3. For each **Low**: fold trivial fixes into the plan; otherwise leave in the review artifact
 4. For each **Monitor**: add/update the plan's `## Monitor` section with named owner
-5. Add a reference line to the plan header: `Plan review: docs/reviews/<latest-rN>.md (latest, ready) · …`
+5. Add a reference line to the plan header: `Plan review: {reviews_dir}/<latest-rN>.md (latest, ready) · …`
 6. If the plan has a final validation task, add verification commands for each Blocker/Medium finding
 
 Report to user:
 > "Plan review r<N> complete: B blockers, M medium (fixed in plan), L low, Mon monitor.
-> Review saved to `docs/reviews/<filename>-r<N>.md`.
+> Review saved to `{reviews_dir}/<filename>-r<N>.md`.
 > Ready for execution: Yes/No (requires Blocker=0 and Medium=0)."
 
 ## Iteration Discipline (plans skill gate)

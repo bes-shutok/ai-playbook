@@ -37,7 +37,8 @@ Invoke the `docs-branch` skill now. It will:
 
 **After docs-branch completes, verify gitignored files are still on disk:**
 ```bash
-for p in docs/tmp docs/reviews docs/personal AGENTS.md CLAUDE.md; do
+# Resolve gitignored doc paths per _shared/doc-paths.md; include common candidates:
+for p in docs/tmp docs/history/reviews docs/reviews docs/personal AGENTS.md CLAUDE.md GEMINI.md COPILOT.md; do
   [ -e "$p" ] && git check-ignore -q "$p" && echo "OK: $p" || true
 done
 ```
@@ -89,6 +90,11 @@ Check for these cases:
 
 4. **New instruction rules**
    - If the session added rules to instruction files, confirm any canonical docs those rules depend on are referenced explicitly instead of leaving the relationship implicit.
+
+5. **Doc-hierarchy migration or doc-only PRs**
+   - If the session ran **doc-hierarchy-migrate** verify (`step6` or `full`) successfully, do not add PR **Test plan** items for that gate as unchecked reviewer tasks — the gate is an implementer checkpoint from the skill install, not a repo-local script.
+   - When updating the PR description, use the [PR checklist](../doc-hierarchy/company-decisions.md#pr-checklist-team-proposal-accepted) only unless the reviewer asked for more; follow [PR description rules](../doc-hierarchy/company-decisions.md#pr-description-rules).
+   - Mark session-verified checks `[x]` or omit them; never leave implementer-completed verification as unchecked homework.
 
 Do not assume the `learn` step already wired these references correctly. Re-check the final diff before staging and commit any missing cross-links as part of cleanup.
 
@@ -218,7 +224,7 @@ Do not push — these are local-only docs repositories.
 ## Integration Points
 
 ### With `execute-plan` skill
-Invoked as a sub-agent after **each** completed plan task (per-task commit) and after **each** review/fix iteration (per-iteration commit). The orchestrator passes the plan path, task or review-round context, suggested commit subject, and **sub-agent log paths** under `docs/tmp/execute-plan/<plan-slug>/`.
+Invoked as a sub-agent after **each** completed plan task (per-task commit) and after **each** review/fix iteration (per-iteration commit). The orchestrator passes the plan path, task or review-round context, suggested commit subject, and **sub-agent log paths** under resolved `{tmp_dir}/execute-plan/<plan-slug>/`.
 
 **Before Step 1 (learn):** read only the **preceding-step** log(s) the orchestrator listed — for per-task `done`, the implement log from Step 1.2; for review-iteration `done`, the current round's review log (Step 3.1) and address log (Step 3.3) when it ran. Do not read full session history. Use log content as primary input for `learn`, not the orchestrator chat summary. If a required preceding-step log is missing, return `blocked` and do not commit. See `execute-plan/agent-logs.md`.
 

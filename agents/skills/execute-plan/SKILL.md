@@ -6,14 +6,16 @@ description: >
   review/fix loops until two consecutive clear review rounds (zero remaining Medium+ after
   receiving-code-review triage), minimum two review rounds, maximum ten review rounds,
   with done after each review iteration;
-  on successful completion, remove docs/tmp/execute-plan/<plan-slug>/ session files.
+  on successful completion, remove session tmp under resolved tmp_dir/execute-plan/<plan-slug>/.
   Trigger phrases —
   "execute the plan", "execute plan", "implement the plan", "implement plan", "run the plan",
   "run plan", "execute-plan".
-  Plan path alone (for example docs/plans/foo.md) is NOT a trigger — use the plan-path gate first.
+  Plan path alone (for example a file under the project plans_dir) is NOT a trigger — use the plan-path gate first.
 ---
 
 # Execute Plan
+
+**Documentation paths:** At Phase 0, resolve `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}` per `_shared/doc-paths.md`. Use `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for session logs. Substitute resolved paths everywhere below that shows `{...}` or legacy `docs/plans/` examples.
 
 **Announce at start:** "I'm using the execute-plan skill to implement `<plan-path>`."
 
@@ -23,11 +25,11 @@ Orchestrate plan execution from the main agent. Always run Phase 0 (branch setup
 
 ## Implicit triggers and plan-path gate (required before Phase 0)
 
-When the user message references a plan under `docs/plans/` (path only, `@` mention, or pasted filename) **without** an execute-plan trigger phrase above, **stop** before Phase 0, before creating the session tmp dir, and before any plan-scoped production or test code edit.
+When the user message references a plan under `{plans_dir}/` (path only, `@` mention, or pasted filename) **without** an execute-plan trigger phrase above, **stop** before Phase 0, before creating the session tmp dir, and before any plan-scoped production or test code edit.
 
 Ask the user to choose **exactly one** of three options (use a structured multiple-choice prompt when your environment supports it; otherwise list the options in chat and wait for an answer):
 
-1. **execute-plan (recommended when the plan has unchecked tasks)** — sub-agents, per-task `done` commits, Phase 3 review loops, archive to `docs/plans/completed/`
+1. **execute-plan (recommended when the plan has unchecked tasks)** — sub-agents, per-task `done` commits, Phase 3 review loops, archive to `{plans_completed_dir}/`
 2. **Manual** — parent implements in-session; one task per commit; `done` only when the user ends the session; Phase 3 only if the user asks
 3. **Read-only** — summarize, review, or update the plan file; no production code edits
 
@@ -41,7 +43,7 @@ If the user selects **execute-plan**, announce the run contract before Phase 0:
 
 Do not start Phase 1 until the user has chosen execute-plan (explicit trigger phrase counts as that choice).
 
-**Session bootstrap (immediate):** When execute-plan is chosen (gate option 1 or explicit trigger phrase), create the session directory and `manifest.md` **before Phase 0** and **before any plan-scoped code edit** (template in Step 0.4). Manual and read-only runs do **not** create `docs/tmp/execute-plan/<PLAN_SLUG>/`.
+**Session bootstrap (immediate):** When execute-plan is chosen (gate option 1 or explicit trigger phrase), create the session directory and `manifest.md` **before Phase 0** and **before any plan-scoped code edit** (template in Step 0.4). Manual and read-only runs do **not** create `{tmp_dir}/execute-plan/<PLAN_SLUG>/`.
 
 ## Anti-patterns (never substitute for orchestration)
 
@@ -58,7 +60,7 @@ Do not start Phase 1 until the user has chosen execute-plan (explicit trigger ph
 | `done` without preceding-step log files | `learn` needs the immediately prior worker log(s) on disk — chat return text alone is insufficient |
 | Pass all session logs into every `done` | Each `done` reads only logs from its preceding step(s), not full history |
 | Overwrite an existing worker log on relaunch | Same path = append Pass N to end; never truncate `review-r<R>-receiving-code-review.log.md` or other worker logs |
-| Delete `docs/tmp/execute-plan/<PLAN_SLUG>/` before success or on failure/interrupt | Tmp logs are removed only in Phase 5 after full successful completion |
+| Delete `{tmp_dir}/execute-plan/<PLAN_SLUG>/` before success or on failure/interrupt | Tmp logs are removed only in Phase 5 after full successful completion |
 | Exit Phase 3 after one clear round | Requires **two consecutive** clear review rounds (`consecutive_clear_rounds >= 2`) and `review_round <= 10` |
 | Start review round 11 | Hard cap: **maximum 10** review rounds (`review_round` 1–10); stop and ask the user before exceeding |
 | User sends plan path only; parent implements inline | Skipped plan-path gate (Mitigation A); treat as read-only or ask the three-way choice first |
@@ -74,12 +76,12 @@ See [agent-logs.md](agent-logs.md) for path convention, required sections, and m
 
 **Orchestrator duties:**
 
-1. Derive `<PLAN_SLUG>` from the plan filename and ensure `docs/tmp/execute-plan/<PLAN_SLUG>/` exists before the first sub-agent.
+1. Derive `<PLAN_SLUG>` from the plan filename and ensure `{tmp_dir}/execute-plan/<PLAN_SLUG>/` exists before the first sub-agent.
 2. Assign the log path and `<LOG_PASS_NUM>` for each worker launch (`1` first time; increment on relaunch of the same path). Pass both in the prompt.
 3. After each worker returns, verify its log file exists, is non-empty, and **on relaunch still contains prior passes** (append-only — see [agent-logs.md](agent-logs.md) write semantics). Update `manifest.md`. Confirm exit criteria from the log — do not re-run tests or re-review inline to duplicate the worker.
 4. Pass **only the preceding-step log path(s)** into each `done` sub-agent (Step 1.4 / Step 3.4) — see [agent-logs.md](agent-logs.md). Do not paste log bodies into orchestrator context; paths and pass/fail summaries are enough for gating.
 
-**Prerequisite:** A plan file at `docs/plans/<name>.md` created per the `plans` skill, with `## Review Scope`, `## Validation Commands`, and `### Task N:` sections.
+**Prerequisite:** A plan file at `{plans_dir}/<name>.md` created per the `plans` skill, with `## Review Scope`, `## Validation Commands`, and `### Task N:` sections.
 
 **Read first:** [subagent-prompts.md](subagent-prompts.md) for copy-paste prompt templates; [agent-logs.md](agent-logs.md) for log paths and handoff rules.
 
@@ -192,10 +194,10 @@ Create the session directory and manifest when execute-plan is chosen (if not al
 
 ```bash
 PLAN_SLUG="<slug-from-basename>"
-mkdir -p "docs/tmp/execute-plan/${PLAN_SLUG}"
+mkdir -p "{tmp_dir}/execute-plan/${PLAN_SLUG}"
 ```
 
-Create `docs/tmp/execute-plan/<PLAN_SLUG>/manifest.md` if missing:
+Create `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` if missing:
 
 ```markdown
 # Execute-plan session: <PLAN_SLUG>
@@ -214,7 +216,7 @@ Update the manifest when Phase 0 completes. See [agent-logs.md](agent-logs.md) f
 | Key | Purpose | Fallback |
 |-----|---------|----------|
 | `shared_docs_dir` | Coding/stack guidelines for implement sub-agent | Resolve from `~/.ai-playbook/facts.md`; see `agent-runtime-layout.md` there |
-| `docs_tmp_dir` | Project tmp root for execute-plan logs | `docs/tmp/` |
+| `tmp_dir` | Project tmp root for execute-plan logs (resolve per `_shared/doc-paths.md` at Phase 0) | `docs/tmp/` |
 
 ## Orchestrator Responsibilities
 
@@ -332,13 +334,13 @@ Use the **Code Review** template from [subagent-prompts.md](subagent-prompts.md)
 
 The sub-agent runs `doing-code-review` in **branch review** mode (not PR mode unless the user supplied a PR URL). It must honor the plan's `## Review Scope` — findings outside scope are dropped.
 
-Review output: `docs/reviews/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` (increment `N` each round; use `-code-review-r` prefix to distinguish from pre-execution **plan** reviews at `…-plan-review-r<N>.md`).
+Review output: `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` (increment `N` each round; use `-code-review-r` prefix to distinguish from pre-execution **plan** reviews at `…-plan-review-r<N>.md`).
 
 Pass `<REVIEW_LOG_PATH>` per [agent-logs.md](agent-logs.md). Pass `review_round` / `<REVIEW_ROUND>` = current `review_round` from manifest.
 
 **Step 3.1 verification gate (orchestrator, before Step 3.2):**
 
-1. Review sub-agent returned the exact `docs/reviews/...` staging doc path.
+1. Review sub-agent returned the exact `{reviews_dir}/...` staging doc path.
 2. That file exists on disk and is non-empty (chat summary alone does not satisfy Step 3.1).
 3. `<REVIEW_LOG_PATH>` exists and is non-empty.
 4. Doc follows `doing-code-review` staging format sufficiently for Step 3.2 parsing (Summary + findings with Severity/Status).
@@ -434,7 +436,7 @@ Update `manifest.md` with current `review_round` and `consecutive_clear_rounds`.
 Move the completed plan per `plans` skill lifecycle:
 
 ```bash
-git mv docs/plans/<filename>.md docs/plans/completed/<filename>.md
+git mv {plans_dir}/<filename>.md {plans_completed_dir}/<filename>.md
 ```
 
 Include the plan move in a commit immediately after the last Step 3.4 `done` (same `done` sub-agent scope if uncommitted, or a follow-up `done` if needed).
@@ -451,14 +453,14 @@ Delete the execute-plan session directory **only after the full workflow succeed
 2. Phase 2 final validation passed.
 3. Phase 3 exited after **two consecutive** clear review rounds (`consecutive_clear_rounds >= 2`, `review_round >= 2`) **or** user explicitly accepted max-rounds stop after round 10 with documented remaining Medium+.
 4. Last Step 3.4 `done` completed successfully.
-5. Plan file exists at `docs/plans/completed/<filename>.md` (Phase 4 archive done).
+5. Plan file exists at `{plans_completed_dir}/<filename>.md` (Phase 4 archive done).
 
 **If any item is false** — do **not** remove tmp files (preserve for resume, debugging, or `learn` on retry).
 
 **Removal (orchestrator runs directly — not a sub-agent):**
 
 ```bash
-TMP_DIR="docs/tmp/execute-plan/<PLAN_SLUG>"
+TMP_DIR="{tmp_dir}/execute-plan/<PLAN_SLUG>"
 # Safety: path must match this session's slug only — never rm parent execute-plan/ or other slugs
 [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
 ```
@@ -466,10 +468,10 @@ TMP_DIR="docs/tmp/execute-plan/<PLAN_SLUG>"
 **Verify:**
 
 ```bash
-test ! -e "docs/tmp/execute-plan/<PLAN_SLUG>" && echo "tmp cleanup OK"
+test ! -e "{tmp_dir}/execute-plan/<PLAN_SLUG>" && echo "tmp cleanup OK"
 ```
 
-Report successful plan completion to the user, including that session tmp logs were removed. Review staging docs under `docs/reviews/` are **not** deleted by this step (separate lifecycle).
+Report successful plan completion to the user, including that session tmp logs were removed. Review staging docs under `{reviews_dir}/` are **not** deleted by this step (separate lifecycle).
 
 ## Sub-Agent Launch Rules
 
@@ -499,9 +501,9 @@ Report successful plan completion to the user, including that session tmp logs w
 8. **Maximum ten review rounds** — never launch Step 3.1 when `review_round > 10`; after round 10 without meeting the exit condition, stop and ask the user (do not loop indefinitely).
 9. **Fresh test output** — never cite stale run results; re-run commands before claiming pass.
 10. **Preceding-step logs before learn** — worker sub-agents write logs; each `done` reads only its immediately prior step's log(s). Missing required log blocks commit.
-11. **Tmp cleanup on success only** — remove `docs/tmp/execute-plan/<PLAN_SLUG>/` in Phase 5 after the success checklist passes; never on failure, max-rounds stop, or user interrupt.
+11. **Tmp cleanup on success only** — remove `{tmp_dir}/execute-plan/<PLAN_SLUG>/` in Phase 5 after the success checklist passes; never on failure, max-rounds stop, or user interrupt.
 12. **Plan-path gate first** — plan file reference without execute-plan trigger → three-way choice before Phase 0 or code edits.
-13. **Session dir before edits** — no plan-scoped production/test edits before `docs/tmp/execute-plan/<PLAN_SLUG>/manifest.md` exists (execute-plan runs only; manual/read-only do not create the session directory).
+13. **Session dir before edits** — no plan-scoped production/test edits before `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` exists (execute-plan runs only; manual/read-only do not create the session directory).
 14. **One task's checkboxes per Step 1.3** — no bulk `- [ ]` → `- [x]` across the plan file.
 15. **Phase 3 required for success** — archive only after Phase 3 exit condition or documented user abort after Phase 2.
 
@@ -512,7 +514,7 @@ If the user stops mid-plan:
 - Report the current task, unchecked items, and last successful **per-task `done` commit** (SHA + message).
 - If work exists only as uncommitted changes, say so explicitly — that means Step 1.4 was never run for those tasks.
 - Do not mark incomplete work as `[x]`.
-- **Preserve** `docs/tmp/execute-plan/<PLAN_SLUG>/` — do not run Phase 5 cleanup.
+- **Preserve** `{tmp_dir}/execute-plan/<PLAN_SLUG>/` — do not run Phase 5 cleanup.
 - Offer to resume from the topmost incomplete task (or run **Recovery** below if the user wants execute-plan compliance on already-implemented work).
 
 ## Recovery: retroactive execute-plan compliance
@@ -531,7 +533,7 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
 ## Integration Points
 
 ### Consumes `plans` skill
-Reads plan format, task order, validation commands, review scope, and commit messages. Archives to `docs/plans/completed/` when finished. If `plans` Phase 0 already created a feature branch, Phase 0 here verifies state and offers to continue on it instead of creating another. Pre-execution plan reviews use `…-plan-review-r<N>.md` with Blocker/Medium gate; Phase 3 code reviews use `…-code-review-r<N>.md` with Medium+ gate — same minimum-two / maximum-ten round discipline.
+Reads plan format, task order, validation commands, review scope, and commit messages. Archives to `{plans_completed_dir}/` when finished. If `plans` Phase 0 already created a feature branch, Phase 0 here verifies state and offers to continue on it instead of creating another. Pre-execution plan reviews use `…-plan-review-r<N>.md` with Blocker/Medium gate; Phase 3 code reviews use `…-code-review-r<N>.md` with Medium+ gate — same minimum-two / maximum-ten round discipline.
 
 ### Consumes `tdd-guide` + `unit-test-runner` (via implement sub-agent)
 Implement sub-agent follows RED → GREEN → Refactor for behavioral tasks; runs validation commands with fresh output.

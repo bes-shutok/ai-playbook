@@ -13,6 +13,10 @@ description: >
 
 Review an RFC or TDD document hosted on Confluence. Provide quality feedback focused on clarity, actionability, and missing context.
 
+## Documentation paths
+
+Resolve `{tmp_dir}` per [`_shared/doc-paths.md`](../_shared/doc-paths.md) before writing review output files. Do not hardcode `./docs/tmp/` when project guidelines document a resolved path.
+
 ## Configuration (from facts document)
 
 This skill reads environment-specific values from the user's facts/profile document (e.g., `facts.md` or equivalent). Never hardcode personal paths, org names, or domains in the skill itself.
@@ -20,9 +24,9 @@ This skill reads environment-specific values from the user's facts/profile docum
 | Key | Purpose | Example |
 |-----|---------|---------|
 | `atlassian_domain` | Default Atlassian cloud domain | `acme.atlassian.net` |
-| `docs_tmp_dir` | Directory for review output files | `~/Projects/acme/docs/tmp` |
+| `docs_tmp_dir` | Directory for review output files (prefer resolved `{tmp_dir}`) | `docs/tmp/` |
 
-If a key is missing from facts, fall back to asking the user or using sensible defaults (e.g., `./docs/tmp/` for output).
+If a key is missing from facts, resolve `{tmp_dir}` per `_shared/doc-paths.md`; ask the user only when resolution is ambiguous.
 
 ## Workflow
 

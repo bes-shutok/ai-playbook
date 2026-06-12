@@ -26,6 +26,14 @@ Use these routing rules before acting:
 
 Do not use this skill alone to judge review feedback or produce review findings. Delegate judgment to `doing-code-review` for active review and `receiving-code-review` for passive review feedback.
 
+## Doc migration PR descriptions
+
+When the PR is a doc-hierarchy migration or doc-only Layer 1/2/3 update on a company service repo:
+
+1. Use the [documentation impact checklist](../doc-hierarchy/company-decisions.md#pr-checklist-team-proposal-accepted) only — do not expand into a layout inventory unless the reviewer asks.
+2. Follow [PR description rules](../doc-hierarchy/company-decisions.md#pr-description-rules): no duplicate unchecked verify-gate TODOs when the session already ran `verify-doc-hierarchy.sh full` from the skill install; never imply a repo-local verify script.
+3. `done` skill applies the same rules when updating PR bodies after implementation.
+
 ## Shared GitHub PR Operations
 
 Use these primitives from review skills instead of duplicating GitHub details there.
@@ -172,6 +180,8 @@ Use when the user asks to squash a multi-commit feature branch into a single cle
 
 ### Steps
 1. Identify the base branch (check `git branch -a`; default may be `master` not `main`). Fetch and confirm the remote tip before squashing.
+   - **Stacked PRs:** the soft-reset parent must be the **immediate parent feature branch** (the branch the story PR will target), not `pre-release` or an older ancestor. Before committing, verify scope: `git diff --stat origin/<parent>..HEAD` should match the current story only (file count/order-of-magnitude lines), not sibling work from another stacked branch.
+   - If `git reset --hard` is blocked by workspace policy, reparent with `git commit-tree <tree> -p origin/<parent>` instead.
 2. Detect format-only files — exclude them from the commit to avoid cluttering the PR:
    ```bash
    git diff -w --ignore-blank-lines <base>..HEAD -- <file>
@@ -183,6 +193,7 @@ Use when the user asks to squash a multi-commit feature branch into a single cle
 6. Apply any `.gitignore` updates (e.g. add `### LLM Agent Artifacts ###` block) and stage them.
 7. Commit everything in a single squashed commit with a clean, feature-focused message.
 8. Push and open a PR against the base branch with `gh pr create --base <base>`.
+9. When the user names teammates for a PR, default to **`gh pr edit --add-reviewer`** (or `--reviewer` on create). Use `--assignee` only when they explicitly say assignee/owner.
 
 ### Gitignore block for LLM artifacts
 ```

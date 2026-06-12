@@ -86,6 +86,14 @@ Skills are automatically triggered based on:
 
 You don't invoke skills directly - the model decides when to use them.
 
+### 4. Repository documentation paths (skills that read/write `docs/`)
+
+Do **not** hardcode `docs/plans/`, `docs/reviews/`, `docs/examples/`, or module-split trees in skill bodies. Follow `_shared/doc-paths.md`:
+
+- At task start, resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, etc. per `_shared/doc-paths.md` resolution order (`user_facts_path` keys, repo `AGENTS.md`, on-disk `project_guidelines_rel`, explore `docs/`).
+- Use session placeholders (`{plans_dir}/…`) in examples and templates — not legacy paths as defaults.
+- **`doc-hierarchy-migrate`** applies the company three-layer schema when the user explicitly runs a migration; it writes resolved paths into the repo for other skills to read. **`doc-hierarchy`** is schema reference; **`doc-hierarchy-upkeep`** is post-migration Layer 1/2 sync.
+
 ## Skill Structure Patterns
 
 ### LICENSE.txt (required for every new skill)

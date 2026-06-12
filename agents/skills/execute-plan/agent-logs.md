@@ -1,15 +1,15 @@
 # Execute Plan — Sub-Agent Execution Logs
 
-Sub-agents write durable logs under `docs/tmp/execute-plan/<PLAN_SLUG>/` so each `done` invocation can run `learn` with context from the **immediately preceding worker step(s)** — not the orchestrator's chat summary, and not the full session history.
+Resolve `{tmp_dir}` per `_shared/doc-paths.md` at Phase 0. Sub-agents write durable logs under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` so each `done` invocation can run `learn` with context from the **immediately preceding worker step(s)** — not the orchestrator's chat summary, and not the full session history.
 
 ## Path convention
 
 | Agent | Log path |
 |-------|----------|
-| Implement task N | `docs/tmp/execute-plan/<PLAN_SLUG>/task-<N>-implement.log.md` |
-| Code review round R | `docs/tmp/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
-| Address review round R | `docs/tmp/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-code-review.log.md` |
-| Session manifest (orchestrator) | `docs/tmp/execute-plan/<PLAN_SLUG>/manifest.md` |
+| Implement task N | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-implement.log.md` |
+| Code review round R | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
+| Address review round R | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-code-review.log.md` |
+| Session manifest (orchestrator) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` |
 
 Create the directory before the first sub-agent launch. `<PLAN_SLUG>` is a short kebab-case slug from the plan filename (e.g. `CRM-123-feature` from `CRM-123-feature.md`).
 
@@ -79,7 +79,7 @@ Include enough detail for `learn` to extract friction and corrections — not ju
 
 ## Manifest (orchestrator maintains)
 
-**Bootstrap:** When the user chooses execute-plan, create `docs/tmp/execute-plan/<PLAN_SLUG>/manifest.md` immediately (before Phase 0 and before plan-scoped production/test edits). Manual and read-only runs do not create this directory.
+**Bootstrap:** When the user chooses execute-plan, create `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` immediately (before Phase 0 and before plan-scoped production/test edits). Manual and read-only runs do not create this directory.
 
 After each sub-agent completes, append to `manifest.md`:
 
@@ -88,9 +88,9 @@ After each sub-agent completes, append to `manifest.md`:
 
 | Step | Log path | Status |
 |------|----------|--------|
-| Task 1 implement | docs/tmp/execute-plan/.../task-1-implement.log.md | success |
+| Task 1 implement | {tmp_dir}/execute-plan/.../task-1-implement.log.md | success |
 | Task 1 done | — | commit abc1234 |
-| Review r1 doing-code-review | docs/tmp/execute-plan/.../review-r1-doing-code-review.log.md | success |
+| Review r1 doing-code-review | {tmp_dir}/execute-plan/.../review-r1-doing-code-review.log.md | success |
 | consecutive_clear_rounds | — | 1 |
 ```
 
@@ -111,10 +111,10 @@ If a required preceding-step log is missing, `done` must not commit — report t
 
 ## Cleanup after successful completion (Phase 5)
 
-When execute-plan finishes **successfully** (all tasks done, two consecutive clear review rounds, plan archived to `docs/plans/completed/`, final `done` committed), the orchestrator removes the entire session directory:
+When execute-plan finishes **successfully** (all tasks done, two consecutive clear review rounds, plan archived to `{plans_completed_dir}/`, final `done` committed), the orchestrator removes the entire session directory:
 
 ```bash
-rm -rf docs/tmp/execute-plan/<PLAN_SLUG>
+rm -rf {tmp_dir}/execute-plan/<PLAN_SLUG>
 ```
 
 | Outcome | Tmp directory |
@@ -122,6 +122,6 @@ rm -rf docs/tmp/execute-plan/<PLAN_SLUG>
 | Full success (Phase 5) | **Removed** — logs already consumed by per-step `done` / `learn` |
 | User interrupt, blocked sub-agent, safety cap, validation failure, fewer than two consecutive clear review rounds | **Preserved** — needed for resume and debugging |
 
-**Scope:** delete only `docs/tmp/execute-plan/<PLAN_SLUG>/` for this plan. Do not delete sibling slugs, the parent `execute-plan/` folder, or `docs/reviews/` staging docs.
+**Scope:** delete only `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for this plan. Do not delete sibling slugs, the parent `execute-plan/` folder, or `{reviews_dir}/` staging docs.
 
 **Timing:** run cleanup **after** the last Step 3.4 `done` and Phase 4 archive — never before final `learn` has read the preceding-step logs.

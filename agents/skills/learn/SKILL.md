@@ -47,7 +47,7 @@ Classify each lesson as exactly one:
 - LLM-only example/playbook
 - Temporary artifact
 
-**Important: style and wording corrections are lessons too.** If a user corrects the tone, phrasing, vocabulary, or formatting of generated output (e.g. "remove long dashes", "use simpler words", "prefer globish", "use API contract not wire contract"), treat it as a lesson and capture it as a skill rule — not just apply it to the current artifact and move on. Vocabulary replacements that apply across projects go in `agent_workflow_guidelines.md` §45.2; recurring workspace terms go in the relevant `dictionary.md` or repo `docs/glossary.md`.
+**Important: style and wording corrections are lessons too.** If a user corrects the tone, phrasing, vocabulary, or formatting of generated output (e.g. "remove long dashes", "use simpler words", "prefer globish", "use API contract not wire contract"), treat it as a lesson and capture it as a skill rule — not just apply it to the current artifact and move on. Vocabulary replacements that apply across projects go in `agent_workflow_guidelines.md` §45.2; recurring workspace terms go in the relevant `dictionary.md` or repo glossary (`docs/maintenance/glossary.md` after migration; legacy `docs/glossary.md`).
 
 ### Source-check self-audit
 When the user corrects a factual detail or asks what could have been learned by digging deeper, explicitly ask:
@@ -107,7 +107,7 @@ When `.ralphex/progress/` exists in the current project directory:
 4. Feed classified patterns into the placement workflow (Steps 2–6) alongside lessons from communication.
 
 **Specific placement guidance for common patterns:**
-- Frequent rate-limit hits → `docs/BEST_PRACTICES.md` or cross-project shared docs (from facts `shared_docs_dir`): plan size guidelines, recommended run windows.
+- Frequent rate-limit hits → resolved best-practices path (`docs/maintenance/best-practices.md` after migration; legacy `docs/BEST_PRACTICES.md` only when exploration confirms it still exists) or cross-project shared docs (from facts `shared_docs_dir`): plan size guidelines, recommended run windows.
 - Container tool gaps → project `AGENTS.md` / `CLAUDE.md`: document which tools are available in which execution phase.
 - Automated review loop failures → note disabling the external review loop in project or user-level docs when applicable.
 - Non-fatal review warnings → no action needed unless they occur in every run; if so, note as known pattern in project docs.
@@ -129,8 +129,8 @@ When research is conducted via web search or other external sources:
 - Add Sources section at the end with URLs and dates
 
 **LLM examples vs canonical docs:**
-- Canonical docs (`docs/<topic>.md`) = technical facts, best practices, comparisons
-- LLM examples (`docs/examples/<topic>.md`) = reasoning patterns, anti-patterns
+- Canonical docs = technical facts, best practices, comparisons (home per project spec — see `_shared/doc-paths.md`)
+- LLM examples / playbooks = reasoning patterns, anti-patterns (resolve `caller_catalog`, `{tmp_dir}`, or project-documented example path — do not assume `docs/examples/`)
 - Examples file should reference main doc, not duplicate it
 
 **When to create new research docs:**
@@ -139,8 +139,9 @@ When research is conducted via web search or other external sources:
 - When the same questions recur across sessions
 - Before making technical decisions with alternatives
 
-## Step 2: Hard Placement Rules
-Apply these without discretion.
+## Step 2: Placement Rules
+
+**First:** Resolve documentation paths per `_shared/doc-paths.md` resolution order (`user_facts_path` keys, repo `AGENTS.md`, on-disk `project_guidelines_rel`, explore `docs/`). Use resolved paths for the rest of this run — do not invent layout.
 
 ### Guideline file roles (resolve from facts keys only)
 
@@ -156,17 +157,14 @@ At learn start, read `user_facts_path`. Skills must **not** hardcode machine pat
 **Company rule workflow:** edit `company_guidelines_master` first, then sync mirrors in affected company repos. **Multi-tier generalization** (JVM + company + project) updates each canonical home — not the repo mirror alone.
 
 ### Temporary artifacts
-- Temporary artifacts may exist only under `docs/tmp/`.
-- Do not create temporary artifacts outside `docs/tmp/`.
+- Temporary artifacts belong under resolved `{tmp_dir}` (typically `docs/tmp/` when present).
+- Do not create session scratch outside `{tmp_dir}` unless project-guidelines documents another gitignored scratch root.
 - By end of run, delete temporary artifacts or promote them into canonical docs.
-- `docs/proposals/` is a durable pre-canonical review area and is not treated as a temporary-artifact location.
-- Do not move/delete files under `docs/proposals/` during learn runs unless explicitly requested by the user.
-- Canonical exceptions (never treat as temporary):
-  - `docs/advantages-recommendations.md`
-  - `docs/db-architectural-differences.md`
+- Resolved `{proposals_dir}` is durable pre-canonical review — not temporary; do not move/delete there unless the user asks.
+- Canonical exceptions (never treat as temporary): paths the project marks as durable in `project_guidelines_rel` or `AGENTS.md`.
 
 ### BEST_PRACTICES scope
-Only place content in `docs/BEST_PRACTICES.md` if it is:
+Only place content in the project best-practices doc (resolve path — often `docs/maintenance/best-practices.md` or legacy `docs/BEST_PRACTICES.md`) if it is:
 - understandable without system internals
 - useful to humans outside incident context
 - not LLM-reasoning correction text
@@ -174,13 +172,17 @@ Only place content in `docs/BEST_PRACTICES.md` if it is:
 - not module/subsystem specific
 
 ### Module/system knowledge
-- Internal behavior details belong in canonical module docs under `docs/<module>/`.
+- Internal behavior details belong in the **canonical home** documented by the project (`docs/architecture/<topic>.md`, `docs/maintenance/<topic>.md` after migration — per resolution).
+- On **company services** with migration-complete signal ([`doc-hierarchy`](../doc-hierarchy/SKILL.md)): do **not** create new `docs/<module>/` or `docs/domain/` trees; route to architecture topics or `maintenance/`.
+- Before migration-complete: legacy `docs/<module>/` may still exist for reads only — do not extend module-split trees; suggest `doc-hierarchy-migrate`.
 - Prefer extending existing canonical docs.
-- If no suitable canonical doc exists, create one.
-- Never place module internals in `docs/BEST_PRACTICES.md`.
+- If no suitable canonical doc exists, create one in the layer/folder the project hierarchy specifies; if undocumented, ask the user or suggest updating `project_guidelines_rel`.
+- Never place module internals in human best-practices docs.
 
 ### LLM examples/playbooks
-- Place LLM-only examples in `docs/examples/`.
+- Place LLM-only examples in the project-resolved path (`caller_catalog`, `{tmp_dir}`).
+- On company services **after** migration-complete: do **not** create new files under `docs/examples/` — merge into `caller_catalog` or use `{tmp_dir}`.
+- Before migration-complete: legacy `docs/examples/<topic>.md` only when exploration confirms the repo still uses that layout.
 - Split by module/domain so only relevant context is loaded.
 - Every LLM example file must start with: `LLM examples - not human documentation`.
 - Do not copy LLM examples into `docs/BEST_PRACTICES.md`.
@@ -200,7 +202,7 @@ Only place content in `docs/BEST_PRACTICES.md` if it is:
   - runnable single-test commands
   - migration checklists where file-level parity matters
   - places where the repo intentionally designates one canonical file/class anchor
-- If a lesson is "this doc or instruction should not pin exact class names", place that as an enforceable instruction/command rule, not in `docs/company-guidelines.md` or other cross-repository baseline docs.
+- If a lesson is "this doc or instruction should not pin exact class names", place that as an enforceable instruction/command rule, not in `docs/maintenance/company-guidelines.md` (or legacy `docs/company-guidelines.md`) or other cross-repository baseline docs.
 
 ## Step 3: LLM Rule Qualification Gate
 Before adding any rule, enforce all checks:
@@ -214,10 +216,7 @@ If a candidate fails:
 - if still weak, discard it
 
 ## Step 4: Documentation Consolidation
-Review and normalize:
-- `docs/`
-- `docs/examples/`
-- `docs/tmp/`
+Review and normalize under resolved doc roots (`docs/`, `{tmp_dir}`, and any example/caller-catalog path from resolution):
 
 Required outcomes:
 - one canonical document per topic
@@ -241,16 +240,13 @@ Intra-document requirements:
 
 ## Step 4.5: Add Cross-References for Lesson Discoverability
 
-After placing a lesson in `docs/domain/development_lessons.md`, immediately add a cross-reference
-to the relevant instruction file (`CLAUDE.md` or `AGENTS.md`) so the lesson is discoverable when
-agents work on related code. Lessons are only useful if agents know to look for them.
+After placing a lesson in the project-resolved development-lessons path (for example `docs/maintenance/development-lessons.md` or a topic file under `docs/architecture/`), immediately add a cross-reference to the relevant instruction file (`CLAUDE.md` or `AGENTS.md`) so the lesson is discoverable when agents work on related code.
 
 **Process:**
-1. Identify which instruction section the lesson relates to (e.g., crypto constraints, repository conventions, agent workflow)
-2. Find the best location within that section — group with related rules for context
-3. Add a concise cross-reference: `See development_lessons.md #N` or `See lesson #N in development_lessons.md`
-4. If the lesson introduces a new domain concept, consider also updating `docs/domain/crypto_reporting_guidelines.md`
-   or other domain docs that agents should read before working in that area
+1. Identify which instruction section the lesson relates to.
+2. Find the best location within that section — group with related rules for context.
+3. Add a concise cross-reference to the resolved lesson doc path.
+4. If the lesson introduces a new domain concept, update the matching **architecture** topic (for example `domain-model.md`) or `maintenance/<topic>.md` — not `docs/domain/` or `docs/<module>/` on migration-complete company services.
 
 **Why this matters:** The instruction files are always loaded during tasks, but `development_lessons.md`
 is loaded only when explicitly mentioned. Without cross-references, a lesson may exist in the corpus but never be
@@ -266,15 +262,15 @@ If you find a pattern where many lessons in one section all reference different 
 could be consolidated or whether the instruction section could be reorganized for better flow.
 
 ## Step 5: Module Layout and Skill Workflow Lessons
-- Keep module docs grouped under `docs/<module>/`.
-- Module Design RFC must be `docs/<module>/<MODULE>_rfc.md`.
-- If move/rename is required, propose minimal change set and ask for consent before applying.
+- Module doc layout follows project resolution (`_shared/doc-paths.md`): legacy `docs/<module>/`, flat `history/feature-notes/`, or architecture topics — do not impose a layout the project has not adopted.
+- RFC / task tracker filenames follow project-guidelines or existing repo convention.
+- If move/rename is required, propose minimal change set and ask for consent before applying. On company services with legacy layout, suggest `doc-hierarchy-migrate` instead of ad-hoc moves.
 
 For lessons about a skill's workflow/style or output/content requirements:
 - update the owning skill's `SKILL.md`
-- update `docs/examples/` only when an example/playbook is needed to demonstrate the rule
+- add an example/playbook only in the project-resolved example path when one is needed to demonstrate the rule
 - do not treat rewriting generated artifacts as the primary fix
-- do **not** place these in `docs/project-guidelines.md`, `docs/company-guidelines.md`, or instruction files — those are for project engineering conventions, not skill behavior
+- do **not** place these in resolved `project_guidelines_rel` / company mirror paths (`docs/maintenance/project-guidelines.md`, `docs/maintenance/company-guidelines.md` after migration), or instruction files — those are for project engineering conventions, not skill behavior
 - edit skills at `~/.agents/skills/` (runtime source; `~/.claude/skills` resolves to the same tree when symlinked)
 
 **Skill-scope detection:** When a lesson explicitly mentions a skill by name or describes a workflow that clearly belongs to a skill (e.g., "plans must investigate...", "execute-plan should...", "review feedback requires..."), detect this as a skill-scope lesson. Apply dual placement:

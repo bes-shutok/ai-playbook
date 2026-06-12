@@ -6,6 +6,8 @@ description: >
 
 # Active Code Review
 
+**Documentation paths:** Resolve `{reviews_dir}` per `_shared/doc-paths.md` before writing staging docs. Examples below use `{reviews_dir}/`; substitute the resolved path.
+
 ## Boundary
 
 Use this skill for **active review**: producing new review findings for a PR, diff, or branch.
@@ -16,7 +18,7 @@ Do not use this skill for implementing, triaging, or replying to existing review
 
 | Mode | Trigger | Behavior |
 |------|---------|----------|
-| **Staged** (default) | "review this PR", "let's review", "review the changes", "review changes in", "review branch", "review against" | Write findings to `docs/reviews/PR-<N>.md` (PR) or `docs/reviews/REVIEW-<branch>-YYYYMMDD.md` (local branch) |
+| **Staged** (default) | "review this PR", "let's review", "review the changes", "review changes in", "review branch", "review against" | Write findings to `{reviews_dir}/` (create dir if missing) |
 | **Direct** | "review and post directly", "skip staging" | Post findings immediately to PR (legacy behavior), still write staging doc as record |
 | **Fix** | "review and fix", "fix mode" | Fix confirmed issues, commit, signal for re-review |
 
@@ -143,6 +145,7 @@ Drop or reword findings that assume something not true in context:
 - A concern already handled at another layer, DB constraint, or framework feature
 - Placeholder/stub code treated as production code
 - Project uses an architecture it has not adopted
+- Ops/infra dependencies not provisioned yet (Kafka topics, DLT, ingress, secrets managers): reframe as a go-live checklist and doc-now action, not "provision in IaC immediately"; downgrade to Low unless the gap also breaks dev/test or local runs
 - Self-documenting code flagged for missing docs
 - A cache operation that is a defensive no-op (keys already expired by TTL at call time) flagged as "incomplete" or "broken"
 
@@ -238,14 +241,15 @@ Severity reflects user impact and operability risk, not how thorough the comment
 Posted PR comments are public and must not cite documents that do not exist on the PR's base branch. The author and external reviewers cannot read them, and citing them either looks like a broken reference or projects private rules onto someone else's code.
 
 Before posting each comment, scan the body for references to any of the following and rewrite or drop:
-- Project-local instruction files that are gitignored in this repo: `CLAUDE.md`, `AGENTS.md`, `docs/project-guidelines.md`, `docs/company-guidelines.md`, `docs/glossary.md`
+- Project-local instruction files that are gitignored in this repo: `CLAUDE.md`, `AGENTS.md`, `docs/project-guidelines.md`, `docs/company-guidelines.md`, `docs/glossary.md`, `docs/facts.md`, and post-migration equivalents under `docs/maintenance/` (`project-guidelines.md`, `company-guidelines.md`, `glossary.md`, `facts.md`)
 - User-level instruction files: anything under `~/.claude/`, `~/.codex/`, `~/.agents/`
 - Cross-project shared docs that are gitignored on the target repo: files under `shared_docs_dir` in `~/.ai-playbook/facts.md` (e.g. `coding_guidelines.md`, `jvm_guidelines.md`, `kotlin_guidelines.md`, `python_guidelines.md`, `agent_workflow_guidelines.md`), company ownership docs under `company_projects_root/.ai-playbook/` (see `~/.ai-playbook/facts.md`; `facts.md`, `dictionary.md`, `company-guidelines.md`)
 
-Quick scan command before posting:
+Quick scan command before posting (resolve `REVIEWS_DIR` per `_shared/doc-paths.md` first; use the exact staging path from the review session when known, otherwise resolve exactly one `${REVIEWS_DIR}/*-PR-<N>-*.md`):
 ```bash
-awk '/^#### Comment/{p=1;next} /^#### Analysis/{p=0} p' docs/reviews/PR-<N>.md | \
-  grep -nE "project-guidelines|company-guidelines|coding_guidelines|jvm_guidelines|kotlin_guidelines|python_guidelines|CLAUDE\.md|AGENTS\.md|agent_workflow_guidelines|shared_docs_dir|~/\.claude|~/\.codex|~/\.agents"
+STAGING="${STAGING:-$(ls -1 "${REVIEWS_DIR}"/*-PR-<N>-*.md 2>/dev/null | head -1)}"
+awk '/^#### Comment/{p=1;next} /^#### Analysis/{p=0} p' "$STAGING" | \
+  grep -nE "project-guidelines|company-guidelines|docs/maintenance/|docs/glossary|docs/facts|coding_guidelines|jvm_guidelines|kotlin_guidelines|python_guidelines|CLAUDE\.md|AGENTS\.md|agent_workflow_guidelines|shared_docs_dir|~/\.claude|~/\.codex|~/\.agents"
 ```
 
 Rewrite rules:
@@ -382,25 +386,25 @@ Read `openapi.yaml` line 261, `ExternalConsentUpdateOrchestrator.java`, api-refe
 
 **ALWAYS write the staging document**, regardless of mode. The staging doc is the primary deliverable and serves as both approval artifact (for PRs) and persistent record (for all reviews).
 
-### Step 5.1: High-level tasks follow-up (crm-profile and similar repos)
+### Step 5.1: High-level tasks follow-up (module-split repos)
 
 After the staging doc is written, scan **Medium+** findings (and any accepted Low that describes implementation vs doc/contract drift) for gaps between **current code** and what module docs imply.
 
-When a finding fits, update the module high-level tasks doc in the review session (or tell the user which task block to extend if the review is read-only):
+When a finding fits, update the module high-level tasks doc in the review session (or tell the user which task block to extend if the review is read-only). Resolve paths from `{guidelines_path}` / project guidelines — do not assume legacy `docs/<module>/` layout on migration-complete repos.
 
-| Module | File |
-|--------|------|
-| Profile | `docs/profile/profile-service-high-level-tasks.md` |
-| Consent | `docs/consent/consent-service-high-level-tasks.md` |
+| Module (example) | Legacy path | Post-migration |
+|------------------|-------------|----------------|
+| Module A | `docs/<module>/<service>-high-level-tasks.md` | path named in project guidelines |
+| Module B | `docs/<module>/<service>-high-level-tasks.md` | path named in project guidelines |
 
-Record **tech debt** (document limitation, MVP doc fix, defer code) or **implementation fix** (named target task, tests expected). Do not rely on gitignored `docs/reviews/` as the only backlog.
+Record **tech debt** (document limitation, MVP doc fix, defer code) or **implementation fix** (named target task, tests expected). Do not rely on gitignored `{reviews_dir}/` as the only backlog.
 
-Repo rule: crm-profile `project-guidelines.md` #77. Cross-repo: same pattern when a repo maintains `docs/<module>/*-high-level-tasks.md`.
+Cross-repo: same pattern when a repo maintains module high-level tasks docs (path from project guidelines).
 
-**File location** (create `docs/reviews/` if it doesn't exist):
-- For GitHub PR reviews: `docs/reviews/YYYY-MM-DD-PR-<number>-<title>.md`
-- For local branch reviews: `docs/reviews/YYYY-MM-DD-branch-review-<branch_name>.md`
-- For plan-based reviews: `docs/reviews/YYYY-MM-DD-plan-review-<plan_name>.md`
+**File location** (create `{reviews_dir}/` if it doesn't exist):
+- For GitHub PR reviews: `{reviews_dir}/YYYY-MM-DD-PR-<number>-<title>.md`
+- For local branch reviews: `{reviews_dir}/YYYY-MM-DD-branch-review-<branch_name>.md`
+- For plan-based reviews: `{reviews_dir}/YYYY-MM-DD-plan-review-<plan_name>.md`
 
 Branch names are sanitized: slashes replaced with dashes, max 30 chars. No prefix (REVIEW/PR) needed since the directory already indicates these are reviews.
 
@@ -451,15 +455,15 @@ Do not include `Side` in staging documents; it is always `RIGHT` for GitHub inli
 **After writing the staging doc**, inform the user:
 
 For PR reviews:
-> "Staged N findings in docs/reviews/YYYY-MM-DD-PR-<number>-<title>.md. Review and mark each status as post/drop/edit, then say 'post comments' when ready."
+> "Staged N findings in {reviews_dir}/YYYY-MM-DD-PR-<number>-<title>.md. Review and mark each status as post/drop/edit, then say 'post comments' when ready."
 
 For branch reviews:
-> "Review complete. Findings written to docs/reviews/YYYY-MM-DD-branch-review-<branch_name>.md with N findings (H: X, M: Y, L: Z)."
+> "Review complete. Findings written to {reviews_dir}/YYYY-MM-DD-branch-review-<branch_name>.md with N findings (H: X, M: Y, L: Z)."
 
 ### Posting Staged Findings
 
 When the user says "post comments", "post the review", or "post approved":
-1. Read `docs/reviews/PR-<number>.md`
+1. Read the staging doc from the review session path, or resolve exactly one `{reviews_dir}/*-PR-<number>-*.md`
 2. Collect all findings with `status: post` or `status: edit`
 3. Post them via `github-pr-workflow` as inline comments
 4. Update the staging doc: change Status header to `POSTED`, mark posted findings as `posted`, keep dropped findings as `drop`
@@ -514,7 +518,7 @@ Staging doc fields (author-facing quality is in **Comment**, not a terse summary
 ## Integration Points
 
 ### With `execute-plan` skill
-Invoked as a sub-agent in **branch review** mode after all plan tasks are implemented. Review scope comes from the plan's `## Review Scope` section. Output staging doc path: `docs/reviews/YYYY-MM-DD-plan-review-<plan-slug>-r<N>.md`. The orchestrator loops review → `receiving-code-review` until two consecutive clear review rounds (zero **remaining** Medium+ after triage — not raw review output).
+Invoked as a sub-agent in **branch review** mode after all plan tasks are implemented. Review scope comes from the plan's `## Review Scope` section. Output staging doc path: `{reviews_dir}/YYYY-MM-DD-plan-review-<plan-slug>-r<N>.md`. The orchestrator loops review → `receiving-code-review` until two consecutive clear review rounds (zero **remaining** Medium+ after triage — not raw review output).
 
 ## Limitations
 

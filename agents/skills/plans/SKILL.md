@@ -1,9 +1,11 @@
 ---
 name: plans
-description: "Full plan lifecycle — create, edit, and complete implementation plans. Use when writing a new plan, updating an existing one, or marking a plan done (moving to docs/plans/completed/). Trigger phrases — \"create a plan\", \"create plan\", \"write a plan\", \"write plan\", \"make a plan\", \"implementation plan\", \"update the plan\", \"update plan\", \"plan for\", \"plan as per\", \"plan based on\", \"plan is done\", \"mark plan complete\", \"plan complete\"."
+description: "Full plan lifecycle — create, edit, and complete implementation plans. Use when writing a new plan, updating an existing one, or marking a plan done (archive to project plans_completed_dir). Trigger phrases — \"create a plan\", \"create plan\", \"write a plan\", \"write plan\", \"make a plan\", \"implementation plan\", \"update the plan\", \"update plan\", \"plan for\", \"plan as per\", \"plan based on\", \"plan is done\", \"mark plan complete\", \"plan complete\"."
 ---
 
 # Plans
+
+**Documentation paths:** Resolve `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{rfcs_dir}` per `_shared/doc-paths.md` before creating, reviewing, or archiving plans. Do not hardcode `docs/plans/` unless resolution finds no project spec and exploration shows that layout.
 
 **Announce at start (create):** "I'm using the plans skill to create the implementation plan."
 
@@ -15,15 +17,15 @@ description: "Full plan lifecycle — create, edit, and complete implementation 
 
 **Exploration discipline:** When creating a plan, use targeted grep/glob to find file paths, class names, and method signatures. Do not read full test files or deeply explore implementation details beyond what is needed to write accurate file paths and test method names in plan tasks. Produce the plan file promptly — do not keep exploring after you have enough to write the tasks. **Before writing any exact file path in a plan task, verify it exists** with glob/bash — an unverified path is a review blocker that only the quality gate catches.
 
-**For detailed plan quality guidance:** If the project has `docs/domain/plan_quality_guidelines.md`, consult it for domain-specific examples and patterns. Otherwise, see Universal Patterns below.
+**For detailed plan quality guidance:** Resolve from `{guidelines_path}` or architecture/maintenance docs named in project guidelines (legacy: `docs/domain/plan_quality_guidelines.md`). Otherwise, see Universal Patterns below.
 
 **When updating or optimizing an existing plan:** compare the plan against the current code shape, the RFC/PRD, and any predecessor phase plans before editing. Prefer patching the plan directly when improvements are clear. **Also verify all required sections are present** (`## Gist & Examples`, `## Evaluation Criteria`, `## Review Scope`, `## Validation Commands`) — pre-existing plans may be missing them; add any absent sections before making other edits. **When the update notes that a code change is "already done", read the actual source file to verify the claim** — do not rely on session summaries or memory; an incorrect "already done" note becomes a review blocker.
 
-**Save plans to:** `docs/plans/<STORY-KEY>-<feature-name>.md` (story key prefix) or `docs/plans/YYYY-MM-DD-<feature-name>.md` (date prefix when no story key applies).
+**Save plans to:** `{plans_dir}/<STORY-KEY>-<feature-name>.md` (story key prefix) or `{plans_dir}/YYYY-MM-DD-<feature-name>.md` (date prefix when no story key applies).
 
-**CRITICAL:** Plans go in `docs/plans/` in the project repository — never in tool-default locations (`.claude/plans/`, `.opencode/plans/`, `.codex/`, `.cursor/`, etc.). When a tool suggests its own default path, override it and write to `docs/plans/` instead.
+**CRITICAL:** Plans go in the resolved `{plans_dir}` in the project repository — never in tool-default locations (`.claude/plans/`, `.opencode/plans/`, `.codex/`, `.cursor/`, etc.). When a tool suggests its own default path, override it with `{plans_dir}`.
 
-**For company projects:** Design RFCs go in `docs/rfcs/`. When a plan implements an RFC, add a one-line reference to it in the plan header (the optional line below the `# Plan:` title).
+**RFCs:** When the project uses RFCs, resolve `{rfcs_dir}` and reference the RFC in the plan header when applicable.
 When an RFC phase already has its own implementation Jira task, use that phase task key in the plan filename and title instead of the parent RFC/story key; keep the RFC reference line in the header for traceability.
 
 ## Phase 0: Branch Setup (Run Once at Plan Creation Start)
@@ -138,7 +140,7 @@ Before proceeding, explicitly confirm each critical decision with the user. When
 - "Is the rollout a single deploy or phased across multiple releases?"
 - "Does this depend on any external work (other teams, migrations, infra changes)?"
 
-For each confirmed decision, record it to a temporary notes buffer (write to `docs/tmp/plan-requirements-<slug>.md`). This becomes input for the `## Gist & Examples` section.
+For each confirmed decision, record it to a temporary notes buffer (write to `{tmp_dir}/plan-requirements-<slug>.md`). This becomes input for the `## Gist & Examples` section.
 
 ### Step 1.3: Define evaluation criteria
 
@@ -288,7 +290,7 @@ ls docs/
 |---|---|
 | New config properties, defaults, validation | `README.md` — config section only |
 | New metrics (counters, latency, reservations) | `docs/metrics.md` (or equivalent metrics reference) |
-| New architectural/engineering conventions | `docs/project-guidelines.md` as a numbered rule |
+| New architectural/engineering conventions | `{guidelines_path}` (resolved per `_shared/doc-paths.md`; typically `docs/maintenance/project-guidelines.md`) as a numbered rule |
 | New workflow steps or pipeline behavior | The relevant workflow doc |
 | New API contracts or BO behavior | The relevant API or workflow doc |
 | Time-bounded migration/rollout instructions | PR description only — never a permanent doc |
@@ -382,7 +384,7 @@ function signatures, pipeline ordering, and return contracts.
 
 Classify every finding as Blocker, Medium, Low, or Monitor (see severity rules below).
 
-Write the review output to: docs/reviews/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md
+Write the review output to: `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md`
 (use `-r1`, `-r2`, … for each loop iteration)
 
 Return in the review Summary:
@@ -410,8 +412,8 @@ Map review-plan agent output when synthesizing: **Block** → Blocker; **Mitigat
 2. **Medium** findings → add or revise plan tasks, tests, invariants, or Review Scope entries (mandatory — same bar as Blockers for loop exit)
 3. **Low** findings → fold into plan when the fix is a one-line clarification; otherwise leave noted in the review artifact
 4. **Monitor** findings → note in the plan's `## Monitor` section; **always resolve ownership**: if an existing plan task or high-level task doc covers the area, assign the item there and cross-reference both ways; if no relevant task exists, suggest creating a new story/task. Never leave a Monitor item as "tracked for a follow-up" without naming its owner task or proposing a new one.
-5. Review output is saved to `docs/reviews/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md`
-6. Add a reference line in the plan header: `Plan review: docs/reviews/<latest-rN>.md (latest, ready) · …`
+5. Review output is saved to `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md`
+6. Add a reference line in the plan header: `Plan review: {reviews_dir}/<latest-rN>.md (latest, ready) · …`
 7. Re-check the plan after incorporating findings
 8. **Repeat until zero Blockers AND zero Medium (minimum 2 rounds):** after incorporating all Blocker and Medium findings, re-run the review sub-agent with the next numbered review file (`…-r2.md`, `…-r3.md`, …). Continue the loop until the latest review reports **Blocker=0 AND Medium=0**. One review round is not sufficient when the plan has multiple new or substantially rewritten tasks, or when the prior round had any Medium+ finding.
 9. **Minimum two reviews:** run at least two complete review rounds (r1, r2) even if the first review returns zero Blockers and zero Medium. This catches issues that emerge only after applying fixes from the first review (new Blockers, incomplete Medium fixes, or cascading changes). Only stop when both: (a) the latest review round has **Blocker=0 AND Medium=0**, AND (b) at least two review rounds have completed.
@@ -464,7 +466,7 @@ When a plan modifies domain types (value objects, entities, enums) that live in 
 
 ## Plan Lifecycle
 
-- When all items are `[x]`, move the file to `docs/plans/completed/`.
+- When all items are `[x]`, move the file to `{plans_completed_dir}/`.
 - When superseded, delete rather than leaving stale `[ ]` items.
 
 ## Universal Patterns
@@ -493,17 +495,17 @@ Core plan quality principles applicable across all projects and languages:
 
 - **Boundary test checklist**: When implementing threshold-based logic (>=, <=, >, <), always include tests at the exact boundary value. Off-by-one errors at boundaries are common sources of incorrect behavior.
 
-Projects with detailed plan quality guidelines should document them in a `docs/domain/` or equivalent location; the generic skill provides only the universal patterns above.
+Projects with detailed plan quality guidelines should document them in `{guidelines_path}` or a named architecture/maintenance doc — not `docs/domain/` or `docs/<module>/` on migration-complete company services. The generic skill provides only the universal patterns above.
 
 ## Execution Handoff
 
 After saving, offer:
 
-> "Plan saved to `docs/plans/<filename>.md`. Ready to execute with `execute-plan`, in this session manually, or hand off to a new session?"
+> "Plan saved to `{plans_dir}/<filename>.md`. Ready to execute with `execute-plan`, in this session manually, or hand off to a new session?"
 
-**Plan path without trigger phrase:** If the user references an existing plan file (`docs/plans/…`, `@` mention, or filename only) without saying execute-plan / implement plan / run plan, **do not** assume implementation. Run the three-way gate from the `execute-plan` skill (execute-plan / manual / read-only) before any production code edits.
+**Plan path without trigger phrase:** If the user references an existing plan file under `{plans_dir}` (`@` mention or filename only) without saying execute-plan / implement plan / run plan, **do not** assume implementation. Run the three-way gate from the `execute-plan` skill (execute-plan / manual / read-only) before any production code edits.
 
-**Automated execution:** Use the `execute-plan` skill. If Phase 0 already created a feature branch, `execute-plan` Phase 0 verifies that branch and offers to continue on it instead of creating another. It orchestrates sub-agents to implement one task at a time (tests must pass), mark checkboxes, run `done` after each task, then run review/fix loops (with `done` after each review iteration) until **two consecutive** clear review rounds (zero remaining Medium+ after `receiving-code-review` triage), **minimum two** and **maximum ten** review rounds, archive the plan to `docs/plans/completed/`, and remove `docs/tmp/execute-plan/<slug>/` on success only. The parent agent must not implement tasks inline or batch commits — see `execute-plan` anti-patterns. Selecting execute-plan authorizes per-task `done` commits without a separate commit prompt for that run (push still requires explicit user instruction).
+**Automated execution:** Use the `execute-plan` skill (resolves same paths via `_shared/doc-paths.md`). Archive to `{plans_completed_dir}/`; session logs under `{tmp_dir}/execute-plan/<slug>/` on success only.
 
 **Manual execution in this session:** Use `tdd-guide` and `unit-test-runner` per task (fresh output before marking the task complete). One task per commit. Use `done` only when the user ends the session (learn + commit across repos). Do not use this path when the user asked for `execute-plan` / `/execute-plan`.
 

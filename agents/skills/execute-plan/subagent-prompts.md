@@ -6,7 +6,7 @@ Placeholders:
 
 | Placeholder | Meaning |
 |-------------|---------|
-| `<PLAN_PATH>` | Repository-relative path, e.g. `docs/plans/CRM-123-feature.md` |
+| `<PLAN_PATH>` | Repository-relative path under resolved `{plans_dir}/`, e.g. `{plans_dir}/CRM-123-feature.md` |
 | `<TASK_NUM>` | Task number, e.g. `2` |
 | `<TASK_TITLE>` | Task heading text |
 | `<TASK_BODY>` | Full markdown for this `### Task N:` section |
@@ -18,10 +18,10 @@ Placeholders:
 | `<COMMIT_HINT>` | Plan commit line or derived message |
 | `<BASE_BRANCH>` | Branch plan work started from (e.g. `main`) |
 | `<PLAN_SLUG>` | Kebab-case slug for log directory |
-| `<IMPLEMENT_LOG_PATH>` | `docs/tmp/execute-plan/<PLAN_SLUG>/task-<N>-implement.log.md` |
-| `<REVIEW_LOG_PATH>` | `docs/tmp/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
-| `<ADDRESS_LOG_PATH>` | `docs/tmp/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-code-review.log.md` |
-| `<MANIFEST_PATH>` | `docs/tmp/execute-plan/<PLAN_SLUG>/manifest.md` |
+| `<IMPLEMENT_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-implement.log.md` |
+| `<REVIEW_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
+| `<ADDRESS_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-code-review.log.md` |
+| `<MANIFEST_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` |
 | `<LOG_PASS_NUM>` | `1` on first launch for this log path; orchestrator increments on relaunch |
 
 Log format and **create vs append** rules: see [agent-logs.md](agent-logs.md). If the log file already exists, **append** Pass `<LOG_PASS_NUM>` to the end — **never overwrite** prior passes. Each `done` reads **only logs from the immediately preceding worker step(s)** — not full session history.
@@ -176,22 +176,22 @@ Drop or mark `drop` any finding outside this scope.
 
 ## Mode
 
-Branch review (no PR unless user provided a PR URL). **Required deliverable:** a staging doc on disk under `docs/reviews/` at:
+Branch review (no PR unless user provided a PR URL). **Required deliverable:** a staging doc on disk under resolved `{reviews_dir}/` at:
 
 <REVIEW_DOC_PATH>
 
-Example: docs/reviews/2026-06-05-<PLAN_SLUG>-code-review-r<REVIEW_ROUND>.md
+Example: {reviews_dir}/2026-06-05-<PLAN_SLUG>-code-review-r<REVIEW_ROUND>.md
 
 (Use `-code-review-r` — not `-plan-review-r`, which is reserved for pre-execution plan reviews from the `plans` skill.)
 
-Create `docs/reviews/` if missing. Follow `doing-code-review` staging-doc format (Summary, per-finding sections with Severity and Status). A chat-only summary is not a substitute.
+Create `{reviews_dir}/` if missing. Follow `doing-code-review` staging-doc format (Summary, per-finding sections with Severity and Status). A chat-only summary is not a substitute.
 
 **Update execution log** at `<REVIEW_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append — see agent-logs.md). Include sub-agent launch details, assessment-pass notes, dropped findings, and full return payload.
 
 ## Acceptance criteria (orchestrator blocks Step 3.2 / address-review without these)
 
 1. Staging doc file exists at `<REVIEW_DOC_PATH>` and is readable.
-2. Doc path is under `docs/reviews/` (not `docs/tmp/` or chat output only).
+2. Doc path is under `{reviews_dir}/` (not `{tmp_dir}/` or chat output only).
 3. Return includes the exact staging doc path and finding counts by severity.
 4. `<REVIEW_LOG_PATH>` exists on disk and is non-empty.
 

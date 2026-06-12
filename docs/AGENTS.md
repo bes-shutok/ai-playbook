@@ -98,10 +98,10 @@ Always use `~/` (home-relative) paths, never absolute `/Users/<name>/` paths, in
 
 ## Implementation Plans
 
-- Plans go in `docs/plans/`; see the `plans` skill for the mandatory format and lifecycle rules.
-- For company work projects, design RFCs go in `docs/rfcs/`.
+- Plans go in `docs/history/plans/` on migrated company service repos (legacy: `docs/plans/`); see the `plans` skill for the mandatory format and lifecycle rules.
+- For company work projects on the doc hierarchy, design RFCs go in `docs/history/feature-notes/` (flat). Do not create or retain `docs/rfcs/` after migration.
 - Do not create plans in session state, `docs/tmp/`, or any other location.
-- Do not create plans in tool-default locations (`.claude/plans/`, `.opencode/plans/`, `.codex/`, `.cursor/`). Always write to `docs/plans/` regardless of what the tool suggests.
+- Do not create plans in tool-default locations (`.claude/plans/`, `.opencode/plans/`, `.codex/`, `.cursor/`). Always write to the resolved `{plans_dir}` regardless of what the tool suggests.
 - Plans must follow TDD task ordering: RED (failing tests) before GREEN (implementation), refactor last.
 - When a plan modifies domain types in a large file (>1k lines), include a task for evaluating extraction to a dedicated domain module.
 

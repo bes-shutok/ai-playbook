@@ -20,6 +20,15 @@ Use it when:
 - Mirror target: `agents/skills/`
 - Notes: shared skills such as `$learn` come from this registry in the current setup.
 
+### Cross-skill modules (`agents/skills/_shared/`)
+- `_shared/doc-paths.md`: documentation path resolution protocol consumed by `plans`, `execute-plan`, `learn`, `doing-code-review`, and other skills that read/write repo docs.
+
+### Doc-hierarchy skill family (`agents/skills/doc-hierarchy*/`)
+- `doc-hierarchy`: schema reference (Layer 1/2/3 layout, migration-complete signal).
+- `doc-hierarchy-migrate`: migration workflow and `scripts/verify-doc-hierarchy.sh` gates.
+- `doc-hierarchy-upkeep`: post-migration Layer 1/2 upkeep.
+- Vendored with the shared registry; not a separate runtime source.
+
 ### Claude Code
 - Runtime source: `~/.claude/skills` (symlink → `~/.agents/skills`)
 - Mirror target: `claude/skills/` (symlink → `../agents/skills`)

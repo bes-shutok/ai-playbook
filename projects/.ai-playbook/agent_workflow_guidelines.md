@@ -77,7 +77,7 @@ test scope.
 ## 5. Gitignored Docs — Code Comment References
 
 When design docs (RFCs, plans) are gitignored and only live on the author's
-machine (e.g. under `docs/rfcs/`, `docs/plans/`):
+machine (e.g. under `docs/history/feature-notes/`, `docs/history/plans/`, or legacy `docs/rfcs/` / `docs/plans/` before migration):
 
 5.1. Code comments that reference design rationale must link to the shared
 location (Confluence page URL, shared wiki, etc.), not the local file path.

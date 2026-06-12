@@ -49,7 +49,7 @@ Use this workflow when the user asks to process, triage, plan, address, or reply
 
 Every CR comment thread must get a reply before it is resolved. For fixes, reference the commit SHA when available and describe what changed. For false positives, explain why no change was made.
 
-When a plan is needed, save grouped tasks to `docs/plans/<BRANCH-KEY>-<short-title>.md` using the repository plan format. Do not start implementing the plan unless the user explicitly says to start.
+When a plan is needed, save grouped tasks to `{plans_dir}/<BRANCH-KEY>-<short-title>.md` (resolve `{plans_dir}` per `_shared/doc-paths.md`) using the repository plan format. Do not start implementing the plan unless the user explicitly says to start.
 
 ## Forbidden Responses
 

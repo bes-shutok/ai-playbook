@@ -412,7 +412,7 @@ When modifying an existing RFC document (adding sections, updating decisions, re
 
 When a lesson changes RFC authoring workflow, section content requirements, or review-checklist expectations:
 - update this `rfc-design` skill at the relevant section
-- update `docs/examples/` only when an example/playbook is needed to illustrate the rule
+- add an example/playbook only when needed to illustrate the rule — use project-resolved path per `_shared/doc-paths.md` (`caller_catalog`, `{tmp_dir}`, or legacy examples dir if the repo still has one)
 - do not treat editing an individual module RFC as the primary fix unless the underlying skill rule is already correct
 
 ---
