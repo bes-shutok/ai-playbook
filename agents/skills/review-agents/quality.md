@@ -40,7 +40,7 @@ Acceptable inline comments (WHY-only, single-line):
 
 Unacceptable inline comments:
 - Restate what the next line does ("// throws IAE on unknown" above `Enum.valueOf(...)`)
-- Reference the current task/PR ("// added for CRM-329", "// used by X flow")
+- Reference the current task/PR ("// added for PROJ-1234", "// used by X flow")
 - Multi-line explanations — move to class or method Javadoc/docstring
 - Section-divider banners ("// === Validation ===") — extract to a named private method instead
 

@@ -1,0 +1,8 @@
+# Local deny patterns for scan-public-hygiene.sh (one ripgrep regex per line).
+# Copy to ~/.ai-playbook/public-hygiene.patterns and customize from your facts document.
+# Do not commit the populated file.
+#
+# Examples (replace with your values):
+# your-org\.atlassian
+# YOUR_PREFIX-[0-9]
+# your-github-handle

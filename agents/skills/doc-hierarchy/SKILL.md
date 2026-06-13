@@ -6,7 +6,7 @@ description: >-
   layout rules, path resolution, and migration completion signals. Use when
   asking what the doc layout is, where a doc type belongs, or whether a repo
   has adopted the hierarchy. Trigger phrases — "doc hierarchy", "documentation
-  hierarchy", "service docs hierarchy", "docs layer", "(legacy project-specific trigger)". For migration execution use doc-hierarchy-migrate; for
+  hierarchy", "service docs hierarchy", "docs layer". For migration execution use doc-hierarchy-migrate; for
   post-migration doc updates use doc-hierarchy-upkeep.
 ---
 
@@ -31,7 +31,7 @@ Team decision: see [company-decisions.md](company-decisions.md) for rationale an
 
 **Only `doc-hierarchy-migrate` writes** canonical paths into `AGENTS.md` and `project_guidelines_rel` during an explicit migration run.
 
-**All other skills** resolve paths per [`../_shared/doc-paths.md`](../_shared/doc-paths.md). They must **not** hardcode `docs/plans/`, `docs/examples/`, or module-split trees.
+**All other skills** invoke the `resolve-vars` skill at task start to resolve paths. They must **not** hardcode `docs/plans/`, `docs/examples/`, or module-split trees.
 
 | Situation | Behavior |
 |-----------|----------|
@@ -86,7 +86,7 @@ A company service repo is **migration-complete** when **all** are true:
 
    Resolve `<doc-hierarchy-migrate-skill>` from the **doc-hierarchy-migrate** skill install (directory containing `doc-hierarchy-migrate/SKILL.md`), regardless of which doc-hierarchy family skill triggered the check. Not from the service repo. **Do not** copy or vendor the script into the service repo.
 
-Until the signal is true, other skills use `_shared/doc-paths.md` exploration (legacy paths allowed). After true, project spec wins; `learn` must not create new `docs/examples/` or `docs/<module>/` trees.
+Until the signal is true, other skills use `resolve-vars` exploration (legacy paths allowed). After true, project spec wins; `learn` must not create new `docs/examples/` or `docs/<module>/` trees.
 
 ## Agent-agnostic instructions
 
@@ -99,7 +99,7 @@ Templates: [instruction-templates.md](instruction-templates.md).
 
 | Consumer | Integration |
 |----------|-------------|
-| `_shared/doc-paths.md` | Resolution order and default path map; links here for migration-complete signal |
+| `resolve-vars` | Resolution order and default path map; links here for migration-complete signal |
 | `doc-hierarchy-migrate` | Applies schema; writes canonical paths into repo instructions |
 | `doc-hierarchy-upkeep` | Layer 1/2 updates when migration-complete signal is true |
 | `plans`, `execute-plan` | Resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}` at task start |
@@ -107,15 +107,15 @@ Templates: [instruction-templates.md](instruction-templates.md).
 | `done`, `docs-branch` | PR checklist; gitignored doc paths via resolved `{reviews_dir}` |
 | `doing-code-review`, `review-plan` | Staging docs under resolved `{reviews_dir}` |
 | `github-pr-workflow` | Doc migration PR description rules from `company-decisions.md` |
-| `review-confluence-doc` | Resolves `{tmp_dir}` per `_shared/doc-paths.md` for review output files |
-| `rfc-design` | Resolves caller catalog and `{tmp_dir}` via `_shared/doc-paths.md` |
+| `review-confluence-doc` | Resolves `{tmp_dir}` by invoking the `resolve-vars` skill at task start for review output files |
+| `rfc-design` | Resolves caller catalog and `{tmp_dir}` via the `resolve-vars` skill |
 | `how-to-write-skills` | Bidirectional Integration Points requirement for skill family consumers |
-| `using-skills` | Documents doc-hierarchy family roles and `_shared/doc-paths.md` resolution at session start |
+| `using-skills` | Documents doc-hierarchy family roles and `resolve-vars` path resolution at session start |
 
 ## Related
 
 - [content-ownership.md](content-ownership.md) — which file owns each topic (no duplicate prose)
-- [`../_shared/doc-paths.md`](../_shared/doc-paths.md) — path resolution for all skills
+- the `resolve-vars` skill — path resolution for all skills
 - [`../doc-hierarchy-migrate/SKILL.md`](../doc-hierarchy-migrate/SKILL.md) — migration workflow
 - [`../doc-hierarchy-upkeep/SKILL.md`](../doc-hierarchy-upkeep/SKILL.md) — Layer 1/2 upkeep
 - `learn`, `plans`, `execute-plan`, `docs-branch`, `done`

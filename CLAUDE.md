@@ -28,6 +28,7 @@ $(cat ./context/rfc-input.md)"
 - Audit files quickly:
 ```bash
 rg --files
+bash ~/.ai-playbook/scripts/scan-public-hygiene.sh   # from instructions repo root; see public_hygiene_scan_script in user facts
 ```
 
 ## Coding Style & Naming Conventions
@@ -56,6 +57,7 @@ rg --files
 - Ensure README command names, aliases, and paths match actual files.
 - For `learn` flows, confirm lessons are placed in the correct scope and do not duplicate guidance.
 - When reviewing uncommitted changes for confidential data, path leakage, or naming issues, inspect the actual changed file set from `git status --short`, including untracked files, before narrowing the review to a subset of files.
+- Before committing skill or instruction changes, run the hygiene scan from `public_hygiene_scan_script` in user facts (exit 0 required). Deny patterns: `public_hygiene_patterns_file` (template: `docs/scan-public-hygiene.patterns.example`). Personal contact email is allowed only in `LICENSE.txt` copyright lines.
 
 ## Agent-Specific Runtime Safety
 - Before host-level changes (package installs, shell profile edits), state execution context (host vs sandbox), expected impact, and rollback plan.
@@ -67,7 +69,7 @@ rg --files
 - When syncing vendored agent assets (`agents/skills/`), apply full bidirectional sync: add new items, update changed items, and remove items that no longer exist in the source. Use `rsync --delete` semantics.
 - Before syncing, diff source vs repo to identify additions, updates, and deletions explicitly.
 - When a runtime source directory is itself a symlink (e.g. `~/.claude/skills → ../.agents/skills`), mirror this with a symlink in the repo (e.g. `claude/skills → ../agents/skills`) rather than a separate copy.
-- After every sync or import of external files, scan all changed files for absolute paths and sensitive information (company domains, employee names, internal service names, environment names, internal URLs, credentials). Mask sensitive content in both the repo copy and the origin source before committing.
+- After every sync or import of external files, scan all changed files for absolute paths and sensitive information (company domains, employee names, internal service names, environment names, internal URLs, credentials). Run the hygiene scan from user facts before commit. Mask sensitive content in both the repo copy and the origin source before committing.
 - Do not vendor skills that are managed autonomously by an agent (e.g. `~/.codex/skills`). Only vendor skills from registries you manage directly (e.g. `~/.agents/skills`).
 - Do not maintain a `create-documentation/` command that duplicates an existing skill in `agents/skills/`. The skill is the canonical form; remove the command copy and update all doc references to point to the skill.
 

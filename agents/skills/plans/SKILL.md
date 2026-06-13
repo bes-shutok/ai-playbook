@@ -5,7 +5,7 @@ description: "Full plan lifecycle — create, edit, and complete implementation 
 
 # Plans
 
-**Documentation paths:** Resolve `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{rfcs_dir}` per `_shared/doc-paths.md` before creating, reviewing, or archiving plans. Do not hardcode `docs/plans/` unless resolution finds no project spec and exploration shows that layout.
+**Documentation paths:** Resolve `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{rfcs_dir}` by invoking the `resolve-vars` skill at task start before creating, reviewing, or archiving plans. Do not hardcode `docs/plans/` unless resolution finds no project spec and exploration shows that layout.
 
 **Announce at start (create):** "I'm using the plans skill to create the implementation plan."
 
@@ -290,7 +290,7 @@ ls docs/
 |---|---|
 | New config properties, defaults, validation | `README.md` — config section only |
 | New metrics (counters, latency, reservations) | `docs/metrics.md` (or equivalent metrics reference) |
-| New architectural/engineering conventions | `{guidelines_path}` (resolved per `_shared/doc-paths.md`; typically `docs/maintenance/project-guidelines.md`) as a numbered rule |
+| New architectural/engineering conventions | `{guidelines_path}` (resolved by invoking the `resolve-vars` skill at task start; typically `docs/maintenance/project-guidelines.md`) as a numbered rule |
 | New workflow steps or pipeline behavior | The relevant workflow doc |
 | New API contracts or BO behavior | The relevant API or workflow doc |
 | Time-bounded migration/rollout instructions | PR description only — never a permanent doc |
@@ -505,11 +505,14 @@ After saving, offer:
 
 **Plan path without trigger phrase:** If the user references an existing plan file under `{plans_dir}` (`@` mention or filename only) without saying execute-plan / implement plan / run plan, **do not** assume implementation. Run the three-way gate from the `execute-plan` skill (execute-plan / manual / read-only) before any production code edits.
 
-**Automated execution:** Use the `execute-plan` skill (resolves same paths via `_shared/doc-paths.md`). Archive to `{plans_completed_dir}/`; session logs under `{tmp_dir}/execute-plan/<slug>/` on success only.
+**Automated execution:** Use the `execute-plan` skill (resolves same paths via the `resolve-vars` skill). Archive to `{plans_completed_dir}/`; session logs under `{tmp_dir}/execute-plan/<slug>/` on success only.
 
 **Manual execution in this session:** Use `tdd-guide` and `unit-test-runner` per task (fresh output before marking the task complete). One task per commit. Use `done` only when the user ends the session (learn + commit across repos). Do not use this path when the user asked for `execute-plan` / `/execute-plan`.
 
 ## Integration Points
+
+### With `resolve-vars` skill
+Provider for `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}`, and `{rfcs_dir}`. Invoke at task start before creating, reviewing, or archiving plans.
 
 ### With `execute-plan` skill
 Consumer of plan format, task order, `## Validation Commands`, `## Review Scope`, per-task commit lines, and completed-plan archival. Shares Phase 0 branch-setup semantics: `plans` runs it at plan creation; `execute-plan` runs it at implementation start and reuses an existing feature branch when appropriate. After plan creation or update, hand off to `execute-plan` when the user wants automated iterative implementation with per-task commits and post-implementation review loops.

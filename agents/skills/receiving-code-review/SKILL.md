@@ -49,7 +49,7 @@ Use this workflow when the user asks to process, triage, plan, address, or reply
 
 Every CR comment thread must get a reply before it is resolved. For fixes, reference the commit SHA when available and describe what changed. For false positives, explain why no change was made.
 
-When a plan is needed, save grouped tasks to `{plans_dir}/<BRANCH-KEY>-<short-title>.md` (resolve `{plans_dir}` per `_shared/doc-paths.md`) using the repository plan format. Do not start implementing the plan unless the user explicitly says to start.
+When a plan is needed, save grouped tasks to `{plans_dir}/<BRANCH-KEY>-<short-title>.md` (resolve `{plans_dir}` by invoking the `resolve-vars` skill at task start) using the repository plan format. Do not start implementing the plan unless the user explicitly says to start.
 
 ## Forbidden Responses
 
@@ -271,6 +271,9 @@ Rules:
 - Never silently resolve any thread.
 
 ## Integration Points
+
+### With `resolve-vars` skill
+Provider for `{plans_dir}` when saving grouped fix tasks from review feedback.
 
 ### With `execute-plan` skill
 Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review` (`pending` Critical/High/Medium findings). Honors the plan's `## Review Scope`. Triage is authoritative for Phase 3 exit: implements fixes, marks `drop`/`done`, leaves only validated issues at `pending`. The orchestrator counts **remaining Medium+** after this step — not provisional `doing-code-review` counts. Does not commit — the orchestrator runs streak evaluation and `done`, then may start the next review round.

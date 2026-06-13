@@ -129,7 +129,7 @@ When research is conducted via web search or other external sources:
 - Add Sources section at the end with URLs and dates
 
 **LLM examples vs canonical docs:**
-- Canonical docs = technical facts, best practices, comparisons (home per project spec — see `_shared/doc-paths.md`)
+- Canonical docs = technical facts, best practices, comparisons (home per project spec — invoke the `resolve-vars` skill at task start)
 - LLM examples / playbooks = reasoning patterns, anti-patterns (resolve `caller_catalog`, `{tmp_dir}`, or project-documented example path — do not assume `docs/examples/`)
 - Examples file should reference main doc, not duplicate it
 
@@ -141,7 +141,7 @@ When research is conducted via web search or other external sources:
 
 ## Step 2: Placement Rules
 
-**First:** Resolve documentation paths per `_shared/doc-paths.md` resolution order (`user_facts_path` keys, repo `AGENTS.md`, on-disk `project_guidelines_rel`, explore `docs/`). Use resolved paths for the rest of this run — do not invent layout.
+**First:** At task start, invoke the `resolve-vars` skill using its resolution order (`user_facts_path` keys, repo `AGENTS.md`, on-disk `project_guidelines_rel`, explore `docs/`). Use resolved paths for the rest of this run — do not invent layout.
 
 ### Guideline file roles (resolve from facts keys only)
 
@@ -262,7 +262,7 @@ If you find a pattern where many lessons in one section all reference different 
 could be consolidated or whether the instruction section could be reorganized for better flow.
 
 ## Step 5: Module Layout and Skill Workflow Lessons
-- Module doc layout follows project resolution (`_shared/doc-paths.md`): legacy `docs/<module>/`, flat `history/feature-notes/`, or architecture topics — do not impose a layout the project has not adopted.
+- Module doc layout follows project resolution (`resolve-vars`): legacy `docs/<module>/`, flat `history/feature-notes/`, or architecture topics — do not impose a layout the project has not adopted.
 - RFC / task tracker filenames follow project-guidelines or existing repo convention.
 - If move/rename is required, propose minimal change set and ask for consent before applying. On company services with legacy layout, suggest `doc-hierarchy-migrate` instead of ad-hoc moves.
 
@@ -380,3 +380,8 @@ Before finishing, verify:
 - RFC-workflow lessons updated in skill/example files where applicable
 - changed API docs and OpenAPI artifacts remain synchronized
 - the learn counter file (`/tmp/learn-counter-${PPID}-<dir_hash>`) has been deleted so the nudge timer restarts
+
+## Integration Points
+
+### With `resolve-vars` skill
+Provider for documentation path resolution during lesson placement. Invoke at task start before resolving canonical doc homes or module layout targets.

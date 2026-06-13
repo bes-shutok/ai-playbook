@@ -8,6 +8,8 @@ set -uo pipefail
 
 PHASE="${1:-full}"
 REPO_ROOT="${REPO_ROOT:-.}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_INSTALL="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT" || exit 2
 git rev-parse --git-dir >/dev/null 2>&1 || { echo 'FATAL: REPO_ROOT is not a git repository'; exit 2; }
 REPO_TOP=$(git rev-parse --show-toplevel)
@@ -15,6 +17,49 @@ if [ "$(pwd -P)" != "$(cd "$REPO_TOP" && pwd -P)" ]; then
   echo "FATAL: REPO_ROOT must be the git repository root (toplevel: $REPO_TOP)" >&2
   exit 2
 fi
+
+echo "verify-doc-hierarchy: REPO_ROOT=$REPO_TOP phase=$PHASE" >&2
+
+if [ -n "${EXPECTED_REPO_ROOT:-}" ]; then
+  expected_abs=$(cd "$EXPECTED_REPO_ROOT" 2>/dev/null && pwd -P) || expected_abs=""
+  if [ -z "$expected_abs" ] || [ "$expected_abs" != "$(pwd -P)" ]; then
+    echo "FATAL: REPO_ROOT ($REPO_TOP) does not match EXPECTED_REPO_ROOT ($EXPECTED_REPO_ROOT)" >&2
+    exit 2
+  fi
+fi
+
+if [ "$PHASE" != self-test ] && [ "${VERIFY_ALLOW_SKILL_INSTALL:-0}" != 1 ]; then
+  repo_top_p=$(cd "$REPO_TOP" && pwd -P)
+  skill_install_p=$(cd "$SKILL_INSTALL" && pwd -P)
+  if [ "$repo_top_p" = "$skill_install_p" ]; then
+    echo "FATAL: REPO_ROOT is the skill install directory ($REPO_TOP). Set REPO_ROOT to the service repo root." >&2
+    exit 2
+  fi
+  if [ -f "$REPO_TOP/agents/skills/doc-hierarchy-migrate/SKILL.md" ] && \
+     [ -f "$REPO_TOP/agents/skills/resolve-vars/SKILL.md" ]; then
+    echo "FATAL: REPO_ROOT appears to be the instructions/skills repository ($REPO_TOP), not a service repo. Set REPO_ROOT to the service repo root." >&2
+    exit 2
+  fi
+fi
+
+if [ "$PHASE" != self-test ] && [ ! -d docs ]; then
+  echo "FATAL: REPO_ROOT has no docs/ directory — likely not a service repo ($REPO_TOP)" >&2
+  exit 2
+fi
+
+validate_external_docs_domain() {
+  local d="${EXTERNAL_DOCS_DOMAIN:-}"
+  [ -z "$d" ] && return 0
+  if command -v rg >/dev/null 2>&1; then
+    if ! printf '%s' "$d" | rg -q '^[a-zA-Z0-9.-]+$'; then
+      echo "FATAL: EXTERNAL_DOCS_DOMAIN contains invalid characters: $d" >&2
+      exit 2
+    fi
+  elif ! printf '%s' "$d" | grep -Eq '^[a-zA-Z0-9.-]+$'; then
+    echo "FATAL: EXTERNAL_DOCS_DOMAIN contains invalid characters: $d" >&2
+    exit 2
+  fi
+}
 
 FAILS=0
 fail() { echo "FAIL: $1"; FAILS=$((FAILS + 1)); }
@@ -97,7 +142,18 @@ gate_step5() {
   fi
 }
 
+gate_step6_content_hygiene() {
+  if ! command -v rg >/dev/null 2>&1; then
+    return
+  fi
+  local scan_roots=(docs/maintenance docs/architecture)
+  rg -q -i '(AKIA[0-9A-Z]{16}|sk_live_[0-9a-zA-Z]{20,}|-----BEGIN (RSA |EC )?PRIVATE KEY-----|Bearer [a-zA-Z0-9._-]{20,})' \
+    "${scan_roots[@]}" 2>/dev/null && \
+    fail "possible live credential pattern in Layer 2 docs (use placeholders)"
+}
+
 gate_step6_finish() {
+  validate_external_docs_domain
   if command -v rg >/dev/null 2>&1; then
     local canon_roots=(AGENTS.md README.md docs/architecture docs/maintenance docs/README.md)
     rg -q 'docs/(project-guidelines|project-decisions|glossary|facts|company-guidelines)\.md' \
@@ -126,7 +182,8 @@ gate_step6_finish() {
     if rg 'docs/[a-z][a-z0-9-]+/' --glob '*.java' --glob '*.kt' --glob '*.py' --glob '*.{yml,yaml,sh,md}' . 2>/dev/null \
       | rg -v 'docs/(architecture|maintenance|history|tmp)/' \
       | rg -v 'https?://[^/]*/docs/' \
-      | rg -v "${EXTERNAL_DOCS_DOMAIN:-no-match-placeholder}/docs/" \
+      | rg -v '[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/docs/' \
+      | rg -Fv "${EXTERNAL_DOCS_DOMAIN:-no-match-placeholder}/docs/" \
       | rg -v 'firebase\.google\.com/docs/' | rg -q .; then
       fail "rogue docs/<module>/ path in source or config"
     fi
@@ -134,13 +191,15 @@ gate_step6_finish() {
     fail "rg (ripgrep) required for step6 reference scans"
   fi
 
+  gate_step6_content_hygiene
+
   local f
   for f in system-overview domain-model integrations api-contracts event-flows operational-guides troubleshooting; do
     test -f "docs/architecture/${f}.md" || fail "docs/architecture/${f}.md missing"
   done
   local arch_count
   arch_count=$(ls -1 docs/architecture/*.md 2>/dev/null | wc -l | tr -d ' ')
-  [ "$arch_count" -eq 7 ] || fail "docs/architecture/ must have exactly 7 .md files (found $arch_count)"
+  [ "$arch_count" -ge 7 ] || fail "docs/architecture/ must have at least 7 .md files (found $arch_count)"
 
   test ! -d docs/examples || fail "docs/examples at root"
   test ! -d docs/history/examples || fail "docs/history/examples present"
@@ -202,11 +261,14 @@ bootstrap_fixture_expected_mini() {
 
 ## Documentation Hierarchy
 
-- **Start here:** `docs/README.md` (Layer 1).
-- **Facts / guidelines:** `docs/maintenance/facts.md`; `docs/maintenance/project-guidelines.md`.
-- **Shared knowledge:** `docs/architecture/`, `docs/maintenance/` (Layer 2).
-- **Historical context:** `docs/history/` (Layer 3).
-- **LLM-only:** `docs/tmp/`; gitignored `docs/history/reviews/`.
+- **Start here:** `docs/README.md` (Layer 1 — concise service overview; not a file catalog).
+- **Facts / guidelines:** `repo_facts_rel` → `docs/maintenance/facts.md`; `project_guidelines_rel` → `docs/maintenance/project-guidelines.md`.
+- **Shared knowledge:** `docs/architecture/`, `docs/maintenance/` (Layer 2) — update in the same PR/session when behavior, contracts, integrations, or ops change; see `docs/maintenance/project-guidelines.md` Documentation Hierarchy section.
+- **Historical context:** `docs/history/` (Layer 3) — reference only; active plans under `docs/history/plans/`, archives under `docs/history/plans/completed/`.
+- **LLM-only:** `docs/tmp/` at root; gitignored `docs/history/reviews/` — not canonical human Layer 2.
+- **Wire catalogs (Layer 2):** `docs/maintenance/api-reference.md` when the service exposes HTTP APIs; other wire contracts under `docs/maintenance/` (BFF, sync, admin FE shapes). Do not recreate a separate examples tree or per-endpoint files under `maintenance/`; use `maintenance/api-reference.md` for caller samples.
+- **Doc path resolution:** Other skills resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{proposals_dir}`, `{rfcs_dir}`, `{caller_catalog}` from this file and project guidelines — not from hardcoded skill defaults.
+- Use `doc-hierarchy-migrate` to relocate flat or module-split docs; use `doc-hierarchy-upkeep` for Layer 1/2 after migration; merge durable knowledge into topic-based `architecture/`, not `docs/<module>/` trees.
 EOF
   cat > "$root/docs/README.md" <<'EOF'
 # fixture-service
@@ -253,8 +315,12 @@ Follow the company service layout under `docs/`. Resolved paths for other skills
 | Key | Path |
 |-----|------|
 | plans_dir | docs/history/plans/ |
+| plans_completed_dir | docs/history/plans/completed/ |
 | reviews_dir | docs/history/reviews/ |
 | tmp_dir | docs/tmp/ |
+| proposals_dir | docs/history/feature-notes/proposals/ |
+| rfcs_dir | docs/history/feature-notes/ |
+| caller_catalog | docs/maintenance/api-reference.md |
 EOF
   for f in facts glossary project-decisions; do
     cat > "$root/docs/maintenance/${f}.md" <<EOF
@@ -291,14 +357,14 @@ docs/tmp/
 EOF
   git -C "$dst" init -q || { fail "could not init git repo in $(basename "$dst") worktree"; return 1; }
   git -C "$dst" add -A 2>/dev/null
-  git -C "$dst" commit -qm "self-test" >/dev/null 2>&1 \
+  git -C "$dst" -c user.name=fixture -c user.email=fixture@example.com commit -qm "self-test" >/dev/null 2>&1 \
     || { fail "could not commit $(basename "$dst") worktree"; return 1; }
 }
 
 commit_self_test_worktree() {
   local work="$1" msg="$2"
   git -C "$work" add -A 2>/dev/null
-  git -C "$work" commit -qm "$msg" >/dev/null 2>&1 \
+  git -C "$work" -c user.name=fixture -c user.email=fixture@example.com commit -qm "$msg" >/dev/null 2>&1 \
     || { fail "could not commit $(basename "$work") worktree: $msg"; return 1; }
 }
 
@@ -382,6 +448,117 @@ gate_self_test() {
     echo "$out" | rg -q 'legacy docs/context, docs/plans, or docs/proposals still referenced in canonical docs' \
       || fail "legacy-ref full failed for unexpected reason: $out"
     echo "OK: legacy path string in canonical doc fails full as expected"
+  fi
+
+  local catalog_work catalog_ok_work guidelines_work vendored_work audit_work
+  catalog_work="$SELF_TEST_TMP_ROOT/caller-catalog-missing"
+  prepare_self_test_worktree "$catalog_work" expected || return 1
+  if out=$(REPO_ROOT="$catalog_work" REQUIRE_CALLER_CATALOG=1 "$script_dir/verify-doc-hierarchy.sh" step2 2>&1); then
+    fail "REQUIRE_CALLER_CATALOG=1 without api-reference should fail step2 but passed"
+  else
+    echo "$out" | rg -q 'api-reference.md missing' \
+      || fail "caller-catalog-missing step2 failed for unexpected reason: $out"
+    echo "OK: REQUIRE_CALLER_CATALOG=1 fails without api-reference as expected"
+  fi
+
+  catalog_ok_work="$SELF_TEST_TMP_ROOT/caller-catalog-present"
+  prepare_self_test_worktree "$catalog_ok_work" expected || return 1
+  echo 'caller samples (fixture)' > "$catalog_ok_work/docs/maintenance/api-reference.md"
+  commit_self_test_worktree "$catalog_ok_work" "add api-reference" || return 1
+  if ! out=$(REPO_ROOT="$catalog_ok_work" REQUIRE_CALLER_CATALOG=1 "$script_dir/verify-doc-hierarchy.sh" step2 2>&1); then
+    fail "REQUIRE_CALLER_CATALOG=1 with api-reference should pass step2 but failed: $out"
+  else
+    echo "OK: REQUIRE_CALLER_CATALOG=1 passes with api-reference as expected"
+  fi
+
+  guidelines_work="$SELF_TEST_TMP_ROOT/company-guidelines-missing"
+  prepare_self_test_worktree "$guidelines_work" expected || return 1
+  if out=$(REPO_ROOT="$guidelines_work" CLASSIFIED_COMPANY_GUIDELINES=1 "$script_dir/verify-doc-hierarchy.sh" step2 2>&1); then
+    fail "CLASSIFIED_COMPANY_GUIDELINES=1 without mirror should fail step2 but passed"
+  else
+    echo "$out" | rg -q 'company-guidelines.md missing' \
+      || fail "company-guidelines-missing step2 failed for unexpected reason: $out"
+    echo "OK: CLASSIFIED_COMPANY_GUIDELINES=1 fails without mirror as expected"
+  fi
+
+  guidelines_work="$SELF_TEST_TMP_ROOT/company-guidelines-present"
+  prepare_self_test_worktree "$guidelines_work" expected || return 1
+  echo 'mirror (fixture)' > "$guidelines_work/docs/maintenance/company-guidelines.md"
+  commit_self_test_worktree "$guidelines_work" "add company-guidelines mirror" || return 1
+  if ! out=$(REPO_ROOT="$guidelines_work" CLASSIFIED_COMPANY_GUIDELINES=1 "$script_dir/verify-doc-hierarchy.sh" step2 2>&1); then
+    fail "CLASSIFIED_COMPANY_GUIDELINES=1 with mirror should pass step2 but failed: $out"
+  else
+    echo "OK: CLASSIFIED_COMPANY_GUIDELINES=1 passes with mirror as expected"
+  fi
+
+  vendored_work="$SELF_TEST_TMP_ROOT/vendored-verify"
+  prepare_self_test_worktree "$vendored_work" expected || return 1
+  mkdir -p "$vendored_work/scripts"
+  cp "$script_dir/verify-doc-hierarchy.sh" "$vendored_work/scripts/verify-doc-hierarchy.sh"
+  commit_self_test_worktree "$vendored_work" "vendor verify script" || return 1
+  if out=$(REPO_ROOT="$vendored_work" "$script_dir/verify-doc-hierarchy.sh" step2 2>&1); then
+    fail "vendored verify script should fail step2 but passed"
+  else
+    echo "$out" | rg -q 'verify-doc-hierarchy.sh vendored' \
+      || fail "vendored-verify step2 failed for unexpected reason: $out"
+    echo "OK: vendored verify script fails step2 as expected"
+  fi
+
+  if ! out=$(REPO_ROOT="$expected_work" "$script_dir/verify-doc-hierarchy.sh" audit 2>&1); then
+    fail "audit on migrated layout should pass but failed: $out"
+  else
+    echo "$out" | rg -q 'PASS \(audit\)' \
+      || fail "audit missing PASS banner: $out"
+    echo "OK: audit passes on migrated layout as expected"
+  fi
+
+  local reviews_ref_work stub_work rogue_work bare_host_work
+  reviews_ref_work="$SELF_TEST_TMP_ROOT/reviews-ref"
+  prepare_self_test_worktree "$reviews_ref_work" expected || return 1
+  echo 'See docs/reviews/ for staging.' >> "$reviews_ref_work/docs/architecture/system-overview.md"
+  commit_self_test_worktree "$reviews_ref_work" "add docs/reviews reference" || return 1
+  if out=$(REPO_ROOT="$reviews_ref_work" "$script_dir/verify-doc-hierarchy.sh" full 2>&1); then
+    fail "docs/reviews/ reference should fail full but passed"
+  else
+    echo "$out" | rg -q 'docs/reviews/ still referenced' \
+      || fail "reviews-ref full failed for unexpected reason: $out"
+    echo "OK: docs/reviews/ reference fails full as expected"
+  fi
+
+  stub_work="$SELF_TEST_TMP_ROOT/stub-redirect"
+  prepare_self_test_worktree "$stub_work" expected || return 1
+  echo '# Moved to docs/architecture/domain-model.md' > "$stub_work/docs/stub-redirect.md"
+  commit_self_test_worktree "$stub_work" "add stub redirect" || return 1
+  if out=$(REPO_ROOT="$stub_work" "$script_dir/verify-doc-hierarchy.sh" full 2>&1); then
+    fail "stub redirect should fail full but passed"
+  else
+    echo "$out" | rg -q 'stub redirect still present' \
+      || fail "stub-redirect full failed for unexpected reason: $out"
+    echo "OK: stub redirect fails full as expected"
+  fi
+
+  rogue_work="$SELF_TEST_TMP_ROOT/rogue-module-path"
+  prepare_self_test_worktree "$rogue_work" expected || return 1
+  mkdir -p "$rogue_work/src/main/java/com/example"
+  echo '// see docs/foo/bar for details' > "$rogue_work/src/main/java/com/example/App.java"
+  commit_self_test_worktree "$rogue_work" "add rogue docs path in source" || return 1
+  if out=$(REPO_ROOT="$rogue_work" "$script_dir/verify-doc-hierarchy.sh" full 2>&1); then
+    fail "rogue docs/<module>/ path should fail full but passed"
+  else
+    echo "$out" | rg -q 'rogue docs/<module>/ path in source or config' \
+      || fail "rogue-module-path full failed for unexpected reason: $out"
+    echo "OK: rogue docs/<module>/ path fails full as expected"
+  fi
+
+  bare_host_work="$SELF_TEST_TMP_ROOT/bare-host-exclusion"
+  prepare_self_test_worktree "$bare_host_work" expected || return 1
+  mkdir -p "$bare_host_work/src/main/java/com/example"
+  echo '// see kubernetes.io/docs/concepts/pods for vendor docs' > "$bare_host_work/src/main/java/com/example/App.java"
+  commit_self_test_worktree "$bare_host_work" "add bare hostname vendor doc reference" || return 1
+  if ! out=$(REPO_ROOT="$bare_host_work" "$script_dir/verify-doc-hierarchy.sh" full 2>&1); then
+    fail "bare hostname vendor doc reference should pass full but failed: $out"
+  else
+    echo "OK: bare hostname vendor doc reference passes full as expected"
   fi
 }
 

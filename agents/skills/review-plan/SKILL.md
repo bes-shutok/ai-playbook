@@ -11,7 +11,7 @@ description: >
 
 ## Boundary
 
-Use this skill for **reviewing implementation plan documents** under resolved `{plans_dir}/` (see `_shared/doc-paths.md`).
+Use this skill for **reviewing implementation plan documents** under resolved `{plans_dir}/` (invoke the `resolve-vars` skill at task start).
 
 Do not use for:
 - Reviewing actual code diffs (use `doing-code-review`)
@@ -51,7 +51,7 @@ Each agent receives:
 2. Relevant source file excerpts (signatures, data structure definitions, pipeline structure)
 3. Its specific review lens from `~/.agents/skills/review-agents/<agent>.md`
 4. The project's CLAUDE.md content (for repository conventions)
-5. **Repo-specific overrides take precedence**: if `CLAUDE.md`, `{guidelines_path}` (resolved per `_shared/doc-paths.md`; typically `docs/maintenance/project-guidelines.md`), or any loaded company/project guideline defines complexity, naming, comment, or layering rules that conflict with the generic pattern catalog, the agent MUST apply the repo-specific value, not the catalog default. Example: catalog says "functions >50 lines" but `company-guidelines.md #17` says "≤30 lines per method" — apply the 30-line rule.
+5. **Repo-specific overrides take precedence**: if `CLAUDE.md`, `{guidelines_path}` (resolved by invoking the `resolve-vars` skill at task start; typically `docs/maintenance/project-guidelines.md`), or any loaded company/project guideline defines complexity, naming, comment, or layering rules that conflict with the generic pattern catalog, the agent MUST apply the repo-specific value, not the catalog default. Example: catalog says "functions >50 lines" but `company-guidelines.md #17` says "≤30 lines per method" — apply the 30-line rule.
 6. **Execution framing**: "You are reviewing an IMPLEMENTATION PLAN, not a code diff. Read the plan tasks and the referenced source files to understand what is being proposed. Apply your pattern catalog to identify whether the proposed changes would introduce the issues you are responsible for detecting."
 7. **Output format**: for each finding provide `{location_in_plan, issue, severity: Blocker/Medium/Low/Monitor, fix, evidence}` — no `path/line/side` fields (those are for code review). **`issue` and `evidence` must be self-contained**: name the plan task, quote or paraphrase the contradicting plan text, cite what the referenced source file shows, and state the concrete fix. Do not return stubs the orchestrator must research.
 
@@ -121,7 +121,7 @@ After all sub-agents complete, **synthesize from agent returns only** — do not
 
 ## Step 4: Output
 
-Write the review to `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md` (resolve `{reviews_dir}` per `_shared/doc-paths.md`; use `-r1`, `-r2`, … per loop iteration):
+Write the review to `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md` (resolve `{reviews_dir}` by invoking the `resolve-vars` skill at task start; use `-r1`, `-r2`, … per loop iteration):
 
 ```markdown
 # Plan Review: <Plan Title>

@@ -15,7 +15,7 @@ description: >
 
 # Execute Plan
 
-**Documentation paths:** At Phase 0, resolve `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}` per `_shared/doc-paths.md`. Use `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for session logs. Substitute resolved paths everywhere below that shows `{...}` or legacy `docs/plans/` examples.
+**Documentation paths:** At Phase 0, resolve `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}` by invoking the `resolve-vars` skill at task start. Use `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for session logs. Substitute resolved paths everywhere below that shows `{...}` or legacy `docs/plans/` examples.
 
 **Announce at start:** "I'm using the execute-plan skill to implement `<plan-path>`."
 
@@ -188,7 +188,7 @@ Report the final branch state to the user before starting Phase 1.
 
 ### Step 0.4 — Session bootstrap (before any plan-scoped code edit)
 
-Derive `<PLAN_SLUG>` from the plan basename (kebab-case, e.g. `CRM-337-consent-merge-survivor-redirect` from `CRM-337-consent-merge-survivor-redirect.md`).
+Derive `<PLAN_SLUG>` from the plan basename (kebab-case, e.g. `PROJ-1234-feature-name` from `PROJ-1234-feature-name.md`).
 
 Create the session directory and manifest when execute-plan is chosen (if not already created at the gate / explicit-trigger step):
 
@@ -216,7 +216,7 @@ Update the manifest when Phase 0 completes. See [agent-logs.md](agent-logs.md) f
 | Key | Purpose | Fallback |
 |-----|---------|----------|
 | `shared_docs_dir` | Coding/stack guidelines for implement sub-agent | Resolve from `~/.ai-playbook/facts.md`; see `agent-runtime-layout.md` there |
-| `tmp_dir` | Project tmp root for execute-plan logs (resolve per `_shared/doc-paths.md` at Phase 0) | `docs/tmp/` |
+| `tmp_dir` | Project tmp root for execute-plan logs (resolve by invoking the `resolve-vars` skill at task start at Phase 0) | `docs/tmp/` |
 
 ## Orchestrator Responsibilities
 
@@ -271,6 +271,15 @@ If the sub-agent reports failure or tests do not pass: do not mark checkboxes; d
 After verification passes, update the plan file: change every completed `- [ ]` to `- [x]` for **that task's clauses only**.
 
 **Never** bulk-update checkboxes across tasks (`replace_all`, scripted sweep, or marking Tasks 1–N in one edit). Incomplete tasks must keep `- [ ]` until their own Step 1.4 succeeds.
+
+### Step 1.3b — Layer 2 documentation checkpoint
+
+Before Step 1.4 on **company-scoped** repos with the [migration-complete signal](../doc-hierarchy/SKILL.md#migration-complete-signal):
+
+- If the completed task touches contracts, domain behavior, integrations, or ops (per task description or `Files:` list), run or confirm [`doc-hierarchy-upkeep`](../doc-hierarchy-upkeep/SKILL.md) in the same change set.
+- If Layer 2 docs were not updated and the task scope required it, do not launch `done` until upkeep edits are included or the user explicitly defers doc sync.
+
+Skip this checkpoint on personal projects or when migration-complete is false (suggest `doc-hierarchy-migrate` repair instead of upkeep).
 
 ### Step 1.4 — Launch done sub-agent
 
@@ -532,6 +541,9 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
 
 ## Integration Points
 
+### Consumes `resolve-vars` skill
+At Phase 0, invoke `resolve-vars` to resolve `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` before plan-scoped edits or session log writes.
+
 ### Consumes `plans` skill
 Reads plan format, task order, validation commands, review scope, and commit messages. Archives to `{plans_completed_dir}/` when finished. If `plans` Phase 0 already created a feature branch, Phase 0 here verifies state and offers to continue on it instead of creating another. Pre-execution plan reviews use `…-plan-review-r<N>.md` with Blocker/Medium gate; Phase 3 code reviews use `…-code-review-r<N>.md` with Medium+ gate — same minimum-two / maximum-ten round discipline.
 
@@ -546,3 +558,6 @@ Branch/plan-scoped review after all tasks; staging doc is the handoff artifact.
 
 ### Consumes `receiving-code-review` skill (sub-agent)
 Triages provisional findings from the staging doc between review rounds. Phase 3 exit counts only **remaining Medium+** still `pending` after this triage — not raw `doing-code-review` output.
+
+### Consumes `doc-hierarchy-upkeep` skill (checkpoint before Step 1.4)
+On company-scoped repos with migration-complete signal, Step 1.3b requires Layer 2 doc sync when plan tasks touch contracts, domain behavior, integrations, or ops. Upkeep edits belong in the same change set as the task before `done` commits.

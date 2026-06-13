@@ -17,7 +17,7 @@ Schema: [`../doc-hierarchy/SKILL.md`](../doc-hierarchy/SKILL.md). Full migration
 
 **Do not run upkeep** until the repo satisfies the [migration-complete signal](../doc-hierarchy/SKILL.md#migration-complete-signal).
 
-If the signal is false, stop and run **doc-hierarchy-migrate** (or repair via `<doc-hierarchy-migrate-skill>/scripts/verify-doc-hierarchy.sh audit` with `REPO_ROOT` set to the service repo).
+If the signal is false, stop and run **doc-hierarchy-migrate** (or repair via `REPO_ROOT=<service-repo> "$SKILL_INSTALL/scripts/verify-doc-hierarchy.sh" audit` after resolving `SKILL_INSTALL` per `doc-hierarchy-migrate`).
 
 ## Workflow
 
@@ -44,7 +44,7 @@ If the signal is false, stop and run **doc-hierarchy-migrate** (or repair via `<
 - **Any edit** to `AGENTS.md`, `docs/README.md`, `docs/architecture/`, or `docs/maintenance/` (including routine Layer 2 paragraph or contract updates): run `full` (alias `step6`) before commit — catches step6 reference hygiene and layout gates.
 - **`step5` only** when checking instruction wiring mid-session without canonical doc edits; it does not run step6 reference scans and is not sufficient alone before commit after upkeep edits.
 
-`REPO_ROOT=<service-repo> <doc-hierarchy-migrate-skill>/scripts/verify-doc-hierarchy.sh <phase>`. Fix violations before committing.
+`REPO_ROOT=<service-repo> "$SKILL_INSTALL/scripts/verify-doc-hierarchy.sh" <phase>`. Fix violations before committing.
 
 ## Integration Points
 
@@ -52,10 +52,10 @@ If the signal is false, stop and run **doc-hierarchy-migrate** (or repair via `<
 |---------------------|-------------|
 | `doc-hierarchy` | Requires migration-complete signal before upkeep runs |
 | `doc-hierarchy-migrate` | Provides verify script and repair workflow when signal is false |
-| `_shared/doc-paths.md` | Resolves paths from repo wiring maintained by upkeep |
-| `learn`, `plans`, `done` | Layer 2 edits in same PR/session as code changes |
+| `resolve-vars` | Resolves paths from repo wiring maintained by upkeep |
+| `learn`, `plans`, `done`, `execute-plan` | Layer 2 edits in same PR/session as code changes |
 
 ## Related
 
 - [`doc-hierarchy`](../doc-hierarchy/SKILL.md), [`doc-hierarchy-migrate`](../doc-hierarchy-migrate/SKILL.md)
-- [`../_shared/doc-paths.md`](../_shared/doc-paths.md), `learn`, `plans`, `done`
+- the `resolve-vars` skill, `learn`, `plans`, `done`

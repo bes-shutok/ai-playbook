@@ -709,3 +709,13 @@ produces incomplete output that fails downstream quality checks.
 47.3. **Project repo instruction files:** defer shared skill maintenance with a one-liner (for example: follow self-maintenance rules in `~/.agents/skills/learn/SKILL.md`). Do not restate multi-path sync recipes or vendor-specific command copies.
 
 47.4. **Migrated skills:** workflows moved to the shared registry (for example `learn`) are skill-only. Remove stale `.opencode/command/<skill>.md` references and local command copies when encountered.
+
+## 48. Public Skill Examples and Local Hygiene Scans
+
+48.1. **Neutral placeholders only** in committed skill and instruction files: use fictitious ticket keys (`PROJ-1234`), domains (`your-org.atlassian.net`), and feature slugs (`feature-name`). Never real Jira numbers, employer ticket prefixes, org domains, GitHub handles, or session-specific identifiers — even in "example" prose.
+
+48.2. **Deny patterns stay local:** machine-specific hygiene regexes belong in `public_hygiene_patterns_file` (user facts), not in the public repo. The repo may ship an empty template (`docs/scan-public-hygiene.patterns.example`) only.
+
+48.3. **Runner stays local:** execute `public_hygiene_scan_script` from user facts (typically under `~/.ai-playbook/scripts/`). Gitignore repo-root `/scripts/` so local copies cannot be committed accidentally.
+
+48.4. **Before skill commits:** run the hygiene scan; personal contact email is allowed only in `LICENSE.txt` copyright lines.

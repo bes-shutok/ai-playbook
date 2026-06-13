@@ -15,14 +15,26 @@ description: Preserve gitignored LLM docs and instruction files by stashing them
 
 ## Documentation paths
 
-Resolve gitignored doc roots per `_shared/doc-paths.md` (`{reviews_dir}`, `{tmp_dir}`, etc.). The `SHADOW_PATHS` loops below list **common** candidates; extend with any gitignored path under `docs/` discovered during resolution. Do not assume `docs/history/reviews/` if the project still uses `docs/reviews/`.
+Resolve gitignored doc roots by invoking the `resolve-vars` skill at task start (`{reviews_dir}`, `{tmp_dir}`, etc.) **before** running the scripts below. Build candidate path lists from session resolution; do not rely on the hardcoded fallbacks when resolved paths are known.
+
+```bash
+# After doc-paths resolution — set REVIEWS_DIR and TMP_DIR from {reviews_dir} and {tmp_dir}
+SHADOW_CANDIDATES=(docs/ .github/docs/ docs/personal/ AGENTS.md CLAUDE.md GEMINI.md COPILOT.md)
+[ -n "${REVIEWS_DIR:-}" ] && SHADOW_CANDIDATES+=("${REVIEWS_DIR%/}/")
+[ -n "${TMP_DIR:-}" ] && SHADOW_CANDIDATES+=("${TMP_DIR%/}/")
+# Fallback only when resolution was not run
+[ -z "${REVIEWS_DIR:-}" ] && SHADOW_CANDIDATES+=(docs/reviews/ docs/history/reviews/)
+[ -z "${TMP_DIR:-}" ] && SHADOW_CANDIDATES+=(docs/tmp/)
+```
+
+The `STASH_ARGS` and `SHADOW_PATHS` loops below use `SHADOW_CANDIDATES` instead of a fixed dual-layout list.
 
 ## Related
 
 - [`doc-hierarchy`](../doc-hierarchy/SKILL.md) — company service documentation hierarchy schema
 - [`doc-hierarchy-migrate`](../doc-hierarchy-migrate/SKILL.md) — migration workflow (references this skill for gitignored doc preservation)
 - [`doc-hierarchy-upkeep`](../doc-hierarchy-upkeep/SKILL.md) — Layer 1/2 upkeep after migration
-- [`_shared/doc-paths.md`](../_shared/doc-paths.md) — path resolution protocol (`{reviews_dir}`, `{tmp_dir}`, etc.)
+- [`resolve-vars`](../resolve-vars/SKILL.md) — path discovery and persistence (`{reviews_dir}`, `{tmp_dir}`, etc.)
 - `done` — invokes this skill automatically before committing
 
 ## When to Use
@@ -40,7 +52,8 @@ Stash all gitignored LLM artifact paths so they survive branch switches. Only in
 ```bash
 STASH_ARGS=()
 PRESTASH_TMP=$(mktemp -d)
-for p in docs/ .github/docs/ docs/personal/ docs/tmp/ docs/reviews/ docs/history/reviews/ AGENTS.md CLAUDE.md GEMINI.md COPILOT.md; do
+# Build SHADOW_CANDIDATES per Documentation paths section above
+for p in "${SHADOW_CANDIDATES[@]}"; do
   clean="${p%/}"
   if [ -e "$clean" ] && git check-ignore -q "$clean"; then
     STASH_ARGS+=("$p")
@@ -84,7 +97,7 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 DOCS_BRANCH="docs"
 
 SHADOW_PATHS=()
-for path in docs/ .github/docs/ docs/personal/ docs/tmp/ docs/reviews/ docs/history/reviews/ AGENTS.md CLAUDE.md GEMINI.md COPILOT.md; do
+for path in "${SHADOW_CANDIDATES[@]}"; do
   if [ -e "${path%/}" ] && git check-ignore -q "${path%/}"; then
     SHADOW_PATHS+=("$path")
   fi

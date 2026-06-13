@@ -20,8 +20,8 @@ Use it when:
 - Mirror target: `agents/skills/`
 - Notes: shared skills such as `$learn` come from this registry in the current setup.
 
-### Cross-skill modules (`agents/skills/_shared/`)
-- `_shared/doc-paths.md`: documentation path resolution protocol consumed by `plans`, `execute-plan`, `learn`, `doing-code-review`, and other skills that read/write repo docs.
+### Path discovery (`agents/skills/resolve-vars/`)
+- `resolve-vars`: on-demand path discovery and persistence; invoked at task start by `plans`, `execute-plan`, `learn`, `doing-code-review`, and other skills that read/write repo docs.
 
 ### Doc-hierarchy skill family (`agents/skills/doc-hierarchy*/`)
 - `doc-hierarchy`: schema reference (Layer 1/2/3 layout, migration-complete signal).

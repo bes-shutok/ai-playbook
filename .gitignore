@@ -8,3 +8,6 @@
 # Ephemeral session scratch (see docs/AGENTS.md)
 /docs/tmp/
 
+# Repo-root scripts/ is local-only (hygiene runner lives in ~/.ai-playbook/scripts/)
+/scripts/
+

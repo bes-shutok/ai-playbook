@@ -81,7 +81,7 @@ When a change spans tiers (for example JVM + company + project), update each can
 
 - **Global:** `~/.cursor/rules/global-user-instructions.mdc` `@`-references this file via `instructions_repo` (or `~/.codex/AGENTS.md` symlink).
 - **Per-repo:** repo `AGENTS.md` only for project deltas; do not duplicate user rules.
-- **Optional IDE hooks (Cursor):** `~/.cursor/hooks.json` may enforce shared git safety (`git reset --hard`, Co-authored-by trailers, force-push prompts) and the execute-plan manifest bootstrap contract (`manifest.md` must exist before plan-scoped edits when `docs/tmp/execute-plan/<PLAN_SLUG>/` exists). Hook wiring is IDE-specific; skill contracts stay in `execute-plan` / `agent-logs.md`.
+- **Optional IDE hooks (Cursor):** `~/.cursor/hooks.json` may enforce shared git safety (`git reset --hard`, Co-authored-by trailers, force-push prompts) and the execute-plan manifest bootstrap contract (`manifest.md` must exist before plan-scoped edits when `{tmp_dir}/execute-plan/<PLAN_SLUG>/` exists). Hook wiring is IDE-specific; skill contracts stay in `execute-plan` / `agent-logs.md`.
 
 ## Path References in Instruction and Documentation Files
 
@@ -95,6 +95,7 @@ Always use `~/` (home-relative) paths, never absolute `/Users/<name>/` paths, in
 - Language-specific skill content: When a skill quality gate or checklist includes language-specific patterns (testing traps, idioms, framework-specific stubs), replace them with a cross-reference to the relevant language guidelines file (`kotlin_guidelines.md`, `python_guidelines.md`, etc.) rather than inlining. Inlining causes drift as guidelines evolve independently.
 - "Language-agnostic" means replacing build-tool commands (e.g. `mvn`, `pytest`) and file extensions (`.kt`, `.py`) with generic placeholders (`<test-command>`, `.ext`). It does NOT mean removing project-doc references (e.g. `docs/metrics.md`, `docs/project-guidelines.md`) or domain terminology (e.g. `BO`) — those are concrete contextual examples that provide useful guidance and should be kept.
 - **Agent-agnostic skills:** shared skill bodies must describe capabilities (sub-agent execution, Atlassian integration, draft-save) — not vendor tools (`AskQuestion`, `Task`, MCP wire names) or IDE hook paths. Optional local enforcement belongs in user `AGENTS.md` / IDE config; see `how-to-write-skills` skill.
+- **Public example placeholders:** committed skills and instructions use neutral fictitious examples only (`PROJ-1234`, `your-org.atlassian.net`). Real Jira keys, employer ticket prefixes, org domains, and session-specific slugs belong in facts documents, not skill bodies. Before commit, run `public_hygiene_scan_script` from user facts; personal email is allowed only in `LICENSE.txt`.
 
 ## Implementation Plans
 
@@ -107,9 +108,9 @@ Always use `~/` (home-relative) paths, never absolute `/Users/<name>/` paths, in
 
 ## Temporary Artifacts
 
-- Temporary artifacts (summaries, analyses, investigations, UAT records, worklogs) belong under `docs/tmp/` and must be promoted or deleted within the same feature cycle.
+- Temporary artifacts (summaries, analyses, investigations, UAT records, worklogs) belong under resolved `{tmp_dir}` (typically `docs/tmp/` post-migration; legacy paths when exploration finds them). Resolve by invoking the `resolve-vars` skill at task start at task start. Promote or delete within the same feature cycle.
 - Before creating a new temporary artifact, check whether an existing canonical doc under `docs/` can be enriched instead.
-- Do not reference `docs/tmp/` from other `docs/` files or code comments.
+- Do not reference `{tmp_dir}` from other `docs/` files or code comments.
 
 ## Sealed Class Sentinel Pattern
 
@@ -169,7 +170,7 @@ Never use em dashes (—) in any generated text: code comments, PR review commen
 
 ## Document Creation
 
-Always create documents (findings, notes, drafts, reports, Slack-shareable writeups) inside the relevant project's `docs/` folder (use `docs/tmp/` for temporary or shareable artifacts). Never create them in the session state folder (`~/.copilot/session-state/`).
+Always create documents (findings, notes, drafts, reports, Slack-shareable writeups) inside the relevant project's `docs/` folder (use resolved `{tmp_dir}` for temporary or shareable artifacts). Never create them in the session state folder (`~/.copilot/session-state/`).
 
 ## Merge Strategy Verification
 

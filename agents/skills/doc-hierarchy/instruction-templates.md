@@ -23,7 +23,7 @@ Canonical architecture filenames (do not rename): `system-overview.md`, `domain-
 
 ### Resolved documentation paths (mandatory after migration)
 
-Authoritative key definitions and default map: doc-paths module in the skill install (`agents/skills/_shared/doc-paths.md`, Default path map section). Copy that table into the repo so other skills resolve paths at task start.
+Authoritative key definitions and default map: the `resolve-vars` skill (Default Path Map section). Copy that table into the repo so other skills invoke `resolve-vars` at task start.
 
 ## Keep Layer 1 and Layer 2 Current (Mandatory)
 
@@ -82,7 +82,7 @@ Record in `AGENTS.md` repo constraints (if not already present):
 
 ```markdown
 - **Instruction files:** `AGENTS.md` is canonical (`# Instructions`) for all agents. Optional: `CLAUDE.md` → `ln -sf AGENTS.md CLAUDE.md`; Cursor → `.cursor/rules/instructions.mdc` with `@AGENTS.md` only (no full duplicate).
-- **Doc hierarchy schema:** company guideline #48 (`company_guidelines_master` in user facts) + `doc-hierarchy-migrate` / `doc-hierarchy-upkeep` skills; record resolved paths here so other skills read project specs (see ai-playbook `agents/skills/_shared/doc-paths.md`).
+- **Doc hierarchy schema:** company guideline #48 (`company_guidelines_master` in user facts) + `doc-hierarchy-migrate` / `doc-hierarchy-upkeep` skills; record resolved paths here so other skills read project specs (invoke the `resolve-vars` skill at task start).
 ```
 
 ## `AGENTS.md` Documentation Hierarchy subsection
@@ -95,8 +95,8 @@ Record in `AGENTS.md` repo constraints (if not already present):
 - **Shared knowledge:** `docs/architecture/`, `docs/maintenance/` (Layer 2) — update in the same PR/session when behavior, contracts, integrations, or ops change; see `docs/maintenance/project-guidelines.md` Documentation Hierarchy section.
 - **Historical context:** `docs/history/` (Layer 3) — reference only; active plans under `docs/history/plans/`, archives under `docs/history/plans/completed/`.
 - **LLM-only:** `docs/tmp/` at root; gitignored `docs/history/reviews/` — not canonical human Layer 2.
-- **Wire catalogs (Layer 2):** `docs/maintenance/api-reference.md` when the service exposes HTTP APIs; other wire contracts under `docs/maintenance/` (BFF, sync, admin FE shapes). Do not recreate `docs/examples/` or per-endpoint files under `maintenance/`.
-- **Doc path resolution:** Other skills resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{caller_catalog}` from this file and `AGENTS.md` — not from hardcoded skill defaults.
+- **Wire catalogs (Layer 2):** `docs/maintenance/api-reference.md` when the service exposes HTTP APIs; other wire contracts under `docs/maintenance/` (BFF, sync, admin FE shapes). Do not recreate a separate examples tree or per-endpoint files under `maintenance/`; use `maintenance/api-reference.md` for caller samples.
+- **Doc path resolution:** Other skills resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{proposals_dir}`, `{rfcs_dir}`, `{caller_catalog}` from this file and project guidelines — not from hardcoded skill defaults.
 - Use `doc-hierarchy-migrate` to relocate flat or module-split docs; use `doc-hierarchy-upkeep` for Layer 1/2 after migration; merge durable knowledge into topic-based `architecture/`, not `docs/<module>/` trees.
 ```
 

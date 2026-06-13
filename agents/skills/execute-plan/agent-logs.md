@@ -1,6 +1,6 @@
 # Execute Plan — Sub-Agent Execution Logs
 
-Resolve `{tmp_dir}` per `_shared/doc-paths.md` at Phase 0. Sub-agents write durable logs under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` so each `done` invocation can run `learn` with context from the **immediately preceding worker step(s)** — not the orchestrator's chat summary, and not the full session history.
+Resolve `{tmp_dir}` by invoking the `resolve-vars` skill at task start at Phase 0. Sub-agents write durable logs under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` so each `done` invocation can run `learn` with context from the **immediately preceding worker step(s)** — not the orchestrator's chat summary, and not the full session history.
 
 ## Path convention
 
@@ -11,7 +11,7 @@ Resolve `{tmp_dir}` per `_shared/doc-paths.md` at Phase 0. Sub-agents write dura
 | Address review round R | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-code-review.log.md` |
 | Session manifest (orchestrator) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` |
 
-Create the directory before the first sub-agent launch. `<PLAN_SLUG>` is a short kebab-case slug from the plan filename (e.g. `CRM-123-feature` from `CRM-123-feature.md`).
+Create the directory before the first sub-agent launch. `<PLAN_SLUG>` is a short kebab-case slug from the plan filename (e.g. `PROJ-1234-feature-name` from `PROJ-1234-feature-name.md`).
 
 ## Write semantics (create vs append — do not overwrite)
 

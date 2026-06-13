@@ -14,7 +14,7 @@ Commands can be used in two ways:
 .
 ├── agents/
 │   └── skills/
-│       ├── _shared/            # cross-skill modules (e.g. doc-paths.md)
+│       ├── resolve-vars/       # on-demand path discovery and persistence
 │       ├── doc-hierarchy/
 │       ├── doc-hierarchy-migrate/
 │       └── doc-hierarchy-upkeep/
@@ -29,7 +29,8 @@ Commands can be used in two ways:
 │       └── security-best-practices/
 ├── docs/
 │   ├── AGENTS.md
-│   └── facts.md.example
+│   ├── facts.md.example
+│   └── scan-public-hygiene.patterns.example
 ├── projects/
 │   └── .ai-playbook/
 │       ├── agent-runtime-layout.md
@@ -60,12 +61,12 @@ Commands can be used in two ways:
 | `create-tdd` | `create-documentation/create-tdd.md` | Generates a technical design document with strict completeness rules. | Requires mandatory sections and detailed testable content; enforces strong inference/traceability constraints. |
 | `learn` | `agents/skills/learn/SKILL.md` | Extracts lessons from communication and applies documentation governance rules. | Classifies lessons, enforces placement scope rules, and requires retroactive consistency checks. Invoked as a skill (`$learn`). |
 | `review-confluence-doc` | `agents/skills/review-confluence-doc/SKILL.md` | Reviews RFC/TDD documents on Confluence for quality, clarity, and actionability. | Fetches Confluence page via Atlassian MCP, provides structured feedback on console, optionally posts accepted feedback as a page comment. |
-| `execute-plan` | `agents/skills/execute-plan/SKILL.md` | Orchestrates iterative implementation of a plans-skill plan via sub-agents. | Resolves `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}` per `_shared/doc-paths.md`; per-task and per-review-iteration `done` with preceding-step logs (`agent-logs.md`); review/fix loops (min 2, max 10 rounds) until two consecutive clear rounds (zero remaining Medium+ after `receiving-code-review` triage); archive plan; remove resolved `{tmp_dir}/execute-plan/<slug>/` on success only. |
+| `execute-plan` | `agents/skills/execute-plan/SKILL.md` | Orchestrates iterative implementation of a plans-skill plan via sub-agents. | Resolves `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}` by invoking the `resolve-vars` skill at task start; per-task and per-review-iteration `done` with preceding-step logs (`agent-logs.md`); review/fix loops (min 2, max 10 rounds) until two consecutive clear rounds (zero remaining Medium+ after `receiving-code-review` triage); archive plan; remove resolved `{tmp_dir}/execute-plan/<slug>/` on success only. |
 | `plans` | `agents/skills/plans/SKILL.md` | Full plan lifecycle: create, edit, and complete implementation plans. | Phase 0 branch setup, Phase 1 requirements discovery interview, plan format enforcement with Evaluation Criteria, TDD task ordering, Plan Quality Gate (review/fix until Blocker=0 and Medium=0). |
-| `doc-hierarchy` | `agents/skills/doc-hierarchy/SKILL.md` | Company service documentation hierarchy schema (Layer 1/2/3 layout, path resolution, migration-complete signal). | Read-only reference for where doc types belong; consumed by `plans`, `execute-plan`, `learn`, `done`, and other skills via `_shared/doc-paths.md`. |
+| `doc-hierarchy` | `agents/skills/doc-hierarchy/SKILL.md` | Company service documentation hierarchy schema (Layer 1/2/3 layout, path resolution, migration-complete signal). | Read-only reference for where doc types belong; consumed by `plans`, `execute-plan`, `learn`, `done`, and other skills via the `resolve-vars` skill. |
 | `doc-hierarchy-migrate` | `agents/skills/doc-hierarchy-migrate/SKILL.md` | Execute documentation hierarchy migration (Steps 0→6): classify, git mv, scaffold, verify. | Includes `scripts/verify-doc-hierarchy.sh` gates; run from skill install with `REPO_ROOT` set to the service repo. |
 | `doc-hierarchy-upkeep` | `agents/skills/doc-hierarchy-upkeep/SKILL.md` | Keep Layer 1 and Layer 2 docs current after code changes on migration-complete repos. | Requires migration-complete signal; same PR/session as behavior or contract changes. |
-| `_shared/doc-paths` | `agents/skills/_shared/doc-paths.md` | Shared documentation path resolution protocol for all skills. | Resolves `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{guidelines_path}`, etc. from project specs and on-disk layout. |
+| `resolve-vars` | `agents/skills/resolve-vars/SKILL.md` | On-demand project path discovery and persistence. | Invoked at task start by consumer skills to resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{guidelines_path}`, etc. from project facts and on-disk layout; caches values in repo facts.md. |
 
 Other vendored skills (`done`, `github-pr-workflow`, `receiving-code-review`, `doing-code-review`, `tdd-guide`, etc.) live under [`agents/skills/`](agents/skills/). Browse that directory for the full set; register or invoke by skill path the same way as the table entries above.
 
@@ -129,6 +130,7 @@ Refresh the mirrored agent assets from the local home directory with:
 rsync -a --delete --exclude '.DS_Store' ~/.agents/skills/ ./agents/skills/
 # claude/skills is a symlink to ../agents/skills — no separate sync needed
 # codex/skills is managed by Codex autonomously — not vendored here
+bash ~/.ai-playbook/scripts/scan-public-hygiene.sh   # from repo root; see public_hygiene_scan_script in user facts
 ```
 
 Source mapping:

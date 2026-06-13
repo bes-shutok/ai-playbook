@@ -6,7 +6,7 @@ description: >
 
 # Active Code Review
 
-**Documentation paths:** Resolve `{reviews_dir}` per `_shared/doc-paths.md` before writing staging docs. Examples below use `{reviews_dir}/`; substitute the resolved path.
+**Documentation paths:** Resolve `{reviews_dir}` by invoking the `resolve-vars` skill at task start before writing staging docs. Examples below use `{reviews_dir}/`; substitute the resolved path.
 
 ## Boundary
 
@@ -245,7 +245,7 @@ Before posting each comment, scan the body for references to any of the followin
 - User-level instruction files: anything under `~/.claude/`, `~/.codex/`, `~/.agents/`
 - Cross-project shared docs that are gitignored on the target repo: files under `shared_docs_dir` in `~/.ai-playbook/facts.md` (e.g. `coding_guidelines.md`, `jvm_guidelines.md`, `kotlin_guidelines.md`, `python_guidelines.md`, `agent_workflow_guidelines.md`), company ownership docs under `company_projects_root/.ai-playbook/` (see `~/.ai-playbook/facts.md`; `facts.md`, `dictionary.md`, `company-guidelines.md`)
 
-Quick scan command before posting (resolve `REVIEWS_DIR` per `_shared/doc-paths.md` first; use the exact staging path from the review session when known, otherwise resolve exactly one `${REVIEWS_DIR}/*-PR-<N>-*.md`):
+Quick scan command before posting (resolve `REVIEWS_DIR` by invoking the `resolve-vars` skill at task start first; use the exact staging path from the review session when known, otherwise resolve exactly one `${REVIEWS_DIR}/*-PR-<N>-*.md`):
 ```bash
 STAGING="${STAGING:-$(ls -1 "${REVIEWS_DIR}"/*-PR-<N>-*.md 2>/dev/null | head -1)}"
 awk '/^#### Comment/{p=1;next} /^#### Analysis/{p=0} p' "$STAGING" | \
@@ -516,6 +516,9 @@ Staging doc fields (author-facing quality is in **Comment**, not a terse summary
 - **Analysis**: verification trail, severity calibration, alternatives (not posted to GitHub)
 
 ## Integration Points
+
+### With `resolve-vars` skill
+Provider for `{reviews_dir}` and other doc paths. At task start, invoke `resolve-vars` before writing staging docs under `{reviews_dir}/`.
 
 ### With `execute-plan` skill
 Invoked as a sub-agent in **branch review** mode after all plan tasks are implemented. Review scope comes from the plan's `## Review Scope` section. Output staging doc path: `{reviews_dir}/YYYY-MM-DD-plan-review-<plan-slug>-r<N>.md`. The orchestrator loops review → `receiving-code-review` until two consecutive clear review rounds (zero **remaining** Medium+ after triage — not raw review output).

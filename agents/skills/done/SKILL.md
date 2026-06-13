@@ -37,7 +37,7 @@ Invoke the `docs-branch` skill now. It will:
 
 **After docs-branch completes, verify gitignored files are still on disk:**
 ```bash
-# Resolve gitignored doc paths per _shared/doc-paths.md; include common candidates:
+# At task start, invoke the `resolve-vars` skill to resolve gitignored doc paths; include common candidates:
 for p in docs/tmp docs/history/reviews docs/reviews docs/personal AGENTS.md CLAUDE.md GEMINI.md COPILOT.md; do
   [ -e "$p" ] && git check-ignore -q "$p" && echo "OK: $p" || true
 done
@@ -103,7 +103,7 @@ Do not assume the `learn` step already wired these references correctly. Re-chec
 Before committing, scan all uncommitted changes (including untracked files) for sensitive or personal information that must not appear in public repositories.
 
 **Check for:**
-- Hardcoded absolute paths containing usernames (e.g., `/Users/john/`, `/home/john/`)
+- Hardcoded absolute paths containing usernames (e.g., `<home>/username/` paths)
 - Organization-specific domains, internal URLs, or service names
 - Employee names, email addresses, or identifiers (except copyright lines in `LICENSE.txt`)
 - API keys, tokens, passwords, or credentials
@@ -118,6 +118,7 @@ Before committing, scan all uncommitted changes (including untracked files) for 
    ```bash
    git diff --cached -U0 | grep -iE '/Users/|/home/|\.atlassian\.net|@[a-z]+\.(com|io|net)|api[_-]?key|token|password|secret'
    ```
+   Also run `public_hygiene_scan_script` from user facts (deny patterns: `public_hygiene_patterns_file`).
 3. For untracked files being staged, scan their full content.
 4. When a push is planned, audit commits in the push range (`origin/<branch>..HEAD` or the squashed commit about to be pushed):
    ```bash
@@ -133,6 +134,8 @@ Before committing, scan all uncommitted changes (including untracked files) for 
 - Move credentials to `.env` or facts documents (never commit them)
 - If the information is in a skill file, externalize it to the Configuration/facts section
 
+**When committing this repository (`skills_repo_path`) or vendored skills:** run `public_hygiene_scan_script` from user facts at the instructions repo root and fix all failures before staging.
+
 **Do NOT commit until all sensitive data is resolved.**
 
 ## Step 3: Commit Uncommitted Changes
@@ -142,7 +145,7 @@ After learn and stash steps complete:
 0. **Distinguish session changes from pre-existing local changes.** Only commit changes that were made during this session. If `git status` shows uncommitted files that were not touched by you in this session, ask the user before staging them — they may be in-progress work the user does not want committed yet.
 1. Run `git status` and `git diff` (staged + unstaged) to see all changes.
 2. Run `git log --oneline -5` to match existing commit message style.
-3. Derive the story key from the current branch name (e.g. `feature/CRM-325-...` → `CRM-325`). If the branch name contains no story key, use a plain descriptive commit message without a ticket prefix on branches such as `main` or `master`. Ask the user only if the repository convention is unclear and there is no obvious non-ticket fallback.
+3. Derive the story key from the current branch name (e.g. `feature/PROJ-1234-...` → `PROJ-1234`). If the branch name contains no story key, use a plain descriptive commit message without a ticket prefix on branches such as `main` or `master`. Ask the user only if the repository convention is unclear and there is no obvious non-ticket fallback.
 4. **Before staging any file, verify it is not gitignored:**
    ```bash
    git check-ignore -q <file> && echo "IGNORED — do not stage"
@@ -163,7 +166,7 @@ With a story key:
 
 ```
 git commit -m "$(cat <<'EOF'
-[CRM-XXX] <concise description of what and why>
+[PROJ-1234] <concise description of what and why>
 EOF
 )"
 ```
@@ -222,6 +225,9 @@ Do not push — these are local-only docs repositories.
 - Current project's `docs/` directory (if it is a separate git repo)
 
 ## Integration Points
+
+### With `resolve-vars` skill
+Provider for `{tmp_dir}` and gitignored doc paths used in Step 2.1 (`docs-branch`). Invoke at task start before stash/sync operations.
 
 ### With `execute-plan` skill
 Invoked as a sub-agent after **each** completed plan task (per-task commit) and after **each** review/fix iteration (per-iteration commit). The orchestrator passes the plan path, task or review-round context, suggested commit subject, and **sub-agent log paths** under resolved `{tmp_dir}/execute-plan/<plan-slug>/`.

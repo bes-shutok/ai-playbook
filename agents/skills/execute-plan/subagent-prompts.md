@@ -6,7 +6,7 @@ Placeholders:
 
 | Placeholder | Meaning |
 |-------------|---------|
-| `<PLAN_PATH>` | Repository-relative path under resolved `{plans_dir}/`, e.g. `{plans_dir}/CRM-123-feature.md` |
+| `<PLAN_PATH>` | Repository-relative path under resolved `{plans_dir}/`, e.g. `{plans_dir}/PROJ-1234-feature-name.md` |
 | `<TASK_NUM>` | Task number, e.g. `2` |
 | `<TASK_TITLE>` | Task heading text |
 | `<TASK_BODY>` | Full markdown for this `### Task N:` section |
