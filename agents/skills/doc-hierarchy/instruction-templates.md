@@ -14,7 +14,7 @@ Follow the company service layout under `docs/` (company guideline #48; `doc-hie
     docs/
     ├── README.md                   # Layer 1: service overview (not a file index)
     ├── architecture/               # Layer 2: seven canonical architecture files
-    ├── maintenance/                # Layer 2: guidelines, facts, glossary, ADRs, wire catalogs
+    ├── maintenance/                # Layer 2: guidelines, glossary, ADRs, wire catalogs (repo agent facts: gitignored .ai-playbook/)
     ├── tmp/                        # LLM-only session scratch (gitignored where used)
     └── history/                    # Layer 3: context/, plans/completed/, investigations/, feature-notes/
         └── reviews/                # LLM-only gitignored review staging
@@ -23,7 +23,7 @@ Canonical architecture filenames (do not rename): `system-overview.md`, `domain-
 
 ### Resolved documentation paths (mandatory after migration)
 
-Authoritative key definitions and default map: the `resolve-vars` skill (Default Path Map section). Copy that table into the repo so other skills invoke `resolve-vars` at task start.
+Authoritative key definitions and default map: the `bootstrap-ai-playbook` skill (Facts File Shape and Path Discovery sections). After migration, path keys live in gitignored `.ai-playbook/facts.md`; consumers read TOML via `using-skills` Step 0 (bootstrap only when Terms triggers fire).
 
 ## Keep Layer 1 and Layer 2 Current (Mandatory)
 
@@ -82,7 +82,7 @@ Record in `AGENTS.md` repo constraints (if not already present):
 
 ```markdown
 - **Instruction files:** `AGENTS.md` is canonical (`# Instructions`) for all agents. Optional: `CLAUDE.md` → `ln -sf AGENTS.md CLAUDE.md`; Cursor → `.cursor/rules/instructions.mdc` with `@AGENTS.md` only (no full duplicate).
-- **Doc hierarchy schema:** company guideline #48 (`company_guidelines_master` in user facts) + `doc-hierarchy-migrate` / `doc-hierarchy-upkeep` skills; record resolved paths here so other skills read project specs (invoke the `resolve-vars` skill at task start).
+- **Doc hierarchy schema:** company guideline #48 (`company_guidelines_master` in user facts) + `doc-hierarchy-migrate` / `doc-hierarchy-upkeep` skills; record resolved paths in project guidelines; repo agent facts in gitignored `.ai-playbook/facts.md` (see `bootstrap-ai-playbook` skill).
 ```
 
 ## `AGENTS.md` Documentation Hierarchy subsection
@@ -91,12 +91,12 @@ Record in `AGENTS.md` repo constraints (if not already present):
 ## Documentation Hierarchy
 
 - **Start here:** `docs/README.md` (Layer 1 — concise service overview; not a file catalog).
-- **Facts / guidelines:** `repo_facts_rel` → `docs/maintenance/facts.md`; `project_guidelines_rel` → `docs/maintenance/project-guidelines.md`.
+- **Facts / guidelines:** `repo_facts_rel` → `.ai-playbook/facts.md` (gitignored repo agent runtime); `project_guidelines_rel` → `docs/maintenance/project-guidelines.md`.
 - **Shared knowledge:** `docs/architecture/`, `docs/maintenance/` (Layer 2) — update in the same PR/session when behavior, contracts, integrations, or ops change; see `docs/maintenance/project-guidelines.md` Documentation Hierarchy section.
 - **Historical context:** `docs/history/` (Layer 3) — reference only; active plans under `docs/history/plans/`, archives under `docs/history/plans/completed/`.
 - **LLM-only:** `docs/tmp/` at root; gitignored `docs/history/reviews/` — not canonical human Layer 2.
 - **Wire catalogs (Layer 2):** `docs/maintenance/api-reference.md` when the service exposes HTTP APIs; other wire contracts under `docs/maintenance/` (BFF, sync, admin FE shapes). Do not recreate a separate examples tree or per-endpoint files under `maintenance/`; use `maintenance/api-reference.md` for caller samples.
-- **Doc path resolution:** Other skills resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{proposals_dir}`, `{rfcs_dir}`, `{caller_catalog}` from this file and project guidelines — not from hardcoded skill defaults.
+- **Doc path resolution:** Other skills resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{proposals_dir}`, `{rfcs_dir}`, `{caller_catalog}` from `.ai-playbook/facts.md` TOML (via `using-skills` Step 0) and project guidelines — not from hardcoded skill defaults.
 - Use `doc-hierarchy-migrate` to relocate flat or module-split docs; use `doc-hierarchy-upkeep` for Layer 1/2 after migration; merge durable knowledge into topic-based `architecture/`, not `docs/<module>/` trees.
 ```
 

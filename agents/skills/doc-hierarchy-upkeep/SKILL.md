@@ -30,6 +30,15 @@ If the signal is false, stop and run **doc-hierarchy-migrate** (or repair via `R
 7. Copy [PR checklist](../doc-hierarchy/company-decisions.md#pr-checklist-team-proposal-accepted) into the PR when docs changed; follow [PR description rules](../doc-hierarchy/company-decisions.md#pr-description-rules).
 8. Grafana dashboard exports belong under `docs/maintenance/dashboards/` (indexed from `architecture/operational-guides.md`) — not `docs/dashboards/` at repo root.
 
+## Repo agent facts and Jira ledger
+
+Update **`.ai-playbook/facts.md`** (not committed `docs/maintenance/facts.md`) when repo-scoping FACT stubs or Jira ledger entries change:
+
+1. **Re-read-before-write:** Re-read `.ai-playbook/facts.md` immediately before editing; parse only the **opening** fenced TOML block; preserve all prose below the fence unchanged.
+2. **Human-canonical claims:** When a FACT carries durable claims for human PR review, update the matching Layer 2 `docs/architecture/*.md` topic in the same change set; keep only index stubs or ticket ledger lines in `.ai-playbook/facts.md`.
+3. **Jira ledger:** Add or update entries under `## Related Jira tasks` in prose; do not cite `.ai-playbook/facts.md` from RFCs, PR descriptions, or code comments — restate ticket IDs inline in human-facing docs.
+4. **Concurrent edits:** If another session may edit facts, re-read immediately before persist (same as bootstrap refresh).
+
 ## Anti-patterns
 
 - Using upkeep to relocate files → **doc-hierarchy-migrate**
@@ -52,10 +61,10 @@ If the signal is false, stop and run **doc-hierarchy-migrate** (or repair via `R
 |---------------------|-------------|
 | `doc-hierarchy` | Requires migration-complete signal before upkeep runs |
 | `doc-hierarchy-migrate` | Provides verify script and repair workflow when signal is false |
-| `resolve-vars` | Resolves paths from repo wiring maintained by upkeep |
+| `bootstrap-ai-playbook` | Writes `.ai-playbook/facts.md`; upkeep and consumers read path keys from that file |
 | `learn`, `plans`, `done`, `execute-plan` | Layer 2 edits in same PR/session as code changes |
 
 ## Related
 
 - [`doc-hierarchy`](../doc-hierarchy/SKILL.md), [`doc-hierarchy-migrate`](../doc-hierarchy-migrate/SKILL.md)
-- the `resolve-vars` skill, `learn`, `plans`, `done`
+- the `bootstrap-ai-playbook` skill, `learn`, `plans`, `done`

@@ -31,7 +31,7 @@ Team decision: see [company-decisions.md](company-decisions.md) for rationale an
 
 **Only `doc-hierarchy-migrate` writes** canonical paths into `AGENTS.md` and `project_guidelines_rel` during an explicit migration run.
 
-**All other skills** invoke the `resolve-vars` skill at task start to resolve paths. They must **not** hardcode `docs/plans/`, `docs/examples/`, or module-split trees.
+**All other skills** read path keys from `.ai-playbook/facts.md` (see `using-skills` Step 0). They must **not** hardcode `docs/plans/`, `docs/examples/`, or module-split trees.
 
 | Situation | Behavior |
 |-----------|----------|
@@ -60,7 +60,7 @@ Project `docs/maintenance/project-guidelines.md` may add **repo deltas** but mus
 docs/
 ├── README.md                   # Layer 1
 ├── architecture/               # Layer 2 — exactly seven topic files
-├── maintenance/                # Layer 2 — guidelines, facts, wire catalogs, optional dashboards/
+├── maintenance/                # Layer 2 — guidelines, wire catalogs, optional dashboards/
 │   └── dashboards/             # optional Grafana exports (index from operational-guides.md)
 ├── tmp/                        # Ephemeral (gitignored)
 ├── history/
@@ -79,14 +79,14 @@ Full filename list and move tables: [migration-map.md](migration-map.md).
 A company service repo is **migration-complete** when **all** are true:
 
 1. `docs/maintenance/project-guidelines.md` exists with a **Documentation Hierarchy** section that records resolved paths (`plans_dir`, `reviews_dir`, etc.) or equivalent literals (`docs/history/plans/`, …).
-2. `AGENTS.md` has H1 `# Instructions` and a **Documentation Hierarchy** subsection pointing at `docs/maintenance/facts.md` and `docs/maintenance/project-guidelines.md`.
+2. `repo_facts_rel` (`.ai-playbook/facts.md`, gitignored repo agent runtime) exists with a valid opening TOML fence; `AGENTS.md` has H1 `# Instructions` and a **Documentation Hierarchy** subsection pointing at `.ai-playbook/facts.md` and `docs/maintenance/project-guidelines.md`; `.ai-playbook/` is gitignored.
 3. From repo root, the **doc-hierarchy-migrate skill** verify script exits 0 on `full` (`step6` is an alias):
 
    `REPO_ROOT=<repo> <doc-hierarchy-migrate-skill>/scripts/verify-doc-hierarchy.sh full`
 
    Resolve `<doc-hierarchy-migrate-skill>` from the **doc-hierarchy-migrate** skill install (directory containing `doc-hierarchy-migrate/SKILL.md`), regardless of which doc-hierarchy family skill triggered the check. Not from the service repo. **Do not** copy or vendor the script into the service repo.
 
-Until the signal is true, other skills use `resolve-vars` exploration (legacy paths allowed). After true, project spec wins; `learn` must not create new `docs/examples/` or `docs/<module>/` trees.
+Until the signal is true, other skills read `.ai-playbook/facts.md` and may explore legacy paths on disk when keys are missing. After true, project spec wins; `learn` must not create new `docs/examples/` or `docs/<module>/` trees.
 
 ## Agent-agnostic instructions
 
@@ -99,23 +99,23 @@ Templates: [instruction-templates.md](instruction-templates.md).
 
 | Consumer | Integration |
 |----------|-------------|
-| `resolve-vars` | Resolution order and default path map; links here for migration-complete signal |
+| `bootstrap-ai-playbook` | Resolution order and default path map; links here for migration-complete signal |
 | `doc-hierarchy-migrate` | Applies schema; writes canonical paths into repo instructions |
 | `doc-hierarchy-upkeep` | Layer 1/2 updates when migration-complete signal is true |
-| `plans`, `execute-plan` | Resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}` at task start |
+| `plans`, `execute-plan` | Read `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}` from `.ai-playbook/facts.md` |
 | `learn` | Placement rules; no new `docs/examples/` or `docs/<module>/` after migration |
 | `done`, `docs-branch` | PR checklist; gitignored doc paths via resolved `{reviews_dir}` |
 | `doing-code-review`, `review-plan` | Staging docs under resolved `{reviews_dir}` |
 | `github-pr-workflow` | Doc migration PR description rules from `company-decisions.md` |
-| `review-confluence-doc` | Resolves `{tmp_dir}` by invoking the `resolve-vars` skill at task start for review output files |
-| `rfc-design` | Resolves caller catalog and `{tmp_dir}` via the `resolve-vars` skill |
+| `review-confluence-doc` | Reads `{tmp_dir}` from `.ai-playbook/facts.md` for review output files |
+| `rfc-design` | Reads caller catalog and `{tmp_dir}` from `.ai-playbook/facts.md` |
 | `how-to-write-skills` | Bidirectional Integration Points requirement for skill family consumers |
-| `using-skills` | Documents doc-hierarchy family roles and `resolve-vars` path resolution at session start |
+| `using-skills` | Step 0 reads `.ai-playbook/facts.md`; invokes bootstrap only when Terms triggers fire |
 
 ## Related
 
 - [content-ownership.md](content-ownership.md) — which file owns each topic (no duplicate prose)
-- the `resolve-vars` skill — path resolution for all skills
+- the `bootstrap-ai-playbook` skill — writes `.ai-playbook/facts.md`; consumers read TOML keys via `using-skills` Step 0
 - [`../doc-hierarchy-migrate/SKILL.md`](../doc-hierarchy-migrate/SKILL.md) — migration workflow
 - [`../doc-hierarchy-upkeep/SKILL.md`](../doc-hierarchy-upkeep/SKILL.md) — Layer 1/2 upkeep
 - `learn`, `plans`, `execute-plan`, `docs-branch`, `done`

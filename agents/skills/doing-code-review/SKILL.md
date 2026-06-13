@@ -6,7 +6,7 @@ description: >
 
 # Active Code Review
 
-**Documentation paths:** Resolve `{reviews_dir}` by invoking the `resolve-vars` skill at task start before writing staging docs. Examples below use `{reviews_dir}/`; substitute the resolved path.
+**Documentation paths:** Read `{reviews_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0) before writing staging docs. Examples below use `{reviews_dir}/`; substitute the resolved path.
 
 ## Boundary
 
@@ -241,15 +241,15 @@ Severity reflects user impact and operability risk, not how thorough the comment
 Posted PR comments are public and must not cite documents that do not exist on the PR's base branch. The author and external reviewers cannot read them, and citing them either looks like a broken reference or projects private rules onto someone else's code.
 
 Before posting each comment, scan the body for references to any of the following and rewrite or drop:
-- Project-local instruction files that are gitignored in this repo: `CLAUDE.md`, `AGENTS.md`, `docs/project-guidelines.md`, `docs/company-guidelines.md`, `docs/glossary.md`, `docs/facts.md`, and post-migration equivalents under `docs/maintenance/` (`project-guidelines.md`, `company-guidelines.md`, `glossary.md`, `facts.md`)
+- Project-local instruction files that are gitignored in this repo: `CLAUDE.md`, `AGENTS.md`, `.ai-playbook/facts.md`, `docs/project-guidelines.md`, `docs/company-guidelines.md`, `docs/glossary.md`, and post-migration equivalents under `docs/maintenance/` (`project-guidelines.md`, `company-guidelines.md`, `glossary.md`)
 - User-level instruction files: anything under `~/.claude/`, `~/.codex/`, `~/.agents/`
 - Cross-project shared docs that are gitignored on the target repo: files under `shared_docs_dir` in `~/.ai-playbook/facts.md` (e.g. `coding_guidelines.md`, `jvm_guidelines.md`, `kotlin_guidelines.md`, `python_guidelines.md`, `agent_workflow_guidelines.md`), company ownership docs under `company_projects_root/.ai-playbook/` (see `~/.ai-playbook/facts.md`; `facts.md`, `dictionary.md`, `company-guidelines.md`)
 
-Quick scan command before posting (resolve `REVIEWS_DIR` by invoking the `resolve-vars` skill at task start first; use the exact staging path from the review session when known, otherwise resolve exactly one `${REVIEWS_DIR}/*-PR-<N>-*.md`):
+Quick scan command before posting (read `REVIEWS_DIR` from `.ai-playbook/facts.md` TOML per `using-skills` Step 0 first; use the exact staging path from the review session when known, otherwise resolve exactly one `${REVIEWS_DIR}/*-PR-<N>-*.md`):
 ```bash
 STAGING="${STAGING:-$(ls -1 "${REVIEWS_DIR}"/*-PR-<N>-*.md 2>/dev/null | head -1)}"
 awk '/^#### Comment/{p=1;next} /^#### Analysis/{p=0} p' "$STAGING" | \
-  grep -nE "project-guidelines|company-guidelines|docs/maintenance/|docs/glossary|docs/facts|coding_guidelines|jvm_guidelines|kotlin_guidelines|python_guidelines|CLAUDE\.md|AGENTS\.md|agent_workflow_guidelines|shared_docs_dir|~/\.claude|~/\.codex|~/\.agents"
+  grep -nE "project-guidelines|company-guidelines|docs/maintenance/|docs/glossary|\.ai-playbook/facts|coding_guidelines|jvm_guidelines|kotlin_guidelines|python_guidelines|CLAUDE\.md|AGENTS\.md|agent_workflow_guidelines|shared_docs_dir|~/\.claude|~/\.codex|~/\.agents"
 ```
 
 Rewrite rules:
@@ -517,8 +517,8 @@ Staging doc fields (author-facing quality is in **Comment**, not a terse summary
 
 ## Integration Points
 
-### With `resolve-vars` skill
-Provider for `{reviews_dir}` and other doc paths. At task start, invoke `resolve-vars` before writing staging docs under `{reviews_dir}/`.
+### With `bootstrap-ai-playbook` skill
+Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-skills` Step 0). This skill reads `{reviews_dir}` and other doc paths from that file before writing staging docs under `{reviews_dir}/`.
 
 ### With `execute-plan` skill
 Invoked as a sub-agent in **branch review** mode after all plan tasks are implemented. Review scope comes from the plan's `## Review Scope` section. Output staging doc path: `{reviews_dir}/YYYY-MM-DD-plan-review-<plan-slug>-r<N>.md`. The orchestrator loops review → `receiving-code-review` until two consecutive clear review rounds (zero **remaining** Medium+ after triage — not raw review output).

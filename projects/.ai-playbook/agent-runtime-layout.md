@@ -20,8 +20,8 @@ Use it when:
 - Mirror target: `agents/skills/`
 - Notes: shared skills such as `$learn` come from this registry in the current setup.
 
-### Path discovery (`agents/skills/resolve-vars/`)
-- `resolve-vars`: on-demand path discovery and persistence; invoked at task start by `plans`, `execute-plan`, `learn`, `doing-code-review`, and other skills that read/write repo docs.
+### Repo agent bootstrap (`agents/skills/bootstrap-ai-playbook/`)
+- `bootstrap-ai-playbook`: bootstraps the gitignored `.ai-playbook/` runtime dir on a target project (gitignore gate, on-disk path discovery, `.ai-playbook/facts.md` creation or refresh). Runs once per project when triggers fire (missing file, invalid TOML, incomplete keys, not gitignored, stale paths); not every session. Consumer skills read TOML keys from `.ai-playbook/facts.md` via `using-skills` Step 0.
 
 ### Doc-hierarchy skill family (`agents/skills/doc-hierarchy*/`)
 - `doc-hierarchy`: schema reference (Layer 1/2/3 layout, migration-complete signal).
@@ -63,7 +63,7 @@ Use it when:
 ### Facts files (local, not in public AGENTS.md)
 - User + workspace: `user_facts_path` facts key → `~/.ai-playbook/facts.md` — identity, GitHub accounts, workspace roots, **guideline canonical keys**, skill keys, brag paths, instruction entrypoints. **Load first every task** (Cursor: `load-facts-at-task-start.mdc`).
 - Ownership: personal-projects and company-work trees (`personal_ownership_docs_dir`, `company_ownership_docs_dir` keys): each scope's `facts.md`, `dictionary.md`, and **`company_guidelines_master`** / runbooks where applicable
-- Repo: `repo_facts_rel` in the current repository (typically `docs/facts.md`; see `docs/facts.md.example`)
+- Repo: `repo_facts_rel` in the current repository (typically `.ai-playbook/facts.md`; see `bootstrap-ai-playbook` skill for format)
 
 ### Guideline masters vs repo mirrors (facts keys)
 - Cross-project: `shared_docs_dir` — canonical JVM/coding guideline files
@@ -132,5 +132,5 @@ rsync -a --delete --exclude '.DS_Store' ~/.agents/skills/ ./agents/skills/
 - `README.md`: overview and usage index for this repository.
 - `AGENTS.md` (repo root): guidance for maintaining **this** command-spec repository only.
 - `docs/AGENTS.md`: version-controlled **user-level** cross-project instructions (canonical source for Codex, Claude Code, Copilot CLI, Cursor).
-- `docs/facts.md.example`: template for repo `docs/facts.md` (`repo_facts_rel`; no machine paths in repo).
+- `bootstrap-ai-playbook` skill: creates/updates repo `.ai-playbook/facts.md` (`repo_facts_rel`; no machine paths in repo).
 - `projects/.ai-playbook/`: canonical shared cross-project guidelines and this runtime-layout doc; runtime directory symlink at `~/Projects/.ai-playbook/`.

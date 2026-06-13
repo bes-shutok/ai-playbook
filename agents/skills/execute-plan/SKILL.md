@@ -15,7 +15,7 @@ description: >
 
 # Execute Plan
 
-**Documentation paths:** At Phase 0, resolve `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}` by invoking the `resolve-vars` skill at task start. Use `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for session logs. Substitute resolved paths everywhere below that shows `{...}` or legacy `docs/plans/` examples.
+**Documentation paths:** At Phase 0, read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Use `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for session logs. Substitute resolved paths everywhere below that shows `{...}` or legacy `docs/plans/` examples.
 
 **Announce at start:** "I'm using the execute-plan skill to implement `<plan-path>`."
 
@@ -216,7 +216,7 @@ Update the manifest when Phase 0 completes. See [agent-logs.md](agent-logs.md) f
 | Key | Purpose | Fallback |
 |-----|---------|----------|
 | `shared_docs_dir` | Coding/stack guidelines for implement sub-agent | Resolve from `~/.ai-playbook/facts.md`; see `agent-runtime-layout.md` there |
-| `tmp_dir` | Project tmp root for execute-plan logs (resolve by invoking the `resolve-vars` skill at task start at Phase 0) | `docs/tmp/` |
+| `tmp_dir` | Project tmp root for execute-plan logs (read from `.ai-playbook/facts.md` TOML at Phase 0) | `docs/tmp/` |
 
 ## Orchestrator Responsibilities
 
@@ -341,7 +341,7 @@ Track in `manifest.md`:
 Launch a sub-agent using your agent's sub-agent execution capability.
 Use the **Code Review** template from [subagent-prompts.md](subagent-prompts.md).
 
-The sub-agent runs `doing-code-review` in **branch review** mode (not PR mode unless the user supplied a PR URL). It must honor the plan's `## Review Scope` — findings outside scope are dropped.
+The sub-agent runs `doing-code-review` in **branch review** mode (not PR mode unless the user supplied a PR URL). Diff scope is **`git diff <BASE_BRANCH>...HEAD`** (all commits on the feature branch for this plan) — not the latest commit alone. Apply the plan's **two-tier Review Scope**: findings on **explicit must-fix** paths are always in scope; for unlisted paths, keep findings only when **plan-related** (causally tied to a plan task, explicit change, or contract the plan altered) — drop unrelated findings with a one-line reason.
 
 Review output: `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` (increment `N` each round; use `-code-review-r` prefix to distinguish from pre-execution **plan** reviews at `…-plan-review-r<N>.md`).
 
@@ -377,6 +377,8 @@ Launch a sub-agent using your agent's sub-agent execution capability.
 Use the **Address Review** template from [subagent-prompts.md](subagent-prompts.md).
 
 The sub-agent runs `receiving-code-review` against the staging doc (not GitHub threads unless a PR exists). It triages provisional findings: implements valid fixes, marks false positives/out-of-scope as `drop`, marks addressed items `done`, and re-runs validation commands.
+
+**Address completeness:** Mark a finding `done` only when the **executable/canonical artifact** named in the finding is fixed (script, monolithic bash block, wired call site, or config the runtime actually reads). Updating a non-executable reference snippet while the runnable block or script remains stale does **not** satisfy address-review — leave the finding `pending` or fix the executable artifact.
 
 Pass `<ADDRESS_LOG_PATH>` per [agent-logs.md](agent-logs.md). Orchestrator verifies the log exists before Step 3.4.
 
@@ -505,7 +507,7 @@ Report successful plan completion to the user, including that session tmp logs w
 3. **One task per implement iteration** — do not batch multiple tasks in one implement sub-agent.
 4. **Done after every task** — launch the `done` **sub-agent** (Step 1.4) and verify a commit at HEAD before starting the next task; overrides the plans skill handoff default of session-end-only `done`. Parent-agent implementation does not satisfy this gate.
 5. **Done after every review iteration** — launch the `done` **sub-agent** (Step 3.4) before the next review round; address-review fixes must not accumulate uncommitted across iterations.
-6. **Review scope is law** — reject or drop out-of-scope review findings per the plan's `## Review Scope`.
+6. **Review scope (two tiers)** — **Explicit must-fix** paths from the plan are always in scope. Unlisted paths use **plan-related extension**: keep findings only when causally tied to the plan; drop unrelated issues. Do not treat the explicit list as a ceiling that hides plan-caused defects elsewhere on the branch.
 7. **Two consecutive clear review rounds** — Phase 3 success exit only when the last two iterations had zero **remaining Medium+** after `receiving-code-review` triage (`consecutive_clear_rounds >= 2` and `review_round >= 2`); provisional `doing-code-review` counts alone do not satisfy this gate.
 8. **Maximum ten review rounds** — never launch Step 3.1 when `review_round > 10`; after round 10 without meeting the exit condition, stop and ask the user (do not loop indefinitely).
 9. **Fresh test output** — never cite stale run results; re-run commands before claiming pass.
@@ -541,8 +543,8 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
 
 ## Integration Points
 
-### Consumes `resolve-vars` skill
-At Phase 0, invoke `resolve-vars` to resolve `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` before plan-scoped edits or session log writes.
+### Consumes `bootstrap-ai-playbook` skill
+At Phase 0, read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` from `.ai-playbook/facts.md` (see `using-skills` Step 0; bootstrap runs only when Terms triggers fire) before plan-scoped edits or session log writes.
 
 ### Consumes `plans` skill
 Reads plan format, task order, validation commands, review scope, and commit messages. Archives to `{plans_completed_dir}/` when finished. If `plans` Phase 0 already created a feature branch, Phase 0 here verifies state and offers to continue on it instead of creating another. Pre-execution plan reviews use `…-plan-review-r<N>.md` with Blocker/Medium gate; Phase 3 code reviews use `…-code-review-r<N>.md` with Medium+ gate — same minimum-two / maximum-ten round discipline.
@@ -554,7 +556,7 @@ Implement sub-agent follows RED → GREEN → Refactor for behavioral tasks; run
 Only `done` performs git commits. Invoked after each implementation task (Step 1.4) and after each review iteration (Step 3.4). Each invocation receives sub-agent log paths and must read them before `learn` — see [agent-logs.md](agent-logs.md).
 
 ### Consumes `doing-code-review` skill (sub-agent)
-Branch/plan-scoped review after all tasks; staging doc is the handoff artifact.
+Branch/plan-scoped review after all tasks; staging doc is the handoff artifact. Uses full-branch diff (`<BASE_BRANCH>...HEAD`). Applies two-tier Review Scope: explicit must-fix plus plan-related extension for unlisted paths.
 
 ### Consumes `receiving-code-review` skill (sub-agent)
 Triages provisional findings from the staging doc between review rounds. Phase 3 exit counts only **remaining Medium+** still `pending` after this triage — not raw `doing-code-review` output.

@@ -47,7 +47,8 @@ Per team agreement: a **high-level service overview** — not an in-depth featur
 - Changes less frequently than code but must stay current when behavior/contracts change.
 - Locations:
   - `docs/architecture/` — seven canonical files (see [SKILL.md](SKILL.md) target layout).
-  - `docs/maintenance/` — runbooks, optional Grafana dashboard exports under `docs/maintenance/dashboards/` (index from `architecture/operational-guides.md`), `project-guidelines.md`, `facts.md`, `company-guidelines.md` mirror, human best practices, wire catalogs (`api-reference.md`, BFF/sync contracts). No `docs/examples/` tree (caller catalog lives in `maintenance/api-reference.md`).
+  - `docs/maintenance/` — runbooks, optional Grafana dashboard exports under `docs/maintenance/dashboards/` (index from `architecture/operational-guides.md`), `project-guidelines.md`, `company-guidelines.md` mirror, human best practices, wire catalogs (`api-reference.md`, BFF/sync contracts). No `docs/examples/` tree (caller catalog lives in `maintenance/api-reference.md`).
+  - **Repo agent runtime (not Layer 2):** `.ai-playbook/` — gitignored; bootstrap writes `repo_facts_rel` (`.ai-playbook/facts.md`) with TOML path keys plus Jira ledger prose. Durable FACT claims belong in Layer 2 `docs/architecture/*.md`; `.ai-playbook/facts.md` holds index stubs only after Step 5b.
 
 ### Ephemeral / tooling (not layers)
 

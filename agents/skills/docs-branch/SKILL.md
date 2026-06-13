@@ -7,7 +7,7 @@ description: Preserve gitignored LLM docs and instruction files by stashing them
 
 ## Core Concepts
 
-- **Gitignored LLM artifacts**: `docs/`, `.github/docs/`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `COPILOT.md` — files that provide LLM context but are excluded from the main working branch via `.gitignore` to avoid polluting the code history. On branches where committing `.gitignore` is not allowed (e.g. during a code review), add them to `.git/info/exclude` instead — a local-only ignore that requires no commit and is respected by `git check-ignore`.
+- **Gitignored LLM artifacts**: `docs/`, `.github/docs/`, `/.ai-playbook/` (repo root only), `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `COPILOT.md` — files that provide LLM context but are excluded from the main working branch via `.gitignore` to avoid polluting the code history. **Default:** add `/.ai-playbook/` to repo `.gitignore` (see `bootstrap-ai-playbook` skill). Use `.git/info/exclude` only when `.gitignore` cannot be committed (for example during a code review on a branch that cannot touch `.gitignore`).
 - **Stash backup**: A `git stash` entry named `"docs and instructions"` that acts as a secondary backup layer. Files are pre-snapshotted to `PRESTASH_TMP` before stashing and restored from there — never via `git stash apply`, which is unreliable for ignored files.
 - **`docs` orphan branch**: A single permanent local branch with no code history that stores the full history of all gitignored doc changes across all feature branches. Never pushed to remote.
 - **Single-branch invariant**: The shadow history for gitignored docs must live on one branch named exactly `docs`. Branches such as `docs/master` or `docs/<feature>` are incorrect and must be consolidated back into `docs`, not reused.
@@ -15,11 +15,11 @@ description: Preserve gitignored LLM docs and instruction files by stashing them
 
 ## Documentation paths
 
-Resolve gitignored doc roots by invoking the `resolve-vars` skill at task start (`{reviews_dir}`, `{tmp_dir}`, etc.) **before** running the scripts below. Build candidate path lists from session resolution; do not rely on the hardcoded fallbacks when resolved paths are known.
+Read `{reviews_dir}`, `{tmp_dir}`, and related path keys from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0) **before** running the scripts below. Build candidate path lists from those values; do not rely on the hardcoded fallbacks when TOML keys are present.
 
 ```bash
-# After doc-paths resolution — set REVIEWS_DIR and TMP_DIR from {reviews_dir} and {tmp_dir}
-SHADOW_CANDIDATES=(docs/ .github/docs/ docs/personal/ AGENTS.md CLAUDE.md GEMINI.md COPILOT.md)
+# After reading .ai-playbook/facts.md TOML — set REVIEWS_DIR and TMP_DIR from {reviews_dir} and {tmp_dir}
+SHADOW_CANDIDATES=(docs/ .github/docs/ docs/personal/ .ai-playbook/ AGENTS.md CLAUDE.md GEMINI.md COPILOT.md)
 [ -n "${REVIEWS_DIR:-}" ] && SHADOW_CANDIDATES+=("${REVIEWS_DIR%/}/")
 [ -n "${TMP_DIR:-}" ] && SHADOW_CANDIDATES+=("${TMP_DIR%/}/")
 # Fallback only when resolution was not run
@@ -34,7 +34,7 @@ The `STASH_ARGS` and `SHADOW_PATHS` loops below use `SHADOW_CANDIDATES` instead 
 - [`doc-hierarchy`](../doc-hierarchy/SKILL.md) — company service documentation hierarchy schema
 - [`doc-hierarchy-migrate`](../doc-hierarchy-migrate/SKILL.md) — migration workflow (references this skill for gitignored doc preservation)
 - [`doc-hierarchy-upkeep`](../doc-hierarchy-upkeep/SKILL.md) — Layer 1/2 upkeep after migration
-- [`resolve-vars`](../resolve-vars/SKILL.md) — path discovery and persistence (`{reviews_dir}`, `{tmp_dir}`, etc.)
+- [`bootstrap-ai-playbook`](../bootstrap-ai-playbook/SKILL.md) — writes `.ai-playbook/facts.md`; path keys read via `using-skills` Step 0
 - `done` — invokes this skill automatically before committing
 
 ## When to Use
@@ -80,6 +80,17 @@ fi
 rm -rf "${PRESTASH_TMP}"
 ```
 
+## Step 1.5: Preserve Active Execute-Plan Session Logs (when present)
+
+When `{tmp_dir}/execute-plan/<plan-slug>/` exists with `manifest.md`, snapshot that directory before Step 2 and restore it after Step 2 completes. **This logic is integrated into the Step 2 script below** (do not run Step 1.5 as a separate tool call). Full replace of `docs/tmp/` during shadow sync can delete working-tree implement/review logs that the `done` skill reads before `learn`.
+
+Reference (for reading only — use Step 2 script):
+
+```bash
+# EXECUTE_PLAN_BACKUP snapshot/restore runs inside Step 2 after SHADOW_PATHS is built
+# and after RESTORE_TMP restore completes — see Step 2 script comments.
+```
+
 ## Step 2: Sync to the `docs` Branch
 
 Create or update the single `docs` branch only when at least one of the candidate paths is both present on disk and gitignored. Skip entirely when the only ignored path is `.claude/` or another local agent config directory — those stay protected by the stash only.
@@ -90,7 +101,7 @@ If the repository already contains any `docs/...` branches, stop and consolidate
 
 > **Critical:** Run this entire script as a **single bash invocation**. Shell variables (especially `RESTORE_TMP`) do not persist between separate tool calls. Splitting the snapshot → checkout → restore sequence across calls causes `RESTORE_TMP` to be empty in later calls, silently deleting files without restoring them. Do not run the script under zsh: `path` is a special zsh variable tied to `PATH`, so the `for path in ...` loops below can break command lookup mid-script.
 
-> **Silent failure risk:** If a candidate file (e.g. `AGENTS.md`) is present on disk as an untracked but **not** gitignored file, `git check-ignore -q` returns failure and it is excluded from `SHADOW_PATHS`. However, `git checkout docs` will still fail with "untracked working tree files would be overwritten". Because the script does not use `set -e`, it continues silently and any subsequent `git commit` lands on the working branch instead of `docs`. **Prevention:** ensure all candidate files are gitignored before running this script — add them to `.git/info/exclude` if you cannot commit `.gitignore` changes.
+> **Silent failure risk:** If a candidate file (e.g. `AGENTS.md` or `.ai-playbook/facts.md`) is present on disk as an untracked but **not** gitignored file, `git check-ignore -q` returns failure and it is excluded from `SHADOW_PATHS`. However, `git checkout docs` will still fail with "untracked working tree files would be overwritten". Because the script does not use `set -e`, it continues silently and any subsequent `git commit` lands on the working branch instead of `docs`. **Prevention:** ensure all candidate paths are gitignored before running this script — repo `.gitignore` should include `/.ai-playbook/` (repo root only); use `.git/info/exclude` only when `.gitignore` cannot be committed.
 
 ```bash
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -103,6 +114,24 @@ for path in "${SHADOW_CANDIDATES[@]}"; do
   fi
 done
 
+# Resolve tmp_dir for execute-plan session preservation (TOML first, then fallback)
+EXEC_TMP=""
+if [ -f .ai-playbook/facts.md ]; then
+  EXEC_TMP=$(awk '/^```toml/{f=1;next} f&&/^```/{exit} f&&/^tmp_dir/{gsub(/^tmp_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
+fi
+EXEC_TMP="${EXEC_TMP:-${TMP_DIR:-docs/tmp/}}"
+EXEC_TMP="${EXEC_TMP%/}"
+
+EXECUTE_PLAN_BACKUP=""
+if [ -d "${EXEC_TMP}/execute-plan" ]; then
+  for session_dir in "${EXEC_TMP}/execute-plan"/*/; do
+    [ -f "${session_dir}manifest.md" ] || continue
+    EXECUTE_PLAN_BACKUP=$(mktemp -d)
+    cp -rp "${session_dir%/}" "${EXECUTE_PLAN_BACKUP}/"
+    break  # one active session per run
+  done
+fi
+
 if [ ${#SHADOW_PATHS[@]} -gt 0 ]; then
   # Snapshot shadow paths AND .gitignore to a temp dir BEFORE any branch switch.
   # git checkout removes files that are tracked on the docs branch but gitignored on the
@@ -111,6 +140,26 @@ if [ ${#SHADOW_PATHS[@]} -gt 0 ]; then
   # preserves; any additions to .gitignore on the working branch must be reflected in
   # the shadow branch or it will silently fall out of sync.
   RESTORE_TMP=$(mktemp -d)
+  docs_branch_abort() {
+    local rc=$?
+    git checkout -f "${CURRENT_BRANCH}" 2>/dev/null || true
+    if [ "${_TRACKED_STASH_CREATED:-0}" = "1" ]; then
+      git stash pop 2>/dev/null || true
+    fi
+    if [ -n "${RESTORE_TMP:-}" ] && [ -d "${RESTORE_TMP}" ]; then
+      for shadow_path in "${SHADOW_PATHS[@]}"; do
+        src="${shadow_path%/}"
+        parent=$(dirname "$src")
+        mkdir -p "./${parent}"
+        rm -rf "./${src}"
+        [ -e "${RESTORE_TMP}/${src}" ] && cp -rp "${RESTORE_TMP}/${src}" "./${parent}/"
+      done
+    fi
+    [ -n "${RESTORE_TMP:-}" ] && rm -rf "${RESTORE_TMP}"
+    [ -n "${EXECUTE_PLAN_BACKUP:-}" ] && rm -rf "${EXECUTE_PLAN_BACKUP}"
+    exit "$rc"
+  }
+  trap docs_branch_abort ERR INT TERM
   for shadow_path in "${SHADOW_PATHS[@]}"; do
     src="${shadow_path%/}"  # strip trailing slash so cp -rp copies the item itself
     if [ -e "$src" ]; then
@@ -155,7 +204,7 @@ if [ ${#SHADOW_PATHS[@]} -gt 0 ]; then
   # Sync .gitignore from the working branch, then strip any rules that exclude the
   # paths this branch exists to track. Use grep -vE (reliable on macOS and Linux).
   if [ -e "${RESTORE_TMP}/.gitignore" ]; then
-    grep -vE '^/?\.?github/docs/?$|^/docs/?$|^/AGENTS\.md$|^/CLAUDE\.md$|^/GEMINI\.md$|^/COPILOT\.md$|^AGENTS\.md$|^GEMINI\.md$|^CLAUDE\.md$|^/?docs/personal/?$|^/?docs/tmp/?$|^/?docs/reviews/?$|^/?docs/history/reviews/?$' "${RESTORE_TMP}/.gitignore" > ./.gitignore || true
+    grep -vE '^/?\.?github/docs/?$|^/docs/?$|^/\.ai-playbook/?$|^/AGENTS\.md$|^/CLAUDE\.md$|^/GEMINI\.md$|^/COPILOT\.md$|^AGENTS\.md$|^GEMINI\.md$|^CLAUDE\.md$|^/?docs/personal/?$|^/?docs/tmp/?$|^/?docs/reviews/?$|^/?docs/history/reviews/?$' "${RESTORE_TMP}/.gitignore" > ./.gitignore || true
   fi
   git add .gitignore 2>/dev/null || true
 
@@ -177,6 +226,35 @@ if [ ${#SHADOW_PATHS[@]} -gt 0 ]; then
   # First strip any nested .git dirs — nested git repos (e.g. docs/personal/) must
   # not be staged as submodule gitlinks; removing .git lets individual files be staged.
   find . -mindepth 2 -name '.git' -type d | while read -r d; do rm -rf "$d"; done
+
+  # Hygiene gate: abort sync if repo agent facts match deny patterns (never force-add secrets to docs branch)
+  if [ -e ".ai-playbook/facts.md" ]; then
+    PATTERNS_FILE="${PUBLIC_HYGIENE_PATTERNS_FILE:-${HOME}/.ai-playbook/public-hygiene.patterns}"
+    if [ ! -f "$PATTERNS_FILE" ] && [ -f docs/scan-public-hygiene.patterns.example ]; then
+      PATTERNS_FILE="docs/scan-public-hygiene.patterns.example"
+    fi
+    HYGIENE_FAIL=0
+    if [ -f "$PATTERNS_FILE" ]; then
+      if rg -q -f "$PATTERNS_FILE" .ai-playbook/facts.md 2>/dev/null; then
+        echo "ERROR: public hygiene patterns matched .ai-playbook/facts.md" >&2
+        rg -n -f "$PATTERNS_FILE" .ai-playbook/facts.md >&2 || true
+        HYGIENE_FAIL=1
+      fi
+    else
+      echo "WARN: no hygiene patterns file; skipping deny-pattern scan (absolute-path check still runs)" >&2
+    fi
+    ABS_HOME_RG="$(printf '%s%s%s%s%s' '/' 'Users' '/|' '/home/' '[a-zA-Z0-9._-]+/')"
+    if rg -q "$ABS_HOME_RG" .ai-playbook/facts.md 2>/dev/null; then
+      echo "ERROR: absolute home paths in .ai-playbook/facts.md" >&2
+      rg -n "$ABS_HOME_RG" .ai-playbook/facts.md >&2 || true
+      HYGIENE_FAIL=1
+    fi
+    if [ "$HYGIENE_FAIL" -ne 0 ]; then
+      echo "ERROR: abort docs-branch sync (fix .ai-playbook/facts.md or run public_hygiene_scan_script before retry)" >&2
+      exit 1
+    fi
+  fi
+
   for path in "${SHADOW_PATHS[@]}"; do
     git add -f "$path" 2>/dev/null || true
   done
@@ -199,6 +277,11 @@ if [ ${#SHADOW_PATHS[@]} -gt 0 ]; then
   # Restore shadow paths from the pre-switch snapshot (reliable, no git involvement).
   # Delete destination first to prevent nesting (cp -rp src dst copies src INSIDE dst
   # if dst already exists). For nested paths, ensure parent dir exists first.
+  LIVE_FACTS=""
+  if [ -f .ai-playbook/facts.md ]; then
+    LIVE_FACTS=$(mktemp)
+    cp .ai-playbook/facts.md "$LIVE_FACTS"
+  fi
   for shadow_path in "${SHADOW_PATHS[@]}"; do
     src="${shadow_path%/}"
     parent=$(dirname "$src")
@@ -206,7 +289,26 @@ if [ ${#SHADOW_PATHS[@]} -gt 0 ]; then
     rm -rf "./${src}"
     [ -e "${RESTORE_TMP}/${src}" ] && cp -rp "${RESTORE_TMP}/${src}" "./${parent}/"
   done
+  if [ -n "${LIVE_FACTS}" ] && [ -f "${LIVE_FACTS}" ]; then
+    mkdir -p .ai-playbook
+    if [ -f .ai-playbook/facts.md ] && [ .ai-playbook/facts.md -nt "${LIVE_FACTS}" ]; then
+      : # keep concurrent post-checkout edits newer than the pre-restore snapshot
+    else
+      cp "${LIVE_FACTS}" .ai-playbook/facts.md
+    fi
+    rm -f "${LIVE_FACTS}"
+  fi
   rm -rf "${RESTORE_TMP}"
+  trap - ERR INT TERM
+
+  # Restore active execute-plan session logs after tmp shadow replace (initial backup from script entry)
+  if [ -n "${EXECUTE_PLAN_BACKUP}" ] && [ -d "${EXECUTE_PLAN_BACKUP}"/* ]; then
+    slug=$(basename "${EXECUTE_PLAN_BACKUP}"/*)
+    mkdir -p "${EXEC_TMP}/execute-plan"
+    rm -rf "${EXEC_TMP}/execute-plan/${slug}"
+    cp -rp "${EXECUTE_PLAN_BACKUP}/${slug}" "${EXEC_TMP}/execute-plan/"
+    rm -rf "${EXECUTE_PLAN_BACKUP}"
+  fi
 
   # Guard: if a SHADOW_PATH is also a directory tracked on the working branch (e.g. docs/),
   # the cp restore above may overwrite tracked files inside it with stale docs-branch content.
@@ -230,9 +332,9 @@ To restore after a manual branch switch:
 
 ```bash
 # Restore from the docs branch without switching to it
-git checkout refs/heads/docs -- docs/ AGENTS.md CLAUDE.md
+git checkout refs/heads/docs -- docs/ AGENTS.md CLAUDE.md .ai-playbook/
 # Unstage — these files must NOT be committed on the feature branch
-git restore --staged docs/ AGENTS.md CLAUDE.md
+git restore --staged docs/ AGENTS.md CLAUDE.md .ai-playbook/
 ```
 
 Then run the full docs-branch skill (Step 1 + Step 2) to re-sync any pending changes.
@@ -256,7 +358,7 @@ This only works when a `git stash push --all` was run after the files were creat
 
 - Never use `docs/master`, `docs/<feature>`, or any other `docs/...` shadow branches. The only valid shadow branch name is exactly `docs`.
 - If any `refs/heads/docs/*` branches already exist, consolidate them into the single `docs` branch and delete the namespaced branches before the next sync. Do not keep using them as a workaround.
-- **Before running this skill, verify all candidate files are gitignored** (`git check-ignore -q <file>`). If a file is untracked but not gitignored, `git checkout docs` will fail with "untracked working tree files would be overwritten". Because the script has no `set -e`, it continues silently and any commit lands on the wrong branch. Fix: add the file to `.git/info/exclude` (local-only, no commit needed) before running the skill.
+- **Before running this skill, verify all candidate files are gitignored** (`git check-ignore -q <file>`). Repo `.gitignore` should include `/.ai-playbook/` (repo root only; see `bootstrap-ai-playbook`). If a file is untracked but not gitignored and you cannot commit `.gitignore`, add the path to `.git/info/exclude` (local-only fallback) before running the skill.
 - Before switching to the `docs` branch, always stash uncommitted tracked changes (`git stash push`) and pop them after returning — dirty tracked files block checkout even with `-f` for staged changes.
 - Run Step 2's script as a **single bash invocation** — never split across tool calls and never run it under zsh.
 - The `docs` branch is **never pushed to remote** — local safety net only.
@@ -270,3 +372,4 @@ This only works when a `git stash push --all` was run after the files were creat
 - **Nested git repos in SHADOW_PATHS** (e.g. `docs/personal/`): strip their `.git` before staging on the docs branch (`find . -mindepth 2 -name '.git' -type d | while read -r d; do rm -rf "$d"; done`). Without this, git treats them as submodule gitlinks and does not stage individual files. The nested `.git` is NOT present in `RESTORE_TMP` either way since `cp -rp` copies it but the docs branch never needs it.
 - **Snapshot/restore path correctness is data-loss critical**: `cp -rp docs/foo RESTORE_TMP/` creates `RESTORE_TMP/foo/` (just the basename), NOT `RESTORE_TMP/docs/foo/`. Use the parent-preserving pattern everywhere: `parent=$(dirname "$src"); mkdir -p "${RESTORE_TMP}/${parent}"; cp -rp "$src" "${RESTORE_TMP}/${parent}/"`. If the snapshot path doesn't match the restore path, the restore silently fails and the file is lost. When adding a new path to SHADOW_PATHS, echo-test the snapshot/restore paths before running the script for real.
 - **Scope the post-restore guard to SHADOW_PATHS only.** The guard that restores tracked files from HEAD must iterate only the tracked files _within_ each SHADOW_PATH — never restore AGENTS.md, CLAUDE.md, or other tracked files outside SHADOW_PATHS from HEAD. A broad guard (`git ls-files -- docs/ AGENTS.md CLAUDE.md`) reverts uncommitted changes that `git stash pop` correctly restored, silently losing work.
+- **Preserve active execute-plan session logs** (`{tmp_dir}/execute-plan/<plan-slug>/` with `manifest.md`): snapshot before Step 2 and restore after Step 2 (see Step 1.5). Do not rely on shadow-branch `docs/tmp/` alone during an execute-plan run.

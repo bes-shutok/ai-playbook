@@ -15,7 +15,7 @@ Review an RFC or TDD document hosted on Confluence. Provide quality feedback foc
 
 ## Documentation paths
 
-Resolve `{tmp_dir}` by invoking the `resolve-vars` skill at task start before writing review output files. Do not hardcode `./docs/tmp/` when project guidelines document a resolved path.
+Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0) before writing review output files. Do not hardcode `./docs/tmp/` when project guidelines document a resolved path.
 
 ## Configuration (from facts document)
 
@@ -26,7 +26,7 @@ This skill reads environment-specific values from the user's facts/profile docum
 | `atlassian_domain` | Default Atlassian cloud domain | `acme.atlassian.net` |
 | `docs_tmp_dir` | Directory for review output files (prefer resolved `{tmp_dir}`) | `docs/tmp/` |
 
-If a key is missing from facts, resolve `{tmp_dir}` by invoking the `resolve-vars` skill at task start; ask the user only when resolution is ambiguous.
+If a key is missing from `.ai-playbook/facts.md`, follow `using-skills` Step 0 (bootstrap only when Terms triggers fire); ask the user only when resolution is ambiguous.
 
 ## Workflow
 
@@ -162,7 +162,7 @@ Output the feedback to a temporary Markdown file for easy reading, and print a s
 
 **File output:**
 1. Write the full review to `{tmp_dir}/review-<page-title-kebab>-<YYYY-MM-DD>.md`
-   - Use `{tmp_dir}` resolved at skill start by invoking the `resolve-vars` skill at task start.
+   - Use `{tmp_dir}` read from `.ai-playbook/facts.md` TOML at skill start.
 2. Create the directory if it does not exist.
 3. The file contains the full structured feedback (all sections below) with proper Markdown formatting (headings, bullet lists, code blocks, and tables render correctly in any editor/previewer).
 

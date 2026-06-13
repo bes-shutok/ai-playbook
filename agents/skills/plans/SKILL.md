@@ -5,7 +5,7 @@ description: "Full plan lifecycle — create, edit, and complete implementation 
 
 # Plans
 
-**Documentation paths:** Resolve `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{rfcs_dir}` by invoking the `resolve-vars` skill at task start before creating, reviewing, or archiving plans. Do not hardcode `docs/plans/` unless resolution finds no project spec and exploration shows that layout.
+**Documentation paths:** Read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}`, and `{rfcs_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Do not hardcode `docs/plans/` unless TOML keys are missing and on-disk exploration shows that layout.
 
 **Announce at start (create):** "I'm using the plans skill to create the implementation plan."
 
@@ -19,7 +19,7 @@ description: "Full plan lifecycle — create, edit, and complete implementation 
 
 **For detailed plan quality guidance:** Resolve from `{guidelines_path}` or architecture/maintenance docs named in project guidelines (legacy: `docs/domain/plan_quality_guidelines.md`). Otherwise, see Universal Patterns below.
 
-**When updating or optimizing an existing plan:** compare the plan against the current code shape, the RFC/PRD, and any predecessor phase plans before editing. Prefer patching the plan directly when improvements are clear. **Also verify all required sections are present** (`## Gist & Examples`, `## Evaluation Criteria`, `## Review Scope`, `## Validation Commands`) — pre-existing plans may be missing them; add any absent sections before making other edits. **When the update notes that a code change is "already done", read the actual source file to verify the claim** — do not rely on session summaries or memory; an incorrect "already done" note becomes a review blocker.
+**When updating or optimizing an existing plan:** compare the plan against the current code shape, the RFC/PRD, and any predecessor phase plans before editing. Prefer patching the plan directly when improvements are clear. **Also verify all required sections are present** (`## Gist & Examples`, `## Evaluation Criteria`, `## Review Scope`, `## Validation Commands`) — pre-existing plans may be missing them; add any absent sections before making other edits. When Review Scope or Validation Commands exist, check them against the **Scope model (two tiers)** and **Validation Commands (authoring rules)** below. **When the update notes that a code change is "already done", read the actual source file to verify the claim** — do not rely on session summaries or memory; an incorrect "already done" note becomes a review blocker.
 
 **Save plans to:** `{plans_dir}/<STORY-KEY>-<feature-name>.md` (story key prefix) or `{plans_dir}/YYYY-MM-DD-<feature-name>.md` (date prefix when no story key applies).
 
@@ -211,17 +211,18 @@ Every plan follows this exact structure — no variations:
 
 ## Review Scope
 
-Files directly changed as part of this plan. Review feedback is accepted **only** for the files listed here.
-Any finding about a file not in this list must be rejected as out of scope.
+**Explicit must-fix** — findings on these paths are always in scope (review and fix if valid):
 
-**Production code — in scope:**
+**Production code:**
 - `path/to/NewFile.ext` *(new)*
 - `path/to/ExistingFile.ext`
 
-**Tests — in scope:**
+**Tests:**
 - `path/to/NewTest.ext` *(new)*
 
-**Out of scope — reject all review feedback:**
+**Plan-related extension** — implementation and review may change files not listed above. Treat a finding as in scope when it is **causally related to this plan**: it implements or completes a plan task, fixes a regression introduced by plan work, closes wiring or docs implied by an explicit must-fix change, or contradicts a contract the plan changed. If the link to the plan is weak or speculative, drop as out of scope with a one-line reason.
+
+**Out of scope — reject unless plan-related:**
 - `path/to/UnrelatedFile.ext` — reason
 
 ## Validation Commands
@@ -290,7 +291,7 @@ ls docs/
 |---|---|
 | New config properties, defaults, validation | `README.md` — config section only |
 | New metrics (counters, latency, reservations) | `docs/metrics.md` (or equivalent metrics reference) |
-| New architectural/engineering conventions | `{guidelines_path}` (resolved by invoking the `resolve-vars` skill at task start; typically `docs/maintenance/project-guidelines.md`) as a numbered rule |
+| New architectural/engineering conventions | `{guidelines_path}` (from `.ai-playbook/facts.md` TOML when present; typically `docs/maintenance/project-guidelines.md`) as a numbered rule |
 | New workflow steps or pipeline behavior | The relevant workflow doc |
 | New API contracts or BO behavior | The relevant API or workflow doc |
 | Time-bounded migration/rollout instructions | PR description only — never a permanent doc |
@@ -304,49 +305,54 @@ ls docs/
 
 ## Review Scope
 
-Every plan must contain a `## Review Scope` section that explicitly lists which files are in scope for code review. Review agents must reject all findings about files not in this list.
+Every plan must contain a `## Review Scope` section using the **two-tier scope model** below. The explicit list is a floor, not a ceiling — review and address-review may include plan-related findings outside the list when the causal link to this plan is clear.
 
 **When to generate it:**
-- At plan creation time: list every file referenced in the plan's Tasks sections. Mark new files with *(new)*.
-- When updating a plan mid-feature: re-derive from `git diff <base-branch>..HEAD --name-only` and classify each file as in-scope or out-of-scope based on whether it was changed to implement this feature's tasks.
+- At plan creation time: list every file referenced in the plan's Tasks sections under **Explicit must-fix**. Mark new files with *(new)*.
+- When updating a plan mid-feature: re-derive the explicit list from `git diff <base-branch>..HEAD --name-only` and classify each file as must-fix or out-of-scope based on whether it was changed to implement this feature's tasks.
 
-**How to derive in-scope files when building on a prior branch:**
+**How to derive explicit must-fix files when building on a prior branch:**
 ```bash
 git diff <prior-phase-branch>..HEAD --name-only
 ```
 Classify each file as:
-- **In scope** — changed to implement a task defined in this plan (new feature code, tests for it, config, docs).
+- **Explicit must-fix** — changed to implement a task defined in this plan (feature code, tests, config, docs the plan names).
 - **Out of scope** — present in the diff due to incidental cleanup, review-driven fixes of pre-existing issues in unrelated components, or formatter noise. List these explicitly with a one-line reason.
 
 **Format:**
 ```markdown
 ## Review Scope
 
-Files directly changed as part of this plan. Review feedback is accepted **only** for the files listed here.
-Any finding about a file not in this list must be rejected as out of scope.
+**Explicit must-fix** — findings on these paths are always in scope (review and fix if valid):
 
-**Production code — in scope:**
+**Production code:**
 - `path/to/NewFile.ext` *(new)*
 - `path/to/ExistingFile.ext`
 
-**Tests — in scope:**
+**Tests:**
 - `path/to/NewTest.ext` *(new)*
 - `path/to/ExistingTest.ext`
 
-**Documentation — scope-linked (not a closed file list):**
+**Plan-related extension** — implementation and review may change files not listed above. Treat a finding as in scope when it is **causally related to this plan**: it implements or completes a plan task, fixes a regression introduced by plan work, closes wiring or docs implied by an explicit must-fix change, or contradicts a contract the plan changed. If the link to the plan is weak or speculative, drop as out of scope with a one-line reason.
 
-List production code and tests explicitly (review is file-scoped). For documentation, use a **scope-linked** policy instead of enumerating every doc path:
+**Documentation:** production code and tests use the explicit list. Docs may also be in scope under plan-related extension when a change is substantively required to keep docs aligned with the feature — not every path needs listing upfront. A doc-closure task should include search/grep for stale references, not only pre-listed paths.
 
-- Any file under `docs/` (and `README.md` only when it catalogs endpoints or auth touched by the feature) may be edited when the change is **substantively required** to keep docs aligned with the feature (same change set as OpenAPI/transport; project-guidelines.md #70).
-- Task 6 (or equivalent doc-closure task) must include grep/search over `docs/` for stale references, not only pre-listed files.
-- Review accepts doc feedback that meets the scope bar; reject unrelated doc refactors.
-- Give **likely touch points** as examples, not an exhaustive allow-list — omitting paths (e.g. BFF contract docs) must not block required sync.
-
-**Out of scope — reject all review feedback:**
+**Out of scope — reject unless plan-related:**
 - `path/to/UnrelatedFile.ext` — one-line reason
 ```
 
 **Placement:** immediately after `## Evaluation Criteria` and before `## Design Invariants` (if present) or `## Validation Commands`.
+
+**Scope model (two tiers):**
+
+| Tier | Role | Review / address behavior |
+|------|------|---------------------------|
+| **Explicit must-fix** | Paths from task `Files:` lists and named plan deliverables | Always review; valid findings must be fixed or explicitly triaged |
+| **Plan-related extension** | Unlisted paths touched during execution or full-branch review | In scope only when causally related to plan goals — assess each finding; do not auto-drop because the path was omitted from the plan |
+
+**Plan-related test (use during review triage):** Can you tie the finding to a specific plan task, explicit must-fix change, or contract the plan altered? If yes → in scope. If no → drop. When an explicit must-fix change implies follow-on updates elsewhere (supporting scripts, linked instructions, config the runtime reads), those follow-ons are plan-related even if omitted from the explicit list.
+
+**After execution:** if review repeatedly surfaces plan-related findings in the same unlisted area, add that path to **Explicit must-fix** on the next plan update — the explicit list should converge toward what the work actually touched.
 
 **Partially-in-scope files:** when a large existing file is in scope for only specific methods, name those methods explicitly and add a freeze note: "All other methods in this file are frozen — reject any review finding that touches them." A file listed as in scope without a method-level constraint is treated as fully open, which invites out-of-scope fixes during review. See `agent_workflow_guidelines.md §15`.
 
@@ -365,6 +371,18 @@ For newly added files (not present in the base branch):
 git rm path/to/NewFile.ext
 ```
 Verify the build compiles after reverting. A compile error is hard evidence of a missed API dependency — un-revert the file and reclassify it.
+
+## Validation Commands (authoring rules)
+
+Every plan must include a `## Validation Commands` fenced bash block (see plan template). Authoring rules:
+
+1. **Scope-aligned checks:** When validation uses grep/search for stale strings, paths, or renamed dependencies, cover every **explicit must-fix** path and any surfaces the plan's contract changes reasonably affect — not a single entry point when multiple artifacts carry the same contract. Breadth should match what plan-related review would still need to verify.
+
+2. **Executable vs reference prose:** When a task changes behavior documented as a script, monolithic bash block, or named file to run, validation must exercise the **canonical executable artifact** (the block labeled as the script to run, or the invoked file path) — not an illustrative snippet elsewhere in the doc. A green grep over reference-only prose does not prove wiring is correct.
+
+3. **Contract-removal checks:** When removing or renaming a dependency (module, env var, path key, CLI flag, workflow step), include at least one command that searches the explicit must-fix set and other surfaces where stale references would break plan goals.
+
+4. **Validation minimality still applies:** Prefer the narrowest command that proves the task, but never narrower than what the two-tier Review Scope requires — a passing check that ignores plan-implied follow-on surfaces is a plan defect.
 
 ## Plan Quality Gate
 
@@ -427,7 +445,8 @@ Then verify these structural failure modes and fix them in the plan:
 - **Right-layer tests:** place failing tests at the layer that can observe the behavior. A mocked downstream collaborator cannot verify logic owned by that collaborator.
 - **Side-effect safety:** when adding a guard around an irreversible side effect, specify failure semantics explicitly (claim/confirm/release, fail-open/fail-closed, TTL) so retries do not skip work that never succeeded.
 - **Existing constants and config:** verify whether metrics, properties, flags, or key prefixes already exist before planning new ones. Reuse existing names unless the RFC requires a new external contract.
-- **Validation minimality:** avoid redundant validation commands. Prefer the narrowest command that proves the task, and a final scoped `verify` when it subsumes compile/test.
+- **Validation minimality:** avoid redundant validation commands. Prefer the narrowest command that proves the task, and a final scoped `verify` when it subsumes compile/test — but never narrower than the two-tier Review Scope (see **Validation Commands (authoring rules)**).
+- **Review scope completeness:** explicit must-fix covers all task `Files:`; plan-related extension policy is stated; validation breadth matches contract changes the plan introduces.
 - **Language-specific testing traps:** before finalizing test tasks, link to the language guidelines for this project (e.g. `kotlin_guidelines.md`, `python_guidelines.md`) in the plan header so the implementer has the relevant silent-failure patterns at hand. For metrics coverage, also link to the applicable company or project guidelines.
 - **Branch count verification:** when specifying helper extraction from a branching function, count all conditional branches in the function body before writing the task. An incomplete branch list silently omits emission paths.
 
@@ -505,14 +524,14 @@ After saving, offer:
 
 **Plan path without trigger phrase:** If the user references an existing plan file under `{plans_dir}` (`@` mention or filename only) without saying execute-plan / implement plan / run plan, **do not** assume implementation. Run the three-way gate from the `execute-plan` skill (execute-plan / manual / read-only) before any production code edits.
 
-**Automated execution:** Use the `execute-plan` skill (resolves same paths via the `resolve-vars` skill). Archive to `{plans_completed_dir}/`; session logs under `{tmp_dir}/execute-plan/<slug>/` on success only.
+**Automated execution:** Use the `execute-plan` skill (reads same paths from `.ai-playbook/facts.md`). Archive to `{plans_completed_dir}/`; session logs under `{tmp_dir}/execute-plan/<slug>/` on success only.
 
 **Manual execution in this session:** Use `tdd-guide` and `unit-test-runner` per task (fresh output before marking the task complete). One task per commit. Use `done` only when the user ends the session (learn + commit across repos). Do not use this path when the user asked for `execute-plan` / `/execute-plan`.
 
 ## Integration Points
 
-### With `resolve-vars` skill
-Provider for `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}`, and `{rfcs_dir}`. Invoke at task start before creating, reviewing, or archiving plans.
+### With `bootstrap-ai-playbook` skill
+Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-skills` Step 0). This skill reads `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}`, and `{rfcs_dir}` from that file.
 
 ### With `execute-plan` skill
 Consumer of plan format, task order, `## Validation Commands`, `## Review Scope`, per-task commit lines, and completed-plan archival. Shares Phase 0 branch-setup semantics: `plans` runs it at plan creation; `execute-plan` runs it at implementation start and reuses an existing feature branch when appropriate. After plan creation or update, hand off to `execute-plan` when the user wants automated iterative implementation with per-task commits and post-implementation review loops.

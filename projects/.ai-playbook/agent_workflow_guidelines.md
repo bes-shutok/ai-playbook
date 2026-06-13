@@ -710,6 +710,10 @@ produces incomplete output that fails downstream quality checks.
 
 47.4. **Migrated skills:** workflows moved to the shared registry (for example `learn`) are skill-only. Remove stale `.opencode/command/<skill>.md` references and local command copies when encountered.
 
+47.5. **Contract coherence across related artifacts:** when a primary instruction or code artifact renames a dependency, changes path-resolution contract text, or updates summary bullets that mirror a canonical script, verify every supporting artifact that implements or echoes that contract stays aligned (linked docs, companion files, scripts invoked by name). Primary-artifact correctness alone is not enough if dependents still instruct the old workflow. During implementation-plan review, the explicit file list is a floor, not a ceiling — use the two-tier Review Scope model in the `plans` skill (explicit must-fix plus plan-related extension).
+
+47.6. **Executable vs reference documentation:** when validation or review checks wiring documented in prose, exercise the canonical executable artifact (named script, monolithic bash block, runtime config) — not an illustrative snippet elsewhere. Mark address-review findings `done` only when the executable artifact is fixed.
+
 ## 48. Public Skill Examples and Local Hygiene Scans
 
 48.1. **Neutral placeholders only** in committed skill and instruction files: use fictitious ticket keys (`PROJ-1234`), domains (`your-org.atlassian.net`), and feature slugs (`feature-name`). Never real Jira numbers, employer ticket prefixes, org domains, GitHub handles, or session-specific identifiers — even in "example" prose.

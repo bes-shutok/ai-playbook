@@ -88,9 +88,9 @@ You don't invoke skills directly - the model decides when to use them.
 
 ### 4. Repository documentation paths (skills that read/write `docs/`)
 
-Do **not** hardcode `docs/plans/`, `docs/reviews/`, `docs/examples/`, or module-split trees in skill bodies. At task start, invoke the `resolve-vars` skill to resolve path variables:
+Do **not** hardcode `docs/plans/`, `docs/reviews/`, `docs/examples/`, or module-split trees in skill bodies. Read path keys from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0):
 
-- At task start, invoke the `resolve-vars` skill to resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, etc. using its resolution order (`user_facts_path` keys, repo `AGENTS.md`, on-disk `project_guidelines_rel`, explore `docs/`).
+- Read `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, etc. from `.ai-playbook/facts.md` (see `using-skills` Step 0).
 - Use session placeholders (`{plans_dir}/…`) in examples and templates — not legacy paths as defaults.
 - **Public example placeholders:** In committed skill and instruction files, use neutral fictitious values only — `PROJ-1234`, `PROJ-1234-feature-name`, `your-org.atlassian.net`, `acme.example.com`. Never real Jira keys, employer ticket prefixes, internal feature slugs, org domains, or session-specific identifiers. Resolve real prefixes from the user's facts document at runtime (`jira_ticket_prefix`, `atlassian_domain`), not in skill bodies. Before commit, run `public_hygiene_scan_script` from user facts.
 - **`doc-hierarchy-migrate`** applies the company three-layer schema when the user explicitly runs a migration; it writes resolved paths into the repo for other skills to read. **`doc-hierarchy`** is schema reference; **`doc-hierarchy-upkeep`** is post-migration Layer 1/2 sync.

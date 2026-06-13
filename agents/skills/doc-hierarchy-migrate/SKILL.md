@@ -41,7 +41,7 @@ Migration progress:
 - [ ] Step 2: Git moves (+ 2b greenfield scaffold when needed)
 - [ ] Step 3: Merge into architecture/*.md
 - [ ] Step 4: Flatten history/feature-notes
-- [ ] Step 5: Layer 1 README + instruction files
+- [ ] Step 5: Layer 1 README + instruction files (+ Step 5b repo agent facts before gate)
 - [ ] Step 6: Reference update + verify (full)
 ```
 
@@ -58,7 +58,7 @@ Migration progress:
 3. Assign each path one outcome — [migration-map.md § Step 0](../doc-hierarchy/migration-map.md#step-0-classification-outcomes).
 4. Classification table in session notes before Step 2.
 5. Flags: `REQUIRE_CALLER_CATALOG=1` if OpenAPI/caller catalog; `CLASSIFIED_COMPANY_GUIDELINES=1` if moving mirror.
-6. Persist flags to `{tmp_dir}/doc-hierarchy-migrate/session-flags.env` (invoke `resolve-vars` for `{tmp_dir}` if needed):
+6. Persist flags to `{tmp_dir}/doc-hierarchy-migrate/session-flags.env`. During Steps 0–4 (before Step 5b), when `.ai-playbook/facts.md` is missing or bootstrap is blocked by legacy committed facts, use on-disk probe `docs/tmp/` (create if needed) or read `{tmp_dir}` from TOML when bootstrap has already run. After Step 5b, read `{tmp_dir}` from `.ai-playbook/facts.md` TOML per `using-skills` Step 0:
 
    ```bash
    REQUIRE_CALLER_CATALOG=0|1
@@ -95,10 +95,20 @@ Flat `history/feature-notes/` + `proposals/` only. **Gate:** `REPO_ROOT=<service
 1. `docs/README.md` — [README template](../doc-hierarchy/instruction-templates.md#layer-1-docsreadmemd-skeleton); Layer 1 rules in [company-decisions.md](../doc-hierarchy/company-decisions.md).
 2. `project-guidelines.md` — [project-guidelines template](../doc-hierarchy/instruction-templates.md#docsmaintenanceproject-guidelinesmd-section).
 3. Patch `AGENTS.md` — [AGENTS template](../doc-hierarchy/instruction-templates.md#agentsmd-documentation-hierarchy-subsection).
-4. Patch `user_facts_path` keys; scrub machine paths from repo `facts.md`.
+4. Patch `user_facts_path` keys; scrub machine paths from repo agent facts.
 5. No `doc-migration.md` in `history/`.
 
-**Gate:** `REPO_ROOT=<service-repo> "$SKILL_INSTALL/scripts/verify-doc-hierarchy.sh" step5`
+### Step 5b: Repo agent facts (before Step 5 gate)
+
+Run **before** the Step 5 gate when legacy committed facts exist or Step 2 moved `facts.md` into `docs/maintenance/`.
+
+1. **Promote human-canonical FACT bodies** from `docs/maintenance/facts.md` (or legacy root `docs/facts.md`) into the matching Layer 2 `docs/architecture/*.md` topics. Durable claims for human PR review belong in Layer 2, not in repo agent facts.
+2. **Create or refresh** gitignored `.ai-playbook/facts.md` with index stubs only (opening TOML path keys per `bootstrap-ai-playbook` Facts File Shape; prose sections such as `## Related Jira tasks` for ticket ledger).
+3. **Gitignore gate:** ensure `/.ai-playbook/` (repo root only) is in repo `.gitignore` (or local exclude when `.gitignore` cannot be committed); confirm `git check-ignore -q .ai-playbook/facts.md` and `git check-ignore -q .ai-playbook/` pass before writing.
+4. **`git rm`** committed `docs/maintenance/facts.md` (and legacy root `docs/facts.md` if still tracked). Do not leave committed repo facts after Step 5b.
+5. Invoke **`bootstrap-ai-playbook`** once (when triggers fire) to populate TOML keys from on-disk discovery; consumers read via `using-skills` Step 0 thereafter.
+
+**Gate:** `REPO_ROOT=<service-repo> "$SKILL_INSTALL/scripts/verify-doc-hierarchy.sh" step5` (committed artifacts + local runtime). For CI or fresh clones without bootstrap output, run `step5-committed` first (committed checks only); then bootstrap and re-run `step5` or `full`.
 
 ## Step 6: Reference update and verify
 
@@ -125,7 +135,11 @@ Fix legacy path strings repo-wide (classification table + `docs/context/`, `docs
 
 ## Local verify
 
-Run `scripts/verify-doc-hierarchy.sh self-test` after skill changes. Self-test builds ephemeral mini git repos in a system temp directory (legacy layout must fail `step2`; minimal migrated layout must pass `step2` and `full`; negative cases cover step3, step4, and step6 reference scans), then removes them. GitHub Actions is optional; workflows belong in `.github/workflows/` only if the repo owner wants remote CI.
+Run `scripts/verify-doc-hierarchy.sh self-test` after skill changes. Self-test builds ephemeral mini git repos in a system temp directory (legacy layout must fail `step2`; minimal migrated layout must pass `step2` and `full`; negative cases cover step3, step4, step6 reference scans, committed `docs/maintenance/facts.md`, committed root `docs/facts.md` (`step5-committed`), and instructions-repo guard), then removes them.
+
+Run `scripts/verify-doc-hierarchy.sh stale-bootstrap-test` after changes to TOML fence parsing or bootstrap refresh logic. Asserts opening-fence-only parse, stale TOML refresh with prose preserved, and inline-code-fence edge cases (TOML-like lines in prose must not merge into the opening block).
+
+GitHub Actions is optional; workflows belong in `.github/workflows/` only if the repo owner wants remote CI.
 
 **Environment:** `REPO_ROOT` (service repo root). `EXTERNAL_DOCS_DOMAIN` — optional hostname for third-party doc URLs that match the rogue `docs/<module>/` scan (for example `kubernetes.io` when code links to `https://kubernetes.io/docs/...`). Built-in exclusions also cover `https?://` URL contexts and `firebase.google.com/docs/`.
 
@@ -135,10 +149,10 @@ Run `scripts/verify-doc-hierarchy.sh self-test` after skill changes. Self-test b
 |---------------------|-------------|
 | `doc-hierarchy` | Schema reference; migration-complete signal definition |
 | `doc-hierarchy-upkeep` | Runs verify gates after Layer 1/2 edits on migration-complete repos |
-| `resolve-vars` | Default path map applies only after migration-complete signal |
+| `bootstrap-ai-playbook` | Default path map applies only after migration-complete signal |
 | `plans`, `execute-plan`, `learn`, `done`, `docs-branch` | Receive canonical paths written during Steps 5–6 |
 
 ## Related
 
 - [`doc-hierarchy`](../doc-hierarchy/SKILL.md), [`doc-hierarchy-upkeep`](../doc-hierarchy-upkeep/SKILL.md)
-- the `resolve-vars` skill, `plans`, `execute-plan`, `learn`, `docs-branch`, `done`
+- the `bootstrap-ai-playbook` skill, `plans`, `execute-plan`, `learn`, `docs-branch`, `done`

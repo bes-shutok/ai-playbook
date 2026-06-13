@@ -168,11 +168,17 @@ Review round: <REVIEW_ROUND>
 Base branch: <BASE_BRANCH>
 Head: current branch
 
-## Review Scope (enforce strictly)
+## Review Scope (two tiers)
 
 <REVIEW_SCOPE>
 
-Drop or mark `drop` any finding outside this scope.
+**Explicit must-fix** — always report valid findings on listed paths.
+
+**Plan-related extension** — for paths not listed, report a finding only when it is causally related to this plan (implements/completes a task, regression from plan work, wiring or docs implied by an explicit change, contradicts a contract the plan changed). Mark unrelated findings `drop` with a one-line reason — do not auto-drop plan-related findings just because the path was omitted from the plan.
+
+## Diff scope
+
+Branch review: `git diff <BASE_BRANCH>...HEAD` (all plan commits on the current branch). Do not limit review to the latest commit.
 
 ## Mode
 
@@ -221,23 +227,26 @@ Read and follow: ~/.agents/skills/receiving-code-review/SKILL.md
 Plan: <PLAN_PATH>
 Review doc: <REVIEW_DOC_PATH>
 
-## Review Scope (do not fix out-of-scope files)
+## Review Scope (two tiers)
 
 <REVIEW_SCOPE>
+
+Fix findings on **explicit must-fix** paths when valid. For unlisted paths, fix only when **plan-related** (same causal test as Code Review). Drop unrelated findings with a one-line reason — do not expand scope into opportunistic refactors or pre-existing unrelated bugs.
 
 ## Instructions
 
 1. Read all findings with Status `pending` in the review doc.
-2. Triage each: implement valid fixes, mark `drop` for false positives/out-of-scope, ask is not available — use technical judgment and note assumptions in the doc.
+2. Triage each using two-tier scope: fix valid findings on explicit must-fix paths; for unlisted paths, fix only when plan-related — mark `drop` for false positives or unrelated issues (one-line reason).
 3. Address Critical, High, and Medium findings first.
 4. Low findings: fix only when trivial; otherwise leave pending.
-5. Run validation after each root-cause fix:
+5. **Done bar:** Mark `done` only when the executable/canonical artifact named in the finding is fixed (script, monolithic bash block, wired call site). A reference-only snippet update while the runnable block stays stale → leave `pending`.
+6. Run validation after each root-cause fix:
 
 <VALIDATION_COMMANDS>
 
-6. Update the review doc: set addressed findings to `done`, false positives/out-of-scope to `drop` with a one-line reason; leave only validated unresolved items at `pending`.
-7. **Update execution log** at `<ADDRESS_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append — see agent-logs.md). On Step 3.3 relaunch within the same round R, Pass 2+ **must** be appended to `review-r<R>-receiving-code-review.log.md` without erasing Pass 1. Include triage decisions, pushback rationale, and full return payload.
-8. Do NOT commit — the orchestrator launches **Done (per review iteration)** (Step 3.4), then starts the next review round unless two consecutive clear review rounds have completed (`consecutive_clear_rounds >= 2`).
+7. Update the review doc: set addressed findings to `done`, false positives/out-of-scope to `drop` with a one-line reason; leave only validated unresolved items at `pending`.
+8. **Update execution log** at `<ADDRESS_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append — see agent-logs.md). On Step 3.3 relaunch within the same round R, Pass 2+ **must** be appended to `review-r<R>-receiving-code-review.log.md` without erasing Pass 1. Include triage decisions, pushback rationale, and full return payload.
+9. Do NOT commit — the orchestrator launches **Done (per review iteration)** (Step 3.4), then starts the next review round unless two consecutive clear review rounds have completed (`consecutive_clear_rounds >= 2`).
 
 ## Return format
 

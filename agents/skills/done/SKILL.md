@@ -37,8 +37,8 @@ Invoke the `docs-branch` skill now. It will:
 
 **After docs-branch completes, verify gitignored files are still on disk:**
 ```bash
-# At task start, invoke the `resolve-vars` skill to resolve gitignored doc paths; include common candidates:
-for p in docs/tmp docs/history/reviews docs/reviews docs/personal AGENTS.md CLAUDE.md GEMINI.md COPILOT.md; do
+# Read gitignored doc paths from .ai-playbook/facts.md TOML (using-skills Step 0); include common candidates:
+for p in docs/tmp docs/history/reviews docs/reviews docs/personal .ai-playbook/facts.md AGENTS.md CLAUDE.md GEMINI.md COPILOT.md; do
   [ -e "$p" ] && git check-ignore -q "$p" && echo "OK: $p" || true
 done
 ```
@@ -226,8 +226,8 @@ Do not push — these are local-only docs repositories.
 
 ## Integration Points
 
-### With `resolve-vars` skill
-Provider for `{tmp_dir}` and gitignored doc paths used in Step 2.1 (`docs-branch`). Invoke at task start before stash/sync operations.
+### With `bootstrap-ai-playbook` skill
+Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-skills` Step 0). This skill reads `{tmp_dir}` and other gitignored doc paths from that file for Step 2.1 (`docs-branch`).
 
 ### With `execute-plan` skill
 Invoked as a sub-agent after **each** completed plan task (per-task commit) and after **each** review/fix iteration (per-iteration commit). The orchestrator passes the plan path, task or review-round context, suggested commit subject, and **sub-agent log paths** under resolved `{tmp_dir}/execute-plan/<plan-slug>/`.

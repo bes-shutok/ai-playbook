@@ -1,6 +1,6 @@
 # User-level instructions (AGENTS.md)
 
-Cross-project engineering rules. **Source of truth:** `docs/AGENTS.md` in this repository (version-controlled). **Codex entrypoint:** `~/.codex/AGENTS.md` symlinked to that file. **Clone path** on your machine: `instructions_repo` in `~/.ai-playbook/facts.md` (see `docs/facts.md.example` for key names).
+Cross-project engineering rules. **Source of truth:** `docs/AGENTS.md` in this repository (version-controlled). **Codex entrypoint:** `~/.codex/AGENTS.md` symlinked to that file. **Clone path** on your machine: `instructions_repo` in `~/.ai-playbook/facts.md` (see `bootstrap-ai-playbook` skill for repo facts key names and format).
 
 **Companion paths (thin or symlink — not separate full copies):**
 - `ln -sf <instructions-repo>/docs/AGENTS.md ~/.codex/AGENTS.md`
@@ -41,7 +41,7 @@ If `~/.codex/AGENTS.md` is a regular file, back it up, then `ln -sf <instruction
 |------|---------------------|-------------------|
 | User + workspace | `docs/AGENTS.md` in this repo (this file) | `~/.ai-playbook/facts.md` (local only: identity, roots, `shared_docs_dir`, skill keys) |
 | Ownership | repo `AGENTS.md` | company or personal ownership facts when scope matches (keys in `user_facts_path`) |
-| Repo | repo `AGENTS.md` | `repo_facts_rel` in the current repo (typically `docs/facts.md`; no machine paths) |
+| Repo | repo `AGENTS.md` | `repo_facts_rel` in the current repo (typically `.ai-playbook/facts.md`; no machine paths) |
 
 At task start, load applicable `facts.md` files for the current repo scope before relying on path or account assumptions. **Cursor agents:** this is mandatory — see `load-facts-at-task-start` user rule; read `user_facts_path` before path-dependent work.
 
@@ -81,7 +81,7 @@ When a change spans tiers (for example JVM + company + project), update each can
 
 - **Global:** `~/.cursor/rules/global-user-instructions.mdc` `@`-references this file via `instructions_repo` (or `~/.codex/AGENTS.md` symlink).
 - **Per-repo:** repo `AGENTS.md` only for project deltas; do not duplicate user rules.
-- **Optional IDE hooks (Cursor):** `~/.cursor/hooks.json` may enforce shared git safety (`git reset --hard`, Co-authored-by trailers, force-push prompts) and the execute-plan manifest bootstrap contract (`manifest.md` must exist before plan-scoped edits when `{tmp_dir}/execute-plan/<PLAN_SLUG>/` exists). Hook wiring is IDE-specific; skill contracts stay in `execute-plan` / `agent-logs.md`.
+- **Optional IDE hooks (Cursor):** `~/.cursor/hooks.json` may enforce shared git safety (`git reset --hard`, Co-authored-by trailers, force-push prompts) and the execute-plan manifest bootstrap contract (`manifest.md` must exist before plan-scoped edits when `{tmp_dir}/execute-plan/<PLAN_SLUG>/` exists). Hook wiring is IDE-specific; skill contracts stay in `execute-plan/SKILL.md` and `agent-logs.md` (keep companion docs aligned with SKILL.md Documentation paths).
 
 ## Path References in Instruction and Documentation Files
 
@@ -102,13 +102,13 @@ Always use `~/` (home-relative) paths, never absolute `/Users/<name>/` paths, in
 - Plans go in `docs/history/plans/` on migrated company service repos (legacy: `docs/plans/`); see the `plans` skill for the mandatory format and lifecycle rules.
 - For company work projects on the doc hierarchy, design RFCs go in `docs/history/feature-notes/` (flat). Do not create or retain `docs/rfcs/` after migration.
 - Do not create plans in session state, `docs/tmp/`, or any other location.
-- Do not create plans in tool-default locations (`.claude/plans/`, `.opencode/plans/`, `.codex/`, `.cursor/`). Always write to the resolved `{plans_dir}` regardless of what the tool suggests.
+- Do not create plans in tool-default locations (`.claude/plans/`, `.opencode/plans/`, `.codex/`, `.cursor/`). Always write to the resolved `{plans_dir}` regardless of what the tool suggests. Read `{plans_dir}` from the opening TOML block in `.ai-playbook/facts.md` (`repo_facts_rel`); use legacy path examples only when keys are missing and on-disk layout confirms them.
 - Plans must follow TDD task ordering: RED (failing tests) before GREEN (implementation), refactor last.
 - When a plan modifies domain types in a large file (>1k lines), include a task for evaluating extraction to a dedicated domain module.
 
 ## Temporary Artifacts
 
-- Temporary artifacts (summaries, analyses, investigations, UAT records, worklogs) belong under resolved `{tmp_dir}` (typically `docs/tmp/` post-migration; legacy paths when exploration finds them). Resolve by invoking the `resolve-vars` skill at task start at task start. Promote or delete within the same feature cycle.
+- Temporary artifacts (summaries, analyses, investigations, UAT records, worklogs) belong under resolved `{tmp_dir}` (typically `docs/tmp/` post-migration; legacy paths when exploration finds them). Read `tmp_dir` from `.ai-playbook/facts.md` (`repo_facts_rel`). Promote or delete within the same feature cycle.
 - Before creating a new temporary artifact, check whether an existing canonical doc under `docs/` can be enriched instead.
 - Do not reference `{tmp_dir}` from other `docs/` files or code comments.
 
@@ -224,6 +224,7 @@ These rules apply to any repository where `docs/`, `AGENTS.md`, or `CLAUDE.md` a
 - Never run `git stash clear` in a repository where gitignored docs/instructions are preserved via stash — stash entries serve as backup transport across branch switches and a second backup layer alongside the `docs` shadow branch. Dropping them removes that redundancy.
 - When executing any multi-step bash script that involves branch switches and uses a shared variable (e.g. `RESTORE_TMP`), run all steps in a **single bash tool call**. Shell variables do not persist between separate tool calls; splitting the sequence causes temp paths to be empty in later calls, silently deleting files without restoring them.
 - For cross-platform line filtering in bash, use `grep -vE` rather than `sed -i`. macOS ships BSD `sed` where `\?` is a literal `?` (not zero-or-one quantifier), causing silent mis-filtering on macOS while working on Linux.
+- During an active **execute-plan** session, `{tmp_dir}/execute-plan/<plan-slug>/` holds implement/review logs the `done` sub-agent reads before `learn`. Before `docs-branch` sync, snapshot any existing `{tmp_dir}/execute-plan/<plan-slug>/` to a separate backup and restore it after sync completes; full `docs/tmp/` replace can delete working-tree session logs.
 
 ## External Source Archive Provenance And Freshness
 
@@ -241,7 +242,7 @@ Documentation files are self-contained by default. Referencing one document from
 
 ## Jira Task Context Ledger
 
-When Jira task context is needed for a feature (for example, to distinguish the primary ticket from parallel or follow-up stories), record the relevant ticket IDs and a one-line relevance summary under **Related Jira tasks** in the repo's `docs/facts.md` (`repo_facts_rel`). Use that section only for internal scoping clarity; do not cite `docs/facts.md` from RFCs, PR descriptions, or code comments. Any human-facing document that needs Jira context must restate the relevant ticket IDs inline.
+When Jira task context is needed for a feature (for example, to distinguish the primary ticket from parallel or follow-up stories), record the relevant ticket IDs and a one-line relevance summary under **Related Jira tasks** in the repo's `.ai-playbook/facts.md` (`repo_facts_rel`). Use that section only for internal scoping clarity; do not cite `.ai-playbook/facts.md` from RFCs, PR descriptions, or code comments. Any human-facing document that needs Jira context must restate the relevant ticket IDs inline.
 
 ## Guidelines and facts loading
 

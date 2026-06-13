@@ -1,6 +1,6 @@
 # Execute Plan — Sub-Agent Execution Logs
 
-Resolve `{tmp_dir}` by invoking the `resolve-vars` skill at task start at Phase 0. Sub-agents write durable logs under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` so each `done` invocation can run `learn` with context from the **immediately preceding worker step(s)** — not the orchestrator's chat summary, and not the full session history.
+Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase 0 (see `using-skills` Step 0; invoke `bootstrap-ai-playbook` only when Terms triggers fire). Sub-agents write durable logs under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` so each `done` invocation can run `learn` with context from the **immediately preceding worker step(s)** — not the orchestrator's chat summary, and not the full session history.
 
 ## Path convention
 

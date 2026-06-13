@@ -1,8 +1,11 @@
 /.idea/
 .DS_Store
 
-# Local facts override (use docs/facts.md.example as template)
+# Repo agent runtime dir at repo root only (bootstrap output; see `bootstrap-ai-playbook` skill)
+/.ai-playbook/
+# Legacy committed repo facts paths (deny accidental re-commit after migration)
 /docs/facts.md
+/docs/maintenance/facts.md
 /docs/reviews
 
 # Ephemeral session scratch (see docs/AGENTS.md)

@@ -5,7 +5,7 @@
 | Topic | Canonical file | Consumers link only |
 |-------|----------------|---------------------|
 | Team rationale, Layer 1/2/3 rules, maintenance model, PR checklist | [company-decisions.md](company-decisions.md) | `doc-hierarchy`, `doc-hierarchy-upkeep`, `instruction-templates` |
-| Target layout tree, skill family, migration-complete signal, precedence | [SKILL.md](SKILL.md) | `doc-hierarchy-migrate`, `resolve-vars` |
+| Target layout tree, skill family, migration-complete signal, precedence | [SKILL.md](SKILL.md) | `doc-hierarchy-migrate`, `bootstrap-ai-playbook`, `using-skills` Step 0 readers |
 | Classification outcomes, move/merge tables, Step 2 special cases (`examples/`, `reviews/`) | [migration-map.md](migration-map.md) | `doc-hierarchy-migrate` |
 | Paste templates (project-guidelines, AGENTS, README, architecture placeholder) | [instruction-templates.md](instruction-templates.md) | `doc-hierarchy-migrate` Step 5 |
 | Migration workflow steps, repair mode, execution contract | [../doc-hierarchy-migrate/SKILL.md](../doc-hierarchy-migrate/SKILL.md) | — |

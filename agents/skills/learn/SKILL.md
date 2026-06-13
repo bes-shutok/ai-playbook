@@ -129,7 +129,7 @@ When research is conducted via web search or other external sources:
 - Add Sources section at the end with URLs and dates
 
 **LLM examples vs canonical docs:**
-- Canonical docs = technical facts, best practices, comparisons (home per project spec — invoke the `resolve-vars` skill at task start)
+- Canonical docs = technical facts, best practices, comparisons (home per `.ai-playbook/facts.md` TOML and project guidelines)
 - LLM examples / playbooks = reasoning patterns, anti-patterns (resolve `caller_catalog`, `{tmp_dir}`, or project-documented example path — do not assume `docs/examples/`)
 - Examples file should reference main doc, not duplicate it
 
@@ -141,7 +141,7 @@ When research is conducted via web search or other external sources:
 
 ## Step 2: Placement Rules
 
-**First:** At task start, invoke the `resolve-vars` skill using its resolution order (`user_facts_path` keys, repo `AGENTS.md`, on-disk `project_guidelines_rel`, explore `docs/`). Use resolved paths for the rest of this run — do not invent layout.
+**First:** Read path keys from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Use resolved paths for the rest of this run — do not invent layout.
 
 ### Guideline file roles (resolve from facts keys only)
 
@@ -262,7 +262,7 @@ If you find a pattern where many lessons in one section all reference different 
 could be consolidated or whether the instruction section could be reorganized for better flow.
 
 ## Step 5: Module Layout and Skill Workflow Lessons
-- Module doc layout follows project resolution (`resolve-vars`): legacy `docs/<module>/`, flat `history/feature-notes/`, or architecture topics — do not impose a layout the project has not adopted.
+- Module doc layout follows project resolution (`.ai-playbook/facts.md` path keys and `doc-hierarchy`): legacy `docs/<module>/`, flat `history/feature-notes/`, or architecture topics — do not impose a layout the project has not adopted.
 - RFC / task tracker filenames follow project-guidelines or existing repo convention.
 - If move/rename is required, propose minimal change set and ask for consent before applying. On company services with legacy layout, suggest `doc-hierarchy-migrate` instead of ad-hoc moves.
 
@@ -383,5 +383,5 @@ Before finishing, verify:
 
 ## Integration Points
 
-### With `resolve-vars` skill
-Provider for documentation path resolution during lesson placement. Invoke at task start before resolving canonical doc homes or module layout targets.
+### With `bootstrap-ai-playbook` skill
+Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-skills` Step 0). This skill reads documentation path keys from that file during lesson placement.

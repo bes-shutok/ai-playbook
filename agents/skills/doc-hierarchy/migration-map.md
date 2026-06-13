@@ -59,7 +59,7 @@ No `examples/` folder in target schema. Classify per file; never bulk `git mv` t
 | `project-guidelines.md` | `maintenance/project-guidelines.md` |
 | `project-decisions.md` | `maintenance/project-decisions.md` |
 | `glossary.md` | `maintenance/glossary.md` |
-| `facts.md` | `maintenance/facts.md` |
+| `facts.md` (legacy root) | **Step 5b:** promote durable FACT bodies → Layer 2 `architecture/*.md`; index stubs → `.ai-playbook/facts.md`; `git rm` committed `maintenance/facts.md` if present |
 | `company-guidelines.md` | `maintenance/company-guidelines.md` |
 | Root wire-contract markdown (`api-for-*.md`, `*-sync*.md`, BFF/admin FE docs) | `maintenance/<kebab-name>.md` |
 | `examples/api-reference.md` (rogue `docs/examples/` or `docs/history/examples/`) | `maintenance/api-reference.md` — HTTP caller catalog when present; redact live credentials before commit |
@@ -108,11 +108,11 @@ After `examples/` disposition: fix path references in Step 6 (`verify-doc-hierar
 
 | Facts key | Path |
 |-----------|------|
-| `repo_facts_rel` | `docs/maintenance/facts.md` |
+| `repo_facts_rel` | `.ai-playbook/facts.md` (gitignored; bootstrap via `bootstrap-ai-playbook` when triggers fire) |
 | `project_guidelines_rel` | `docs/maintenance/project-guidelines.md` |
 | `company_guidelines_repo_mirror_rel` | `docs/maintenance/company-guidelines.md` (when mirror exists) |
 
-Update `user_facts_path` (resolve path from the `user_facts_path` key) when adopting hierarchy in a repo; document in repo `AGENTS.md`. Do not copy machine-specific paths from user facts into repo `docs/maintenance/facts.md`.
+Repo agent runtime (`.ai-playbook/`) is always gitignored. Bootstrap writes TOML path keys; consumers read via `using-skills` Step 0. Do not commit legacy maintenance facts as repo facts after Step 5b. Do not copy machine-specific paths from user facts into `.ai-playbook/facts.md`.
 
 ## Module-split `docs/<module>/` trees (any service)
 
