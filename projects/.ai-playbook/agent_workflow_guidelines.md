@@ -570,7 +570,7 @@ Before writing any documentation, PR description, or explanation that describes 
 
 38.2. If no canonical source is readily available, note uncertainty inline rather than stating the behavior as fact.
 
-## 39. Output Writing Style — No Em Dashes, Prefer Globish
+## 39. Output Writing Style: No Em Dashes, Prefer Globish
 
 When generating any text artifact (PR descriptions, READMEs, skill docs, commit messages, comments):
 

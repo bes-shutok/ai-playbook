@@ -5,7 +5,7 @@ description: >-
   architecture/maintenance by topic, Layer 3 history). Read-only reference for
   layout rules, path resolution, and migration completion signals. Use when
   asking what the doc layout is, where a doc type belongs, or whether a repo
-  has adopted the hierarchy. Trigger phrases — "doc hierarchy", "documentation
+  has adopted the hierarchy. Trigger phrases: "doc hierarchy", "documentation
   hierarchy", "service docs hierarchy", "docs layer". For migration execution use doc-hierarchy-migrate; for
   post-migration doc updates use doc-hierarchy-upkeep.
 ---
