@@ -5,7 +5,7 @@ description: Use this skill whenever the user wants to send, post, draft, or upd
 
 # Slack Message Skill
 
-**Writing:** Follow `agent_workflow_guidelines.md` §45 (plain English, globish-friendly).
+**Writing:** Follow `agent_workflow_guidelines.md` §39 (no em dashes) and §45 (plain English, globish-friendly). Scan every draft for `—` before preview or draft-save.
 
 ## Core workflow
 
@@ -73,6 +73,17 @@ Apply to every draft. Scan the final text before showing the preview.
 - **Internal engineering refs.** Product-facing Slack posts should not cite ADR numbers, plan filenames, or ticket-only context unless the audience uses them. Use endpoint names, user-visible behavior, and plain outcome language. Jira keys (e.g. `PROJ-1234`) are fine when the thread is already task-scoped.
 - **Minimal context.** Product or cross-team decision posts should open with the gap and the ask. Do not recap unrelated shipped work (e.g. a prior ticket's empty-state fix) unless it is required to understand the question.
 - **Symmetrical questions.** When a post has multiple product choices, give each question the same shape: short scenario, API or payload example when it helps, then labeled options `*A)*` / `*B)*` / `*C)*` with tradeoffs in one line each.
+
+## BI / data-team asks (cross-team)
+
+When the author investigated BI tables or schemas and asks BI/PJM for help:
+
+- **First person when the author did the work.** Use *I searched*, *I found*, *I could not find*; not *we audited* unless a team did it together.
+- **Avoid data-warehouse jargon** unless the reader uses it daily. Replace terms like *mart*, *baseline mart*, *cutover*, *delta*, *export shape* with plain words: *BI table*, *which table to use*, *last updated column*, *separate datasets*.
+- **Ask about source tables, columns, and reliability** (completeness, v1 vs v2, which row is canonical, whether `update_time` is maintained). Do **not** ask how BI should deliver files (CSV, S3, file count); export transport is the requester's problem unless BI owns delivery by policy.
+- **Missing fields:** give 3–4 examples with a one-line plain description of what the field means; link to a Confluence or doc section for the full list. Do not paste long tables in Slack.
+- **Search scope in P.S.:** list which DBs/clusters were checked and ask the reader to point to other stores (e.g. Redshift) if data might live elsewhere.
+- **Team signature tags** (e.g. `[EU-CRM-BE]`): add only when local facts or the user confirm the tag. Do not copy signatures from other people's messages.
 
 ## Editing existing messages
 

@@ -52,3 +52,9 @@ Additional review context for Java/Spring projects. Append to each sub-agent pro
 - Dependency versions: check for known CVEs in newly added dependencies.
 - Maven/Gradle plugin versions: verify compatibility with Java version.
 - Test scope: test utilities must use `test` scope, not `compile`.
+
+## Message-driven handlers (Spring Kafka)
+
+- **Framework defaults vs docs:** Before flagging a doc/code mismatch on broker or error-handler naming (DLT topic suffix, retry topic names), confirm the default for the dependency version on the classpath. Major-version upgrades often change suffixes and resolver behavior; stale ops docs or prior review threads may cite an older default.
+- **Caught exceptions vs container retry:** When a `@KafkaListener` catches exceptions inside a per-item loop, the method can return successfully and the container commits the offset without invoking `DefaultErrorHandler` retry/DLT. Narrow catches to expected domain outcomes; let infrastructure failures propagate unless idempotency makes full-message retry safe.
+- **Validation bounds vs persistence:** Inbound record validation (`@Valid`, Bean Validation) must fit the tightest downstream storage limit (column length, composite unique key size, lookup key width). Persistence overflow surfaces as a different exception type than `ConstraintViolationException` and may not follow the fast non-retryable DLT path.

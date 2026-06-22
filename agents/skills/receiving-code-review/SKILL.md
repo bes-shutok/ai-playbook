@@ -137,20 +137,20 @@ FOR multi-item feedback:
   4. Verify no regressions
 ```
 
-## Same-change-set scope for optional Low findings
+## Default: address all findings regardless of severity
 
-When a review finding is marked optional/Low but references files or classes already modified in the active branch or session, list the in-scope Low findings you plan to implement and ask the user for confirmation before acting.
+Address every review finding by default, including Low and optional ones, whether the file is in the active change set or a cross-cutting/new subsystem path. Do not ask for confirmation before implementing Low findings; just verify, implement, test, and report.
 
 ```
-IF finding severity is Low AND reviewer labels it "optional":
-  IF finding touches files already changed on this branch/session:
-    REPORT to user: list each in-scope Low finding and the proposed fix
-    WAIT for user confirmation before implementing
-  ELSE IF finding is cross-cutting or new subsystem:
-    PRESENT to user before deferring
+DEFAULT: address every finding (Critical/High/Medium/Low, in-scope or cross-cutting).
+SKIP only when one of these conditions holds:
+  - User explicitly asked to skip, defer, or "no Lows" / "Medium+ only" earlier in the session
+  - YAGNI applies (unused feature) -> push back per the YAGNI Check section
+  - Suggestion is technically incorrect for this codebase -> push back per the When To Push Back section
+  - Finding was already confirmed as `done` by prior code inspection
 ```
 
-"Optional" means lower delivery priority, not permission to skip when the diff is already open on those paths. But it also does not mean silent auto-implementation: report what you plan to fix and get a brief confirmation first.
+"Optional" or "Low" severity signals lower priority for the reviewer, not permission to defer action. If the fix is large or opens a new subsystem, say so briefly in the report but proceed unless a push-back condition above triggers. The Triage Decision Rule below still gates design-decision findings (architectural moves, refactors) - those remain ask-first regardless of severity.
 
 ## Triage Decision Rule
 

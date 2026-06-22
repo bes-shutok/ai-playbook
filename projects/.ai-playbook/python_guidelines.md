@@ -191,3 +191,120 @@ from myapp.submodule.parsing import _dedup_by_tx_key
 
 Rule: `__init__.py` should only re-export symbols listed in `__all__`. Private helpers
 must be imported directly from their defining submodule.
+
+## 10. Pytest Test Method Names Must Start with `test_`
+
+Pytest collects test functions and methods by name prefix only. Methods named after the
+behaviour they describe (for example `finds_funding_fee_event_with_timestamp`,
+`returns_empty_when_labels_missing`) without a `test_` prefix are silently skipped —
+pytest reports `0 collected` and the RED phase never executes, so a GREEN implementation
+can pass vacuously or a missing import can go undetected.
+
+```python
+# ❌ WRONG — pytest collects zero of these
+class TestDerivativesThScanner:
+    def finds_funding_fee_event_with_timestamp(self, tmp_path):
+        ...
+
+    def returns_empty_when_labels_missing(self):
+        ...
+```
+
+```python
+# ✅ CORRECT — every test method is prefixed
+class TestDerivativesThScanner:
+    def test_finds_funding_fee_event_with_timestamp(self, tmp_path):
+        ...
+
+    def test_returns_empty_when_labels_missing(self):
+        ...
+```
+
+When transcribing test names from a plan or pseudocode that uses descriptive non-prefixed
+names, prefix every method with `test_` at write time. After writing the first batch, run
+`uv run pytest <path> --collect-only` (or just `uv run pytest <path> -v`) and confirm the
+expected test count appears in the collection line before implementing.
+
+## 11. Build Tabular Test Rows with `csv.DictWriter`, Not Hand-Aligned String Literals
+
+When a test fixture needs a CSV with many columns (the Koinly TH export has 15+ columns),
+do not write the rows as inline string literals. Long single-line CSV rows exceed line-length
+linters (E501), are hard to modify when a column shifts, and invite column-count drift that
+python_guidelines §1 was written to prevent.
+
+```python
+# ❌ BRITTLE — long literal, E501 violations, hard to modify
+path.write_text(
+    "Date,Type,Tag,Sending Wallet,Sent Amount,Sent Currency,Receiving Wallet,Received Amount,Received Currency,Description\n"
+    "2025-01-24 20:00:00 UTC,crypto_withdrawal,Funding fee,ByBit,0.08838575,USDT,,,\n"
+)
+```
+
+```python
+# ✅ ROBUST — rows as dicts, header written once, csv handles quoting and alignment
+def _write_th_csv(path, rows):
+    with path.open("w", newline="") as f:
+        f.write("Transaction report 2025\n\n")  # Koinly preamble
+        fieldnames = ["Date", "Type", "Tag", "Sending Wallet", "Sent Amount",
+                      "Sent Currency", "Receiving Wallet", "Received Amount",
+                      "Received Currency", "Description"]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+```
+
+DictWriter guarantees every row matches the declared header (extra keys raise, missing
+keys are written empty), eliminates alignment-by-hand, and keeps each test row readable as
+a dict literal.
+
+## 12. Verify Pipeline Stage Ordering With monkeypatch Spies, Not Full Mocks
+
+When an integration test needs to assert that stage A runs before stage B before stage C in a multi-step pipeline (for example: validate → dedup → split), do not mock the stages themselves — that discards the real integration coverage and only proves the mocks were called in order. Instead, wrap each real stage with a thin monkeypatch spy that records the call order, then delegates to the original function.
+
+```python
+# ✅ Spy pattern — real stages run, call order is captured
+def test_dedup_runs_after_validation_before_split(monkeypatch):
+    call_order = []
+
+    def _spy_validate(name, fn):
+        def wrapper(*args, **kwargs):
+            call_order.append(name)
+            return fn(*args, **kwargs)
+        return wrapper
+
+    import tax_reporting.application.crypto_reporting as mod
+    from tax_reporting.application.crypto.derivatives_dedup import apply_derivatives_dedup
+
+    monkeypatch.setattr(
+        mod, "_validate_capital_entries_have_valid_countries",
+        _spy_validate("validate", mod._validate_capital_entries_have_valid_countries),
+    )
+    monkeypatch.setattr(
+        mod, "apply_derivatives_dedup",
+        _spy_validate("dedup", apply_derivatives_dedup),
+    )
+    monkeypatch.setattr(
+        mod, "_split_ogr_index",
+        _spy_validate("split", mod._split_ogr_index),
+    )
+
+    mod.load_koinly_crypto_report(...)  # real call with real fixture
+
+    assert call_order.index("validate") < call_order.index("dedup") < call_order.index("split")
+```
+
+**Why spies, not mocks:** A mock replaces the stage with a stub that returns canned data. If a future refactor moves the dedup call to a different module or renames the stage, the mock still "passes" because it never invokes the real code. A spy wraps the real function, so the test fails loudly if the wiring moves or the real stage raises.
+
+**When to use this pattern:**
+
+- The pipeline has three or more stages and the ORDER is a correctness invariant (not just "does each stage run").
+- You already have a fixture that exercises the full pipeline end-to-end.
+- The stages are module-level functions (or methods on an injectable dependency) that `monkeypatch.setattr` can reach.
+
+**When NOT to use it:**
+
+- The order is enforced by the language (sequential statements in a single function) — a unit test of that function already covers it.
+- The stages share mutable state that a spy would perturb (spy must be pure passthrough).
+
+**Anti-pattern:** Mocking `apply_derivatives_dedup` with `MagicMock(return_value=[])`. The test asserts the mock was called, but the real dedup never runs. A bug that makes the real dedup raise on the fixture (which would surface as a pipeline failure in production) is invisible to the test.

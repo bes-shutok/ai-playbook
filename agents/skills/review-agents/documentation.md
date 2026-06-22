@@ -42,6 +42,14 @@ If changes relate to an existing plan:
 - Update plan status if needed
 - Note which plan items this change addresses
 
+## Module README vs deployable README scope
+
+When a doc finding covers how modules are composed or wired (Maven dependencies, Modulith `::api` boundaries, `ModuleBoundariesTest`, which module imports which):
+
+- Prefer the **deployable/composition README** (e.g. `app/README.md`) as the comment target or fix location.
+- Module READMEs should describe what that module owns and exposes (public API packages, domain boundaries), not duplicate composition mechanics already documented at the app layer.
+- If a module README bullet repeats a Module boundaries section plus Modulith syntax, suggest removing the duplicate from the module README rather than expanding it.
+
 ## Module high-level tasks (implementation vs docs drift)
 
 When review finds current code behavior that module docs, BFF contracts, or high-level tasks do not capture (narrower read path than another API, missing edge case, accepted tech debt):

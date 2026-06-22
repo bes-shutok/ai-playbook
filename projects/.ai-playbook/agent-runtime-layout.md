@@ -12,7 +12,7 @@ This document is the canonical source of truth for how agent-specific instructio
 Use it when:
 - deciding where a skill like `$learn` actually comes from,
 - mirroring local agent assets into this repository,
-- documenting how Claude Code, Codex, Copilot, or OpenCode load reusable instructions.
+- documenting how Claude Code, Codex, Copilot, Gemini CLI, or OpenCode load reusable instructions.
 
 ## Verified Runtime Sources
 ### Shared Agent Skill Registry
@@ -36,7 +36,7 @@ Use it when:
 
 ### Codex
 - Runtime source: `~/.codex/skills`
-- Mirror target: none — Codex manages its own skills autonomously; they are not vendored into this repository.
+- Mirror target: none; Codex manages its own skills autonomously and they are not vendored into this repository.
 
 ### OpenCode
 - Runtime source: `~/.opencode/command`
@@ -54,27 +54,73 @@ Use it when:
 
 ### Claude Code (global instructions)
 - Canonical source: same as Codex
-- Runtime entrypoint: `~/.claude/CLAUDE.md` (regular file with `@<instructions-repo>/docs/AGENTS.md` — not a symlink)
+- Runtime entrypoint: `~/.claude/CLAUDE.md` (regular file with `@<instructions-repo>/docs/AGENTS.md`; not a symlink)
 
 ### Cursor (global instructions)
 - Canonical source: same as Codex
 - Runtime entrypoint: `~/.cursor/rules/global-user-instructions.mdc` (`@` reference)
+- Optional hooks: versioned under `cursor/hooks/` in this repo; install to `~/.cursor/hooks/` per `cursor/hooks/README.md`
+
+### Gemini CLI and Antigravity (Google)
+- Canonical skill source: `~/.agents/skills` (shared registry; symlink to `instructions_repo/agents/skills`).
+- **Gemini CLI** discovers `~/.agents/skills/` natively. Do **not** add a redundant `~/.gemini/skills` symlink; it duplicates the same registry with no benefit.
+- **Antigravity** global skills: `~/.gemini/config/skills/` ([official docs](https://antigravity.google/docs/skills)). Antigravity does **not** scan `~/.agents/skills/` on its own.
+- **Wire Antigravity with one whole-directory symlink** to the shared registry (edit skills once):
+
+```bash
+ln -sfn ~/.agents/skills ~/.gemini/config/skills
+```
+
+- **Whole folder vs per-skill symlinks:** symlink the **directory**, not each skill inside it. Per-skill symlinks under Antigravity paths are silently ignored ([vercel-labs/skills#633](https://github.com/vercel-labs/skills/issues/633)). A single directory symlink exposes real skill subfolders through normal path traversal.
+- **Fallback if Antigravity still misses skills:** Settings → Customizations → Skill Custom Paths → add the **absolute** path to `~/.agents/skills` (tilde may not expand). Restart IDE; open a fresh conversation.
+- Runtime entrypoint (global instructions): `~/.gemini/GEMINI.md` (regular file with `@<instructions-repo>/docs/AGENTS.md`; supports `@` imports). **Not** a symlink: `/memory add` appends to the global file.
+- Observed local folder: `~/.gemini/` (`config/` for Antigravity skills + MCP; session state under `antigravity/`)
 
 ### Facts files (local, not in public AGENTS.md)
-- User + workspace: `user_facts_path` facts key → `~/.ai-playbook/facts.md` — identity, GitHub accounts, workspace roots, **guideline canonical keys**, skill keys, brag paths, instruction entrypoints. **Load first every task** (Cursor: `load-facts-at-task-start.mdc`).
+- User + workspace: `user_facts_path` facts key → `~/.ai-playbook/facts.md`; identity, GitHub accounts, workspace roots, **guideline canonical keys**, skill **path** keys, brag paths, instruction entrypoints. **Not** portable workflow policy or numeric thresholds (those live in skill `SKILL.md`; see `agent_workflow_guidelines.md` §50). **Load first every task** (Cursor: `load-facts-at-task-start.mdc`).
 - Ownership: personal-projects and company-work trees (`personal_ownership_docs_dir`, `company_ownership_docs_dir` keys): each scope's `facts.md`, `dictionary.md`, and **`company_guidelines_master`** / runbooks where applicable
 - Repo: `repo_facts_rel` in the current repository (typically `.ai-playbook/facts.md`; see `bootstrap-ai-playbook` skill for format)
 
 ### Guideline masters vs repo mirrors (facts keys)
-- Cross-project: `shared_docs_dir` — canonical JVM/coding guideline files
-- Company: `company_guidelines_master` — canonical; repo `company_guidelines_repo_mirror_rel` is sync-only
-- Project: `project_guidelines_rel` in the current repo — canonical for that repo
+- Cross-project: `shared_docs_dir`; canonical JVM/coding guideline files
+- Company: `company_guidelines_master`; canonical; repo `company_guidelines_repo_mirror_rel` is sync-only
+- Project: `project_guidelines_rel` in the current repo; canonical for that repo
 
 ## Entrypoint verification
 
-Canonical user rules live in `<instructions_repo>/docs/AGENTS.md`. Codex, Claude Code, and Copilot load that file through home-directory entrypoints (`~/.codex/AGENTS.md`, `~/.claude/CLAUDE.md`, `~/.copilot/copilot-instructions.md`), not by reading the repo path during a normal session.
+Canonical user rules live in `<instructions_repo>/docs/AGENTS.md`. Codex, Claude Code, Copilot, and Gemini CLI load that file through home-directory entrypoints (`~/.codex/AGENTS.md`, `~/.claude/CLAUDE.md`, `~/.copilot/copilot-instructions.md`, `~/.gemini/GEMINI.md`), not by reading the repo path during a normal session.
 
 **Run the bash checks in `docs/AGENTS.md` (Verify wiring)** after migration or machine setup. That section is the source of truth because it ships in the same document agents actually consume via the symlinks above.
+
+### Wire Gemini CLI and Antigravity (instructions + skills)
+
+```bash
+# Set INSTRUCTIONS_REPO from ~/.ai-playbook/facts.md (key: instructions_repo)
+CANONICAL="${INSTRUCTIONS_REPO:?}/docs/AGENTS.md"
+
+# Shared skill registry (canonical edit path)
+test -L ~/.agents/skills || ln -sfn "${INSTRUCTIONS_REPO}/agents/skills" ~/.agents/skills
+
+# Antigravity vendor folder: whole-directory symlink (NOT per-skill links inside)
+ln -sfn ~/.agents/skills ~/.gemini/config/skills        # Antigravity global
+
+# Global instructions: thin @ import (do NOT symlink; /memory add appends here)
+cat > ~/.gemini/GEMINI.md <<EOF
+# User instructions (Gemini CLI)
+
+Canonical cross-project rules: \`${CANONICAL}\` (edit there; version-controlled).
+
+@${CANONICAL}
+EOF
+
+# Verify
+grep -q '@' ~/.gemini/GEMINI.md
+test -L ~/.agents/skills
+test ! -e ~/.gemini/skills
+test -L ~/.gemini/config/skills
+test -f ~/.gemini/config/skills/bootstrap-ai-playbook/SKILL.md
+python3 -c "import os; assert os.path.realpath(os.path.expanduser('~/.gemini/config/skills')) == os.path.realpath(os.path.expanduser('~/.agents/skills'))"
+```
 
 ## Mirror Rules
 - Verify the actual on-disk runtime source before documenting an agent import path.
@@ -86,7 +132,9 @@ Canonical user rules live in `<instructions_repo>/docs/AGENTS.md`. Codex, Claude
 
 ## Local agent config (`~/.ai-playbook/`)
 
-- **`facts.md`:** identity, workspace roots, `shared_docs_dir`, skill keys, brag paths, entrypoints (never commit).
+- **`facts.md`:** identity, workspace roots, `shared_docs_dir`, skill keys, brag paths, entrypoints, MCP auth **path keys** (never commit).
+- **`credentials/`:** local OAuth backups for Slack/Atlassian MCP (`mcp-cursor.json`, `mcp-atlassian-mcp-remote/`). Mode `700`/`600`. Never commit.
+- **`scripts/`:** local helpers (e.g. `sync-mcp-credentials.sh`, `scan-public-hygiene.sh`, `check-instruction-size.sh`). Paths referenced from facts; portable policy stays in skills.
 - **`README.md`:** overview of facts + guideline symlink layout (never commit).
 
 ## Shared project guidelines (`projects/.ai-playbook/`)
@@ -121,8 +169,8 @@ rg -n -i '/Users/|<employer-domain>|api[_-]?key|password|secret' projects/.ai-pl
 ## Refresh Commands
 ```bash
 rsync -a --delete --exclude '.DS_Store' ~/.agents/skills/ ./agents/skills/
-# claude/skills is a symlink to ../agents/skills — no separate sync needed
-# codex/skills is managed by Codex autonomously — not vendored here
+# claude/skills is a symlink to ../agents/skills; no separate sync needed
+# codex/skills is managed by Codex autonomously; not vendored here
 
 # Company ownership docs mirror (optional; resolve company_projects_root from ~/.ai-playbook/facts.md)
 # rsync -a --exclude '.DS_Store' --exclude 'tmp/' <company-projects-root>/.ai-playbook/ ./projects/.ai-playbook/company/
@@ -131,6 +179,6 @@ rsync -a --delete --exclude '.DS_Store' ~/.agents/skills/ ./agents/skills/
 ## Related Files
 - `README.md`: overview and usage index for this repository.
 - `AGENTS.md` (repo root): guidance for maintaining **this** command-spec repository only.
-- `docs/AGENTS.md`: version-controlled **user-level** cross-project instructions (canonical source for Codex, Claude Code, Copilot CLI, Cursor).
+- `docs/AGENTS.md`: version-controlled **user-level** cross-project instructions (canonical source for Codex, Claude Code, Copilot CLI, Gemini CLI, Cursor).
 - `bootstrap-ai-playbook` skill: creates/updates repo `.ai-playbook/facts.md` (`repo_facts_rel`; no machine paths in repo).
 - `projects/.ai-playbook/`: canonical shared cross-project guidelines and this runtime-layout doc; runtime directory symlink at `~/Projects/.ai-playbook/`.

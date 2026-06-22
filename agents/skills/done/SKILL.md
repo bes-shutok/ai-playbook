@@ -11,7 +11,7 @@ description: >
 
 Run `/learn` to capture lessons from this session, then commit all uncommitted changes across all repositories touched during the session.
 
-**Workflow continuity:** This skill executes as a continuous sequence of steps (1 → 2 → 2.5 → 2.6 → 2.7 → 3 → 4 → 5). After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification.
+**Workflow continuity:** This skill executes as a continuous sequence of steps (1 → 2 → 2.5 → 2.6 → 2.7 → 2.75 → 2.76 → 2.8 → 3 → 4 → 5). After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification.
 
 ## Configuration (from facts document)
 
@@ -42,6 +42,21 @@ for p in docs/tmp docs/history/reviews docs/reviews docs/personal .ai-playbook/f
   [ -e "$p" ] && git check-ignore -q "$p" && echo "OK: $p" || true
 done
 ```
+
+**Verify untracked WIP survived** (docs-branch snapshots `git ls-files --others --exclude-standard` before orphan branch creation):
+
+```bash
+# Before docs-branch (optional but recommended):
+git ls-files --others --exclude-standard > /tmp/docs-branch-untracked-manifest.$$
+# After docs-branch:
+while IFS= read -r f; do
+  [ -e "$f" ] || echo "MISSING untracked: $f"
+done < /tmp/docs-branch-untracked-manifest.$$
+rm -f /tmp/docs-branch-untracked-manifest.$$
+```
+
+If any path is missing, restore from docs-branch `UNTRACKED_BACKUP` or Cursor Local History before committing.
+
 If any gitignored path that existed before docs-branch is now missing, restore it immediately from the `docs` orphan branch before proceeding:
 ```bash
 git checkout refs/heads/docs -- <missing-path>
@@ -132,11 +147,66 @@ Before committing, scan all uncommitted changes (including untracked files) for 
 - Replace personal paths with facts-document references or generic placeholders (e.g., `<your-org>.atlassian.net`, `~/Projects/<project>/`)
 - Replace internal names with generic equivalents
 - Move credentials to `.env` or facts documents (never commit them)
-- If the information is in a skill file, externalize it to the Configuration/facts section
+- If the information is in a skill file, externalize **machine-specific** values to facts documents; keep **portable policy constants and workflow thresholds** in the skill body (see `learn` Step 2 — Facts vs skill configuration; `agent_workflow_guidelines.md` §50).
 
 **When committing this repository (`skills_repo_path`) or vendored skills:** run `public_hygiene_scan_script` from user facts at the instructions repo root and fix all failures before staging.
 
 **Do NOT commit until all sensitive data is resolved.**
+
+## Step 2.75: Unused import scan (all touched source files)
+
+Before committing, verify every changed or new **source file** from this session has no unused-import diagnostics (or the language equivalent: `using`, `require`, type-only imports, and so on).
+
+1. List touched paths from unstaged, staged, and untracked diffs:
+   ```bash
+   { git diff --name-only; git diff --cached --name-only; git ls-files --others --exclude-standard; } | sort -u
+   ```
+2. From that list, keep paths the IDE or language server can lint. Exclude obvious non-source artifacts (markdown, plain YAML/JSON config, lockfiles, images, binaries, generated stubs under build output). When unsure whether a path is lintable, include it — `ReadLints` skips what it cannot analyze.
+3. Run IDE or language-server diagnostics on **every remaining touched path** (for example Cursor `ReadLints` per file or batched by directory). Fix every unused-import-class diagnostic before staging. Common cases:
+   - **Java / Kotlin:** unused `import` or static import (including static imports shadowed by instance calls such as `lenient().doAnswer()` vs `import static … doAnswer`).
+   - **Python:** unused `import` / `from … import`.
+   - **TypeScript / JavaScript:** unused value or type-only `import`.
+   - **C#:** unused `using`.
+   - **Go / Rust:** unused imports (still run diagnostics even when `go build` / `cargo check` also enforces).
+4. When no linter is configured for a touched language, eyeball new or changed import blocks in the diff and remove lines with no references in the file.
+5. Re-run diagnostics after fixes until clean on all touched lintable source paths.
+
+Do not stage source files for commit while unused-import diagnostics remain on any touched path from this session.
+
+**After Step 2.75 completes, immediately continue to Step 2.76.**
+
+## Step 2.76: No em dash scan (touched prose files)
+
+Before committing, scan touched prose and instruction files for em dash (U+2014). Policy: `agent_workflow_guidelines.md` §39.
+
+1. From the repo root (or each repo you will commit), run:
+   ```bash
+   "${CHECK_NO_EM_DASH_SCRIPT:-${HOME}/.ai-playbook/scripts/check-no-em-dash.sh}" touched
+   ```
+2. The script scans `*.md`, `*.mdc`, and instruction entrypoint filenames among touched paths. Fix every reported line: use a comma, colon, semicolon, period, or parentheses instead of `—`.
+3. Re-run until exit code 0.
+
+Do not stage prose or instruction files while the scan fails.
+
+**After Step 2.76 completes, immediately continue to Step 2.8.**
+
+## Step 2.8: Instruction Size Gate (before commit)
+
+When uncommitted changes touch always-loaded instruction entrypoints (`AGENTS.md`, `CLAUDE.md`, and others listed in `user_facts_path` when present), verify they still fit the context budget after learn compaction.
+
+**Budget:** **30,720 bytes** per instruction entrypoint (same constant as learn Step 6.5).
+
+1. From the repo root, run:
+   ```bash
+   "${HOME}/.ai-playbook/scripts/check-instruction-size.sh" gate
+   ```
+   (Override script path only for local testing via `INSTRUCTION_SIZE_CHECK_SCRIPT`.)
+2. **Gate behavior:** exits non-zero when an instruction file exceeds the budget **and** has uncommitted changes. Grandfathered over-budget files with no pending edits do not block unrelated commits.
+3. On failure: return to learn Step 6.5 — compact hybrid bullets to cross-references, move infrequent rules to skills, then re-run **gate** before staging instruction files.
+
+Do not stage instruction entrypoints for commit while **gate** fails.
+
+**After Step 2.8 completes, immediately continue to Step 3.**
 
 ## Step 3: Commit Uncommitted Changes
 
@@ -244,5 +314,5 @@ Invoked as a sub-agent after **each** completed plan task (per-task commit) and 
 - Never add `Co-Authored-By:` or `Co-authored-by:` trailers or use `git commit --trailer` for agent attribution. See user `AGENTS.md` (Git Commit Trailer Policy). Disable automatic agent attribution in IDE settings when present.
 - Never use `--no-verify`.
 - Never commit secrets, PII files (`.env`, credential files), or personal/org-specific information into public repositories.
-- Never hardcode personal paths, org domains, or project-specific identifiers in skill files — externalize to facts documents.
+- Never hardcode personal paths, org domains, or project-specific identifiers in skill files — externalize those to facts documents. Portable workflow policy and numeric thresholds stay in the skill (see `learn` Step 2 — Facts vs skill configuration).
 - If the branch has no story key, use a plain descriptive commit message on branches such as `main` or `master`; ask only when the repository convention is unclear.

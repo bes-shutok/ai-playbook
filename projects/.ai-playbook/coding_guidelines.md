@@ -18,7 +18,7 @@ Keeping them separate creates:
 - Duplicated arrange/act code that drifts independently
 - A misleading appearance that the two behaviors are independently testable
 - A stub-without-verify smell: one test stubs a collaborator but never verifies it; the
-  other verifies it but duplicates all the setup — split tests conceal that both
+  other verifies it but duplicates all the setup; split tests conceal that both
   assertions belong to a single invocation
 
 **Exception:** keep tests separate when they require genuinely different setups (different
@@ -29,7 +29,7 @@ exercises a distinct code path.
 
 Wrap only the specific operation that can throw the expected exception in `try`. When multiple operations share one `try` block, an exception from a different operation is caught, producing a misleading error message and triggering fallback logic that was not intended for that failure.
 
-**Example:** A cache read with a fallback — if the fallback call is inside the same `try` as the cache read, a fallback exception fires the catch block, logs "cache failed" (wrong), and retries the fallback a second time.
+**Example:** A cache read with a fallback: if the fallback call is inside the same `try` as the cache read, a fallback exception fires the catch block, logs "cache failed" (wrong), and retries the fallback a second time.
 
 Each distinct failure mode should have its own narrowly-scoped try-catch.
 
@@ -37,13 +37,13 @@ Each distinct failure mode should have its own narrowly-scoped try-catch.
 
 Load test results, throughput numbers, latency observations, and fan-out ratios measured in non-production environments (UAT, staging, STG, dev) are not representative of production capacity. Key reasons:
 
-- **Rule / data volume differs** — STG typically has far fewer configured rules, users, or records than PROD. A fan-out ratio of 13× on STG tells you nothing about the PROD multiplier.
-- **Traffic is synthetic** — GoReplay replays, JMeter scripts, and similar tools produce artificial traffic patterns that don't match real user behaviour distributions.
-- **Infrastructure differs** — resource limits, pod counts, DB instance sizes, and network topology are usually smaller in non-prod environments.
+- **Rule / data volume differs**: STG typically has far fewer configured rules, users, or records than PROD. A fan-out ratio of 13× on STG tells you nothing about the PROD multiplier.
+- **Traffic is synthetic**: GoReplay replays, JMeter scripts, and similar tools produce artificial traffic patterns that don't match real user behaviour distributions.
+- **Infrastructure differs**: resource limits, pod counts, DB instance sizes, and network topology are usually smaller in non-prod environments.
 
 When documenting load test findings:
 - Always label observed numbers with the environment and the traffic source (e.g. "STG, GoReplay replay of March 28 capture").
-- Do not embed test-env-derived formulas (e.g. `~300 × ~13 ≈ ~4k`) in canonical capacity docs — they imply generality that doesn't exist.
+- Do not embed test-env-derived formulas (e.g. `~300 × ~13 ≈ ~4k`) in canonical capacity docs; they imply generality that doesn't exist.
 - If numbers must be recorded for historical reference, place them in a clearly scoped section (e.g. "STG-only / artificial load") and explicitly state they are not production guidance.
 
 ## 4. Safe Sentinel for Absent Optional Fields
@@ -56,7 +56,7 @@ parsing and arithmetic treat the absent field as a no-op.
 ## 5. Data-Loss Conditions Must Be Logged at Warning Level or Higher
 
 When a matching, aggregation, or transformation step discards or fails to match data,
-the condition must be logged at `warning` level or higher — never `debug`. Data-loss
+the condition must be logged at `warning` level or higher, never `debug`. Data-loss
 conditions are always production-visible and must not be hidden behind debug-level
 filtering.
 
@@ -77,7 +77,7 @@ startup misconfiguration as a transient infrastructure error.
 Resolve the config value **before** entering the try-catch block so that config validation
 failures propagate immediately.
 
-## 8. Numbered Enum Slot Reservation — Use Explicit Entries
+## 8. Numbered Enum Slot Reservation: Use Explicit Entries
 
 When reserving a gap in a numbered enum (e.g. `METRICS0007` reserved for an upcoming feature
 while `METRICS0008` already exists), add the entry as an actual (unused) enum constant rather
@@ -101,22 +101,22 @@ across many rows.
 ## 10. Hoist Batch-Invariant Checks Outside Loops
 
 When a flag, config value, or feature-gate is the same for every item in a batch, compute it
-once before the loop — not inside the loop body. This avoids redundant work and makes the
+once before the loop, not inside the loop body. This avoids redundant work and makes the
 invariant intent explicit.
 
 ## 11. Use Lifecycle-Specific Names for Fields That Hold Different Life Phases
 
 When a class holds two or more fields that represent the same kind of entity at different
-lifecycle phases, name each field after its specific phase — not a relative or positional term.
+lifecycle phases, name each field after its specific phase, not a relative or positional term.
 
 Relative terms like "current" and "latest" feel interchangeable and force the reader to trace
 all usages to understand which phase each field holds.
 
-**Bad:** `currentRevisionId` vs `latestRevisionId` — both sound like "the most recent one".
+**Bad:** `currentRevisionId` vs `latestRevisionId`: both sound like "the most recent one".
 Reading `archiveCurrentRevisionIfNeeded()` right before activating `latestRevisionId` looks
 contradictory until you trace both field meanings.
 
-**Good:** `activeRevisionId` (published) vs `draftRevisionId` (pending activation) — the phase
+**Good:** `activeRevisionId` (published) vs `draftRevisionId` (pending activation): the phase
 is encoded in the name; the flow reads as "archive the active one, promote the draft".
 
 ## 12. PII Redaction Before Committing Personal Docs to Shared Repos
@@ -147,10 +147,264 @@ When testing conditional logic that uses threshold comparisons (`>=`, `<=`, `>`)
 - Zero-basis review thresholds: test exactly `threshold` value
 - Pagination limits: test exactly `page_size` items
 
-The boundary value itself is where the bug most often lives — one direction wrong and the classification flips.
+The boundary value itself is where the bug most often lives: one direction wrong and the classification flips.
 
 ## 16. Use Exact Equality for Known Counts
 
 When the expected count of items is known (not just "at least one"), use exact equality (`==`) in assertions rather than inequalities (`>=`, `<=`).
 
 **Why:** `assert len(entries) >= 1` accepts any positive count, hiding duplications and partial failures. If the test scenario produces exactly one entry, the assertion should be `assert len(entries) == 1` so that unexpected extras or splits fail visibly.
+
+## 17. Root-Cause Principle Catalog (Recall by Problem Shape)
+
+This catalog is **finalized** by the `generalize audit` (see the `generalize` skill). The
+anchor sets below are the authoritative illustrative subset drawn from the audit; the
+complete per-repo lesson map lives in each repo's `principle-index.md`. Shape triggers may
+be revised by a future audit run, but the family set (A to H) is stable.
+
+The rest of this file (clauses #1 to #16) is incident-anchored: a rule is recalled by the code location
+or the incident surface that produced it. That helps prevent the same bug in the same place, but it
+under-helps when the same root cause reappears in a new module under a different surface, because no
+cross-ref points there and the headline does not match. This catalog re-anchors recurring lessons to the
+underlying root-cause *family* and to a *shape trigger* (the situation, independent of file or module,
+that should make you suspect the family). Recall then works by problem shape, not by where the last bug
+bit.
+
+**How to use it.** When you capture a lesson (via the `learn` skill's Generalization pass) or review one,
+name its family from #18 onward and write a shape trigger that a reader in a different module would
+recognize. Use the `generalize` skill's `map` mode for a single incident and its `audit` mode to cluster
+a whole corpus. The catalog is the family authority; the concrete incident is always kept as the witness
+(a bare precept with no failure mode is unfalsifiable and forgettable).
+
+**Family map (A to H).** Each family below links to its section:
+
+- A. Equivalence-class coverage: a passing test pins one cell; fix the class, not the cell. See #18.
+- B. Error-policy propagation: a centralized fallible op must carry each call site's raise/degrade policy. See #19.
+- C. Representation: sentinel vs None vs exception: each carries distinct recoverability; do not conflate. See #20.
+- D. Single source of truth: two authoritative copies drift; one source, the rest are views. See #21.
+- E. Temporal / ordering invariants: earlier events cannot consume later state; recompute preconditions after each input change. See #22.
+- F. Layering / dependency direction: dependencies point one way; logic lives at the layer that owns it. See #23.
+- G. Data-loss observability: unmatched or dropped records must surface; never silent discard. See #24.
+- H. Verify the real thing, not the abstraction: do not trust names, summaries, or mocks; trace actual data and behavior. See #25.
+
+Inline anchors in each family are an illustrative subset; see each repo's `principle-index.md` for the
+full lesson map per family.
+
+## 18. Equivalence-class coverage (A)
+
+A passing test pins one cell of an N-dimensional input space; the fix belongs at the partition class,
+not at the cell the test happened to exercise.
+
+**Failure signature:** A bug is fixed with a test for the specific failing case, yet a sibling case that
+shares the same partition (different caller, different branch of the same condition, different config
+arm) still fails silently. The regression suite grows, but coverage of the *class* does not.
+
+**Shape trigger:** You just added a test or guard after extracting a shared helper, centralizing a policy,
+or widening a conditional to cover more callers/branches. Ask: of the equivalence classes that now flow
+through the changed code (each caller, each raise-vs-degrade arm, each value partition), is there a test
+that would fail if the implementation were wrong for *that* class specifically? If two classes could be
+wrong independently, they need independent assertions, not one OR'd case.
+
+**Example:** A shared helper normalizes a value and raises on malformed input. It is extracted from three
+callers: one that must raise hard, one that must warn-and-degrade, and one that must skip the row. A test
+is written for the raising caller and passes. The warn-and-degrade caller, with a different exception
+policy, still swallows the malformed value and produces a wrong output, because the centralized helper
+was not taught each caller's policy and no test exercised the degrade arm. The class is "centralized
+fallible op across callers with distinct policies"; the cell is "the one caller the test pinned."
+(Illustrative anchors: tax-reporting #91, #111, #117, #119, #125, #133, #136.)
+
+**Exception:** When the changed code genuinely has exactly one equivalence class (a single caller, a
+single branch, a total function with no partition), one test suffices. The family bites when N > 1.
+
+## 19. Error-policy propagation (B)
+
+A centralized fallible operation must carry each call site's raise-vs-degrade policy; a single hard-coded
+policy in the shared code serves only the call site whose policy happens to match.
+
+**Failure signature:** Reusing a validated security or parsing pattern (symlink rejection, size limit,
+rate lookup, parse) at a new call site fixes the *primary* failure but leaks the original site's error
+handling, which is calibrated to that site's cost of silent failure. The new site either raises where it
+should degrade, or degrades where it should raise.
+
+**Shape trigger:** You are centralizing a fallible op (rate lookup, parse, resolve, guard) that more than
+one caller now invokes, or you are reusing an existing validation/security pattern at a new location.
+For each caller, ask: what is the cost of a silent failure here, and does the centralized code's raise or
+degrade match that cost? If the cost differs across callers, the policy is a per-call argument, not a
+constant in the helper.
+
+**Example:** A rate-lookup helper returns a sentinel on failure, and one caller multiplies that sentinel
+through and raises an uncaught type error at a different layer, because the helper's "return None on
+miss" policy was right for the original caller (which checked the result) but wrong for the new caller
+(which used the result unconditionally). The fix is not to make the helper raise; it is to make the
+policy explicit per call site (raise inside the per-row boundary that catches it, or degrade explicitly)
+so each caller's recoverability is honored. (Illustrative anchors: tax-reporting #9, #105, #124, #130,
+#135.)
+
+**Exception:** When every caller shares the same recoverability and the same cost of silent failure, a
+single hard-coded policy in the shared code is correct and a per-call argument is over-engineering.
+
+## 20. Representation: sentinel vs None vs exception (C)
+
+The representation chosen for "this value is absent or invalid" (a sentinel value, a null/None, or a
+thrown exception) carries a distinct recoverability contract; conflating them produces wrong downstream
+behavior that looks like a valid result.
+
+**Failure signature:** A field that can be absent, unknown, or invalid is represented one way internally
+(e.g. a sentinel string) but rendered or consumed as if it were a different representation (None, an
+empty string, a thrown exception). The output either crashes on an unexpected type, or worse, renders a
+plausible-but-wrong value with no signal that anything was missing.
+
+**Shape trigger:** You are choosing how to represent an absent/unknown/invalid value, or you are passing
+such a value across a boundary (internal resolver to user-facing output, one layer to another, a string
+format that interpolates it). Ask three questions: is this representation recoverable by the receiver
+(caught exception vs uncaught), is it distinguishable from a legitimate value (sentinel vs bare empty),
+and does it degrade explicitly when the field is reachable via a warn-only path? If the answers differ
+across boundaries, convert at the boundary rather than letting the internal representation leak.
+
+**Example:** An internal resolver marks an unresolved origin with a review-sentinel string. Downstream, a
+user-facing cell interpolates that sentinel into prose, so the review-required flag is silently rendered
+as if it were a real value. The fix is to convert: the sentinel is internal-only; the user-facing field
+uses the raw input value (or an explicit "unknown" token), and any f-string that interpolates a possibly
+null field degrades explicitly rather than printing "None". (Illustrative anchors:
+tax-reporting #113, #114, #131.)
+
+**Exception:** Within a single layer where one representation is used consistently and never crosses a
+boundary, no conversion is needed. The family bites at the boundary or when the null-path is reachable.
+
+## 21. Single source of truth (D)
+
+When the same fact is authoritative in two places, the two copies drift; designate one source and make
+the rest views (or recompute), never a second independent authority.
+
+**Failure signature:** A total, a derived value, or a classification exists in two places that are each
+treated as authoritative. One is updated (the merge applies a fix, an override corrects a row); the other
+is not. The two disagree, and downstream code trusts the stale copy.
+
+**Shape trigger:** You are about to write a second authoritative copy of a fact that already has a home
+(a duplicate key in an index, a derived total that is also summed elsewhere, an override applied before
+an aggregation that recomputes the same field). Ask: is there already one source for this value, and is
+the new copy a view over it or a second authority? If two authorities exist, one must be demoted to a
+view, or the duplicate-key case must sum rather than overwrite.
+
+**Example:** An aggregation sums FIFO lots into per-disposal totals, and a separate override report also
+holds the per-disposal total. The override is applied, but the aggregation recomputes from the lots
+afterward and clobbers the override, because both were authoritative for the same field. The fix is
+ordering plus demotion: the override is the authority and is applied before aggregation, and aggregation
+treats the overridden total as the source of truth rather than recomputing it. (Illustrative anchors:
+tax-reporting #59, #75, #77, #85, #103.)
+
+**Exception:** A genuinely independent second copy that is never consumed as authoritative (a cache that
+is always validated against the source, a display snapshot) does not drift dangerously. The family bites
+when both copies are read as the answer.
+
+## 22. Temporal / ordering invariants (E)
+
+An earlier event cannot consume state that only a later event establishes; when inputs change the
+preconditions, recompute them after each change rather than once at the start.
+
+**Failure signature:** Logic computed a precondition (a tolerance, a candidate set, a parsed value) once,
+then mutated the inputs (shrank a window, removed matched items, advanced a cursor), and reused the stale
+precondition against the new state. The result admits an invalid candidate, or rejects a valid one, or
+consumes a second value from a now-exhausted source.
+
+**Shape trigger:** You are writing a multi-phase or sliding-window matcher, a loop that mutates a shared
+structure, or code that parses a value inside a try block and then derives a second value from it
+outside the block. Ask: after each mutation, are the preconditions (window tolerance, candidate count,
+parsed object, cursor position) still valid for the remaining state? If the mutation changes what would
+be admissible, recompute before the next step. Prefer an ordered structure (a deque popped once per
+event) over a dict keyed by a non-unique tuple, which silently overwrites on collision.
+
+**Example:** A two-pointer sliding-window matcher computes a tolerance proportional to the current window
+size, then shrinks the window from the left but reuses the stale tolerance, so the shrunken window admits
+a candidate that is invalid for its new size. Or: phase 1 of a matcher removes exact matches, and phase 2
+brute-force-checks the fallback against the original full set rather than the post-phase-1 remainder, so
+its feasibility prediction is wrong because the candidate count changed. The fix in both is to recompute
+the precondition after every state change. (Illustrative anchors: tax-reporting #106, #107,
+#108, #110.)
+
+**Exception:** When preconditions are genuinely invariant across all mutations (a constant tolerance, a
+monotonically growing candidate set), recomputing is redundant. The family bites when the mutation can
+change admissibility.
+
+## 23. Layering / dependency direction (F)
+
+Dependencies point one way; logic that depends on a lower layer's detail does not belong at a higher
+layer, and a lower layer must not reach up for a constant or type owned above it.
+
+**Failure signature:** An orchestration layer accumulates domain logic until it is both the coordinator
+and the rule book, or a lower layer imports a constant or type from a higher layer and creates a cycle.
+The module grows past its size budget, or an extraction fails with a circular import.
+
+**Shape trigger:** You are adding logic to an orchestration layer, extracting a helper to a new module,
+or splitting responsibilities. Ask: does this logic belong to the layer that owns the data or rule it
+operates on, or has it accreted in the orchestrator by convenience? And does the extracted module depend
+only on lower layers, or does it reach back up for a constant from its source module? Move domain logic
+to a dedicated service when coordination grows; resolve constants downward.
+
+**Example:** A thin orchestrator grows past its size budget because each new rule was added there for
+convenience. Extracting the rules into a dedicated service reveals that the service needs a constant
+still owned by the orchestrator, so a naive extraction creates a circular import. The fix is to move the
+constant to the layer that owns it (downward) so the extracted service depends only on lower layers, and
+to keep the orchestrator as coordination only. (Illustrative anchors: tax-reporting #28, #49,
+#86, #87, #88, #121.)
+
+**Exception:** A genuinely cross-cutting concern (logging, telemetry) that is intentionally allowed to
+appear at every layer does not violate directionality. The family bites when domain rules or owned
+constants flow the wrong way.
+
+## 24. Data-loss observability (G)
+
+When a matching, aggregation, dedup, or transformation step drops or fails to match a record, the drop
+must surface visibly; a silent discard is a data-loss bug even when the program exits zero.
+
+**Failure signature:** Records that should have been matched, paired, or carried through are absent from
+the output, and nothing in the logs at warning or above explains where they went. The output looks
+complete and valid; it is not.
+
+**Shape trigger:** You are writing or reusing a matcher (FIFO pairing, key join), a dedup step, a
+filter-before-aggregation, or any guard that reads a manifest or patterns file. Ask: for every input
+record that is not carried to the output, is there an explicit fallback and a warning? And for every
+guard that depends on a file (a manifest, a patterns list), does it fail closed when the file is absent
+(a missing grep target exits non-zero, so a naive "cmd and echo BAD or echo GOOD" reports GOOD exactly
+when the guard cannot run)? Matched-target counts should warn when one source event matches more than one
+target item, to surface amount collisions without blocking splits.
+
+**Example:** A matcher pairs source events to target items by a key tuple, and unmatched source events
+are simply not emitted, with no warning. Or a hygiene guard runs "grep -f patterns && echo BAD || echo
+GOOD", but the patterns file is gitignored and absent in CI, so grep exits non-zero and the guard prints
+GOOD, a false pass, exactly when it cannot run. The fix is an explicit fallback for every unmatched
+record logged at warning or higher, and a fail-closed guard that distinguishes "could not run" from
+"ran clean". (Illustrative anchors: tax-reporting #40, #51, #73, #102, #126.)
+
+**Exception:** A drop that is intentional and documented by the domain (a materiality filter, a known
+suppression) does not need a warning, provided the suppression is itself visible elsewhere (a stated
+threshold, a logged count). The family bites when the drop is silent and unintentional.
+
+## 25. Verify the real thing, not the abstraction (H)
+
+Do not trust names, summaries, mocks, or plan pseudocode; trace the actual data from source to output
+and confirm the behavior against the real implementation.
+
+**Failure signature:** A claim about production code (a field's semantics, a file path, a line number, a
+function's return shape, an enumeration's cases) is asserted from a name, a docstring, or a plan's
+pseudocode, and the assertion is wrong. A test passes against a mock that does not match the real
+collaborator, or a plan task is built on a field-name conflation that the real data contradicts.
+
+**Shape trigger:** You are about to assert that something is "handled correctly", write a plan task that
+claims a fact about production code, or trust a summary (a docstring, a headline, a reviewer's gloss).
+Code inspection alone is insufficient. Ask: have I traced the actual data from the source to the output,
+and have I read the function's implementation (not just its name) to learn what patterns it really
+supports? For plan pseudocode that compares two same-named fields across objects, trace the fixture to
+confirm the two names denote the same economic quantity before implementing. For an enumeration claimed
+as N-case, count the implemented branches.
+
+**Example:** A plan compares two fields by name across two domain objects and assumes they are the same
+quantity, but the objects name two different economic values that happen to share a label, so the
+comparison is meaningless. Or a test verifies "YES/NO" rendering against a flag the fixture sets via a
+nested object, but the real renderer reads a different field, so the test passes against a mock and the
+production path is untested. The fix is a data trace: read the implementation, set the fixture fields to
+different-but-realistic values so a conflation fails visibly, and assert against the real collaborator.
+(Illustrative anchors: tax-reporting #71, #72, #99, #100, #101, #116, #120, #123, #132.)
+
+**Exception:** A purely structural claim (a file exists, a function is exported) can be settled by
+inspection alone. The family bites for any claim about semantics, behavior, or data identity.

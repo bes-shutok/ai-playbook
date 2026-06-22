@@ -211,6 +211,20 @@ Update the manifest when Phase 0 completes. See [agent-logs.md](agent-logs.md) f
 
 **Hard gate:** The parent agent must **not** edit production or test files listed in the plan's `Files:` sections until Step 0.4 completes **and** the user has chosen execute-plan (explicit trigger or plan-path gate option 1).
 
+### Step 0.4b — Stale plan-path checkpoint (doc-hierarchy migration)
+
+Before Step 1.1, when the repo carries a [migration-complete signal](../doc-hierarchy/SKILL.md#migration-complete-signal) **and** the plan was authored before that migration (check the plan's authoring commit against the migration commit, or simply grep the plan body), verify the plan's **literal embedded paths** still resolve against the current tree.
+
+Why: a doc-hierarchy migration moves whole subtrees (`docs/<x>/` -> `docs/maintenance/<x>/`, `docs/plans/` -> `docs/history/plans/`, `docs/reviews/` -> `docs/history/reviews/`, etc.). A plan written before the migration keeps the old prefixes in its task `Files:` lists, prose code-path literals (e.g. `_REPOSITORY_ROOT / "docs" / "tax" / ...`), and its `## Validation Commands` grep targets. Executing it untranslated has two silent failure modes: sub-agents write to non-existent old locations, and the plan's own validation commands grep against nothing (false-pass).
+
+Check:
+
+1. `grep -nE 'docs/(tax|domain|plans|personal|reviews)/' <plan>` (adapt the prefix alternation to the migration's actual moved subtrees).
+2. For each stale hit, translate to the migrated location. Also rewrite segmented code-path literals (`"docs" / "tax"` -> `"docs" / "maintenance" / "tax"`) so they match the authoritative source path, not just the prose.
+3. Re-run the grep until clean, then run the plan's `## Validation Commands` once to confirm targets resolve.
+
+This is a pre-Phase-1 plan-maintenance pass (its own commit, not one of the plan's tasks) so per-task commits stay clean. Skip on repos without the migration-complete signal, or when the grep returns clean (plan post-dates the migration). See `development_lessons.md` in the affected repo for the concrete incident this checkpoint codifies.
+
 ## Configuration (from facts document)
 
 | Key | Purpose | Fallback |

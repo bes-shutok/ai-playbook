@@ -11,7 +11,7 @@ description: Capture concrete lessons from task communication and update the doc
 - Canonical document: long-lived source of truth under `docs/`.
 - Temporary artifact: summary/review/analysis/note/draft/worklog with short-lived value.
 - Enforceable LLM rule: a concise do/do-not instruction that prevents repeat mistakes.
-- Facts document: a local-only file providing environment-specific values (paths, domains). This skill references keys from the user's facts documents — see the project or shared `facts.md` for values. Key used: `shared_docs_dir` (cross-project guidelines directory).
+- Facts document: a local-only file providing **machine- and environment-specific** values (paths, accounts, domains, repo path keys). **Not** for portable workflow policy, numeric thresholds, or skill behavior; those belong in the owning skill's `SKILL.md`. This skill reads facts keys for path resolution, see `user_facts_path` and repo `repo_facts_rel`.
 
 ## When to Use
 Use this skill when asked to:
@@ -20,7 +20,7 @@ Use this skill when asked to:
 - update repository docs or instruction rules from lessons learned,
 - consolidate duplicated documentation.
 
-Keep this skill scoped to documentation/instruction corpus updates. Do not use it to trigger product code or contract refactors. Do not commit changes — committing is the `done` skill's responsibility.
+Keep this skill scoped to documentation/instruction corpus updates. Do not use it to trigger product code or contract refactors. Do not commit changes; committing is the `done` skill's responsibility.
 
 ## Goal
 In one run:
@@ -47,7 +47,7 @@ Classify each lesson as exactly one:
 - LLM-only example/playbook
 - Temporary artifact
 
-**Important: style and wording corrections are lessons too.** If a user corrects the tone, phrasing, vocabulary, or formatting of generated output (e.g. "remove long dashes", "use simpler words", "prefer globish", "use API contract not wire contract"), treat it as a lesson and capture it as a skill rule — not just apply it to the current artifact and move on. Vocabulary replacements that apply across projects go in `agent_workflow_guidelines.md` §45.2; recurring workspace terms go in the relevant `dictionary.md` or repo glossary (`docs/maintenance/glossary.md` after migration; legacy `docs/glossary.md`).
+**Important: style and wording corrections are lessons too.** If a user corrects the tone, phrasing, vocabulary, or formatting of generated output (e.g. "remove long dashes", "use simpler words", "prefer globish", "use API contract not wire contract"), treat it as a lesson and capture it as a skill rule, not just apply it to the current artifact and move on. Vocabulary replacements that apply across projects go in `agent_workflow_guidelines.md` §45.2; recurring workspace terms go in the relevant `dictionary.md` or repo glossary (`docs/maintenance/glossary.md` after migration; legacy `docs/glossary.md`).
 
 ### Source-check self-audit
 When the user corrects a factual detail or asks what could have been learned by digging deeper, explicitly ask:
@@ -61,10 +61,11 @@ If the answer is yes, capture the deeper verification rule, not only the correct
 Before writing any lesson to its final destination, apply a generalization pass:
 
 1. **Identify the abstract principle** behind the specific incident. Ask: "What is the underlying pattern, independent of this particular technology, file, or module?"
+1b. **Name the root-cause family and the shape trigger.** Identify which family in the principle catalog (`coding_guidelines.md` #17+) this incident belongs to, and write the *shape trigger*: the situation (independent of this file/module) that should make a future reader suspect this family. If no family fits, propose one to the catalog rather than leaving the lesson unanchored. See the `generalize` skill (`../generalize/SKILL.md`) for the map procedure.
 2. **State the general rule first**, then add the specific instance as a concrete example. The rule should remain correct even if the specific tool, framework, or module changes.
-3. **Check whether the generalized rule already exists** in canonical docs or instruction files. If it does, add only the missing concrete example — do not create a duplicate rule.
+3. **Check whether the generalized rule already exists** in canonical docs or instruction files, and whether an existing same-family lesson already covers this shape. If either holds, add only the missing witness and cross-link rather than creating a near-duplicate; do not create a duplicate rule.
 4. **Decide the scope**: after generalizing, assess whether the rule is truly universal or still carries domain-specific assumptions. Apply this test:
-   - **Shared canonical (cross-project docs directory)**: Would this rule be correct and useful in *any* project — a Kotlin microservice, a Python data pipeline, a frontend app? If the rule mentions FIFO matching, batch aggregation, CSV parsing, report generation, or similar domain concepts, it is likely too specific for shared docs even after generalization. Resolve the shared docs path from the user's facts document (key: `shared_docs_dir`).
+   - **Shared canonical (cross-project docs directory)**: Would this rule be correct and useful in *any* project, such as a Kotlin microservice, a Python data pipeline, or a frontend app? If the rule mentions FIFO matching, batch aggregation, CSV parsing, report generation, or similar domain concepts, it is likely too specific for shared docs even after generalization. Resolve the shared docs path from the user's facts document (key: `shared_docs_dir`).
    - **Project-level instruction (repo `CLAUDE.md`/`AGENTS.md`) or project docs (`docs/`)**: The rule is a reusable principle within this project but depends on domain context (financial calculations, data matching, tax reporting). Write it as a general principle with repo-specific examples, and keep it in the project.
    - **Module-level**: The rule is genuinely specific to one module's quirks. Keep it module-scoped but still phrase it as a reusable principle for that module rather than a one-off incident report.
 5. **Place accordingly**: write the full text at the chosen scope. If the rule goes to shared canonical docs, reduce the project instruction to a cross-reference. If it stays project-level, write it directly in the project instruction or docs.
@@ -73,11 +74,11 @@ Before writing any lesson to its final destination, apply a generalization pass:
 Example:
 - **Too specific**: "Excel column headers in the crypto gains sheet should say 'Quantity' instead of 'Amount'"
 - **Generalized (shared scope)**: "User-facing output labels (column headers, API field names, report section titles) should use self-explanatory terminology, not terse names inherited from upstream source formats." → applies to any project, any output surface → place in `coding_guidelines.md`.
-- **Generalized but project-scoped**: "Post-aggregation validation must run after all groups are accumulated, not per-row." → sounds general but assumes batch row processing with mid-accumulation state — only relevant in data-pipeline projects → keep in project instruction as full text, do not elevate to `coding_guidelines.md`.
+- **Generalized but project-scoped**: "Post-aggregation validation must run after all groups are accumulated, not per-row." → sounds general but assumes batch row processing with mid-accumulation state, so only relevant in data-pipeline projects → keep in project instruction as full text, do not elevate to `coding_guidelines.md`.
 
 ### Anti-pattern: premature dismissal as "already covered"
 Before discarding a candidate lesson because an existing rule seems to cover it,
-verify that the **specific failure mode** from this session is addressed — not
+verify that the **specific failure mode** from this session is addressed, not
 just the general topic. Common missed distinctions:
 - **Policy vs methodology**: an existing rule says *what* to do (e.g. "don't
   commit formatting-only files") but the lesson is about *how* to do it reliably
@@ -98,11 +99,11 @@ When `.ralphex/progress/` exists in the current project directory:
 
 1. Read the 5 most recent `*.txt` files from `.ralphex/progress/` (by modification time).
 2. For each log, extract recurring patterns:
-   - **Rate-limit hits** — phase where the limit was hit (task/review/automation), frequency, reset window noted in the log.
-   - **Review-phase warnings** — `first review pass did not complete cleanly` (non-fatal; flag if frequent).
-   - **Already-done detection** — agent found work pre-completed in a prior commit; note if it caused repeated plan runs.
-   - **Environment/tool gaps** — tool not found inside container (Maven, Python, etc.) during a phase that assumed it was available.
-   - **Automated review loop failures** — external review parse or exit errors.
+   - **Rate-limit hits**: phase where the limit was hit (task/review/automation), frequency, reset window noted in the log.
+   - **Review-phase warnings**: `first review pass did not complete cleanly` (non-fatal; flag if frequent).
+   - **Already-done detection**: agent found work pre-completed in a prior commit; note if it caused repeated plan runs.
+   - **Environment/tool gaps**: tool not found inside container (Maven, Python, etc.) during a phase that assumed it was available.
+   - **Automated review loop failures**: external review parse or exit errors.
 3. Classify each extracted pattern using the same Step 1 categories (human guidance, module knowledge, LLM rule, or temporary).
 4. Feed classified patterns into the placement workflow (Steps 2–6) alongside lessons from communication.
 
@@ -130,7 +131,7 @@ When research is conducted via web search or other external sources:
 
 **LLM examples vs canonical docs:**
 - Canonical docs = technical facts, best practices, comparisons (home per `.ai-playbook/facts.md` TOML and project guidelines)
-- LLM examples / playbooks = reasoning patterns, anti-patterns (resolve `caller_catalog`, `{tmp_dir}`, or project-documented example path — do not assume `docs/examples/`)
+- LLM examples / playbooks = reasoning patterns, anti-patterns (resolve `caller_catalog`, `{tmp_dir}`, or project-documented example path; do not assume `docs/examples/`)
 - Examples file should reference main doc, not duplicate it
 
 **When to create new research docs:**
@@ -141,7 +142,7 @@ When research is conducted via web search or other external sources:
 
 ## Step 2: Placement Rules
 
-**First:** Read path keys from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Use resolved paths for the rest of this run — do not invent layout.
+**First:** Read path keys from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Use resolved paths for the rest of this run; do not invent layout.
 
 ### Guideline file roles (resolve from facts keys only)
 
@@ -151,20 +152,36 @@ At learn start, read `user_facts_path`. Skills must **not** hardcode machine pat
 |------|-----------|-----------|
 | Cross-project JVM/coding | `shared_docs_dir` + filename | Universal or JVM/Spring rule |
 | Company master | `company_guidelines_master` | Cross-repo company convention |
-| Company repo mirror | `company_guidelines_repo_mirror_rel` | Sync only — after master edit; never canonical |
+| Company repo mirror | `company_guidelines_repo_mirror_rel` | Sync only: after master edit; never canonical |
 | Project (current repo) | `project_guidelines_rel` | Repo stack/domain rule |
 
-**Company rule workflow:** edit `company_guidelines_master` first, then sync mirrors in affected company repos. **Multi-tier generalization** (JVM + company + project) updates each canonical home — not the repo mirror alone.
+**Company rule workflow:** edit `company_guidelines_master` first, then sync mirrors in affected company repos. **Multi-tier generalization** (JVM + company + project) updates each canonical home, not the repo mirror alone.
+
+### Facts vs skill configuration (required before adding keys or constants)
+
+Use this split when capturing lessons or extending agent automation:
+
+| Belongs in **facts** (`user_facts_path`, ownership facts, repo `repo_facts_rel`) | Belongs in **skill** (`SKILL.md` for the owning workflow) |
+|-----------------------------------------------------------------------------------|-------------------------------------------------------------|
+| Machine paths and workspace roots | Workflow steps, gates, and completion criteria |
+| GitHub accounts, domains, employer-specific identifiers | Numeric policy constants (byte budgets, loop limits, timeouts) |
+| Repo path keys (`plans_dir`, `tmp_dir`, `project_guidelines_rel`) | Placement ladders and qualification gates for that skill |
+| Local-only script locations that vary by machine | Default script **behavior** and mode names (`check`, `gate`) |
+| Hygiene deny-pattern files (local regex lists) | When to invoke a script and how to interpret exit codes |
+
+**Do not** add facts keys for portable policy the skill already owns (for example instruction byte budgets; define the number in `learn` / `done` Step text, not in `user_facts_path`). **Do not** duplicate skill workflow rules in facts.
+
+When a user corrects "that should live in the skill, not facts", treat it as a **skill-scope** lesson: update the owning skill and `agent_workflow_guidelines.md` §50 if the split was unclear; do not re-home the constant into facts under another key name.
 
 ### Temporary artifacts
 - Temporary artifacts belong under resolved `{tmp_dir}` (typically `docs/tmp/` when present).
 - Do not create session scratch outside `{tmp_dir}` unless project-guidelines documents another gitignored scratch root.
 - By end of run, delete temporary artifacts or promote them into canonical docs.
-- Resolved `{proposals_dir}` is durable pre-canonical review — not temporary; do not move/delete there unless the user asks.
+- Resolved `{proposals_dir}` is durable pre-canonical review, not temporary; do not move/delete there unless the user asks.
 - Canonical exceptions (never treat as temporary): paths the project marks as durable in `project_guidelines_rel` or `AGENTS.md`.
 
 ### BEST_PRACTICES scope
-Only place content in the project best-practices doc (resolve path — often `docs/maintenance/best-practices.md` or legacy `docs/BEST_PRACTICES.md`) if it is:
+Only place content in the project best-practices doc (resolve path, often `docs/maintenance/best-practices.md` or legacy `docs/BEST_PRACTICES.md`) if it is:
 - understandable without system internals
 - useful to humans outside incident context
 - not LLM-reasoning correction text
@@ -172,16 +189,16 @@ Only place content in the project best-practices doc (resolve path — often `do
 - not module/subsystem specific
 
 ### Module/system knowledge
-- Internal behavior details belong in the **canonical home** documented by the project (`docs/architecture/<topic>.md`, `docs/maintenance/<topic>.md` after migration — per resolution).
+- Internal behavior details belong in the **canonical home** documented by the project (`docs/architecture/<topic>.md`, `docs/maintenance/<topic>.md` after migration, per resolution).
 - On **company services** with migration-complete signal ([`doc-hierarchy`](../doc-hierarchy/SKILL.md)): do **not** create new `docs/<module>/` or `docs/domain/` trees; route to architecture topics or `maintenance/`.
-- Before migration-complete: legacy `docs/<module>/` may still exist for reads only — do not extend module-split trees; suggest `doc-hierarchy-migrate`.
+- Before migration-complete: legacy `docs/<module>/` may still exist for reads only; do not extend module-split trees; suggest `doc-hierarchy-migrate`.
 - Prefer extending existing canonical docs.
 - If no suitable canonical doc exists, create one in the layer/folder the project hierarchy specifies; if undocumented, ask the user or suggest updating `project_guidelines_rel`.
 - Never place module internals in human best-practices docs.
 
 ### LLM examples/playbooks
 - Place LLM-only examples in the project-resolved path (`caller_catalog`, `{tmp_dir}`).
-- On company services **after** migration-complete: do **not** create new files under `docs/examples/` — merge into `caller_catalog` or use `{tmp_dir}`.
+- On company services **after** migration-complete: do **not** create new files under `docs/examples/`; merge into `caller_catalog` or use `{tmp_dir}`.
 - Before migration-complete: legacy `docs/examples/<topic>.md` only when exploration confirms the repo still uses that layout.
 - Split by module/domain so only relevant context is loaded.
 - Every LLM example file must start with: `LLM examples - not human documentation`.
@@ -206,10 +223,11 @@ Only place content in the project best-practices doc (resolve path — often `do
 
 ## Step 3: LLM Rule Qualification Gate
 Before adding any rule, enforce all checks:
-1. Rule vs fact: must prescribe/forbid behavior.
-2. Generalization: must apply to multiple future cases.
-3. Preventive value: removing it should clearly increase risk.
-4. Actionability: must say what to do or avoid.
+1. Rule vs fact: must prescribe/forbid behavior, not store a path, account, or environment value.
+2. Facts vs skill: portable thresholds and workflow policy belong in the owning skill, not a new facts key.
+3. Generalization: must apply to multiple future cases.
+4. Preventive value: removing it should clearly increase risk.
+5. Actionability: must say what to do or avoid.
 
 If a candidate fails:
 - rewrite once into a concise rule
@@ -230,7 +248,7 @@ Required outcomes:
 Topic-sibling update rule:
 - When placing new content in any document, **scan all other docs in the repo** (`docs/`, instruction files, READMEs) for documents that already cover the same topic or a parent/sibling concept.
 - If a sibling document exists (e.g., `docs/shell-functions.md` covers agent selection and you are adding a new agent-selection feature to `AGENTS.md`), update **both** documents in the same pass.
-- Do not rely on cross-reference checks in later steps to catch this — the content must be placed in all relevant documents during the initial placement pass.
+- Do not rely on cross-reference checks in later steps to catch this; the content must be placed in all relevant documents during the initial placement pass.
 - Practical technique: after identifying the placement target, run `grep -rl "<topic keyword>"` across the repo to find sibling documents before writing.
 
 Intra-document requirements:
@@ -244,9 +262,9 @@ After placing a lesson in the project-resolved development-lessons path (for exa
 
 **Process:**
 1. Identify which instruction section the lesson relates to.
-2. Find the best location within that section — group with related rules for context.
+2. Find the best location within that section, grouped with related rules for context.
 3. Add a concise cross-reference to the resolved lesson doc path.
-4. If the lesson introduces a new domain concept, update the matching **architecture** topic (for example `domain-model.md`) or `maintenance/<topic>.md` — not `docs/domain/` or `docs/<module>/` on migration-complete company services.
+4. If the lesson introduces a new domain concept, update the matching **architecture** topic (for example `domain-model.md`) or `maintenance/<topic>.md`, not `docs/domain/` or `docs/<module>/` on migration-complete company services.
 
 **Why this matters:** The instruction files are always loaded during tasks, but `development_lessons.md`
 is loaded only when explicitly mentioned. Without cross-references, a lesson may exist in the corpus but never be
@@ -257,12 +275,12 @@ constraints section because that's where agents work with derivatives reporting.
 should be referenced near decision points and configuration rules.
 
 **Topic-sibling check:** When adding a cross-reference, scan nearby rules for the same topic domain.
-If multiple rules reference the same lesson, that's good — it reinforces the lesson's importance.
+If multiple rules reference the same lesson, that's good; it reinforces the lesson's importance.
 If you find a pattern where many lessons in one section all reference different docs, consider whether the lesson
 could be consolidated or whether the instruction section could be reorganized for better flow.
 
 ## Step 5: Module Layout and Skill Workflow Lessons
-- Module doc layout follows project resolution (`.ai-playbook/facts.md` path keys and `doc-hierarchy`): legacy `docs/<module>/`, flat `history/feature-notes/`, or architecture topics — do not impose a layout the project has not adopted.
+- Module doc layout follows project resolution (`.ai-playbook/facts.md` path keys and `doc-hierarchy`): legacy `docs/<module>/`, flat `history/feature-notes/`, or architecture topics; do not impose a layout the project has not adopted.
 - RFC / task tracker filenames follow project-guidelines or existing repo convention.
 - If move/rename is required, propose minimal change set and ask for consent before applying. On company services with legacy layout, suggest `doc-hierarchy-migrate` instead of ad-hoc moves.
 
@@ -270,7 +288,7 @@ For lessons about a skill's workflow/style or output/content requirements:
 - update the owning skill's `SKILL.md`
 - add an example/playbook only in the project-resolved example path when one is needed to demonstrate the rule
 - do not treat rewriting generated artifacts as the primary fix
-- do **not** place these in resolved `project_guidelines_rel` / company mirror paths (`docs/maintenance/project-guidelines.md`, `docs/maintenance/company-guidelines.md` after migration), or instruction files — those are for project engineering conventions, not skill behavior
+- do **not** place these in resolved `project_guidelines_rel` / company mirror paths (`docs/maintenance/project-guidelines.md`, `docs/maintenance/company-guidelines.md` after migration), or instruction files; those are for project engineering conventions, not skill behavior
 - edit skills at `~/.agents/skills/` (runtime source; `~/.claude/skills` resolves to the same tree when symlinked)
 
 **Skill-scope detection:** When a lesson explicitly mentions a skill by name or describes a workflow that clearly belongs to a skill (e.g., "plans must investigate...", "execute-plan should...", "review feedback requires..."), detect this as a skill-scope lesson. Apply dual placement:
@@ -324,10 +342,23 @@ When a skill's output was **corrected, retracted, downgraded, or significantly r
 **Self-application**: this rule applies to the learn skill itself. If a lesson extracted by learn is later found to be mis-placed, mis-scoped, or incorrectly generalized, that is a learn-skill output correction and should be fed back into this section's placement/generalization logic.
 
 ## Step 6: Instruction File Updates
-Update instruction rules in three sections only:
-1. Reusable engineering rules (Java/Kotlin ecosystem)
-2. Repository style and conventions
-3. Repository constraints
+
+Update instruction rules only in the repo’s existing instruction sections (typical names: reusable engineering rules, repository style and conventions, repository constraints; exact headings vary by repo).
+
+### Instruction placement ladder (required before any edit)
+
+Resolve canonical homes from `user_facts_path` keys; never hardcode language, stack, or tool names in this ladder.
+
+| Scope | Canonical home (facts key or path) | Always-loaded instruction file |
+|-------|-----------------------------------|--------------------------------|
+| Cross-project universal | file under `shared_docs_dir` (for example `coding_guidelines.md`) | one-line cross-reference only |
+| Stack or language ecosystem | appropriate file under `shared_docs_dir` | one-line cross-reference only |
+| Company-wide | `company_guidelines_master` | one-line cross-reference only |
+| Project / repo | `project_guidelines_rel` | one-line cross-reference only |
+| Infrequent workflow | dedicated skill (`SKILL.md`) | remove from always-loaded instructions |
+| Repo delta with no canonical home | (none) | full text allowed (keep concise) |
+
+**Hybrid rule (mandatory):** When full rule text lives in a canonical tier, the instruction file gets **at most one line** (`see … #N` or equivalent pointer). Do **not** restate the same rule inline in the same bullet.
 
 Placement test:
 - reusable anywhere -> section 1
@@ -342,20 +373,36 @@ Instruction consolidation pass (required):
 - If two rules are both needed, make scopes non-overlapping and clearly distinguish baseline rule vs exception rule.
 
 Compaction pass (required):
-- When an instruction rule restates or elaborates a convention already fully documented in company or project guidelines, replace the rule body with a compact reference (for example `see company-guidelines.md #N` or `see project-guidelines.md #N`) and keep only the incremental constraint or local exception in the instruction file. Edit the **canonical** file for the tier (`company_guidelines_master` or `project_guidelines_rel` per facts keys) — not a repo company mirror alone.
+- When an instruction rule restates or elaborates a convention already fully documented in company or project guidelines, replace the rule body with a compact reference (for example `see company-guidelines.md #N` or `see project-guidelines.md #N`) and keep only the incremental constraint or local exception in the instruction file. Edit the **canonical** file for the tier (`company_guidelines_master` or `project_guidelines_rel` per facts keys), not a repo company mirror alone.
 - When a rule in a project-level instruction file (`repo AGENTS.md`) duplicates content already present in user-level instructions (`~/.codex/AGENTS.md`), remove the project-level duplicate or reduce it to a one-line cross-reference. User-level rules are always loaded; restating them per-project adds no enforcement value and creates drift risk.
 - When adding a NEW project-specific technical or architectural convention (for example persistence configuration, test infrastructure pattern, schema layout, tool-specific settings), place the detailed content as a numbered rule in the current repo's project guidelines (`project_guidelines_rel` facts key) first; add only a one-line `see project-guidelines.md #N` reference in instruction files. Full-text rules in instruction files are reserved for cross-cutting reasoning guards that have no suitable canonical doc home.
 - When adding a NEW cross-repository convention or baseline standard, choose the canonical home by scope. Read `user_facts_path` and resolve:
   - **Universal coding principle** (applies in any language, any company): `<shared_docs_dir>/coding_guidelines.md`
-  - **Ecosystem-specific** (shared across JVM languages, Spring Boot patterns, Reactor/Mono): `<shared_docs_dir>/jvm_guidelines.md` — not in `coding_guidelines.md` because ecosystem rules are irrelevant to Python/Go/Rust projects.
+  - **Ecosystem-specific** (shared across JVM languages, Spring Boot patterns, Reactor/Mono): `<shared_docs_dir>/jvm_guidelines.md`, not in `coding_guidelines.md` because ecosystem rules are irrelevant to Python/Go/Rust projects.
   - **Language/framework-specific** (Kotlin stdlib idiom, MockK, Java Optional): `<shared_docs_dir>/kotlin_guidelines.md` / `java_guidelines.md` etc.
-  - **Company-specific convention** (naming, error code format, logging policy shared across company repos but not universal): **`company_guidelines_master`** (facts key) — not `company_guidelines_repo_mirror_rel`; sync repo mirrors after editing the master.
-  - Do NOT default to company guidelines for general programming principles — that file is for company-specific conventions only.
+  - **Company-specific convention** (naming, error code format, logging policy shared across company repos but not universal): **`company_guidelines_master`** (facts key), not `company_guidelines_repo_mirror_rel`; sync repo mirrors after editing the master.
+  - Do NOT default to company guidelines for general programming principles; that file is for company-specific conventions only.
   - Add only a one-line `see company-guidelines.md #N` reference in instruction files (repo-relative label for humans; canonical edit target remains the facts key).
 - When multiple instruction bullets share the same governing principle, merge into one generalized rule with examples rather than keeping N specific variants.
 - When a rule can be stated more concisely without losing its enforceable meaning, shorten it; prefer one-sentence rules over multi-sentence explanations.
 - When an instruction rule is only needed for specific infrequent task types (for example Jira story creation, PR description writing, PR chunk splitting), move it to a dedicated skill such as `jira-pr-workflow` rather than keeping it in the always-loaded instruction files; add or update the trigger description in the skill's front matter.
-- Do not remove a rule solely to save space — only when the canonical doc or a more general rule already covers it.
+- Do not remove a rule solely to save space; only when the canonical doc or a more general rule already covers it.
+
+## Step 6.5: Instruction size gate (required before finishing learn)
+
+Always-loaded instruction entrypoints (`AGENTS.md`, `CLAUDE.md`, and repo-root copies when present) are a fixed context budget, not a second canonical doc tier. Canonical guideline files (`project_guidelines_rel`, company master, `shared_docs_dir`) stay **on demand** (open only the sections or `#N` rules the task needs); compaction moves full rule text there and leaves pointers in entrypoints.
+
+**Budget:** **30,720 bytes** per instruction entrypoint.
+
+1. From the repo root, run:
+   ```bash
+   "${HOME}/.ai-playbook/scripts/check-instruction-size.sh" check
+   ```
+   (Override script path only for local testing via `INSTRUCTION_SIZE_CHECK_SCRIPT`.)
+2. When **check** fails (any listed file exceeds the budget), run the compaction pass in Step 6 **in this learn run** until **check** passes: replace hybrid bullets with cross-references, move infrequent workflow rules to skills, and keep only repo deltas without a canonical home.
+3. Do not finish learn while instruction files remain over budget after placement.
+
+**Net-growth rule:** When adding a cross-reference to an instruction file, do not increase file size unless an equal or larger amount of redundant inline text was removed in the same learn run.
 
 ## Step 7: API Contract Naming Hygiene
 When lessons involve external API naming or endpoint shape:
@@ -374,7 +421,9 @@ Before finishing, verify:
 - no instruction rule restates a convention already documented in full in company or project guidelines; full text lives in the canonical file for that tier (`company_guidelines_master`, `project_guidelines_rel`, or `shared_docs_dir` file per facts keys); instruction files hold only the incremental constraint or a reference
 - no project-level instruction rule duplicates a rule already present in user-level instructions (`~/.codex/AGENTS.md`); project-level copies are reduced to a cross-reference or removed
 - every new full-text rule added to instruction files is either (a) a cross-cutting reasoning guard with no suitable canonical doc home, or (b) already has its detailed content in the tier-appropriate canonical guideline file with only a `see … #N` reference in the instruction file
-- instruction files (`CLAUDE.md`, `AGENTS.md`) do not exceed 30,720 bytes each; if they do, apply the compaction pass again targeting the largest remaining rules for cross-ref replacement or occasional-skill extraction
+- Step 6.5 instruction size gate passed: `"${HOME}/.ai-playbook/scripts/check-instruction-size.sh" check` exits 0 from the repo root after compaction
+- no hybrid bullets remain where canonical tier already holds the full rule text
+- no new facts keys added for portable policy constants that belong in a skill (see Step 2, Facts vs skill configuration)
 - exact class names appear only where operationally useful or intentionally canonical; normative instructions and canonical docs use role-based wording instead
 - if the learn workflow changed, `~/.agents/skills/learn/SKILL.md` is updated and committed in the skills repository (`skills_repo_path` in `~/.ai-playbook/facts.md`)
 - RFC-workflow lessons updated in skill/example files where applicable

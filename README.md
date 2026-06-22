@@ -47,9 +47,10 @@ Commands can be used in two ways:
 ## Agent Folder Map
 - Shared skills such as `$learn` come from `~/.agents/skills` in the current setup.
 - Claude Code uses `~/.claude/skills` (symlink → `~/.agents/skills`); mirrored as `claude/skills → ../agents/skills`.
-- Codex manages its own skills in `~/.codex/skills` autonomously — not vendored here.
+- Codex manages its own skills in `~/.codex/skills` autonomously and they are not vendored here.
 - OpenCode uses `~/.opencode/command` for registered command copies.
 - Copilot currently exposes local config/session state under `~/.copilot/`, not a reusable command or skill library.
+- Gemini CLI discovers skills from `~/.agents/skills` (no separate `~/.gemini/skills` symlink needed). Antigravity global skills live under `~/.gemini/config/skills/` (symlink to the shared registry). Global instructions via `~/.gemini/GEMINI.md` (`@` import of `docs/AGENTS.md`).
 - See [projects/.ai-playbook/agent-runtime-layout.md](projects/.ai-playbook/agent-runtime-layout.md) for the full verified mapping and mirror rules.
 
 ## Command Catalog
@@ -127,8 +128,8 @@ Refresh the mirrored agent assets from the local home directory with:
 
 ```bash
 rsync -a --delete --exclude '.DS_Store' ~/.agents/skills/ ./agents/skills/
-# claude/skills is a symlink to ../agents/skills — no separate sync needed
-# codex/skills is managed by Codex autonomously — not vendored here
+# claude/skills is a symlink to ../agents/skills; no separate sync needed
+# codex/skills is managed by Codex autonomously; not vendored here
 bash ~/.ai-playbook/scripts/scan-public-hygiene.sh   # from repo root; see public_hygiene_scan_script in user facts
 ```
 

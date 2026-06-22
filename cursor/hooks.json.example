@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "./hooks/git-safety.sh",
+        "matcher": "git ",
+        "failClosed": false
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "./hooks/execute-plan-manifest-gate.sh",
+        "matcher": "Write|StrReplace|EditNotebook",
+        "failClosed": false
+      },
+      {
+        "command": "./hooks/instruction-size-warn.sh",
+        "matcher": "Write|StrReplace|EditNotebook",
+        "failClosed": false
+      },
+      {
+        "command": "./hooks/no-em-dash.sh",
+        "matcher": "Write|StrReplace|EditNotebook|mcp_slack_|Confluence|confluence|Jira|jira|atlassian",
+        "failClosed": true
+      }
+    ]
+  }
+}
