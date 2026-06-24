@@ -3,10 +3,10 @@ name: bootstrap-ai-playbook
 description: >
   Bootstraps the gitignored repo agent runtime directory on a target project: gitignore gate,
   on-disk path discovery, and `.ai-playbook/facts.md` creation or refresh. Runs once per project
-  when missing or stale — not every session. Renamed from `resolve-vars`.
+  when missing or stale; not every session. Renamed from `resolve-vars`.
 ---
 
-# Bootstrap AI Playbook — Repo Agent Runtime
+# Bootstrap AI Playbook; Repo Agent Runtime
 
 Bootstraps the gitignored repo agent runtime directory (`.ai-playbook/`) on a target project. Writes path keys and agent context to `.ai-playbook/facts.md` so other skills read resolved `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, etc. without per-skill discovery logic.
 
@@ -15,15 +15,15 @@ Bootstraps the gitignored repo agent runtime directory (`.ai-playbook/`) on a ta
 | Layer | Location | Committed? |
 |-------|----------|------------|
 | Skill spec (this file) | `agents/skills/bootstrap-ai-playbook/SKILL.md` in the instructions repo | Yes |
-| Bootstrap output | `<target-repo>/.ai-playbook/*` | No — always gitignored |
+| Bootstrap output | `<target-repo>/.ai-playbook/*` | No; always gitignored |
 
 All invocation artifacts live under the target repo's `.ai-playbook/` only. Do not create committed runtime copies, `*.example` files, or `docs/facts.md` for bootstrap output.
 
 ## Core Concepts
 
-- **Repo agent runtime dir**: `<repo>/.ai-playbook/` — whole directory must be gitignored before any write.
-- **Repo agent facts**: `<repo>/.ai-playbook/facts.md` — fenced TOML path keys plus prose below (Jira ledger, scoping notes).
-- **Required TOML keys**: `plans_dir`, `reviews_dir`, `tmp_dir`, `facts_path`, `bootstrap_version` — absence means keys incomplete; refresh discovery.
+- **Repo agent runtime dir**: `<repo>/.ai-playbook/`; whole directory must be gitignored before any write.
+- **Repo agent facts**: `<repo>/.ai-playbook/facts.md`; fenced TOML path keys plus prose below (Jira ledger, scoping notes).
+- **Required TOML keys**: `plans_dir`, `reviews_dir`, `tmp_dir`, `facts_path`, `bootstrap_version`; absence means keys incomplete; refresh discovery.
 - **On-disk discovery first**: Prefer the shallowest existing directory matching hints. Never seed path values from plan text, doc-hierarchy literals, or skill defaults without verifying the path exists on disk.
 - **Re-read-before-write**: Re-read `.ai-playbook/facts.md` immediately before persisting; merge TOML keys without clobbering prose below the opening fence.
 
@@ -37,7 +37,7 @@ Invoke when **Terms triggers** fire (at most once per session, except **recovery
 - `.ai-playbook/` or `.ai-playbook/facts.md` not gitignored
 - Cached path keys point at directories that no longer exist on disk (stale)
 
-When the file exists, TOML is valid, required keys are present, paths exist on disk, and gitignore passes — **no-op**; return cached values.
+When the file exists, TOML is valid, required keys are present, paths exist on disk, and gitignore passes; **no-op**; return cached values.
 
 **Recovery rerun (same session):** If bootstrap already ran this session but post-write validation fails (missing required key, directory absent, unparsable opening fence), or a consumer cannot resolve a required path key after reading `.ai-playbook/facts.md`, run bootstrap again once for recovery. Do not cap recovery reruns when validation still fails after the first write.
 
@@ -45,7 +45,7 @@ Other skills **read** TOML keys from `.ai-playbook/facts.md`; they do not invoke
 
 ## Hard Gates (Before Any Write)
 
-### 1. Legacy committed facts — hard fail
+### 1. Legacy committed facts; hard fail
 
 If `docs/maintenance/facts.md` or legacy root `docs/facts.md` is tracked:
 
@@ -56,7 +56,7 @@ git ls-files --error-unmatch docs/facts.md 2>/dev/null
 
 When either command exits 0, **stop**. Do not write `.ai-playbook/facts.md`. Tell the user to run **`doc-hierarchy-migrate` Step 5b** (promote FACT bodies to Layer 2, index stubs in `.ai-playbook/facts.md`, gitignore `/.ai-playbook/`, `git rm` legacy committed facts).
 
-### 2. Gitignore gate — block until ignored
+### 2. Gitignore gate; block until ignored
 
 Before creating or updating anything under `.ai-playbook/`:
 
@@ -66,8 +66,8 @@ git check-ignore -q .ai-playbook/facts.md && git check-ignore -q .ai-playbook/
 
 If either check fails, **ask the user** how to ignore the runtime dir:
 
-1. **Repo `.gitignore` (recommended)** — add `/.ai-playbook/` (repo root only) and commit the ignore rule.
-2. **Local exclude only** — when `.gitignore` cannot be committed, add `/.ai-playbook/` to `.git/info/exclude`.
+1. **Repo `.gitignore` (recommended)**; add `/.ai-playbook/` (repo root only) and commit the ignore rule.
+2. **Local exclude only**; when `.gitignore` cannot be committed, add `/.ai-playbook/` to `.git/info/exclude`.
 
 Do not write until both checks pass. Confirm nothing under `.ai-playbook/` is tracked:
 
@@ -111,10 +111,10 @@ Optional keys (discover when present; omit when not found):
 ### Order
 
 1. **Load cached TOML** from `.ai-playbook/facts.md` when valid and paths still exist on disk.
-2. **`user_facts_path`** — `project_guidelines_rel`, `repo_facts_rel` (`.ai-playbook/facts.md` only; never `docs/facts.md`).
-3. **Repo `AGENTS.md` / `CLAUDE.md`** — Documentation Hierarchy subsection if present.
-4. **`project_guidelines_rel` on disk** — plan/review/tmp path notes (probe `docs/maintenance/project-guidelines.md`, then legacy `docs/project-guidelines.md` when user-facts path missing).
-5. **On-disk exploration** — list/glob under `docs/` for existing `plans/`, `reviews/`, `tmp/`, `completed/`, `proposals/`, wire-catalog markdown.
+2. **`user_facts_path`**; `project_guidelines_rel`, `repo_facts_rel` (`.ai-playbook/facts.md` only; never `docs/facts.md`).
+3. **Repo `AGENTS.md` / `CLAUDE.md`**; Documentation Hierarchy subsection if present.
+4. **`project_guidelines_rel` on disk**; plan/review/tmp path notes (probe `docs/maintenance/project-guidelines.md`, then legacy `docs/project-guidelines.md` when user-facts path missing).
+5. **On-disk exploration**; list/glob under `docs/` for existing `plans/`, `reviews/`, `tmp/`, `completed/`, `proposals/`, wire-catalog markdown.
 
 **Partial migration:** When `docs/maintenance/` or `docs/architecture/` exists but doc-hierarchy migration-complete signal is false, continue exploration with legacy paths allowed; do not apply post-migration defaults without verification.
 
@@ -180,9 +180,9 @@ Return each resolved path to the caller. Substitute `{plans_dir}`, `{reviews_dir
 | `using-skills` | Step 0 reads `.ai-playbook/facts.md`; invokes this skill only when Terms triggers fire |
 | `doc-hierarchy`, `doc-hierarchy-migrate`, `doc-hierarchy-upkeep` | Migration-complete signal and Step 5b for legacy committed facts |
 | `plans`, `execute-plan`, `doing-code-review`, `review-plan`, `learn`, `done`, `docs-branch` | Read TOML keys from `.ai-playbook/facts.md` |
-| `review-confluence-doc`, `rfc-design` | Read `{tmp_dir}` and caller catalog from repo agent facts |
+| `review-confluence-doc`, `rfc-design` | Read `{tmp_dir}` and caller catalog from repo agent facts; `rfc-design` writes review staging under `{tmp_dir}/rfc-review/` |
 
 ## Related
 
-- `doc-hierarchy` — schema reference and migration-complete signal
-- `doc-hierarchy-migrate` — Step 5b promotes legacy `docs/maintenance/facts.md` before bootstrap
+- `doc-hierarchy`; schema reference and migration-complete signal
+- `doc-hierarchy-migrate`; Step 5b promotes legacy `docs/maintenance/facts.md` before bootstrap

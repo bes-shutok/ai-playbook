@@ -82,7 +82,19 @@ Use the page title, labels, and content structure to classify. If ambiguous, ask
 
 ### Step 4 – Analyze and Generate Feedback
 
-Review the document for the following quality dimensions:
+#### Step 4.0 – Prose Clarity Sub-Agent (Mandatory)
+
+Launch `prose-clarity.md` from `~/.agents/skills/review-agents/` before finalizing Step 4 feedback.
+
+The sub-agent receives:
+1. Full fetched document content (parent page plus child pages from Step 2)
+2. Document type from Step 3 (RFC / TDD / Other)
+3. Execution framing: "You are reviewing a Confluence technical document, not a git diff. Apply your pattern catalog to all human-readable prose: section text, bullets, tables, API description fields, and comments inside code blocks. Do not flag missing sections or structural gaps (the orchestrator owns completeness). Return `{section_anchor, quoted_excerpt, issue, severity: Suggestion|Advisory, suggested_action}`."
+4. Output limit: 2–3 findings max; report problems only.
+
+Merge sub-agent returns into 🟡 Suggestions (default severity Suggestion) and tag with `[Prose]`. Do not duplicate the same prose issue in Step 4.1.
+
+Review the document for the following quality dimensions (orchestrator-owned; supplement with sub-agent output above):
 
 #### 4.1 Clarity
 - Are terms defined or unambiguous?
@@ -144,6 +156,7 @@ If the document contains implementation logic (code snippets, pseudocode, algori
 - Do NOT use the full PR-oriented `doing-code-review` workflow (no GitHub PR, no sub-agents, no line comments).
 - Instead, apply the *review lens* from relevant sub-agent focus areas:
   - `quality`: bugs, logic errors, edge cases, error handling
+  - `prose-clarity`: redundant or verbose comments and docstrings inside code blocks
   - `security`: injection, secrets, input validation, auth gaps
   - `concurrency`: race conditions, isolation issues (if concurrent logic is present)
   - `simplification`: over-engineering in the proposed implementation
@@ -206,9 +219,10 @@ Rules:
 - If the document is well-written, say so. Do not invent issues.
 - Tag premortem findings with `[Premortem]` and the originating persona.
 - Tag code review findings with `[Code]`.
+- Tag prose-clarity findings with `[Prose]`.
 - **Never cite local or internal files** (e.g. `jvm_guidelines.md`, `CLAUDE.md`, internal playbooks) anywhere in the review output: not in the file, not on console, not in Confluence comments. The document author has no access to these files. State the principle and the reason it matters inline instead.
 - **Write the review doc in comment-ready tone.** The review file is the source the comments are posted from; use the same wording (suggestion tone: "we could", "one option might be") in the file so no rephrasing is needed at posting time.
-- **No em dashes** ("—") anywhere in the review output: not in the file, not on console, not in Confluence comments. Use commas, semicolons, colons, parentheses, or split into separate sentences.
+- **No em dashes** ("; ") anywhere in the review output: not in the file, not on console, not in Confluence comments. Use commas, semicolons, colons, parentheses, or split into separate sentences.
 - **Spell out jargon and acronyms on first use.** Engineering shorthand (e.g. "p99 latency", "OCP", "JWKS", "CSRF") is opaque to readers from adjacent disciplines or non-native speakers. Where a term is used, briefly expand it the first time (e.g. "p99 latency under 200ms, meaning 99% of requests complete in under 200ms").
 - **Verify acronym meaning from the document, not from industry default.** Acronyms in document titles or section headers may have project-specific meanings (e.g. "TDD" can mean "Technical Design Document" rather than "Test-Driven Development"). Do not raise findings that depend on a particular expansion of an acronym without confirming the author's intent from the document content. If unclear, ask before posting.
 
@@ -247,7 +261,7 @@ After presenting feedback on console:
 Apply these to every comment regardless of severity:
 
 - **Suggestion tone, never directive.** Use "we could", "one option might be", "what about", "we should probably". Never issue orders ("Add X", "Remove Y", "Change Z"). Severity (Critical/Suggestion/Question) controls whether action is required, not the tone.
-- **No em dashes** ("—") anywhere in comment text. Use commas, semicolons, colons, or parentheses instead. (See also the global rule in Step 5.)
+- **No em dashes** ("; ") anywhere in comment text. Use commas, semicolons, colons, or parentheses instead. (See also the global rule in Step 5.)
 - **Plain language (globish).** Short words, short sentences. Avoid jargon a non-native speaker would not know.
 - **Never reference internal machine-specific docs** (e.g. JVM guidelines, CLAUDE.md rules, internal playbooks) in Confluence comments. Explain the principle and its benefits directly instead.
 - **Status lozenges for severity**: use `Critical` (red), `Suggestion` (yellow), `Question` (blue), `Advisory` (yellow) at the start of each comment so the reader can scan severity at a glance.
@@ -263,6 +277,9 @@ Apply these to every comment regardless of severity:
 
 ## Integration Points
 
+### With `review-agents` skill (mandatory prose pass)
+`prose-clarity.md` is launched in Step 4.0 for all document types. Findings merge into Suggestions, tagged `[Prose]`.
+
 ### With `premortem` skill (mandatory)
 Invoked in Step 4.5 after initial quality analysis. All six personas for RFC/Design documents;
 Pessimist + Attacker + Operator for TDD documents. Blockers become Critical feedback items.
@@ -270,7 +287,7 @@ Mitigations become Suggestions. The premortem is run against the document conten
 
 ### With `doing-code-review` skill (conditional)
 Applied in Step 4.6 only when implementation logic is present in the document (code blocks > 10 lines,
-SQL, pseudocode, config-as-logic). Uses the review lens (quality, security, concurrency, simplification)
+SQL, pseudocode, config-as-logic). Uses the review lens (quality, prose-clarity, security, concurrency, simplification)
 but NOT the full PR workflow. Findings are tagged `[Code]` in the output.
 
 ---

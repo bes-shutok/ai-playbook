@@ -7,10 +7,10 @@ description: >
   receiving-code-review triage), minimum two review rounds, maximum ten review rounds,
   with done after each review iteration;
   on successful completion, remove session tmp under resolved tmp_dir/execute-plan/<plan-slug>/.
-  Trigger phrases —
+  Trigger phrases:
   "execute the plan", "execute plan", "implement the plan", "implement plan", "run the plan",
   "run plan", "execute-plan".
-  Plan path alone (for example a file under the project plans_dir) is NOT a trigger — use the plan-path gate first.
+  Plan path alone (for example a file under the project plans_dir) is NOT a trigger; use the plan-path gate first.
 ---
 
 # Execute Plan
@@ -19,7 +19,7 @@ description: >
 
 **Announce at start:** "I'm using the execute-plan skill to implement `<plan-path>`."
 
-Orchestrate plan execution from the main agent. Always run Phase 0 (branch setup) first — do not skip it. Delegate heavy work to sub-agents so context stays clean. Do not implement tasks inline unless a sub-agent fails and you must recover.
+Orchestrate plan execution from the main agent. Always run Phase 0 (branch setup) first; do not skip it. Delegate heavy work to sub-agents so context stays clean. Do not implement tasks inline unless a sub-agent fails and you must recover.
 
 **Announcement is not execution.** Saying you are using this skill does not satisfy it. The parent agent must run the Phase 1 loop (implement sub-agent → verify → mark checkboxes → **done sub-agent** → report) for **each** task. Passing tests or marking all checkboxes in one parent session is **not** a substitute for per-task `done` commits.
 
@@ -29,9 +29,9 @@ When the user message references a plan under `{plans_dir}/` (path only, `@` men
 
 Ask the user to choose **exactly one** of three options (use a structured multiple-choice prompt when your environment supports it; otherwise list the options in chat and wait for an answer):
 
-1. **execute-plan (recommended when the plan has unchecked tasks)** — sub-agents, per-task `done` commits, Phase 3 review loops, archive to `{plans_completed_dir}/`
-2. **Manual** — parent implements in-session; one task per commit; `done` only when the user ends the session; Phase 3 only if the user asks
-3. **Read-only** — summarize, review, or update the plan file; no production code edits
+1. **execute-plan (recommended when the plan has unchecked tasks)**; sub-agents, per-task `done` commits, Phase 3 review loops, archive to `{plans_completed_dir}/`
+2. **Manual**; parent implements in-session; one task per commit; `done` only when the user ends the session; Phase 3 only if the user asks
+3. **Read-only**; summarize, review, or update the plan file; no production code edits
 
 **Plan path alone is not an execute-plan trigger.**
 
@@ -49,7 +49,7 @@ Do not start Phase 1 until the user has chosen execute-plan (explicit trigger ph
 
 | Anti-pattern | Why it violates the skill |
 |--------------|---------------------------|
-| Skip Phase 0 and start Phase 1 immediately | Branch setup is mandatory — work must happen on a known, tracked branch with user confirmation; skipping risks mixing plan work with unrelated changes or detached HEAD |
+| Skip Phase 0 and start Phase 1 immediately | Branch setup is mandatory; work must happen on a known, tracked branch with user confirmation; skipping risks mixing plan work with unrelated changes or detached HEAD |
 | Parent implements Task 1–N inline in one turn | Skips implement sub-agents and per-task `done`; only inline recovery after sub-agent failure is allowed |
 | Green tests → mark all `[x]` → archive plan | Checkboxes and archive belong **after** each task's `done`, not batched at the end |
 | Skip Step 1.4 because "code already works" | `done` is the **only** commit path during Phase 1; tests passing does not commit |
@@ -57,7 +57,7 @@ Do not start Phase 1 until the user has chosen execute-plan (explicit trigger ph
 | Address review fixes then start next review round without `done` | Each review iteration must end with Step 3.4 `done` before Step 3.1 runs again |
 | Batch all review fixes into one commit at loop exit | `done` runs after **every** review iteration, not only when the loop exits |
 | Skip Phase 3 because implementation looks complete | Review/fix loop is mandatory; each iteration still ends with `done` |
-| `done` without preceding-step log files | `learn` needs the immediately prior worker log(s) on disk — chat return text alone is insufficient |
+| `done` without preceding-step log files | `learn` needs the immediately prior worker log(s) on disk; chat return text alone is insufficient |
 | Pass all session logs into every `done` | Each `done` reads only logs from its preceding step(s), not full history |
 | Overwrite an existing worker log on relaunch | Same path = append Pass N to end; never truncate `review-r<R>-receiving-code-review.log.md` or other worker logs |
 | Delete `{tmp_dir}/execute-plan/<PLAN_SLUG>/` before success or on failure/interrupt | Tmp logs are removed only in Phase 5 after full successful completion |
@@ -78,8 +78,8 @@ See [agent-logs.md](agent-logs.md) for path convention, required sections, and m
 
 1. Derive `<PLAN_SLUG>` from the plan filename and ensure `{tmp_dir}/execute-plan/<PLAN_SLUG>/` exists before the first sub-agent.
 2. Assign the log path and `<LOG_PASS_NUM>` for each worker launch (`1` first time; increment on relaunch of the same path). Pass both in the prompt.
-3. After each worker returns, verify its log file exists, is non-empty, and **on relaunch still contains prior passes** (append-only — see [agent-logs.md](agent-logs.md) write semantics). Update `manifest.md`. Confirm exit criteria from the log — do not re-run tests or re-review inline to duplicate the worker.
-4. Pass **only the preceding-step log path(s)** into each `done` sub-agent (Step 1.4 / Step 3.4) — see [agent-logs.md](agent-logs.md). Do not paste log bodies into orchestrator context; paths and pass/fail summaries are enough for gating.
+3. After each worker returns, verify its log file exists, is non-empty, and **on relaunch still contains prior passes** (append-only; see [agent-logs.md](agent-logs.md) write semantics). Update `manifest.md`. Confirm exit criteria from the log; do not re-run tests or re-review inline to duplicate the worker.
+4. Pass **only the preceding-step log path(s)** into each `done` sub-agent (Step 1.4 / Step 3.4); see [agent-logs.md](agent-logs.md). Do not paste log bodies into orchestrator context; paths and pass/fail summaries are enough for gating.
 
 **Prerequisite:** A plan file at `{plans_dir}/<name>.md` created per the `plans` skill, with `## Review Scope`, `## Validation Commands`, and `### Task N:` sections.
 
@@ -93,7 +93,7 @@ If the `plans` skill already ran Phase 0 on a feature branch for this work, run 
 
 **Announce at start:** "Before executing the plan, I'll set up a dedicated branch. This ensures clean history and allows safe review/rollback."
 
-### Step 0.1 — Propose branch creation
+### Step 0.1: Propose branch creation
 
 If already on a non-default feature branch (not `main`, `master`, or `develop`) that plausibly matches this plan (Jira ID or plan slug in the branch name), ask:
 
@@ -128,7 +128,7 @@ Proceed with branch creation? (yes/no)
 
 Wait for explicit user confirmation before proceeding.
 
-### Step 0.2 — Create and push the branch
+### Step 0.2: Create and push the branch
 
 If the user confirms (yes):
 
@@ -168,7 +168,7 @@ Understood. I'll proceed on the current branch: <current-branch>
 Note: This means plan work will mix with any existing uncommitted changes.
 ```
 
-### Step 0.3 — Verify branch state
+### Step 0.3: Verify branch state
 
 Before proceeding to Phase 1:
 
@@ -186,7 +186,7 @@ Report the final branch state to the user before starting Phase 1.
 
 **Hard gate:** Do not proceed to Phase 1 until branch setup is complete or explicitly declined by the user.
 
-### Step 0.4 — Session bootstrap (before any plan-scoped code edit)
+### Step 0.4: Session bootstrap (before any plan-scoped code edit)
 
 Derive `<PLAN_SLUG>` from the plan basename (kebab-case, e.g. `PROJ-1234-feature-name` from `PROJ-1234-feature-name.md`).
 
@@ -204,14 +204,14 @@ Create `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` if missing:
 
 | Step | Log path | Status |
 |------|----------|--------|
-| Phase 0 branch | — | pending |
+| Phase 0 branch | (none) | pending |
 ```
 
 Update the manifest when Phase 0 completes. See [agent-logs.md](agent-logs.md) for log paths.
 
 **Hard gate:** The parent agent must **not** edit production or test files listed in the plan's `Files:` sections until Step 0.4 completes **and** the user has chosen execute-plan (explicit trigger or plan-path gate option 1).
 
-### Step 0.4b — Stale plan-path checkpoint (doc-hierarchy migration)
+### Step 0.4b: Stale plan-path checkpoint (doc-hierarchy migration)
 
 Before Step 1.1, when the repo carries a [migration-complete signal](../doc-hierarchy/SKILL.md#migration-complete-signal) **and** the plan was authored before that migration (check the plan's authoring commit against the migration commit, or simply grep the plan body), verify the plan's **literal embedded paths** still resolve against the current tree.
 
@@ -240,10 +240,10 @@ The main agent (you) only:
 2. Loads and parses the plan file.
 3. Identifies the **topmost incomplete task** (first `### Task N:` that still has any `- [ ]` item).
 4. Launches sub-agents in sequence (never parallel for implement/done/review-fix).
-5. Verifies sub-agent exit criteria before advancing (artifact exists, tests pass, log non-empty) — **does not redo sub-agent work** (see `how-to-write-skills` Orchestrator / Sub-Agent Boundary).
+5. Verifies sub-agent exit criteria before advancing (artifact exists, tests pass, log non-empty); **does not redo sub-agent work** (see `how-to-write-skills` Orchestrator / Sub-Agent Boundary).
 6. Updates plan checkboxes (`- [ ]` → `- [x]`) after a task passes verification.
 7. Launches the **`done` sub-agent after every task** (Step 1.4) and after **every review iteration** (Step 3.4).
-8. Reports progress to the user between phases (include last commit SHA when `done` finished; summarize worker outcomes by path/count — do not paste full worker logs into orchestrator context).
+8. Reports progress to the user between phases (include last commit SHA when `done` finished; summarize worker outcomes by path/count; do not paste full worker logs into orchestrator context).
 
 Do not skip verification. Do not mark checkboxes before tests pass. Do not start the next task until Step 1.4 succeeds. Do not re-implement, re-review, or re-analyze inline what a sub-agent was launched to do.
 
@@ -251,7 +251,7 @@ Do not skip verification. Do not mark checkboxes before tests pass. Do not start
 
 Repeat until every `- [ ]` in every `### Task N:` section is `- [x]`:
 
-### Step 1.1 — Select task
+### Step 1.1: Select task
 
 ```bash
 # Find first task with unchecked items (manual parse of plan file)
@@ -261,9 +261,9 @@ Rules:
 
 - Process tasks in document order (Task 1, then Task 2, …).
 - A task is incomplete if **any** of its `- [ ]` lines are unchecked, including nested items under `Files:`.
-- Implement **one task per iteration** — all clauses in that task section, not the whole plan.
+- Implement **one task per iteration**; all clauses in that task section, not the whole plan.
 
-### Step 1.2 — Launch implement sub-agent
+### Step 1.2: Launch implement sub-agent
 
 Launch a sub-agent using your agent's sub-agent execution capability (parallel launches when supported).
 Use the **Implement Task** template from [subagent-prompts.md](subagent-prompts.md).
@@ -280,13 +280,13 @@ Pass: plan file path, task number/title, full task section text, `## Validation 
 
 If the sub-agent reports failure or tests do not pass: do not mark checkboxes; do not launch `done`. Diagnose (launch a focused fix sub-agent or fix inline), then re-run implement verification.
 
-### Step 1.3 — Mark plan progress
+### Step 1.3: Mark plan progress
 
 After verification passes, update the plan file: change every completed `- [ ]` to `- [x]` for **that task's clauses only**.
 
 **Never** bulk-update checkboxes across tasks (`replace_all`, scripted sweep, or marking Tasks 1–N in one edit). Incomplete tasks must keep `- [ ]` until their own Step 1.4 succeeds.
 
-### Step 1.3b — Layer 2 documentation checkpoint
+### Step 1.3b: Layer 2 documentation checkpoint
 
 Before Step 1.4 on **company-scoped** repos with the [migration-complete signal](../doc-hierarchy/SKILL.md#migration-complete-signal):
 
@@ -295,7 +295,7 @@ Before Step 1.4 on **company-scoped** repos with the [migration-complete signal]
 
 Skip this checkpoint on personal projects or when migration-complete is false (suggest `doc-hierarchy-migrate` repair instead of upkeep).
 
-### Step 1.4 — Launch done sub-agent
+### Step 1.4: Launch done sub-agent
 
 Launch a sub-agent using your agent's sub-agent execution capability.
 Use the **Done (per task)** template from [subagent-prompts.md](subagent-prompts.md).
@@ -309,9 +309,9 @@ Pass the plan's commit line when present (e.g. `Commit: feat: ...`), `<IMPLEMENT
 1. `done` sub-agent confirmed it read `<IMPLEMENT_LOG_PATH>`.
 2. `done` sub-agent returned a commit SHA, or an explicit justified `nothing to commit`.
 3. `git log -1 --oneline` in the repo shows that commit at HEAD (or the user-visible branch tip moved).
-4. `git status` has no unstaged/uncommitted files from the completed task's `Files:` list — if it does, relaunch `done` or a fix sub-agent; do **not** open Task N+1.
+4. `git status` has no unstaged/uncommitted files from the completed task's `Files:` list; if it does, relaunch `done` or a fix sub-agent; do **not** open Task N+1.
 
-### Step 1.5 — Report and continue
+### Step 1.5: Report and continue
 
 Tell the user which task completed, the **commit SHA/message** from Step 1.4, and which task is next. If more tasks remain, go to Step 1.1.
 
@@ -334,7 +334,7 @@ Run after all tasks are implemented and final validation passes.
 
 | Gate | Rule |
 |------|------|
-| **Blocking tier** | Zero **remaining Medium+** after `receiving-code-review` triage each round — Critical, High, or Medium still at Status `pending` in the staging doc |
+| **Blocking tier** | Zero **remaining Medium+** after `receiving-code-review` triage each round; Critical, High, or Medium still at Status `pending` in the staging doc |
 | **Minimum rounds** | At least **2** review rounds (`review_round` 1 and 2) even if round 1 is already clear |
 | **Clear streak** | **Two consecutive** clear rounds (`consecutive_clear_rounds >= 2`) before Phase 4 |
 | **Maximum rounds** | **10** review rounds hard cap (`review_round` 1–10); never launch Step 3.1 for round 11 |
@@ -343,23 +343,25 @@ Low findings may remain; they do not block Phase 4 once the exit condition is me
 
 Track in `manifest.md`:
 
-- `review_round` — current round number (increment when starting Step 3.1; starts at 1)
-- `consecutive_clear_rounds` — clear-round streak (reset to 0 when any remaining Medium+ after triage)
+- `review_round`; current round number (increment when starting Step 3.1; starts at 1)
+- `consecutive_clear_rounds`; clear-round streak (reset to 0 when any remaining Medium+ after triage)
 
-**Provisional vs accepted findings:** `doing-code-review` output is provisional. Phase 3 completion counts only **remaining Medium+** after `receiving-code-review` triage (Status still `pending` in the staging doc). Findings marked `drop` or `done` by address-review do not block completion. When Step 3.3 is skipped (no Medium+ pending from Step 3.2), the round is clear by definition.
+**Provisional vs accepted findings:** `doing-code-review` output is provisional. Findings marked `drop` (false positives) by address-review do not block a clear round. However, findings marked `done` mean the codebase was mutated, which resets the clear-round streak. When Step 3.3 is skipped (no Medium+ pending from Step 3.2), the round is clear by definition.
 
-### Step 3.1 — Launch review sub-agent
+### Step 3.1: Launch review sub-agent
 
-**Before launching:** read `review_round` from `manifest.md`. If `review_round > 10`, do **not** launch — go to Step 3.5 (max-rounds stop). If entering Phase 3 for the first time, set `review_round = 1` and `consecutive_clear_rounds = 0`.
+**Before launching:** read `review_round` from `manifest.md`. If `review_round > 10`, do **not** launch; go to Step 3.5 (max-rounds stop). If entering Phase 3 for the first time, set `review_round = 1` and `consecutive_clear_rounds = 0`.
 
 Launch a sub-agent using your agent's sub-agent execution capability.
 Use the **Code Review** template from [subagent-prompts.md](subagent-prompts.md).
 
-The sub-agent runs `doing-code-review` in **branch review** mode (not PR mode unless the user supplied a PR URL). Diff scope is **`git diff <BASE_BRANCH>...HEAD`** (all commits on the feature branch for this plan) — not the latest commit alone. Apply the plan's **two-tier Review Scope**: findings on **explicit must-fix** paths are always in scope; for unlisted paths, keep findings only when **plan-related** (causally tied to a plan task, explicit change, or contract the plan altered) — drop unrelated findings with a one-line reason.
+The sub-agent runs `doing-code-review` in **branch review** mode (not PR mode unless the user supplied a PR URL). Diff scope is **`git diff <BASE_BRANCH>...HEAD`** (all commits on the feature branch for this plan); not the latest commit alone. Apply the plan's **two-tier Review Scope**: findings on **explicit must-fix** paths are always in scope; for unlisted paths, keep findings only when **plan-related** (causally tied to a plan task, explicit change, or contract the plan altered); drop unrelated findings with a one-line reason.
 
 Review output: `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` (increment `N` each round; use `-code-review-r` prefix to distinguish from pre-execution **plan** reviews at `…-plan-review-r<N>.md`).
 
 Pass `<REVIEW_LOG_PATH>` per [agent-logs.md](agent-logs.md). Pass `review_round` / `<REVIEW_ROUND>` = current `review_round` from manifest.
+
+**Diff snapshots (optional):** If the review sub-agent materializes diff files for parallel worker agents, they must live only under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` as `diff-r<R>.patch` and `src-diff-r<R>.patch` per `doing-code-review` **Diff access**. Before launching Step 3.1, remove orphan repo-root `diff_r*.patch` / `src_diff_r*.patch` files from prior runs if present. Phase 5 cleanup removes session diff snapshots with review logs.
 
 **Step 3.1 verification gate (orchestrator, before Step 3.2):**
 
@@ -368,22 +370,22 @@ Pass `<REVIEW_LOG_PATH>` per [agent-logs.md](agent-logs.md). Pass `review_round`
 3. `<REVIEW_LOG_PATH>` exists and is non-empty.
 4. Doc follows `doing-code-review` staging format sufficiently for Step 3.2 parsing (Summary + findings with Severity/Status).
 
-If any check fails, relaunch the review sub-agent — do **not** enter Step 3.2 or launch address-review.
+If any check fails, relaunch the review sub-agent; do **not** enter Step 3.2 or launch address-review.
 
-### Step 3.2 — Triage input (doing-code-review)
+### Step 3.2: Triage input (doing-code-review)
 
 Parse the staging doc at the verified path. Count findings by severity where **Status** is `pending` (not `drop`).
 
 | Severity | Blocking tier? | Action |
 |----------|----------------|--------|
-| Critical, High, Medium | Yes (Medium+) | Launch Step 3.3 (`receiving-code-review`) — **does not** update the clear-round streak |
+| Critical, High, Medium | Yes (Medium+) | Launch Step 3.3 (`receiving-code-review`); **does not** update the clear-round streak |
 | Low | No | May remain; does not block completion once exit condition is met |
 
 **Do not use Step 3.2 counts for loop exit.** They only decide whether Step 3.3 runs. Exit criteria are evaluated in Step 3.4 after triage.
 
-Compare rounds: if a finding is identical to a prior round and was already fixed, downgrade to duplicate and drop — do not loop forever on stale comments.
+Compare rounds: if a finding is identical to a prior round and was already fixed, downgrade to duplicate and drop; do not loop forever on stale comments.
 
-### Step 3.3 — Launch address-review sub-agent
+### Step 3.3: Launch address-review sub-agent
 
 If any Critical/High/Medium `pending` findings exist from Step 3.2:
 
@@ -392,7 +394,7 @@ Use the **Address Review** template from [subagent-prompts.md](subagent-prompts.
 
 The sub-agent runs `receiving-code-review` against the staging doc (not GitHub threads unless a PR exists). It triages provisional findings: implements valid fixes, marks false positives/out-of-scope as `drop`, marks addressed items `done`, and re-runs validation commands.
 
-**Address completeness:** Mark a finding `done` only when the **executable/canonical artifact** named in the finding is fixed (script, monolithic bash block, wired call site, or config the runtime actually reads). Updating a non-executable reference snippet while the runnable block or script remains stale does **not** satisfy address-review — leave the finding `pending` or fix the executable artifact.
+**Address completeness:** Mark a finding `done` only when the **executable/canonical artifact** named in the finding is fixed (script, monolithic bash block, wired call site, or config the runtime actually reads). Updating a non-executable reference snippet while the runnable block or script remains stale does **not** satisfy address-review; leave the finding `pending` or fix the executable artifact.
 
 Pass `<ADDRESS_LOG_PATH>` per [agent-logs.md](agent-logs.md). Orchestrator verifies the log exists before Step 3.4.
 
@@ -404,25 +406,25 @@ If Step 3.2 shows **no** Critical/High/Medium `pending` findings, skip Step 3.3 
 2. Staging doc statuses updated (`done`, `drop`, or justified `pending`).
 3. Address log **Remaining Medium+** section parsed (or staging doc re-read for `pending` Critical/High/Medium).
 
-### Step 3.4 — Evaluate clear-round streak and launch done
+### Step 3.4: Evaluate clear-round streak and launch done
 
-**Clear round (accepted Medium+ gate):** zero **remaining Medium+** after triage for this iteration:
+**Clear round (code-mutation gate):** A round is only "clear" if no code changes were made to fix issues. Findings marked `drop` (false positives) do not mutate code, but findings marked `done` (fixed) do mutate code and require a fresh review.
 
 | Step 3.3 ran? | Clear when |
 |---------------|------------|
-| No (Step 3.2 had zero Medium+ `pending`) | Always clear — nothing for `receiving-code-review` to accept |
-| Yes | Zero Critical/High/Medium findings still at Status `pending` in the staging doc (and address log reports "none" under Remaining Medium+) |
+| No (Step 3.2 had zero Medium+ `pending`) | Always clear; no bugs found, no fixes needed. |
+| Yes | Zero Critical/High/Medium findings marked `done` AND zero findings still at Status `pending`. (All findings must have been marked `drop`). |
 
 **Streak tracking (`consecutive_clear_rounds`, update before launching done):**
 
 | This round | `consecutive_clear_rounds` |
 |------------|----------------------------|
-| Clear (zero remaining Medium+ per table above) | increment by 1 |
-| Any remaining Medium+ `pending` after Step 3.3 | reset to 0 |
+| Clear (zero items marked `done` AND zero items `pending`) | increment by 1 |
+| Unclear (any items marked `done` OR any items `pending`) | reset to 0 |
 
 Record the current count in `manifest.md`.
 
-**Loop exit condition (success path):** `consecutive_clear_rounds >= 2` **and** `review_round >= 2` after updating the streak for this round. One clear round is **not** enough — after the first, run `done` below, then start the next review round (Step 3.1 with incremented `review_round`) before exiting Phase 3.
+**Loop exit condition (success path):** `consecutive_clear_rounds >= 2` **and** `review_round >= 2` after updating the streak for this round. One clear round is **not** enough; after the first, run `done` below, then start the next review round (Step 3.1 with incremented `review_round`) before exiting Phase 3.
 
 **Hard cap:** `review_round` must never exceed **10**. Do not increment past 10 or launch another review sub-agent after round 10 completes Step 3.4.
 
@@ -435,7 +437,7 @@ Pass review round number, review doc path, whether address-review ran, and **pre
 - `<ADDRESS_LOG_PATH>` from Step 3.3 (required only if Step 3.3 ran; otherwise omit)
 - `manifest.md` path (traceability; not a substitute for worker logs)
 
-The sub-agent **reads those preceding-step logs before `learn`** — not implement logs or prior review rounds — then runs the full `done` skill (learn → docs-branch → commit) for this iteration's changes.
+The sub-agent **reads those preceding-step logs before `learn`**; not implement logs or prior review rounds; then runs the full `done` skill (learn → docs-branch → commit) for this iteration's changes.
 
 **Do not return to Step 3.5 until done sub-agent succeeds.**
 
@@ -446,14 +448,14 @@ The sub-agent **reads those preceding-step logs before `learn`** — not impleme
 3. `git log -1 --oneline` reflects that commit when one was expected (address-review ran with file changes).
 4. `git status` has no unstaged files from this iteration's fix scope.
 
-### Step 3.5 — Continue or exit loop
+### Step 3.5: Continue or exit loop
 
 Update `manifest.md` with current `review_round` and `consecutive_clear_rounds`.
 
 | Condition | Action |
 |-----------|--------|
 | `consecutive_clear_rounds >= 2` **and** `review_round >= 2` | Proceed to Phase 4 (success) |
-| `review_round >= 10` **and** exit condition not met | **Stop** — report remaining Medium+ `pending` findings, last commit SHA, and ask the user: continue with manual fixes, accept remaining items and archive anyway, or abort. Do **not** launch round 11. Preserve tmp logs. |
+| `review_round >= 10` **and** exit condition not met | **Stop**; report remaining Medium+ `pending` findings, last commit SHA, and ask the user: continue with manual fixes, accept remaining items and archive anyway, or abort. Do **not** launch round 11. Preserve tmp logs. |
 | Otherwise | Increment `review_round` by 1; if new value `<= 10`, return to Step 3.1; if would exceed 10, use max-rounds stop row above |
 
 ## Phase 4: Archive Plan
@@ -480,13 +482,13 @@ Delete the execute-plan session directory **only after the full workflow succeed
 4. Last Step 3.4 `done` completed successfully.
 5. Plan file exists at `{plans_completed_dir}/<filename>.md` (Phase 4 archive done).
 
-**If any item is false** — do **not** remove tmp files (preserve for resume, debugging, or `learn` on retry).
+**If any item is false**; do **not** remove tmp files (preserve for resume, debugging, or `learn` on retry).
 
-**Removal (orchestrator runs directly — not a sub-agent):**
+**Removal (orchestrator runs directly; not a sub-agent):**
 
 ```bash
 TMP_DIR="{tmp_dir}/execute-plan/<PLAN_SLUG>"
-# Safety: path must match this session's slug only — never rm parent execute-plan/ or other slugs
+# Safety: path must match this session's slug only: never rm parent execute-plan/ or other slugs
 [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
 ```
 
@@ -496,7 +498,7 @@ TMP_DIR="{tmp_dir}/execute-plan/<PLAN_SLUG>"
 test ! -e "{tmp_dir}/execute-plan/<PLAN_SLUG>" && echo "tmp cleanup OK"
 ```
 
-Report successful plan completion to the user, including that session tmp logs were removed. Review staging docs under `{reviews_dir}/` are **not** deleted by this step (separate lifecycle).
+Report successful plan completion to the user, including that session tmp logs and any review diff snapshots under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` were removed. Review staging docs under `{reviews_dir}/` are **not** deleted by this step (separate lifecycle).
 
 ## Sub-Agent Launch Rules
 
@@ -516,30 +518,31 @@ Report successful plan completion to the user, including that session tmp logs w
 
 ## Hard Gates
 
-1. **Branch setup before implementation** — Phase 0 must run and complete (branch created with tracking or explicitly declined by user) before Phase 1 begins. Never skip branch setup or start work on an unknown/unverified branch state.
-2. **No checkbox without green tests** — never mark `- [x]` before validation passes.
-3. **One task per implement iteration** — do not batch multiple tasks in one implement sub-agent.
-4. **Done after every task** — launch the `done` **sub-agent** (Step 1.4) and verify a commit at HEAD before starting the next task; overrides the plans skill handoff default of session-end-only `done`. Parent-agent implementation does not satisfy this gate.
-5. **Done after every review iteration** — launch the `done` **sub-agent** (Step 3.4) before the next review round; address-review fixes must not accumulate uncommitted across iterations.
-6. **Review scope (two tiers)** — **Explicit must-fix** paths from the plan are always in scope. Unlisted paths use **plan-related extension**: keep findings only when causally tied to the plan; drop unrelated issues. Do not treat the explicit list as a ceiling that hides plan-caused defects elsewhere on the branch.
-7. **Two consecutive clear review rounds** — Phase 3 success exit only when the last two iterations had zero **remaining Medium+** after `receiving-code-review` triage (`consecutive_clear_rounds >= 2` and `review_round >= 2`); provisional `doing-code-review` counts alone do not satisfy this gate.
-8. **Maximum ten review rounds** — never launch Step 3.1 when `review_round > 10`; after round 10 without meeting the exit condition, stop and ask the user (do not loop indefinitely).
-9. **Fresh test output** — never cite stale run results; re-run commands before claiming pass.
-10. **Preceding-step logs before learn** — worker sub-agents write logs; each `done` reads only its immediately prior step's log(s). Missing required log blocks commit.
-11. **Tmp cleanup on success only** — remove `{tmp_dir}/execute-plan/<PLAN_SLUG>/` in Phase 5 after the success checklist passes; never on failure, max-rounds stop, or user interrupt.
-12. **Plan-path gate first** — plan file reference without execute-plan trigger → three-way choice before Phase 0 or code edits.
-13. **Session dir before edits** — no plan-scoped production/test edits before `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` exists (execute-plan runs only; manual/read-only do not create the session directory).
-14. **One task's checkboxes per Step 1.3** — no bulk `- [ ]` → `- [x]` across the plan file.
-15. **Phase 3 required for success** — archive only after Phase 3 exit condition or documented user abort after Phase 2.
+1. **Branch setup before implementation**; Phase 0 must run and complete (branch created with tracking or explicitly declined by user) before Phase 1 begins. Never skip branch setup or start work on an unknown/unverified branch state.
+2. **No checkbox without green tests**; never mark `- [x]` before validation passes.
+3. **One task per implement iteration**; do not batch multiple tasks in one implement sub-agent.
+4. **Done after every task**; launch the `done` **sub-agent** (Step 1.4) and verify a commit at HEAD before starting the next task; overrides the plans skill handoff default of session-end-only `done`. Parent-agent implementation does not satisfy this gate.
+5. **Done after every review iteration**; launch the `done` **sub-agent** (Step 3.4) before the next review round; address-review fixes must not accumulate uncommitted across iterations.
+6. **Review scope (two tiers)**; **Explicit must-fix** paths from the plan are always in scope. Unlisted paths use **plan-related extension**: keep findings only when causally tied to the plan; drop unrelated issues. Do not treat the explicit list as a ceiling that hides plan-caused defects elsewhere on the branch.
+7. **Two consecutive clear review rounds**; Phase 3 success exit only when the last two iterations had zero **remaining Medium+** after `receiving-code-review` triage (`consecutive_clear_rounds >= 2` and `review_round >= 2`); provisional `doing-code-review` counts alone do not satisfy this gate.
+8. **Maximum ten review rounds**; never launch Step 3.1 when `review_round > 10`; after round 10 without meeting the exit condition, stop and ask the user (do not loop indefinitely).
+9. **Fresh test output**; never cite stale run results; re-run commands before claiming pass.
+10. **Preceding-step logs before learn**; worker sub-agents write logs; each `done` reads only its immediately prior step's log(s). Missing required log blocks commit.
+11. **Tmp cleanup on success only**; remove `{tmp_dir}/execute-plan/<PLAN_SLUG>/` in Phase 5 after the success checklist passes; never on failure, max-rounds stop, or user interrupt.
+12. **Plan-path gate first**; plan file reference without execute-plan trigger → three-way choice before Phase 0 or code edits.
+13. **Session dir before edits**; no plan-scoped production/test edits before `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` exists (execute-plan runs only; manual/read-only do not create the session directory).
+14. **One task's checkboxes per Step 1.3**; no bulk `- [ ]` → `- [x]` across the plan file.
+15. **Phase 3 required for success**; archive only after Phase 3 exit condition or documented user abort after Phase 2.
+16. **Review diff artifacts in session tmp only**; never write `*.patch` diff snapshots to repo root or outside `{tmp_dir}/execute-plan/<PLAN_SLUG>/`; use `diff-r<R>.patch` / `src-diff-r<R>.patch` naming per `doing-code-review` **Diff access**.
 
 ## User Interruption
 
 If the user stops mid-plan:
 
 - Report the current task, unchecked items, and last successful **per-task `done` commit** (SHA + message).
-- If work exists only as uncommitted changes, say so explicitly — that means Step 1.4 was never run for those tasks.
+- If work exists only as uncommitted changes, say so explicitly; that means Step 1.4 was never run for those tasks.
 - Do not mark incomplete work as `[x]`.
-- **Preserve** `{tmp_dir}/execute-plan/<PLAN_SLUG>/` — do not run Phase 5 cleanup.
+- **Preserve** `{tmp_dir}/execute-plan/<PLAN_SLUG>/`; do not run Phase 5 cleanup.
 - Offer to resume from the topmost incomplete task (or run **Recovery** below if the user wants execute-plan compliance on already-implemented work).
 
 ## Recovery: retroactive execute-plan compliance
@@ -561,19 +564,19 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
 At Phase 0, read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` from `.ai-playbook/facts.md` (see `using-skills` Step 0; bootstrap runs only when Terms triggers fire) before plan-scoped edits or session log writes.
 
 ### Consumes `plans` skill
-Reads plan format, task order, validation commands, review scope, and commit messages. Archives to `{plans_completed_dir}/` when finished. If `plans` Phase 0 already created a feature branch, Phase 0 here verifies state and offers to continue on it instead of creating another. Pre-execution plan reviews use `…-plan-review-r<N>.md` with Blocker/Medium gate; Phase 3 code reviews use `…-code-review-r<N>.md` with Medium+ gate — same minimum-two / maximum-ten round discipline.
+Reads plan format, task order, validation commands, review scope, and commit messages. Archives to `{plans_completed_dir}/` when finished. If `plans` Phase 0 already created a feature branch, Phase 0 here verifies state and offers to continue on it instead of creating another. Pre-execution plan reviews use `…-plan-review-r<N>.md` with Blocker/Medium gate; Phase 3 code reviews use `…-code-review-r<N>.md` with Medium+ gate; same minimum-two / maximum-ten round discipline.
 
 ### Consumes `tdd-guide` + `unit-test-runner` (via implement sub-agent)
 Implement sub-agent follows RED → GREEN → Refactor for behavioral tasks; runs validation commands with fresh output.
 
 ### Consumes `done` skill (sub-agent, per task + per review iteration)
-Only `done` performs git commits. Invoked after each implementation task (Step 1.4) and after each review iteration (Step 3.4). Each invocation receives sub-agent log paths and must read them before `learn` — see [agent-logs.md](agent-logs.md).
+Only `done` performs git commits. Invoked after each implementation task (Step 1.4) and after each review iteration (Step 3.4). Each invocation receives sub-agent log paths and must read them before `learn`; see [agent-logs.md](agent-logs.md).
 
 ### Consumes `doing-code-review` skill (sub-agent)
 Branch/plan-scoped review after all tasks; staging doc is the handoff artifact. Uses full-branch diff (`<BASE_BRANCH>...HEAD`). Applies two-tier Review Scope: explicit must-fix plus plan-related extension for unlisted paths.
 
 ### Consumes `receiving-code-review` skill (sub-agent)
-Triages provisional findings from the staging doc between review rounds. Phase 3 exit counts only **remaining Medium+** still `pending` after this triage — not raw `doing-code-review` output.
+Triages provisional findings from the staging doc between review rounds. Phase 3 exit counts only **remaining Medium+** still `pending` after this triage; not raw `doing-code-review` output.
 
 ### Consumes `doc-hierarchy-upkeep` skill (checkpoint before Step 1.4)
 On company-scoped repos with migration-complete signal, Step 1.3b requires Layer 2 doc sync when plan tasks touch contracts, domain behavior, integrations, or ops. Upkeep edits belong in the same change set as the task before `done` commits.

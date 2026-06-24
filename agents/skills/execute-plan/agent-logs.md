@@ -1,6 +1,6 @@
-# Execute Plan — Sub-Agent Execution Logs
+# Execute Plan: Sub-Agent Execution Logs
 
-Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase 0 (see `using-skills` Step 0; invoke `bootstrap-ai-playbook` only when Terms triggers fire). Sub-agents write durable logs under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` so each `done` invocation can run `learn` with context from the **immediately preceding worker step(s)** — not the orchestrator's chat summary, and not the full session history.
+Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase 0 (see `using-skills` Step 0; invoke `bootstrap-ai-playbook` only when Terms triggers fire). Sub-agents write durable logs under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` so each `done` invocation can run `learn` with context from the **immediately preceding worker step(s)**; not the orchestrator's chat summary, and not the full session history.
 
 ## Path convention
 
@@ -10,19 +10,20 @@ Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase
 | Code review round R | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
 | Address review round R | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-code-review.log.md` |
 | Session manifest (orchestrator) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` |
+| Review diff snapshots (optional) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/diff-r<R>.patch`, `src-diff-r<R>.patch` |
 
 Create the directory before the first sub-agent launch. `<PLAN_SLUG>` is a short kebab-case slug from the plan filename (e.g. `PROJ-1234-feature-name` from `PROJ-1234-feature-name.md`).
 
-## Write semantics (create vs append — do not overwrite)
+## Write semantics (create vs append: do not overwrite)
 
 Each log path is **stable for the round/task** (one file per row in the path table). Worker agents must **never truncate or replace** an existing log for that path.
 
 | Situation | Action |
 |-----------|--------|
 | Log file **does not exist** | **Create** the file with the full format below (Pass 1). |
-| Log file **already exists** (orchestrator relaunch, retry, continuation) | **Append** to the **end** of the file — do not overwrite earlier passes. |
+| Log file **already exists** (orchestrator relaunch, retry, continuation) | **Append** to the **end** of the file; do not overwrite earlier passes. |
 
-**Append format** — add after the last byte of the existing file:
+**Append format**; add after the last byte of the existing file:
 
 ```markdown
 
@@ -59,14 +60,14 @@ Every sub-agent **updates its log file before returning** (create or append per 
 
 ## Commands run
 ```bash
-# command — result (pass/fail/skipped)
+# command: result (pass/fail/skipped)
 ```
 
 ## Key decisions
 - (non-obvious choices, triage calls, scope boundaries)
 
 ## Errors and retries
-- (failures, false starts — or "none")
+- (failures, false starts; or "none")
 
 ## Artifacts
 - (paths to staging doc, files changed, etc.)
@@ -75,7 +76,7 @@ Every sub-agent **updates its log file before returning** (create or append per 
 (Paste the structured return section the orchestrator expects)
 ```
 
-Include enough detail for `learn` to extract friction and corrections — not just a one-line status.
+Include enough detail for `learn` to extract friction and corrections; not just a one-line status.
 
 ## Manifest (orchestrator maintains)
 
@@ -89,16 +90,16 @@ After each sub-agent completes, append to `manifest.md`:
 | Step | Log path | Status |
 |------|----------|--------|
 | Task 1 implement | {tmp_dir}/execute-plan/.../task-1-implement.log.md | success |
-| Task 1 done | — | commit abc1234 |
+| Task 1 done | (none) | commit abc1234 |
 | Review r1 doing-code-review | {tmp_dir}/execute-plan/.../review-r1-doing-code-review.log.md | success |
-| consecutive_clear_rounds | — | 1 |
+| consecutive_clear_rounds | (none) | 1 |
 ```
 
 The orchestrator passes the manifest path (for session traceability) plus **only the preceding-step log paths** into each `done` sub-agent prompt. Update `consecutive_clear_rounds` after each Step 3.4 (see execute-plan SKILL.md).
 
-## Done sub-agent — required reads before learn
+## Done sub-agent: required reads before learn
 
-Read logs from the worker step(s) that **directly preceded this `done` invocation** — not earlier tasks or review rounds.
+Read logs from the worker step(s) that **directly preceded this `done` invocation**; not earlier tasks or review rounds.
 
 | `done` invocation | Preceding step(s) | Log(s) to read |
 |-------------------|-------------------|----------------|
@@ -107,7 +108,7 @@ Read logs from the worker step(s) that **directly preceded this `done` invocatio
 
 Do **not** pass implement logs into review-iteration `done`, or prior rounds' review/address logs into a later iteration.
 
-If a required preceding-step log is missing, `done` must not commit — report to orchestrator to relaunch the worker sub-agent.
+If a required preceding-step log is missing, `done` must not commit; report to orchestrator to relaunch the worker sub-agent.
 
 ## Cleanup after successful completion (Phase 5)
 
@@ -119,9 +120,9 @@ rm -rf {tmp_dir}/execute-plan/<PLAN_SLUG>
 
 | Outcome | Tmp directory |
 |---------|----------------|
-| Full success (Phase 5) | **Removed** — logs already consumed by per-step `done` / `learn` |
-| User interrupt, blocked sub-agent, safety cap, validation failure, fewer than two consecutive clear review rounds | **Preserved** — needed for resume and debugging |
+| Full success (Phase 5) | **Removed**; logs already consumed by per-step `done` / `learn` |
+| User interrupt, blocked sub-agent, safety cap, validation failure, fewer than two consecutive clear review rounds | **Preserved**; needed for resume and debugging |
 
-**Scope:** delete only `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for this plan. Do not delete sibling slugs, the parent `execute-plan/` folder, or `{reviews_dir}/` staging docs.
+**Scope:** delete only `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for this plan (includes optional `diff-r*.patch` / `src-diff-r*.patch` snapshots). Do not delete sibling slugs, the parent `execute-plan/` folder, or `{reviews_dir}/` staging docs.
 
-**Timing:** run cleanup **after** the last Step 3.4 `done` and Phase 4 archive — never before final `learn` has read the preceding-step logs.
+**Timing:** run cleanup **after** the last Step 3.4 `done` and Phase 4 archive; never before final `learn` has read the preceding-step logs.

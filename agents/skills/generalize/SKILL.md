@@ -104,6 +104,19 @@ The lesson body keeps the original incident: the failing test, the diff, the row
 silently dropped. The family and shape trigger go in the headline and the cross-ref; the incident
 stays as proof. A rule with no witness is principle theater (see Anti-Patterns).
 
+### Phase 4.5: Format using the standard Principle-based Template
+
+Every new lesson added to a repository's `development_lessons.md` must follow the standard principle-based template to ensure formatting consistency. Construct the lesson entry with these exact sections:
+
+- `**Principle:** Family [Letter] ([Family Name])` (omit only for Excluded/process-only lessons)
+- Description: Plain language explanation of the lesson and its context
+- `**Why this matters:**` (or inline description): Detail the rationale and risk of ignoring the lesson
+- `**Required behavior:**` / `**Qualification gate:**`: Clear, action-oriented instructions on what to do or avoid
+- `**Shape trigger (when to suspect this family):**`: The situation, independent of the files or framework, where this pattern is relevant
+- `**General form:**`: The abstract, domain-independent rule governing the class of problems
+- `**Example ([plan/feature]):**`: The concrete incident that serves as the witness
+- `**See also:**`: Clickable links to other related lessons or guidelines
+
 ### Phase 5: Check for an existing same-family lesson
 
 Before writing a new entry, look for an existing lesson in the same family. Resolve in this order:

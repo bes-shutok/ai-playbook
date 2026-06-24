@@ -1,12 +1,12 @@
 ---
 name: doing-code-review
 description: >
-  Active code review skill. Orchestrates 8 parallel CR sub-agents for thorough review of PRs, diffs, or branches. Language-agnostic core with runtime language overlays (Java/Spring, Kotlin/Spring, Python). Two modes: posts PR review comments by default; fix mode (auto-commit) when explicitly asked. Trigger phrases: "let's review", "review this PR", "review the changes", "review changes in", "review branch", "review against", "code review", "look at this PR", "check this PR", "check this diff", "doing-code-review". Do not use for addressing existing reviewer comments; use receiving-code-review instead.
+  Active code review skill. Orchestrates 10 parallel CR sub-agents for thorough review of PRs, diffs, or branches. Language-agnostic core with runtime language overlays (Java/Spring, Kotlin/Spring, Python). Two modes: posts PR review comments by default; fix mode (auto-commit) when explicitly asked. Trigger phrases: "let's review", "review this PR", "review the changes", "review changes in", "review branch", "review against", "code review", "look at this PR", "check this PR", "check this diff", "doing-code-review". Do not use for addressing existing reviewer comments; use receiving-code-review instead.
 ---
 
 # Active Code Review
 
-**Documentation paths:** Read `{reviews_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0) before writing staging docs. Examples below use `{reviews_dir}/`; substitute the resolved path.
+**Documentation paths:** Read `{reviews_dir}` and `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0) before writing staging docs or any diff snapshot files. Examples below use `{reviews_dir}/` and `{tmp_dir}/`; substitute the resolved paths.
 
 ## Boundary
 
@@ -43,6 +43,7 @@ User args (e.g., "check for secrets", "against branch X") provide context for th
 - Launching fewer sub-agents because the user's request seems narrow or focused. The user asked for a review; launch the full agent set unless an explicit skip rule applies.
 - Reporting grep results, manual scans, or inline analysis as the review output. Sub-agents provide coverage a single pass cannot; the staging doc is the deliverable.
 - Replacing the sub-agent pipeline with a targeted scan because "the user only asked about X." A focused scan cannot find what it was not asked to look for; the full agent set can.
+- Writing diff snapshot files (`*.patch`) to the repo root or other tracked paths. Diff artifacts belong under `{tmp_dir}/` only (see **Diff access** below).
 
 ## Step 1: Gather Context
 
@@ -73,6 +74,35 @@ Determine the primary language/framework from the changed files and project stru
 
 Load the matching overlay file from this skill's directory (e.g. `java-spring.md`). The overlay content is appended to each sub-agent prompt as additional language-specific review context.
 
+## Diff access (orchestrator and sub-agents)
+
+**Preferred:** Each review sub-agent runs `git diff <base>...<head>` and reads changed source files directly. No patch files are required.
+
+**Optional materialization:** If the orchestrator writes diff snapshot files (for example to share one diff across parallel sub-agents), they **must** live under `{tmp_dir}/`:
+
+| Context | Directory |
+|---------|-----------|
+| Standalone review (not `execute-plan`) | `{tmp_dir}/code-review/<session-slug>/` |
+| `execute-plan` Phase 3 | `{tmp_dir}/execute-plan/<PLAN_SLUG>/` (same session dir as review logs) |
+
+**Naming (when materialized):**
+
+- `diff-r<R>.patch`: full branch diff (all changed files)
+- `src-diff-r<R>.patch`: source and config only (for example `*.py`, `*.java`, `*.kt`, `*.ts`, `*.tsx`, `*.js`, `*.go`, `*.rs`, `*.yaml`, `*.yml`, `*.toml`, `*.xml`, `*.gradle*`, `*.properties`, `pom.xml`, `build.gradle*`, `*.sql`)
+
+`<R>` is the review round number when known (execute-plan); omit or use `1` for standalone reviews.
+
+**Hard rules:**
+
+- Do **not** write diff artifacts to the repo root, tracked paths, or `{reviews_dir}/`.
+- Do **not** use legacy repo-root names like `diff_r5.patch` or `src_diff_r5.patch`.
+- At the start of a review round, remove orphan `diff_r*.patch` / `src_diff_r*.patch` files from the repo root if a prior run left them behind.
+
+**Cleanup:**
+
+- `execute-plan`: Phase 5 removes `{tmp_dir}/execute-plan/<PLAN_SLUG>/` (logs and diff snapshots together).
+- Standalone review: remove `{tmp_dir}/code-review/<session-slug>/` when the staging doc is final.
+
 ## Step 3: Launch Sub-Agents in Parallel
 
 Launch all review worker agents **in parallel** using your agent's sub-agent execution capability (parallel launches when supported). Wait for all to complete before proceeding.
@@ -80,7 +110,7 @@ Launch all review worker agents **in parallel** using your agent's sub-agent exe
 Each agent receives:
 1. Its own prompt (from the corresponding `.md` file in `~/.agents/skills/review-agents/`)
 2. The language overlay content
-3. Instructions to run `git diff <base>...<head>` and read source files for full context
+3. Instructions to run `git diff <base>...<head>` (or read `{tmp_dir}/.../diff-r<R>.patch` / `src-diff-r<R>.patch` when the orchestrator materialized snapshots under `{tmp_dir}/`) and read source files for full context
 4. The base and head branch names
 5. Output format: return a JSON array of `{path, line, side, body, severity}` findings; severity is `Low / Medium / High / Critical`. Sub-agent `body` must already meet §4.12 depth for its severity; do not write one-paragraph stubs expecting the orchestrator to expand them.
 6. An explicit constraint: "Do not over-investigate or validate every single line number. Read the diff and key source files, then report findings. Write each `body` to full §4.12 depth: quote contract/doc text, name the code path, describe actual behavior, state why it matters, and suggest fix options. For Medium+, include all four Comment sections inline in `body` using `**Bold headings**`."
@@ -95,6 +125,7 @@ Sub-agents (all files in `~/.agents/skills/review-agents/`):
 | `implementation.md` | Requirement coverage, correctness of approach, wiring, completeness |
 | `testing.md` | Test coverage, quality, fake tests, independence |
 | `simplification.md` | Over-engineering, excessive abstraction, premature generalization |
+| `prose-clarity.md` | Redundant, verbose, or unclear comments and docs in the diff; self-explanatory code vs prose |
 | `architecture.md` | God classes, SOLID, DDD, CQRS, clean architecture, aggregates, value objects, extraction opportunities |
 | `documentation.md` | Missing documentation updates for user-visible changes |
 | `security.md` | Injection, secrets, input validation, data leakage, auth |
@@ -117,6 +148,8 @@ Each agent returns a JSON array. Medium+ `body` values must be self-contained (o
 The premortem agent maps its output: Block → severity High; Mitigate → severity Medium; Monitor/Accept → dropped (not actionable in a code review).
 
 **Skip premortem when** the diff is purely mechanical (renames, formatting, dependency bumps) or total changed lines < 20.
+
+**Skip prose-clarity when** the diff has no added or modified human-readable prose: no comment lines (`//`, `#`, `/*`, docstrings), no markdown or doc body changes, no OpenAPI or config `description` fields. Pure code or logic edits with no prose changes do not need this agent.
 
 Report problems only. No positive observations.
 
@@ -146,7 +179,7 @@ Drop or reword findings that assume something not true in context:
 - Placeholder/stub code treated as production code
 - Project uses an architecture it has not adopted
 - Ops/infra dependencies not provisioned yet (Kafka topics, DLT, ingress, secrets managers): reframe as a go-live checklist and doc-now action, not "provision in IaC immediately"; downgrade to Low unless the gap also breaks dev/test or local runs
-- Self-documenting code flagged for missing docs
+- Self-documenting code flagged for missing docs (defer missing-doc gaps to `documentation.md`; defer redundant or verbose existing prose to `prose-clarity.md`)
 - A cache operation that is a defensive no-op (keys already expired by TTL at call time) flagged as "incomplete" or "broken"
 
 **Verification methodology**: before **keeping** a finding about a potential runtime failure (duplicate keys, null values, missing constraints), confirm the failure is reachable. Prefer evidence the sub-agent already cited; if missing, one targeted read of the enforcement layer (DB schema, framework validation, upstream guards); not a full re-analysis. If the sub-agent did not cite enforcement-layer evidence and a spot-check is inconclusive, relaunch that agent to verify rather than expanding inline.
@@ -484,9 +517,10 @@ For PR reviews, post via `github-pr-workflow`:
 {
   "event": "COMMENT",
   "body": "",
-  "comments": [...]
+  "comments": []
 }
 ```
+Populate `comments` with assessed inline finding objects from the staging doc.
 
 For branch reviews, skip the posting step; the staging doc is the complete deliverable. Inform the user where the doc was written.
 

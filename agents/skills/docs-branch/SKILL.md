@@ -1,6 +1,10 @@
 ---
 name: docs-branch
-description: Preserve gitignored LLM docs and instruction files by stashing them and syncing to a permanent orphan `docs` branch. Use standalone when you need to save docs without a full done/commit cycle, or invoked automatically from the done skill. Trigger phrases: "save docs", "sync docs branch", "preserve docs".
+description: >
+  Preserve gitignored LLM docs and instruction files by stashing them and syncing
+  to a permanent orphan `docs` branch. Use standalone when you need to save docs
+  without a full done/commit cycle, or invoked automatically from the done skill.
+  Trigger phrases: "save docs", "sync docs branch", "preserve docs".
 ---
 
 # Docs Branch: Preserve Gitignored Docs and Instructions
@@ -17,6 +21,8 @@ description: Preserve gitignored LLM docs and instruction files by stashing them
 
 Read `{reviews_dir}`, `{tmp_dir}`, and related path keys from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0) **before** running the scripts below. Build candidate path lists from those values; do not rely on the hardcoded fallbacks when TOML keys are present.
 
+A repo may also declare **extra shadow dirs** it wants preserved on the `docs` branch that are not under the standard `docs/` tree (for example a gitignored personal-data directory like `resources/source/`). Set the optional `extra_shadow_dirs` TOML array in `.ai-playbook/facts.md` to a list of repo-relative paths. Each entry is subject to the same `git check-ignore` filter as the standard candidates, so list the actual gitignored children, not a parent directory that is itself tracked (gitignore often ignores a directory's *contents* via a trailing `/*` while leaving the directory itself un-ignored).
+
 ```bash
 # After reading .ai-playbook/facts.md TOML: set REVIEWS_DIR and TMP_DIR from {reviews_dir} and {tmp_dir}
 SHADOW_CANDIDATES=(docs/ .github/docs/ docs/personal/ .ai-playbook/ AGENTS.md CLAUDE.md GEMINI.md COPILOT.md)
@@ -25,6 +31,20 @@ SHADOW_CANDIDATES=(docs/ .github/docs/ docs/personal/ .ai-playbook/ AGENTS.md CL
 # Fallback only when resolution was not run
 [ -z "${REVIEWS_DIR:-}" ] && SHADOW_CANDIDATES+=(docs/reviews/ docs/history/reviews/)
 [ -z "${TMP_DIR:-}" ] && SHADOW_CANDIDATES+=(docs/tmp/)
+# Optional extra_shadow_dirs TOML array: additional repo-relative gitignored paths to preserve.
+# Parsing is portable across bash and zsh (no `read -a`, which is bash-only).
+if [ -f .ai-playbook/facts.md ]; then
+  _extra_raw=$(awk '/^```toml/{f=1;next} f&&/^```/{exit} f&&/^extra_shadow_dirs[[:space:]]*=/{sub(/^extra_shadow_dirs[[:space:]]*=[[:space:]]*\[/,""); sub(/\].*$/,""); print; exit}' .ai-playbook/facts.md)
+  if [ -n "$_extra_raw" ]; then
+    while IFS= read -r _item; do
+      [ -n "$_item" ] || continue
+      SHADOW_CANDIDATES+=("$_item")
+    done <<EOF
+$(printf '%s' "$_extra_raw" | tr ',' '\n' | sed "s/^[[:space:]]*//; s/[[:space:]]*$//; s/^['\"]//; s/['\"]$//")
+EOF
+    unset _extra_raw _item
+  fi
+fi
 ```
 
 The `STASH_ARGS` and `SHADOW_PATHS` loops below use `SHADOW_CANDIDATES` instead of a fixed dual-layout list.

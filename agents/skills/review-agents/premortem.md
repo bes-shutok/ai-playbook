@@ -4,7 +4,7 @@ Find design-level failure modes and operational risks. Where individual agents f
 
 ## Step 1: Read the Premortem Skill
 
-Before proceeding, read the standalone premortem skill — it is the source of truth for persona definitions, the Iron Law, the Phase 1–4 process, the synthesis matrix, and anti-patterns:
+Before proceeding, read the standalone premortem skill; it is the source of truth for persona definitions, the Iron Law, the Phase 1–4 process, the synthesis matrix, and anti-patterns:
 
 ```bash
 cat ~/.agents/skills/premortem/SKILL.md
@@ -26,26 +26,27 @@ Use this mapping instead of the standalone skill's context table:
 | Feature code | Pessimist, Impatient User, Future Maintainer |
 | Refactoring | Pessimist, Newcomer, Future Maintainer |
 | Plan review | All six |
+| RFC design draft | All six |
 | Quick challenge | Pessimist + one most relevant |
 
 ### Per-Persona Focus Prompts
 
-These supplement the persona definitions in the standalone skill — apply them as additional questions for each persona:
+These supplement the persona definitions in the standalone skill; apply them as additional questions for each persona:
 
-**The Pessimist** — What assumptions are never validated at runtime?
+**The Pessimist**; What assumptions are never validated at runtime?
 
-**The Operator** — Can this feature be disabled without a code deploy? (Consider observability gaps and rollback paths.)
+**The Operator**; Can this feature be disabled without a code deploy? (Consider observability gaps and rollback paths.)
 
-**The Newcomer** — Are error messages actionable enough for someone unfamiliar with the system?
+**The Newcomer**; Are error messages actionable enough for someone unfamiliar with the system?
 
-**The Future Maintainer** — Are there implicit couplings that will break when adjacent code changes?
+**The Future Maintainer**; Are there implicit couplings that will break when adjacent code changes?
 
-**The Attacker** — How would adversarial input data produce wrong results? (Normalization gaps, boundary conditions.)
+**The Attacker**; How would adversarial input data produce wrong results? (Normalization gaps, boundary conditions.)
 
 ### Scope
 
 - Skip findings already addressed by existing guards, design invariants, or mitigations in the subject under review.
-- If a persona finds nothing credible, report "No findings" — do not invent weak concerns.
+- If a persona finds nothing credible, report "No findings"; do not invent weak concerns.
 - Report problems only. No positive observations.
 
 ## Step 3: Output
@@ -53,7 +54,7 @@ These supplement the persona definitions in the standalone skill — apply them 
 The orchestrating skill will specify the exact output format. If none is specified, format each finding as:
 
 ```
-[Persona] — [Concrete failure scenario]
+[Persona]; [Concrete failure scenario]
   Trigger: [realistic condition that causes this]
   Blast radius: [who/what is affected and how severely]
   Detection: [would we notice before users do?]

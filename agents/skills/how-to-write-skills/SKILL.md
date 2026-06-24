@@ -12,7 +12,7 @@ Master creating effective, discoverable, well-structured agent skills that work 
 Create your first skill in under 5 minutes:
 
 ```bash
-# 1. Create skill directory (under skills_repo_path from user facts — typically agents/skills/)
+# 1. Create skill directory (under skills_repo_path from user facts; typically agents/skills/)
 mkdir -p agents/skills/my-skill
 
 # 2. Create SKILL.md with frontmatter
@@ -40,7 +40,7 @@ EOF
 
 **With optional fields:**
 
-```yaml
+```text
 ---
 name: my-skill
 description: Read and analyze code. Use when reviewing code quality or searching for patterns.
@@ -91,20 +91,20 @@ You don't invoke skills directly - the model decides when to use them.
 Do **not** hardcode `docs/plans/`, `docs/reviews/`, `docs/examples/`, or module-split trees in skill bodies. Read path keys from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0):
 
 - Read `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, etc. from `.ai-playbook/facts.md` (see `using-skills` Step 0).
-- Use session placeholders (`{plans_dir}/…`) in examples and templates — not legacy paths as defaults.
-- **Public example placeholders:** In committed skill and instruction files, use neutral fictitious values only — `PROJ-1234`, `PROJ-1234-feature-name`, `your-org.atlassian.net`, `acme.example.com`. Never real Jira keys, employer ticket prefixes, internal feature slugs, org domains, or session-specific identifiers. Resolve real prefixes from the user's facts document at runtime (`jira_ticket_prefix`, `atlassian_domain`), not in skill bodies. Before commit, run `public_hygiene_scan_script` from user facts.
+- Use session placeholders (`{plans_dir}/…`) in examples and templates; not legacy paths as defaults.
+- **Public example placeholders:** In committed skill and instruction files, use neutral fictitious values only; `PROJ-1234`, `PROJ-1234-feature-name`, `your-org.atlassian.net`, `acme.example.com`. Never real Jira keys, employer ticket prefixes, internal feature slugs, org domains, or session-specific identifiers. Resolve real prefixes from the user's facts document at runtime (`jira_ticket_prefix`, `atlassian_domain`), not in skill bodies. Before commit, run `public_hygiene_scan_script` from user facts.
 - **`doc-hierarchy-migrate`** applies the company three-layer schema when the user explicitly runs a migration; it writes resolved paths into the repo for other skills to read. **`doc-hierarchy`** is schema reference; **`doc-hierarchy-upkeep`** is post-migration Layer 1/2 sync.
 
 ## Skill Structure Patterns
 
 ### LICENSE.txt (required for every new skill)
 
-Every skill directory must include `LICENSE.txt`. Copy from an existing skill (for example `plans/LICENSE.txt` or `done/LICENSE.txt`) — do not create a skill without it.
+Every skill directory must include `LICENSE.txt`. Copy from an existing skill (for example `plans/LICENSE.txt` or `done/LICENSE.txt`); do not create a skill without it.
 
 - **License:** MIT
-- **Copyright line:** copy verbatim from `plans/LICENSE.txt` (update year if needed). Personal email stays in `LICENSE.txt` only — never repeat it in `SKILL.md` or other skill body text.
+- **Copyright line:** copy verbatim from `plans/LICENSE.txt` (update year if needed). Personal email stays in `LICENSE.txt` only; never repeat it in `SKILL.md` or other skill body text.
 
-When syncing or vendoring skills, copy the full directory (`SKILL.md`, `LICENSE.txt`, and all support files) — never sync `SKILL.md` alone.
+When syncing or vendoring skills, copy the full directory (`SKILL.md`, `LICENSE.txt`, and all support files); never sync `SKILL.md` alone.
 
 ### Simple Skill (Single File)
 
@@ -113,7 +113,7 @@ Everything in a single SKILL.md file - ideal for focused guidance.
 ```
 my-skill/
 ├── SKILL.md
-└── LICENSE.txt          # Required — MIT; copy from plans/LICENSE.txt
+└── LICENSE.txt          # Required; MIT; copy from plans/LICENSE.txt
 ```
 
 **Example**: Simple utilities, straightforward workflows
@@ -181,24 +181,25 @@ my-skill/
 For pattern catalogs or reference content used by multiple orchestrating skills with different execution contexts.
 
 ```
-review-agents/          # Library skill — not invoked directly
+review-agents/          # Library skill; not invoked directly
 ├── SKILL.md            # Documents the pool; says "do not invoke directly"
-├── quality.md          # Pattern catalog only — no execution instructions
+├── quality.md          # Pattern catalog only; no execution instructions
 ├── architecture.md
 └── premortem.md
 
-doing-code-review/      # Orchestrating skill — reads from review-agents/
+doing-code-review/      # Orchestrating skill; reads from review-agents/
 └── SKILL.md            # Wraps each catalog file with code-review framing
 
-review-plan/            # Orchestrating skill — reads from review-agents/
+review-plan/            # Orchestrating skill; reads from review-agents/
+rfc-design/             # Orchestrating skill; Step 2 review pass reads from review-agents/
 └── SKILL.md            # Wraps each catalog file with plan-review framing
 ```
 
 **Key design rules:**
-- Library skill SKILL.md frontmatter description must say "not meant to be invoked directly"
-- Agent files contain **only pattern catalogs** (what to detect) — no execution instructions, no output format
+- Library skill `SKILL.md` frontmatter description must say "not meant to be invoked directly"
+- Agent files contain **only pattern catalogs** (what to detect); no execution instructions, no output format
 - Execution framing (what to read, how to analyze) and output format (`{path, line, side}` vs `{location_in_plan, fix}`) live in each orchestrating skill's sub-agent prompt
-- Adding a new agent = drop one `.md` file in the library → all orchestrating skills pick it up automatically
+- Adding a new agent = drop one `.md` file in the library **and** update **every** orchestrating skill that should launch it: Step 3 (or equivalent) launch table, parallel agent count in frontmatter/description, output template agent lists, and bidirectional Integration Points. Cataloging the agent in `review-agents/SKILL.md` alone does **not** wire it into `doing-code-review`, `review-plan`, `rfc-design`, or `review-confluence-doc`.
 
 **When to use:**
 - Two or more skills launch sub-agents with overlapping pattern catalogs
@@ -212,21 +213,21 @@ review-plan/            # Orchestrating skill — reads from review-agents/
 When a standalone skill has deep domain logic (personas, process phases, synthesis rules, anti-patterns) and you need it as a sub-agent inside another skill's workflow, make the sub-agent a **thin adapter** rather than duplicating the source skill's content.
 
 ```
-premortem/           # Standalone skill — full logic, all 6 personas, synthesis matrix
+premortem/           # Standalone skill; full logic, all 6 personas, synthesis matrix
 └── SKILL.md
 
 review-agents/
-└── premortem.md     # Adapter — reads standalone skill, adds only sub-agent overrides
+└── premortem.md     # Adapter; reads standalone skill, adds only sub-agent overrides
 ```
 
 **Adapter structure:**
-1. **Step 1: Read the source skill** — `cat ~/.agents/skills/<skill>/SKILL.md` at the top of the agent file, before any instructions.
-2. **Step 2: Apply overrides** — add only what differs in this sub-agent context: input selection (which personas for which change type), output format, scope limits.
-3. **Nothing else** — rules, anti-patterns, and process steps already present in the source skill are inherited. Never re-state them in the adapter.
+1. **Step 1: Read the source skill.** Run `cat ~/.agents/skills/<skill>/SKILL.md` at the top of the agent file, before any instructions.
+2. **Step 2: Apply overrides:** add only what differs in this subagent context: input selection (which personas for which change type), output format, scope limits.
+3. **Nothing else:** rules, anti-patterns, and process steps already present in the source skill are inherited. Never re-state them in the adapter.
 
 **Anti-patterns:**
 - ❌ Copy-pasting persona definitions or anti-patterns from the standalone skill (creates drift when the source is updated)
-- ❌ Restating constraints already covered in the source skill's anti-patterns (e.g. "max 2-3 findings per persona" already existed in the source skill's anti-patterns section — adding it again as a hard rule in the adapter is redundant)
+- ❌ Restating constraints already covered in the source skill's anti-patterns (e.g. "max 2-3 findings per persona" already existed in the source skill's anti-patterns section; adding it again as a hard rule in the adapter is redundant)
 - ✅ Only add what is context-specific: change-type → persona selection, sub-agent output format, and scope limits unique to this workflow
 
 **When to use:**
@@ -238,46 +239,46 @@ review-agents/
 For multi-phase workflows that chain existing skills (for example implement → commit → review → fix), use a dedicated orchestrating skill. See `execute-plan` as the reference implementation.
 
 **Design rules:**
-- Main agent orchestrates only: select work item, launch sub-agents, verify exit criteria, update tracking artifacts (plan checkboxes).
+- Main agent orchestrates only: select work item, launch subagents, verify exit-criteria, update tracking artifacts (plan checkboxes).
 - Put sub-agent launch prompts in `subagent-prompts.md`; the orchestrator skill references templates, not inline walls of text.
-- Each sub-agent reads the consumed skill from `~/.agents/skills/` — do not duplicate `done`, `doing-code-review`, or similar logic inline.
-- Define hard gates and explicit exit criteria per phase (tests pass before checkboxes; zero remaining Medium+ after receiving-code-review triage before final archive).
+- Each sub-agent reads the consumed skill from `~/.agents/skills/`; do not duplicate `done`, `doing-code-review`, or similar logic inline.
+- Define hard-gates and explicit exit-criteria per phase (tests pass before checkboxes; zero remaining Medium+ after receiving-code-review triage before final archive).
 - Add bidirectional **Integration Points** on every consumed skill.
 
 ### Orchestrator / Sub-Agent Boundary
 
-**Goal:** keep the orchestrator's context clean. Sub-agents do the heavy analysis, implementation, and verification; the orchestrator coordinates and gates — it does not redo sub-agent work inline.
+**Goal:** keep the orchestrator's context clean. Subagents do the heavy analysis, implementation, and verification; the orchestrator coordinates and gates; it does not redo subagent work inline.
 
-| Orchestrator owns | Sub-agent owns |
-|-------------------|----------------|
+| Orchestrator owns | Subagent owns |
+| --- | --- |
 | Launch prompts, exit-criteria checks, dedup/synthesis, artifact paths | Reading diffs/plans/source, analysis, findings detail, implementation, tests |
 | Short summaries for the user (counts, SHAs, paths, pass/fail) | Self-contained return payloads (JSON findings, staging docs, worker logs) |
 | Spot-checking claims when evidence is missing or contradictory | Evidence, quotes, code paths, severity rationale, fix options in the return payload |
-| Relaunching a focused sub-agent when output is incomplete | Meeting output-depth requirements before returning |
+| Relaunching a focused subagent when output is incomplete | Meeting output-depth requirements before returning |
 
 **Anti-patterns:**
 - ❌ Orchestrator re-reads diff/source files to write finding detail a sub-agent should have returned
 - ❌ Orchestrator copies full sub-agent JSON or log bodies into its working context when a path + count suffices
 - ❌ Orchestrator runs inline analysis "while waiting" for sub-agents (except documented fallback when a sub-agent times out)
 - ❌ Sub-agent returns stubs ("see OpenAPI mismatch") expecting the parent to expand
-- ✅ Sub-agent returns §4.12-depth findings (or equivalent for that workflow); orchestrator verifies, dedups, formats, posts
+- ✅ Subagent returns §4.12-depth findings (or equivalent for that workflow); orchestrator verifies, deduplicates, formats, posts
 - ✅ Incomplete sub-agent output → relaunch that agent with a focused prompt; do not silently take over its job
 
-**Return-payload rule:** every sub-agent return must let the orchestrator advance without re-doing the same reads. Include file paths, line anchors, quoted contract text, verification notes, and fix suggestions in the sub-agent artifact — not in orchestrator chat context.
+**Return-payload rule:** every sub-agent return must let the orchestrator advance without re-doing the same reads. Include file paths, line anchors, quoted contract text, verification notes, and fix suggestions in the sub-agent artifact; not in orchestrator chat context.
 
 ### Optional IDE / CLI enforcement (outside skills)
 
-Skills define **agent-agnostic contracts** (files to create, gates, forbidden actions). Optional hooks, shell wrappers, or IDE policies may enforce those contracts locally — document them in user `AGENTS.md` or IDE config, **not** inside shared skills.
+Skills define **agent-agnostic contracts** (files to create, gates, forbidden actions). Optional hooks, shell wrappers, or IDE policies may enforce those contracts locally; document them in user `AGENTS.md` or IDE config, **not** inside shared skills.
 
 | Worth optional local enforcement | Usually not worth hooks |
-|----------------------------------|-------------------------|
-| Execute-plan bootstrap (`manifest.md` before plan-scoped edits when session dir exists) | `plans`, `learn`, `tdd-guide`, review triage — need judgment, not deterministic block |
-| Git safety (`git reset --hard`, co-author trailers, force-push prompts) | Orchestration skills (`done`, `execute-plan` sub-agent launches) — hooks cannot replace workflow |
-| Secrets in prompts (if IDE supports it) | `unit-test-runner`, `systematic-debugging` — must run freely |
+| --- | --- |
+| Execute-plan bootstrap (`manifest.md` before plan-scoped edits when session dir exists) | `plans`, `learn`, `tdd-guide`, review triage; need judgment, not deterministic block |
+| Git safety (`git reset --hard`, coauthor trailers, force-push prompts) | Orchestration skills (`done`, `execute-plan` subagent launches); hooks cannot replace workflow |
+| Secrets in prompts (if IDE supports it) | `unit-test-runner`, `systematic-debugging`; must run freely |
 
 Do not reference hook filenames, MCP wire names, or vendor UI tools inside skill bodies.
 
-Reference implementations: `doing-code-review` (§ Orchestrator Boundary), `execute-plan` (worker logs + orchestrator duties), `review-plan` (Step 3 synthesis).
+Reference implementations: `doing-code-review` (§ Orchestrator Boundary), `execute-plan` (worker logs + orchestrator duties), `review-plan` (Step 3 synthesis), `rfc-design` (Step 2 review pass + fold into RFC).
 
 ## When to Use Reference Files
 
@@ -301,7 +302,7 @@ Keep in SKILL.md:
 
 ### Required Fields
 
-```yaml
+```text
 ---
 name: skill-name              # Required: lowercase-with-hyphens, max 64 chars
 description: What + When      # Required: max 1024 chars
@@ -333,7 +334,7 @@ description: What + When      # Required: max 1024 chars
 
 ### Optional Fields
 
-```yaml
+```text
 ---
 name: skill-name
 description: What + When
@@ -364,11 +365,11 @@ model: haiku                     # Optional: Use specific model (haiku, opus, so
 **Problem**: Skill never triggers because description lacks keywords.
 
 **Solution**: Include specific trigger contexts:
-```yaml
-# ❌ Bad
+```text
+# Bad
 description: Helps with documentation
 
-# ✅ Good
+# Good
 description: Generate technical documentation from code. Use when user mentions docs, API reference, or documentation generation.
 ```
 
@@ -389,15 +390,15 @@ description: Generate technical documentation from code. Use when user mentions 
 ```markdown
 ## Additional Resources
 
-- **Detailed Guide**: See [detailed-topic.md](references/detailed-topic.md)
-- **Quick Reference**: See [quick-ref.md](references/quick-ref.md)
+- **Detailed Guide**: See `references/<topic>.md` in the skill directory
+- **Quick Reference**: See `references/<quick-ref>.md` in the skill directory
 ```
 
 ### 4. Wrong Location
 
 **Problem**: Skill not discovered because it's in the wrong directory.
 
-**Solution** — resolve paths from `user_facts_path` (`skills_repo_path`, local agent mirrors); do not hardcode one vendor directory as canonical in skill text:
+**Solution:** resolve paths from `user_facts_path` (`skills_repo_path`, local agent mirrors); do not hardcode one vendor directory as canonical in skill text:
 
 - **Shared catalog:** `skills_repo_path` → `agents/skills/<name>/` (canonical source to edit first)
 - **Local mirrors:** sync to agent-specific install paths (Cursor, Claude Code, Codex, etc.) after editing the catalog
@@ -412,15 +413,26 @@ description: Generate technical documentation from code. Use when user mentions 
 - References: Deep dives and details
 - Never copy-paste content between files
 
+### 6. IDE lint noise in SKILL.md
+
+**Problem**: JetBrains and similar editors flag tables, YAML frontmatter, JSON examples, and spell-check compounds inside skill files.
+
+**Solution**:
+- Use `description: >` when the description line contains colons (for example `Trigger phrases:`).
+- Fence **example** frontmatter as ` ```text ` `, not ` ```yaml ` `, so inspectors do not treat sample `description:` keys as duplicate real frontmatter.
+- Table separators: `| --- | --- |`; avoid `<` and `>` in cells (write `under 300 lines`, not `< 300`).
+- JSON examples must be valid JSON (`[]` placeholders, not `[...]`).
+- Prefer `deduplicate` / `subagent` / `coauthor` over informal verb forms and hyphenated compounds spell-checkers reject.
+
 ## Skill Size Guidelines
 
 Based on analysis of 50+ production skills:
 
 | Size Range | Line Count | Recommendation |
-|------------|------------|----------------|
-| Small | < 300 | Single SKILL.md |
-| Medium | 300-600 | SKILL.md + references/ |
-| Large | > 600 | Heavy progressive disclosure |
+| --- | --- | --- |
+| Small | under 300 lines | Single SKILL.md |
+| Medium | 300-600 lines | SKILL.md + references/ |
+| Large | over 600 lines | Heavy progressive disclosure |
 
 **Real-world examples**:
 - `temporal-python-testing`: 146 lines (small, focused)
@@ -528,7 +540,7 @@ pdf-processing/
 ```
 
 **Frontmatter:**
-```yaml
+```text
 ---
 name: pdf-processing
 description: Extract text, fill forms, merge PDFs. Use when working with PDF files, forms, or document extraction. Requires pypdf and pdfplumber packages.
@@ -573,7 +585,7 @@ api-design-principles/
 - ✅ Test skill discovery and triggering
 - ✅ Use lowercase-with-hyphens for names
 - ✅ Place skills under the shared catalog (`agents/skills/` in `skills_repo_path`) and sync mirrors
-- ✅ Write agent-agnostic skills — describe required capabilities (WHAT) without prescribing specific tool implementations (HOW)
+- ✅ Write agent-agnostic skills; describe required capabilities (WHAT) without prescribing specific tool implementations (HOW)
 
 ### DON'T:
 - ❌ Write vague descriptions without triggers
@@ -583,8 +595,8 @@ api-design-principles/
 - ❌ Forget to test the skill
 - ❌ Use camelCase or spaces in names
 - ❌ Mix details with essentials
-- ❌ Hardcode tool references — describe capabilities instead (sub-agent execution, draft-save integration, structured user choice)
-- ❌ Name vendor-specific tools or UI (`AskQuestion`, `Task`, MCP wire names, IDE hook paths) inside skills — optional enforcement belongs in user `AGENTS.md` / IDE config, not skill bodies
+- ❌ Hardcode tool references; describe capabilities instead (sub-agent execution, draft-save integration, structured user choice)
+- ❌ Name vendor-specific tools or UI (`AskQuestion`, `Task`, MCP wire names, IDE hook paths) inside skills; optional enforcement belongs in user `AGENTS.md` / IDE config, not skill bodies
 
 ## Security Considerations
 
@@ -604,7 +616,7 @@ The `allowed-tools` field is an important security feature that helps:
 
 **3. Common Patterns**
 
-```yaml
+```text
 # Documentation skill (read-only)
 ---
 name: api-docs
@@ -690,7 +702,7 @@ Don't restrict when:
 
 **Solutions**:
 1. Move details to `references/`
-2. Reduce SKILL.md line count
+2. Reduce SKILL.md line-count
 3. Use more concise language
 4. Split into multiple focused skills
 
@@ -704,8 +716,8 @@ Don't restrict when:
 
 ## Quick Reference
 
-| Task | Command/Action |
-|------|----------------|
+| Task | Command or action |
+| --- | --- |
 | Create skill | `mkdir -p agents/skills/my-skill` (under `skills_repo_path`) |
 | Test discovery | Ask "What skills are available?" |
 | Test triggering | Ask task matching description |

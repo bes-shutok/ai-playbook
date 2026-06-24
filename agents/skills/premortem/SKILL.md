@@ -1,10 +1,10 @@
 ---
 name: premortem
 description: >
-  Diverse premortem analysis — stress-test plans, designs, code changes, and test strategies
+  Diverse premortem analysis; stress-test plans, designs, code changes, and test strategies
   by imagining failure from multiple adversarial perspectives. Use before finalizing plans,
   during code review, when designing test strategies, or when the user asks to "premortem",
-  "stress-test", "what could go wrong", or "challenge this". Trigger phrases — "premortem",
+  "stress-test", "what could go wrong", or "challenge this". Trigger phrases; "premortem",
   "stress-test this", "what could go wrong", "challenge this plan", "devil's advocate",
   "run a premortem", "failure modes".
 ---
@@ -14,7 +14,7 @@ description: >
 ## Core Concept
 
 A premortem assumes the project/plan/change has already failed and works backwards to identify
-*why*. Unlike a post-mortem, it exploits the power of prospective hindsight — people are better
+*why*. Unlike a post-mortem, it exploits the power of prospective hindsight; people are better
 at explaining past events than predicting future ones.
 
 **Diverse** means using multiple distinct adversarial personas, each with different expertise
@@ -59,8 +59,8 @@ Not every premortem needs all personas. Select based on context:
 | Implementation plan | Pessimist, Newcomer, Operator, Future Maintainer | Attacker, Impatient User |
 | Code review | Pessimist, Attacker, Operator | Future Maintainer |
 | Test strategy | Pessimist, Attacker, Impatient User | Newcomer |
-| RFC/Design | All six | — |
-| Quick challenge | Pessimist + one most relevant | — |
+| RFC/Design | All six |; |
+| Quick challenge | Pessimist + one most relevant |; |
 
 ## Process
 
@@ -75,24 +75,24 @@ State in 1-2 sentences what is being premortemed:
 
 For each selected persona, independently generate:
 
-1. **Failure scenario** — a concrete, specific way this fails (not vague "it might be slow")
-2. **Trigger conditions** — what realistic circumstances cause this failure
-3. **Blast radius** — who/what is affected and how severely
-4. **Detection difficulty** — would we notice before users do? How long until detection?
-5. **Existing mitigation** — does the current plan already address this? (If yes, note it and move on)
+1. **Failure scenario**; a concrete, specific way this fails (not vague "it might be slow")
+2. **Trigger conditions**; what realistic circumstances cause this failure
+3. **Blast radius**; who/what is affected and how severely
+4. **Detection difficulty**; would we notice before users do? How long until detection?
+5. **Existing mitigation**; does the current plan already address this? (If yes, note it and move on)
 
 **Rules:**
-- Each finding must be *concrete* — name specific components, data flows, or user actions
+- Each finding must be *concrete*; name specific components, data flows, or user actions
 - No duplicate findings across personas (deduplicate in synthesis)
-- If a persona finds nothing credible, it reports "No findings" — do not invent weak concerns
+- If a persona finds nothing credible, it reports "No findings"; do not invent weak concerns
 - Findings already mitigated by the plan are acknowledged and skipped, not re-raised
 
 ### Phase 3: Synthesis
 
 After all personas complete:
 
-1. **Deduplicate** — merge findings that describe the same root failure from different angles
-2. **Rank by risk** — severity × likelihood matrix:
+1. **Deduplicate**; merge findings that describe the same root failure from different angles
+2. **Rank by risk**; severity × likelihood matrix:
 
 | | Low likelihood | Medium likelihood | High likelihood |
 |---|---|---|---|
@@ -101,10 +101,10 @@ After all personas complete:
 | **Low severity** | Accept | Accept | Monitor |
 
 3. **Classify action**:
-   - **Block** — must address before proceeding
-   - **Mitigate** — add safeguard, test, or monitoring
-   - **Monitor** — add observability, accept residual risk
-   - **Accept** — documented risk, no action needed
+   - **Block**; must address before proceeding
+   - **Mitigate**; add safeguard, test, or monitoring
+   - **Monitor**; add observability, accept residual risk
+   - **Accept**; documented risk, no action needed
 
 ### Phase 4: Output
 
@@ -114,16 +114,16 @@ Format findings as a ranked list:
 ## Premortem: [Subject]
 
 ### Blockers
-1. [Finding] — Persona: X — Trigger: Y — Mitigation: Z
+1. [Finding]; Persona: X; Trigger: Y; Mitigation: Z
 
 ### Mitigations Needed
-1. [Finding] — Persona: X — Trigger: Y — Suggested fix: Z
+1. [Finding]; Persona: X; Trigger: Y; Suggested fix: Z
 
 ### Monitor
-1. [Finding] — Persona: X — Trigger: Y — Observability: Z
+1. [Finding]; Persona: X; Trigger: Y; Observability: Z
 
 ### Accepted Risks
-1. [Finding] — Persona: X — Rationale for acceptance: Y
+1. [Finding]; Persona: X; Rationale for acceptance: Y
 ```
 
 ## Integration Points
@@ -145,9 +145,7 @@ the test plan. Personas: Pessimist + Attacker. Frame: "Tests passed but the bug 
 Findings become additional test cases or assertions.
 
 ### With `rfc-design` skill
-Invoked as a gate before final RFC output. All six personas. Blockers revise RFC sections.
-Mitigations feed §8 (Testing & Rollout). Monitors feed §7 (Operability).
-Accepted risks go in an appendix subsection. Output is folded into the RFC, not shown separately.
+Invoked as `premortem.md` in the Step 2 parallel review pass (not standalone). All six personas. Block findings revise RFC sections. Mitigations feed §8 (Testing and Rollout). Monitors feed §7 (Operability). Accepted risks go in an appendix subsection. Output is folded into the RFC via staging file under `{tmp_dir}/rfc-review/`, not shown separately in chat.
 
 ### With `review-confluence-doc` skill
 Invoked in Step 4.5 after initial quality analysis of a fetched Confluence page.

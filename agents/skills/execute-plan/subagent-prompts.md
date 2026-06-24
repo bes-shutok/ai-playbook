@@ -1,4 +1,4 @@
-# Execute Plan — Sub-Agent Prompt Templates
+# Execute Plan: Sub-Agent Prompt Templates
 
 Copy the relevant template, fill placeholders, and launch via your agent's sub-agent execution capability.
 
@@ -24,7 +24,7 @@ Placeholders:
 | `<MANIFEST_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` |
 | `<LOG_PASS_NUM>` | `1` on first launch for this log path; orchestrator increments on relaunch |
 
-Log format and **create vs append** rules: see [agent-logs.md](agent-logs.md). If the log file already exists, **append** Pass `<LOG_PASS_NUM>` to the end — **never overwrite** prior passes. Each `done` reads **only logs from the immediately preceding worker step(s)** — not full session history.
+Log format and **create vs append** rules: see [agent-logs.md](agent-logs.md). If the log file already exists, **append** Pass `<LOG_PASS_NUM>` to the end; **never overwrite** prior passes. Each `done` reads **only logs from the immediately preceding worker step(s)**; not full session history.
 
 ---
 
@@ -49,13 +49,13 @@ Task: ### Task <TASK_NUM>: <TASK_TITLE>
 
 ## Rules
 
-1. Implement ONLY this task — every `- [ ]` clause in the task section above.
+1. Implement ONLY this task; every `- [ ]` clause in the task section above.
 2. Follow RED → GREEN when the task specifies it; run tests and show fresh output.
 3. Touch only files listed under this task's `Files:` (plus imports/wiring required for compile).
-4. Fix ALL test failures before returning — including failures that seem unrelated.
-5. Do NOT commit — the orchestrator launches `done` after verification.
-6. Do NOT edit the plan file — the orchestrator marks checkboxes.
-7. **Update execution log** at `<IMPLEMENT_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append — see agent-logs.md). Include commands run, decisions, errors, and full return payload.
+4. Fix ALL test failures before returning; including failures that seem unrelated.
+5. Do NOT commit; the orchestrator launches `done` after verification.
+6. Do NOT edit the plan file; the orchestrator marks checkboxes.
+7. **Update execution log** at `<IMPLEMENT_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). Include commands run, decisions, errors, and full return payload.
 
 ## Return format
 
@@ -95,16 +95,16 @@ Context:
 - Suggested commit subject: <COMMIT_HINT>
 - Manifest: <MANIFEST_PATH>
 
-## Preceding-step log — read before learn (required)
+## Preceding-step log: read before learn (required)
 
 Step 1.4 follows Step 1.2 implement. Read in full before invoking `learn`:
 - <IMPLEMENT_LOG_PATH>
 
-Do not read logs from other tasks or review rounds. If the log is missing or empty, stop and return `blocked: missing implement log` — do not commit.
+Do not read logs from other tasks or review rounds. If the log is missing or empty, stop and return `blocked: missing implement log`; do not commit.
 
 ## Scope
 
-Commit ONLY changes from this task. If `git status` shows unrelated uncommitted files from other work, do not stage them — ask is not available; leave them unstaged.
+Commit ONLY changes from this task. If `git status` shows unrelated uncommitted files from other work, do not stage them; ask is not available; leave them unstaged.
 
 Run the full done workflow: read preceding-step log → learn → docs-branch → sensitive-data scan → commit.
 
@@ -130,21 +130,21 @@ Context:
 - Address-review ran: yes | no (no = Step 3.3 skipped; still run learn + commit if anything is uncommitted)
 - Manifest: <MANIFEST_PATH>
 
-## Preceding-step logs — read before learn (required)
+## Preceding-step logs: read before learn (required)
 
 Step 3.4 follows Step 3.1 review and optionally Step 3.3 address. Read in full before invoking `learn`:
 
-- <REVIEW_LOG_PATH> (from Step 3.1 — required)
-- <ADDRESS_LOG_PATH> (from Step 3.3 — only if address-review ran; omit otherwise)
+- <REVIEW_LOG_PATH> (from Step 3.1; required)
+- <ADDRESS_LOG_PATH> (from Step 3.3; only if address-review ran; omit otherwise)
 
-Do **not** read implement logs or logs from prior review rounds. If a required preceding-step log is missing or empty, stop and return `blocked: missing <path>` — do not commit.
+Do **not** read implement logs or logs from prior review rounds. If a required preceding-step log is missing or empty, stop and return `blocked: missing <path>`; do not commit.
 
 ## Scope
 
 Commit changes from this iteration only: address-review code fixes, review doc edits on disk, and any other uncommitted work from this round. Do not stage unrelated pre-existing local changes.
 
 Suggested commit subject: fix: address plan review r<REVIEW_ROUND> findings
-(or chore: plan review r<REVIEW_ROUND> clean — when address-review did not run but learn/docs sync is needed)
+(or chore: plan review r<REVIEW_ROUND> clean; when address-review did not run but learn/docs sync is needed)
 
 Run the full done workflow: read preceding-step logs → learn → docs-branch → sensitive-data scan → commit.
 
@@ -172,13 +172,23 @@ Head: current branch
 
 <REVIEW_SCOPE>
 
-**Explicit must-fix** — always report valid findings on listed paths.
+**Explicit must-fix**; always report valid findings on listed paths.
 
-**Plan-related extension** — for paths not listed, report a finding only when it is causally related to this plan (implements/completes a task, regression from plan work, wiring or docs implied by an explicit change, contradicts a contract the plan changed). Mark unrelated findings `drop` with a one-line reason — do not auto-drop plan-related findings just because the path was omitted from the plan.
+**Plan-related extension**; for paths not listed, report a finding only when it is causally related to this plan (implements/completes a task, regression from plan work, wiring or docs implied by an explicit change, contradicts a contract the plan changed). Mark unrelated findings `drop` with a one-line reason; do not auto-drop plan-related findings just because the path was omitted from the plan.
 
 ## Diff scope
 
 Branch review: `git diff <BASE_BRANCH>...HEAD` (all plan commits on the current branch). Do not limit review to the latest commit.
+
+## Diff access
+
+Preferred: each review worker sub-agent runs `git diff <BASE_BRANCH>...HEAD` directly.
+
+If you materialize diff snapshot files for parallel sub-agents, write them **only** under:
+
+`{tmp_dir}/execute-plan/<PLAN_SLUG>/`
+
+Use names `diff-r<REVIEW_ROUND>.patch` (full diff) and `src-diff-r<REVIEW_ROUND>.patch` (source/config only). Do **not** write to repo root or use legacy names like `diff_r5.patch` / `src_diff_r5.patch`. Remove orphan repo-root patch files from prior runs at the start of this step if present.
 
 ## Mode
 
@@ -188,11 +198,11 @@ Branch review (no PR unless user provided a PR URL). **Required deliverable:** a
 
 Example: {reviews_dir}/2026-06-05-<PLAN_SLUG>-code-review-r<REVIEW_ROUND>.md
 
-(Use `-code-review-r` — not `-plan-review-r`, which is reserved for pre-execution plan reviews from the `plans` skill.)
+(Use `-code-review-r`; not `-plan-review-r`, which is reserved for pre-execution plan reviews from the `plans` skill.)
 
 Create `{reviews_dir}/` if missing. Follow `doing-code-review` staging-doc format (Summary, per-finding sections with Severity and Status). A chat-only summary is not a substitute.
 
-**Update execution log** at `<REVIEW_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append — see agent-logs.md). Include sub-agent launch details, assessment-pass notes, dropped findings, and full return payload.
+**Update execution log** at `<REVIEW_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). Include sub-agent launch details, assessment-pass notes, dropped findings, and full return payload.
 
 ## Acceptance criteria (orchestrator blocks Step 3.2 / address-review without these)
 
@@ -209,8 +219,8 @@ Create `{reviews_dir}/` if missing. Follow `doing-code-review` staging-doc forma
 - Staging doc path: <REVIEW_DOC_PATH> (must exist on disk)
 - Execution log: <REVIEW_LOG_PATH> (must exist on disk)
 
-### Medium+ pending findings from doing-code-review (provisional — or "none")
-1. Title — Severity — File:line
+### Medium+ pending findings from doing-code-review (provisional: or "none")
+1. Title; Severity; File:line
 
 Do NOT fix code. Do NOT commit. Review only. Loop exit uses remaining Medium+ after address-review triage, not this list.
 ```
@@ -231,12 +241,12 @@ Review doc: <REVIEW_DOC_PATH>
 
 <REVIEW_SCOPE>
 
-Fix findings on **explicit must-fix** paths when valid. For unlisted paths, fix only when **plan-related** (same causal test as Code Review). Drop unrelated findings with a one-line reason — do not expand scope into opportunistic refactors or pre-existing unrelated bugs.
+Fix findings on **explicit must-fix** paths when valid. For unlisted paths, fix only when **plan-related** (same causal test as Code Review). Drop unrelated findings with a one-line reason; do not expand scope into opportunistic refactors or pre-existing unrelated bugs.
 
 ## Instructions
 
 1. Read all findings with Status `pending` in the review doc.
-2. Triage each using two-tier scope: fix valid findings on explicit must-fix paths; for unlisted paths, fix only when plan-related — mark `drop` for false positives or unrelated issues (one-line reason).
+2. Triage each using two-tier scope: fix valid findings on explicit must-fix paths; for unlisted paths, fix only when plan-related; mark `drop` for false positives or unrelated issues (one-line reason).
 3. Address Critical, High, and Medium findings first.
 4. Low findings: fix only when trivial; otherwise leave pending.
 5. **Done bar:** Mark `done` only when the executable/canonical artifact named in the finding is fixed (script, monolithic bash block, wired call site). A reference-only snippet update while the runnable block stays stale → leave `pending`.
@@ -245,18 +255,23 @@ Fix findings on **explicit must-fix** paths when valid. For unlisted paths, fix 
 <VALIDATION_COMMANDS>
 
 7. Update the review doc: set addressed findings to `done`, false positives/out-of-scope to `drop` with a one-line reason; leave only validated unresolved items at `pending`.
-8. **Update execution log** at `<ADDRESS_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append — see agent-logs.md). On Step 3.3 relaunch within the same round R, Pass 2+ **must** be appended to `review-r<R>-receiving-code-review.log.md` without erasing Pass 1. Include triage decisions, pushback rationale, and full return payload.
-9. Do NOT commit — the orchestrator launches **Done (per review iteration)** (Step 3.4), then starts the next review round unless two consecutive clear review rounds have completed (`consecutive_clear_rounds >= 2`).
+8. **Update execution log** at `<ADDRESS_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). On Step 3.3 relaunch within the same round R, Pass 2+ **must** be appended to `review-r<R>-receiving-code-review.log.md` without erasing Pass 1. Include triage decisions, pushback rationale, and full return payload.
+9. Do NOT commit; the orchestrator launches **Done (per review iteration)** (Step 3.4), then starts the next review round unless two consecutive clear review rounds have completed (`consecutive_clear_rounds >= 2`).
 
 ## Return format
 
+### Counts
+- Fixed (`done`): <count>
+- Dropped (`drop`): <count>
+- Remaining (`pending`): <count>
+
 ### Fixed
-- Finding title — what changed
+- Finding title; what changed
 
 ### Dropped
-- Finding title — reason
+- Finding title; reason
 
-### Remaining Medium+ (after triage — orchestrator uses this for exit gate)
+### Remaining Medium+
 - (list or "none")
 
 ### Tests

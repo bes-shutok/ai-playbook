@@ -33,7 +33,7 @@ Do not use for:
 4. **Existing-method modification audit**: for every existing method the plan modifies, compute
    pre-change line count and the new line count implied by the planned edits. Flag any
    post-modification method that would exceed repo complexity limits (cyclomatic, nesting depth,
-   line length — see repo-specific overrides in Step 2 item 5). New methods get audited by the
+   line length; see repo-specific overrides in Step 2 item 5). New methods get audited by the
    relevant agent; modifications to existing methods are easy to miss otherwise.
 5. **Replacement / supersession map**: list any new class, enum, method, or table the plan
    introduces that overlaps in purpose with existing code (e.g. a new policy enum that supersedes
@@ -51,9 +51,9 @@ Each agent receives:
 2. Relevant source file excerpts (signatures, data structure definitions, pipeline structure)
 3. Its specific review lens from `~/.agents/skills/review-agents/<agent>.md`
 4. The project's CLAUDE.md content (for repository conventions)
-5. **Repo-specific overrides take precedence**: if `CLAUDE.md`, `{guidelines_path}` (from `.ai-playbook/facts.md` TOML when present; typically `docs/maintenance/project-guidelines.md`), or any loaded company/project guideline defines complexity, naming, comment, or layering rules that conflict with the generic pattern catalog, the agent MUST apply the repo-specific value, not the catalog default. Example: catalog says "functions >50 lines" but `company-guidelines.md #17` says "≤30 lines per method" — apply the 30-line rule.
+5. **Repo-specific overrides take precedence**: if `CLAUDE.md`, `{guidelines_path}` (from `.ai-playbook/facts.md` TOML when present; typically `docs/maintenance/project-guidelines.md`), or any loaded company/project guideline defines complexity, naming, comment, or layering rules that conflict with the generic pattern catalog, the agent MUST apply the repo-specific value, not the catalog default. Example: catalog says "functions >50 lines" but `company-guidelines.md #17` says "≤30 lines per method"; apply the 30-line rule.
 6. **Execution framing**: "You are reviewing an IMPLEMENTATION PLAN, not a code diff. Read the plan tasks and the referenced source files to understand what is being proposed. Apply your pattern catalog to identify whether the proposed changes would introduce the issues you are responsible for detecting."
-7. **Output format**: for each finding provide `{location_in_plan, issue, severity: Blocker/Medium/Low/Monitor, fix, evidence}` — no `path/line/side` fields (those are for code review). **`issue` and `evidence` must be self-contained**: name the plan task, quote or paraphrase the contradicting plan text, cite what the referenced source file shows, and state the concrete fix. Do not return stubs the orchestrator must research.
+7. **Output format**: for each finding provide `{location_in_plan, issue, severity: Blocker/Medium/Low/Monitor, fix, evidence}`; no `path/line/side` fields (those are for code review). **`issue` and `evidence` must be self-contained**: name the plan task, quote or paraphrase the contradicting plan text, cite what the referenced source file shows, and state the concrete fix. Do not return stubs the orchestrator must research.
 
 ### Shared agents (from `~/.agents/skills/review-agents/`)
 
@@ -64,12 +64,13 @@ Each agent receives:
 | `architecture.md` | Would the proposed design introduce SOLID violations, layer crossings, god classes? |
 | `testing.md` | Are the described tests sufficient? Could a test pass even if the implementation is wrong? |
 | `simplification.md` | Is the planned approach over-engineered for the problem? |
+| `prose-clarity.md` | Is plan prose redundant, verbose, or unclear? Could tasks be self-explanatory via naming? |
 | `documentation.md` | Are docs for user-visible behavior changes included in the plan? |
 | `security.md` | Would the proposed changes introduce security vulnerabilities? |
 | `concurrency.md` | Would the proposed changes introduce race conditions or transactional scope issues? |
-| `premortem.md` | Design-level failure modes; "it shipped and failed — why?" |
+| `premortem.md` | Design-level failure modes; "it shipped and failed; why?" |
 
-### Plan-specific agent (inline — no shared file)
+### Plan-specific agent (inline; no shared file)
 
 #### Consistency Agent
 
@@ -107,17 +108,17 @@ For each finding, provide:
 
 ## Step 3: Synthesize Findings
 
-After all sub-agents complete, **synthesize from agent returns only** — do not re-read source files or re-analyze the plan in the orchestrator context. The orchestrator dedups, ranks, and formats; sub-agents already did the reading and reasoning.
+After all sub-agents complete, **synthesize from agent returns only**; do not re-read source files or re-analyze the plan in the orchestrator context. The orchestrator dedups, ranks, and formats; sub-agents already did the reading and reasoning.
 
 1. **Deduplicate**: Merge findings that describe the same root issue from different angles
 2. **Rank by severity**:
-   - **Blocker** — must address before execution
-   - **Medium** — should add safeguard, test, or step to plan
-   - **Low** — minor improvement, optional in plan revision
-   - **Monitor** — note as risk, add observability
+   - **Blocker**; must address before execution
+   - **Medium**; should add safeguard, test, or step to plan
+   - **Low**; minor improvement, optional in plan revision
+   - **Monitor**; note as risk, add observability
 3. **Cross-reference with plan**: For each finding, note whether the plan already
    addresses it (and mark as "Already mitigated" if so)
-4. **Incomplete agent output**: if a finding lacks `evidence` or a concrete `fix`, relaunch that agent focused on the gap — do not fill it inline
+4. **Incomplete agent output**: if a finding lacks `evidence` or a concrete `fix`, relaunch that agent focused on the gap; do not fill it inline
 
 ## Step 4: Output
 
@@ -129,7 +130,7 @@ Write the review to `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md
 **Date:** YYYY-MM-DD
 **Plan:** `{plans_dir}/<filename>.md`
 **Prior:** `{reviews_dir}/<prior-rN>.md` *(omit on r1)*
-**Agents:** quality, implementation, architecture, testing, simplification, documentation, security, concurrency, premortem, consistency
+**Agents:** quality, implementation, architecture, testing, simplification, prose-clarity, documentation, security, concurrency, premortem, consistency
 
 ## Summary
 
@@ -140,7 +141,7 @@ Write the review to `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md
 ## Blockers
 
 ### 1. <Title>
-- **Agent:** quality | implementation | architecture | testing | simplification | documentation | security | concurrency | premortem | consistency
+- **Agent:** quality | implementation | architecture | testing | simplification | prose-clarity | documentation | security | concurrency | premortem | consistency
 - **Location:** Task N, bullet M
 - **Issue:** <concrete description>
 - **Evidence:** <what the source code shows>
@@ -217,8 +218,8 @@ Adapted from `doing-code-review`:
 - **No vague concerns.** Every finding must name specific components, data flows, or functions.
 - **Skip findings the plan already addresses.** Read the full plan (including Design Invariants)
   before generating findings.
-- **No style/formatting findings** on the plan document itself.
+- **No markdown formatting nitpicks** on the plan document itself (heading levels, list style). Redundant or verbose plan prose is owned by `prose-clarity.md`.
 - **Evidence-gated findings:** correctness claims must be backed by reading the actual source
-  file. Do not assume — verify.
+  file. Do not assume; verify.
 - **2-3 findings max per agent.** Quality over quantity. If an agent finds nothing credible,
   it reports "No findings."

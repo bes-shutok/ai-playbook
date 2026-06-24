@@ -38,7 +38,7 @@ Team decision: see [company-decisions.md](company-decisions.md) for rationale an
 | User runs **doc-hierarchy-migrate** | Apply three-layer hierarchy; update repo instructions |
 | User runs **doc-hierarchy-upkeep** | Update Layer 1/2 only when migration-complete signal is true |
 | User runs **another skill** | Read paths from project specs; explore `docs/` if silent |
-| Legacy layout on disk | Use what exists; suggest **doc-hierarchy-migrate** — do not silently relocate |
+| Legacy layout on disk | Use what exists; suggest **doc-hierarchy-migrate**; do not silently relocate |
 | **`learn` on company service** | After migration-complete: no new `docs/examples/` or `docs/<module>/` trees |
 
 Project `docs/maintenance/project-guidelines.md` may add **repo deltas** but must **not** redefine the three-layer folder schema without a team decision.
@@ -59,17 +59,17 @@ Project `docs/maintenance/project-guidelines.md` may add **repo deltas** but mus
 ```
 docs/
 ├── README.md                   # Layer 1
-├── architecture/               # Layer 2 — exactly seven topic files
-├── maintenance/                # Layer 2 — guidelines, wire catalogs, optional dashboards/
+├── architecture/               # Layer 2; exactly seven topic files
+├── maintenance/                # Layer 2; guidelines, wire catalogs, optional dashboards/
 │   └── dashboards/             # optional Grafana exports (index from operational-guides.md)
 ├── tmp/                        # Ephemeral (gitignored)
 ├── history/
-│   ├── context/                # Layer 3 — product/domain context (from legacy docs/context/)
+│   ├── context/                # Layer 3; product/domain context (from legacy docs/context/)
 │   ├── plans/completed/
-│   ├── investigations/         # Layer 3 — other investigation notes (flat files)
+│   ├── investigations/         # Layer 3; other investigation notes (flat files)
 │   ├── migrations/
 │   ├── reviews/                # Ephemeral (gitignored)
-│   └── feature-notes/          # Layer 3 — RFCs, PRDs, gap analyses (flat files)
+│   └── feature-notes/          # Layer 3; RFCs, PRDs, gap analyses (flat files)
 ```
 
 Full filename list and move tables: [migration-map.md](migration-map.md).
@@ -108,14 +108,14 @@ Templates: [instruction-templates.md](instruction-templates.md).
 | `doing-code-review`, `review-plan` | Staging docs under resolved `{reviews_dir}` |
 | `github-pr-workflow` | Doc migration PR description rules from `company-decisions.md` |
 | `review-confluence-doc` | Reads `{tmp_dir}` from `.ai-playbook/facts.md` for review output files |
-| `rfc-design` | Reads caller catalog and `{tmp_dir}` from `.ai-playbook/facts.md` |
+| `rfc-design` | Reads caller catalog and `{tmp_dir}` from `.ai-playbook/facts.md`; review staging under `{tmp_dir}/rfc-review/` |
 | `how-to-write-skills` | Bidirectional Integration Points requirement for skill family consumers |
 | `using-skills` | Step 0 reads `.ai-playbook/facts.md`; invokes bootstrap only when Terms triggers fire |
 
 ## Related
 
-- [content-ownership.md](content-ownership.md) — which file owns each topic (no duplicate prose)
-- the `bootstrap-ai-playbook` skill — writes `.ai-playbook/facts.md`; consumers read TOML keys via `using-skills` Step 0
-- [`../doc-hierarchy-migrate/SKILL.md`](../doc-hierarchy-migrate/SKILL.md) — migration workflow
-- [`../doc-hierarchy-upkeep/SKILL.md`](../doc-hierarchy-upkeep/SKILL.md) — Layer 1/2 upkeep
+- [content-ownership.md](content-ownership.md); which file owns each topic (no duplicate prose)
+- the `bootstrap-ai-playbook` skill; writes `.ai-playbook/facts.md`; consumers read TOML keys via `using-skills` Step 0
+- [`../doc-hierarchy-migrate/SKILL.md`](../doc-hierarchy-migrate/SKILL.md); migration workflow
+- [`../doc-hierarchy-upkeep/SKILL.md`](../doc-hierarchy-upkeep/SKILL.md); Layer 1/2 upkeep
 - `learn`, `plans`, `execute-plan`, `docs-branch`, `done`
