@@ -38,6 +38,7 @@ Additional review context for Java/Spring projects. Append to each sub-agent pro
 ## Collection Invariants in Records/Commands
 
 - Domain records, commands, and DTOs with collection parameters: verify compact constructors check for null elements (not just null/empty). A missing `stream().anyMatch(Objects::isNull)` guard allows NPEs to surface later at runtime in hard-to-diagnose locations.
+- OpenAPI Generator optional array properties on request models often default to `new ArrayList<>()`. When the client omits the field from JSON, Jackson leaves the empty list in place (not `null`). Partial-update handlers that only check `steps == null` will still forward `[]` upstream. Treat omitted and empty collections as "no change" when the upstream contract distinguishes `null` from empty.
 
 ## Observability
 

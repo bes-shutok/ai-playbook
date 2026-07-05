@@ -205,7 +205,7 @@ When the user asks to run reviews until clean (e.g. "no medium problems", "until
 1. **Exit condition and minimum rounds:** see `plans` skill Plan Quality Gate (Blocker=0 AND Medium=0, minimum two rounds).
 2. **Severity alignment:** agents emit Blocker/Medium/Low/Monitor directly; no mapping step needed.
 3. **Treat a clean review as data, not as a terminal verdict.** A 0 Blocker / 0 Medium outcome can mean either (a) the plan is correct, or (b) the agent catalog lacks patterns to detect defects. Run the self-audit below before stopping after only one round.
-4. **Run a brief self-audit alongside the agent review.** Before declaring iteration complete, scan the change types introduced by the latest plan revision (new domain types, decomposed methods, replaced classes, modified existing methods, restructured tasks) and verify the catalog has an active pattern for each. If a change type has no corresponding pattern in `~/.agents/skills/review-agents/*.md`, the agents cannot detect defects of that class.
+4. **Run a brief self-audit alongside the agent review.** Before declaring iteration complete, scan the change types introduced by the latest plan revision (new domain types, decomposed methods, replaced classes, modified existing methods, restructured tasks) and verify the catalog has an active pattern for each. If a change type has no corresponding pattern in `~/.agents/skills/review-agents/*.md`, the agents cannot detect defects of that class. **Also list every "inherited/validated/tested/unchanged" claim in the plan and confirm the panel re-probed each by measurement** (see Signal-to-Noise: Inherited/validated claims are claims, not proof). A clean round that did not re-probe the plan's "settled" mechanisms is not evidence those mechanisms are correct.
 5. **Catalog gap discovered → update the skill before re-iterating.** If the self-audit identifies a missing pattern (e.g. "no agent owns 'type-boundary discipline'", "no agent enumerates switches", "no agent checks for superseded code"), add the pattern to the relevant agent file FIRST, then re-run the review. Patching the plan around a catalog gap leaves the gap for future plans.
 6. **Stop when both conditions hold**: the latest review reports Blocker=0 AND Medium=0 (minimum two rounds completed) AND a self-audit against the change types in the plan finds no additional concerns the catalog would have missed.
 7. **Record self-audit gaps as catalog improvements**, not as one-off plan patches. When the self-audit found something the catalog missed, the fix is two-part: patch the plan AND update the agent file or `SKILL.md`. The catalog improvement is the persistent gain; the plan patch is local.
@@ -217,7 +217,29 @@ Adapted from `doing-code-review`:
 - **Report problems only.** No positive observations or praise.
 - **No vague concerns.** Every finding must name specific components, data flows, or functions.
 - **Skip findings the plan already addresses.** Read the full plan (including Design Invariants)
-  before generating findings.
+  before generating findings. This applies to *specific prior findings that were mitigated* -
+  NOT to mechanisms the plan merely *asserts* are proven (see the next rule).
+- **Inherited/validated claims are claims, not proof.** When a plan says a mechanism is
+  "inherited," "validated by prior rounds," "already tested," "unchanged from a prior phase,"
+  or "gate-core inherited," treat that phrasing as a flag to RE-VERIFY the mechanism, not as a
+  reason to skip it. The areas a plan declares settled are precisely where latent defects hide
+  unchallenged (a prior review declaring "X is tested" discourages the next panel from
+  measuring X). Re-probe by exercising the mechanism against the real artifact it operates on,
+  not by re-reading the plan's assertion.
+- **Measure the real artifact, don't just re-assert the plan's claims about it.** When a plan
+  operates on a real file, schema, config, or API (a parser over a corpus, a migration over a
+  dataset, a loader over a config), run at least one structural measurement of that artifact
+  that the code's correctness depends on - fence-marker parity, key uniqueness, encoding,
+  delimiter/count parity, nullability - beyond re-asserting the counts the plan states. Reading
+  the source is necessary; measuring the property the code relies on is the verification.
+- **Agent empirical assertions are claims, not measurements.** A review agent may state a
+  runtime fact (an exception type, a return shape, an encoding or serialization outcome) with
+  measured-sounding confidence without having executed it. When a finding turns on such an
+  assertion, re-run the one-line reproduction yourself before folding the finding: agents
+  regularly invert language semantics, and a false assertion reads identical to a true one.
+  Shape witnessed this session: two agents asserted `json.dumps({"k": b"x"}, default=str)`
+  raises; an empirical check showed it succeeds (`default=str` degrades `bytes`), and the real
+  residual vectors were circular-reference and `__str__`-raising.
 - **No markdown formatting nitpicks** on the plan document itself (heading levels, list style). Redundant or verbose plan prose is owned by `prose-clarity.md`.
 - **Evidence-gated findings:** correctness claims must be backed by reading the actual source
   file. Do not assume; verify.

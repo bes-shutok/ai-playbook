@@ -60,6 +60,8 @@ At task start: read **`user_facts_path`**, then ownership/repo facts when scoped
 
 **Cursor hooks (optional):** versioned in `cursor/hooks/`; install to `~/.cursor/hooks/` (`cursor/hooks/README.md`). Enforces git safety (including unscoped `git clean`) and optional execute-plan / em-dash gates; contracts in skills, not duplicated here.
 
+**ai-playbook-versioned hooks:** two cross-agent hooks ship under `agents/hooks/` (symlinked into each agent's `~/` config): lessons-recall (proactive recall via `UserPromptSubmit`/`PreInvocation` injection) and skill-gate (`PreToolUse` block on gated artifacts); the marker WRITE RECIPE and wiring live in `ai-playbook/agents/hooks/skill-gate/README.md` (single source). **Install, per-agent differences, session bridge, and same-repo multi-agent behavior:** `agents/hooks/lessons-recall/README.md` (**Install (step-by-step)**, **Agent differences (v2 at a glance)**, **Session channel precedence**). v2 Cursor-only change: optional `cursor-session-bridge.sh` exports `CURSOR_SESSION_ID` per composer tab; Claude/Codex/agy wiring unchanged. Probe: `python3 scripts/hooks_probe.py --all`.
+
 ## Hard rules (keep inline; high frequency)
 
 - **Git push:** never push without explicit user instruction; never force-push without approval.
@@ -70,6 +72,7 @@ At task start: read **`user_facts_path`**, then ownership/repo facts when scoped
 - **Paths in docs/skills:** use `~/` home-relative paths, not `/Users/...`.
 - **Public hygiene:** neutral placeholders in committed skills; run `public_hygiene_scan_script` before skill commits.
 - **GitHub PR URL:** invoke `doing-code-review` or `receiving-code-review` per intent; see `agent_workflow_guidelines.md` #42 area / PR workflow skills.
+- **Confluence ownership:** never update Confluence pages created by someone else unless the user specifically asks for that page to be changed. For any such page, request explicit user approval for each individual change before editing.
 - **Personal projects:** local git only unless user asks to push/open PR (`personal_projects_root` in facts).
 - **Compaction:** run `learn` before allowing context compaction.
 
@@ -78,9 +81,11 @@ At task start: read **`user_facts_path`**, then ownership/repo facts when scoped
 Biases toward caution over speed; for trivial tasks, use judgment. Full detail: `agent_workflow_guidelines.md` **§57**.
 
 - **Think first:** state assumptions; if multiple interpretations exist, present them; if unclear, stop and ask before coding.
+- **Explain simply, not simpler:** break down complicated ideas, cut unnecessary jargon, and explain as clearly as you can. Avoid details that are not strictly necessary in the current context. Truly understanding a topic means you can explain it simply. Do not oversimplify: if you make an idea too simple, it becomes inaccurate, misleading, or loses its core meaning.
 - **Simplicity:** minimum code for the request; no speculative features, abstractions, or error handling for impossible cases; rewrite if overcomplicated.
 - **Surgical edits:** touch only what the task requires; match existing style; do not refactor or "improve" adjacent code; remove orphans your changes created only. See also `agent_workflow_guidelines.md` **§8**.
 - **Verify goals:** turn requests into testable success criteria; for multi-step work, plan each step with a verify check (tests, repro, or observable outcome).
+- **Recall before re-biting:** before a bug fix or a non-trivial design change, scan the symptom (or planned change) against the root-cause families table; if a family matches, grep the tagged corpus (user-level `development_lessons.md` + the repo's `docs/maintenance/development_lessons.md`) for the specific lesson and apply it BEFORE coding. Cross-project incidents are only reused if you check the pool; a re-bitten mistake is the exact failure this exists to prevent.
 
 ## Skill maintenance (summary)
 
@@ -92,14 +97,14 @@ Plans: resolved `{plans_dir}` only; see `plans` skill. RFCs on doc-hierarchy rep
 
 ## Gitignored docs safety (summary)
 
-Verify `git check-ignore` before staging. Never `git stash clear` when docs-branch workflow active. Run docs-branch bash as **one** shell invocation (`RESTORE_TMP` does not persist across calls). Execute-plan session logs under `{tmp_dir}/execute-plan/`; snapshot before docs-branch sync. Details: `docs-branch` skill and `agent_workflow_guidelines.md` #6, #46.
+Verify `git check-ignore` before staging. Never `git stash clear` when docs-branch workflow active. Run docs-branch bash as **one** shell invocation (`RESTORE_TMP` does not persist across calls). Docs-branch sync is **add-only**: missing shadow files (especially reviews) are restored from `refs/heads/docs`, not treated as deletions unless explicitly removed in the latest `docs` commit. Execute-plan session logs under `{tmp_dir}/execute-plan/`; snapshot before docs-branch sync. Details: `docs-branch` skill and `agent_workflow_guidelines.md` #6, #46.
 
 ## Shared guidelines index (`shared_docs_dir`; on demand)
 
 | File | When to open |
 |------|----------------|
 | `agent_workflow_guidelines.md` | Review triage, scope, CI interpretation, formatting detection, coding discipline (**§57**), workflow lessons (**§1–§56**) |
-| `coding_guidelines.md` | Universal coding patterns |
+| `coding_guidelines.md` | Universal coding patterns; #17 lesson tag-format spec + #17-#25 root-cause principle catalog (families A-H) |
 | `jvm_guidelines.md` | JVM/Spring conventions (e.g. #2 Duration properties, #3 Spring Cloud Config name, #6 logging) |
 | `kotlin_guidelines.md` | Kotlin-specific (e.g. #16 `CancellationException`) |
 | `java_guidelines.md` | Java-specific |
@@ -110,6 +115,27 @@ Verify `git check-ignore` before staging. Never `git stash clear` when docs-bran
 **Company guidelines master:** when company-scoped and the task touches cross-repo conventions (DDD, logging, DB naming, branch hygiene, concurrency patterns cited in workflow lessons).
 
 **Project guidelines:** repo `AGENTS.md` indexes rule numbers; open `project_guidelines_rel` sections only for the active task.
+
+## Root-cause families (always-on recall index)
+
+The point of the lessons corpus is to be recalled by **problem shape**, not by file location. When in doubt (reviewing a bug, writing a fix, designing, or a test fails), pattern-match the symptom against these families first, then grep the corpus for the specific tagged lesson. This table is the always-in-context index; full definitions and failure signatures live in `coding_guidelines.md` #18-#25.
+
+| Cat | Family | Suspect it when |
+|-----|--------|-----------------|
+| #18 | **A. Equivalence-class coverage** | A test pins one cell of an input class; the fix must cover the whole partition, not just the tested cell |
+| #19 | **B. Error-policy propagation** | A centralized fallible op is reused, but each call site's raise-vs-degrade policy was not carried over |
+| #20 | **C. Representation: sentinel vs None vs exception** | "absent/invalid" is a sentinel, a None, or an exception and two got conflated; recoverability differs |
+| #21 | **D. Single source of truth** | The same fact is authoritative in two places; one drifts |
+| #22 | **E. Temporal / ordering invariants** | An earlier event consumes state a later event changes; a precondition went stale |
+| #23 | **F. Layering / dependency direction** | Logic lives in the wrong layer, or a dependency points both ways (a lower layer reaches up) |
+| #24 | **G. Data-loss observability** | A match/dedup/transform drops a record silently; exit 0 yet data is missing |
+| #25 | **H. Verify the real thing, not the abstraction** | Code trusts a name, summary, mock, or field-name conflation instead of tracing real data |
+
+**Corpus topology.** Cross-project incidents live in the **user-level** `development_lessons.md` under `shared_docs_dir` (strict `UL#N`, gated read-only by `lessons_index.py` at `learn` Step 6.6); per-repo incidents in each repo's `docs/maintenance/development_lessons.md` (convention `#N`, **skill-gate enforced** when hooks are installed: Write/Edit requires a fresh `learn.<project>.<session>.marker` from the `learn` skill; see `agents/hooks/skill-gate/README.md`).
+
+**Recall command** (the tags ARE the index): `grep -nE '^\*\*Principle:\*\* Family <X>' <user_corpus_or_repo_file>` lists every lesson already tagged with the family. See the `generalize` and `learn` skills; a new user-level capture is gate-checked at `learn` Step 6.6.
+
+**Citation policy.** Do not cite `UL#N` from project files; cite the lesson title (+ short description if decisive), else drop the sentence.
 
 ## Domain snippets (pointer-first; detail in shared docs)
 

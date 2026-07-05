@@ -735,7 +735,7 @@ produces incomplete output that fails downstream quality checks.
 
 48.2. **Deny patterns stay local:** machine-specific hygiene regexes belong in `public_hygiene_patterns_file` (user facts), not in the public repo. The repo may ship an empty template (`docs/scan-public-hygiene.patterns.example`) only.
 
-48.3. **Runner stays local:** execute `public_hygiene_scan_script` from user facts (typically under `~/.ai-playbook/scripts/`). Gitignore repo-root `/scripts/` so local copies cannot be committed accidentally.
+48.3. **Runner source vs runtime:** repo-root `scripts/` is the TRACKED canonical home for shared agent scripts (hygiene runners like `scan-public-hygiene.sh`, `check-no-em-dash.sh`, `check-instruction-size.sh`, `done-lock.sh`, plus the lessons gate/adopter/migrator). Runtime copies under `~/.ai-playbook/scripts/` are synced from this tracked source. Execute `public_hygiene_scan_script` from user facts (typically under `~/.ai-playbook/scripts/`). Only machine-specific or secrets-bearing scripts (e.g. `sync-mcp-credentials.sh`) and `public_hygiene_patterns_file` stay local and gitignored under `~/.ai-playbook/scripts/`.
 
 48.4. **Before skill commits:** run the hygiene scan; personal contact email is allowed only in `LICENSE.txt` copyright lines.
 
@@ -761,7 +761,7 @@ When an implement sub-agent reports that work for the current task "was already 
 
 50.2. **Skills own portable policy.** Byte budgets, retry counts, gate mode names, placement ladders, and "when to run" rules belong in the owning skill's `SKILL.md` (for example instruction size budget in `learn` Step 6.5 and `done` Step 2.8).
 
-50.3. **Scripts follow the same split.** Default behavior and constants live in the skill and in a local script under `~/.ai-playbook/scripts/` (gitignored from public repos). Facts may point at a script path when it varies by machine; facts must not restate the script's policy constants.
+50.3. **Scripts follow the same split.** Default behavior and constants live in the skill and in shared scripts tracked under repo-root `scripts/` (canonical source), synced to `~/.ai-playbook/scripts/` at runtime. Facts may point at a runtime script path when it varies by machine; facts must not restate the script's policy constants. Only secrets-bearing or machine-specific scripts (e.g. `sync-mcp-credentials.sh`, `public_hygiene_patterns_file`) remain gitignored under `~/.ai-playbook/scripts/`.
 
 50.4. **User correction trigger:** When the user says a constant "can live in the skill" or "doesn't need to be in facts", remove the facts key; do not rename it to another facts entry. Update the owning skill instead.
 
@@ -778,6 +778,10 @@ When an implement sub-agent reports that work for the current task "was already 
 53.4. **Live vs backup:** Cursor canonical auth is `~/.cursor/projects/Users-andrey/mcp-auth.json` (adjust user segment per machine). Per-project `mcp-auth.json` may lag; `restore` can refresh both user-level and `CURSOR_PROJECT_DIR` project files.
 
 53.5. **Cross-reference:** `user_facts_path` §MCP OAuth; `learn` Step 2: Facts vs skill configuration.
+
+53.6. **Atlassian: one auth path per task.** IDE MCP integration, CLI agent MCP integration, standalone MCP proxy, and REST bearer token stores are **separate**. Do not chain them in one task. If the active integration is already authenticated, use it only; do not start an alternate proxy, re-run login, or delete local OAuth token files. At most **one** browser OAuth prompt per task; re-prompt only when the chosen path fails with an explicit auth error.
+
+53.7. **`restore` vs fresh login:** Never run a credential **restore** immediately after a successful OAuth login in the same task; it can overwrite fresh tokens with an old backup. After login: **snapshot**. Use restore only in a later session when auth is missing. Repo Confluence scripts (`scripts/sync-confluence.py`) must use the same authenticated MCP path as the active agent integration, not an untested alternate REST bearer store. Runtime-specific commands and local enforcement hooks live in `user_facts_path` §MCP OAuth (not in committed repo docs).
 
 ## 51. Instruction Context Loading: Always-On vs On Demand
 
@@ -944,3 +948,20 @@ When wiring Google Gemini CLI or Antigravity to the shared skill registry:
 58.5. **Fallback:** if Antigravity still misses skills, add the **absolute** path to `~/.agents/skills` under Settings → Customizations → Skill Custom Paths (tilde may not expand). Restart IDE; open a fresh conversation.
 
 58.6. **Cross-reference:** wiring recipes and verify bash in `agent-runtime-layout.md` (Gemini CLI and Antigravity section) and `docs/AGENTS.md` (Verify wiring).
+
+## 59. Vision/OCR Reads Need Text-Source Verification Before Correcting an Artifact
+
+When a vision or OCR model interprets a screenshot, photo, or scanned image and its read disagrees with a value already in an artifact (a doc, config, data file, or code), the default hypothesis is that the IMAGE READ is wrong, not the artifact. Image models produce systematic, internally consistent misreads: swapping near-identical words (two verbs that differ by a few characters), dropping prefixes, or normalizing unusual tokens to common ones. A wrong read can therefore look confident and self-consistent and look like an artifact error that needs fixing.
+
+**Rule:** before changing an existing artifact value to match a vision/OCR read, confirm the read against an authoritative text source (the spec, official instructions, the source document's extracted text, or a second independent extraction). Correct the artifact only if the text source agrees with the vision read.
+
+**Anti-pattern:** a field in a doc carries a non-obvious code (a letter prefix plus digits). A screenshot of the same field is fed to a vision model, which returns a plausible value with the prefix dropped and a similar word substituted. Treating the disagreement as a stale doc and "correcting" the doc to the vision value, without checking the authoritative reference, introduces an error into an artifact that was already right.
+
+**Qualification gate (when this rule applies):**
+- A vision/OCR result contradicts a value currently in a tracked artifact, and
+- you are about to edit the artifact to match the image read, and
+- you have not yet checked the image read against a text source (extracted text, spec, official manual, second extraction).
+
+**General form:** image-derived claims are unverified interpretations of unstructured input with known characteristic failure modes (systematic, consistent misreads). They are not primary sources. An existing artifact value that the read contradicts is evidence the read may be wrong; resolve the contradiction against a text source before mutating anything.
+
+**Why this matters:** the failure mode is a silent regression. You "fix" something that was correct, and because the wrong read was confident and consistent, the mistake does not feel like a mistake. The verify step costs seconds; the wrong edit propagates into committed work.

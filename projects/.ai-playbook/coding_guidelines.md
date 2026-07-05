@@ -159,8 +159,10 @@ When the expected count of items is known (not just "at least one"), use exact e
 
 This catalog is **finalized** by the `generalize audit` (see the `generalize` skill). The
 anchor sets below are the authoritative illustrative subset drawn from the audit; the
-complete per-repo lesson map lives in each repo's `principle-index.md`. Shape triggers may
-be revised by a future audit run, but the family set (A to H) is stable.
+complete per-repo lesson map is greppable in each repo's `development_lessons.md`
+(`grep -nE '^\*\*Principle:\*\* Family X'`), and cross-project lessons live in the
+user-level `development_lessons.md` (strict, gated). Shape triggers may be revised by a
+future audit run, but the family set (A to H) is stable.
 
 The rest of this file (clauses #1 to #16) is incident-anchored: a rule is recalled by the code location
 or the incident surface that produced it. That helps prevent the same bug in the same place, but it
@@ -187,8 +189,46 @@ a whole corpus. The catalog is the family authority; the concrete incident is al
 - G. Data-loss observability: unmatched or dropped records must surface; never silent discard. See #24.
 - H. Verify the real thing, not the abstraction: do not trust names, summaries, or mocks; trace actual data and behavior. See #25.
 
-Inline anchors in each family are an illustrative subset; see each repo's `principle-index.md` for the
-full lesson map per family.
+Inline anchors in each family are an illustrative subset; grep each repo's
+`development_lessons.md` (`grep -nE '^\*\*Principle:\*\* Family X'`) for the full project-tier
+lesson map per family, and the user-level `development_lessons.md` for cross-project lessons.
+
+### Lesson tag format
+
+Every catalogued lesson carries exactly one family tag as the **first body line** of the
+lesson, in the form:
+
+```
+**Principle:** Family <X> (<free-text reason>)
+```
+
+- `<X>` is one of the family letters in #18-#25 (currently A-H), or the literal `excluded`
+  (a process-only or out-of-catalog lesson, kept for history but not recalled by shape), or
+  `unclassified` (the lesson has not yet been routed through the `generalize` audit). Do NOT
+  invent letters outside the catalog; growing the family set means adding the #18-#25 section
+  AND the gate's `VALID_FAMILIES` together.
+- The parenthetical `(<free-text reason>)` is **mandatory**: a short, specific phrase naming
+  the failure mode or shape (e.g. `Family H (verify the real thing, not the abstraction)`).
+  A bare `Family H` with no reason is rejected; the reason is what makes recall by shape work.
+- Exactly one tag per lesson. A lesson spanning two families is split into two lessons (the
+  audit exists to force that decision), not double-tagged.
+
+**Strictness split.** The tag is enforced at two different strengths:
+
+- **User level** (`shared_docs_dir`/`development_lessons.md`, the cross-project corpus): the
+  tag is **mandatory and enforced**. `lessons_index.py` rejects any `UL#N` lesson that has
+  zero tags, more than one, or a tag outside `VALID_FAMILIES`; a catalog change that adds a
+  family surfaces as a visible `invalid-family` failure until `VALID_FAMILIES` and the #18-#25
+  section are updated together. The `learn` Step 6.6 gate hard-blocks on a violation.
+- **Project level** (each repo's `docs/maintenance/development_lessons.md`): the tag is a
+  **convention**, written by `learn`/`generalize` for best-effort in-project AI recall. Project
+  files are plain markdown, valid standalone with NO skill, gate, or user-corpus dependency;
+  nothing enforces the tag and a missing/malformed tag does not break the project. A project
+  that wants strictness can opt into a project-local gate later.
+
+Cross-project lessons live in the user-level `development_lessons.md` (strict, gated);
+repo-specific lessons live in each repo's `development_lessons.md` (convention). Both layers
+load on demand, so recall works from either.
 
 ## 18. Equivalence-class coverage (A)
 
@@ -408,3 +448,69 @@ different-but-realistic values so a conflation fails visibly, and assert against
 
 **Exception:** A purely structural claim (a file exists, a function is exported) can be settled by
 inspection alone. The family bites for any claim about semantics, behavior, or data identity.
+
+## 26. Tests Must Not Depend on Gitignored Data
+
+Test data that a test reads at runtime must be committed to version control, inlined in the test, or
+generated deterministically at test time. It must never live in a gitignored path. A test that opens a
+gitignored fixture (a local snapshot, a scratch JSON, a personal data file) passes on the machine that
+happens to have the file and errors at setup on every fresh clone and CI run, because the file is absent
+there. Such a test is not a portable contract; it is a latent CI failure that surfaces only when someone
+else runs the suite.
+
+This applies to characterization/golden-snapshot tests in particular: capturing a "golden" value into a
+gitignored file and asserting against it from a test re-creates this failure mode by design. Inline the
+expected value as a literal in the test, or commit the snapshot to the repo.
+
+**Failure signature:** A test's `setup_method` / fixture loader calls `pytest.fail` (or raises) when a
+data file is missing, and that file lives under a gitignored directory (`docs/tmp/`, a personal data
+folder, a machine-local scratch path). The suite is green locally and red on CI or a fresh clone.
+
+**Shape trigger:** You are about to read a data file from within a test, or to capture pipeline output
+into a snapshot file for a characterization test. Ask: is this path version-controlled? Run
+`git check-ignore <path>`. If it returns the path, the test depends on data that does not exist on a clean
+checkout. Either inline the value, commit the fixture, or generate it deterministically in the test.
+
+**Example:** A characterization test captures two aggregated gain values into
+`docs/tmp/derivatives-characterization-golden.json` (gitignored) and reads them in `setup_method`,
+calling `pytest.fail` when the file is absent. The test passes on the author's machine and errors at
+setup everywhere else. The fix is to inline `Decimal("136.01")` and `Decimal("-1.00")` directly in the
+test methods and delete the snapshot file, so the contract holds on any checkout.
+(Illustrative anchors: tax-reporting #189.)
+
+## 27. Prefer Safe-Default Autodiscovery Over Operator-Supplied Parameters When Generalizing a Tool
+
+When generalizing a tool that was hardcoded to one context (one repo, one domain, one config), the
+first instinct is to **parameterize** the hardcoded values: turn the embedded keyword list, magic
+constant, or fixed ordering into a CLI flag or config file the operator supplies per run. This
+relocates the bespoke knowledge from the engine to a per-run file but does not remove the manual
+step; the tool is technically context-agnostic yet practically bespoke-per-run.
+
+Before parameterizing, ask whether the parameter is needed at all. If the tool performs a
+classification or routing where the buckets have **asymmetric cost** (mis-assigning to one bucket is
+costly, e.g. promoting a project-specific record into a shared cross-project store where it pollutes
+every consumer; mis-assigning to the other is harmless, e.g. keeping a genuinely-shared record local
+just loses some reuse), then identify only the **costly bucket** via stable, context-independent
+signals and default everything else to the **safe (harmless) bucket**. The safe default makes the
+costly error impossible by construction, so the classifier never needs to recognize the safe-bucket
+inputs precisely and therefore never needs the operator to supply the domain vocabulary that would
+let it do so. The result is zero-config; keep the parameter only as an optional override.
+
+**Failure signature:** A "generalized" tool ships with a required `--<domain>-keywords <file>` flag
+(or equivalent) and the run book instructs the operator to curate the repo's domain terms by hand
+before each run. The manual step is the symptom of a parameter that safe-default autodiscovery could
+have eliminated.
+
+**Shape trigger:** You are converting a hardcoded value into a parameter (adding a CLI flag, a config
+key, or a "curate this file per repo" instruction) so a tool built for one context can run elsewhere.
+Pause and ask: is there a bucket whose correct identification lets me default every other input
+safely? If yes, detect that bucket from stable signals and drop the parameter.
+
+**Example:** A migration tool classifies each legacy lesson as project-specific or cross-project. The
+first generalization extracted the hardcoded domain keywords into a `--domain-keywords <file>` flag
+the operator curates per repo. The better design recognizes the asymmetry: mis-promoting a
+project-specific lesson into the shared cross-project corpus is costly; keeping a cross-project
+lesson local is harmless. So the classifier identifies the cross-project bucket only, via a stable
+family tag or a generic engineering-shape vocabulary drawn from a shared catalog, and defaults
+everything else to project-specific. No domain keywords are needed; the tool runs zero-config.
+(Illustrative anchors: tax-reporting lessons-corpus plan, 2026-06-29.)

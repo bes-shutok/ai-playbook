@@ -108,7 +108,7 @@ stays as proof. A rule with no witness is principle theater (see Anti-Patterns).
 
 Every new lesson added to a repository's `development_lessons.md` must follow the standard principle-based template to ensure formatting consistency. Construct the lesson entry with these exact sections:
 
-- `**Principle:** Family [Letter] ([Family Name])` (omit only for Excluded/process-only lessons)
+- `**Principle:** Family [Letter] ([Family Name])` for catalogued lessons (the family letters in `coding_guidelines.md` #18-#25, currently A-H); `**Principle:** Family excluded (<kind>)` for all Excluded/process-only lessons (MANDATORY - never omit the tag line; `<kind>` names the process category). A lesson with no `**Principle:**` line is malformed.
 - Description: Plain language explanation of the lesson and its context
 - `**Why this matters:**` (or inline description): Detail the rationale and risk of ignoring the lesson
 - `**Required behavior:**` / `**Qualification gate:**`: Clear, action-oriented instructions on what to do or avoid
@@ -119,13 +119,16 @@ Every new lesson added to a repository's `development_lessons.md` must follow th
 
 ### Phase 5: Check for an existing same-family lesson
 
-Before writing a new entry, look for an existing lesson in the same family. Resolve in this order:
+Before writing a new entry, look for an existing lesson in the same family. The family map
+lives in-band in the lessons corpus itself, so resolve by grepping the `**Principle:** Family X`
+tags:
 
-1. **`principle-index.md` (O(1) lookup).** If the repo maintains a `principle-index.md` mapping
-   family to lesson numbers, read it first. This is the preferred resolution path.
-2. **Corpus scan (fallback).** If no index exists, scan the lessons corpus for entries citing the
-   same family. This is slower and more error-prone; flag the absence of an index so the audit
-   mode can create one later.
+1. **Grep the source (preferred).** Run
+   `grep -nE '^\*\*Principle:\*\* Family <X>' docs/maintenance/development_lessons.md` (project)
+   and the same grep on the user-level `development_lessons.md` (cross-project) to list every
+   lesson already tagged with the family. The tags ARE the index.
+2. **Full read (fallback).** If the grep returns nothing or the family is new, read the corpus to
+   confirm no same-family lesson exists under a different tag spelling.
 
 **Prefer cross-ref over a new entry.** If an existing lesson already covers this family at this
 generality, add the new incident as a witness to that lesson (a second example, a cross-reference)
@@ -221,8 +224,8 @@ kept) and the numbers that collapse into it. Preserve lesson numbers per invaria
 - **Under-represented families**: families with zero or one lesson, where the corpus has a blind
   spot and future incidents are likely to be missed.
 
-Suggest creating or refreshing the repo's `principle-index.md` from the final family map so the
-next `map` mode resolves in O(1).
+Suggest refreshing the repo's in-band `**Principle:** Family X` tags so the next `map` mode
+resolves by grep; the tags themselves are the family index.
 
 ## Integration Points
 
@@ -232,6 +235,18 @@ The `learn` skill's Generalization pass calls this skill's `map` mode before a l
 to its final destination, so the lesson is anchored to its family and cross-referenced rather
 than duplicated. See `../learn/SKILL.md` for the Generalization pass steps. `audit` mode is
 invoked separately, when a corpus has grown large enough to need consolidation.
+
+**Routing fork (mirrors `learn` Step 1 Generalization pass):** after the `map` mode resolves the
+family, the FIRST discriminator for placement is **abstract precept vs concrete lesson**:
+
+1. **Abstract precept** -> `coding_guidelines.md` under `shared_docs_dir` (a do/do-not rule,
+   correct in any project, no incident witness). The catalog families (#18-#25) live here.
+2. **Concrete cross-project lesson** -> **user-level corpus** (`development_lessons.md` resolved
+   from `shared_docs_dir`), strict-tagged (`**Principle:** Family X`, next `UL#N`). The user-level
+   corpus is gated by `lessons_index.py` (the `learn` Step 6.6 gate). The value of a corpus entry
+   is the incident witness; do not flatten a concrete lesson into a precept in `coding_guidelines.md`.
+3. **Project-specific** -> repo `development_lessons.md` (convention-tagged, `**Principle:** Family X`).
+   Project corpora are convention; they are not gated (warn-only dup check).
 
 ### With plans
 
@@ -257,7 +272,7 @@ connect to the catalog and to prior incidents without re-deriving the principle.
 | Auto-generating families | Families are curated from the catalog, never auto-derived. Propose new families to the catalog with at least two incidents |
 | Collapsing an overlapping-but-distinct lesson | Same family is not same lesson. Distinct angles survive consolidation as separate entries with a cross-ref |
 | Stripping the incident entirely | Strip the skin (file, module, jargon), keep the witness (the failure mode). A precept with no witness is unfalsifiable |
-| Skipping the `principle-index.md` lookup | Always try the O(1) index first; fall back to a corpus scan only if the index is absent, and flag the absence |
+| Skipping the family grep | Always grep the `**Principle:** Family X` tags in the project and user-level corpora first; the tags are the index. A full read is fallback only |
 | Family-clustered-only audit (skipping the atom-level pass) | Phases 3 and 4 cluster within a family, so they cannot see a shared atom whose lessons have different primary families. Always run the atom-level family-agnostic pass (Phase 4b) after family-clustering, or cross-family duplicates hide silently |
 
 ## Standalone Invocation
@@ -269,5 +284,5 @@ When invoked directly (not as part of `learn`):
    shape trigger, and cross-ref-vs-new-entry decision.
 3. For `audit`: confirm the corpus path, run the `uniq -d` gate first, then Phases 1 through 5 and
    report the consolidation map and blind-spot analysis.
-4. Offer: "Want me to write the cross-refs / create the `principle-index.md` / propose the new
+4. Offer: "Want me to write the cross-refs / tag any untagged lessons / propose the new
    family to the catalog now?"

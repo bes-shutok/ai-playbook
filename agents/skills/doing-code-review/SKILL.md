@@ -49,6 +49,8 @@ User args (e.g., "check for secrets", "against branch X") provide context for th
 
 For a GitHub PR URL, use `github-pr-workflow` to resolve owner, repo, PR number, base branch, head branch, changed files, diff, and existing review comments.
 
+Before assessment, scan existing PR review comments for author-documented scope decisions (intentional MVP limits, deferred routes, "for now" behavior). Use them in Step 4.2 assumption checks and dedup; do not treat seed-data or domain-model roles as in-scope requirements when the PR description, tests, and author threads say otherwise.
+
 Pull latest commits:
 ```bash
 git checkout <base-branch> && git pull origin <base-branch>
@@ -77,6 +79,8 @@ Load the matching overlay file from this skill's directory (e.g. `java-spring.md
 ## Diff access (orchestrator and sub-agents)
 
 **Preferred:** Each review sub-agent runs `git diff <base>...<head>` and reads changed source files directly. No patch files are required.
+
+**Re-review after local fixes:** `git diff <base>...HEAD` only includes committed `HEAD` changes. Before launching a new review round after applying fixes, either commit/amend the fixes first or explicitly include the working-tree diff (`git diff`) in the sub-agent prompt/materialized snapshot. Do not ask sub-agents to verify uncommitted fixes using only `<base>...HEAD`; they will re-report stale findings from the old commit.
 
 **Optional materialization:** If the orchestrator writes diff snapshot files (for example to share one diff across parallel sub-agents), they **must** live under `{tmp_dir}/`:
 
@@ -181,6 +185,9 @@ Drop or reword findings that assume something not true in context:
 - Ops/infra dependencies not provisioned yet (Kafka topics, DLT, ingress, secrets managers): reframe as a go-live checklist and doc-now action, not "provision in IaC immediately"; downgrade to Low unless the gap also breaks dev/test or local runs
 - Self-documenting code flagged for missing docs (defer missing-doc gaps to `documentation.md`; defer redundant or verbose existing prose to `prose-clarity.md`)
 - A cache operation that is a defensive no-op (keys already expired by TTL at call time) flagged as "incomplete" or "broken"
+- Editing an existing migration in a pre-deploy greenfield service flagged as a Flyway immutability break. First verify whether any shared, CI, staging, or production environment has applied it. If not deployed anywhere and local databases are easy to reset or repair, drop the finding or reframe it as a Low release-readiness note.
+- **Author-documented intentional scope in existing PR threads:** before keeping a Medium+ finding about authorization, RBAC, or feature completeness, read existing PR review comments (including author replies). If the author states an MVP decision ("for now", "no endpoints yet", "configure per route when added"), drop or downgrade unless head code contradicts that stated intent.
+- **Story scope vs domain seed data:** roles, enums, or fixtures in seed SQL or domain docs do not by themselves prove the current PR must support that behavior. Verify PR description, changed routes, integration tests, and author threads before staging a High finding that a role or caller type is "blocked incorrectly".
 
 **Verification methodology**: before **keeping** a finding about a potential runtime failure (duplicate keys, null values, missing constraints), confirm the failure is reachable. Prefer evidence the sub-agent already cited; if missing, one targeted read of the enforcement layer (DB schema, framework validation, upstream guards); not a full re-analysis. If the sub-agent did not cite enforcement-layer evidence and a spot-check is inconclusive, relaunch that agent to verify rather than expanding inline.
 
@@ -229,6 +236,7 @@ When a finding's evidence is in a file that IS in the diff but the recommended f
 - Use globish: plain, short words a non-native speaker can follow.
 - When a fix changes one token, say so explicitly.
 - Spell out abbreviations; do not use jargon shortcuts (write "IllegalStateException", not "ISE").
+- When the staged review uses three or more non-trivial abbreviations or domain terms (for example RBAC, JWT, DLT, TOCTOU, API key, operator, tenant), add a short `## Terms` section before `## Findings`. Define each term in plain language so the staging document and any posted comment can stand alone for a reviewer who is not deep in the local vocabulary.
 
 ### 4.9 Verify Line Numbers
 Before posting, confirm two things for each comment's `line` value:
@@ -260,6 +268,11 @@ Severity reflects user impact and operability risk, not how thorough the comment
 
 **Metrics / observability asks are Low by default.** A missing counter for a drop path is an observability gap, not a defect: the drop itself is correct behavior, dashboards just can't see it. Promote to Medium only when the missing telemetry would mask an active production problem (e.g. the drop path is on a hot user-visible flow, or it competes with an alert that already exists at a different level). Promote to High essentially never.
 
+**Metrics findings: inline placement.** When recommending new counters or Grafana alert wiring on a PR:
+- Post **new counter** proposals inline at the code path where the counter would be incremented (emit site), not only in the PR review summary.
+- Post **Grafana alert / panel** recommendations inline at the **existing** metric increment call site (for example `incrementDuplicateBlocked`), so the author can wire the alert to the metric already emitted there.
+- Findings about telemetry in code **outside the PR diff** (for example an error counter in a class the PR does not touch): post **once in the PR review body**, not as inline comments that fail line resolution.
+
 **Test asks are Low by default**, with one exception: Medium if the untested code path itself contains a real failure mode the team relies on (e.g. a per-step catch that bounds failure blast radius). "There's no test for X" alone is Low; "there's no test for X, and X is the only thing preventing Y" is Medium.
 
 **Documentation/inline-comment asks are Low**, regardless of doc length or topic.
@@ -287,6 +300,7 @@ awk '/^#### Comment/{p=1;next} /^#### Analysis/{p=0} p' "$STAGING" | \
 
 Rewrite rules:
 - If the citation is the source of an objective rule the PR author would also recognize (project method-length limit, metrics convention, naming convention), restate the principle inline without citing the file. Example: `"see company-guidelines.md #17 (≤30 lines)"` → `"this is hard to scan and exceeds typical method-length limits"`.
+- **Sporty company engineering rules (public cite):** When a finding rests on Sporty company guidelines (not OpenAPI, README, or other PR-visible docs), do not use the **What the contract or docs say** heading; company guidelines are not API contracts. Use **As per Sporty guidelines** and link the public copy in `sporty-ai-playbook` with the rule number (for example `https://github.com/opennetltd/sporty-ai-playbook/blob/main/department/backend/crm/projects/sporty/.ai-playbook/company-guidelines.md` #13 for no PII in logs). **Before posting, verify the cited rule exists** at that URL (fetch or read the linked file; confirm the numbered rule or quoted text is present). Do not cite local `company_guidelines_master` paths or gitignored repo mirrors. If the rule is not publicly available or cannot be verified, do not present it as a guideline mandate: rephrase as a suggestion in mild tone and ground it in common engineering practice or widely accepted best practices (for example "we could avoid logging operator-entered field values in validation failures").
 - If the citation is the only justification for the finding (i.e. the rule lives only in your private docs), drop the finding entirely. Personal style preferences from user-level instructions are not project conventions the PR author has agreed to follow. Em-dash bans, no-also-chain rules, specific log-format preferences, and similar are common examples. The right place for these is the gitignored doc itself, not a public PR comment.
 
 If a rule should be enforced project-wide, propose it first as a PR to the shared project doc (where the author can agree or push back), then cite it in future reviews. Do not retroactively flag PRs against rules that exist only in your private instructions.
@@ -394,6 +408,8 @@ After dedup in §4.5, for every **Medium+** finding:
 3. Split `body` into staging **Comment** and **Analysis** sections; refine wording but preserve substance; do not shorten a detailed agent `body` for brevity.
 
 **Self-check before marking staging doc complete:** For each Medium+ finding, ask: "Could the author act on this Comment alone without a chat follow-up?" If no, sub-agent output was insufficient; relaunch or expand in staging from the agent payload, not from orchestrator re-analysis. For actionable code fixes, confirm the Comment includes a concrete snippet per §4.9.0.
+
+**Contract section gate:** Before using **What the contract says**, name the normative source and confirm it is in the PR diff (for example `app/api/openapi.yaml` response text, a README section the PR edits, a schema or test the PR adds). If the normative source is Sporty company engineering guidelines, use **As per Sporty guidelines** with a verified public `sporty-ai-playbook` URL and rule number (see §4.9.1), not **What the contract or docs say**. If the rule cannot be verified at a public URL, use suggestion tone and common best practices instead of a guideline citation. If the only source is a gitignored instruction file or private guideline without a public mirror, drop the finding or reframe the opening section as **What this PR establishes** (in-PR design, tests, or persistence the change itself introduces). Do not suggest relaxing or rewriting that source as the fix when the cited "contract" was never PR-visible.
 
 #### Comment example (Medium, contract drift)
 
@@ -525,6 +541,8 @@ Populate `comments` with assessed inline finding objects from the staging doc.
 For branch reviews, skip the posting step; the staging doc is the complete deliverable. Inform the user where the doc was written.
 
 Each finding must be posted as an **inline comment** at its specific file and line (for PR reviews). Never consolidate multiple findings into a single top-level review body comment (that makes findings hard to locate and resolve).
+
+**Exception; out-of-diff telemetry:** one PR review body comment for findings about code or metrics outside the diff (see §4.9.0 metrics inline placement). Keep all in-diff metrics recommendations inline.
 
 **Exception; multi-key deploy checklists:** when several Low findings describe ordered BO/ops steps across different config keys (for example credentials key + routing key), we may post one PR thread comment with the full ordered checklist and delete the superseded inline comments. Keep code-specific inline comments (naming, missing beans) separate.
 

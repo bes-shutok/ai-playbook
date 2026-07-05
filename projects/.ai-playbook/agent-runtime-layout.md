@@ -134,7 +134,7 @@ python3 -c "import os; assert os.path.realpath(os.path.expanduser('~/.gemini/con
 
 - **`facts.md`:** identity, workspace roots, `shared_docs_dir`, skill keys, brag paths, entrypoints, MCP auth **path keys** (never commit).
 - **`credentials/`:** local OAuth backups for Slack/Atlassian MCP (`mcp-cursor.json`, `mcp-atlassian-mcp-remote/`). Mode `700`/`600`. Never commit.
-- **`scripts/`:** local helpers (e.g. `sync-mcp-credentials.sh`, `scan-public-hygiene.sh`, `check-instruction-size.sh`). Paths referenced from facts; portable policy stays in skills.
+- **`scripts/`:** runtime copies of shared agent scripts, synced from the tracked canonical source at repo-root `scripts/` of `instructions_repo` (hygiene runners `scan-public-hygiene.sh`, `check-no-em-dash.sh`, `check-instruction-size.sh`, `done-lock.sh`, plus the lessons gate/adopter/migrator). Secrets-bearing or machine-specific scripts (e.g. `sync-mcp-credentials.sh`) and `public_hygiene_patterns_file` live here only and stay gitignored; they are not in the tracked source. Paths referenced from facts; portable policy stays in skills.
 - **`README.md`:** overview of facts + guideline symlink layout (never commit).
 
 ## Shared project guidelines (`projects/.ai-playbook/`)

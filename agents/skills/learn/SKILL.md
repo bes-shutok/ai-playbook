@@ -22,6 +22,8 @@ Use this skill when asked to:
 
 Keep this skill scoped to documentation/instruction corpus updates. Do not use it to trigger product code or contract refactors. Do not commit changes; committing is the `done` skill's responsibility.
 
+**Writing project lessons corpus:** Before each Write/Edit to the repo's project lessons file (`docs/maintenance/development_lessons.md`), refresh the skill-gate learn marker per `ai-playbook/agents/hooks/skill-gate/README.md` (learn class WRITE RECIPE: derive `project` and `session` per Terms, invoke the shared `session_channel.py` subprocess VERBATIM, then `python3 ~/.ai-playbook/scripts/skill_gate.py --write-marker learn --session-id "$SID"`). Run this on EVERY project-corpus write (create AND update). FAIL-LOUD if the marker write fails. Do NOT inline path/body/window constants here; the README is the single source (Family D).
+
 ## Goal
 In one run:
 1. Extract lessons from communication in the current task context.
@@ -65,10 +67,10 @@ Before writing any lesson to its final destination, apply a generalization pass:
 2. **State the general rule first**, then add the specific instance as a concrete example. The rule should remain correct even if the specific tool, framework, or module changes.
 2b. **Format using the standard Principle-based Template**: When adding a new lesson (e.g., to `development_lessons.md`), format it according to the standard template defined in the `generalize` skill (`../generalize/SKILL.md` Phase 4.5).
 3. **Check whether the generalized rule already exists** in canonical docs or instruction files, and whether an existing same-family lesson already covers this shape. If either holds, add only the missing witness and cross-link rather than creating a near-duplicate; do not create a duplicate rule.
-4. **Decide the scope**: after generalizing, assess whether the rule is truly universal or still carries domain-specific assumptions. Apply this test:
-   - **Shared canonical (cross-project docs directory)**: Would this rule be correct and useful in *any* project, such as a Kotlin microservice, a Python data pipeline, or a frontend app? If the rule mentions FIFO matching, batch aggregation, CSV parsing, report generation, or similar domain concepts, it is likely too specific for shared docs even after generalization. Resolve the shared docs path from the user's facts document (key: `shared_docs_dir`).
-   - **Project-level instruction (repo `CLAUDE.md`/`AGENTS.md`) or project docs (`docs/`)**: The rule is a reusable principle within this project but depends on domain context (financial calculations, data matching, tax reporting). Write it as a general principle with repo-specific examples, and keep it in the project.
-   - **Module-level**: The rule is genuinely specific to one module's quirks. Keep it module-scoped but still phrase it as a reusable principle for that module rather than a one-off incident report.
+4. **Decide the scope**: after generalizing, apply the FIRST discriminator - **abstract precept vs concrete lesson** - then assess portability. The prior "place in `coding_guidelines.md`" guidance applied to *abstract* rules (do/do-not precepts stripped of incident detail); concrete cross-project lessons go to the user-level corpus instead. Three-way fork:
+   - **(1) Abstract precept -> `coding_guidelines.md`**: a do/do-not rule that is correct and useful in *any* project (Kotlin microservice, Python data pipeline, frontend app) and carries no incident witness. Resolve the shared docs path from the user's facts document (key: `shared_docs_dir`). If the rule mentions FIFO matching, batch aggregation, CSV parsing, report generation, or similar domain concepts, it is likely too specific for shared docs even after generalization.
+   - **(2) Concrete cross-project lesson -> user-level corpus**: a generalized lesson (mechanism + witness) that would re-bite in another project. Tag it strict (`**Principle:** Family X`, next `UL#N`) in the user-level `development_lessons.md` (resolved from `shared_docs_dir`); Step 6.6 gates this corpus. Concrete > abstract here: if the value is the incident witness, the lesson belongs in the corpus, not flattened into a precept in `coding_guidelines.md`.
+   - **(3) Project-specific -> repo `development_lessons.md`**: a reusable principle within this project but dependent on domain context (financial calculations, data matching, tax reporting). Write it as a general principle with repo-specific examples, convention-tagged (`**Principle:** Family X`), and keep it in the project. Module-level quirks stay module-scoped but still phrased as a reusable principle for that module rather than a one-off incident report.
 5. **Place accordingly**: write the full text at the chosen scope. If the rule goes to shared canonical docs, reduce the project instruction to a cross-reference. If it stays project-level, write it directly in the project instruction or docs.
 6. **Add cross-references for discoverability**: When placing or updating a lesson in project docs (development_lessons.md), also add or update cross-references from instruction files (CLAUDE.md, AGENTS.md) so the lesson is discoverable when working on the relevant topic. A guideline in `development_lessons.md` is only useful if agents know to look for it when processing related code. Check for sibling documents (grep for related keywords) that should reference the same lesson.
 
@@ -405,6 +407,39 @@ Always-loaded instruction entrypoints (`AGENTS.md`, `CLAUDE.md`, and repo-root c
 
 **Net-growth rule:** When adding a cross-reference to an instruction file, do not increase file size unless an equal or larger amount of redundant inline text was removed in the same learn run.
 
+## Step 6.6: Corpus gates (required before finishing learn)
+
+Two corpora, two gates:
+
+| Corpus | Path | Gate |
+|--------|------|------|
+| **User-level** (cross-project, strict `UL#N`) | resolved from `shared_docs_dir` / runtime symlink | **Step 6.6 script** below (`lessons_index.py`) |
+| **Project-level** (convention `#N`) | `docs/maintenance/development_lessons.md` | **Skill-gate learn class** (PreToolUse hook; refresh `learn.*.marker` before every Write/Edit per the skill-gate README) |
+
+The project corpus IS skill-gate gated: absent or stale `learn.<project>.<session>.marker` blocks Write/Edit to `development_lessons.md` with `Invoke the learn skill before editing the project lessons corpus.` The user-level corpus is NOT skill-gate gated; it remains opt-in strict via the script gate in this step only.
+
+### User-level lessons-corpus gate (script)
+
+The user-level corpus is opt-in strict: lessons captured as cross-project (`UL#N`) must carry a `**Principle:** Family X` (or `Family excluded (<kind>)`) tag so the corpus stays grep-indexable and the `generalize` audit does not lose them. This subsection enforces that invariant on the **user corpus only** before learn finishes.
+
+Resolve (do NOT reference the upper-case shared-docs-dir env var - it is not exported; the facts key is lowercase `shared_docs_dir`, and the upper-case form expands to empty, collapsing the path and silently tripping the missing-corpus cold-start guard):
+- script: `script="${LESSONS_INDEX_SCRIPT:-${HOME}/.ai-playbook/scripts/lessons_index.py}"` (`LESSONS_INDEX_SCRIPT` override is local-testing only)
+- user corpus: `user_corpus="${HOME}/Projects/.ai-playbook/development_lessons.md"` (runtime symlink, canonical-equivalent to the `shared_docs_dir` master)
+
+Guards, in order:
+
+1. **Drift precheck (warn-only):** if the repo source AND runtime copies exist AND `diff -q` differs for `lessons_corpus.py` OR `lessons_index.py` OR `lessons_adopt.py` OR `lessons_migrate.py`, warn naming the drifted script(s) and give the `cp` repo->runtime recipe; continue. If the repo source is absent (runtime-only deployment), emit a WARNING (not a silent note) that the gate's own integrity is unverified and continue. Warn-only because blocking would deadlock the very `learn` that could fix the drift.
+2. **Missing-script cold-start:** `[[ -f "$script" ]]` or warn "gate script absent; install via the playbook repo" and exit 0.
+3. **Missing-corpus cold-start:** if the user corpus file does not exist (playbook not cloned / convention not adopted at user level yet), warn "user-level corpus absent; see `coding_guidelines.md` #17; run `lessons-migrate` to seed it" and exit 0.
+4. **Zero-tag cold-start:** if the user corpus has zero family tags, warn "convention not adopted in user corpus" and exit 0.
+5. **Adopted (blocking):** run `"$script" "$user_corpus"`. On non-zero exit, print the recovery recipe ("classify the listed `UL#N` via learn/generalize, OR run `lessons_adopt.py --tag-unclassified <user_corpus>` manually, then re-run `learn`") and **block** (exit 1). `lessons_adopt.py` is a manual tool and is NEVER invoked automatically - do NOT route it through `done`.
+
+**Block propagation (r4 Medium 4):** `learn` is invoked by `done` Step 1 as a SKILL (a sub-procedure, not a subprocess whose exit code `done` checks). "Step 6.6 blocks (exit 1)" therefore means the `learn` skill returns `blocked` to its caller; `done` Step 1 treats a blocked `learn` as a Step-1 failure (does NOT proceed to Step 2 commit) and falls through to `done`'s Step 6 lock-release. The operator fixes the user corpus out-of-band before the next `done`. A standalone `learn` (not under `done`) must NOT trigger `lessons_adopt.py`.
+
+**Strictness trade:** a `learn` in any project blocks on a user-corpus violation because the user chose strict user-level. The corpus is single-user-local, so a block means "fix the user corpus", not "fix this repo". This is intentional: one strict corpus enforces the tag invariant across every project's `learn` run.
+
+**Project-tier dup check (warn-only, no script):** project `development_lessons.md`: optional `grep -oE '^## [0-9]+' <project_corpus> | sort | uniq -d` (warn-only). Project corpus writes are enforced by the skill-gate learn class at edit time, not by this script step.
+
 ## Step 7: API Contract Naming Hygiene
 When lessons involve external API naming or endpoint shape:
 - Prefer resource-oriented OpenAPI paths and avoid RPC verb segments (`/set`, `/check`, `/resolve`, `/merge`, `/unsuppress`).
@@ -423,6 +458,7 @@ Before finishing, verify:
 - no project-level instruction rule duplicates a rule already present in user-level instructions (`~/.codex/AGENTS.md`); project-level copies are reduced to a cross-reference or removed
 - every new full-text rule added to instruction files is either (a) a cross-cutting reasoning guard with no suitable canonical doc home, or (b) already has its detailed content in the tier-appropriate canonical guideline file with only a `see … #N` reference in the instruction file
 - Step 6.5 instruction size gate passed: `"${HOME}/.ai-playbook/scripts/check-instruction-size.sh" check` exits 0 from the repo root after compaction
+- Step 6.6 passed: user-level `lessons_index.py <user corpus>` exits 0 (or warn-only cold-start); project corpus gated by skill-gate learn marker refresh before each Write/Edit
 - no hybrid bullets remain where canonical tier already holds the full rule text
 - no new facts keys added for portable policy constants that belong in a skill (see Step 2, Facts vs skill configuration)
 - exact class names appear only where operationally useful or intentionally canonical; normative instructions and canonical docs use role-based wording instead

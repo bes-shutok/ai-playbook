@@ -1,6 +1,10 @@
 /.idea/
 .DS_Store
 
+# Python bytecode cache
+__pycache__/
+*.pyc
+
 # Repo agent runtime dir at repo root only (bootstrap output; see `bootstrap-ai-playbook` skill)
 /.ai-playbook/
 # Legacy committed repo facts paths (deny accidental re-commit after migration)
@@ -10,7 +14,4 @@
 
 # Ephemeral session scratch (see docs/AGENTS.md)
 /docs/tmp/
-
-# Repo-root scripts/ is local-only (hygiene runner lives in ~/.ai-playbook/scripts/)
-/scripts/
 

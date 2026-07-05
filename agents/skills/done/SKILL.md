@@ -4,14 +4,14 @@ description: >
   Finalize a development session by running the learn workflow to capture lessons, then committing
   all uncommitted changes across all repositories (project, skills, docs/facts). Use when the user
   signals a session is complete (e.g. "done", "commit", "wrap up"). This is the only skill that
-  performs git commits — other skills (learn, review, etc.) make file changes but never commit.
+  performs git commits, other skills (learn, review, etc.) make file changes but never commit.
 ---
 
 # Done
 
 Run `/learn` to capture lessons from this session, then commit all uncommitted changes across all repositories touched during the session.
 
-**Workflow continuity:** This skill executes as a continuous sequence of steps (1 → 2 → 2.5 → 2.6 → 2.7 → 2.75 → 2.76 → 2.8 → 3 → 4 → 5). After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification.
+**Workflow continuity:** This skill executes as a continuous sequence of steps (0 → 1 → 2 → 2.5 → 2.6 → 2.7 → 2.75 → 2.76 → 2.8 → 3 → 4 → 5 → 6). After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification. **Exception:** Step 0 may block while waiting for another `done` on the same git repo; resume automatically when the lock is released.
 
 ## Configuration (from facts document)
 
@@ -19,19 +19,45 @@ Run `/learn` to capture lessons from this session, then commit all uncommitted c
 |-----|---------|----------|
 | `skills_repo_path` | Path to the skills repository | `~/.agents/scripts/commit-skills.sh` default |
 
+Script path for Step 0 / Step 6 (override with `DONE_LOCK_SCRIPT` for local testing):
+
+```bash
+"${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}"
+```
+
+## Step 0: Acquire project done lock
+
+Parallel agent sessions on the **same git repository** must not run `learn`, `docs-branch`, or project commits at the same time. Acquire an exclusive per-repo lock **before** Step 1.
+
+1. From the project git root (`git rev-parse --show-toplevel`), run **wait-acquire** (blocks until free):
+
+   ```bash
+   LABEL="$(git branch --show-current 2>/dev/null || echo unknown-branch)"
+   eval "$("${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}" wait-acquire --label "$LABEL")"
+   ```
+
+2. Keep `DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` in scope for the rest of this run. You need them in Step 6.
+3. If **wait-acquire** times out (default 2 hours), run `status`, report the holder, and stop without committing. Do not bypass the lock.
+4. Stale locks (holder crashed without Step 6 release) are auto-stolen after **30 minutes** (`DONE_LOCK_STALE_SECS`, default 1800).
+5. Optional: pass a richer `--label` (plan slug, task id, review round) when the orchestrator provides context.
+
+**After the lock is acquired, immediately continue to Step 1.** Do not run learn, docs-branch, or project commits before Step 0 succeeds.
+
 ## Step 1: Run Learn
 
 Invoke the `learn` skill now to extract lessons and update the documentation corpus before committing.
 
-**After learn completes, immediately continue to Step 2.** Do not stop or wait for user input — the workflow is continuous and all steps should execute in sequence.
+**If `learn` reports a blocked state** (Step 6.6 user-corpus violation: a strict-tagged `UL#N` lesson is missing its `**Principle:** Family X` tag, or the gate script returned non-zero on the adopted corpus), release the lock via Step 6 and return `blocked` WITHOUT proceeding to Step 2 commit. `learn` is invoked here as a SKILL (a sub-procedure), not as a subprocess whose exit code this step checks, so the gate's block decision lives in `learn`'s Step 6.6 text and propagates here through `learn`'s returned state. The operator fixes the user corpus out-of-band (classify the listed `UL#N` via learn/generalize, or run `lessons_adopt.py --tag-unclassified <user_corpus>` manually) before the next `done`.
+
+**After learn completes, immediately continue to Step 2.** Do not stop or wait for user input; the workflow is continuous and all steps should execute in sequence.
 
 ## Step 2: Preserve Gitignored Docs and Instructions
 
 Invoke the `docs-branch` skill now. It will:
-1. Stash all gitignored LLM artifact paths (`docs/`, `.github/docs/`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `COPILOT.md`, `.claude/`) so they survive branch switches, then re-apply the stash so files remain on disk.
-2. Sync those files to the permanent `docs` orphan branch, creating it if it doesn't exist.
+1. Snapshot all configured gitignored shadow paths (`docs/`, `.github/docs/`, `.ai-playbook/`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `COPILOT.md`, plus repo `extra_shadow_dirs`) while leaving the live checkout on the current branch.
+2. Sync those files to the permanent `docs` orphan branch through a temporary `git worktree`, creating it if it doesn't exist.
 
-**After docs-branch completes, immediately continue to Step 2.5.** Do not stop or wait for user input — the workflow is continuous and all steps should execute in sequence.
+**After docs-branch completes, immediately continue to Step 2.5.** Do not stop or wait for user input; the workflow is continuous and all steps should execute in sequence.
 
 > All implementation details, edge cases, and the full bash script live in `docs-branch/SKILL.md`. Refer there for the canonical script when executing.
 
@@ -43,7 +69,7 @@ for p in docs/tmp docs/history/reviews docs/reviews docs/personal .ai-playbook/f
 done
 ```
 
-**Verify untracked WIP survived** (docs-branch snapshots `git ls-files --others --exclude-standard` before orphan branch creation):
+**Verify untracked WIP survived** (docs-branch keeps the live checkout on the current branch):
 
 ```bash
 # Before docs-branch (optional but recommended):
@@ -57,7 +83,7 @@ rm -f /tmp/docs-branch-untracked-manifest.$$
 
 If any path is missing, restore from docs-branch `UNTRACKED_BACKUP` or Cursor Local History before committing.
 
-If any gitignored path that existed before docs-branch is now missing, restore it immediately from the `docs` orphan branch before proceeding:
+If any gitignored path that existed before docs-branch is now missing, restore it immediately from the `docs` orphan branch before proceeding (docs-branch add-only sync restores missing shadow files automatically, including reviews; use manual restore only when that step did not run):
 ```bash
 git checkout refs/heads/docs -- <missing-path>
 git restore --staged <missing-path>
@@ -67,7 +93,7 @@ git restore --staged <missing-path>
 
 Before committing, identify and revert any **uncommitted** files where the only diff is formatting (whitespace, trailing commas, blank lines, import reordering, line wrapping, or collapsing multi-line expressions to a single line) with no logic, naming, or structural change.
 
-**This applies to ALL uncommitted files — including pre-existing local changes not made in this session.**
+**This applies to ALL uncommitted files, including pre-existing local changes not made in this session.**
 
 1. List uncommitted changed files: `git diff --name-only && git diff --cached --name-only`.
 2. For each file, visually inspect `git diff -- <file>`. Revert if **every** hunk is one of:
@@ -78,7 +104,7 @@ Before committing, identify and revert any **uncommitted** files where the only 
    - end-of-file newline added
    - collapsing or expanding multi-line expressions with no token change
 
-   Do **not** rely solely on `git diff -w --ignore-blank-lines` — that flag misses ktlint reformatting such as line splits and trailing commas.
+   Do **not** rely solely on `git diff -w --ignore-blank-lines`; that flag misses ktlint reformatting such as line splits and trailing commas.
    ```bash
    git restore <file>          # unstaged changes
    git restore --staged <file> # staged changes
@@ -107,7 +133,7 @@ Check for these cases:
    - If the session added rules to instruction files, confirm any canonical docs those rules depend on are referenced explicitly instead of leaving the relationship implicit.
 
 5. **Doc-hierarchy migration or doc-only PRs**
-   - If the session ran **doc-hierarchy-migrate** verify (`step6` or `full`) successfully, do not add PR **Test plan** items for that gate as unchecked reviewer tasks — the gate is an implementer checkpoint from the skill install, not a repo-local script.
+   - If the session ran **doc-hierarchy-migrate** verify (`step6` or `full`) successfully, do not add PR **Test plan** items for that gate as unchecked reviewer tasks. The gate is an implementer checkpoint from the skill install, not a repo-local script.
    - When updating the PR description, use the [PR checklist](../doc-hierarchy/company-decisions.md#pr-checklist-team-proposal-accepted) only unless the reviewer asked for more; follow [PR description rules](../doc-hierarchy/company-decisions.md#pr-description-rules).
    - Mark session-verified checks `[x]` or omit them; never leave implementer-completed verification as unchecked homework.
 
@@ -147,7 +173,7 @@ Before committing, scan all uncommitted changes (including untracked files) for 
 - Replace personal paths with facts-document references or generic placeholders (e.g., `<your-org>.atlassian.net`, `~/Projects/<project>/`)
 - Replace internal names with generic equivalents
 - Move credentials to `.env` or facts documents (never commit them)
-- If the information is in a skill file, externalize **machine-specific** values to facts documents; keep **portable policy constants and workflow thresholds** in the skill body (see `learn` Step 2 — Facts vs skill configuration; `agent_workflow_guidelines.md` §50).
+- If the information is in a skill file, externalize **machine-specific** values to facts documents; keep **portable policy constants and workflow thresholds** in the skill body (see `learn` Step 2, Facts vs skill configuration; `agent_workflow_guidelines.md` §50).
 
 **When committing this repository (`skills_repo_path`) or vendored skills:** run `public_hygiene_scan_script` from user facts at the instructions repo root and fix all failures before staging.
 
@@ -161,7 +187,7 @@ Before committing, verify every changed or new **source file** from this session
    ```bash
    { git diff --name-only; git diff --cached --name-only; git ls-files --others --exclude-standard; } | sort -u
    ```
-2. From that list, keep paths the IDE or language server can lint. Exclude obvious non-source artifacts (markdown, plain YAML/JSON config, lockfiles, images, binaries, generated stubs under build output). When unsure whether a path is lintable, include it — `ReadLints` skips what it cannot analyze.
+2. From that list, keep paths the IDE or language server can lint. Exclude obvious non-source artifacts (markdown, plain YAML/JSON config, lockfiles, images, binaries, generated stubs under build output). When unsure whether a path is lintable, include it; `ReadLints` skips what it cannot analyze.
 3. Run IDE or language-server diagnostics on **every remaining touched path** (for example Cursor `ReadLints` per file or batched by directory). Fix every unused-import-class diagnostic before staging. Common cases:
    - **Java / Kotlin:** unused `import` or static import (including static imports shadowed by instance calls such as `lenient().doAnswer()` vs `import static … doAnswer`).
    - **Python:** unused `import` / `from … import`.
@@ -183,7 +209,7 @@ Before committing, scan touched prose and instruction files for em dash (U+2014)
    ```bash
    "${CHECK_NO_EM_DASH_SCRIPT:-${HOME}/.ai-playbook/scripts/check-no-em-dash.sh}" touched
    ```
-2. The script scans `*.md`, `*.mdc`, and instruction entrypoint filenames among touched paths. Fix every reported line: use a comma, colon, semicolon, period, or parentheses instead of `—`.
+2. The script scans `*.md`, `*.mdc`, and instruction entrypoint filenames among touched paths. Fix every reported line: use a comma, colon, semicolon, period, or parentheses instead of a long dash.
 3. Re-run until exit code 0.
 
 Do not stage prose or instruction files while the scan fails.
@@ -202,7 +228,7 @@ When uncommitted changes touch always-loaded instruction entrypoints (`AGENTS.md
    ```
    (Override script path only for local testing via `INSTRUCTION_SIZE_CHECK_SCRIPT`.)
 2. **Gate behavior:** exits non-zero when an instruction file exceeds the budget **and** has uncommitted changes. Grandfathered over-budget files with no pending edits do not block unrelated commits.
-3. On failure: return to learn Step 6.5 — compact hybrid bullets to cross-references, move infrequent rules to skills, then re-run **gate** before staging instruction files.
+3. On failure: return to learn Step 6.5, compact hybrid bullets to cross-references, move infrequent rules to skills, then re-run **gate** before staging instruction files.
 
 Do not stage instruction entrypoints for commit while **gate** fails.
 
@@ -212,13 +238,13 @@ Do not stage instruction entrypoints for commit while **gate** fails.
 
 After learn and stash steps complete:
 
-0. **Distinguish session changes from pre-existing local changes.** Only commit changes that were made during this session. If `git status` shows uncommitted files that were not touched by you in this session, ask the user before staging them — they may be in-progress work the user does not want committed yet.
+0. **Distinguish session changes from pre-existing local changes.** Only commit changes that were made during this session. If `git status` shows uncommitted files that were not touched by you in this session, ask the user before staging them; they may be in-progress work the user does not want committed yet.
 1. Run `git status` and `git diff` (staged + unstaged) to see all changes.
 2. Run `git log --oneline -5` to match existing commit message style.
 3. Derive the story key from the current branch name (e.g. `feature/PROJ-1234-...` → `PROJ-1234`). If the branch name contains no story key, use a plain descriptive commit message without a ticket prefix on branches such as `main` or `master`. Ask the user only if the repository convention is unclear and there is no obvious non-ticket fallback.
 4. **Before staging any file, verify it is not gitignored:**
    ```bash
-   git check-ignore -q <file> && echo "IGNORED — do not stage"
+   git check-ignore -q <file> && echo "IGNORED, do not stage"
    ```
    If a file appears in `git diff` but is gitignored, it was previously force-tracked. Remove it from tracking first and do **not** commit it on the feature branch:
    ```bash
@@ -273,7 +299,7 @@ This commits any pending skill edits in the skills repository with an auto-gener
 After committing skills, check whether any facts documents or docs repositories were modified during this session. Each docs directory is its own git repo and must be committed independently.
 
 Resolve paths from the user's facts document:
-- `shared_docs_dir` — cross-project guidelines and shared facts
+- `shared_docs_dir`, cross-project guidelines and shared facts
 - Project-specific docs directories are determined from the current working project
 
 For each docs git repo that has uncommitted changes:
@@ -288,11 +314,22 @@ If there are changes:
 cd <docs_dir> && git add -A && git commit -m "docs: <brief description of what was added/updated>"
 ```
 
-Do not push — these are local-only docs repositories.
+Do not push. These are local-only docs repositories.
 
 **Common docs repos to check:**
 - Shared docs (from facts `shared_docs_dir`)
 - Current project's `docs/` directory (if it is a separate git repo)
+
+## Step 6: Release project done lock
+
+**Always run Step 6 before ending this skill**, including when Steps 1–5 failed or returned early. This lets a waiting parallel `done` resume.
+
+```bash
+DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" \
+  "${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}" release
+```
+
+If release fails (token mismatch, missing env), run `status` from the project root, report the holder, and ask the user before forcing `stale-clean`.
 
 ## Integration Points
 
@@ -302,17 +339,21 @@ Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-sk
 ### With `execute-plan` skill
 Invoked as a sub-agent after **each** completed plan task (per-task commit) and after **each** review/fix iteration (per-iteration commit). The orchestrator passes the plan path, task or review-round context, suggested commit subject, and **sub-agent log paths** under resolved `{tmp_dir}/execute-plan/<plan-slug>/`.
 
-**Before Step 1 (learn):** read only the **preceding-step** log(s) the orchestrator listed — for per-task `done`, the implement log from Step 1.2; for review-iteration `done`, the current round's review log (Step 3.1) and address log (Step 3.3) when it ran. Do not read full session history. Use log content as primary input for `learn`, not the orchestrator chat summary. If a required preceding-step log is missing, return `blocked` and do not commit. See `execute-plan/agent-logs.md`.
+**Before Step 1 (learn):** read only the **preceding-step** log(s) the orchestrator listed: for per-task `done`, the implement log from Step 1.2; for review-iteration `done`, the current round's review log (Step 3.1) and address log (Step 3.3) when it ran. Do not read full session history. Use log content as primary input for `learn`, not the orchestrator chat summary. If a required preceding-step log is missing, release the Step 0 lock (Step 6), return `blocked`, and do not commit. See `execute-plan/agent-logs.md`.
+
+Each execute-plan `done` sub-agent still runs Step 0 and Step 6. Sequential tasks in one orchestrator usually acquire immediately after the prior release; parallel chats on the same repo wait on **wait-acquire**.
 
 ## Rules
 
-- Always run learn before committing — lessons must be captured first.
+- Always acquire the Step 0 project lock before learn or any project-side commit steps; always release it in Step 6.
+- Never skip Step 0 or Step 6, even for "just commit" or empty commit runs.
+- Always run learn before committing; lessons must be captured first.
 - Never skip the learn step even if the user says "just commit".
-- Invoke `docs-branch` skill for all docs/instructions preservation — do not inline the stash or branch logic here.
+- Invoke `docs-branch` skill for all docs/instructions preservation; do not inline the stash or branch logic here.
 - Always verify that new or revised reusable docs, reference material, and explanatory artifacts added in the session are referenced from instructions or related canonical docs where future agents will need them.
 - Never stage or commit a file that is gitignored, even if it appears in `git diff` (it was previously force-tracked). Use `git rm --cached` to remove it from tracking; do not commit it on the feature branch.
 - Never add `Co-Authored-By:` or `Co-authored-by:` trailers or use `git commit --trailer` for agent attribution. See user `AGENTS.md` (Git Commit Trailer Policy). Disable automatic agent attribution in IDE settings when present.
 - Never use `--no-verify`.
 - Never commit secrets, PII files (`.env`, credential files), or personal/org-specific information into public repositories.
-- Never hardcode personal paths, org domains, or project-specific identifiers in skill files — externalize those to facts documents. Portable workflow policy and numeric thresholds stay in the skill (see `learn` Step 2 — Facts vs skill configuration).
+- Never hardcode personal paths, org domains, or project-specific identifiers in skill files; externalize those to facts documents. Portable workflow policy and numeric thresholds stay in the skill (see `learn` Step 2, Facts vs skill configuration).
 - If the branch has no story key, use a plain descriptive commit message on branches such as `main` or `master`; ask only when the repository convention is unclear.

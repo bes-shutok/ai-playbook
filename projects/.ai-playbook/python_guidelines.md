@@ -308,3 +308,54 @@ def test_dedup_runs_after_validation_before_split(monkeypatch):
 - The stages share mutable state that a spy would perturb (spy must be pure passthrough).
 
 **Anti-pattern:** Mocking `apply_derivatives_dedup` with `MagicMock(return_value=[])`. The test asserts the mock was called, but the real dedup never runs. A bug that makes the real dedup raise on the fixture (which would surface as a pipeline failure in production) is invisible to the test.
+
+## 13. Pass Pervasive Configuration as a Typed Value Object, Not via `contextvars` or a Module Cache
+
+When a value like the reporting jurisdiction, tenant, or locale must reach several functions in a single-threaded synchronous pipeline, pass it as an explicit parameter carrying a **typed value object** (a frozen dataclass whose relevant field is required and validated at load). Do not reach for `contextvars.ContextVar` or a module-level cached singleton just because the value feels "pervasive."
+
+```python
+# ✅ GOOD - explicit DI of the typed value object
+@dataclass(frozen=True)
+class TaxJurisdictionConfig:
+    country: str          # required, no default; validated fail-fast at config load
+    fiscal_year: int
+    ...
+
+def write_crypto_supplementary_sheet(
+    workbook, crypto_tax_report, tax_jurisdiction: TaxJurisdictionConfig,
+) -> None:
+    if tax_jurisdiction.country != "PT":
+        return  # omit the PT-only reference section
+    ...
+
+# single call site already holds the object in scope:
+write_crypto_supplementary_sheet(workbook, report, config.tax_jurisdiction)
+```
+
+```python
+# ❌ WRONG - hidden global state for a value that only threads one or two hops
+import contextvars
+_CURRENT_JURISDICTION: contextvars.ContextVar[TaxJurisdictionConfig | None] = (
+    contextvars.ContextVar("jurisdiction", default=None)
+)
+
+def write_crypto_supplementary_sheet(workbook, crypto_tax_report) -> None:
+    jurisdiction = _CURRENT_JURISDICTION.get()  # untyped-ish, implicit, None-able
+    if jurisdiction is None:                     # a "default to forget" the type cannot catch
+        ...
+```
+
+**Why a typed value object, not `contextvars`:** The frozen dataclass with a required `country` field makes an unset value *impossible to construct*; validation runs once, fail-fast, at config load, so the parameter TYPE is the guarantee that the value is set. There is no `None` default and no sentinel to misuse. `contextvars` is the recommended tool only for truly cross-cutting context that spans many indifferent layers AND crosses async/thread boundaries (request ID, trace context, current user). For a synchronous CLI where the value threads one or two hops to functions called from a single site, `contextvars` adds hidden global state, loses type-checker/IDE support, and forces every test to set and reset a context (leakage risk between tests) to avoid threading two parameters. ([Python `contextvars` docs](https://docs.python.org/3/library/contextvars.html); if you do use it, the `ContextVar` must be created at module top level, never inside a function.)
+
+**Why not a module-level cache / `functools.lru_cache` accessor:** A `get_jurisdiction()` singleton is hidden mutable global state duplicated from what the `Config` object already carries. It is a testing hazard (tests must reset it) and obscures the dependency at the call site. If the value already lives on a config object loaded at startup, thread that object.
+
+**Choosing the narrowest cohesive type:** Pass the value object the consumer actually needs, not the whole root config. `TaxJurisdictionConfig` (cohesive, carries `.country` plus the flags the consumer uses) is correct; passing the entire `Config` couples the consumer to exchange rates and security settings it does not need, and passing a bare `country: str` discards the cohesion and the type-level presence guarantee.
+
+**When `contextvars` IS the right choice:**
+
+- A web/async workload where the value is request-scoped and must not leak across concurrent tasks.
+- The value would otherwise be threaded through many functions that do not otherwise use it (signature pollution across indifferent layers), not just one or two call sites.
+
+**Anti-pattern 1:** Defaulting an optional `country: str | None = None` parameter and falling back to a PT/synthetic value when `None`. A caller that forgets to thread it silently produces PT output on a non-PT run. Make the value object required; let the type checker and the frozen-dataclass contract enforce presence.
+
+**Anti-pattern 2:** Introducing `contextvars` in a batch CLI "for future flexibility" before there is a second async caller. The hidden state and per-test context boilerplate are a net loss over an explicit parameter; add `contextvars` only when the async/pervasiveness need is real.
