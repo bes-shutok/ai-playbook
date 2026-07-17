@@ -35,6 +35,10 @@ In one run:
 6. Keep repository structure and module layout compliant.
 7. Keep this workflow scoped to documentation/instruction corpus updates only.
 
+### Repeated failures and mechanical invariants
+
+When the same class of failure appears more than once, do not only restate prompt advice. Ask which harness component is missing (instruction, source of truth, tool, validator, permission rule, eval, or recovery path), then encode the fix at the right scope. Prefer mechanical checks (lint rules, schema validators, hooks, regression evals) when the rule is enforceable without judgment. For the general harness pattern, see `agents-best-practices/references/agent-legibility-feedback-loops.md`.
+
 ## Step 1: Extract Lessons
 Review communication from this task and list concrete items:
 - mistakes and false assumptions
@@ -306,7 +310,7 @@ For lessons about a skill's workflow/style or output/content requirements:
 **Commit workflow:** Commit skill changes in the skills repository (`skills_repo_path` in `~/.ai-playbook/facts.md`), separately from project changes with a clear commit message.
 
 Examples:
-- RFC section-content requirements belong in `~/.agents/skills/rfc-design/SKILL.md`
+- RFC section-content requirements belong in `rfc-design/SKILL.md` and `rfc-design/references/rfc-sections.md`
 - done-workflow rules belong in `~/.agents/skills/done/SKILL.md`
 - Investigation quality requirements belong in `~/.agents/skills/plans/SKILL.md` (not just in project docs)
 
@@ -336,7 +340,7 @@ When a skill's output was **corrected, retracted, downgraded, or significantly r
 | Skill | Where to place verification rules |
 |-------|----------------------------------|
 | `doing-code-review` | Sub-agent prompts (quality.md, concurrency.md, etc.) for domain checks; SKILL.md Step 4 for cross-cutting assessment rules |
-| `rfc-design` | SKILL.md input collection gates or section generation rules |
+| `rfc-design` | SKILL.md workflow gates; `references/rfc-sections.md` section template and editing checklist |
 | `plans` | SKILL.md scope/estimation rules |
 | `learn` | This file's extraction or placement logic |
 | `done` | SKILL.md commit/cleanup rules |
@@ -471,3 +475,6 @@ Before finishing, verify:
 
 ### With `bootstrap-ai-playbook` skill
 Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-skills` Step 0). This skill reads documentation path keys from that file during lesson placement.
+
+### With `agents-best-practices` skill (provider)
+`learn` is the operational feedback loop for this playbook: it turns recurring failures into durable docs, enforceable rules, and mechanical checks. `agents-best-practices/references/agent-legibility-feedback-loops.md` describes the general harness pattern (source-of-truth artifacts, validators, garbage collection). When auditing or designing a harness, read that reference; when a concrete failure occurred in this session, run `learn`.

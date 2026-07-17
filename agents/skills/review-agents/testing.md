@@ -59,5 +59,12 @@ When a plan introduces a hand-rolled test double for an interface (e.g. `Recordi
 2. Methods not exercised by the test should throw `UnsupportedOperationException` (Java/Kotlin), `NotImplementedError` (Python), or equivalent — fail fast on accidental use. Returning `null` / `Optional.empty()` / a default-constructed value is a defect: it lets tests silently pass when an unrelated production code path stumbles into the unused method.
 3. When the interface gains a method later, the test double must be updated in the same change set (compilation forces this for static-typed languages; for dynamic ones, add a CI gate).
 
+## Actionable fix snippets (code review)
+
+When a finding proposes a concrete test or production code change (any severity):
+
+1. Include a before/after or "could look like" snippet in `body` per `doing-code-review` §4.9.0.
+2. In test examples, build data once (builder/fixture) and assert using getters from that object (`outbox.getCampaignId()`), not a second copy of the same literal in `assertThat(...)`. Duplicated literals let setup and asserts drift independently and can hide mapping bugs.
+3. Point at an existing test in the repo as a pattern when one exists (for example a sibling IT with `ArgumentCaptor`).
 
 Report problems only. No positive observations.

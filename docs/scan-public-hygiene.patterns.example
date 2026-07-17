@@ -1,8 +1,10 @@
 # Local deny patterns for scan-public-hygiene.sh (one ripgrep regex per line).
 # Copy to ~/.ai-playbook/public-hygiene.patterns and customize from your facts document.
-# Do not commit the populated file.
+# Do not commit the populated file. Avoid blank lines (rg -f treats them as match-all).
 #
-# Examples (replace with your values):
-# your-org\.atlassian
-# YOUR_PREFIX-[0-9]
+# Match employer org as a word (domain OR path segment), not only `org\.`:
+#   \byour-org\b
+# Ticket prefixes and emails:
+#   YOUR_PREFIX-[0-9]
+#   @(gmail|your-domain)\.
 # your-github-handle

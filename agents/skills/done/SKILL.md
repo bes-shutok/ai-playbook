@@ -11,13 +11,23 @@ description: >
 
 Run `/learn` to capture lessons from this session, then commit all uncommitted changes across all repositories touched during the session.
 
-**Workflow continuity:** This skill executes as a continuous sequence of steps (0 → 1 → 2 → 2.5 → 2.6 → 2.7 → 2.75 → 2.76 → 2.8 → 3 → 4 → 5 → 6). After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification. **Exception:** Step 0 may block while waiting for another `done` on the same git repo; resume automatically when the lock is released.
+## Invocation (read first)
+
+`done`, `learn`, and `docs-branch` are **markdown skills**, not shell commands or binaries. There is no runner under `~/.ai-playbook/runtime` and no `/learn` executable.
+
+- **Do not** run `done`, `learn`, `docs-branch`, `SKILL.md`, or `/learn` as shell commands.
+- **Do not** delegate this workflow to a Task/subagent that tries to exec a skill path.
+- **Do** read each skill file (`~/.agents/skills/<name>/SKILL.md`) and execute its steps in **this** agent session using normal tools (shell for scripts, Read/Write for skill logic).
+
+**Workflow continuity:** This skill executes as a continuous sequence of steps (0 → 1 → 2.65 → 2.64 → 2 → 2.5 → 2.6 → 2.7 → 2.75 → 2.76 → 2.8 → 3 → 4 → 5 → 6 → 7). After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification. **Exception:** Step 0 uses a short agent wait (`DONE_LOCK_AGENT_MAX_WAIT_SECS`, default 90s); on timeout return `blocked` with lock `status` instead of polling for hours. **An empty project working tree is not a stop condition:** still run Steps 2.65, 2.64, 2, and 6 and finish with Step 7.
 
 ## Configuration (from facts document)
 
 | Key | Purpose | Fallback |
 |-----|---------|----------|
 | `skills_repo_path` | Path to the skills repository | `~/.agents/scripts/commit-skills.sh` default |
+| `done_lock_script` | Per-repo done lock script | `~/.ai-playbook/scripts/done-lock.sh` |
+| `confluence_mirror_hygiene_script` | Confluence mirror validate + ephemeral tmp cleanup | `~/.ai-playbook/scripts/confluence-mirror-hygiene.sh` |
 
 Script path for Step 0 / Step 6 (override with `DONE_LOCK_SCRIPT` for local testing):
 
@@ -25,21 +35,39 @@ Script path for Step 0 / Step 6 (override with `DONE_LOCK_SCRIPT` for local test
 "${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}"
 ```
 
+Agent wait budget for Step 0 (override for local testing):
+
+```bash
+"${DONE_LOCK_AGENT_MAX_WAIT_SECS:-90}"
+```
+
 ## Step 0: Acquire project done lock
 
 Parallel agent sessions on the **same git repository** must not run `learn`, `docs-branch`, or project commits at the same time. Acquire an exclusive per-repo lock **before** Step 1.
 
-1. From the project git root (`git rev-parse --show-toplevel`), run **wait-acquire** (blocks until free):
+1. From the project git root (`git rev-parse --show-toplevel`), run **`status`** first (non-blocking) so a held lock is visible before waiting.
+
+2. Acquire with a **short agent wait** (do not use the script default 7200s in agent sessions):
 
    ```bash
    LABEL="$(git branch --show-current 2>/dev/null || echo unknown-branch)"
-   eval "$("${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}" wait-acquire --label "$LABEL")"
+   MAX_WAIT="${DONE_LOCK_AGENT_MAX_WAIT_SECS:-90}"
+   LOCK_SCRIPT="${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}"
+   if ! eval "$("$LOCK_SCRIPT" wait-acquire --label "$LABEL" --max-wait "$MAX_WAIT")"; then
+     "$LOCK_SCRIPT" status >&2
+     echo "done-lock: blocked after ${MAX_WAIT}s; another done holds the lock" >&2
+     echo "done-lock: if holder PID is dead or lock is stale, run: $LOCK_SCRIPT stale-clean" >&2
+     exit 2
+   fi
    ```
 
-2. Keep `DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` in scope for the rest of this run. You need them in Step 6.
-3. If **wait-acquire** times out (default 2 hours), run `status`, report the holder, and stop without committing. Do not bypass the lock.
-4. Stale locks (holder crashed without Step 6 release) are auto-stolen after **30 minutes** (`DONE_LOCK_STALE_SECS`, default 1800).
-5. Optional: pass a richer `--label` (plan slug, task id, review round) when the orchestrator provides context.
+3. Keep `DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` in scope when the same shell session runs multiple steps. **Across separate Shell tool calls**, re-export those two values from your Step 0 acquire stdout (chat context). The file `<repo>/.ai-playbook/done-lock.session` is a **fence/status** signal only; Step 6 `release-repo` requires env vars and will **not** source that file (confused-deputy guard after stale-clean / peer acquire).
+4. If **wait-acquire** times out, run `status`, report the holder (`label`, `age_secs`, `holder_pid`, `holder_alive`, `stealable` / `abandoned`), return `blocked`, and **do not** commit. Do not bypass an active lock. Do **not** run `stale-clean` unless `status` shows the lock is stale/abandoned **and** you intend to take over; after `stale-clean`, only the chat that successfully re-acquires may release (using that acquire's token).
+5. **Stealable locks** (auto-stolen on the next `acquire` / `wait-acquire` poll):
+   - **Stale:** age ≥ `DONE_LOCK_STALE_SECS` (default 1800 = 30m) **and** no matching session fence.
+   - **Abandoned:** lock metadata records `holder_pid` and that process is not running **and** there is no matching `<repo>/.ai-playbook/done-lock.session` for the lock token.
+   - **Session fence:** a dead `holder_pid` with a live matching session file is **not** auto-stealable, even after stale TTL (normal after one-shot Shell tool exits). Operator escape: `stale-clean` may remove a fenced lock when it is also stale. Step 6 releases only with the env token from **your** acquire.
+6. Optional: pass a richer `--label` (plan slug, task id, review round) when the orchestrator provides context.
 
 **After the lock is acquired, immediately continue to Step 1.** Do not run learn, docs-branch, or project commits before Step 0 succeeds.
 
@@ -49,7 +77,82 @@ Invoke the `learn` skill now to extract lessons and update the documentation cor
 
 **If `learn` reports a blocked state** (Step 6.6 user-corpus violation: a strict-tagged `UL#N` lesson is missing its `**Principle:** Family X` tag, or the gate script returned non-zero on the adopted corpus), release the lock via Step 6 and return `blocked` WITHOUT proceeding to Step 2 commit. `learn` is invoked here as a SKILL (a sub-procedure), not as a subprocess whose exit code this step checks, so the gate's block decision lives in `learn`'s Step 6.6 text and propagates here through `learn`'s returned state. The operator fixes the user corpus out-of-band (classify the listed `UL#N` via learn/generalize, or run `lessons_adopt.py --tag-unclassified <user_corpus>` manually) before the next `done`.
 
-**After learn completes, immediately continue to Step 2.** Do not stop or wait for user input; the workflow is continuous and all steps should execute in sequence.
+**After learn completes, immediately continue to Step 2.65.** Do not stop or wait for user input; the workflow is continuous and all steps should execute in sequence.
+
+## Step 2.65: Confluence mirror and ephemeral tmp hygiene
+
+Before `docs-branch`, validate Confluence mirror state and handle ephemeral publish snapshots under `docs/tmp/`. **Never delete `*-cf-out.md` until audit confirms the content is already represented in the docs hierarchy or is a stale duplicate.**
+
+**Run when any of these are true:**
+
+- `docs/maintenance/confluence-sync-manifest.json` exists in the project repo
+- This session created or updated files under `docs/history/context/confluence/`
+- This session pushed or restored Confluence pages via Atlassian MCP
+- Ephemeral files exist under `docs/tmp/` (`*-cf-out.md`, `__pycache__`)
+
+**Skip** when none apply and `docs/tmp/` has no ephemeral publish snapshots.
+
+```bash
+HYGIENE="${CONFLUENCE_MIRROR_HYGIENE_SCRIPT:-${HOME}/.ai-playbook/scripts/confluence-mirror-hygiene.sh}"
+```
+
+1. **Audit before delete.** Classify each `docs/tmp/*-cf-out.md`:
+
+   ```bash
+   "$HYGIENE" audit-cf-out
+   ```
+
+   - **NEEDS_UPGRADE:** promote content into the docs hierarchy first:
+     1. `docs/history/context/confluence/{page_id}-{slug}.md` with standard mirror frontmatter (verbatim wiki body)
+     2. `layer2_targets` from `confluence-sync-manifest.json` when curated Layer 2 is authoritative
+     3. Engineering spike sync ledgers (for example ADR-46 §Confluence sync ledger) when versions changed
+   - **UNMAPPED:** route manually (new manifest entry, mirror file, or Layer 2 doc); do not delete.
+   - **STALE:** safe to remove after promotion pass (older publish snapshot, subset of mirror, or superseded wording).
+
+   Re-run `audit-cf-out` until exit 0 before cleanup.
+
+2. When a manifest exists, run validation:
+
+   ```bash
+   "$HYGIENE" validate
+   ```
+
+   On failure, fix before `docs-branch` and re-run until exit 0:
+
+   - Mirror files use standard YAML frontmatter (`confluence_page_id`, `confluence_title`, `confluence_version`, `confluence_url`, `space_key`, `synced_at`, `sync_status`, `layer2_targets`). Do not use a bare `path:` key.
+   - Mirror filenames follow `{page_id}-{slug}.md`.
+   - `docs/maintenance/confluence-sync-manifest.json` lists every mirror with matching `local_path`, versions, and `layer2_targets`.
+   - `docs/history/context/confluence/README.md` indexes manifest pages.
+   - Engineering spike docs with a Confluence sync ledger (for example ADR-46) match manifest `confluence_version` after an intentional wiki push (`sync_status: synced`). Use `pending` when repo mirrors are ahead of wiki per project-guidelines #92.
+
+3. After a live Confluence push, refresh mirror bodies from the published wiki content (or authoritative repo spike sections), bump manifest versions, and set `sync_status: synced` in the same session. Do not leave truncated wiki pages; republish the full body before marking synced.
+
+4. **Cleanup only after audit passes:**
+
+   ```bash
+   "$HYGIENE" cleanup
+   ```
+
+   Removes `__pycache__` always; removes `*-cf-out.md` only when step 1 marked them STALE. Aborts when promotion is still pending.
+
+**After Step 2.65 completes, immediately continue to Step 2.64.**
+
+## Step 2.64: Review staging hygiene
+
+When this session wrote or updated review staging docs under `{reviews_dir}/` (resolve from `.ai-playbook/facts.md` via `using-skills` Step 0), validate each session-touched staging file before `docs-branch` sync. Cover every review-staging kind: basename matches `*review*.md`, or PR staging names (`*-PR-*` / `PR-<n>-...` per `review-staging`), or any path accepted by the validator's `is_staging_review_path`. Do not filter to `*review*.md` alone; that misses PR staging.
+
+```bash
+VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"
+# Only paths this session created or edited (do not glob all historical rounds)
+for f in <session-touched-staging-paths>; do
+  [ -f "$f" ] || continue
+  python3 "$VALIDATOR" --hard "$f" || exit 1
+done
+```
+
+On failure: complete the staging doc per `review-staging` (Metadata, Review Statistics, Findings with Comment/Analysis) before continuing. Do not sync stub staging docs to the orphan `docs` branch.
+
+**After Step 2.64 completes, immediately continue to Step 2.**
 
 ## Step 2: Preserve Gitignored Docs and Instructions
 
@@ -322,14 +425,32 @@ Do not push. These are local-only docs repositories.
 
 ## Step 6: Release project done lock
 
-**Always run Step 6 before ending this skill**, including when Steps 1–5 failed or returned early. This lets a waiting parallel `done` resume.
+**Always run Step 6 before Step 7**, including when Steps 1–5 failed or returned early. This lets a waiting parallel `done` resume.
+
+From the project git root, release with **`DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` from your Step 0 acquire** (re-export from that tool output if the shell lost env). `release-repo` requires those env vars and refuses to load the shared session file:
+
+```bash
+DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" \
+  "${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}" release-repo
+```
+
+Equivalent:
 
 ```bash
 DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" \
   "${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}" release
 ```
 
-If release fails (token mismatch, missing env), run `status` from the project root, report the holder, and ask the user before forcing `stale-clean`.
+If release fails (token mismatch, env missing), run `status` from the project root. When `status` shows free, your hold is already gone (peer `stale-clean` or release); do not source `.ai-playbook/done-lock.session` to “fix” env. When `status` shows `abandoned: yes` with no session fence, run `stale-clean` only if you will re-acquire; ask the user before forcing removal of an **active** lock.
+
+## Step 7: Report outcome to the user
+
+**Never end `/done` silently after diagnostics.** Always send a short summary:
+
+- Project repo: commit hash(es) created, or **working tree clean** at `HEAD` (include `git log -1 --oneline`).
+- Skills / shared docs repos: commits created or none.
+- Lock: confirm `status` shows **free** after Step 6.
+- If `blocked` at Step 0 or learn: state why and what the user should run (`stale-clean`, fix corpus, retry).
 
 ## Integration Points
 
@@ -343,13 +464,17 @@ Invoked as a sub-agent after **each** completed plan task (per-task commit) and 
 
 Each execute-plan `done` sub-agent still runs Step 0 and Step 6. Sequential tasks in one orchestrator usually acquire immediately after the prior release; parallel chats on the same repo wait on **wait-acquire**.
 
+### With `review-staging` skill
+Step 2.64 validates session-touched staging docs under `{reviews_dir}/` before docs-branch sync. Include `*review*.md`, PR staging (`*-PR-*` / `PR-<n>-...`), and any path accepted by `is_staging_review_path` (not only `*review*.md` or `*-r*.md`). Complete Metadata, Review Statistics, and Findings with Comment/Analysis before continuing; do not sync stub staging docs.
+
 ## Rules
 
-- Always acquire the Step 0 project lock before learn or any project-side commit steps; always release it in Step 6.
-- Never skip Step 0 or Step 6, even for "just commit" or empty commit runs.
+- Always acquire the Step 0 project lock before learn or any project-side commit steps; always release it in Step 6 (`release-repo` from project git root).
+- Never skip Step 6 or Step 7, even for "just commit" or empty working tree runs.
 - Always run learn before committing; lessons must be captured first.
 - Never skip the learn step even if the user says "just commit".
 - Invoke `docs-branch` skill for all docs/instructions preservation; do not inline the stash or branch logic here.
+- Run Step 2.65 (Confluence mirror validate, audit-cf-out promotion gate, ephemeral `docs/tmp` cleanup) before `docs-branch` when the manifest exists or the session touched Confluence mirrors, wiki pages, or ephemeral publish snapshots.
 - Always verify that new or revised reusable docs, reference material, and explanatory artifacts added in the session are referenced from instructions or related canonical docs where future agents will need them.
 - Never stage or commit a file that is gitignored, even if it appears in `git diff` (it was previously force-tracked). Use `git rm --cached` to remove it from tracking; do not commit it on the feature branch.
 - Never add `Co-Authored-By:` or `Co-authored-by:` trailers or use `git commit --trailer` for agent attribution. See user `AGENTS.md` (Git Commit Trailer Policy). Disable automatic agent attribution in IDE settings when present.

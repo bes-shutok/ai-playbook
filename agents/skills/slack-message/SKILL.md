@@ -14,7 +14,7 @@ description: Use this skill whenever the user wants to send, post, draft, or upd
 3. Show the preview and ask: "Does this look good, or any changes?"
 4. After approval, save to **Slack Drafts** using your environment's **draft-save** Slack integration only. Tell the user to open Slack → **Drafts & Sent** and click **Send** themselves.
 
-**Never use immediate/direct send.** Some integrations add an agent attribution footer on direct send. Draft-only keeps the post attributed to the user when they send from Slack.
+**Never use immediate/direct send, even when the user says "post", "send it", or "send the message".** Treat every send-like instruction as draft-only: save to Slack Drafts and let the user send from the Slack client. Do not call a direct-send tool at all; use the draft-save tool exclusively. Some integrations add an agent attribution footer on direct send, and direct send removes the user's final review. Draft-only keeps the post attributed to the user when they send from Slack. If the user explicitly wants it sent without review, still save a draft and tell them to click Send themselves.
 
 ## Showing the draft (required)
 
@@ -58,11 +58,15 @@ Does this look good, or any changes?
 - Follow any local or task-specific Slack template over the generic rules here. For example, daily standups use `*Previous working day / Completed*`, `*Today*`, `*Blockers*`, and `•` bullets.
 - Use `•` for standup/report bullets and any other message where the local instructions or source material use `•`. Use `-` only for generic ad-hoc Slack lists with no local template.
 - Preserve explicit section-specific bullet style from the user, even when it differs from the default template. For example, if the user writes `*Blockers*` with `- None`, keep `- None` rather than normalizing it to `• None`.
+- When updating an existing standup section from a partial user snippet, add the new bullet(s) to the existing section unless the user explicitly says to replace/remove the old content. Do not drop an existing `*Today*` item just because the user sends another `*Today*` item.
 - Code identifiers, class names, method names, field names, config keys: wrap in backticks
 - Do not label widely-used, active tools or systems as "legacy" unless the user explicitly does so
 - `@here`, `@channel`, and user `@mentions` pass through as-is.
 - For recurring colleagues, preserve the `@` tag and use the full name plus local Slack signature only when local facts/instructions provide it. For manual copy-paste drafts, prefer that local tag form over raw Slack user IDs such as `<@U...>`; use raw Slack IDs only when saving/sending through a Slack integration that requires them, or when the user explicitly asks for real Slack mention syntax. Do not hardcode real people in this generic skill.
 - In manual copy-paste drafts, do not wrap confirmed teammate `@mentions` in Markdown links. Keep them as raw Slack-visible text such as `@Full Name [TEAM]`; links can prevent the copy-pasted text from behaving like a clean mention.
+- **Hyperlinks (draft-save, required).** When saving via the draft-save Slack integration, use Slack mrkdwn link syntax: `<https://example.com/path|link label>`. Do **not** use Markdown `[label](url)` in draft-save bodies; Slack renders that as plain text, not a clickable link.
+- **Hyperlinks (chat preview).** Show the same `<url|label>` syntax inside the preview fence so copy-paste and draft-save stay aligned. Wrong in draft body: `[mockup UI](https://example.com/users/usr_002)`. Right: `<https://example.com/users/usr_002|mockup UI>`.
+- **Preserve user link labels.** When the user provides link text (for example `mockup UI`, `CRM MVP Data Points`), keep their label; only fix the wrapper syntax before draft-save.
 
 ## Wording rules
 
@@ -74,8 +78,11 @@ Apply to every draft. Scan the final text before showing the preview.
 - **API response vs caller behavior.** When describing consent/messaging checks, separate what the API returns from what callers should do. Say the endpoint returns HTTP `200 OK` with `decision: "DENY"` and `reason: …`; then say callers should not deliver when `decision` is `DENY`. Do not write vague shorthand like "do not send (`DENY`)" without stating it is the JSON response field.
 - **Internal engineering refs.** Product-facing Slack posts should not cite ADR numbers, plan filenames, or ticket-only context unless the audience uses them. Use endpoint names, user-visible behavior, and plain outcome language. Jira keys (e.g. `PROJ-1234`) are fine when the thread is already task-scoped.
 - **Validation evidence stays private by default.** Use repository checks, source links, and detailed evidence to validate the answer for the user, but do not paste long evidence sections into Slack unless the user explicitly asks for them. For cross-team technical replies, lead with the conclusion and only the shortest operationally useful bullets.
-- **Source-backed decision replies.** Use Slack markdown inline links (`[label](url)`) at the claim they support. When compressing analysis, keep the strongest concrete tradeoffs and risk bullets in shorter form instead of smoothing them into generic narrative.
+- **Source-backed decision replies.** Use inline hyperlinks at the claim they support. In draft-save bodies use `<url|label>` (see Hyperlinks above). When compressing analysis, keep the strongest concrete tradeoffs and risk bullets in shorter form instead of smoothing them into generic narrative.
 - **Audience vocabulary.** Remove specialty jargon the author does not normally use, but keep common developer terms such as CRUD when writing to engineers. Do not replace precise familiar terms with vaguer wording or explain basic developer vocabulary to peer developers.
+- **Non-expert (Product/PM) replies: define the term, show examples, explain *why*.** When answering a non-engineer about an engineering constraint or limit, first define the key domain term in plain language with 2-5 concrete examples, then explain *why* the constraint exists (the trade-off), not only *what* it is. Compress the deep technical part to "simple, not simpler". Do not open with implementation internals (data structures, algorithms, caps) as if the reader already shares them.
+- **Adjacent-team asks: frame in their domain, show don't explain, drop your internals.** When asking a peer on another team or service for data/contract changes, phrase each need as a concrete question in *their* domain (their API or payload shape), the same way you would ask your clearest question. Prefer *showing* an annotated example payload over explaining in prose. Do not dump your own service's internal concepts (materialization caps, operator/window mappings, bitmap mechanics) that the reader is not aware of and does not own; keep those on your side.
+- **Catalog scope vs MVP enablement.** When a peer plans to expose "all" items from a mockup or UI tab as the MVP catalog, clarify that your service may only *enable* a curated subset for MVP (link the stakeholder thread that set the constraint) and give a short example list of what is in scope. Distinguish "define broadly in the catalog contract" from "segmentation/filtering enables only the curated set."
 - **Tentative architecture/source choices.** When a thread is still a spike or option analysis, do not turn candidate paths into final statements. Distinguish current research access from later production access, first baseline import from repeatable backfill or enrichment, and the default sync option from possible alternate workflows. If the source only supports "likely", "at this stage", or "one option", keep that uncertainty in the draft.
 - **Standup blockers stay explicit.** Do not replace a blocker with `None` just because there was partial progress or a new reply. Keep blocker status when the underlying decision, approval, alignment, or dependency is still unresolved; downgrade to `None` only when the user explicitly says there are no blockers or the source text clearly resolves the dependency.
 - **Minimal context.** Product or cross-team decision posts should open with the gap and the ask. Do not recap unrelated shipped work (e.g. a prior ticket's empty-state fix) unless it is required to understand the question.
@@ -104,8 +111,10 @@ Extract the ID directly from a Slack URL: `https://.../archives/C0123456789` mea
 
 Use the **draft-save** Slack integration with the channel ID and approved message text. Return any draft or channel link the integration provides so the user can open Slack and send.
 
+- Before draft-save, scan the message body: every hyperlink must use `<url|label>`, not `[label](url)` or bare URLs with a separate label line.
 - For thread replies, pass the parent message timestamp when the integration supports it.
 - If a draft already exists for that channel, tell the user to edit or delete it in Slack first, then retry.
+- **Draft-save does not overwrite.** Each draft-save call creates a **new** draft; it does not update or replace a prior draft for the same channel/thread (there is usually no draft-update or draft-delete API). When you save a revised version, the old draft remains. Report the new draft id, name which draft to keep, and tell the user to delete the superseded one(s) in Slack. Do not assume a re-save replaced the earlier draft.
 - **Immediate/direct send is forbidden** in this skill, even when the user says "post", "send", or "notify". Those words mean save a draft and instruct the user to send from Slack.
 
 After saving, remind the user: *Open Slack → Drafts & Sent → review → Send.*

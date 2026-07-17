@@ -29,10 +29,39 @@ Use it when:
 - `doc-hierarchy-upkeep`: post-migration Layer 1/2 upkeep.
 - Vendored with the shared registry; not a separate runtime source.
 
+### Agent harness design (`agents/skills/agents-best-practices/`)
+- `agents-best-practices`: vendored from [DenisSergeevitch/agents-best-practices](https://github.com/DenisSergeevitch/agents-best-practices) (MIT; upstream `metadata.version` in `SKILL.md` frontmatter, currently `1.2.0`).
+- Scope: provider-neutral harness design (loops, permissions, MVP blueprints, evals, MCP/skills governance). Complements first-party workflow skills (`plans`, `execute-plan`, `learn`, `how-to-write-skills`).
+- Re-sync: `git clone --depth 1` or `rsync` from upstream; preserve upstream `LICENSE` copyright in `LICENSE.txt`; run `public_hygiene_scan_script` before commit.
+
+### Productivity and domain skills (vendored from [mattpocock/skills](https://github.com/mattpocock/skills))
+- **License:** copy [upstream LICENSE](https://github.com/mattpocock/skills/blob/main/LICENSE) verbatim into each skill's `LICENSE.txt` (`Copyright (c) 2026 Matt Pocock`). Do not use the first-party `plans/LICENSE.txt` copyright for vendored copies.
+- `grilling`: one-question-at-a-time decision interview before acting; complements `premortem` (failure modes) and `plans` Phase 1.
+- `grill-with-docs`: user-invoked combo of `grilling` + inline `domain-modeling` (glossary and ADRs during the interview).
+- `domain-modeling`: active ubiquitous-language and ADR discipline; paths aligned with doc-hierarchy (`docs/maintenance/glossary.md`, `docs/maintenance/project-decisions.md`, `docs/architecture/domain-model.md`); legacy `CONTEXT.md` / `docs/adr/` read-only fallback only.
+- `handoff`: user-invoked session handoff doc for fresh agents; output under `{tmp_dir}/handoff/` when repo facts exist; aligned with `agents-best-practices` compaction handoff format.
+- **Skill design vocabulary** (formerly `writing-great-skills`): merged into `how-to-write-skills/references/skill-design-principles.md` and `skill-design-vocabulary.md`; do not re-vendor as a separate skill.
+- Re-sync: sparse-clone upstream skill folders; refresh `LICENSE.txt` from upstream root `LICENSE`; drop vendor `agents/` folders (Codex-specific); run `public_hygiene_scan_script` before commit.
+
+### External upstream catalog (`projects/.ai-playbook/skill-upstream-catalog.md`)
+- Canonical list of external skill, plugin, and harness sources to consult when extending or refreshing `agents/skills/`.
+- Includes vendored status, local overlap notes, and refresh checklist.
+- Vendored skills still record `metadata.upstream` per skill; this catalog is the registry-level index.
+
+### Review staging and panel (`agents/skills/review-staging/`, `review-agents/`, consumers)
+- `review-staging`: gold source for `{reviews_dir}/` staging doc hierarchy and `## Review Statistics` (Panel Solo/Echo, Pattern tags, Severity calibration, Triage outcomes, required `.stats.json` sidecar; `wrong-owner` discard for tiered-ownership tuning).
+- `review-agents`: shared sub-agent pattern catalogs; each return includes `pattern: <agent>#<kebab-slug>`. Panel launch/skip rules and tiered ownership: `review-agents/review-panel-selection.md` (merged `documentation` + legacy `prose-clarity`; opt-in `premortem`/`concurrency`).
+- Consumers: `doing-code-review`, `review-plan`, `review-loop`, `receiving-code-review`, `rfc-design`, `review-confluence-doc`, `execute-plan` Phase 3, `done` (Step 2.64). Staging docs are gitignored on consumer repos; sync to orphan `docs` branch via `docs-branch`.
+
 ### Claude Code
 - Runtime source: `~/.claude/skills` (symlink → `~/.agents/skills`)
 - Mirror target: `claude/skills/` (symlink → `../agents/skills`)
 - Notes: `~/.claude/skills` is a symlink to `~/.agents/skills`; the repo mirrors this with `claude/skills -> ../agents/skills`. Only skills are active; `~/.claude/commands` does not exist on this machine.
+
+### Cursor (skills)
+- Runtime source: `~/.cursor/skills` (symlink → shared registry or this repo's `agents/skills/` depending on machine setup)
+- Mirror target: `agents/skills/` (canonical tracked copy)
+- Notes: Cursor also loads global instructions via `~/.cursor/rules/` (see Cursor global instructions below). Do not assume `~/.cursor/skills` equals `~/.agents/skills` without verifying the symlink target.
 
 ### Codex
 - Runtime source: `~/.codex/skills`
@@ -126,7 +155,7 @@ python3 -c "import os; assert os.path.realpath(os.path.expanduser('~/.gemini/con
 - Verify the actual on-disk runtime source before documenting an agent import path.
 - Distinguish shared registries from vendor-specific folders instead of assuming everything comes from the current agent's home directory.
 - Mirror reusable commands and skills into repository folders that preserve the source tree shape.
-- Document home-directory runtime sources with `~`-based paths and repository targets with repository-relative paths; do not commit absolute local filesystem paths such as `/Users/...`.
+- Document home-directory runtime sources with `~`-based paths and repository targets with repository-relative paths; do not commit absolute local filesystem paths such as ``$HOME/...` (absolute home paths)`.
 - Do not treat config, logs, caches, or session-state folders as reusable instruction libraries.
 - Keep detailed runtime mapping here and let overview documents reference this file instead of duplicating the full mapping.
 
@@ -134,7 +163,7 @@ python3 -c "import os; assert os.path.realpath(os.path.expanduser('~/.gemini/con
 
 - **`facts.md`:** identity, workspace roots, `shared_docs_dir`, skill keys, brag paths, entrypoints, MCP auth **path keys** (never commit).
 - **`credentials/`:** local OAuth backups for Slack/Atlassian MCP (`mcp-cursor.json`, `mcp-atlassian-mcp-remote/`). Mode `700`/`600`. Never commit.
-- **`scripts/`:** runtime copies of shared agent scripts, synced from the tracked canonical source at repo-root `scripts/` of `instructions_repo` (hygiene runners `scan-public-hygiene.sh`, `check-no-em-dash.sh`, `check-instruction-size.sh`, `done-lock.sh`, plus the lessons gate/adopter/migrator). Secrets-bearing or machine-specific scripts (e.g. `sync-mcp-credentials.sh`) and `public_hygiene_patterns_file` live here only and stay gitignored; they are not in the tracked source. Paths referenced from facts; portable policy stays in skills.
+- **`scripts/`:** runtime copies of shared agent scripts, synced from the tracked canonical source at repo-root `scripts/` of `instructions_repo` (hygiene runners `scan-public-hygiene.sh`, `check-no-em-dash.sh`, `check-instruction-size.sh`, `done-lock.sh`, `confluence-mirror-hygiene.sh`, plus the lessons gate/adopter/migrator and review-staging validator). Secrets-bearing or machine-specific scripts (e.g. `sync-mcp-credentials.sh`) and `public_hygiene_patterns_file` live here only and stay gitignored; they are not in the tracked source. Paths referenced from facts; portable policy stays in skills.
 - **`README.md`:** overview of facts + guideline symlink layout (never commit).
 
 ## Shared project guidelines (`projects/.ai-playbook/`)
@@ -163,7 +192,7 @@ Before committing changes under `projects/.ai-playbook/`, scan for sensitive con
 
 ```bash
 # Add employer-specific domain patterns from local facts if needed; keep committed examples neutral
-rg -n -i '/Users/|<employer-domain>|api[_-]?key|password|secret' projects/.ai-playbook/
+rg -n -i 'absolute-home-path|<employer-domain>|api[_-]?key|password|secret' projects/.ai-playbook/
 ```
 
 ## Refresh Commands
@@ -178,6 +207,7 @@ rsync -a --delete --exclude '.DS_Store' ~/.agents/skills/ ./agents/skills/
 
 ## Related Files
 - `README.md`: overview and usage index for this repository.
+- `skill-upstream-catalog.md`: external skill/plugin/harness sources for vendoring and periodic refresh (this directory).
 - `AGENTS.md` (repo root): guidance for maintaining **this** command-spec repository only.
 - `docs/AGENTS.md`: version-controlled **user-level** cross-project instructions (canonical source for Codex, Claude Code, Copilot CLI, Gemini CLI, Cursor).
 - `bootstrap-ai-playbook` skill: creates/updates repo `.ai-playbook/facts.md` (`repo_facts_rel`; no machine paths in repo).

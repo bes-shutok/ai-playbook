@@ -137,15 +137,18 @@ Blockers become additional plan tasks. Mitigations become test cases or validati
 Invoked as one of the shared `review-agents/` sub-agents. The `review-agents/premortem.md` wrapper
 reads this skill for persona definitions and process, then applies sub-agent overrides (change-type
 persona selection, max 2 findings per persona). Only Block and Mitigate findings surface as review
-comments. Skipped for trivial diffs (<20 lines).
+comments. Opt-in per `review-agents/review-panel-selection.md` (domain tags); not launched by default on localized feature PRs.
 
 ### With `tdd-guide` skill
 Invoked during the Bug Fix Workflow (step 4) after defining outcomes but before proposing
 the test plan. Personas: Pessimist + Attacker. Frame: "Tests passed but the bug reappeared."
 Findings become additional test cases or assertions.
 
+### With `grilling` skill
+Grilling resolves decisions through a one-question-at-a-time interview until shared understanding is confirmed. Offer premortem **after** grilling completes when the user wants failure-mode coverage. Grilling asks *what*; premortem asks *how it fails*.
+
 ### With `rfc-design` skill
-Invoked as `premortem.md` in the Step 2 parallel review pass (not standalone). All six personas. Block findings revise RFC sections. Mitigations feed §8 (Testing and Rollout). Monitors feed §7 (Operability). Accepted risks go in an appendix subsection. Output is folded into the RFC via staging file under `{tmp_dir}/rfc-review/`, not shown separately in chat.
+Invoked as `premortem.md` in the Step 2 parallel review pass (not standalone). All six personas. Block findings revise RFC sections. Mitigations feed §8 (Testing and Rollout). Monitors feed §7 (Operability). Accepted risks go in an appendix subsection. Output is folded into the RFC via staging file under `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` (per `review-staging`), not shown separately in chat.
 
 ### With `review-confluence-doc` skill
 Invoked in Step 4.5 after initial quality analysis of a fetched Confluence page.

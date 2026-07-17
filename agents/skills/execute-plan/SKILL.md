@@ -7,25 +7,88 @@ description: >
   receiving-code-review triage), minimum two review rounds, maximum ten review rounds,
   with done after each review iteration;
   on successful completion, remove session tmp under resolved tmp_dir/execute-plan/<plan-slug>/.
-  Trigger phrases:
-  "execute the plan", "execute plan", "implement the plan", "implement plan", "run the plan",
-  "run plan", "execute-plan".
-  Plan path alone (for example a file under the project plans_dir) is NOT a trigger; use the plan-path gate first.
+  Trigger phrases and invocations:
+  "execute the plan", "execute plan", "execute <plan-path>", "implement plan", "implement <plan-path>",
+  "run plan", "run <plan-path>", "execute-plan", "/execute-plan", or attaching/invoking this skill.
+  Plan path alone (no execute/implement/run verb before the path, no /execute-plan, no skill attachment)
+  is NOT execute-plan; use the plan-path gate only in that case.
 ---
 
 # Execute Plan
 
-**Documentation paths:** At Phase 0, read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Use `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for session logs. Substitute resolved paths everywhere below that shows `{...}` or legacy `docs/plans/` examples.
+**First step every turn:** Run [Invocation detection](#invocation-detection-run-first) before the plan-path gate or any Phase 0 work. If detection returns `invoked`, proceed immediately; never show the three-way gate.
+
+**Documentation paths:** At Phase 0, read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Use `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for session logs. Substitute resolved paths everywhere below that shows `{...}` or legacy `docs/plans/` examples. After doc-hierarchy migration, `{plans_dir}` is often `docs/history/plans/`; treat that path the same as `docs/plans/`.
 
 **Announce at start:** "I'm using the execute-plan skill to implement `<plan-path>`."
 
 Orchestrate plan execution from the main agent. Always run Phase 0 (branch setup) first; do not skip it. Delegate heavy work to sub-agents so context stays clean. Do not implement tasks inline unless a sub-agent fails and you must recover.
 
+**Continuous execution:** Once execute-plan is invoked, run the full plan end-to-end (Phase 1 tasks → Phase 2 → Phase 3 → Phase 4) **without asking for permission between steps**. Brief progress reports are fine; stopping to ask "proceed to Task N?" or "start review?" is not. Pause only on hard gates (failure, timeout, max review rounds, user interrupt, or explicit user abort).
+
 **Announcement is not execution.** Saying you are using this skill does not satisfy it. The parent agent must run the Phase 1 loop (implement sub-agent → verify → mark checkboxes → **done sub-agent** → report) for **each** task. Passing tests or marking all checkboxes in one parent session is **not** a substitute for per-task `done` commits.
 
-## Implicit triggers and plan-path gate (required before Phase 0)
+## Invocation detection (run first)
 
-When the user message references a plan under `{plans_dir}/` (path only, `@` mention, or pasted filename) **without** an execute-plan trigger phrase above, **stop** before Phase 0, before creating the session tmp dir, and before any plan-scoped production or test code edit.
+**Before** the plan-path gate, branch setup, or any plan-scoped edit, classify the user message. This check is mandatory; do not skip it because a plan path is present.
+
+### Algorithm
+
+Normalize the user message: trim whitespace; compare case-insensitively.
+
+**`invoked = true`** when **any** of these holds:
+
+| # | Signal | How to match |
+|---|--------|----------------|
+| A | **Verb + plan** | Message contains `execute plan`, `execute the plan`, `implement plan`, `implement the plan`, `run plan`, or `run the plan` as a phrase (words adjacent, optional `the`, hyphen or space). A plan `.md` path on the same line still counts. |
+| B | **Verb + plan path (shorthand)** | Message contains `execute`, `implement`, or `run` followed by whitespace and a repository-relative `.md` path under a plans directory (path contains `/plans/`, or matches resolved `{plans_dir}` / `{plans_completed_dir}` / legacy `docs/plans/`). Examples: `execute docs/history/plans/foo.md`, `run {plans_dir}/PROJ-1-feature.md`. Extra whitespace between verb and path is OK. |
+| C | **Hyphen / slash** | Message contains `execute-plan` or `/execute-plan` |
+| D | **Skill attachment** | This `execute-plan` skill is attached to the message or selected via slash command |
+| E | **Prior gate** | User already chose execute-plan (option 1) in this session |
+
+**`invoked = false`** only when **none** of A–E match. Examples: bare path, `@plan.md`, "review this plan", "what's in this plan", `execute the tests` (verb + non-plan target).
+
+**Plan path heuristic for signal B:** token after `execute`/`implement`/`run` ends with `.md` and looks like an implementation plan file (under `.../plans/...` or resolved `{plans_dir}`), not a script or command.
+
+### Worked examples (gate forbidden when `invoked = true`)
+
+| User message | `invoked` | Action |
+|--------------|-----------|--------|
+| `execute plan docs/history/plans/PROJ-1234-predicate-catalog-fact-store.md` | **true** | Proceed; do **not** ask 1/2/3 |
+| `execute docs/history/plans/PROJ-1234-predicate-catalog-fact-store.md` | **true** | Proceed (shorthand verb + path) |
+| `execute  docs/history/plans/PROJ-1234-predicate-catalog-fact-store.md` | **true** | Proceed (extra whitespace OK) |
+| `Execute plan docs/history/plans/foo.md` | **true** | Proceed |
+| `/execute-plan docs/history/plans/foo.md` | **true** | Proceed |
+| `docs/history/plans/foo.md` | false | Three-way gate |
+| `@PROJ-1234-plan.md` | false | Three-way gate |
+
+**Common misread to avoid:** `execute plan <path>` and `execute <path>` (when path is under `.../plans/...`) are **not** "path only". The verb is the invocation; the path is the argument.
+
+When `invoked = true` and a plan path is present (or inferable from context), extract `<plan-path>` and continue to session bootstrap and Phase 0.
+
+## Execute-plan invocation vs plan-path gate
+
+### Execute-plan already chosen (skip gate; proceed immediately)
+
+When invocation detection returns `invoked = true`, execute-plan is **already chosen**. Do **not** show the three-way gate. Do **not** tell the user they "did not explicitly invoke execute-plan".
+
+Also treat as already chosen when any legacy signal below applies (same outcome as the table above):
+
+1. **Trigger phrase** in the user message (see table A–C).
+2. **Skill attachment or invocation** (see table D).
+3. **Prior gate choice** in the same session (see table E).
+
+When `invoked = true` **and** a plan path is available (in the message, from prior context, or from the slash command argument), announce the run contract and continue:
+
+> Using execute-plan on `<plan-path>`: Phase 0 branch setup → session tmp dir → one implement sub-agent + `done` commit per task (auto-continue through all tasks) → Phase 2 validation → minimum 2 clear review rounds → archive plan.
+
+**Commit authorization:** An execute-plan invocation **overrides** session-level "do not commit unless asked" **for this run only**. Step 1.4 and Step 3.4 `done` sub-agents must commit without a separate commit prompt. **Push** still requires explicit user instruction (see user `AGENTS.md` Git Push Policy).
+
+**Session bootstrap (immediate):** Create the session directory and `manifest.md` **before Phase 0** and **before any plan-scoped code edit** (template in Step 0.4).
+
+### Plan-path gate (only when execute-plan is NOT already chosen)
+
+When the user references a plan file (under `{plans_dir}/`, `{plans_completed_dir}/`, `docs/history/plans/`, legacy `docs/plans/`, or another resolved plans path from `.ai-playbook/facts.md`; path only, `@` mention, or pasted filename) **and invocation detection returned `invoked = false`**, **stop** before Phase 0, before creating the session tmp dir, and before any plan-scoped production or test code edit.
 
 Ask the user to choose **exactly one** of three options (use a structured multiple-choice prompt when your environment supports it; otherwise list the options in chat and wait for an answer):
 
@@ -35,21 +98,22 @@ Ask the user to choose **exactly one** of three options (use a structured multip
 
 **Plan path alone is not an execute-plan trigger.**
 
-If the user selects **execute-plan**, announce the run contract before Phase 0:
+If the user selects **execute-plan** from this gate, announce the run contract (same block as above) and create the session directory before Phase 0.
 
-> Using execute-plan on `<plan-path>`: Phase 0 branch confirm → session tmp dir → one implement sub-agent + `done` commit per task → Phase 2 validation → minimum 2 clear review rounds → archive plan.
+Manual and read-only runs do **not** create `{tmp_dir}/execute-plan/<PLAN_SLUG>/`.
 
-**Commit authorization:** Selecting execute-plan in this gate **overrides** session-level "do not commit unless asked" **for this execute-plan run only**. Step 1.4 and Step 3.4 `done` sub-agents must commit without a separate commit prompt. **Push** still requires explicit user instruction (see user `AGENTS.md` Git Push Policy).
-
-Do not start Phase 1 until the user has chosen execute-plan (explicit trigger phrase counts as that choice).
-
-**Session bootstrap (immediate):** When execute-plan is chosen (gate option 1 or explicit trigger phrase), create the session directory and `manifest.md` **before Phase 0** and **before any plan-scoped code edit** (template in Step 0.4). Manual and read-only runs do **not** create `{tmp_dir}/execute-plan/<PLAN_SLUG>/`.
+Do not start Phase 1 until execute-plan is chosen (invocation signal or gate option 1).
 
 ## Anti-patterns (never substitute for orchestration)
 
 | Anti-pattern | Why it violates the skill |
 |--------------|---------------------------|
-| Skip Phase 0 and start Phase 1 immediately | Branch setup is mandatory; work must happen on a known, tracked branch with user confirmation; skipping risks mixing plan work with unrelated changes or detached HEAD |
+| Skip Phase 0 and start Phase 1 immediately | Branch setup is mandatory; work must happen on a known, tracked branch; skipping Step 0.3 verification risks detached HEAD or wrong branch |
+| Show three-way gate when message contains `execute` + plan path | `execute docs/.../plans/foo.md` is shorthand invocation, not path-only |
+| Show three-way gate when message contains `execute plan` + plan path | `execute plan docs/.../foo.md` is invocation + argument, not path-only |
+| Show three-way gate when execute-plan skill is attached or `/execute-plan` was used | Skill attachment and slash invocation already mean execute-plan; the gate is only for bare plan-path references |
+| Ask to continue when current branch already matches the plan | Definitive branch match auto-continues after Step 0.3; prompts are only for plausible non-exact matches or new branch creation |
+| Ask permission before the next task or review round | Phase 1 and Phase 3 auto-continue after each successful step; user already chose execute-plan |
 | Parent implements Task 1–N inline in one turn | Skips implement sub-agents and per-task `done`; only inline recovery after sub-agent failure is allowed |
 | Green tests → mark all `[x]` → archive plan | Checkboxes and archive belong **after** each task's `done`, not batched at the end |
 | Skip Step 1.4 because "code already works" | `done` is the **only** commit path during Phase 1; tests passing does not commit |
@@ -62,6 +126,9 @@ Do not start Phase 1 until the user has chosen execute-plan (explicit trigger ph
 | Overwrite an existing worker log on relaunch | Same path = append Pass N to end; never truncate `review-r<R>-receiving-code-review.log.md` or other worker logs |
 | Delete `{tmp_dir}/execute-plan/<PLAN_SLUG>/` before success or on failure/interrupt | Tmp logs are removed only in Phase 5 after full successful completion |
 | Exit Phase 3 after one clear round | Requires **two consecutive** clear review rounds (`consecutive_clear_rounds >= 2`) and `review_round <= 10` |
+| Treat post-fix Step 3.1 as "verify prior fixes only" | Causes verification bias; clear rounds must be **fresh adversarial** reviews (promote miss-path after boolean false) |
+| Clear a round with empty mutator failure-mode matrix | Zero Medium+ is not enough; matrix is part of the clear-round quality bar |
+| Skip premortem on clear-streak rounds when plan had concurrency | Premortem stays launched whenever concurrency/transactional mutators are in Review Scope |
 | Start review round 11 | Hard cap: **maximum 10** review rounds (`review_round` 1–10); stop and ask the user before exceeding |
 | User sends plan path only; parent implements inline | Skipped plan-path gate (Mitigation A); treat as read-only or ask the three-way choice first |
 | `replace_all` or bulk `- [ ]` → `- [x]` across the plan | Violates one-task checkbox discipline; mark only the current task after its `done` |
@@ -87,33 +154,43 @@ See [agent-logs.md](agent-logs.md) for path convention, required sections, and m
 
 ## Phase 0: Branch Setup (Run Once at Start)
 
-Before any implementation work, verify and set up a clean branch for this plan execution.
+Before any implementation work, verify and set up a clean branch for this plan execution. Phase 0 always runs Step 0.3 verification; prompts are skipped only on **definitive branch match** (Step 0.1a).
 
-If the `plans` skill already ran Phase 0 on a feature branch for this work, run Step 0.3 first, report the current branch, and ask whether to **continue on the current branch** or create a fresh branch. Do not propose a second branch without that choice.
-
-**Announce at start:** "Before executing the plan, I'll set up a dedicated branch. This ensures clean history and allows safe review/rollback."
-
-### Step 0.1: Propose branch creation
-
-If already on a non-default feature branch (not `main`, `master`, or `develop`) that plausibly matches this plan (Jira ID or plan slug in the branch name), ask:
-
-```
-You're already on: <current-branch>
-Continue on this branch for plan execution? (yes/no)
-```
-
-- **yes** → skip to Step 0.3
-- **no** → proceed with new-branch proposal below
-
-Otherwise, ask the user for confirmation to create a new branch:
-
-**Branch naming convention:**
+**Branch naming convention** (compute before Step 0.1):
 
 1. Extract Jira task ID from plan name if present (pattern: `[A-Z]+-\d+`, e.g. `PROJ-1234`)
 2. If found: branch name = `<JIRA-TASKID>-<short-description>`
 3. If not found: branch name = `YYYY-MM-DD-<short-description>`
 
-`<short-description>` is derived from the plan title, kebab-case, max ~40 chars.
+`<short-description>` is derived from the plan title, kebab-case, max ~40 chars. Also derive `<PLAN_SLUG>` = plan basename without `.md`.
+
+### Step 0.1a: Definitive branch match (auto-continue; no prompt)
+
+If the current branch (not detached HEAD) equals **either**:
+
+- `<PLAN_SLUG>` (plan filename without `.md`, e.g. `PROJ-1234-predicate-catalog-fact-store`), or
+- the computed `<BRANCH_NAME>` from the naming convention above,
+
+then **auto-continue**: report `Already on plan branch <current-branch>; verifying state and proceeding.` and skip to Step 0.3. Do **not** ask whether to continue.
+
+This covers the common case where the `plans` skill already created the feature branch and the plan slug matches the branch name.
+
+### Step 0.1b: Plausible non-exact match (ask once)
+
+If on a non-default feature branch (not `main`, `master`, or `develop`) that **plausibly** relates to this plan (Jira ID or plan slug substring in the branch name) but is **not** a definitive match from Step 0.1a, ask:
+
+```
+You're already on: <current-branch>
+Expected plan branch: <PLAN_SLUG> or <BRANCH_NAME>
+Continue on this branch for plan execution? (yes/no)
+```
+
+- **yes** → skip to Step 0.3
+- **no** → proceed to Step 0.1c
+
+### Step 0.1c: Propose new branch creation
+
+When on a default branch or when the user declined Step 0.1b, announce: "Before executing the plan, I'll set up a dedicated branch. This ensures clean history and allows safe review/rollback."
 
 Ask the user:
 
@@ -209,7 +286,7 @@ Create `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` if missing:
 
 Update the manifest when Phase 0 completes. See [agent-logs.md](agent-logs.md) for log paths.
 
-**Hard gate:** The parent agent must **not** edit production or test files listed in the plan's `Files:` sections until Step 0.4 completes **and** the user has chosen execute-plan (explicit trigger or plan-path gate option 1).
+**Hard gate:** The parent agent must **not** edit production or test files listed in the plan's `Files:` sections until Step 0.4 completes **and** execute-plan is chosen (invocation signal or plan-path gate option 1).
 
 ### Step 0.4b: Stale plan-path checkpoint (doc-hierarchy migration)
 
@@ -236,16 +313,16 @@ This is a pre-Phase-1 plan-maintenance pass (its own commit, not one of the plan
 
 The main agent (you) only:
 
-1. Runs Phase 0 (branch setup) at the start, with user confirmation, before any implementation work.
+1. Runs Phase 0 (branch setup) at the start before any implementation work (prompt only when branch is not a definitive match or new branch creation is needed).
 2. Loads and parses the plan file.
 3. Identifies the **topmost incomplete task** (first `### Task N:` that still has any `- [ ]` item).
 4. Launches sub-agents in sequence (never parallel for implement/done/review-fix).
 5. Verifies sub-agent exit criteria before advancing (artifact exists, tests pass, log non-empty); **does not redo sub-agent work** (see `how-to-write-skills` Orchestrator / Sub-Agent Boundary).
 6. Updates plan checkboxes (`- [ ]` → `- [x]`) after a task passes verification.
 7. Launches the **`done` sub-agent after every task** (Step 1.4) and after **every review iteration** (Step 3.4).
-8. Reports progress to the user between phases (include last commit SHA when `done` finished; summarize worker outcomes by path/count; do not paste full worker logs into orchestrator context).
+8. Reports brief progress between steps (task completed, commit SHA, next step starting); **immediately continues** to the next step without waiting for user confirmation.
 
-Do not skip verification. Do not mark checkboxes before tests pass. Do not start the next task until Step 1.4 succeeds. Do not re-implement, re-review, or re-analyze inline what a sub-agent was launched to do.
+Do not skip verification. Do not mark checkboxes before tests pass. Do not start the next task until Step 1.4 succeeds. Do not re-implement, re-review, or re-analyze inline what a sub-agent was launched to do. **Do not end a turn asking whether to proceed** when the next step is defined and gates passed; launch the next sub-agent in the same session (or immediately in the next turn if context limits require it).
 
 ## Phase 1: Per-Task Implementation Loop
 
@@ -311,9 +388,26 @@ Pass the plan's commit line when present (e.g. `Commit: feat: ...`), `<IMPLEMENT
 3. `git log -1 --oneline` in the repo shows that commit at HEAD (or the user-visible branch tip moved).
 4. `git status` has no unstaged/uncommitted files from the completed task's `Files:` list; if it does, relaunch `done` or a fix sub-agent; do **not** open Task N+1.
 
-### Step 1.5: Report and continue
+### Step 1.5: Report and continue (auto; no prompt)
 
-Tell the user which task completed, the **commit SHA/message** from Step 1.4, and which task is next. If more tasks remain, go to Step 1.1.
+After Step 1.4 passes, post a **brief** status (one short block is enough):
+
+- Task N completed; commit SHA and message
+- Starting Task N+1 (title) now
+
+Then **immediately** go to Step 1.1 for the next incomplete task. Do **not**:
+
+- Ask "want me to proceed to Task N+1?"
+- Offer to start the next task as an optional follow-up
+- End the turn waiting for user confirmation when unchecked tasks remain
+
+The user already invoked execute-plan; continuing through all tasks is the default contract.
+
+**Only stop between tasks when:**
+
+- Step 1.2 or 1.4 failed and you need user input to recover
+- The user interrupted or explicitly said stop/pause
+- All task checkboxes are `[x]` (proceed to Phase 2, also without asking)
 
 ## Phase 2: Plan Completion
 
@@ -321,6 +415,7 @@ When all task checkboxes are `[x]`:
 
 1. Run the plan's `## Validation Commands` once more from the main agent (fresh output).
 2. If validation fails, treat as a new fix iteration (implement sub-agent on the failing scope) before entering Phase 3.
+3. If validation passes, **proceed to Phase 3 immediately**; do not ask whether to start review.
 
 ## Phase 3: Review / Fix Loop
 
@@ -346,16 +441,34 @@ Track in `manifest.md`:
 - `review_round`; current round number (increment when starting Step 3.1; starts at 1)
 - `consecutive_clear_rounds`; clear-round streak (reset to 0 when any remaining Medium+ after triage)
 
-**Provisional vs accepted findings:** `doing-code-review` output is provisional. Findings marked `drop` (false positives) by address-review do not block a clear round. However, findings marked `done` mean the codebase was mutated, which resets the clear-round streak. When Step 3.3 is skipped (no Medium+ pending from Step 3.2), the round is clear by definition.
+**Provisional vs accepted findings:** `doing-code-review` output is provisional. Findings marked `drop` (false positives) by address-review do not block a clear round. However, findings marked `done` mean the codebase was mutated, which resets the clear-round streak. Zero Medium+ alone is **not** enough for a clear round; see Step 3.4 **Clear-round quality bar**.
+
+### Verify-fix vs fresh review (do not conflate)
+
+After Step 3.3 address-review mutates code, the **next** Step 3.1 is a **fresh adversarial review**, not a confirmation pass.
+
+| Pass type | When | Prompt framing |
+|-----------|------|----------------|
+| **Verify-fix** (optional, inline in address-review) | Inside Step 3.3 after fixes | Confirm each fixed finding's executable artifact; re-run validation commands |
+| **Fresh review** (every Step 3.1) | All review rounds, including post-fix | Full branch diff; hunt new defects; prior findings are **context only**, not a filter |
+
+**Forbidden in Step 3.1 prompts (including r2+):** "do not re-report fixed issues", "verify r1 fixes only", "confirm prior round remains clean", or any framing that steers agents to rubber-stamp a clear round. Allowed: list prior staging paths as history; still require full-panel adversarial coverage.
+
+**Rationale:** A Phase 3 clear streak after a FOR UPDATE fix still missed a High `promoteToActive` miss-path wipe and Medium ensure-then-promote success semantics on explicit must-fix paths. Confirmation framing caused the miss.
 
 ### Step 3.1: Launch review sub-agent
 
 **Before launching:** read `review_round` from `manifest.md`. If `review_round > 10`, do **not** launch; go to Step 3.5 (max-rounds stop). If entering Phase 3 for the first time, set `review_round = 1` and `consecutive_clear_rounds = 0`.
 
 Launch a sub-agent using your agent's sub-agent execution capability.
-Use the **Code Review** template from [subagent-prompts.md](subagent-prompts.md).
+Use the **Code Review** template from [subagent-prompts.md](subagent-prompts.md). Fill `<REVIEW_MODE_NOTES>`:
+
+- Always: fresh adversarial full-branch review (table above).
+- When plan Review Scope or Domains include concurrency / transactional mutators / `FOR UPDATE` / race ITs: instruct `doing-code-review` to **launch premortem** (do not skip on "quiet" clear-streak rounds).
 
 The sub-agent runs `doing-code-review` in **branch review** mode (not PR mode unless the user supplied a PR URL). Diff scope is **`git diff <BASE_BRANCH>...HEAD`** (all commits on the feature branch for this plan); not the latest commit alone. Apply the plan's **two-tier Review Scope**: findings on **explicit must-fix** paths are always in scope; for unlisted paths, keep findings only when **plan-related** (causally tied to a plan task, explicit change, or contract the plan altered); drop unrelated findings with a one-line reason.
+
+**Mutator failure-mode matrix (required in staging doc):** The review sub-agent must include `## Mutator failure-mode matrix` listing every **new or changed** public mutating API on explicit must-fix paths (port methods, application services that write). For each: miss / wrong-status / stale-id / concurrent-overlap checked via IT, staged finding, or `checked: yes` with one-line evidence (test name or code path). Missing rows → orchestrator treats the round as **not clear** (Step 3.4) even if Medium+ pending is zero; relaunch review or stage Medium `implementation#missing-negative-coverage`.
 
 Review output: `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` (increment `N` each round; use `-code-review-r` prefix to distinguish from pre-execution **plan** reviews at `…-plan-review-r<N>.md`).
 
@@ -368,7 +481,9 @@ Pass `<REVIEW_LOG_PATH>` per [agent-logs.md](agent-logs.md). Pass `review_round`
 1. Review sub-agent returned the exact `{reviews_dir}/...` staging doc path.
 2. That file exists on disk and is non-empty (chat summary alone does not satisfy Step 3.1).
 3. `<REVIEW_LOG_PATH>` exists and is non-empty.
-4. Doc follows `doing-code-review` staging format sufficiently for Step 3.2 parsing (Summary + findings with Severity/Status).
+4. Doc follows `doing-code-review` staging format sufficiently for Step 3.2 parsing (findings with Severity/Status/Triage) and includes populated `## Review Statistics` per `review-staging` (including Solo/Echo, Pattern, Severity calibration).
+5. Doc includes `## Mutator failure-mode matrix` with a row per new/changed public mutator on explicit must-fix paths (or an explicit `N/A: no mutating APIs in this plan` line). Incomplete matrix → relaunch Step 3.1.
+6. When plan scope included concurrency signals: Panel shows `premortem` as `complete` (not `skipped`) unless the user explicitly said `skip premortem`.
 
 If any check fails, relaunch the review sub-agent; do **not** enter Step 3.2 or launch address-review.
 
@@ -410,17 +525,23 @@ If Step 3.2 shows **no** Critical/High/Medium `pending` findings, skip Step 3.3 
 
 **Clear round (code-mutation gate):** A round is only "clear" if no code changes were made to fix issues. Findings marked `drop` (false positives) do not mutate code, but findings marked `done` (fixed) do mutate code and require a fresh review.
 
-| Step 3.3 ran? | Clear when |
-|---------------|------------|
-| No (Step 3.2 had zero Medium+ `pending`) | Always clear; no bugs found, no fixes needed. |
-| Yes | Zero Critical/High/Medium findings marked `done` AND zero findings still at Status `pending`. (All findings must have been marked `drop`). |
+| Step 3.3 ran? | Clear when (all must hold) |
+|---------------|----------------------------|
+| No (Step 3.2 had zero Medium+ `pending`) | Zero Medium+ pending **and** clear-round quality bar (below) passes |
+| Yes | Zero Critical/High/Medium findings marked `done` **and** zero findings still at Status `pending` (all Medium+ marked `drop`) **and** clear-round quality bar passes |
+
+**Clear-round quality bar (blocks streak increment even when Medium+ pending is 0):**
+
+1. **Mutator failure-mode matrix** present and complete (Step 3.1 gate #5); every mutator row has IT evidence, a staged finding, or `checked: yes` with a concrete pointer.
+2. **Not a discard-only quiet round without adversarial depth:** If raw findings were non-zero and **all** were discarded as `noise` / `already-mitigated` / `prior-review`, the review log or staging Analysis must still show the failure-mode matrix was filled from code/IT evidence (not left empty). An empty matrix plus "no findings" after a fix round is **unclear**; relaunch Step 3.1 with fresh-review framing.
+3. **Premortem** launched when required (Step 3.1 gate #6).
 
 **Streak tracking (`consecutive_clear_rounds`, update before launching done):**
 
 | This round | `consecutive_clear_rounds` |
 |------------|----------------------------|
-| Clear (zero items marked `done` AND zero items `pending`) | increment by 1 |
-| Unclear (any items marked `done` OR any items `pending`) | reset to 0 |
+| Clear (mutation gate + quality bar) | increment by 1 |
+| Unclear (any Medium+ `done`/`pending`, or quality bar failed) | reset to 0 |
 
 Record the current count in `manifest.md`.
 
@@ -456,7 +577,7 @@ Update `manifest.md` with current `review_round` and `consecutive_clear_rounds`.
 |-----------|--------|
 | `consecutive_clear_rounds >= 2` **and** `review_round >= 2` | Proceed to Phase 4 (success) |
 | `review_round >= 10` **and** exit condition not met | **Stop**; report remaining Medium+ `pending` findings, last commit SHA, and ask the user: continue with manual fixes, accept remaining items and archive anyway, or abort. Do **not** launch round 11. Preserve tmp logs. |
-| Otherwise | Increment `review_round` by 1; if new value `<= 10`, return to Step 3.1; if would exceed 10, use max-rounds stop row above |
+| Otherwise | Increment `review_round` by 1; if new value `<= 10`, **return to Step 3.1 immediately** (no prompt); if would exceed 10, use max-rounds stop row above |
 
 ## Phase 4: Archive Plan
 
@@ -467,6 +588,19 @@ git mv {plans_dir}/<filename>.md {plans_completed_dir}/<filename>.md
 ```
 
 Include the plan move in a commit immediately after the last Step 3.4 `done` (same `done` sub-agent scope if uncommitted, or a follow-up `done` if needed).
+
+### Step 4.1: Update parent rollout tracker (when applicable)
+
+If the plan header references a parent RFC, feature-note, or rollout doc that tracks phase status (look for `RFC:`, `Rollout plan`, or a phase-status table), update that parent artifact in the same change set as the archive move:
+
+- Add a "Phase <N> landed at commit `<SHA>`" line in the parent's Status block or rollout table.
+- Replace any "Phase <N> plan: <path>" link with the `completed/` path.
+- Add review-rN links if the plan went through Phase 3.
+- If a "NEXT:" pointer exists, advance it to the following phase.
+
+Rationale: the parent rollout doc is the source of truth for "which phases have landed"; archiving the plan without updating it leaves a stale tracker and forces future agents to reconstruct status from git history. (Family D: single source of truth.)
+
+Skip Step 4.1 when the plan has no parent rollout doc (standalone plan, no RFC reference).
 
 When Phase 4 completes, proceed to Phase 5.
 
@@ -518,22 +652,25 @@ Report successful plan completion to the user, including that session tmp logs a
 
 ## Hard Gates
 
-1. **Branch setup before implementation**; Phase 0 must run and complete (branch created with tracking or explicitly declined by user) before Phase 1 begins. Never skip branch setup or start work on an unknown/unverified branch state.
+1. **Branch setup before implementation**; Phase 0 must run and complete (definitive match auto-continue, branch created with tracking, or explicitly declined by user) before Phase 1 begins. Never skip Step 0.3 verification or start work on detached HEAD.
 2. **No checkbox without green tests**; never mark `- [x]` before validation passes.
 3. **One task per implement iteration**; do not batch multiple tasks in one implement sub-agent.
 4. **Done after every task**; launch the `done` **sub-agent** (Step 1.4) and verify a commit at HEAD before starting the next task; overrides the plans skill handoff default of session-end-only `done`. Parent-agent implementation does not satisfy this gate.
 5. **Done after every review iteration**; launch the `done` **sub-agent** (Step 3.4) before the next review round; address-review fixes must not accumulate uncommitted across iterations.
 6. **Review scope (two tiers)**; **Explicit must-fix** paths from the plan are always in scope. Unlisted paths use **plan-related extension**: keep findings only when causally tied to the plan; drop unrelated issues. Do not treat the explicit list as a ceiling that hides plan-caused defects elsewhere on the branch.
-7. **Two consecutive clear review rounds**; Phase 3 success exit only when the last two iterations had zero **remaining Medium+** after `receiving-code-review` triage (`consecutive_clear_rounds >= 2` and `review_round >= 2`); provisional `doing-code-review` counts alone do not satisfy this gate.
+7. **Two consecutive clear review rounds**; Phase 3 success exit only when the last two iterations had zero **remaining Medium+** after `receiving-code-review` triage (`consecutive_clear_rounds >= 2` and `review_round >= 2`) **and** each clear round passed the **clear-round quality bar** (mutator failure-mode matrix complete; premortem launched when concurrency was in scope; not a discard-only quiet pass without matrix evidence); provisional `doing-code-review` counts alone do not satisfy this gate.
 8. **Maximum ten review rounds**; never launch Step 3.1 when `review_round > 10`; after round 10 without meeting the exit condition, stop and ask the user (do not loop indefinitely).
 9. **Fresh test output**; never cite stale run results; re-run commands before claiming pass.
 10. **Preceding-step logs before learn**; worker sub-agents write logs; each `done` reads only its immediately prior step's log(s). Missing required log blocks commit.
 11. **Tmp cleanup on success only**; remove `{tmp_dir}/execute-plan/<PLAN_SLUG>/` in Phase 5 after the success checklist passes; never on failure, max-rounds stop, or user interrupt.
-12. **Plan-path gate first**; plan file reference without execute-plan trigger → three-way choice before Phase 0 or code edits.
+12. **Plan-path gate only when `invoked = false`**; run invocation detection first. Bare plan path only → three-way choice. **`execute plan <path>` and `execute <plan-path>` (under `.../plans/...`) must never trigger the gate.**
 13. **Session dir before edits**; no plan-scoped production/test edits before `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` exists (execute-plan runs only; manual/read-only do not create the session directory).
 14. **One task's checkboxes per Step 1.3**; no bulk `- [ ]` → `- [x]` across the plan file.
 15. **Phase 3 required for success**; archive only after Phase 3 exit condition or documented user abort after Phase 2.
 16. **Review diff artifacts in session tmp only**; never write `*.patch` diff snapshots to repo root or outside `{tmp_dir}/execute-plan/<PLAN_SLUG>/`; use `diff-r<R>.patch` / `src-diff-r<R>.patch` naming per `doing-code-review` **Diff access**.
+17. **No per-step continuation prompts**; after Task N `done`, Phase 2 pass, or review-round `done`, auto-start the next defined step. Ask the user only on failure, timeout, max review rounds, user interrupt, or explicit abort.
+18. **Fresh review framing on every Step 3.1**; never prompt clear-streak rounds as verification-only; prior findings are context, not a filter.
+19. **Premortem when concurrency in scope**; do not skip premortem on quiet clear-streak rounds if the plan Review Scope / Domains include concurrency, transactional mutators, or race ITs (user `skip premortem` overrides).
 
 ## User Interruption
 
@@ -549,7 +686,7 @@ If the user stops mid-plan:
 
 Use when plan tasks were implemented inline (uncommitted or one large commit) and Step 1.4 / Phase 3 were skipped.
 
-1. Run Phase 0 and Step 0.4 (branch confirm + session tmp dir + manifest).
+1. Run Phase 0 and Step 0.4 (branch setup + session tmp dir + manifest).
 2. **Do not** re-implement from scratch or batch-mark all `[x]`.
 3. For each task in document order:
    - Verify that task's scope only (plan validation command subset or task `Files:` list).
@@ -564,7 +701,7 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
 At Phase 0, read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` from `.ai-playbook/facts.md` (see `using-skills` Step 0; bootstrap runs only when Terms triggers fire) before plan-scoped edits or session log writes.
 
 ### Consumes `plans` skill
-Reads plan format, task order, validation commands, review scope, and commit messages. Archives to `{plans_completed_dir}/` when finished. If `plans` Phase 0 already created a feature branch, Phase 0 here verifies state and offers to continue on it instead of creating another. Pre-execution plan reviews use `…-plan-review-r<N>.md` with Blocker/Medium gate; Phase 3 code reviews use `…-code-review-r<N>.md` with Medium+ gate; same minimum-two / maximum-ten round discipline.
+Reads plan format, task order, validation commands, review scope, and commit messages. Archives to `{plans_completed_dir}/` when finished. If `plans` Phase 0 already created a feature branch, Phase 0 here auto-continues on definitive branch match (Step 0.1a). Pre-execution plan reviews use `…-plan-review-r<N>.md` with Blocker/Medium gate; Phase 3 code reviews use `…-code-review-r<N>.md` with Medium+ gate; same minimum-two / maximum-ten round discipline.
 
 ### Consumes `tdd-guide` + `unit-test-runner` (via implement sub-agent)
 Implement sub-agent follows RED → GREEN → Refactor for behavioral tasks; runs validation commands with fresh output.
@@ -577,6 +714,12 @@ Branch/plan-scoped review after all tasks; staging doc is the handoff artifact. 
 
 ### Consumes `receiving-code-review` skill (sub-agent)
 Triages provisional findings from the staging doc between review rounds. Phase 3 exit counts only **remaining Medium+** still `pending` after this triage; not raw `doing-code-review` output.
+
+### Related: `review-loop` skill (standalone)
+For branch hygiene **without** a plan (user asks to loop until clean on current branch), use **`review-loop`** instead of Phase 3. Default exit: one fresh clear round (zero Medium+ before fixes). Phase 3 keeps two consecutive clear rounds and plan-scoped review scope.
+
+### Consumes `review-staging` skill
+Phase 3 staging docs (and plan-review artifacts when present) must follow `review-staging` hierarchy and `## Review Statistics`, including the mutator failure-mode matrix when applicable. Clear-round quality bar treats incomplete staging as not clear.
 
 ### Consumes `doc-hierarchy-upkeep` skill (checkpoint before Step 1.4)
 On company-scoped repos with migration-complete signal, Step 1.3b requires Layer 2 doc sync when plan tasks touch contracts, domain behavior, integrations, or ops. Upkeep edits belong in the same change set as the task before `done` commits.

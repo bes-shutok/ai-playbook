@@ -514,3 +514,27 @@ lesson local is harmless. So the classifier identifies the cross-project bucket 
 family tag or a generic engineering-shape vocabulary drawn from a shared catalog, and defaults
 everything else to project-specific. No domain keywords are needed; the tool runs zero-config.
 (Illustrative anchors: tax-reporting lessons-corpus plan, 2026-06-29.)
+
+## 28. Minimal Solution Ladder (Before Writing Code)
+
+Climb this ladder **after** reading the task and tracing the code the change touches. The ladder shortens the solution, not the understanding. Lazy about implementation, never about comprehension.
+
+Stop at the first rung that holds:
+
+1. **Does this need to exist?** Speculative or "for later" work: skip it and say so in one line (YAGNI).
+2. **Already in this codebase?** Reuse existing helper, util, type, or pattern; re-implementing nearby code is the most common slop.
+3. **Standard library does it?** Use it.
+4. **Native platform feature covers it?** Prefer built-ins (HTML input types, CSS, DB constraints) over custom code or new dependencies.
+5. **Already-installed dependency solves it?** Use it; do not add a dependency for what a few lines can do.
+6. **Can it be one line?** One line.
+7. **Only then:** the minimum code that works.
+
+**Bug fixes:** a ticket names a symptom. Before editing, grep callers of the function you will touch. Fix at the shared choke point where all callers route through; patching only the reported path leaves sibling callers broken.
+
+**Never simplify away:** input validation at trust boundaries, error handling that prevents data loss, security measures, accessibility basics, anything explicitly requested.
+
+**Deliberate simplifications** with a known ceiling (global lock, O(n²) scan, naive heuristic): leave a short comment naming the ceiling and the trigger to revisit (for example throughput threshold, second implementation needed).
+
+**Tests:** non-trivial logic (branch, loop, parser, money/security path) deserves one runnable check (smallest `test_*` or self-check); trivial one-liners need no test (YAGNI applies to tests too).
+
+**Upstream pattern:** adapted from [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail); deep links in `skill-upstream-catalog.md` **Merged pattern index**. Merged here instead of a persistent session-mode skill. Complexity review tags live in `review-agents/simplification.md`.

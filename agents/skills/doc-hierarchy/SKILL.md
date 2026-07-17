@@ -107,8 +107,8 @@ Templates: [instruction-templates.md](instruction-templates.md).
 | `done`, `docs-branch` | PR checklist; gitignored doc paths via resolved `{reviews_dir}` |
 | `doing-code-review`, `review-plan` | Staging docs under resolved `{reviews_dir}` |
 | `github-pr-workflow` | Doc migration PR description rules from `company-decisions.md` |
-| `review-confluence-doc` | Reads `{tmp_dir}` from `.ai-playbook/facts.md` for review output files |
-| `rfc-design` | Reads caller catalog and `{tmp_dir}` from `.ai-playbook/facts.md`; review staging under `{tmp_dir}/rfc-review/` |
+| `review-confluence-doc` | Reads `{reviews_dir}` (and `{tmp_dir}` for scratch only) from `.ai-playbook/facts.md`; review staging under `{reviews_dir}/` per `review-staging` |
+| `rfc-design` | Reads `{reviews_dir}`, `{rfcs_dir}`, `{proposals_dir}`, `{tmp_dir}` from `.ai-playbook/facts.md`; saves RFCs under `{rfcs_dir}` (Layer 3 `history/feature-notes/`); review staging under `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` (never `{tmp_dir}/rfc-review/`) |
 | `how-to-write-skills` | Bidirectional Integration Points requirement for skill family consumers |
 | `using-skills` | Step 0 reads `.ai-playbook/facts.md`; invokes bootstrap only when Terms triggers fire |
 

@@ -167,7 +167,7 @@ codex, gemini) is selected via config and may change later. Hardcoding to one
 agent's script creates unnecessary image rebuilds when switching.
 
 9.3. Config paths inside the container must use container-internal absolute paths
-(e.g. `/home/app/.config/ralphex/scripts/...`), NOT `~`-prefixed paths. The Go
+(e.g. ``~`-unsafe container paths like service-home config scripts/...`), NOT `~`-prefixed paths. The Go
 binary does not expand tilde: `~` is treated literally and the command is not
 found.
 
@@ -662,6 +662,8 @@ Applies to plans, RFCs, PR descriptions, BFF/API docs, Confluence pages, Slack d
 | partial-empty | describe literally (e.g. `items: []`, `isHidden: true`) |
 | INNER JOIN gap | **database join misses rows** when stored values do not match exactly |
 | RED / GREEN (in Gist only) | OK in plan **tasks**; in Gist use **failing test first**, **make test pass** |
+| gated off (the default test run / CI) | **not run in normal `mvn test`**, **only when someone runs them on purpose** |
+| self-contained (integration tests) | **start their own dependency in the test** (for example Testcontainers), **no manual setup** |
 
 45.3. **Code vs docs split:** "wire format" and similar transport vocabulary are fine in `project-guidelines.md`, OpenAPI descriptions, and Java transport comments where the team already uses them. Do not use them in plan **Gist & Examples**, PR summaries, or BFF docs when a plain equivalent exists.
 
@@ -738,6 +740,8 @@ produces incomplete output that fails downstream quality checks.
 48.3. **Runner source vs runtime:** repo-root `scripts/` is the TRACKED canonical home for shared agent scripts (hygiene runners like `scan-public-hygiene.sh`, `check-no-em-dash.sh`, `check-instruction-size.sh`, `done-lock.sh`, plus the lessons gate/adopter/migrator). Runtime copies under `~/.ai-playbook/scripts/` are synced from this tracked source. Execute `public_hygiene_scan_script` from user facts (typically under `~/.ai-playbook/scripts/`). Only machine-specific or secrets-bearing scripts (e.g. `sync-mcp-credentials.sh`) and `public_hygiene_patterns_file` stay local and gitignored under `~/.ai-playbook/scripts/`.
 
 48.4. **Before skill commits:** run the hygiene scan; personal contact email is allowed only in `LICENSE.txt` copyright lines.
+
+48.5. **Done lock agent wait:** Agent `/done` Step 0 must call `wait-acquire --max-wait "${DONE_LOCK_AGENT_MAX_WAIT_SECS:-90}"`, not the script default 7200s. On timeout, return `blocked` with `done-lock.sh status` (holder `label`, `holder_pid`, `holder_alive`). `done-lock.sh` records `holder_pid` at acquire; auto-steal only when abandoned (dead PID and no matching session fence) or stale without a session fence. Session-fenced locks are never auto-stolen; operator `stale-clean` may remove a fenced lock that is also stale. Step 6 must release with `DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` from this chat's Step 0 acquire exports (`release` or `release-repo`); both refuse to load the shared `<repo>/.ai-playbook/done-lock.session` file (fence/status only; avoids confused-deputy after peer acquire). Re-export those two values from Step 0 stdout across Shell tool calls. Step 7 must always report outcome (commits or clean tree, lock free); never stop after Step 0 checks only.
 
 ## 49. Verify an Implement Sub-Agent's "Already Done" Claim Against Actual Git State
 
@@ -965,3 +969,19 @@ When a vision or OCR model interprets a screenshot, photo, or scanned image and 
 **General form:** image-derived claims are unverified interpretations of unstructured input with known characteristic failure modes (systematic, consistent misreads). They are not primary sources. An existing artifact value that the read contradicts is evidence the read may be wrong; resolve the contradiction against a text source before mutating anything.
 
 **Why this matters:** the failure mode is a silent regression. You "fix" something that was correct, and because the wrong read was confident and consistent, the mistake does not feel like a mistake. The verify step costs seconds; the wrong edit propagates into committed work.
+
+## 60. Active Code Review: Actionable Fixes Need Code Snippets
+
+When `doing-code-review` (or any staged PR review) proposes a concrete code, test, or config change the author can apply immediately, the **Comment** must include a before/after or "could look like" snippet per `doing-code-review` §4.9.0. This applies at **all severities**, including Low test-gap findings; Medium+ depth alone is not enough without a snippet when the fix is actionable.
+
+60.1. **Orchestrator polish pass:** check every staged finding with an actionable fix for a fenced code block in the Comment, not only Medium+ findings. Relaunch the responsible sub-agent or expand during staging when missing.
+
+60.2. **Sub-agent output:** Step 3 prompts and `review-agents/testing.md` require snippets in `body` for actionable fixes at any severity.
+
+60.3. **Test examples in review comments:** build data once (builder/fixture), then assert with getters from that object (`outbox.getCampaignId()`, `outbox.getDedupeKey()`). Do not repeat the same literal in setup and asserts; duplicated literals let both sides drift and hide mapping bugs.
+
+60.4. **Verify claims before "deferred" shorthand:** do not say a plan or doc "defers" work unless a normative section says so. A single stale checked task or javadoc note is not a design decision.
+
+60.5. **Housekeeping the author should see:** suggestions such as archiving a completed plan to `{plans_completed_dir}/` belong in a PR comment (Low), not only in internal staging notes.
+
+**Cross-reference:** `doing-code-review` §4.9.0, §4.12 orchestrator polish; `review-agents/testing.md` Actionable fix snippets.

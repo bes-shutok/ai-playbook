@@ -43,20 +43,28 @@ CORE="$HOME/.ai-playbook/scripts/skill_gate.py"
 # Read the entire stdin payload.
 payload="$(cat)"
 
-# Extract .tool_input.file_path with python3 (NOT jq). Tolerant:
-# missing/None/non-string -> empty string.
-target="$(printf '%s' "$payload" | python3 -c 'import json,sys
+# Extract .tool_input path and cwd with python3 (NOT jq).
+# Python prints two lines (target, then cwd). Bash `read` is one line per call.
+{
+  read -r target
+  read -r cwd
+} <<EOF
+$(printf '%s' "$payload" | python3 -c 'import json,sys
 try:
-    raw = sys.stdin.read()
-    obj = json.loads(raw) if raw.strip() else {}
+    obj = json.loads(sys.stdin.read() or "{}")
 except Exception:
     obj = {}
 ti = obj.get("tool_input")
 if not isinstance(ti, dict):
     ti = {}
 v = ti.get("file_path")
-sys.stdout.write(v if isinstance(v, str) else "")
-')"
+if not isinstance(v, str):
+    v = ti.get("path")
+cwd = obj.get("cwd")
+sys.stdout.write((v if isinstance(v, str) else "") + "\n")
+sys.stdout.write((cwd if isinstance(cwd, str) else "") + "\n")
+')
+EOF
 
 # Derive the session id VERBATIM via the shared helper subprocess.
 SID="$(python3 "$SESSION_CHANNEL")"
@@ -75,6 +83,12 @@ else
     session_args=()
 fi
 
+# Build cwd args when the hook payload carries a workspace directory.
+cwd_args=()
+if [ -n "$cwd" ]; then
+    cwd_args=(--cwd "$cwd")
+fi
+
 # Consult the core. Capture stdout (the decision JSON). Discard core stderr
 # (r2-M6: the core's loud fail-open warnings land in hooks.log via the shared
 # ``_append_hooks_log_line`` helper, which is the documented observability sink;
@@ -86,7 +100,7 @@ fi
 # interpreter is outside the gate's contract).
 # NOTE: `${arr[@]+"${arr[@]}"}` is the bash-3.2-safe empty-array expansion
 # under `set -u` (bare `"${arr[@]}"` errors on an empty array in macOS bash).
-core_out="$(python3 "$CORE" --target "$target" ${session_args[@]+"${session_args[@]}"} 2>/dev/null)" || core_out=""
+core_out="$(python3 "$CORE" --target "$target" ${cwd_args[@]+"${cwd_args[@]}"} ${session_args[@]+"${session_args[@]}"} 2>/dev/null)" || core_out=""
 
 # Translate the core decision into the Claude PreToolUse contract.
 # Build the decision ONLY via json.loads/json.dumps dict construction.

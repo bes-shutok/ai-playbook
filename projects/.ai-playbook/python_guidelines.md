@@ -359,3 +359,39 @@ def write_crypto_supplementary_sheet(workbook, crypto_tax_report) -> None:
 **Anti-pattern 1:** Defaulting an optional `country: str | None = None` parameter and falling back to a PT/synthetic value when `None`. A caller that forgets to thread it silently produces PT output on a non-PT run. Make the value object required; let the type checker and the frozen-dataclass contract enforce presence.
 
 **Anti-pattern 2:** Introducing `contextvars` in a batch CLI "for future flexibility" before there is a second async caller. The hidden state and per-test context boilerplate are a net loss over an explicit parameter; add `contextvars` only when the async/pervasiveness need is real.
+
+## 14. Pair `pytest.raises` with `match=` (Ruff PT011)
+
+`pytest.raises(ExceptionType)` with no `match=` argument passes for ANY instance of
+that exception type, not just the one the test intends. Ruff's `PT011` rule flags bare
+`pytest.raises(...)` for this reason: a test that asserts only the type can stay GREEN
+when a completely different code path raises the same exception type, masking the
+behaviour the test was supposed to pin.
+
+**Principle:** Family A (Equivalence-class coverage). The bare-type assertion pins only
+one cell of the equivalence class "any `ExceptionType` raised anywhere in the body".
+The test must pin the specific cell, the message substring unique to the intended
+raise site.
+
+Always pair `pytest.raises` with a `match=<regex>` argument whose substring is
+produced by the intended raise site (the unknown value passed to the constructor,
+the field name in the validation error, the configuration key, etc.):
+
+```python
+# WRONG - PT011; passes for any ValueError from anywhere in the body
+with pytest.raises(ValueError):
+    Treatment("nonsense")
+
+# CORRECT - match pins the constructor call site (the literal value appears
+# in Python's default enum error message)
+with pytest.raises(ValueError, match="nonsense"):
+    Treatment("nonsense")
+```
+
+When the raise site produces a domain-specific message (configuration error, validation
+error, file processing error), prefer a substring of THAT message over the input value
+itself; that anchors the assertion to the intended raise site even when Python's
+default error text changes.
+
+Applies to every Python test that uses `pytest.raises`. Add the `match=` argument at
+RED time; never defer it as "polish" after GREEN.

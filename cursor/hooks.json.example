@@ -6,6 +6,11 @@
         "command": "./hooks/git-safety.sh",
         "matcher": "git ",
         "failClosed": false
+      },
+      {
+        "command": "./hooks/review-staging-gate.sh commit",
+        "matcher": "git commit",
+        "failClosed": false
       }
     ],
     "preToolUse": [
@@ -23,6 +28,19 @@
         "command": "./hooks/no-em-dash.sh",
         "matcher": "Write|StrReplace|EditNotebook|mcp_slack_|Confluence|confluence|Jira|jira|atlassian",
         "failClosed": true
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "./hooks/review-staging-gate.sh edit",
+        "matcher": "Write|StrReplace|EditNotebook",
+        "failClosed": false
+      }
+    ],
+    "stop": [
+      {
+        "command": "./hooks/review-staging-gate.sh stop",
+        "failClosed": false
       }
     ]
   }

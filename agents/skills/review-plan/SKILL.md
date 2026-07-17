@@ -42,18 +42,20 @@ Do not use for:
 
 ## Step 2: Launch Sub-Agents in Parallel
 
-Launch ALL review agents simultaneously using your agent's parallel execution capability
+Read `review-agents/review-panel-selection.md` for the default 8-agent plan panel (7 shared plus inline consistency) and conditional `concurrency` / `premortem` launch. Record `Domains:` in staging metadata.
+
+Launch ALL selected review agents simultaneously using your agent's parallel execution capability
 (e.g., background execution mode, parallel sub-agent launch, or equivalent mechanism).
 Wait for all agents to complete before proceeding.
 
 Each agent receives:
 1. The full plan content
 2. Relevant source file excerpts (signatures, data structure definitions, pipeline structure)
-3. Its specific review lens from `~/.agents/skills/review-agents/<agent>.md`
+3. Its specific review lens from `~/.agents/skills/review-agents/<agent>.md` (or the repo-vendored copy under `agents/skills/review-agents/<agent>.md` when present)
 4. The project's CLAUDE.md content (for repository conventions)
 5. **Repo-specific overrides take precedence**: if `CLAUDE.md`, `{guidelines_path}` (from `.ai-playbook/facts.md` TOML when present; typically `docs/maintenance/project-guidelines.md`), or any loaded company/project guideline defines complexity, naming, comment, or layering rules that conflict with the generic pattern catalog, the agent MUST apply the repo-specific value, not the catalog default. Example: catalog says "functions >50 lines" but `company-guidelines.md #17` says "≤30 lines per method"; apply the 30-line rule.
 6. **Execution framing**: "You are reviewing an IMPLEMENTATION PLAN, not a code diff. Read the plan tasks and the referenced source files to understand what is being proposed. Apply your pattern catalog to identify whether the proposed changes would introduce the issues you are responsible for detecting."
-7. **Output format**: for each finding provide `{location_in_plan, issue, severity: Blocker/Medium/Low/Monitor, fix, evidence}`; no `path/line/side` fields (those are for code review). **`issue` and `evidence` must be self-contained**: name the plan task, quote or paraphrase the contradicting plan text, cite what the referenced source file shows, and state the concrete fix. Do not return stubs the orchestrator must research.
+7. **Output format**: for each finding provide `{location_in_plan, issue, severity: Critical/Suggestion/Advisory, fix, evidence}`; no `path/line/side` fields (those are for code review). **`issue` and `evidence` must be self-contained**: name the plan task, quote or paraphrase the contradicting plan text, cite what the referenced source file shows, and state the concrete fix. Do not return stubs the orchestrator must research.
 
 ### Shared agents (from `~/.agents/skills/review-agents/`)
 
@@ -64,8 +66,7 @@ Each agent receives:
 | `architecture.md` | Would the proposed design introduce SOLID violations, layer crossings, god classes? |
 | `testing.md` | Are the described tests sufficient? Could a test pass even if the implementation is wrong? |
 | `simplification.md` | Is the planned approach over-engineered for the problem? |
-| `prose-clarity.md` | Is plan prose redundant, verbose, or unclear? Could tasks be self-explanatory via naming? |
-| `documentation.md` | Are docs for user-visible behavior changes included in the plan? |
+| `documentation.md` | Missing docs for user-visible changes; redundant or verbose plan prose (two-phase agent) |
 | `security.md` | Would the proposed changes introduce security vulnerabilities? |
 | `concurrency.md` | Would the proposed changes introduce race conditions or transactional scope issues? |
 | `premortem.md` | Design-level failure modes; "it shipped and failed; why?" |
@@ -96,105 +97,139 @@ Check:
 7. Evaluation Criteria substance: Does the plan's Evaluation Criteria section contain
    specific, verifiable criteria (e.g. "API returns 404 for unknown IDs", "batch completes
    within 5s at 10k records")? Vague criteria like "it should work" or "tests pass" must
-   be flagged as a Medium finding.
+   be flagged as a Suggestion finding.
 
 For each finding, provide:
 - The two contradicting statements (with task numbers)
 - Which one is correct (based on source code and domain rules)
-- Severity: Blocker / Medium / Low
+- Severity: Critical / Suggestion / Advisory
 - Evidence: what was read in source files or plan text that supports the finding
 - Suggested resolution
+
+**Ownership (tiered):** report Design Invariants / Glossary vs Task contradictions and cross-task alignment only. Do not report source-code algorithm bugs (quality), missing tests (testing), or wiring gaps (implementation). Invariant-vs-task contradictions stay here even when they sound like quality bugs. See `review-panel-selection.md`.
 ```
 
 ## Step 3: Synthesize Findings
 
-After all sub-agents complete, **synthesize from agent returns only**; do not re-read source files or re-analyze the plan in the orchestrator context. The orchestrator dedups, ranks, and formats; sub-agents already did the reading and reasoning.
+After all sub-agents complete, **synthesize from agent returns only**; do not re-read source files or re-analyze the plan in the orchestrator context. The orchestrator dedups, ranks, formats, and **records Review Statistics** per `review-staging`; sub-agents already did the reading and reasoning.
 
-1. **Deduplicate**: Merge findings that describe the same root issue from different angles
+1. **Deduplicate**: Merge findings that describe the same root issue from different angles. Apply tiered ownership from `review-panel-selection.md` to pick the lead agent; do not discard a different fix at the same site. Record each merge in **Deduplication groups** (all contributing agents, staged finding number).
 2. **Rank by severity**:
-   - **Blocker**; must address before execution
-   - **Medium**; should add safeguard, test, or step to plan
-   - **Low**; minor improvement, optional in plan revision
-   - **Monitor**; note as risk, add observability
+   - **Critical**; blocks execution
+   - **Suggestion**; should add safeguard, test, or step to plan
+   - **Advisory**; monitor-level note or optional improvement
 3. **Cross-reference with plan**: For each finding, note whether the plan already
-   addresses it (and mark as "Already mitigated" if so)
-4. **Incomplete agent output**: if a finding lacks `evidence` or a concrete `fix`, relaunch that agent focused on the gap; do not fill it inline
+   addresses it (and mark as "Already mitigated" if so). Discarded mitigated items go in **Discarded findings** with reason `already-mitigated`.
+4. **Incomplete agent output**: if a finding lacks `evidence` or a concrete `fix`, relaunch that agent focused on the gap; do not fill it inline. Failed relaunches: Panel Status `failed` or `timeout`, discards use `agent-failed` or `insufficient-evidence`.
+5. **Record statistics**: populate full `## Review Statistics` per `review-staging` (Panel with Solo/Echo, Counts, Deduplication groups, Discarded with Pattern, Severity calibration, Triage placeholder) before writing `## Findings`. Write the matching `.stats.json` sidecar in the same pass.
 
 ## Step 4: Output
 
-Write the review to `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md` (read `{reviews_dir}` from `.ai-playbook/facts.md` TOML; use `-r1`, `-r2`, … per loop iteration):
+Write the review to `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md` and `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.stats.json` (read `{reviews_dir}` from `.ai-playbook/facts.md` TOML; use `-r1`, `-r2`, … per loop iteration). Follow the staged hierarchy and **Review Statistics** section from `review-staging` (gold source).
 
 ```markdown
 # Plan Review: <Plan Title>
 
-**Date:** YYYY-MM-DD
-**Plan:** `{plans_dir}/<filename>.md`
-**Prior:** `{reviews_dir}/<prior-rN>.md` *(omit on r1)*
-**Agents:** quality, implementation, architecture, testing, simplification, prose-clarity, documentation, security, concurrency, premortem, consistency
+## Metadata
+- Type: Plan Review
+- Date: YYYY-MM-DD
+- URL or Artifact: `{plans_dir}/<filename>.md`
+- Depth: light | full *(when applicable)*
+- Domains: concurrency, SQL *(when known)*
+- Round: r1
+- Prior: `{reviews_dir}/<prior-rN>.md` *(omit on r1)*
+- Findings: <staged count>
+- Status: STAGED
 
-## Summary
+## Review Statistics
 
-<1-2 sentence overall assessment>
-**Counts:** Blockers: N | Medium: N | Low: N | Monitor: N
-**Ready for execution:** Yes/No (Yes only when Blocker=0 AND Medium=0)
+### Panel
+| Agent | Status | Raw | Solo | Echo | Relaunch |
+|-------|--------|-----|------|------|----------|
+| quality | complete | 0 | 0 | 0 | no |
+| consistency | complete | 1 | 1 | 0 | no |
 
-## Blockers
+### Counts
+- Agents launched: 12
+- Agents skipped: 0
+- Raw findings (all agents): 3
+- Staged findings: 2
+- Discarded during synthesis: 1
+- Solo staged (unique agent origin): 1
+- Echo staged (multi-agent dedup): 1
 
-### 1. <Title>
-- **Agent:** quality | implementation | architecture | testing | simplification | prose-clarity | documentation | security | concurrency | premortem | consistency
-- **Location:** Task N, bullet M
-- **Issue:** <concrete description>
-- **Evidence:** <what the source code shows>
-- **Fix:** <specific change to the plan>
+### Deduplication groups
+| Staged # | Agents | Theme |
+|----------|--------|-------|
+| 1 | quality, concurrency | Missing guard on concurrent delete |
 
-## Medium
+When none: `None (each staged finding had a single agent origin).`
 
-### 1. <Title>
-- **Agents:** ...
-- **Location:** ...
-- **Issue:** ...
-- **Suggested addition:** <new step, invariant, test, or scope entry required before execution>
+### Discarded findings
+| Agent | Agent severity | Pattern | Theme | Reason | Notes |
+|-------|----------------|---------|-------|--------|-------|
+| documentation | Advisory | documentation#glossary | Add glossary link | already-mitigated | Plan Review Scope lists glossary |
 
-## Low
+When none: `None.`
 
-### 1. <Title>
-- **Agents:** ...
-- **Location:** ...
-- **Issue:** ...
-- **Fix:** <optional one-line plan clarification>
+### Severity calibration
+| Staged # | Agent | Agent severity | Staged severity | Delta |
+|----------|-------|----------------|-----------------|-------|
 
-## Monitor
+When none: `None (agent severities matched staged severities).`
 
-### 1. <Title>
-- **Agent:** Risks
-- **Scenario:** ...
-- **Observability:** <what logging/metrics to add>
+### Triage outcomes
+Pending triage. *(After Step 5 plan fold: set Fixed for folded Blocker/Medium, Deferred for Monitor-only, Dropped for rejected findings.)*
 
-## Accepted Risks
+## Findings
 
-### 1. <Title>
-- **Rationale:** ... (Low findings the plan author chooses not to address)
+### 1. <short title>
+- **Severity**: Critical | Suggestion | Advisory
+- **Agent severity**: Suggestion *(omit when equal to Severity)*
+- **Pattern**: quality#concurrent-access
+- **Agents**: quality, concurrency
+- **Triage**: pending
+- **Anchor**: Task N, bullet M (plan section heading or nearby prose anchor)
+- **Source**: [Prose] | [Premortem] | [Code]
 
-## Amendments
+#### Comment (posted as-is when approved)
+<Self-contained, suggestion-tone explanation of the issue and the concrete change to the plan.>
 
-| # | Finding | Affects | Action |
-|---|---------|---------|--------|
-| 1 | ... | Task N | Add step / revise step / new invariant |
+#### Analysis (not posted)
+<Originating agent (quality | implementation | architecture | testing | simplification | documentation | security | concurrency | premortem | consistency), what the referenced source code shows, and severity rationale.>
+
+---
+
+### 2. <short title>
+- **Severity**: Critical | Suggestion | Advisory
+- **Pattern**: implementation#wiring-gap
+- **Agents**: implementation
+- **Triage**: pending
+- **Anchor**: <plan section heading or nearby prose anchor>
+- **Source**: [Prose] | [Premortem] | [Code]
+
+#### Comment (posted as-is when approved)
+<...>
+
+#### Analysis (not posted)
+<...>
 ```
 
 ## Step 5: Amend Plan
 
 After writing the review document:
 
-1. For each **Blocker**: update the affected plan task directly (mandatory before next review round)
-2. For each **Medium**: update tasks, invariants, tests, or Review Scope (mandatory before next review round)
-3. For each **Low**: fold trivial fixes into the plan; otherwise leave in the review artifact
-4. For each **Monitor**: add/update the plan's `## Monitor` section with named owner
-5. Add a reference line to the plan header: `Plan review: {reviews_dir}/<latest-rN>.md (latest, ready) · …`
-6. If the plan has a final validation task, add verification commands for each Blocker/Medium finding
+1. For each finding with **Severity: Critical**: fold into the plan as a **Blocker** (update the affected plan task directly; mandatory before next review round)
+2. For each finding with **Severity: Suggestion**: fold into the plan as a **Medium** (update tasks, invariants, tests, or Review Scope; mandatory before next review round)
+3. For each finding with **Severity: Advisory**: fold into the plan as a **Monitor** (add/update the plan's `## Monitor` section with named owner)
+4. Add a reference line to the plan header: `Plan review: {reviews_dir}/<latest-rN>.md (latest, ready) · …`
+5. If the plan has a final validation task, add verification commands for each Blocker/Medium finding (Critical/Suggestion only)
+6. Update each finding **Triage** and `## Review Statistics` → **Triage outcomes**: `fixed` for folded Critical/Suggestion, `deferred` for Monitor-only Advisory, `dropped` for findings rejected during fold
+
+Note: older plan review artifacts may use the prior Blocker/Medium/Low/Monitor vocabulary. This skill now uses staged severities (Critical/Suggestion/Advisory) plus the Step 5 mapping into plan actions (Blocker/Medium/Monitor).
 
 Report to user:
-> "Plan review r<N> complete: B blockers, M medium (fixed in plan), L low, Mon monitor.
+> "Plan review r<N> complete: B blockers, M medium (fixed in plan), Mon monitor.
 > Review saved to `{reviews_dir}/<filename>-r<N>.md`.
 > Ready for execution: Yes/No (requires Blocker=0 and Medium=0)."
 
@@ -203,9 +238,9 @@ Report to user:
 When the user asks to run reviews until clean (e.g. "no medium problems", "until ready"):
 
 1. **Exit condition and minimum rounds:** see `plans` skill Plan Quality Gate (Blocker=0 AND Medium=0, minimum two rounds).
-2. **Severity alignment:** agents emit Blocker/Medium/Low/Monitor directly; no mapping step needed.
+2. **Severity alignment:** agents emit Critical/Suggestion/Advisory. Step 5 defines how to fold these into plan actions (Blocker/Medium/Monitor).
 3. **Treat a clean review as data, not as a terminal verdict.** A 0 Blocker / 0 Medium outcome can mean either (a) the plan is correct, or (b) the agent catalog lacks patterns to detect defects. Run the self-audit below before stopping after only one round.
-4. **Run a brief self-audit alongside the agent review.** Before declaring iteration complete, scan the change types introduced by the latest plan revision (new domain types, decomposed methods, replaced classes, modified existing methods, restructured tasks) and verify the catalog has an active pattern for each. If a change type has no corresponding pattern in `~/.agents/skills/review-agents/*.md`, the agents cannot detect defects of that class. **Also list every "inherited/validated/tested/unchanged" claim in the plan and confirm the panel re-probed each by measurement** (see Signal-to-Noise: Inherited/validated claims are claims, not proof). A clean round that did not re-probe the plan's "settled" mechanisms is not evidence those mechanisms are correct.
+4. **Run a brief self-audit alongside the agent review.** Before declaring iteration complete, scan the change types introduced by the latest plan revision (new domain types, decomposed methods, replaced classes, modified existing methods, restructured tasks) and verify the catalog has an active pattern for each. If a change type has no corresponding pattern in your review-agent prompts (often under `~/.agents/skills/review-agents/*.md`, and sometimes vendored under `agents/skills/review-agents/`), the agents cannot detect defects of that class. **Also list every "inherited/validated/tested/unchanged" claim in the plan and confirm the panel re-probed each by measurement** (see Signal-to-Noise: Inherited/validated claims are claims, not proof). A clean round that did not re-probe the plan's "settled" mechanisms is not evidence those mechanisms are correct.
 5. **Catalog gap discovered → update the skill before re-iterating.** If the self-audit identifies a missing pattern (e.g. "no agent owns 'type-boundary discipline'", "no agent enumerates switches", "no agent checks for superseded code"), add the pattern to the relevant agent file FIRST, then re-run the review. Patching the plan around a catalog gap leaves the gap for future plans.
 6. **Stop when both conditions hold**: the latest review reports Blocker=0 AND Medium=0 (minimum two rounds completed) AND a self-audit against the change types in the plan finds no additional concerns the catalog would have missed.
 7. **Record self-audit gaps as catalog improvements**, not as one-off plan patches. When the self-audit found something the catalog missed, the fix is two-part: patch the plan AND update the agent file or `SKILL.md`. The catalog improvement is the persistent gain; the plan patch is local.
@@ -240,8 +275,13 @@ Adapted from `doing-code-review`:
   Shape witnessed this session: two agents asserted `json.dumps({"k": b"x"}, default=str)`
   raises; an empirical check showed it succeeds (`default=str` degrades `bytes`), and the real
   residual vectors were circular-reference and `__str__`-raising.
-- **No markdown formatting nitpicks** on the plan document itself (heading levels, list style). Redundant or verbose plan prose is owned by `prose-clarity.md`.
+- **No markdown formatting nitpicks** on the plan document itself (heading levels, list style). Redundant or verbose plan prose is owned by `documentation.md` phase 2.
 - **Evidence-gated findings:** correctness claims must be backed by reading the actual source
   file. Do not assume; verify.
 - **2-3 findings max per agent.** Quality over quantity. If an agent finds nothing credible,
   it reports "No findings."
+
+## Integration Points
+
+### With `review-staging` skill
+Writes `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` and the matching `.stats.json` sidecar. Follow `review-staging` for hierarchy, required `## Review Statistics`, and naming. Read `{reviews_dir}` from `.ai-playbook/facts.md` TOML.

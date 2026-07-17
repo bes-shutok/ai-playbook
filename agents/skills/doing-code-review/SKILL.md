@@ -1,7 +1,7 @@
 ---
 name: doing-code-review
 description: >
-  Active code review skill. Orchestrates 10 parallel CR sub-agents for thorough review of PRs, diffs, or branches. Language-agnostic core with runtime language overlays (Java/Spring, Kotlin/Spring, Python). Two modes: posts PR review comments by default; fix mode (auto-commit) when explicitly asked. Trigger phrases: "let's review", "review this PR", "review the changes", "review changes in", "review branch", "review against", "code review", "look at this PR", "check this PR", "check this diff", "doing-code-review". Do not use for addressing existing reviewer comments; use receiving-code-review instead.
+  Active code review skill. Orchestrates a review panel from review-panel-selection (default 7 agents plus conditional concurrency/premortem) for thorough review of PRs, diffs, or branches. Language-agnostic core with runtime language overlays (Java/Spring, Kotlin/Spring, Python). Two modes: posts PR review comments by default; fix mode (auto-commit) when explicitly asked. Trigger phrases: "let's review", "review this PR", "review the changes", "review changes in", "review branch", "review against", "code review", "look at this PR", "check this PR", "check this diff", "doing-code-review". Do not use for addressing existing reviewer comments; use receiving-code-review instead.
 ---
 
 # Active Code Review
@@ -40,9 +40,9 @@ User args (e.g., "check for secrets", "against branch X") provide context for th
 
 ### Anti-patterns
 
-- Launching fewer sub-agents because the user's request seems narrow or focused. The user asked for a review; launch the full agent set unless an explicit skip rule applies.
+- Launching fewer sub-agents because the user's request seems narrow or focused. The user asked for a review; launch the panel from `review-panel-selection.md` (default 7 plus any matched conditionals) unless an explicit skip rule applies.
 - Reporting grep results, manual scans, or inline analysis as the review output. Sub-agents provide coverage a single pass cannot; the staging doc is the deliverable.
-- Replacing the sub-agent pipeline with a targeted scan because "the user only asked about X." A focused scan cannot find what it was not asked to look for; the full agent set can.
+- Replacing the sub-agent pipeline with a targeted scan because "the user only asked about X." A focused scan cannot find what it was not asked to look for; the selected panel can.
 - Writing diff snapshot files (`*.patch`) to the repo root or other tracked paths. Diff artifacts belong under `{tmp_dir}/` only (see **Diff access** below).
 
 ## Step 1: Gather Context
@@ -109,29 +109,31 @@ Load the matching overlay file from this skill's directory (e.g. `java-spring.md
 
 ## Step 3: Launch Sub-Agents in Parallel
 
-Launch all review worker agents **in parallel** using your agent's sub-agent execution capability (parallel launches when supported). Wait for all to complete before proceeding.
+Read `review-agents/review-panel-selection.md` to determine the default 7-agent panel and whether `concurrency` / `premortem` launch for this diff. Record `Domains:` in staging metadata.
+
+Launch all selected review worker agents **in parallel** using your agent's sub-agent execution capability (parallel launches when supported). Wait for all to complete before proceeding.
 
 Each agent receives:
-1. Its own prompt (from the corresponding `.md` file in `~/.agents/skills/review-agents/`)
-2. The language overlay content
-3. Instructions to run `git diff <base>...<head>` (or read `{tmp_dir}/.../diff-r<R>.patch` / `src-diff-r<R>.patch` when the orchestrator materialized snapshots under `{tmp_dir}/`) and read source files for full context
-4. The base and head branch names
-5. Output format: return a JSON array of `{path, line, side, body, severity}` findings; severity is `Low / Medium / High / Critical`. Sub-agent `body` must already meet §4.12 depth for its severity; do not write one-paragraph stubs expecting the orchestrator to expand them.
-6. An explicit constraint: "Do not over-investigate or validate every single line number. Read the diff and key source files, then report findings. Write each `body` to full §4.12 depth: quote contract/doc text, name the code path, describe actual behavior, state why it matters, and suggest fix options. For Medium+, include all four Comment sections inline in `body` using `**Bold headings**`."
+1. **`severity-calibration.md`** (always; tier definitions and decision procedure)
+2. Its own prompt (from the corresponding `.md` file in `~/.agents/skills/review-agents/`)
+3. The language overlay content
+4. Instructions to run `git diff <base>...<head>` (or read `{tmp_dir}/.../diff-r<R>.patch` / `src-diff-r<R>.patch` when the orchestrator materialized snapshots under `{tmp_dir}/`) and read source files for full context
+5. The base and head branch names
+6. Output format: return a JSON array of `{path, line, side, body, severity}` findings; severity is `Low / Medium / High / Critical` per `severity-calibration.md`. **Missing or ambiguous severity in agent output is treated as `Low` until the orchestrator verifies and calibrates.** Sub-agent `body` must already meet §4.12 depth for its severity; do not write one-paragraph stubs expecting the orchestrator to expand them.
+7. An explicit constraint: "Do not over-investigate or validate every single line number. Read the diff and key source files, then report findings. Write each `body` to full §4.12 depth: quote contract/doc text, name the code path, describe actual behavior, state why it matters, and suggest fix options. For Medium+, include all four Comment sections inline in `body` using `**Bold headings**`. For any actionable code/test/config fix at any severity, include a concrete before/after or 'could look like' code snippet per §4.9.0 in `body`. Include one sentence why the chosen severity applies (`severity-calibration.md`)."
 
 **Timeout handling:** If a sub-agent has not completed within 10 minutes, launch a replacement with a more focused prompt (limit to first 1500 lines of diff via `| head -1500`, add "read key source files directly" instead of exhaustive investigation). Do not wait indefinitely for stuck agents.
 
-Sub-agents (all files in `~/.agents/skills/review-agents/`):
+Sub-agents (prepend `severity-calibration.md` to each prompt; specialist files in `~/.agents/skills/review-agents/`):
 
 | Agent file | Focus |
 |---|---|
 | `quality.md` | Bugs, logic errors, edge cases, error handling, correctness, type safety |
 | `implementation.md` | Requirement coverage, correctness of approach, wiring, completeness |
 | `testing.md` | Test coverage, quality, fake tests, independence |
-| `simplification.md` | Over-engineering, excessive abstraction, premature generalization |
-| `prose-clarity.md` | Redundant, verbose, or unclear comments and docs in the diff; self-explanatory code vs prose |
+| `simplification.md` | Over-engineering, excessive abstraction, premature generalization; tagged cuts (`delete:`, `stdlib:`, `native:`, `yagni:`, `shrink:`) |
 | `architecture.md` | God classes, SOLID, DDD, CQRS, clean architecture, aggregates, value objects, extraction opportunities |
-| `documentation.md` | Missing documentation updates for user-visible changes |
+| `documentation.md` | Missing documentation updates; prose clarity in diff (two-phase agent) |
 | `security.md` | Injection, secrets, input validation, data leakage, auth |
 | `concurrency.md` | Race conditions, transactional scope, isolation, locking gaps |
 | `premortem.md` | Design-level failure modes, operational risks, architectural blind spots |
@@ -151,9 +153,11 @@ Each agent returns a JSON array. Medium+ `body` values must be self-contained (o
 
 The premortem agent maps its output: Block → severity High; Mitigate → severity Medium; Monitor/Accept → dropped (not actionable in a code review).
 
-**Skip premortem when** the diff is purely mechanical (renames, formatting, dependency bumps) or total changed lines < 20.
+**Stats sidecar:** write `{reviews_dir}/<same-basename>.stats.json` per `review-staging` in the same pass as the staging doc.
 
-**Skip prose-clarity when** the diff has no added or modified human-readable prose: no comment lines (`//`, `#`, `/*`, docstrings), no markdown or doc body changes, no OpenAPI or config `description` fields. Pure code or logic edits with no prose changes do not need this agent.
+**Conditional agents:** `premortem` and `concurrency` are opt-in per `review-panel-selection.md`. User overrides (`include premortem`, `skip concurrency`, etc.) take precedence.
+
+**Skip `documentation` entirely** only when internal refactor with no user-visible change **and** no added/modified prose in the diff.
 
 Report problems only. No positive observations.
 
@@ -165,8 +169,9 @@ The orchestrator **coordinates** sub-agents; it does **not** re-do their analysi
 |----|--------|
 | Launch agents, wait, parse JSON returns | Re-analyze the diff inline while agents run |
 | Dedup, tone-check, verify line numbers, drop invalid findings | Re-read sources to expand thin `body` text (relaunch the agent instead) |
-| Spot-check a claim only when the agent's stated evidence is missing or contradicts a quick grep | Re-derive full contract-vs-code analysis the agent should have returned |
-| Write staging doc from agent payloads + §4.12 polish | Copy full agent JSON into orchestrator chat when paths/counts suffice |
+| Record Review Statistics per `review-staging` while deduping (Panel with Solo/Echo, Deduplication groups, Discarded with Pattern, Severity calibration, Triage placeholder) | Re-derive full contract-vs-code analysis the agent should have returned |
+| Spot-check a claim only when the agent's stated evidence is missing or contradicts a quick grep | Copy full agent JSON into orchestrator chat when paths/counts suffice |
+| Write staging doc from agent payloads + §4.12 polish | |
 
 **Insufficient sub-agent output:** relaunch the responsible agent with a focused prompt ("expand finding N to §4.12 depth with quoted contract and code behavior"). Treat orchestrator expansion as recovery only, not the normal path.
 
@@ -183,7 +188,7 @@ Drop or reword findings that assume something not true in context:
 - Placeholder/stub code treated as production code
 - Project uses an architecture it has not adopted
 - Ops/infra dependencies not provisioned yet (Kafka topics, DLT, ingress, secrets managers): reframe as a go-live checklist and doc-now action, not "provision in IaC immediately"; downgrade to Low unless the gap also breaks dev/test or local runs
-- Self-documenting code flagged for missing docs (defer missing-doc gaps to `documentation.md`; defer redundant or verbose existing prose to `prose-clarity.md`)
+- Self-documenting code flagged for missing docs (defer to `documentation.md` phase 1); defer redundant or verbose existing prose to `documentation.md` phase 2
 - A cache operation that is a defensive no-op (keys already expired by TTL at call time) flagged as "incomplete" or "broken"
 - Editing an existing migration in a pre-deploy greenfield service flagged as a Flyway immutability break. First verify whether any shared, CI, staging, or production environment has applied it. If not deployed anywhere and local databases are easy to reset or repair, drop the finding or reframe it as a Low release-readiness note.
 - **Author-documented intentional scope in existing PR threads:** before keeping a Medium+ finding about authorization, RBAC, or feature completeness, read existing PR review comments (including author replies). If the author states an MVP decision ("for now", "no endpoints yet", "configure per route when added"), drop or downgrade unless head code contradicts that stated intent.
@@ -220,6 +225,8 @@ Use `github-pr-workflow` existing-review-comments primitive. Drop findings alrea
 
 Also dedup within your own findings before posting. If two findings describe the same underlying problem (even from different perspectives, e.g. a concurrency agent and a premortem), keep only the one with the clearest explanation and strongest fix suggestion. Never post two comments that a reader would perceive as "the same point said differently".
 
+**Tiered ownership:** when deduping, apply lead-agent rules from `review-panel-selection.md`. Ownership affects which agent leads a merge, not silent discard of a different fix at the same site.
+
 **Dependent fixes must be merged into one finding.** When Finding A recommends a structural change that forces a dependent change elsewhere (e.g., removing a default parameter from a constructor requires updating test verify blocks to pass the argument explicitly, otherwise the test fails to compile), the dependent change is not a separate finding; it is part of A's complete fix. Presenting it as a separate Lower-severity finding creates a contradiction: the secondary finding reads as optional/advisory even though A makes it mandatory. Ask: "If the author applies this fix, do any other files break or become incomplete?" If yes, include those changes in the same finding's fix suggestion.
 
 ### 4.6 PR Chain Awareness
@@ -234,6 +241,7 @@ When a finding's evidence is in a file that IS in the diff but the recommended f
 - Always use suggestion tone, never directive/ordering tone. This applies to all comments regardless of severity, including comment **titles and headings** (bold text at the start of a comment). Severity controls whether the review requests changes or approves with comments, not the tone of individual comments. Use phrases like "Please consider ...", "we could", "we should", "one option might be", "what about", or a direct question ("could you add X?") instead of direct orders ("Drop line 68", "Remove X", "Add Y"). Avoid bare imperatives even in chat summaries to the reviewer when describing staged findings; the staging **Comment** text and any paraphrase shown in conversation should use the same mild suggestion tone. Avoid "Consider doing X" as well: although it sounds soft, it still reads as an instruction that the reader is expected to comply with. Bad title: "Dead branch: both paths are identical". Good title: "This conditional could probably be simplified". Bad body: "Wrap the post-send steps in try/finally", "Drop line 68 from the README". Good body: "We should probably wrap the post-send steps in try/finally here", "Please consider dropping line 68 from the README. What do you think?"
 - No em dashes (the U+2014 character) anywhere in comment text. Use commas, semicolons, colons, or parentheses instead. Scan every comment body for U+2014 before posting and replace any occurrence.
 - Use globish: plain, short words a non-native speaker can follow.
+- When suggesting integration-test changes, say what happens in plain steps, not Maven jargon alone. Bad: "gate ITs off the default test run". Good: "do not run these tests in normal `mvn test`; run them only when someone starts RocketMQ first" or "start RocketMQ automatically in the test (Testcontainers)".
 - When a fix changes one token, say so explicitly.
 - Spell out abbreviations; do not use jargon shortcuts (write "IllegalStateException", not "ISE").
 - When the staged review uses three or more non-trivial abbreviations or domain terms (for example RBAC, JWT, DLT, TOCTOU, API key, operator, tenant), add a short `## Terms` section before `## Findings`. Define each term in plain language so the staging document and any posted comment can stand alone for a reviewer who is not deep in the local vocabulary.
@@ -259,29 +267,30 @@ gh pr diff <PR> --repo <owner/repo> | awk '
 
 If the line you want is outside every hunk, either retarget to the closest hunk-internal line that still anchors the finding, or drop the inline comment in favor of posting on a different file/line that IS in the diff. A whole batch of comments fails atomically if any one line is unresolvable, so verify all of them before posting.
 
-### 4.9.0 Severity Defaults
-Severity reflects user impact and operability risk, not how thorough the comment is. Common defaults:
+### 4.9.0 Severity defaults
 
-- **High**: data loss, security exposure, or wrong-result bug reachable in normal traffic.
-- **Medium**: behavior regression in normal traffic, correctness gap in a documented edge case, missing test for a code path that itself has a real failure mode.
-- **Low**: style/readability, naming, log-level mismatch, dead code, comment-only fix, observability gap where the underlying behavior is correct.
+**Canonical rules:** `review-agents/severity-calibration.md` (tier definitions, decision procedure, category defaults, cc-thingz mapping). Sub-agents must set explicit severity on every finding; orchestrator treats missing severity as **Low** until verified.
 
-**Metrics / observability asks are Low by default.** A missing counter for a drop path is an observability gap, not a defect: the drop itself is correct behavior, dashboards just can't see it. Promote to Medium only when the missing telemetry would mask an active production problem (e.g. the drop path is on a hot user-visible flow, or it competes with an alert that already exists at a different level). Promote to High essentially never.
+Orchestrator-specific additions (not duplicated in severity-calibration):
+
+- **Metrics / observability asks are Low by default.** Promote per severity-calibration table; promote to High essentially never.
 
 **Metrics findings: inline placement.** When recommending new counters or Grafana alert wiring on a PR:
 - Post **new counter** proposals inline at the code path where the counter would be incremented (emit site), not only in the PR review summary.
 - Post **Grafana alert / panel** recommendations inline at the **existing** metric increment call site (for example `incrementDuplicateBlocked`), so the author can wire the alert to the metric already emitted there.
 - Findings about telemetry in code **outside the PR diff** (for example an error counter in a class the PR does not touch): post **once in the PR review body**, not as inline comments that fail line resolution.
 
-**Test asks are Low by default**, with one exception: Medium if the untested code path itself contains a real failure mode the team relies on (e.g. a per-step catch that bounds failure blast radius). "There's no test for X" alone is Low; "there's no test for X, and X is the only thing preventing Y" is Medium.
+**Test asks are Low by default** (see severity-calibration); Medium only when the untested path prevents a real failure mode the team relies on.
 
 **Documentation/inline-comment asks are Low**, regardless of doc length or topic.
 
-**Feature-flag gating does not reduce severity.** A bug that causes silent data loss or complete feature outage is High regardless of whether it is guarded by a feature flag. The flag only controls when the bug is reachable; once enabled, the full impact applies. Do not list "gated by a flag" as a mitigating factor when calibrating severity.
+**Feature-flag gating does not reduce severity** (severity-calibration).
 
-**Pre-existing pattern does not reduce severity of newly introduced issues.** If a PR introduces code that follows the same broken pattern as pre-existing code elsewhere, the new instance is a NEW issue at full severity. The pre-existing instance is EXISTING debt (note briefly at Low or omit). Do not conflate "consistent with existing behavior" with "acceptable new behavior".
+**Pre-existing pattern does not reduce severity of newly introduced issues** (severity-calibration; §4.11 NEW vs EXISTING).
 
-**Actionable fix comments should include a code snippet.** When a finding proposes something the author can apply in code immediately (not an open question, scope-confirmation ask, or optional doc-only note), include a concrete before/after or "could look like" snippet in the Comment body so the author can act without a follow-up chat. Single-token fixes ("rename to X") and prose-only doc edits are exempt. Staging doc Comment sections follow the same rule.
+**Actionable fix comments should include a code snippet.** When a finding proposes something the author can apply in code immediately (not an open question, scope-confirmation ask, or optional doc-only note), include a concrete before/after or "could look like" snippet in the Comment body so the author can act without a follow-up chat. Single-token fixes ("rename to X") and prose-only doc edits are exempt. Staging doc Comment sections follow the same rule. Applies at **all severities**, including Low test-gap and config findings.
+
+**Test and review-comment snippets:** In suggested test bodies, assert against values already held in a fixture or builder variable (for example `outbox.getCampaignId()`), not a second copy of the same literal. Duplicated literals in setup and asserts can both pass when the mapping is wrong.
 
 ### 4.9.1 No References To Gitignored Local Docs In Posted Comments
 Posted PR comments are public and must not cite documents that do not exist on the PR's base branch. The author and external reviewers cannot read them, and citing them either looks like a broken reference or projects private rules onto someone else's code.
@@ -300,7 +309,7 @@ awk '/^#### Comment/{p=1;next} /^#### Analysis/{p=0} p' "$STAGING" | \
 
 Rewrite rules:
 - If the citation is the source of an objective rule the PR author would also recognize (project method-length limit, metrics convention, naming convention), restate the principle inline without citing the file. Example: `"see company-guidelines.md #17 (≤30 lines)"` → `"this is hard to scan and exceeds typical method-length limits"`.
-- **Sporty company engineering rules (public cite):** When a finding rests on Sporty company guidelines (not OpenAPI, README, or other PR-visible docs), do not use the **What the contract or docs say** heading; company guidelines are not API contracts. Use **As per Sporty guidelines** and link the public copy in `sporty-ai-playbook` with the rule number (for example `https://github.com/opennetltd/sporty-ai-playbook/blob/main/department/backend/crm/projects/sporty/.ai-playbook/company-guidelines.md` #13 for no PII in logs). **Before posting, verify the cited rule exists** at that URL (fetch or read the linked file; confirm the numbered rule or quoted text is present). Do not cite local `company_guidelines_master` paths or gitignored repo mirrors. If the rule is not publicly available or cannot be verified, do not present it as a guideline mandate: rephrase as a suggestion in mild tone and ground it in common engineering practice or widely accepted best practices (for example "we could avoid logging operator-entered field values in validation failures").
+- **Company engineering rules (public cite):** When a finding rests on employer/company guidelines that are not OpenAPI, README, or other PR-visible docs, do not use the **What the contract or docs say** heading; company guidelines are not API contracts. Use **As per company guidelines** and link the public guidelines URL resolved from facts (`company_guidelines_public_url` or equivalent), with the rule number (for example `https://github.com/example-org/example-guidelines-repo/blob/main/company-guidelines.md` #13 for no PII in logs). **Before posting, verify the cited rule exists** at that URL (fetch or read the linked file; confirm the numbered rule or quoted text is present). Do not cite local `company_guidelines_master` paths, gitignored repo mirrors, or org-specific internal path segments. If the rule is not publicly available or cannot be verified, do not present it as a guideline mandate: rephrase as a suggestion in mild tone and ground it in common engineering practice or widely accepted best practices (for example "we could avoid logging operator-entered field values in validation failures").
 - If the citation is the only justification for the finding (i.e. the rule lives only in your private docs), drop the finding entirely. Personal style preferences from user-level instructions are not project conventions the PR author has agreed to follow. Em-dash bans, no-also-chain rules, specific log-format preferences, and similar are common examples. The right place for these is the gitignored doc itself, not a public PR comment.
 
 If a rule should be enforced project-wide, propose it first as a PR to the shared project doc (where the author can agree or push back), then cite it in future reviews. Do not retroactively flag PRs against rules that exist only in your private instructions.
@@ -336,6 +345,10 @@ If the doc is in the output, the finding is in scope. If not, drop or move to a 
 Only flag PR-body issues when a CI-gated machine-readable field is missing or wrong (see `agent_workflow_guidelines.md #33` for examples like the `isRestartRequired` metadata in the config repo).
 
 **Stale PR summary prose is not a formal finding by default.** When the PR description disagrees with head code because the author intentionally changed scope (evident from fix commits and updated branch docs) and a human reviewer already approved, do not raise a Medium/Low review comment asking to update the PR body. Drop it or note it in staging Analysis only. Raise it only if the mismatch could mislead merge without approval or runtime behavior is still wrong.
+
+### 4.9.3 Staging doc anchor edits
+
+When correcting `- **File**:` or `- **Line**:` in the staging doc during polish, follow `review-staging` field shape (separate list items for File and Line) and verify values against PR head per §4.9.
 
 ### 4.10 Empirical Verification of Test/Compile Claims
 Before posting a finding that claims tests will fail, code will not compile, or runtime errors will occur, attempt to verify by actually running the build or tests locally. If the local environment cannot run the build (missing dependencies, VPN, etc.), state explicitly in the comment that the claim is based on static analysis and has not been empirically verified. Never present an unverified inference as a confirmed fact.
@@ -402,12 +415,15 @@ Include verification notes (files read, schema checks, severity rationale, alter
 
 #### Orchestrator polish pass (mandatory before staging doc is final)
 
-After dedup in §4.5, for every **Medium+** finding:
-1. Confirm the sub-agent `body` satisfies §4.12 Comment depth. If thin, **relaunch the responsible sub-agent** to expand; do not re-read sources in the orchestrator to fill gaps (recovery path only when relaunch is impractical).
-2. Apply tone check (§4.8), assumption verification (§4.2–4.4) using cited evidence, and line-number verification (§4.9).
-3. Split `body` into staging **Comment** and **Analysis** sections; refine wording but preserve substance; do not shorten a detailed agent `body` for brevity.
+After dedup in §4.5, for every finding (all severities):
+1. Confirm the sub-agent `body` satisfies §4.12 Comment depth for its severity. If thin, **relaunch the responsible sub-agent** to expand; do not re-read sources in the orchestrator to fill gaps (recovery path only when relaunch is impractical).
+2. If the finding proposes an actionable code/test/config fix, confirm the Comment includes a concrete snippet per §4.9.0. If missing, relaunch the responsible sub-agent with "expand finding N with §4.9.0 snippet" or add the snippet during staging polish (recovery only when relaunch is impractical).
+3. Apply tone check (§4.8), assumption verification (§4.2–4.4) using cited evidence, and line-number verification (§4.9), including staging `- **Line**:` / `- **File**:` per §4.9.3 when needed.
+4. Split `body` into staging **Comment** and **Analysis** sections; refine wording but preserve substance; do not shorten a detailed agent `body` for brevity.
 
-**Self-check before marking staging doc complete:** For each Medium+ finding, ask: "Could the author act on this Comment alone without a chat follow-up?" If no, sub-agent output was insufficient; relaunch or expand in staging from the agent payload, not from orchestrator re-analysis. For actionable code fixes, confirm the Comment includes a concrete snippet per §4.9.0.
+**Self-check before marking staging doc complete:** For each finding with an actionable fix, ask: "Could the author apply this without a follow-up chat?" If no, the Comment is missing a §4.9.0 snippet or sufficient detail; relaunch or expand. For Medium+ findings, also confirm §4.12 section depth.
+
+**Mechanical gate:** run `python3 "${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}" --hard "<staging-path>"` before reporting findings to the user. Fix validation errors before the round is complete.
 
 **Contract section gate:** Before using **What the contract says**, name the normative source and confirm it is in the PR diff (for example `app/api/openapi.yaml` response text, a README section the PR edits, a schema or test the PR adds). If the normative source is Sporty company engineering guidelines, use **As per Sporty guidelines** with a verified public `sporty-ai-playbook` URL and rule number (see §4.9.1), not **What the contract or docs say**. If the rule cannot be verified at a public URL, use suggestion tone and common best practices instead of a guideline citation. If the only source is a gitignored instruction file or private guideline without a public mirror, drop the finding or reframe the opening section as **What this PR establishes** (in-PR design, tests, or persistence the change itself introduces). Do not suggest relaxing or rewriting that source as the fix when the cited "contract" was never PR-visible.
 
@@ -424,7 +440,30 @@ The `409` response for `PATCH /v1/consent-updates` says consent updates are "rej
 This is contract drift, not a typical happy-path logic bug. OpenAPI readers expect strict `409`; api-reference §8b documents the race as an accepted MVP limitation. Integrators or codegen clients may assume behavior the runtime does not fully guarantee.
 
 **What we could do**
-One option: soften the OpenAPI `409` description to match api-reference (document the READ COMMITTED race). Another: tighten with `SELECT … FOR UPDATE` on the profile row and re-check immediately before the first mutating statement, if we want the strict contract.
+One option: soften the OpenAPI `409` description to match api-reference (document the READ COMMITTED race). Another: tighten with row lock before the first mutating statement (Java snippet below).
+```
+
+```java
+ProfileRow profile = profileRepository.findByIdForUpdate(profileId);
+if (profile.getStatus() == ProfileStatus.DELETED) {
+    throw new ProfileDeletedException(profileId);
+}
+```
+
+#### Comment example (Low, test gap with snippet)
+
+```markdown
+`shouldPublish` only asserts no-throw. We could pull the published message and assert fields from the fixture (Java snippet below). Use getters from `outbox`, not duplicated literals in asserts.
+```
+
+```java
+sendIntentEventPublisher.publish(outbox);
+MessageExt received = pullMessageByKey(outbox.getDedupeKey());
+JsonNode json = objectMapper.readTree(received.getBody());
+assertThat(received.getKeys()).isEqualTo(outbox.getDedupeKey());
+assertThat(json.get("sendIntentId").asText()).isEqualTo(outbox.getSendIntentId());
+assertThat(json.get("campaignId").asText()).isEqualTo(outbox.getCampaignId());
+assertThat(json.get("channel").asText()).isEqualTo(outbox.getChannel().value());
 ```
 
 #### Analysis example (same finding)
@@ -435,7 +474,7 @@ Read `openapi.yaml` line 261, `ExternalConsentUpdateOrchestrator.java`, api-refe
 
 ## Step 5: Output
 
-**ALWAYS write the staging document**, regardless of mode. The staging doc is the primary deliverable and serves as both approval artifact (for PRs) and persistent record (for all reviews).
+**ALWAYS write the staging document**, regardless of mode. The staging doc is the primary deliverable and serves as both approval artifact (for PRs) and persistent record (for all reviews). Include `## Review Statistics` on every review (including zero-finding rounds) per `review-staging`.
 
 ### Step 5.1: High-level tasks follow-up (module-split repos)
 
@@ -454,8 +493,9 @@ Cross-repo: same pattern when a repo maintains module high-level tasks docs (pat
 
 **File location** (create `{reviews_dir}/` if it doesn't exist):
 - For GitHub PR reviews: `{reviews_dir}/YYYY-MM-DD-PR-<number>-<title>.md`
-- For local branch reviews: `{reviews_dir}/YYYY-MM-DD-branch-review-<branch_name>.md`
-- For plan-based reviews: `{reviews_dir}/YYYY-MM-DD-plan-review-<plan_name>.md`
+- For local branch reviews: `{reviews_dir}/YYYY-MM-DD-branch-review-<branch_name>.md` (add `-r<N>` when part of a review-loop)
+- For pre-implementation plan reviews (`review-plan`): `{reviews_dir}/YYYY-MM-DD-plan-review-<plan_name>-r<N>.md`
+- For execute-plan Phase 3 post-implementation code reviews: `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` (not `-plan-review-r`)
 
 Branch names are sanitized: slashes replaced with dashes, max 30 chars. No prefix (REVIEW/PR) needed since the directory already indicates these are reviews.
 
@@ -463,7 +503,7 @@ Branch names are sanitized: slashes replaced with dashes, max 30 chars. No prefi
 
 Write all findings to the staging document instead of posting directly. This allows the reviewer to inspect, edit, or drop findings before they reach the PR author.
 
-**Document format**:
+**Document format** (hierarchy and `## Review Statistics` per `review-staging`; code-review severities and optional `Status` below):
 
 ```markdown
 # Code Review: <PR #<number>; <title> OR Branch <head> → <base>>
@@ -473,14 +513,63 @@ Write all findings to the staging document instead of posting directly. This all
 - Date: YYYY-MM-DD
 - PR: <url> (if PR review)
 - Branch: <head> → <base> (if branch review, include plan reference if applicable)
-- Findings: <count>
+- Findings: <staged count>
 - Status: STAGED (not yet posted)
+
+## Review Statistics
+
+### Panel
+| Agent | Status | Raw | Solo | Echo | Relaunch |
+|-------|--------|-----|------|------|----------|
+| quality | complete | 2 | 1 | 1 | no |
+| premortem | skipped | 0 | 0 | 0 | no |
+
+### Counts
+- Agents launched: 10
+- Agents skipped: 1
+- Raw findings (all agents): 5
+- Staged findings: 3
+- Discarded during synthesis: 2
+- Solo staged (unique agent origin): 1
+- Echo staged (multi-agent dedup): 2
+
+### Deduplication groups
+| Staged # | Agents | Theme |
+|----------|--------|-------|
+| 1 | quality, implementation | Null guard missing on batch path |
+
+When none: `None (each staged finding had a single agent origin).`
+
+### Discarded findings
+| Agent | Agent severity | Pattern | Theme | Reason | Notes |
+|-------|----------------|---------|-------|--------|-------|
+| documentation | Low | documentation#prose-verbose-comment | Rename variable | noise | Optional cleanup only |
+
+When none: `None.`
+
+### Severity calibration
+| Staged # | Agent | Agent severity | Staged severity | Delta |
+|----------|-------|----------------|-----------------|-------|
+| 2 | quality | Low | Medium | upgraded |
+
+When none: `None (agent severities matched staged severities).`
+
+### Triage outcomes
+| Agent | Staged | Fixed | Dropped | Deferred | Pending |
+|-------|--------|-------|---------|----------|---------|
+| quality | 2 | 0 | 0 | 0 | 2 |
+
+Before triage: Pending = Staged for each agent; Fixed/Dropped/Deferred = 0. After `receiving-code-review`: recompute from finding **Triage** fields.
 
 ## Findings
 
 ### 1. <short title>
 - **Status**: `pending`
+- **Triage**: pending
 - **Severity**: High | Medium | Low
+- **Agent severity**: Low *(omit when equal to Severity)*
+- **Pattern**: quality#null-handling
+- **Agents**: quality, concurrency
 - **File**: path/to/File.kt
 - **Line**: 115
 
@@ -497,11 +586,15 @@ Write all findings to the staging document instead of posting directly. This all
 
 Do not include `Side` in staging documents; it is always `RIGHT` for GitHub inline comments and adds noise for branch-only reviews. When posting approved findings to a PR, set `side: RIGHT` in the API payload only (not in the markdown staging file).
 
-**Status values** (user edits these before giving "post comments" command):
-- `pending`; not yet reviewed by user
-- `post`; approved, will be posted to PR
-- `drop`; rejected, will not be posted
-- `edit`; user modified the Comment section, post the updated text
+**Status values** (user or triage skill edits these):
+- `pending`: not yet triaged or still open after triage
+- `done`: fixed in code; maps to **Triage** `fixed`
+- `drop`: rejected; maps to **Triage** `dropped`
+- `deferred`: valid but intentionally deferred; maps to **Triage** `deferred`
+- `post`: approved for PR comment (PR staged mode)
+- `edit`: user modified Comment before post (PR staged mode)
+
+After triage, update `## Review Statistics` → **Triage outcomes** and each finding's **Triage** per `review-staging`. Update the required `.stats.json` sidecar alongside the staging doc.
 
 **After writing the staging doc**, inform the user:
 
@@ -515,8 +608,8 @@ For branch reviews:
 
 When the user says "post comments", "post the review", or "post approved":
 1. Read the staging doc from the review session path, or resolve exactly one `{reviews_dir}/*-PR-<number>-*.md`
-2. Collect all findings with `status: post` or `status: edit`
-3. Post them via `github-pr-workflow` as inline comments
+2. Collect all findings with `status: post` or `status: edit` (or `pending` when the user explicitly approves posting all pending)
+3. For each finding, read the `#### Comment` block verbatim; verify `File`/`Line` are in diff hunks (§4.9); post via `github-pr-workflow` as inline comments
 4. Update the staging doc: change Status header to `POSTED`, mark posted findings as `posted`, keep dropped findings as `drop`
 5. Report which findings were posted and which were dropped
 
@@ -571,15 +664,18 @@ Staging doc fields (author-facing quality is in **Comment**, not a terse summary
 
 ## Integration Points
 
+### With `review-staging` skill
+Staging doc hierarchy and `## Review Statistics` are defined in `review-staging` (Panel with Solo/Echo, Pattern tags, Severity calibration, Triage outcomes). Populate synthesis stats during orchestrator dedup; update Triage outcomes after triage without rewriting synthesis tables.
+
 ### With `bootstrap-ai-playbook` skill
 Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-skills` Step 0). This skill reads `{reviews_dir}` and other doc paths from that file before writing staging docs under `{reviews_dir}/`.
 
 ### With `execute-plan` skill
-Invoked as a sub-agent in **branch review** mode after all plan tasks are implemented. Review scope comes from the plan's `## Review Scope` section. Output staging doc path: `{reviews_dir}/YYYY-MM-DD-plan-review-<plan-slug>-r<N>.md`. The orchestrator loops review → `receiving-code-review` until two consecutive clear review rounds (zero **remaining** Medium+ after triage; not raw review output).
+Invoked as a sub-agent in **branch review** mode after all plan tasks are implemented. Review scope comes from the plan's `## Review Scope` section. Output staging doc path: `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` (execute-plan naming; not `-plan-review-r`). The orchestrator loops review → `receiving-code-review` until two consecutive clear review rounds (zero **remaining** Medium+ after triage **and** clear-round quality bar: mutator failure-mode matrix complete; premortem launched when concurrency was in scope; fresh adversarial framing on every Step 3.1, not verify-only). When invoked from execute-plan, honor the Code Review template in `execute-plan/subagent-prompts.md` (fresh review mode, mutator matrix, premortem rule).
 
 ## Limitations
 
-- In comment mode: read-only. Do not modify any repository file.
-- The review deliverable is the staged review document (or posted comments). Do not fix findings, commit changes, or start implementing suggestions after the review is complete; those are separate tasks that require explicit user request.
+- In comment mode: read-only for **source code** under review. Staging doc polish is allowed when the user requests it or during orchestrator polish before the doc is final.
+- The review deliverable is the staged review document (or posted comments). Do not fix product code, commit changes, or start implementing suggestions after the review is complete unless the user explicitly requests fix mode or a separate fix workflow.
 - Before starting, identify PR author. If PR was not created by current user, enforce read-only with no exceptions.
 - Respond in English.

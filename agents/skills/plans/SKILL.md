@@ -385,17 +385,19 @@ Every plan must include a `## Validation Commands` fenced bash block (see plan t
 
 4. **Validation minimality still applies:** Prefer the narrowest command that proves the task, but never narrower than what the two-tier Review Scope requires; a passing check that ignores plan-implied follow-on surfaces is a plan defect.
 
+5. **Boolean mutator negative paths:** When a task adds or changes a public method that returns `boolean` / `Optional` success from a **multi-row SQL CTE or multi-statement write** (activate + supersede, claim + update, insert + promote, compare-and-set), the plan **must** include at least one RED→GREEN IT in `given/expects` form where the call **returns false / empty** (missing row, wrong status, stale id) and asserts **no destructive side effects** on unrelated rows (for example prior ACTIVE not superseded; other keys untouched). Happy-path and concurrent-success ITs alone are not enough; execute-plan Phase 3 will still require a mutator failure-mode matrix, but the plan must force the negative IT into implementation.
+
 ## Plan Quality Gate
 
 Before finalizing a new or updated plan, run the `review-plan` skill as a sub-agent:
 
-**Execution:** Launch a sub-agent **with the `review-plan` skill instructions** (not a generic `general-purpose` agent doing a single-pass critique). A hand-rolled generic sub-agent that summarizes "looks good" does NOT satisfy this gate: it skips the 10-agent review catalog and tends to return a falsely clean verdict. The sub-agent must perform the full multi-lens review: 10 parallel sub-agents from the shared review-agents catalog (quality, implementation, architecture, testing, simplification, prose-clarity, documentation, security, concurrency, premortem) plus an inline consistency agent, returning structured findings. Do NOT run the review inline; always delegate to a `review-plan` sub-agent so the main context stays clean and the full catalog runs.
+**Execution:** Launch a sub-agent **with the `review-plan` skill instructions** (not a generic `general-purpose` agent doing a single-pass critique). A hand-rolled generic sub-agent that summarizes "looks good" does NOT satisfy this gate: it skips the 9-agent default review catalog and tends to return a falsely clean verdict. The sub-agent must perform the full multi-lens review: 8 shared agents from the review-agents catalog (quality, implementation, architecture, testing, simplification, documentation, security) plus conditional concurrency/premortem per `review-panel-selection.md`, plus an inline consistency agent, returning structured findings. Do NOT run the review inline; always delegate to a `review-plan` sub-agent so the main context stays clean and the full catalog runs.
 
 **Sub-agent prompt template:**
 ```
 You are running the review-plan skill. Review the following implementation plan by launching
-10 parallel sub-agents from the shared review-agents catalog (quality, implementation, architecture,
-testing, simplification, prose-clarity, documentation, security, concurrency, premortem) plus an inline consistency
+8 shared sub-agents from the review-agents catalog (quality, implementation, architecture,
+testing, simplification, documentation, security) plus conditional concurrency/premortem per review-panel-selection.md, plus an inline consistency
 agent, as described in the skill instructions.
 
 Read the actual source files referenced in the plan to verify assumptions about data types,
@@ -513,6 +515,8 @@ Core plan quality principles applicable across all projects and languages:
 
 - **Test specification format**: Every test item must use the `given/expects` format: `` `ClassName#method`; given <scenario>, expects <outcome> ``. Include positive tests (happy path), negative tests (what must NOT happen), edge case tests (boundary conditions), and error path tests (exception handling and cleanup). A bare method name without a scenario description is not acceptable; the plan must be readable without opening the test file.
 
+- **Boolean / Optional multi-row mutators:** When specifying a port or adapter method that returns success/failure from a CTE or multi-statement write, always add a negative `given/expects` IT: call fails (wrong id, wrong status, stale token) **and** persisted state for other rows is unchanged. See **Validation Commands (authoring rules)** item 5. Incident reference: `promoteToActive` superseded ACTIVE while returning `false` on a missing BUILDING target.
+
 - **Integration testing requirements**: For multi-step pipelines, include integration tests that exercise the full flow, not just unit tests for individual components.
 
 - **Boundary test checklist**: When implementing threshold-based logic (>=, <=, >, <), always include tests at the exact boundary value. Off-by-one errors at boundaries are common sources of incorrect behavior.
@@ -525,11 +529,25 @@ After saving, offer:
 
 > "Plan saved to `{plans_dir}/<filename>.md`. Ready to execute with `execute-plan`, in this session manually, or hand off to a new session?"
 
-**Plan path without trigger phrase:** If the user references an existing plan file under `{plans_dir}` (`@` mention or filename only) without saying execute-plan / implement plan / run plan, **do not** assume implementation. Run the three-way gate from the `execute-plan` skill (execute-plan / manual / read-only) before any production code edits.
+**Plan path without invocation:** If the user references an existing plan file under `{plans_dir}` (`@` mention or filename only) without invoking execute-plan (no `execute plan`, no shorthand `execute`/`implement`/`run` + plan path, no `/execute-plan`, skill not attached), **do not** assume implementation. Run the three-way gate from the `execute-plan` skill (execute-plan / manual / read-only) before any production code edits.
 
 **Automated execution:** Use the `execute-plan` skill (reads same paths from `.ai-playbook/facts.md`). Archive to `{plans_completed_dir}/`; session logs under `{tmp_dir}/execute-plan/<slug>/` on success only.
 
 **Manual execution in this session:** Use `tdd-guide` and `unit-test-runner` per task (fresh output before marking the task complete). One task per commit. Use `done` only when the user ends the session (learn + commit across repos). Do not use this path when the user asked for `execute-plan` / `/execute-plan`.
+
+## Final Step: Run `done`
+
+After the plan file is saved, the review gate reports `ready=yes`, and the execution-handoff choice has been offered, invoke the `done` skill as the last step of the plans workflow. This finalizes the plan-creation session: `learn` captures any cross-repo lessons, `docs-branch` syncs any shadow review files under `{reviews_dir}`, and the plan file (plus the review artifact) is committed across all repositories.
+
+**Scope:** the `done` run covers only this plan-creation session's changes (plan file, review artifact, docs-branch shadows). It does **not** start implementation or mark plan tasks complete.
+
+**Skip only when:**
+- The user explicitly says "not yet" / "wait" / "I'll commit myself"; honor that and stop.
+- The execution-handoff gate selected `execute-plan` and the user wants the plan commit folded into the first task's `done`; in that case, say so and let `execute-plan` own the first commit.
+
+**Do not skip** just because the plan file looks small or the session feels incomplete. The plan file and its review artifact are deliverables; `done` is the canonical commit path for them.
+
+Announce: "Running `done` to finalize the plan-creation session (learn + docs-branch + commit across repos)."
 
 ## Integration Points
 
@@ -538,3 +556,6 @@ Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-sk
 
 ### With `execute-plan` skill
 Consumer of plan format, task order, `## Validation Commands`, `## Review Scope`, per-task commit lines, and completed-plan archival. Shares Phase 0 branch-setup semantics: `plans` runs it at plan creation; `execute-plan` runs it at implementation start and reuses an existing feature branch when appropriate. After plan creation or update, hand off to `execute-plan` when the user wants automated iterative implementation with per-task commits and post-implementation review loops.
+
+### With `grilling` skill
+When Phase 1 requirements discovery hits ambiguous scope or trade-offs, and the user asks to grill a decision, invoke `grilling` for one-question-at-a-time resolution. Do not replace the plans interview structure; grilling deepens specific decisions.

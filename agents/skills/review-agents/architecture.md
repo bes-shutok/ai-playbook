@@ -166,9 +166,9 @@ When a large class or module is identified, suggest concrete extraction paths:
 
 When the transport layer (OpenAPI generator, HTTP framework, etc.) emits primitives like `String`:
 
-- The conversion from transport primitive to domain enum/value object should happen at the application service entry — once, at a clearly identifiable seam.
+- The conversion from transport primitive to domain enum/value object should happen at the application service entry: once, at a clearly identifiable seam.
 - Flag mid-flow `Enum.valueOf(...)`, `Enum.fromString(...)`, or manual string comparisons (`"ACTIVE".equals(status)`) inside business-rule code. They indicate the boundary is leaking inward.
-- Flag the symmetric reverse: domain enums being re-stringified before they cross back into the transport layer (e.g. `someEnum.name()` calls scattered across multiple methods) — collect the conversion at the exit seam.
+- Flag the symmetric reverse: domain enums being re-stringified before they cross back into the transport layer (e.g. `someEnum.name()` calls scattered across multiple methods) : collect the conversion at the exit seam.
 - A correctly-bounded engine takes a `ConsentCheckQuery` with stringly-typed fields ONCE at `evaluate()`, converts to enums once, and operates on enums until the final `ConsentCheckResult` construction.
 
 ## Aggregate Boundary Issues
@@ -192,8 +192,10 @@ When the transport layer (OpenAPI generator, HTTP framework, etc.) emits primiti
 - Copy-paste inheritance: subclasses differ only in constant values
 - Switch statements that grow: new case added with each feature (should be polymorphism)
 - Type-based dispatching: `if isinstance(x, A): ... elif isinstance(x, B): ...`
-- Parallel switches on the same discriminator: when a `switch (purpose)` returning `reason` appears in one method AND a `switch (purpose)` returning `policy` appears in another, consolidate into an enum-with-behavior where each constant carries its data tuple. The anti-pattern is "data class enum" — bare enum constants while their callers carry the data.
+- Parallel switches on the same discriminator: when a `switch (purpose)` returning `reason` appears in one method AND a `switch (purpose)` returning `policy` appears in another, consolidate into an enum-with-behavior where each constant carries its data tuple. The anti-pattern is "data class enum" : bare enum constants while their callers carry the data.
 - Anemic enum: a newly-introduced enum that has only `name()`/`ordinal()` and a `valueOf(...)` registry, with all per-constant data living in caller-side switches. Move the data onto the enum constants as `final` fields.
 
+
+**Ownership (tiered):** layer violations, god classes, DDD/CQRS/SOLID structural issues. Do not report missing config wiring (implementation) or runtime algorithm bugs (quality). See `review-panel-selection.md`.
 
 Report problems only. No positive observations.

@@ -24,6 +24,15 @@ description: Jira workflow for creating/updating Jira stories and creating git b
 - When cleaning up Jira comments after a story-scope change, do not touch comments left by other people unless the user explicitly asks for that.
 - When a Jira story/comment cites a specific Slack discussion as scope evidence, include the Slack permalink in that comment rather than referring to the discussion indirectly.
 
+## Bulk backlog creation (Atlassian MCP)
+
+When creating multiple related stories from a planning doc in one session:
+
+1. **Parent and points on create:** set `additional_fields.parent.key` for epic parent; story points via `customfield_10016` when the project uses that field.
+2. **Assignee:** `assignee_account_id` on `createJiraIssue` often fails. After each create, call `editJiraIssue` with `{"assignee": {"accountId": "<accountId>"}}` (resolve via `lookupJiraAccountId` or `atlassianUserInfo`).
+3. **Issue links:** `issuelinks` on create often fails. After all issues exist, call `createIssueLink` per link (`type`: `Blocks` or `Relates`; `inwardIssue` = blocker/source, `outwardIssue` = blocked/target per Jira semantics).
+4. **Planning doc sync:** update the source doc with Jira keys, points, parent epic, and blocker links in the same session (mapping table + per-section `Jira:` lines).
+
 ---
 
 # Create Branch from Jira Ticket

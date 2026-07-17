@@ -1,7 +1,7 @@
 ---
 name: github-pr-workflow
 description: >
-  GitHub PR workflow and shared GitHub PR operations — use as the common GitHub PR URL protocol for active review and passive review skills, and as the primary skill for PR descriptions, PR stats, splitting a branch diff into PR chunks, creating GitHub PR branches, rebasing stacked PRs after parent squash-merge, and creating squashed PR branches. Trigger phrases — "GitHub PR URL", "write the PR description", "PR stats", "split PR", "PR chunks", "split branch", "split the diff", "create PRs", "create the branches", "rebase pr", "rebase on pre-release", "squash", "squashed branch", "squashed PR", "GitHub PR workflow".
+  GitHub PR workflow and shared GitHub PR operations: use as the common GitHub PR URL protocol for active review and passive review skills, and as the primary skill for PR descriptions, PR stats, splitting a branch diff into PR chunks, creating GitHub PR branches, rebasing stacked PRs after parent squash-merge, and creating squashed PR branches. Trigger phrases: "GitHub PR URL", "write the PR description", "PR stats", "split PR", "PR chunks", "split branch", "split the diff", "create PRs", "create the branches", "rebase pr", "rebase on pre-release", "squash", "squashed branch", "squashed PR", "GitHub PR workflow".
 ---
 
 # GitHub PR Workflow
@@ -30,7 +30,7 @@ Do not use this skill alone to judge review feedback or produce review findings.
 
 When the PR is a doc-hierarchy migration or doc-only Layer 1/2/3 update on a company service repo:
 
-1. Use the [documentation impact checklist](../doc-hierarchy/company-decisions.md#pr-checklist-team-proposal-accepted) only — do not expand into a layout inventory unless the reviewer asks.
+1. Use the [documentation impact checklist](../doc-hierarchy/company-decisions.md#pr-checklist-team-proposal-accepted) only; do not expand into a layout inventory unless the reviewer asks.
 2. Follow [PR description rules](../doc-hierarchy/company-decisions.md#pr-description-rules): no duplicate unchecked verify-gate TODOs when the session already ran `verify-doc-hierarchy.sh full` from the skill install; never imply a repo-local verify script.
 3. `done` skill applies the same rules when updating PR bodies after implementation.
 
@@ -88,6 +88,8 @@ gh api repos/{owner}/{repo}/pulls/{pr}/reviews \
   ]
 }
 ```
+
+Use `path`, `line`, and `side: "RIGHT"` on the PR head commit. Do not parse the unified diff for legacy `position` values. Read each staging finding's Comment text per block; do not bulk-extract with shell or regex across the whole file.
 
 Post with `event: "COMMENT"` unless `doing-code-review` marks a Critical or High severity issue with clear production risk.
 
@@ -182,7 +184,7 @@ Use when the user asks to squash a multi-commit feature branch into a single cle
 1. Identify the base branch (check `git branch -a`; default may be `master` not `main`). Fetch and confirm the remote tip before squashing.
    - **Stacked PRs:** the soft-reset parent must be the **immediate parent feature branch** (the branch the story PR will target), not `pre-release` or an older ancestor. Before committing, verify scope: `git diff --stat origin/<parent>..HEAD` should match the current story only (file count/order-of-magnitude lines), not sibling work from another stacked branch.
    - If `git reset --hard` is blocked by workspace policy, reparent with `git commit-tree <tree> -p origin/<parent>` instead.
-2. Detect format-only files — exclude them from the commit to avoid cluttering the PR:
+2. Detect format-only files; exclude them from the commit to avoid cluttering the PR:
    ```bash
    git diff -w --ignore-blank-lines <base>..HEAD -- <file>
    # empty output = formatting only; non-empty = real change
@@ -205,7 +207,7 @@ Use when the user asks to squash a multi-commit feature branch into a single cle
 ```
 
 ## Rebasing a Stacked Child PR After Parent Squash-Merge
-When the parent PR has been squash-merged into the target branch, use `git rebase --onto <target> <parent-branch>` — NOT `git rebase <target>` — to exclude already-squashed parent commits and replay only the child's own commits.
+When the parent PR has been squash-merged into the target branch, use `git rebase --onto <target> <parent-branch>`, NOT `git rebase <target>`, to exclude already-squashed parent commits and replay only the child's own commits.
 
 If conflicts remain (squash diff ≠ cumulative individual diffs), resolve by taking HEAD (`git checkout --ours`): the squash already contains the correct final state. For `modify/delete` conflicts on files deleted by the squash, `git rm` them. Empty commits (whose changes are fully covered by the squash) are dropped automatically by git and can be ignored.
 
@@ -235,7 +237,7 @@ For PRs against repos with PR-metadata-driven CI (notably `config-repo-prod`), t
 - For PR descriptions against a non-default base branch (for example stacked PRs), describe only the delta visible from that base; do not frame changes as restorations or mention work that exists only below the base branch.
 - When drafting a PR description, omit verification sections unless the user explicitly asks for verification details or the repository template requires them.
 - When a user asks for PR stats, prefer concise branch-vs-base counts (for example commits plus doc/non-doc file counts) over full file-change or insertion/deletion totals unless the user explicitly asks for churn metrics.
-- Never reference gitignored files (e.g. `AGENTS.md`, `CLAUDE.md`, `docs/`) in PR descriptions, commit messages, or review replies — they do not appear in the diff and cause spurious review comments. Only mention files that are tracked and visible in the PR.
+- Never reference gitignored files (e.g. `AGENTS.md`, `CLAUDE.md`, `docs/`) in PR descriptions, commit messages, or review replies; they do not appear in the diff and cause spurious review comments. Only mention files that are tracked and visible in the PR.
 
 ## PR Chunk Splitting
 When asked to split a branch diff against a base branch (for example `pre-release`) into multiple PRs:
@@ -243,11 +245,11 @@ When asked to split a branch diff against a base branch (for example `pre-releas
 ### Sizing Rules
 - Target fewer than 10 non-doc files per chunk; hard max is 15 non-doc files.
 - Doc-only files (`docs/**`, `AGENTS.md`, `README.md`) do not count toward the file limit but should be distributed to the chunk that owns the behavior they document.
-- Distribute chunks as evenly as possible — avoid one oversized chunk paired with several tiny ones.
+- Distribute chunks as evenly as possible; avoid one oversized chunk paired with several tiny ones.
 
 ### Grouping Rules
 - Each chunk must have a single clear change reason (feature addition, refactor, infra/config, dependency upgrade, etc.).
-- Minimize file overlap between chunks — no file should appear in two chunks.
+- Minimize file overlap between chunks; no file should appear in two chunks.
 - Identify "ride-along" changes (infrastructure, refactoring, dependency upgrades not tied to a specific feature) and group them into their own dedicated chunk.
 - When a core feature set is tightly coupled and cannot be split below the hard max without breaking the feature, say so explicitly and recommend opening a single PR rather than splitting artificially.
 
@@ -262,8 +264,8 @@ When presenting a split plan:
 When the user asks to actually create the PR branches (not just plan them):
 
 ### Pre-flight Checklist
-- Run `git diff --name-only <base>...<work>` and build a complete file inventory. Every file — including `README.md` and other root-level tracked files — must be assigned to exactly one chunk. Do not skip files simply because they are documentation or because the plan omitted them.
-- Identify deleted files separately: `git diff --diff-filter=D --name-only <base>...<work>`. `git checkout <branch> -- <files>` aborts on the first deleted file and silently skips all remaining files in the list — deleted files must be staged via `git rm` in a separate step.
+- Run `git diff --name-only <base>...<work>` and build a complete file inventory. Every file, including `README.md` and other root-level tracked files, must be assigned to exactly one chunk. Do not skip files simply because they are documentation or because the plan omitted them.
+- Identify deleted files separately: `git diff --diff-filter=D --name-only <base>...<work>`. `git checkout <branch> -- <files>` aborts on the first deleted file and silently skips all remaining files in the list; deleted files must be staged via `git rm` in a separate step.
 - Check for compile-time dependencies between chunks: if a file in chunk N+1 references types generated from a file in chunk N+1's plan but that generator lives in chunk N, move the generator to chunk N. Verify this by running the project's compile command after checking out each chunk's files.
 - Verify GitHub CLI authentication before starting: `gh auth status`. If not authenticated, surface this immediately rather than discovering it at PR creation time.
 

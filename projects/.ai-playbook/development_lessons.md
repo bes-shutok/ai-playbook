@@ -1367,6 +1367,8 @@ When a plan task, design invariant, or gist example makes a claim about producti
 
 **Implementer-side example (2026-07-03 lessons-recall-hook Task 7):** A Task-7 selftest asserted that `resolve_plans_dir(cwd)` walks UP to the repo facts, because the plan described the mechanism that way. The first attempt failed GREEN-flip: `facts_paths.resolve_toml_key` reads `<start_dir>/.ai-playbook/facts.md` DIRECTLY and does NOT walk up by design; the cross-subdir GATING guarantee is delivered by a different mechanism (`classify_path`'s default-suffix fallback on the target's realpath, Arm 2). The selftest was rewritten to pin the real contract (resolve at root returns the facts value byte-for-byte; subdir returns None by design; the gate fired from a subdir still classifies a `docs/plans/foo.md` target via the Arm 2 fallback). A single Read of `resolve_toml_key` before writing the assertion would have produced the correct selftest first time.
 
+**Citation-precedent example (2026-07-05 TH-anchored Transaction view Phase A plan):** The plan's Gist bullet 1 and Invariant 2 justified a proposed `tx_id` precedence chain (`TxHash -> TxSrc -> TxDest -> None`) by citing `token_origin.py:99-101` as the established precedent, claiming "real Koinly exports store the transaction hash in `TxSrc`." Reading the cited code revealed it reads `TxSrc` ONLY (single field, no fallback) and `crypto_fifo/parsing.py:156` independently reads `TxHash` ONLY; the two call sites use DIFFERENT fields and neither implements a precedence chain. The chain was net-new behaviour misattributed to existing code. r1 review caught this as Blocker 1; the revision dropped the citation, marked the chain net-new, and added a Task 1 measurement step that halts for user confirmation before locking the precedence from real-CSV data. A single Read of `token_origin.py:99-101` during plan authoring would have prevented the false-precedent Blocker.
+
 **See also:** Lesson #71 (verification-first task ordering), Lesson #72 (data trace verification), Lesson #99 (trace fixture when comparing same-unit fields by name), CLAUDE.md §4 Agent Workflow Rules.
 
 **See also (principle cluster H):** #101 (same family, distinct angle: general plan-claim rule (#100) and its two specific witnesses.).
@@ -3411,11 +3413,11 @@ For each residue, apply the user's verbatim citation policy (cite the title if d
 
 **Rule:** Before keeping authorization or RBAC findings at Medium+, read existing PR review comments (not only dedup against them). Treat author-documented MVP scope as evidence in Step 4.2 assumption checks. Distinguish: (1) path-scoped `requestMatchers` already carving out public routes, (2) intentional admin-only on the current protected set, (3) forward-looking roles in seed data not exercised by this PR's routes or tests. Drop or downgrade when head code matches stated intent; keep only when implementation contradicts the author's documented decision or the PR's own tests/description.
 
-**Why this matters:** Staging a High finding from seed-data inference without reading author threads produces false merge blockers and erodes review trust. The orchestrator used sub-agent RBAC logic and missed harutyungrigoryan-rgb's inline reply that CRM-537 intentionally requires admin on all protected paths and defers API-key routes.
+**Why this matters:** Staging a High finding from seed-data inference without reading author threads produces false merge blockers and erodes review trust. The orchestrator used sub-agent RBAC logic and missed reviewer-gh-handle's inline reply that PROJ-537 intentionally requires admin on all protected paths and defers API-key routes.
 
 **Shape trigger:** Authorization finding on `SecurityFilterChain`, `hasAuthority`, or role names where PR tests use only one role fixture and PR description lists a narrow endpoint set.
 
-**Example (2026-07-02, sporty-crm-platform PR #8 review):** Finding #1 claimed `.anyRequest().hasAnyAuthority(ROLE_CRM_ADMIN)` incorrectly blocked managers and API keys. Seed data includes `ROLE_CRM_MANAGER`, but CRM-537 ships only `/me` and `/permissions` with admin integration tests, and the author replied on `CrmSecurityConfig` that all protected paths are admin-only for now with per-route matchers when new endpoints land. Finding withdrawn after user correction.
+**Example (2026-07-02, example-crm-platform PR #8 review):** Finding #1 claimed `.anyRequest().hasAnyAuthority(ROLE_CRM_ADMIN)` incorrectly blocked managers and API keys. Seed data includes `ROLE_CRM_MANAGER`, but PROJ-537 ships only `/me` and `/permissions` with admin integration tests, and the author replied on `CrmSecurityConfig` that all protected paths are admin-only for now with per-route matchers when new endpoints land. Finding withdrawn after user correction.
 
 **See also:** doing-code-review SKILL.md Step 1 (gather PR comments for scope) and §4.2 (author intent, story scope vs seed data), coding_guidelines.md #25 (Family H).
 
@@ -3431,7 +3433,7 @@ For each residue, apply the user's verbatim citation policy (cite the title if d
 
 **Shape trigger:** Review Comment uses **What the contract says** without quoting a line from a file in `gh pr diff --name-only`.
 
-**Example (2026-07-02, sporty-crm-platform PR #8, finding #5):** Draft cited "audit without PII in application logs" with no PR source. Rewritten to **What this PR already establishes** (`auth_audit_log.email`, `createFailure`, integration tests) vs duplicate WARN logging in `OAuthLoginService`.
+**Example (2026-07-02, example-crm-platform PR #8, finding #5):** Draft cited "audit without PII in application logs" with no PR source. Rewritten to **What this PR already establishes** (`auth_audit_log.email`, `createFailure`, integration tests) vs duplicate WARN logging in `OAuthLoginService`.
 
 **See also:** doing-code-review §4.12 contract section gate, §4.9.1, UL#162, coding_guidelines.md #25 (Family H).
 
@@ -3463,7 +3465,7 @@ For each residue, apply the user's verbatim citation policy (cite the title if d
 
 **Shape trigger:** Review Comment opens with **What the contract or docs say** but the cited rule is PII logging, method-length limits, or other company-guidelines content not quoted from a file in `gh pr diff --name-only`.
 
-**Example (2026-07-03, sporty-crm-platform PR #9, finding #9):** Draft cited "repo security rules: do not log PII" under **What the contract or docs say**. Rewritten to **As per Sporty guidelines** with public company-guidelines.md #13 before posting.
+**Example (2026-07-03, example-crm-platform PR #9, finding #9):** Draft cited "repo security rules: do not log PII" under **What the contract or docs say**. Rewritten to **As per Sporty guidelines** with public company-guidelines.md #13 before posting.
 
 **See also:** doing-code-review §4.9.1, §4.12 contract section gate, UL#163.
 
@@ -3577,3 +3579,382 @@ A selftest fixture authored from the predicate's own assumptions satisfies NONE 
 In all three, the discipline existed at one site; the sibling was added/found later without the discipline; the re-bite was caught only when a review specifically looked for the missing propagation.
 
 **See also:** coding_guidelines.md #18 (Family A: cover the whole partition, not just the tested cell), #21 (Family D parent), #24 (Family G parent), #105 (recalibrate exception policy per call site - the inverse complement of this lesson: that one is about DIVERGING policy where divergence is correct; this one is about PROPAGATING discipline where uniformity is correct), #135 (propagate exception policy through wrappers), #168 (selftest fixtures must mirror real installs).
+
+## 171. An API Rate-Limit Error's Reset Timestamp Is in the Provider's Reporting Timezone, Not the Local Timezone; Verify With a Cheap Probe Before Treating a Far-Future Reset as a Hard Multi-Hour Block
+
+**Principle:** Family H (Verify the real thing, not the abstraction: the error message's reset timestamp is an abstraction; the real thing is the provider's CURRENT limit state, which a single cheap probe observes directly).
+
+**Trigger:** A sub-agent or API call aborts with a 429 / usage-limit error whose message names a reset time (for example "Your limit will reset at 2026-07-05 23:12:59"). The orchestrator, seeing a reset that looks hours away in its own local timezone, concludes sub-agents are hard-blocked for that whole window and either (a) commits to elaborate inline recovery of the aborted unit of work, (b) pauses the workflow to ask the user how to proceed, or (c) waits. The conclusion rests on the unstated assumption that the printed timestamp is in the orchestrator's local timezone.
+
+**Rule:**
+
+1. **Treat the printed reset timestamp as timezone-unspecified, not local.** Provider rate-limit messages report the reset instant in the provider's reporting/dashboard timezone (commonly US-Pacific for Anthropic-class APIs), which can differ from the orchestrator's local zone by many hours. A "23:12:59" reset that reads as ~6h away may in fact be minutes away or already past. Do not convert "reset at HH:MM:SS" into "blocked for N hours" without confirming the zone.
+2. **Probe the real current state with ONE cheap retry before committing to a workaround.** The authoritative limit state is "does the next call succeed right now," not the printed timestamp. Re-launch one cheap sub-agent (or make one cheap call) and observe. A probe that succeeds collapses the entire multi-hour-block assumption at near-zero cost; a probe that fails with the same timestamp confirms the block is real and you have lost only one quick call.
+3. **Never let an unverified future-reset timestamp drive destructive or high-effort recovery.** Inline-recovery of an aborted review round, asking the user to choose between waiting and weakening a process gate, and abandoning the normal sub-agent workflow are all costly actions justified ONLY by a verified block. A single probe is the precondition for any of them.
+4. **When you MUST reason about the timestamp, name the timezone explicitly.** If a probe is genuinely impossible and the timestamp is the only signal, state the zone assumption out loud ("assuming the printed reset is in <zone>, which is <N> hours offset from local") so the user can correct it before you act.
+
+**Why this matters:** The cost asymmetry is extreme. The probe costs one cheap call; acting on a wrong multi-hour-block assumption costs hours of inline work, a degraded review (inline recovery sacrifices sub-agent independence), or an unnecessary user interrupt. In the triggering incident, the orchestrator spent a full address-review pass inline AND raised a structured user question predicated on a ~6h block that did not exist in the local timezone at all; a single probe sub-agent would have succeeded immediately and resumed the normal workflow. The error message was not wrong about the reset instant; the orchestrator was wrong about its timezone.
+
+**Shape trigger:** A sub-agent aborts with a 429/usage-limit/quota error carrying a future reset timestamp, and the next planned step is either inline recovery of the aborted unit OR a user-facing "blocked for N hours, how do you want to proceed" prompt. Suspect it whenever the words "reset at" or "limit will reset" appear in an abort reason and the orchestrator's plan changes shape because of the implied wait duration.
+
+**Example (2026-07-05 tax-reporting OGR event-level plan execution, Phase 3):** An address-review sub-agent aborted with "Usage limit reached for 5 hour. Your limit will reset at 2026-07-05 23:12:59" (a 429). The orchestrator read the timestamp against the current WEST (UTC+1) local time of 16:52 and concluded sub-agents were hard-blocked for ~6h20m, then performed the r1 address-review triage INLINE (sacrificing sub-agent independence) and committed the fix inline (skipping the normal per-iteration `done`), and finally raised an AskUserQuestion offering "pause ~6h" vs "inline round 2" vs "accept round 1." The user corrected that the 23:12:59 reset was in a different timezone and there was no limitation in the local timezone at all; round 2 (and rounds 3-4) then ran as normal sub-agents and completed immediately. A single probe sub-agent launched at 16:52 would have succeeded and avoided the inline detour, the skipped `done`, and the user interrupt.
+
+**See also:** coding_guidelines.md #25 (Family H parent), #100 (verify plan claims against actual source before dependent tasks - same shape: an unverified proxy drives downstream decisions), #71/#72/#97 (investigation/data-trace/characterization-test cluster - probe the real state rather than reasoning from a description).
+
+## 172. A User Redirect Targets the CATEGORY Of the Rejected Solution, Not the Literal Instance; Before Proposing the Next Variant, Articulate Why It Is Categorically Different (Not Just Literally Different)
+
+**Principle:** Family H (Verify the real thing, not the abstraction: the user's redirect targets the real constraint - a category of solution the user does not want - but the agent verifies the next variant against an abstraction, the literal mechanism, and concludes "different mechanism, so not the same rejection". The redirect silently does not propagate) cross Family D (Single source of truth: when the user has named the SSOT for some fact, every variant that introduces a competing source for that fact - whether in code, config, defaults, or seed data - violates the SSOT regardless of where the competing source lives).
+
+**Trigger:** A user rejects a proposed solution during plan design, code review, or implementation. The rejection reason is broader than the literal instance (e.g. "we should not bake user-specific labels into generic code", "trust the registry", "don't add escape hatches"). You immediately start drafting the next variant. The risk peaks when the next variant differs in SURFACE FORM (config field instead of code constant; default value instead of explicit list; wallet-keyed instead of platform-keyed) but belongs to the SAME CATEGORY the user just rejected.
+
+**Rule:** After any user redirect on a proposed solution, before proposing the next variant, run a one-sentence category check: "The user rejected X because of category Y. The new variant Z is [literally different / categorically different]. Specifically, Z [does / does not] still require the user to populate / maintain / choose the same kind of value that triggered the rejection." If you cannot articulate in one sentence why Z is categorically different (not just literally different), do not propose it. Ask the user first, or pick a variant that is categorically different.
+
+**Why this matters:** A redirect that does not propagate to the category forces the user to reject the same theme N times before the agent internalizes it. Each rejection costs a turn and signals the agent is pattern-matching on surface form (code constant vs config field vs default; literal A vs literal B) rather than on the user's actual constraint. The user's mental model is "I gave you a principle; apply it"; the agent's mental model is "you rejected this instance; let me try a different instance". The gap is the difference between a principle and an instance. Three rejections on the same theme inside one session is the signature of this lesson.
+
+**Shape trigger:** Any of:
+- You are about to propose a variant of a just-rejected solution and the only difference is the location/mechanism (code -> config -> default -> environment variable).
+- The user's redirect used a categorical phrase ("we should not", "trust the SSOT", "no escape hatches", "this is per-user data") rather than a literal one ("change Kraken to kraken").
+- You find yourself thinking "but this is different because it's in config instead of code" or "but this is auto-discovered instead of hardcoded" - both are surface-form differences; the category may be the same.
+- The user repeats the rejection with stronger wording on the second or third variant ("DO we really need...") - this is the categorical-vs-literal gap surfacing.
+
+**Example (2026-07-06 tax-reporting TH-anchored Transaction view Phase A, Task 4 WalletKindResolver design):** Three rejections on one theme inside a single task. The agent was designing a CEX/DEX classifier for crypto platforms.
+
+(a) Variant 1 - hardcoded seed list in production code: `Kraken`, `ByBit`, `Wirex` -> CEX; `Ledger*`, `SUI*` -> DEX. The agent flagged this as a CLAUDE.md violation ("Never introduce hardcoded values without first flagging it and asking the user") and presented the seed list via AskUserQuestion. The user rejected: "explain why would we need hardcoded wallet-label seed list? ... Why can't they be autodiscovered for each user during processing?" The categorical rejection: wallet labels are per-user discovery hints, not generic-code constants.
+
+(b) Variant 2 - same list in config.ini: agent proposed `[CRYPTO WALLETS] known_cex` in config.ini, treating "config" as categorically different from "code". The user rejected: "DO we really need CEX list in config if we'll have these in registry?" Same category (user-supplied platform enumeration), different literal location. The agent had pattern-matched on surface form (code vs config) instead of on the categorical constraint (no user-specific platform enumeration at all).
+
+(c) Variant 3 - per-wallet-label aggregation: agent proposed auto-discovery but aggregated at wallet-label level (one classification per distinct wallet label string). The user rejected: "The same CEX can have dozens of different wallets... All wallets belonging to CEX platform are CEX anyway. So why don't we aggregate it on the platform level?" Different theme (aggregation key, not value location) but same parent category: the agent had picked an identity granularity that fragments the platform-level SSOT.
+
+The final design (two-tier platform-level resolver: registry tier 1, row-evidence auto-discovery tier 2; classification at platform level; no hardcoded labels anywhere) emerged only after three rejections. A category-check after variant 1 ("the user rejected the category 'user-supplied platform enumeration in generic code'; does my config-field variant still require the user to supply a platform list? YES -> same category") would have skipped variant 2 entirely.
+
+**See also:** coding_guidelines.md #25 (Family H parent), #21 (Family D parent), #170 (propagate a discipline to every sibling site - the inverse: propagate a redirect to every sibling variant), #100 (verify plan claims against actual source - same shape: an unverified proxy (literal mechanism) drives downstream decisions when the real thing (category) was already named).
+
+## 173. Active Code Review Is Read-Only On the Reviewed Repo; Doc Fixes Belong In Staging Findings, Not Tracked Edits
+
+**Principle:** Family H (Verify the real task boundary: the user agreed to a review suggestion, but the active skill mode is still read-only review, not implementation). Cross Family D (Single source of truth: the deliverable is the gitignored staging doc and/or posted PR comments, not working-tree edits on the reviewed branch).
+
+**Trigger:** You are running `doing-code-review` (staged or direct post). The review surfaces doc gaps, config clarifications, or small fixes. The user affirms ("sure", "yes, add that") or asks for doc improvements "for clarity." You are about to edit tracked files (`openapi.yaml`, `README`, `application.yml`, architecture docs) on the reviewed project.
+
+**Rule:** During active code review, never modify tracked project files on the reviewed repository. Record doc/test/config suggestions only in `{reviews_dir}` staging findings and PR inline comments. If the user wants the fixes applied, they must explicitly end review and start a separate implementation task (or use fix mode when explicitly requested). A user "sure" to a doc suggestion during review means include it in review output, not commit it. If you already edited tracked files by mistake, stash or revert before `done`; do not commit those edits as part of review.
+
+**Why this matters:** Review edits on someone else's PR branch create noise, bypass the author's workflow, and violate the skill boundary ("read-only with no exceptions" when PR author is not the current user). Doc fixes mixed into review also confuse what the PR author should land vs what the reviewer changed locally.
+
+**Shape trigger:** `doing-code-review` is active AND you are about to `Write`/`StrReplace` on any path that `git check-ignore` does not exclude, including documentation, OR the user asked for doc clarity "during" or immediately after a review thread without saying "implement" or "commit."
+
+**Example (2026-07-06 example-crm-platform PR #9 review):** After triaging PUT vs PATCH and internal-auth doc confusion, the user said "sure" to doc clarity suggestions. The agent edited `application.yml`, `bff/README.md`, `auth/README.md`, `integrations.md`, and `project-decisions.md` on `feature/PROJ-562` while still in review mode. The user corrected that these were unallowed during PR review; changes were `git stash`ed. Correct action: add doc findings to staging (finding #6 PATCH/PUT, optional integrations note) and post comments only.
+
+**See also:** doing-code-review `## Limitations`; coding_guidelines.md #25 (Family H).
+
+## 174. Migration SQL Substring Guardrails: Remove Or Slim After Flyway IT, Do Not Expand
+
+**Principle:** Family D (Single source of truth: the migration SQL file is canonical; a parallel `contains("CREATE TABLE …")` catalog in tests is a second authority that drifts on harmless edits and still does not prove the SQL runs).
+
+**Trigger:** A PR or review touches schema migration resources (`V*__*.sql`) and has both (a) a fast classpath/string-matching guardrail test and (b) a Flyway or Testcontainers test that applies migrations against real PostgreSQL and asserts tables, constraints, or seed rows.
+
+**Rule:** Do not suggest adding more substring assertions that mirror migration DDL (CHECK names, index names, regex fragments). After schema shape stabilizes, suggest removing the substring catalog or keeping at most a file-existence check. Prefer one runtime truth path: Flyway integration test plus mapper DB tests. Flag expansion as review noise; flag retention of a large substring list as temporary guardrail debt worth deleting.
+
+**Why this matters:** String-matching tests break when SQL is reformatted or renamed without behavior change, while syntax errors and invalid FKs still pass. Maintainers must update SQL and the test catalog in lockstep. The guardrail made sense during initial schema bring-up or a large rename; long term it fights the migration file as SSOT.
+
+**Shape trigger:** Review agent proposes `assertThat(migrationContent).contains("chk_*")` or similar; OR author asks whether a schema resource test still has value post-rename; OR `FlywayIntegrationTest` (or equivalent) already validates applied schema.
+
+**Example (2026-07-06 example-crm-platform PR #11 PROJ-533):** `AuthSchemaResourceTest` substring-matched `V1__auth_core.sql` table and index names while `FlywayIntegrationTest` applied migrations and queried `information_schema`. Review initially suggested adding `chk_operators_id` assertions; reviewer dropped that and instead posted a follow-up suggesting removal of substring guardrails to avoid two schema catalogs.
+
+**See also:** #82, #94 (Family D silent drift); doing-code-review §4.2 (drop expand-SQL-coverage findings when Flyway IT covers runtime); testing.md (prefer tests that exercise real behavior).
+
+
+## 175. A Plan's Validation Grep That Targets an English Word Inside Docstrings/Prose Produces False-Positive BAD Results; Target the Symbol-Identifier Position or Exclude the Definition Site
+
+**Principle:** Family A (Equivalence-class coverage) - the plan-authoring analog of #154 (a wording-pass review's grep target omitted method identifiers). A plan's `## Validation Commands` grep that asserts "no production caller wires Phase A type X" or "no inline threshold literal remains" is itself a grep over the corpus; underscoping that grep's PATTERN (matches the English word inside docstrings/prose, or matches the named constant's value at its DEFINITION site) produces false-positive BAD results that block the GREEN gate without indicating any real defect.
+
+**Trigger:** A plan's Task N validation step is expressed as a grep over `src/` or `tests/` whose GOOD/BAD semantics depend on a string being ABSENT. The string is one of: (a) an English word that also happens to be a class/identifier name (e.g. "Transaction", "History", "Report"); (b) a numeric literal (e.g. `0.95`) that has a legitimate named-constant definition site elsewhere in the tree; (c) a token that legitimately appears in docstring prose describing the concept the grep is trying to ban. The implement sub-agent runs the grep, gets BAD, and must either prove the matches are all false positives (laborious) or block the GREEN gate on a plan amendment.
+
+**Rule:** When authoring a plan validation grep whose semantics is "no production caller wires X" or "no inline literal Y remains outside its definition site," construct the pattern against the symbol-identifier position or the usage position, NOT against the bare token. For (a) identifier-name matches, anchor to call/import/annotation syntax: `grep -nE '\b(X|Y|Z)\(|from .* import .*\b(X|Y|Z)\b|:\s*(X|Y|Z)\b'` matches calls, imports, and type annotations, NOT prose mentions. For (b) literal-value matches, exclude the constant-DEFINITION file (the line `<NAME>: <TYPE> = <VALUE>`), not just `test|constants` paths - the definition site is the legitimate home of the literal. For (c) docstring-prose collisions, scope the grep to non-docstring lines (`grep -v '"""'` or `awk` outside triple-quoted blocks), or rewrite the invariant to a structural check (call-graph analysis, AST walk) rather than a text grep. A bare `grep -rn '\bX\b' src/` where X is an English word used in prose is a false-positive factory; do not ship it as a plan gate.
+
+**Why this happens:** Plan authors write validation greps in the same casual style as one-off shell greps (`grep X src/`) and rely on the implementer to "triage" the matches. When the token collides with prose (the word "Transaction" appears in 18 docstring references to "Transaction History report"), every match is a false positive and the triage burden moves to the implementer, who must then write a justification note in the implement log and request a plan amendment. The grep itself was never going to surface a real defect because the token was never at the position the invariant cares about. The plan gate's exit code (BAD) does not distinguish "a real caller wired the type" from "a docstring mentioned the English word"; both produce the same non-zero exit.
+
+**Required behavior:**
+1. When authoring a plan validation grep, name the POSITION the invariant cares about (call site, import statement, type annotation, assignment RHS, constant definition) and construct the pattern to match ONLY that position. A bare word-boundary pattern is acceptable only when the token is unambiguous (a coined identifier with no English-meaning collision, e.g. `TxCorrelationKey`).
+2. For threshold/literal-ban greps, exclude the named constant's definition file explicitly (e.g. `wallet_kind.py` for `HIGH_PROBABILITY_THRESHOLD = 0.95`), not just `test|constants` paths. The definition site is the legitimate home of the literal; banning it there is a self-contradictory gate.
+3. When a docstring-prose collision is unavoidable (the token IS an English word the codebase discusses in prose), prefer a structural check (AST walk, call-graph analysis) over a text grep, or scope the grep to non-docstring regions. Record the refined pattern in the implement log and route a plan-amendment request to narrow the original pattern.
+4. Before flipping the GREEN gate on a BAD grep result, the implementer must verify EACH match is at the position the invariant bans (call/import/annotation/assignment), not at a prose or definition position. A grep that prints BAD with all matches in prose/definitions is a false-positive gate, not a defect; annotate the plan clause and proceed.
+
+**Shape trigger (when to suspect this family):** A plan's validation step is expressed as `grep ... src/ && echo BAD || echo GOOD` (or the inverse). The token is an English word used in docstrings OR a numeric literal with a named-constant definition. The implement log records the grep as BAD with a note "all N matches are false positives" or "single match is the constant definition." The plan author did not specify the position the grep targets.
+
+**General form:** A validation grep's discriminating power lives in WHERE the token appears (call site vs. prose vs. definition), not WHETHER the token appears as a bare string. A pattern that ignores position produces false-positive BAD results that block the GREEN gate without indicating any real defect. Author the pattern against the position, or replace the text grep with a structural check.
+
+**Example (2026-07-05 crypto Phase A plan, Task 9 validation greps):** Two of the plan's four validation greps printed BAD on a clean tree. (a) `grep -nE '\b(Transaction|TransactionHistoryRow|TxCompositeKey|TxCorrelationKey|WalletKind|WalletClassification)\b' src/tax_reporting/...` matched the prose word "Transaction" inside 18 docstring references to "Transaction History report" / "Transaction History CSV" / "transaction/network fee." Zero matches were `import Transaction`, `Transaction(...)`, or `: Transaction` - the actual positions the "no production caller wires Phase A types" invariant cares about. (b) `grep -nE '0\.95' src/ tests/ | grep -v -E 'test|constants'` matched the single constant definition site `src/tax_reporting/application/crypto/wallet_kind.py:53: HIGH_PROBABILITY_THRESHOLD: float = 0.95` because the exclusion list covered `test|constants` paths but not the constant's actual home module. Both underlying invariants held; both greps blocked the GREEN gate on a false positive. The implement log documented the false positives and the orchestrator annotated the plan clause. Recommended refined patterns: (a) anchor to call/import/annotation syntax; (b) add `wallet_kind.py` to the exclusion list or match `0.95` only on non-definition lines. See the Task 9 implement log (local).
+
+**Distinguishing from #154:** #154 is about a wording-pass REVIEW whose grep target omitted the method-IDENTIFIER position after a rename; the false negative was staleness surviving at an unscanned position. This lesson is about a PLAN VALIDATION grep whose pattern matched the WRONG position (prose/definition) producing a false positive BAD; the failure is a gate blocking on noise, not staleness surviving. Both share the root cause "a grep whose target is underspecified," but #154's symptom is silent staleness and this lesson's symptom is a noisy false-positive gate. The position-awareness prescription is the same family of fix.
+
+**See also:** #154 (wording-pass review grep target omission, identifier position), #112 (name-vs-body coverage gap), #187 (changed rendered label grep), #196 (cross-task contract change grep), coding_guidelines.md #18 (Family A equivalence-class coverage).
+
+
+## 176. A Plan-Prescribed Cleanup-Audit Grep Must Enumerate Every Surface Where the Removed/Renamed Token Can Survive; an Audit Path Scoped to `src/` Only Will Pass Clean While Stale References Survive in `docs/` and Law-Archive READMEs
+
+**Principle:** Family H (Verify the real thing, at the right population) - a cleanup audit's population is the SET of surfaces where the removed/renamed token can survive, not the one surface the plan author mentally associates with "production code". Compounded by Family A (Equivalence-class coverage) - the audit grep's PATH argument defines the equivalence class under test; narrowing it to `src/` while the token also lives in `docs/` undersamples the class.
+
+**Trigger:** A plan task removes or renames a concept (deletes an alias, drops a numbered-suffix form like `ByBit (2)`, retires a code path, sunsets a flag value). The plan prescribes a Task-N cleanup-audit grep whose job is to verify no stale references survive. The audit's PATH is scoped to the production-code tree only (e.g. `grep -rn '<token>' src/tax_reporting/`). The implement sub-agent runs the prescribed grep, gets CLEAN, logs the audit as PASS, and the task closes. A later review round re-runs the same grep with a WIDER path (e.g. `grep -rn '<token>' src/tax_reporting/ docs/maintenance/`) and finds stale references surviving in docstring examples, implementation-guideline spec blocks, plan-quality examples, or law-archive README files.
+
+**Rule:** When authoring a plan task whose job is "verify the removed/renamed token is gone from the codebase," the audit grep's PATH must enumerate EVERY surface where the token can survive a removal: production source (`src/`), tests (`tests/`), rendered-text constants, decision-point docs (`docs/maintenance/`), rules docs, implementation-guideline spec blocks AND EXAMPLES, law-archive README files (these often restate rules in prose), and any emitted-text fixtures. The author's mental model "this is a production-code change, so audit production code" is wrong for cleanups: a removal propagates docstring, doc, and law-archive updates as a matter of course, and those surfaces carry the same stale token the audit was designed to catch. A cleanup audit scoped to `src/` only is a false-negative factory: it passes CLEAN over a corpus that still contains the stale token at the unscanned surfaces.
+
+**Why this happens:** The plan author writes the audit in the same casual style as a one-off dev grep (`grep X src/`) and mentally files "production code" as the surface that matters. But a removal audit's invariant is "the token is GONE from the codebase", not "the token is gone from production code". Docstring examples, spec blocks in implementation guidelines, decision-point prose, and law-archive READMEs are PART of the codebase for removal-audit purposes; they survive removals because they are not in the production-code path the author audits. The audit returns CLEAN; the stale references survive; only a later review round that re-greps with a wider path surfaces them. By then the cleanup task has closed and the fix lands in a review-iteration commit, costing a round.
+
+**Required behavior:**
+1. When authoring a plan task that removes or renames a concept (alias, numbered-suffix form, flag value, code path), enumerate the surfaces where the token can survive BEFORE writing the audit grep. The minimum surface set for a removal: `src/`, `tests/`, `docs/maintenance/` (including subdirs: rules, guidelines, decision points), law-archive READMEs (`docs/maintenance/tax/.../README.md`), rendered-text constants in source, and any emitted-text fixtures. Project-specific surfaces (callers in build configs, README examples, presentation artifacts) extend this set.
+2. Construct the audit grep PATH to cover the enumerated set explicitly: `grep -rn '<token>' src/ tests/ docs/maintenance/` (or wider if the project has additional doc trees). A bare `grep -rn '<token>' src/` is acceptable only when the token's removal is provably scoped to production code (e.g. an internal helper with no docstring, doc, or example footprint).
+3. Pay special attention to law-archive READMEs and decision-point prose: these restate rules in human-readable form and frequently echo the very token a cleanup removes. The cleanup that motivated the audit often STARTED in production code but the rule it implements is restated in the README, so the README is a high-probability survival surface.
+4. The cleanup-audit grep is distinct from a validation grep (which bans a token at a position). A cleanup audit asserts ABSENCE across the codebase; its population is EVERY surface. A validation gate asserts ABSENCE at a position; its population is one position class. Cleanup audits enumerate surfaces; validation gates enumerate positions.
+5. Before logging the audit as PASS, the implementer must verify the prescribed grep PATH covers at minimum `src/`, `tests/`, and `docs/`. If the plan author scoped the audit to `src/` only, the implementer must WIDEN the path (and annotate the implement log) rather than run the narrow command and report CLEAN.
+
+**Shape trigger (when to suspect this family):** A plan task says "remove `<token>` (alias / numbered-suffix form / flag value) and audit that no stale references survive." The audit command is `grep -rn '<token>' src/...` (production-code path only). The implement log records the audit as CLEAN/PASS. The token was ALSO referenced in docstring examples, implementation-guideline spec blocks, law-archive READMEs, or decision-point prose - surfaces the grep path omitted. The cleanup task closes; the stale references survive until a review round re-greps with a wider path.
+
+**General form:** A removal/renaming audit's discriminating power lives in WHICH SURFACES the grep enumerates, not in whether the token appears at any one surface. A path that omits the surfaces where the removed token was ALSO restated (docs, READMEs, guideline examples, law archives) produces a false-negative CLEAN that lets stale references survive the cleanup. Author the audit path to enumerate every surface where the token can live, or accept that the cleanup is incomplete and route the surviving references to a follow-up.
+
+**Example (2026-07-05 crypto Phase A plan, Task 8 ByBit alias removal):** Task 8 removed the numbered-alias normalization (`ByBit (2)` -> `ByBit`) and prescribed a cleanup-audit grep `grep -rn 'ByBit (2)\|ByBit (3)' src/tax_reporting/` to verify no stale production references survived. The implement sub-agent ran it, got CLEAN, logged PASS, and Task 8 closed. Round-1 review re-ran the same token over `src/tax_reporting/ docs/maintenance/` and found 5 stale references the audit path omitted: (a) `chain_derivation.py:62` docstring example still used `ByBit (2)`; (b) `crypto_implementation_guidelines.md` Pitfall 4 code example (line 481) and the derivatives CG/TH matching spec (line 1153-1155) still referenced `ByBit (2)`; (c) `plan_quality_guidelines.md` boundary-test example (line 290/293) still used `ByBit (2)`; (d) `docs/maintenance/tax/laws/pt/crypto-tax/README.md` (line 69 and 84) still restated the "must be normalized to the same wallet" rule with the `ByBit (2) -> ByBit` chain-derivation example. The audit grep's path (`src/tax_reporting/`) was scoped to production code only and missed every doc/README surface where the same token lived. The fix landed in the round-1 address-review commit. See the Phase A plan Task 8 audit clause, the r1 doing-code-review log Finding 1, and the r1 receiving-code-review log.
+
+**Distinguishing from #141 (corrected domain rule surface propagation):** #141 is the REACTIVE analog: a review finding flags a stale rule in ONE location, and the lesson is "grep the stale wording across the corpus before closing the finding." This lesson is the PLAN-TIME analog: the plan AUTHOR prescribes the cleanup audit grep, and the lesson is "author the audit PATH to cover every surface where the token can survive, not just `src/`". Both share the root cause "a stale-token grep whose scope is too narrow"; #141's trigger is a finding (post-hoc), this lesson's trigger is plan authoring (ante-hoc). The path-enumeration prescription is the same family of fix.
+
+**Distinguishing from #175 (plan validation grep position):** #175 is about a plan validation grep whose PATTERN matches the wrong POSITION (prose vs definition vs call site), producing a false-positive BAD that blocks the GREEN gate. This lesson is about a plan cleanup-audit grep whose PATH omits the surfaces where the token lives, producing a false-negative CLEAN that lets stale references survive. Both share the root cause "a plan-prescribed grep whose author under-specified what it should examine"; #175's symptom is gate-blocking noise, this lesson's symptom is silent staleness surviving a cleanup. The fix prescriptions differ: #175 refines the PATTERN (anchor to position); this lesson widens the PATH (enumerate surfaces).
+
+**Distinguishing from #113 (validation over shared directory with legacy entries):** #113 is about a validation grep whose path is too BROAD (false-fails on legacy siblings the new convention does not cover). This lesson is about a cleanup-audit grep whose path is too NARROW (false-passes on stale references at omitted surfaces). Both share the root cause "a plan grep whose population is mis-scoped"; #113's symptom is false failure, this lesson's symptom is false success. The fix prescriptions are inverse: #113 NARROWS the path or accepts the legacy token; this lesson WIDENS the path to cover every surface.
+
+**See also:** #141 (corrected domain rule surface propagation, the reactive analog), #175 (plan validation grep position vs cleanup-audit path), #113 (validation over shared directory with legacy, the inverse scoping hazard), #154 (wording-pass review grep target omission), coding_guidelines.md #22 (Family H verify the real thing).
+
+## 177. A Plan Task That Prescribes a Placeholder Value or Verify Command Must Cross-Check It Against Every Downstream Guard and Reader in the Same Plan; a Placeholder That Satisfies One Task Can Violate Another Task's Invariant
+
+**Principle:** Family H (Verify the real thing, not the abstraction) - a placeholder VALUE prescribed by a plan task is an abstraction over "this byte sequence passes every guard and reader the SAME plan prescribes downstream"; the plan author who writes `0x + 64 zeros` and asserts it satisfies "no real tx hash" has verified the abstraction (the description "synthetic-looking") and not the real thing (the regex `(0x[0-9a-fA-F]{40,})|([0-9a-fA-F]{64})` that a later task's guard runs against the fixture). The same hazard applies to a verify COMMAND prescribed in one task whose reader chain differs from the production reader chain another task's tests use: the count or shape it asserts is an abstraction over "raw `csv.DictReader` happens to behave like `read_koinly_rows` here", which is false whenever the format has a title line.
+
+**Trigger:** A plan contains a task that prescribes (a) a specific placeholder/constant value (a synthetic identifier, magic string, all-zero hex, well-known sentinel) AND a LATER task in the same plan whose guard/test/validation consumes that value via a regex, equality check, or parser. OR (b) a verify one-liner using a primitive (`csv.DictReader`, raw `open()`, bare `json.load`) AND a later task whose tests or characterization uses the production reader chain. The implement sub-agent for the earlier task follows the prescription verbatim and logs PASS; the later task's guard/test then fails (or would fail) on the same value/command, and the orchestrator must amend mid-execution.
+
+**Rule:** When authoring or revising a plan task that prescribes a placeholder value or a verify command, the plan author must enumerate EVERY other task in the same plan whose guard, test, regex, or reader touches that value or path. For each enumerated downstream site, the author verifies (by reading the actual guard/regex/reader source) that the prescribed value/command satisfies the downstream site. If it does not, the prescription must be revised BEFORE execution starts. Sub-agents implementing the task who detect the collision mid-execution must halt, surface the contradiction to the orchestrator, and request an amendment rather than silently substituting a different value.
+
+**Why this happens:** The plan author writes the placeholder in a natural style (`0x + 64 zeros reads as "obviously synthetic" to a human`) and files it as "obviously safe". The downstream guard's regex was authored against a DIFFERENT intuition ("any 64-hex string is a real tx hash"), and the two intuitions never meet because the plan never cross-checks them. For verify commands, the author reaches for the most primitive reader (`csv.DictReader`) because it is the shortest incantation, forgetting that production code has a title-line-detecting wrapper (`_detect_header_index`) precisely because the raw primitive does not handle the format. The plan-as-written is internally consistent at the prose level; the plan-as-executed collides at the value/byte level.
+
+**Required behavior:**
+1. Placeholder values: before writing `<placeholder>` into a plan task body, grep the plan for every regex, equality check, and parser signature that will consume the fixture/identifier/value downstream. For each match, confirm the placeholder satisfies the consumer. If any consumer would reject the placeholder, choose a different placeholder that satisfies ALL consumers (e.g. a non-hex sentinel like `synth-txhash-multilot-001` instead of all-zero hex, when a downstream regex would match all-zero hex).
+2. Verify commands: prefer the PRODUCTION reader chain (`read_koinly_rows`, the loader entry point, the parser under test) over raw primitives (`csv.DictReader`, bare `open()`). The expected count in the verify step must be derived from running the production reader against a known-correct fixture, not from the author's mental arithmetic on data rows. If the production reader is unavailable in a one-liner, write a small script that imports it; do not fall back to the primitive and annotate the count discrepancy post-hoc.
+3. Cross-task consistency: when a later task's test/guard is the canonical consumer of an earlier task's output, the earlier task's prescription must cite the later task's invariant by name (e.g. "satisfies `test_no_real_data_in_fixtures` regex at Task 7"). The citation forces the author to read the downstream site before prescribing.
+4. Implementer escalation: when a sub-agent detects mid-execution that the plan's prescription collides with a downstream guard in the same plan, the sub-agent must halt and request an amendment. Silently substituting a different value hides the contradiction from the orchestrator and from any future reader of the implement log.
+
+**Shape trigger (when to suspect this family):** A plan task prescribes a placeholder value or a verify command, AND a later task in the same plan (or a review scope clause in the same plan) defines a guard/regex/reader that consumes that value/path. The implement log records the earlier task as PASS; the later task fails (or the orchestrator amends the placeholder between tasks). The plan's prose is internally consistent; its bytes are not.
+
+**General form:** A plan's prescriptions are a SYSTEM, not a list. Each prescribed value or command has a downstream consumer within the same plan, and the consumer's behavior is determined by its actual implementation (regex pattern, reader chain), not by the prose intuition the author used when prescribing. Verifying the prescription against the prose of the downstream task is Family H violation; verifying against the actual regex/reader source is the cure.
+
+**Example (2026-07-07 tax-reporting Phase C plan, Task 1 multi_lot_ogr fixture):** Task 1 prescribed `TxHash = 0x + 64 zeros` as the obviously-synthetic placeholder. Task 7's `test_no_real_data_in_fixtures` regex `(0x[0-9a-fA-F]{40,})|([0-9a-fA-F]{64})` matches all-zero hex (it is a 64-hex string). Task 1's verify one-liner `parse OK 1` expected exactly 1 row, but used raw `csv.DictReader`, which counts the `Transaction report 2025` title line as a row (the production reader `read_koinly_rows` skips it via `_detect_header_index`). The orchestrator detected both collisions mid-execution and switched the placeholder to `synth-txhash-multilot-001` (non-hex), and the implement log documented the verify-count discrepancy as a property of the raw primitive, not the fixture. Both fixes were correct, but the plan should have caught them at authoring time by cross-checking the placeholder against Task 7's regex source and by deriving the verify count from the production reader.
+
+**Distinguishing from #176 (cleanup-audit grep path scope):** #176 is about a grep whose PATH is too narrow for a removal audit. This lesson is about a placeholder VALUE or verify COMMAND whose byte-level shape collides with a downstream consumer in the same plan. Both share Family H (verify against the real thing); #176's fix is widening the PATH, this lesson's fix is cross-checking the VALUE/COMMAND against every downstream guard/reader before execution.
+
+**Distinguishing from #175 (validation grep pattern position):** #175 is about a grep whose PATTERN matches the wrong position. This lesson is about a placeholder value colliding with a downstream regex or a verify command using the wrong reader chain. #175's symptom is gate-blocking noise; this lesson's symptom is mid-execution orchestrator amendment or a fixture that fails a later task's guard.
+
+**See also:** #175 (plan validation grep position), #176 (plan cleanup-audit grep path scope), coding_guidelines.md #22 (Family H verify the real thing).
+
+
+## 178. A Count Snapshot Captured Before a Consumption Loop Cannot Serve as the Loop's "Is There Still an Item?" Guard Once the Loop Drains the Structure the Count Described
+
+**Principle:** Family E (Temporal / ordering invariants) - a count (`len(collection)`) captured into a local BEFORE a loop is a FROZEN snapshot of the collection's size at that instant. If the loop body then mutates the collection (`popleft`, `pop`, `del`, `append`), the frozen count diverges from the LIVE size. Using the frozen count as a "should this iteration still try to consume?" guard (e.g. `if th_count[key] == 0: skip`) produces a category error: the guard answers "were there any items before the loop started?" when the question is "are there any items RIGHT NOW, after prior iterations already consumed some?" Compounded by Family H (Verify the real thing, not the abstraction) - the variable name (`th_count`, `initial_size`, `bucket_size`) is an abstraction over the live collection; the correctness property ("the bucket is empty, fall through") is a property of the live `len(collection)`, not of the named snapshot.
+
+**Trigger:** A matcher/aggregator/corrector builds a `dict[key] -> collection` index, captures a per-key count (`counts = {k: len(v) for k, v in index.items()}`) BEFORE the consumption loop, then iterates calling `index[key].popleft()` (or `.pop()`, `.popitem()`, `del`) inside the loop. The same loop consults `counts[key]` to decide whether to attempt a match or fall through. The data shape that surfaces the bug: ONE key with MORE target items than source events (a CG key with 3 FIFO lots but only 1 PAYMENT TH row). The first iteration pops the only item; the count snapshot still says `th_count[key] == 1`; the second iteration's `if th_count[key] == 0` guard is False (the snapshot is stale), so it does NOT fall through and instead attempts a second pop on the now-empty collection (IndexError) OR, worse, silently skips a candidate it should have processed because the guard was inverted.
+
+**Rule:** When a loop consumes items from a mutable collection indexed by key, the "is there still an item for this key?" guard MUST read the LIVE collection's length (`len(index[key]) == 0`), not a count variable captured before the loop. The pre-loop count may exist for other purposes (logging "expected matches", detecting all-empty inputs, emitting a surplus summary) but MUST NOT gate per-iteration consumption. If the pre-loop count is the only signal a downstream summary needs, compute the summary from the post-loop residual (`len(index[key])` after the loop), not from `initial - consumed` arithmetic.
+
+**Why this happens:** The implementer builds the count to drive a preflight check ("skip keys with zero items entirely") and then reuses the same variable inside the loop because it is already in scope and reads naturally (`if th_count[key] == 0: continue`). The reuse is correct ONLY for the FIRST iteration (where live `len` equals the snapshot). From the second iteration on, the snapshot is stale. The bug is silent when every key has exactly one source event (snapshot and live size agree on every iteration) and surfaces only when a key has more targets than events - precisely the partial-match case the matcher exists to handle.
+
+**Required behavior:**
+1. Capture the pre-loop count ONLY for purposes that do not gate per-iteration consumption: preflight skip of all-empty inputs, post-loop surplus reporting, expected-vs-actual logging.
+2. Inside the consumption loop, guard with the LIVE collection: `if not index[key]: continue` or `if len(index[key]) == 0: continue` (reading the collection, not the snapshot).
+3. When the loop is structured as `for key in keys: if index[key]: item = index[key].popleft()`, the live-empty check is implicit in the truthiness test; do NOT additionally consult a snapshot count.
+4. If a refactor moves from "one item per key" to "deque per key" (UL#81), re-audit every guard that referenced the old scalar count: those guards are now snapshots over a mutable deque and must switch to live `len(deque)`.
+
+**Shape trigger (when to suspect this family):** A function captures `counts = {k: len(v) ...}` before a loop, the loop calls `.popleft()` / `.pop()` / `del` on `v`, and the loop body branches on `counts[k]`. The symptom is either an IndexError on the second iteration of a multi-target key, OR a partial-match case (more targets than events on one key) that silently skips processing or silently double-consumes. A single-event-per-key test passes; a multi-target-key test fails or silently drops data.
+
+**General form:** A size snapshot is correct only at the instant it is taken. Any guard that must answer "what is the state NOW?" must read the live structure, not the snapshot. The name of the snapshot variable (`th_count`, `initial_counts`) does not carry the temporal invariant; only reading the live collection does.
+
+**Example (2026-07-10 tax-reporting Phase D plan, Task 4 PAYMENT flip):** `correct_payment_proceeds` builds `th_count = {key: len(bucket) for key, bucket in th_rows_by_key.items()}` before the per-lot consumption loop. The loop calls `bucket = th_rows_by_key.get(key); bucket.popleft()` for each CG lot. The original early-bucket guard was `if bucket is None or th_count.get(key, 0) == 0: continue`, which is correct only when every key has exactly one TH row (snapshot equals live size on every iteration). Under the new `via_resolver=True` path, the caller pre-filters TH rows to PAYMENT treatment, so a CG key with 3 lots can have only 1 PAYMENT TH row. The first lot consumes the row (`popleft`); `th_count[key]` still reads `1` (frozen); the second lot's guard `th_count.get(key, 0) == 0` is False, so it does NOT fall through, and the subsequent `bucket.popleft()` on the now-empty deque raises `IndexError` (or, in a variant, silently no-ops the surplus lot instead of leaving it for the legacy correction path). The fix widened the guard to `if bucket is None or th_count.get(key, 0) == 0 or len(bucket) == 0: continue`, adding the live `len(bucket) == 0` check so a drained deque is detected regardless of the stale snapshot. See the Task 4 implement log "Early bucket check widened" note.
+
+**Distinguishing from #81 (ordered queue per non-unique key):** #81 prescribes BUILDING the deque and popping one per event. This lesson assumes the deque already exists (the matcher follows #81) and prescribes the GUARD shape once consumption drains it: the per-iteration "is the bucket still non-empty?" test must read live `len(deque)`, not a pre-loop count snapshot. #81 is the data-structure lesson; this lesson is the guard-shape lesson that becomes load-bearing once #81's deque is in place and a partial-match key surfaces.
+
+**Distinguishing from #82 (recompute tolerance after every shrink step):** #82 is about a DERIVED value (tolerance) that depends on a mutable window size and must be recomputed after every shrink. This lesson is about a COUNT value that depends on a mutable collection size and must not be reused as a guard after every pop. Both share Family E (a derived value captured before mutation diverges from the post-mutation state); #82's fix is recompute-inside-loop, this lesson's fix is read-live-collection-inside-loop.
+
+**See also:** #81 (ordered queue per non-unique key, the data structure this guard protects), #82 (recompute window-relative tolerance, sibling "derived value vs mutable state" hazard), #110 (matcher temporal-invariant triple), coding_guidelines.md #22 (Family E temporal / ordering invariants).
+
+
+## 179. A Short SHA Verified by `git rev-parse --verify <prefix>` Can Be a Phantom Abbreviation Match Against an Unrelated Commit; Reconcile SHAs in Canonical Docs by Full Hash and Cross-Check With `--all` Oneline
+
+**Principle:** Family H (Verify the real thing, not the abstraction) - a short SHA prefix (e.g. `45171a5`) passed to `git rev-parse --verify` is an abstraction over "some commit in this repository, on some ref, whose full 40-hex SHA begins with these 7 hex characters". The command succeeds via ABBREVIATION MATCH against ANY candidate commit sharing that prefix; it does NOT confirm the short SHA is the prefix of the SPECIFIC commit the author intended (the "Phase C landing", the "release tag", the "fix commit referenced in the postmortem"). When the intended SHA does not exist on any ref (was mis-transcribed, came from a different clone, or was the author's mnemonic rather than a real hash), `--verify` STILL exits 0 if any unrelated commit happens to share the prefix, producing false confidence that the citation is correct. Compounded by Family G (Data-loss observability) - the silent failure mode is a canonical doc (feature-notes, postmortem, changelog) citing a SHA that resolves to a completely unrelated commit, and every future reader who clicks the short link lands on the wrong revision with no warning.
+
+**Trigger:** A canonical document (feature-notes, postmortem, CHANGELOG, README history section, plan hand-off log) records a short SHA (7-12 hex) purporting to identify a specific milestone commit. A later task "reconciles" the citation by running `git rev-parse --verify <short>` or `git rev-parse <short>^{commit}`. The command exits 0, and the reconciler records "SHA verified" without printing the FULL resolved SHA and without checking that the resolved commit's metadata (subject, author date, files changed) matches the milestone the citation claims. The abbreviation-prefix collision is silent: git does not report "matched by abbreviation" vs "matched by exact short-SHA identity", and the reconciler treats exit 0 as the verification claim.
+
+**Rule:** When reconciling a SHA cited in a canonical doc against the live repository, the reconciler MUST:
+1. Print the FULL resolved SHA (`git rev-parse <short>`) and paste the full hash (or at least the first 12+ hex) into the doc, not the short prefix.
+2. Print the commit's `git show -s --format='%H %an %ad %s' <resolved>` and confirm the subject, author, and date match the milestone the citation describes. A SHA whose resolved subject is "Task 10: opt-in smoke" cannot be the "Phase C landing" no matter how cleanly `--verify` exited.
+3. When the cited short SHA does not resolve at all (`git rev-parse --verify --quiet <short>` exits non-zero on a fresh `git fetch`), do NOT accept an abbreviation match as a fallback. Treat the citation as WRONG and search for the correct commit by subject/date (`git log --all --oneline --grep="<milestone phrase>"`) before re-citing.
+4. In repositories with multiple long-lived branches or a busy master, prefer citing the merge-commit SHA or a tag over a short prefix; tags and merge SHAs are stable identities, abbreviation matches are not.
+
+**Why this happens:** `git rev-parse --verify <short>` is documented as resolving "a single valid SHA-1" and exits 0 on abbreviation matches by design (this is how short-SHA CLI ergonomics work for everyday `git show abc123`). The reconciler reads "exit 0" as "the SHA is real and is the one I meant", conflating "git found A commit with this prefix" with "git found THE commit I cited". The conflation is invisible when the cited SHA is correct (the two readings coincide) and surfaces only when the cited SHA is wrong AND an unrelated commit shares the prefix - a low-probability event per citation, but a near-certainty across a corpus of dozens of cited SHAs accumulated over months.
+
+**Required behavior:**
+1. Canonical docs that cite a commit MUST cite the full 40-hex SHA (or a tag/merge SHA), never a 7-hex short prefix as the canonical identifier. Short prefixes are acceptable in prose ("see commit abc123f") but the doc's authoritative citation (the line a future `git show` is run against) is the full hash.
+2. A reconciliation task that verifies a cited SHA MUST log the full resolved SHA, the subject, and the author date in the task's implement log, and MUST diff those against the milestone's expected metadata. "rev-parse exited 0" alone is not verification.
+3. When a cited short SHA resolves but the resolved commit's subject/date do not match the milestone, the reconciliation MUST flag the citation as a phantom match, search for the correct commit, and update the doc with the authoritative full SHA. Do not propagate the phantom.
+4. Reconciliation scripts that automate SHA verification MUST use `git rev-parse --verify --quiet <short>` AND `git log -1 --format=%H <short>` AND assert the resolved full SHA starts with the cited short prefix AS-WRITTEN; if the only match is via git's abbreviation disambiguation against a different prefix, the assertion fails.
+
+**Shape trigger (when to suspect this family):** A doc cites a short SHA. A verification step says "rev-parse --verify passed". The reconciler did not print the resolved full SHA or compare its subject to the milestone. The cited SHA, when inspected, resolves to a commit whose subject is on a different topic, a different task, or a different phase than the citation claims. The probability of phantom collision rises with repository age and commit count (more commits = more 7-hex prefixes = more collisions).
+
+**General form:** "git accepted the short identifier" is not "git identified the intended object". Git's short-identifier resolution is a convenience over a SEARCH over all objects, not an IDENTITY check against a specific object. Any verification that treats search-success as identity-confirmation is Family H: the exit code is an abstraction over the resolution mechanism, and the real thing (which specific commit was resolved) requires inspecting the resolved object's metadata.
+
+**Example (2026-07-10 tax-reporting Phase D finalize, Task 11):** The feature-notes `docs/history/feature-notes/2026-06-20-th-anchored-transaction-state-machine.md` cited Phase C as commit `45171a5`. The Task 11 reconciliation ran `git rev-parse --verify 45171a5` which exited 0 and resolved via git's short-SHA search to `0449a9b` (the Task 10 HEAD on the Phase D branch), an unrelated commit whose subject ("Task 10: opt-in real-data smoke") had nothing to do with Phase C ("Phase C synthetic corpus + one-shot shadow verification"). `45171a5` is NOT the prefix of any real commit on any ref; the resolution succeeded only because git's abbreviation disambiguation accepted it as a search key. The authoritative Phase C landing on both local master and origin/master is `d158904`. The reconciliation correctly flagged the phantom, searched by subject (`git log --all --oneline | grep "Phase C"`), found `d158904`, and updated the feature-notes citation to the authoritative full SHA. The lesson is that the FIRST verification (`rev-parse --verify 45171a5`) gave a false-green that would have propagated the phantom citation if the reconciler had stopped at exit 0.
+
+**Distinguishing from #177 (placeholder value collides with downstream guard):** #177 is about a VALUE colliding with a regex/reader. This lesson is about an IDENTIFIER colliding with an unrelated object via search disambiguation. Both share Family H; #177's fix is cross-checking the value against every downstream consumer, this lesson's fix is printing and metadata-checking the resolved object.
+
+**Distinguishing from #43 (lock key resolution from field semantics not population counts):** #43 is about resolving a KEY from field meaning rather than prevalence. This lesson is about resolving an IDENTIFIER from object metadata rather than prefix-search success. Both share Family H; #43's hazard is collapsing two semantically distinct fields, this lesson's hazard is collapsing two distinct commits that share a hex prefix.
+
+**See also:** #43 (lock key resolution from field semantics not population counts), #177 (plan placeholder collides with downstream guard), coding_guidelines.md #22 (Family H verify the real thing).
+
+
+## 180. When Updating a Fenced Markdown Template, Prefer Exact-Match Micro-Edits Over Full-Block Replacement to Avoid Fragile Patches and Accidental Drift
+
+**Principle:** Family H (Verify the real thing, not the abstraction) - a fenced Markdown template is a real artifact with multiple invariants (opening fence marker, closing fence marker, required headings, and exact phrasing used by downstream tooling). A full "replace the whole fenced block" edit is an abstraction over many independent invariants. It is easy to accidentally change unrelated lines, break the closing marker, or retain legacy subsections while believing the template was converted. Micro-edits force verification at the granularity of each invariant and keep unrelated text unchanged.
+
+**Trigger:** A workflow spec or skill contains a large fenced Markdown template. The change request is structural ("switch to a universal hierarchy", "add per-finding fields") but the implementer attempts a one-shot full replacement of the fence contents. Reviewers then see unrelated diffs, or the template looks updated but still contains legacy headings further down in the same fence.
+
+**Rule:** Update fenced templates via a sequence of exact-match micro-edits:
+1. Re-read the exact on-disk fenced block content first.
+2. Replace only one legacy subsection at a time using an exact-match patch (unique pre and post context).
+3. Preserve the original closing fence marker exactly.
+4. Verify with a targeted search that required new fields exist, and that forbidden legacy headings do not exist inside the fence.
+
+**Why this happens:** Large blocks create brittle patches because a tiny mismatch in whitespace, an ellipsis placeholder, or a prior local edit causes the patch to fail or to replace the wrong region. Even when it applies, full-block replacement makes it hard to review what changed vs what was unintentionally reformatted.
+
+**Required behavior:**
+1. Limit each patch to one subsection inside the fence (or one finding template), then re-check the file.
+2. After conversion, run focused checks for required headings and removed headings scoped to the fenced block.
+3. Keep everything else in the document unchanged unless the task explicitly calls for broader refactors.
+
+**Shape trigger (when to suspect this family):** The diff shows a large fenced block entirely rewritten, the closing fence marker moved or changed, or legacy headings still appear later in the same fenced block after an attempted conversion.
+
+**General form:** Preserve local invariants by editing only the minimal surface needed, and verify each invariant directly after each micro-change.
+
+
+## 181. Multi-Agent Review Harnesses Need Structured Staging Metadata to Improve Sub-Agents Iteratively
+
+**Principle:** Family G (Defensive warnings must also record items in the failure-tracking structure) extended to harness observability: a review panel without recorded discard reasons, dedup groups, pattern tags, and post-triage outcomes is a chat summary, not an improvement loop.
+
+**Trigger:** A project runs many parallel review sub-agents but cannot answer which agents are redundant, which catalog patterns produce mostly false positives, or which findings survive triage. The team debates adding or removing agents without aggregate data.
+
+**Rule:** Every review orchestrator must write a staging doc under `{reviews_dir}/` with immutable synthesis statistics (Panel with Solo/Echo, Discarded findings with reason codes and Pattern ids, Severity calibration, Deduplication groups) plus mutable **Triage outcomes** after fix passes. Sub-agents return `pattern: <agent>#<kebab-slug>` on each finding. Gold source: `review-staging` skill in the skills repo.
+
+**Why this happens:** Raw agent output mixes in chat or ephemeral memory. Without per-agent discard reasons and triage rollups, the only signal is "too many findings" or "clean round," which does not identify catalog gaps or over-eager agents.
+
+**Required behavior:**
+1. Record statistics during synthesis, not from memory after reporting to the user.
+2. Tag each finding with **Pattern** so `review-agents/*.md` edits can target high-discard patterns.
+3. Update **Triage outcomes** after `receiving-code-review` without rewriting synthesis tables.
+4. Emit a required `.stats.json` sidecar for aggregation across reviews; use `wrong-owner` discard code with `lead: <agent>` when tiered ownership merges non-lead returns.
+
+**Shape trigger (when to suspect this family):** Review workflows exist but there is no `{reviews_dir}/` artifact with `## Review Statistics`, or staging docs lack **Agents**, **Pattern**, and discard **Reason** columns.
+
+**General form:** Treat multi-agent review like an instrumented pipeline: every rejection and every fix must be attributable to an agent and a pattern, or you cannot tune the panel.
+
+**See also:** `agents/skills/review-staging/SKILL.md`, `agents/skills/review-agents/SKILL.md`, `agents-best-practices/references/agent-legibility-feedback-loops.md`.
+
+
+## 182. Vendored Skills Must Use Upstream License and Doc-Hierarchy Paths
+
+**Principle:** Family A (Single source of truth for canonical paths and attribution) applied to skill vendoring: copied skills inherit upstream copyright and write docs only into paths the repo schema already owns.
+
+**Trigger:** Importing skills from an external registry (for example mattpocock/skills) into `agents/skills/`, or adapting a skill that assumes root `CONTEXT.md`, `docs/adr/`, or a parallel decisions directory.
+
+**Rule:**
+1. Copy the upstream root `LICENSE` verbatim into each vendored skill's `LICENSE.txt`; never substitute the first-party `plans/LICENSE.txt` copyright.
+2. Record `metadata.upstream` in `SKILL.md` frontmatter and document re-sync in `agent-runtime-layout.md`.
+3. When a vendored skill writes glossary or ADR content, map to doc-hierarchy Layer 2: `docs/maintenance/glossary.md`, `docs/maintenance/project-decisions.md` (append `## ADR-NNNN` sections), and `docs/architecture/domain-model.md`; do not introduce `maintenance/decisions/` or root `CONTEXT.md` on migration-complete repos.
+4. Merge overlapping meta-skills (for example skill-design vocabulary) into `how-to-write-skills/references/` instead of keeping a duplicate skill directory.
+
+**Shape trigger (when to suspect this family):** A new vendored skill creates doc paths not listed in `doc-hierarchy/migration-map.md`, or its `LICENSE.txt` carries the playbook author's copyright instead of the upstream author's.
+
+**See also:** `agents/skills/how-to-write-skills/SKILL.md` (LICENSE section), `agents/skills/domain-modeling/SKILL.md`, `projects/.ai-playbook/agent-runtime-layout.md`, `projects/.ai-playbook/skill-upstream-catalog.md`.
+
+
+## 183. Merge Upstream Review and Discipline Patterns Before Vendoring Duplicate Skills
+
+**Principle:** Family A (Single source of truth) applied to external skill catalogs: when an upstream repo overlaps first-party skills or always-on instructions, absorb patterns into the existing artifact and catalog the source as reference-only instead of adding a parallel skill directory.
+
+**Trigger:** Evaluating an external registry (for example DietrichGebert/ponytail, karpathy-guidelines, cc-thingz plugins) where some modules duplicate `doing-code-review`, `docs/AGENTS.md` coding discipline, or `execute-plan`.
+
+**Rule:**
+1. Record the source in `skill-upstream-catalog.md` with **Reference only** or **Partially vendored** status and local overlap notes.
+2. Merge review output conventions (tag vocabulary, one-line finding format, scope boundaries) into `review-agents/*.md` sub-agent files consumed by existing orchestrators.
+3. Merge implementation-time discipline (decision ladders, safety carve-outs) into `coding_guidelines.md` numbered rules and cross-link from `docs/AGENTS.md`; do not add a persistent session-mode skill that fights always-on instructions.
+4. Vendor standalone directories only when the workflow is unique (for example `grilling`, `handoff`) and not already covered by first-party skills.
+5. Add each merged upstream **file** URL to `skill-upstream-catalog.md` **Merged pattern index** (repo-level row alone is not enough for refresh).
+
+**Shape trigger (when to suspect this family):** A proposed import adds a skill whose description says "use on ANY coding task" or "ACTIVE EVERY RESPONSE" while `docs/AGENTS.md` already encodes the same bias; or adds `*-review` that only hunts complexity while `doing-code-review` already loads `simplification.md`.
+
+**Example (2026-07-14 ai-playbook):** ponytail's tagged complexity review merged into `review-agents/simplification.md`; its minimal-solution ladder became `coding_guidelines.md` **#28**; ponytail cataloged as reference-only. Not imported: plugin hooks, benchmark scoreboard, repo-wide audit/debt skills (optional future work).
+
+**See also:** #182, `projects/.ai-playbook/skill-upstream-catalog.md`, `agents/skills/review-agents/simplification.md`, `coding_guidelines.md` **#28**.
+
+
+## 184. Orchestrator Skills Must Treat Slash Invocation as Explicit Mode Choice and Auto-Continue Through Defined Steps
+
+**Principle:** Family D (Single source of truth for workflow contracts) applied to skill orchestrators: when the user invokes a slash command or attaches a skill, that is the mode selection; do not re-ask with a softer gate or pause between steps the contract already defines.
+
+**Trigger:** A user runs `/execute-plan <plan-path>`, types `execute plan docs/history/plans/foo.md` or shorthand `execute docs/history/plans/foo.md`, or attaches the execute-plan skill, but the agent still shows the execute-plan / manual / read-only gate, asks to continue on a branch that already matches the plan slug, or ends a task with "want me to proceed to Task N+1?"
+
+**Rule:**
+1. Run **invocation detection first**: `execute plan` + path, shorthand `execute`/`implement`/`run` + plan `.md` path under `.../plans/...`, `/execute-plan`, and skill attachment are equivalent execute-plan choice; the three-way gate applies only when `invoked = false` (bare path or `@mention` with no verb before the plan path).
+2. On Phase 0 branch setup, **auto-continue** when `git branch --show-current` equals the plan slug (basename without `.md`) or the computed plan branch name; prompt only for plausible non-exact matches or new branch creation.
+3. After each task `done`, Phase 2 pass, or review-round `done`, **start the next defined step immediately**; brief progress reports are fine, permission prompts are not.
+
+**Why this happens:** Agents pattern-match on "plan path in message" and generic safety habits (confirm branch, confirm next step). Slash commands attach the skill without putting trigger text in the user message, so text-only trigger lists miss the invocation. Step boundaries feel like natural pause points unless the skill forbids asking.
+
+**Shape trigger (when to suspect this family):** User explicitly invoked an orchestrator skill but the agent behaves like they only mentioned a file path, or asks yes/no between tasks on a plan they already asked to execute end-to-end.
+
+**See also:** `agents/skills/execute-plan/SKILL.md` (Invocation detection, Continuous execution, Step 0.1a, Step 1.5), `plan-execution-routing` Cursor rule, `done` skill workflow continuity.
+
+## 185. Tune Review Panels From Review Statistics, Not Agent Count Alone
+
+**Principle:** Family D (Single source of truth for workflow contracts) applied to multi-agent review: panel changes must be driven by staged `## Review Statistics` (solo/raw ratio, echo dedup groups, discard reason codes), not by intuition about "too many agents."
+
+**Trigger:** A team debates merging `quality`, `implementation`, and `architecture` because full panels discard 80%+ of raw findings, or because `premortem` often echoes other agents without solo-staged output.
+
+**Rule:**
+1. Aggregate recent reviews from `{reviews_dir}/` (and project mirrors on the `docs` branch) before changing `review-agents/*.md` or orchestrator launch lists.
+2. Prefer **conditional launch** (`premortem`, `concurrency` opt-in by domain tags and diff signals in `review-panel-selection.md`) over collapsing agents that still produce solo findings (each had solo/raw >= 0.62 in a Jul 2026 sample).
+3. Merge only **proven overlap pairs** (for example `documentation` + `prose-clarity`); keep tiered ownership boundaries so dedup picks a **lead agent** without discarding a different fix at the same site.
+4. Record `Domains:` in staging metadata explaining why each conditional agent launched or skipped.
+5. Monitor solo-staged median and discard% for two weeks after a panel change; loosen triggers if solo output drops without discard improvement.
+
+**Why this happens:** Raw finding volume looks like noise, but solo-staged counts show which lenses still add unique signal. Merging high-solo agents to reduce launches hurts detection; skipping echo-heavy agents via opt-in preserves coverage on cross-service and transactional diffs.
+
+**Shape trigger (when to suspect this family):** Review refactor discussion cites agent count or token cost but no `## Review Statistics` aggregation, or orchestrators duplicate skip rules inline instead of `review-panel-selection.md`.
+
+**Example (2026-07-15 ai-playbook):** Jul 13-15 CRM/tax reviews showed premortem solo/raw 0.28 vs simplification 0.62; PROJ-601 code review 77 raw to 9 staged with 4-5 agent echo clusters. Shipped: merge `documentation`+`prose-clarity`, opt-in `premortem`/`concurrency`, tiered ownership for quality/implementation/architecture/consistency, canonical `review-panel-selection.md`.
+
+**See also:** #181, `agents/skills/review-agents/review-panel-selection.md`, `agents/skills/review-staging/SKILL.md`.
+## 186. Use wrong-owner Discards and Required stats.json to Identify Merge-into Candidates
+
+**Principle:** Family G (Defensive warnings must also record items in the failure-tracking structure) applied to review panel tuning: echo counts alone cannot distinguish "duplicate root cause" from "wrong agent filed the finding."
+
+**Trigger:** After tiered ownership is live, the team still cannot decide whether to fold agent A into agent B because discard rows only say `duplicate` and aggregation requires hand-reading markdown tables.
+
+**Rule:**
+1. Require a `.stats.json` sidecar beside every staging `.md` (same basename); validator hard-fails when missing unless Metadata records `Stats sidecar: skipped (<reason>)`.
+2. When tiered ownership merges a root cause, discard non-lead returns with reason `wrong-owner`, not `duplicate`. Notes: `lead: <agent-id>`; sidecar: `"lead_agent": "<agent-id>"`.
+3. Weekly aggregation: sum `wrong-owner` by discarded `agent`; high counts on agent X with lead Y suggest folding X into Y (after triage drop rate confirms noise).
+4. Keep `duplicate` for same-agent repeats or when no tiered lead applies.
+
+**Shape trigger (when to suspect this family):** Panel-tuning discussion needs spreadsheet exports from review markdown, or discard tables never distinguish ownership misses from generic duplicates.
+
+**See also:** #181, #185, `agents/skills/review-staging/SKILL.md`, `~/.ai-playbook/scripts/validate_review_staging.py`.
+
+## 187. Exclusive File Locks Must Record a Long-Lived Holder PID, Not the Acquire CLI Process
+
+**Principle:** Family E (Temporal / ordering invariants) - a lock that treats the short-lived acquire process as the holder is abandoned the moment acquire exits.
+
+**Trigger:** A shell lock script is invoked via `eval "$(lock.sh acquire)"` (or any subprocess that prints exports and exits). Metadata stores `holder_pid=$$`. A later acquire uses `kill -0` on that PID to decide "abandoned" and steals the lock while the original session still believes it holds exclusivity.
+
+**Rule:** Record `PPID` (or an explicit `DONE_LOCK_HOLDER_PID` for the long-lived agent/shell), never the acquire script PID. Steal paths must compare-and-swap on token/epoch before `rm` so two waiters cannot both destroy a freshly re-created lock.
+
+**Example (2026-07-17 ai-playbook review-loop r1–r3):** `scripts/done-lock.sh` wrote `holder_pid=$$`; status showed `abandoned: yes` at age 0s and a second acquire succeeded immediately. Fixed by using PPID and CAS steal. R2: PPID alone fails for one-shot agent Shell tools; treat matching `.ai-playbook/done-lock.session` as a live fence so dead PID is not auto-stealable. R3: do not auto-steal a fenced lock even after stale TTL (operator `stale-clean` only); CAS `mv` re-checks tomb meta; clear session only when token still matches; `selftest` covers fence/CAS/incomplete-dir.
+

@@ -1,11 +1,10 @@
 ---
 name: rfc-design
 description: >
-  Manage the full RFC lifecycle: create, edit, and maintain Design RFCs in Markdown format.
-  Use when the user asks to create, write, draft, edit, update, or review an RFC or feature design document.
-  Creation follows a three-phase process: (1) input collection, (2) assumptions and coverage confirmation,
-  (3) draft generation plus parallel review-agents pass before final output.
-  Editing follows the structural conformance rules in the "Editing an Existing RFC" section.
+  Create, edit, or structurally review Design RFCs in Markdown. Use for design RFC, feature design,
+  technical design doc, architecture RFC, API design, or /rfc-design. Modes: create (full intake),
+  edit (existing file), review-local (Step 2 only). Confluence-hosted pages: use review-confluence-doc.
+  Creation uses intake gates, then draft plus tiered review-agents pass before final output.
 ---
 
 # Command: Generate MVP Design RFC (Implementation-ready, succinct)
@@ -21,6 +20,20 @@ description: >
 - Server-owned field: state/audit field (for example `updated_at`, version) set by the service, not by client input.
 - Core vs custom properties split: core cross-tenant dimensions are first-class fields; tenant-defined extensions are a flexible map.
 
+## When to Use
+
+| User intent | Mode | Skill path |
+|-------------|------|------------|
+| Create or draft a new Design RFC | **Create** | Steps 0 → 0.1 → 1 → 2 → 3 |
+| Update an existing Markdown RFC file | **Edit** | **Read this skill + `references/rfc-sections.md` first**; skip Steps 0–0.1 unless scope changed; apply editing checklist; run Step 2 (Light) when edit is substantial **or** after a formatting/readability cleanup pass (formatting alone misses contract gaps). Use targeted edits (`StrReplace`), not full-file overwrite, on large RFCs. |
+| Review a local Markdown RFC only | **Review-local** | Step 2 on the provided draft; no regeneration |
+| Review an RFC/TDD on Confluence | **Redirect** | `review-confluence-doc` (fetch page, quality feedback) |
+| Turn an approved RFC into an implementation plan | **Handoff** | `plans` skill; reference the saved RFC path in the plan header |
+
+**Announce at start:** "I'm using the rfc-design skill in **{mode}** mode."
+
+**Do not use** for implementation plans (`plans`), code review (`doing-code-review`), or Confluence page review (`review-confluence-doc`).
+
 ## Workflow Overview
 
 | Phase | Step | Hard gate? | Output |
@@ -28,10 +41,32 @@ description: >
 | Intake | Step 0 – Input collection | Yes | Input inventory only |
 | Intake | Step 0.1 – Assumptions and coverage | Yes | Coverage checklist for user confirm |
 | Draft | Step 1 – Generate RFC draft | No (after gates) | Full RFC sections 1–8 per structure below |
-| Review | Step 2 – Review pass (sub-agents) | Mandatory unless skip rule applies | Staging review file under `{tmp_dir}/`; revised RFC |
+| Review | Step 2 – Review pass (sub-agents) | Tiered (light default; full on request) | Staging review file under `{reviews_dir}/`; revised RFC |
 | Deliver | Step 3 – Finalize | No | Markdown RFC only (findings folded in; no separate review artifact in chat) |
+| Handoff (optional) | After Step 3 | No | Offer `plans` when user wants implementation planning |
 
-**Documentation paths:** Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0) before writing review staging files.
+**Section template:** Read `references/rfc-sections.md` when drafting §1–8, Technical Decision Notes, or editing an existing RFC. Read `references/contract-blueprint-example.md` before drafting or revising **§5 Contracts**.
+
+## Documentation paths (doc-hierarchy aligned)
+
+Read path keys from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0; `bootstrap-ai-playbook` when triggers fire). Do **not** hardcode `docs/rfcs/`, `docs/plans/`, or module-split trees.
+
+| Key | Role | Post-migration default (Layer 3) |
+|-----|------|----------------------------------|
+| `{rfcs_dir}` | Canonical **Design RFC** files (history, flat) | `docs/history/feature-notes/` |
+| `{proposals_dir}` | Pre-canonical RFC **drafts** only (optional) | `docs/history/feature-notes/proposals/` or legacy `docs/proposals/` |
+| `{reviews_dir}` | RFC review staging docs and `.stats.json` sidecars | `docs/reviews/` |
+| `{tmp_dir}` | Session scratch (not review staging) | `docs/tmp/` |
+
+**Save location rules:**
+
+1. Resolve `{rfcs_dir}` from facts; use the on-disk path only (bootstrap never invents paths).
+2. **Doc-hierarchy migration-complete repos:** save finished RFCs as **flat files** under `{rfcs_dir}` (Layer 3 history). Prefer `{SERVICE}_rfc.md` or `{feature}-rfc.md` per `doc-hierarchy/migration-map.md`. Do **not** create `docs/rfcs/` at `docs/` root; verify script flags that as a migration failure.
+3. **Legacy repos (pre-migration):** if `docs/rfcs/` still exists on disk and facts point there, save there until **doc-hierarchy-migrate** runs; do not create new legacy roots on repos already on the three-layer layout.
+4. **Work-in-progress drafts** the user has not approved for the history corpus: `{proposals_dir}` when that key exists; otherwise ask before writing under `{rfcs_dir}`.
+5. **Placement questions** (RFC vs architecture topic vs investigation note): read `doc-hierarchy` skill; RFCs are Layer 3 feature notes, not Layer 2 architecture topics.
+
+**Review staging** (Step 2) always under `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` per `review-staging`, never under `{rfcs_dir}` or `{tmp_dir}/rfc-review/`.
 
 Generate a **Design RFC** in **Markdown format**.
 
@@ -48,30 +83,73 @@ Do NOT include generation-time reasoning, meta commentary, or attribution.
 
 ## Terminology (Mandatory)
 
-At the very beginning of the document, include a `Terminology` section that defines
-the key domain concepts used throughout the RFC, including any **non-trivial or domain-specific abbreviations**.
+Place **`# Terminology`** (or `# Dictionary`) at the **very beginning** of the document. It is the **only** block before **`### 1. Header`**. Numbered sections 1–8 and any **Addendum** sections follow Header.
 
-Rules:
+### Reader-facing glossary (not writer instructions)
+
+The Terminology block is for **readers** implementing the RFC. It is **not** a place for authoring policy, eval-ban tables, jargon-usage essays, or "if you meant X use Y" disambiguation matrices. Those belong in project guidelines, agent skills, or feature working notes.
+
+**Allowed in Terminology:**
+
+- One optional intro sentence (e.g. two concepts that must not be confused).
+- A **flat, alphabetically sorted** bullet list: one term per bullet, short clear definition.
+- Jargon and abbreviations (e.g. tombstone, DLQ, MQ) when defined here before first body use.
+
+**Forbidden in Terminology:**
+
+- Topic subsections (`#### People and audience`, `#### Filters and bitmaps`, etc.).
+- Writer meta tables or prose ("Use them when they are unambiguous", "Do not use eval").
+- Operator matrices, catalog tables, or long comparative notes (move to **Addendum** at document end).
+
+**Body prose:** Do not use ambiguous catch-alls (e.g. **eval**, **evaluation**) as a stand-in for distinct operations. Name the **one** operation: operator preview, segment membership, rule compilation, snapshot build, bitmap maintenance, list count/page. Agent-centric working notes may keep **eval** for brevity.
+
+### What to define
+
 - Explain terms (including abbreviations) that may be ambiguous, security-sensitive, or domain-specific.
-- Do NOT explain universally known technical terms.
+- Do NOT explain universally known technical terms (API, HTTP, JSON, DB, UI).
 
-Must be explained if used:
-- RBAC, SSO, IAM, PII
-- Company- or product-specific abbreviations
-- Cross-domain abbreviations whose meaning is not obvious
+Must be explained if used: RBAC, SSO, IAM, PII; company/product abbreviations; cross-domain abbreviations whose meaning is not obvious.
 
-Must NOT be explained:
-- API
-- HTTP / REST
-- JSON / XML
-- DB / SQL
-- UI / UX
+### Format
 
-Format:
-- Bullet list
-- One term per bullet
-- One-line explanation
-- No repetition elsewhere in the document
+- Bullet list; **bold term** first; one short definition per bullet.
+- Sort entries **A–Z** by the bold term (ignore leading "The").
+- No repetition of full definitions elsewhere in the document; body may use the term once defined.
+- Do not bold cross-references or emphasis inside a definition; use plain words for other glossary terms already defined above.
+
+### Bold and emphasis (§1–8 and Addendum)
+
+- **Terminology only:** bold the term label at the start of each glossary bullet (`- **Term**:`). Nowhere else in the RFC.
+- **Body sections:** use `####` / `#####` headings to partition content. Do not bold glossary terms, operation names, or whole sentences for emphasis.
+- **Code and literals:** use backticks for field names, operators, table/column names, and wire values.
+- If a block needs visual separation, add a heading; do not substitute bold paragraphs.
+
+### Addendum (supplementary material)
+
+After **`### 8. Testing & Rollout`**, optional **`### Addendum A.`**, **`### Addendum B.`**, … for material that supports the RFC but is not a glossary entry:
+
+- Operator / filter matrices (e.g. MVP filter operators D24)
+- Naming rationale tables (e.g. `HAS_OCCURRED` vs `EXISTS`)
+- Accepted risks overflow when §8 is already dense
+
+Addenda use the same heading rules as §1–8 (see `references/rfc-sections.md`).
+
+---
+
+## Document structure and headings (Mandatory)
+
+Read `references/rfc-sections.md` for the full section template. Summary:
+
+| Level | Use for |
+|-------|---------|
+| `# Terminology` | Glossary only (before §1) |
+| `### N. Section title` | Numbered sections 1–8, Addendum |
+| `#### Subsection title` | Problem statement, Goals, In-scope, Contract notes, Critical tests, … |
+| `#####` | Per-endpoint examples under §5.1, per-event under §5.2 |
+
+**Subsection rule:** Inside `### 2. Problem, Goals, Non-goals` (and §3, §5, §7, §8, etc.), use **`#### Subsection title`** plus a blank line, then bullets or prose. Do **not** use nested list labels (`- Problem statement:`) or bold inline titles (`**Goals:**`) as pseudo-headings; they do not separate visually in Confluence or Markdown previews.
+
+**Edit mode (mandatory):** Before changing an existing RFC, read this skill and `references/rfc-sections.md`, then run the **Editing checklist** in `rfc-sections.md` before presenting the update.
 
 ---
 
@@ -99,6 +177,8 @@ Hard gate rules:
 Proceed signal:
 - Only start generating the RFC after the user explicitly indicates readiness, e.g. "OK, proceed", "Go ahead", or "Generate the RFC".
 
+**Fast path (skip separate Step 0 inventory):** When the user already attached or pointed to PRD + architecture (+ contracts when APIs/events/DB are in scope) **and** said to proceed, draft, or generate, treat Step 0 as satisfied. Produce Step 0.1 coverage checklist in the same message (do not wait for a second turn unless a blocking gap remains).
+
 ---
 
 ## Step 0.1 – Assumptions & Coverage Confirmation (Hard Gate)
@@ -119,6 +199,8 @@ Hard gate rules:
 - Do NOT generate any RFC sections until:
   1) the checklist is produced, AND
   2) the user confirms the checklist AND gives the Proceed signal.
+
+**Fast path:** When the user message includes both complete inputs and an explicit proceed/generate signal, present the checklist and start Step 1 in the same turn after a one-line assumption summary. Do not block on a second confirmation unless the checklist contains `(TODO: confirm)` items that block implementation-ready contracts.
 
 ---
 
@@ -147,6 +229,8 @@ Rules:
 
 Rules:
 - Prefer concrete bullets over narrative.
+- **Succinct vs telegraphic:** Bullets must stay skimmable **and** self-contained for readers who land mid-document (§4 edge cases, §6 rules, §7 alerts). Succinct is short with complete meaning; telegraphic drops subjects, uses undefined jargon, or hides thresholds (e.g. "alert if ≥3 in 24h" without saying **what** is counted). When a term is in Terminology, still spell out the behavior once in edge cases and operability rows (table/column names OK).
+- **§5 Contracts:** prefer **implementation blueprints** (JSON request/response bodies, event payloads, DDL/SQL) over wordy explanations. If a fact is not in a fenced example, it is not implementation-ready. Minimum bar: `references/contract-blueprint-example.md`.
 - Every bullet must be either:
   - a requirement
   - a decision
@@ -154,306 +238,58 @@ Rules:
   - a dependency
   - or an implementation task input
 - Do NOT list obvious/generic statements unless explicitly required by provided inputs.
-- Keep sections short; avoid exhaustive inventories.
+- Keep non-contract sections short; §5 endpoint inventories are expected to be complete, not minimal.
 - Use stable headings so Jira stories can link to specific sections.
 
 ---
 
 ## Step 1 – Generate RFC Draft
 
-After Step 0 and Step 0.1 gates pass, draft all RFC sections below in one pass. Do not run the Step 2 review pass until the draft is complete (all sections present or marked "Not applicable for MVP").
-
-## RFC Output Structure (Must Follow Exactly)
-
-Produce the RFC with the following numbered sections, in this order.
-Do NOT rename, reorder, merge, omit, or add sections.
-
-If a section is not applicable for MVP, write only:
-- `Not applicable for MVP: <one-line reason tied to scope or provided inputs>`
-
-### 1. Header
-Must include:
-- RFC title (feature name)
-- Owning team (if provided; otherwise `(TODO: confirm)`)
-- Status: Draft / In Review / Approved (default Draft)
-- Created date (infer from current date if not provided; mark `(TODO: confirm)` if inferred)
-- Last updated date (same rule as created date)
-- Links:
-  - PRD link or identifier (or `(TODO: add link)`)
-  - Architecture doc link or identifier (or `(TODO: add link)`)
-
-Keep this section compact. The metadata table must be placed **inside** `## 1. Header`; not as a floating table above the Terminology section.
-
----
-
-### 2. Problem, Goals, Non-goals
-Purpose: clarify why we are doing this, what success means, and where the hard boundaries are.
-
-Rules:
-- Goals must be specific and testable where possible.
-- Non-goals: only include items that are **not obvious from the Goals alone** and could plausibly be pulled into scope during planning or implementation. For each item give a one-line reason why it is excluded. Omit anything that is self-evidently out of scope. Do NOT write placeholder text such as "None" or generic deferrals.
-- Non-goals must not use "this RFC scopes to `<service>`" as the reason for exclusion. An RFC is scoped to a **feature**, not a service; cross-service impact is documented in §3 and §5.4. When deferring a cross-service analysis, state the actual dependency that makes it premature (e.g. "rate depends on BO trigger-rule configuration not yet defined") rather than attributing exclusion to service ownership.
-
-Must include:
-- Problem statement (1–3 bullets)
-- Goals (3–7 bullets)
-- Non-goals (only when items exist that pass the above gate; omit otherwise)
-
----
-
-### 3. Scope & Dependencies
-Purpose: define what THIS service/team owns vs what is upstream/downstream.
-
-Must include:
-- In-scope components (owned by this team/service) with 1-line responsibility each
-- Dependencies (external components THIS service requires):
-  - Only list if THIS service directly depends on them
-  - State what THIS service needs from them (1 line)
-  - Omit owner/team unless critical to unblock implementation
-- Assumptions that affect behavior (only those relevant to MVP and implementation)
-
-Rules:
-- **Do NOT list downstream consumers** - services that call THIS service or consume its events belong in documentation for those services, not here.
-- **Do NOT list sibling services** unless THIS service has a direct runtime dependency on them.
-- **Do NOT inventory the entire system** - only include what THIS service directly needs to function.
-- Only list constraints/rules that are enforced by this service or directly required for this service to function.
-- If a rule is enforced elsewhere, do NOT restate it as a requirement; record it as a dependency/assumption only if THIS service relies on it at runtime.
-- Do NOT include negative-scope statements such as "X does not apply to this feature" or "X is handled elsewhere". If something is not relevant to this service, omit it; documenting its absence adds noise.
-
----
-
-### 4. Functional Overview
-Purpose: describe runtime behavior precisely.
-
-Must include:
-- At least one end-to-end MVP flow (step-by-step, numbered)
-- Edge cases (only the important ones) using the format:
-
-**Edge case: <title>**
-- Condition:
-- Behavior:
-- Outcome:
-- Notes:
-
-Rules:
-- Keep flows readable. No diagrams required.
-- No arrows (→). No shorthand.
-- Include only edge cases that impact business correctness, money, user experience, or support load.
-- **Multi-flow structure**: when multiple flows share most steps, structure as a base flow covering the shared path, plus derived flows that document only their divergences. Each derived flow must open with "Flow X applies with one divergence at step N" (or "Flow X applies in full") and close with "All other steps identical to Flow X."
-- **Metrics placement**: metrics that fire on the base/shared path belong in the base flow step where they fire. Do not repeat them in derived flows; derived flows document only metrics specific to their divergence (e.g. a suppression-hit counter that never fires in the base path).
-- **Error propagation scope**: error propagation notes must explicitly state the unit of failure; per-message, per-thread, or per-batch; and explain the isolation boundary (e.g. "returns RECONSUME_LATER for that one message only; other consumer threads ACK their own messages independently").
-
----
-
-### 5. Contracts (API, Events, Data)
-Purpose: provide implementation-ready external and persistence contracts.
-
-Include only what is in scope per confirmed coverage:
-- APIs (HTTP endpoints)
-- Domain events / message queues (if any)
-- Database schema changes (if any)
-
-#### 5.1 APIs
-For each new or modified endpoint, include:
-- Method + path
-- Purpose (1 line)
-- Authn/authz expectations if non-obvious and explicitly required by inputs
-- Required headers ONLY if relevant (e.g. idempotency key, correlation id)
-- Request body in a code fence (JSON)
-- Response body in a code fence (JSON)
-- Status codes (only those actually used)
-- Idempotency semantics (if applicable)
-- Error contract (brief): error code + when it happens
-
-Rules:
-- If an endpoint exists but details are missing, still list it and use `(TODO: define)` in the body fields.
-- No generic "standard errors" statements.
-- Prefer unambiguous field names (for example `consent_state` instead of ambiguous qualifiers) when terms affect decision interpretation.
-
-#### 5.2 Events / Messaging (if applicable)
-For each event/message:
-- Name
-- Producer
-- Consumers (if known)
-  - **Always include this field** - it documents the integration contract and what downstream services expect from THIS service
-  - List known services that subscribe to or consume this event
-  - This is different from Section 3 dependencies (what THIS service requires); this documents what THIS service provides to others
-- When emitted
-- Delivery semantics: at-least-once / at-most-once / exactly-once (or `(TODO: define)`)
-- Ordering guarantee (or state none)
-- Payload (code fence, JSON) with PII fields clearly marked
-
-#### 5.3 Database (if applicable)
-Provide DDL for new/changed tables and indexes.
-
-Rules:
-- Use the best-fit SQL dialect if DB engine is known.
-- If DB engine is unknown, use generic SQL and mark engine-specific details `(TODO: confirm)`.
-- Include:
-  - table definition(s)
-  - primary key
-  - important indexes
-  - key constraints that can be determined
-- Keep DDL minimal but sufficient for implementation stories.
-
-**When there are no schema changes, do not limit the section to "no schema changes."** Instead document the hot-path read queries that fire per event:
-- Include the full query (SQL or equivalent).
-- Name the covering index; note whether its leading column matches the most selective predicate or forces a range scan with trailing filters.
-- Document any in-process cache protecting the query: cache key, TTL, invalidation trigger, and worst-case miss rate.
-- Explicitly call out non-hot-path queries (CRUD, admin lookups) as off-hot-path so reviewers can distinguish them.
-
-#### 5.4 Downstream Service Impact (if applicable)
-When the RFC involves publishing events or messages that a downstream service consumes (e.g. triggering a notification pipeline, a scheduling service, or a downstream processor), include a section documenting:
-- Which consumer/handler in the downstream service receives the message and how it routes the payload.
-- The immediate-processing path vs any deferred/scheduled path (e.g. `delay = 0` → direct dispatch vs `delay > 0` → scheduled record written to a DB table polled by a cron/scheduler).
-- Volume impact on the downstream service relative to today (increased / decreased / unchanged), broken down per message type or activity if they differ.
-- **RFC-owned operational deliverables**: if the feature requires a BO operator to create configuration records, templates, or flags in a downstream service before activation (e.g. a `t_notification_setting` row, a template record), treat these as tracked RFC deliverables; not "prerequisites another team owns". Document them here with the full BO → management → service call chain if applicable (never reference internal `/inner/` endpoints for operator-facing steps), state what error occurs if the records are absent (error type, retry behavior), and track them in §8 Rollout phases.
-- Clearly distinguish: (a) **source-code changes** in the downstream service (developer work, scoped to this RFC if needed) vs (b) **BO/operator configuration actions** (no code change, but still RFC-scoped deliverables). A statement "no code changes needed in service X" is incomplete when BO setup actions are also required.
-
----
-
-### 6. Business Logic Rules
-
-Purpose: define implementation behavior and precedence.
-
-Must include:
-- Ordered rules (numbered) that define:
-  - decision logic
-  - precedence (what wins when conflicts happen)
-  - idempotency/dedup behavior (if applicable)
-- For each rule:
-  - trigger/inputs (1 line)
-  - behavior (1–3 bullets)
-  - output/effect (1 line)
-
-Rules:
-- Only include rules that matter for correctness (money, identity, eligibility, state transitions).
-- Avoid repeating functional flow steps; focus on rules/decisions.
-
----
-
-### 7. Operability (Metrics, Logs, Alerts)
-Purpose: minimum viable observability for MVP.
-
-Must include:
-- 4–5 metrics total (operational + business mixed), each with:
-  - name
-  - type (counter/gauge/histogram/timer)
-  - emitted by (service + operation)
-  - labels (max 4)
-  - what to do when abnormal (1 line)
-- Key logs (only if non-obvious):
-  - what is logged
-  - what is NEVER logged (PII safety if relevant)
-- Alerts (only if clearly justified by MVP risk):
-  - condition
-  - severity
-  - owning/on-call team (or `(TODO: confirm)`)
-
-Rules:
-- Do NOT create long SLO/SLA theory. Keep it operational.
-- If nothing meaningful is stated in inputs, write:
-  - `Not applicable for MVP: observability handled elsewhere` (only if supported by inputs) OR
-  - provide minimal metrics anyway (preferred).
-
----
-
-### 8. Testing & Rollout
-Purpose: only the critical tests and rollout steps that prevent expensive failures.
-
-Must include:
-- Critical tests (max ~10 bullets unless inputs demand more), focused on:
-  - edge/marginal business cases
-  - idempotency/dedup (if applicable)
-  - failure modes that cause user-visible or financial impact
-- For each test bullet:
-  - scenario/trigger
-  - expected behavior
-  - assertion (what is checked)
-
-Rollout:
-- If there are migrations, flags, or backfills, list:
-  - steps (numbered)
-  - rollback plan (1–3 bullets)
-- When the implementation is intentionally split into deployable phases, add a short phase-separation subsection in §8 before the rollout steps. For each phase include: scope, dependency on earlier phases, and whether it is a safe ship boundary on its own.
-- When a feature adds **net-new volume** to a downstream service (previously 0 or near-0, now potentially high), add an explicit capacity review gate in the rollout plan before the trigger goes live. A feature that *reduces* volume (e.g. via suppression) does not need this gate. State which service, what the volume change is, and why it is new.
-- If no rollout info exists in inputs:
-  - state `(TODO: define rollout plan)` only if needed for MVP delivery.
-
----
-
-## Technical Decision Notes (Non-obvious Choices)
-
-When the RFC makes a non-obvious implementation choice where multiple approaches exist and constraints drive the selection, document it as a named subsection within the relevant RFC section (e.g., "Concurrency Design Note", "Cache Strategy Note"). Structure it as:
-
-1. **Constraints** (non-negotiable inputs that bound the option space; label C1, C2, …)
-2. **Options considered**; comparison table with each constraint as a column; mark ✅ / ❌ per cell
-3. **Elimination trail**; one sentence per eliminated option explaining which constraint it violates
-4. **Recommendation**; state the chosen option and the decision trail: a numbered sequence that maps each constraint to the option's property that satisfies it
-5. **Reversibility note**; one sentence per constraint: which input would need to change to make a previously eliminated option viable again
-
-Rules:
-- The decision trail must be written so a reader who did not attend the discussion can independently verify or challenge the choice using only the RFC.
-- Keep constraints concrete and verifiable (e.g., "`handleMessage()` throws → retry; any early return = silent ack" not "correctness concerns").
-- Do NOT list options that were never seriously considered. Only include options that would be valid if one or more constraints were relaxed.
-- Place the note in the section closest to the implementation detail it justifies; typically Section 3 (Core Concepts/Assumptions) for cross-cutting decisions, or Section 4 (Functional Overview) for flow-specific ones.
-- **Subsection-local terms**: when a Technical Decision Note (or similar analytical subsection) introduces local variables (e.g. N), notation shorthands (e.g. ~10 ms), or abbreviated concepts not defined in the global Terminology, add a "Terms used in this section" table immediately after the subsection heading, before the Constraints block. One row per term; columns: Term | Meaning.
-- **Dimension-specific variable naming**: when an analytical subsection discusses more than one related boundary or cardinality (for example activity-level fan-out vs per-user + task concurrency), do not use a bare single-letter variable like `N` as the primary term. Name the variable after the counted dimension (`fanOut`, `matchedRules`, `distinctTasks`) and state the other boundaries explicitly so the formula cannot be misread as applying to the wrong scope.
-- **Formula clarity**: mathematical formulas with ambiguous operator precedence must use explicit parentheses (e.g. `1 000 ms / (N × 10 ms)`, not `1 000 ms / N × 10 ms`).
-- **PROD verification query for unbounded/configurable variables**: when a constraint documents a variable that is BO-configurable or unbounded at runtime (e.g. "N rules per activity, no code gate"), include a PROD-runnable SQL query immediately below the constraint so engineers can verify the real current value without digging through the codebase. The query must mirror the exact WHERE clause the application uses (same predicates, evaluated at `NOW()`), group by the dimension being counted, and order by count descending so the maximum is the first row. Always qualify table names with the database name (e.g. `afbet_crm.t_crm_user_activity_trigger`).
-- **Zero-row observations**: if the verification query returns zero rows or the inspected table is empty, record that as a point-in-time environment observation only. Do not present it as proof of an upper bound, intended limit, or enforced invariant; pair it with product/source clarification if the design still needs a target boundary.
-
----
-
-## Editing an Existing RFC
-
-When modifying an existing RFC document (adding sections, updating decisions, restructuring content), apply the same structural contract as creation. Do **not** skip this because the skill was not explicitly invoked for the edit.
-
-### Checklist before committing any RFC change
-
-1. **Section order**; Sections must remain Terminology → 1 Header → 2 Problem/Goals → 3 Scope & Dependencies → 4 Functional Overview → 5 Contracts → 6 Business Logic Rules → 7 Operability → 8 Testing & Rollout → Appendix(es). Do not add, rename, reorder, merge, or omit numbered sections.
-
-2. **Placement of new content**; Place new content in the section closest to the detail it justifies:
-   - Cross-cutting decisions → Section 3 (Scope & Dependencies)
-   - Flow-specific decisions → Section 4 (Functional Overview)
-   - Closed decisions (no open alternatives) → inline rationale in the relevant section or a named appendix subsection; do NOT present them as open option comparisons.
-
-3. **Technical Decision Notes**; Any non-obvious technical choice added or substantially revised must follow the full structure defined in §Technical Decision Notes: Constraints → Options table (constraints as columns) → Elimination trail (one sentence per eliminated option) → Recommendation with decision trail → Reversibility note (one sentence per constraint). Partial structures (e.g. recommendation without elimination trail, or options table without reversibility note) are not compliant.
-
-4. **Closed decisions**; When a decision has been made, collapse any options-comparison content to a single named subsection containing: the decision, who made it, when, and the rationale. Remove pros/cons tables for eliminated options; they add noise to a reader trying to understand what will be built.
-
-5. **Terminology**; Any new term introduced in the edit must be defined in the `## Terminology` section. Do not define terms inline in the body for the first time. Exception: subsection-local variables and shorthands used only within a single analytical subsection (e.g. a Technical Decision Note) may be defined in a "Terms used in this section" table at the top of that subsection instead.
-
-6. **Process-tense labels**; Do not use labels that were only meaningful during the review/drafting stage. Replace "(current)" with "(existing)" or "(pre-RFC)", remove "(new)" from stable flow/section headings, and avoid "Refactored" in stable section titles. Use stable descriptive names that remain accurate after the RFC is implemented.
-
-7. **Open question resolution propagation**; When resolving an RFC open question (changing status from "defer" or "open" to decided), grep the entire document for all references to the old state; assumptions, edge cases, flow descriptions, rules, and inline mentions. Update every reference in the same changeset. A resolved question with stale references elsewhere in the RFC is worse than an open question because it creates contradictions.
-
-8. **Substantial edits**; When the edit changes contracts (§5), flows (§4), business rules (§6), or rollout (§8), run **Step 2 – Review pass** before presenting the updated RFC. Skip Step 2 for typo-only or single-bullet clarifications unless the user requests a full review.
+After Step 0 and Step 0.1 gates pass, draft all RFC sections in one pass per `references/rfc-sections.md`. Do not run Step 2 until the draft is complete (all sections present or marked "Not applicable for MVP").
 
 ## Skill Ownership for RFC Lessons
 
 When a lesson changes RFC authoring workflow, section content requirements, or review-checklist expectations:
-- update this `rfc-design` skill at the relevant section
+- update this `rfc-design` skill or `references/rfc-sections.md` at the relevant section
 - add an example/playbook only when needed to illustrate the rule; use project-resolved path from `.ai-playbook/facts.md` TOML (`caller_catalog`, `{tmp_dir}`, or legacy examples dir if the repo still has one)
 - do not treat editing an individual module RFC as the primary fix unless the underlying skill rule is already correct
 
 ---
 
-## Step 2 – Review Pass (Sub-Agents, Mandatory)
+## Step 2 – Review Pass (Sub-Agents, Tiered)
 
-After Step 1 draft is complete, launch review sub-agents **in parallel** before presenting the final RFC. Do not replace this pass with inline orchestrator analysis.
+After Step 1 draft is complete (or when running **Review-local** mode), read `review-agents/review-panel-selection.md` for RFC Light/Full panels and conditional agents, then launch review sub-agents **in parallel** before presenting the final RFC. Do not replace this pass with inline orchestrator analysis.
+
+### Review depth
+
+| Depth | When | Agents |
+|-------|------|--------|
+| **Light** (default) | MVP RFC, first draft, user did not ask for full review | `quality`, `implementation`, `security`, `architecture`, `simplification`, `documentation`, `concurrency` (when matched; see Conditional agents), inline consistency |
+| **Full** | User says "full review", money/security-critical feature, or RFC touches async/queues/multi-service events | All agents in the table below plus inline consistency |
+| **Skip** | Trivial config/doc tweak, or user says "skip review" | None |
+
+User may request **Full** explicitly; do not default to Full without a signal.
 
 ### Hard gates
 
 1. **Launch all relevant sub-agents before revising the RFC.** Do not skip the pipeline because the draft "looks fine."
-2. **Write the staging review file** under `{tmp_dir}/rfc-review/<rfc-slug>-<YYYY-MM-DD>.md` before folding findings into the RFC.
+2. **Write the staging review file** under `{reviews_dir}/YYYY-MM-DD-rfc-review-<rfc-slug>-<mode_or_round>.md` and the matching `.stats.json` sidecar before folding findings into the RFC. Include `## Review Statistics` per `review-staging`.
 3. **Fold findings into the RFC structure** (Step 3). Do not present a separate premortem or review report in chat; print only a short summary and the staging file path.
+4. **Partial review gate:** when more than 2 agents fail (see Budget), write the staging file but do **not** fold findings into the RFC until the user chooses re-review or manual continuation.
+
+### Budget (default)
+
+- Launch all agents for the selected depth in **one parallel batch**; do not run Step 2 twice in one session unless the user requests re-review.
+- **Max 1 relaunch** per agent for insufficient output; record relaunch in the staging file Agent status table.
+- If **more than 2 agents** fail (timeout, empty, or unusable return): write the staging file with partial findings, **do not fold** into the RFC, and report partial review status to the user.
+- **Light:** up to 8 agents (6 shared + consistency, or 7 shared + consistency when `concurrency` matches).
+- **Full:** up to 10 agents (7 shared + conditional concurrency/premortem + consistency); same relaunch and failure rules.
 
 ### Orchestrator boundary
 
 | Do | Do not |
 |----|--------|
-| Launch agents, wait, parse returns, dedup, write staging file | Re-analyze the RFC inline while agents run |
+| Launch agents, wait, parse returns, dedup, write staging file with Review Statistics | Re-analyze the RFC inline while agents run |
 | Fold accepted findings into RFC sections per severity map | Re-read source inputs to expand thin agent findings (relaunch the agent instead) |
 | Spot-check a claim only when evidence is missing or contradicts a quick grep | Author full analysis the agent should have returned |
 
@@ -464,24 +300,25 @@ After Step 1 draft is complete, launch review sub-agents **in parallel** before 
 Each agent receives:
 1. Full RFC draft from Step 1
 2. Original inputs from Step 0 (PRD excerpts, architecture, contracts) when available for evidence checks
-3. Its pattern catalog from `~/.agents/skills/review-agents/<agent>.md`
-4. **Execution framing:** "You are reviewing a Design RFC draft, not a git diff or implementation plan. Read the RFC sections and referenced input context. Apply your pattern catalog to what the RFC **proposes**. Do not flag RFC template formatting (numbered sections, Terminology placement). Return `{section_anchor, quoted_excerpt, issue, severity: Block/Mitigate/Monitor/Accept, fix, evidence}`."
+3. Its pattern catalog from `review-agents/<agent>.md` (resolve via shared skills registry)
+4. **Execution framing:** "You are reviewing a Design RFC draft, not a git diff or implementation plan. Read the RFC sections and referenced input context. Apply your pattern catalog to what the RFC **proposes**. Do not flag correct template placement (Terminology before §1, `###` numbered sections). **Do** flag Terminology writer meta, non-alphabetical or subsectioned glossaries, pseudo-headings (`- Label:` / `**Label:**`), operator matrices in Terminology instead of Addendum, **telegraphic edge cases or operability rows** (undefined jargon, missing Condition/Behavior/Outcome in §4, thresholds without units/subjects), and **body prose that assumes Terminology was read** without restating behavior once. Return `{section_anchor, quoted_excerpt, issue, severity: Block/Mitigate/Monitor/Accept, fix, evidence}`."
 5. **Output limit:** 2–3 findings max per agent; report problems only.
 
-#### Shared agents (from `~/.agents/skills/review-agents/`)
+#### Shared agents (from `review-agents/`)
 
-| Agent file | Focus in RFC context |
-|---|---|
-| `quality.md` | Logic gaps in flows and rules; incorrect assumptions; edge cases missing from §4 |
-| `implementation.md` | Missing wiring, contract field gaps, backward compatibility holes, `(TODO: define)` that block stories |
-| `architecture.md` | Layer violations, god-service patterns, unnecessary complexity in proposed structure |
-| `testing.md` | §8 tests insufficient for §4 flows or §6 rules; tests that could pass with a broken design |
-| `simplification.md` | Over-engineered approach for stated MVP scope |
-| `prose-clarity.md` | Redundant, verbose, or unclear RFC prose; duplicate sources of truth across sections |
-| `documentation.md` | User-visible behavior changes missing from implied doc surfaces |
-| `security.md` | Auth gaps, PII handling, injection surfaces in proposed APIs or events |
-| `concurrency.md` | Race conditions, transactional scope, ordering gaps in proposed behavior |
-| `premortem.md` | Design-level failure modes; frame: "This RFC was approved, implemented, and failed in production. Why?" (all six personas) |
+Launch only the agents required by the selected **review depth** and `review-panel-selection.md`. Full depth runs shared agents marked yes in Full plus consistency; Light runs agents marked yes in Light plus consistency. **`concurrency.md` and `premortem.md` follow panel-selection heuristics/overrides** (concurrency is always on for Full; premortem is never forced by Full alone). **`concurrency.md` also runs at Light when the Conditional agents rule matches.**
+
+| Agent file | Focus in RFC context | Light | Full |
+|---|---|:---:|:---:|
+| `quality.md` | Logic gaps in flows and rules; incorrect assumptions; edge cases missing from §4 | yes | yes |
+| `implementation.md` | Missing wiring, contract field gaps, backward compatibility holes, `(TODO: define)` that block stories; §5 missing per-endpoint JSON bodies | yes | yes |
+| `security.md` | Auth gaps, PII handling, injection surfaces in proposed APIs or events | yes | yes |
+| `architecture.md` | Layer violations, god-service patterns, unnecessary complexity in proposed structure | yes | yes |
+| `testing.md` | §8 tests insufficient for §4 flows or §6 rules; tests that could pass with a broken design | | yes |
+| `simplification.md` | Over-engineered approach for stated MVP scope | yes | yes |
+| `documentation.md` | Missing doc surfaces for user-visible changes; redundant or verbose RFC prose; duplicate sources of truth; **telegraphic §4/§6/§7 bullets** that omit subjects or reuse jargon without restating behavior (two-phase agent) | yes | yes |
+| `concurrency.md` | Race conditions, transactional scope, ordering gaps in proposed behavior | when matched | yes |
+| `premortem.md` | Design-level failure modes; frame: "This RFC was approved, implemented, and failed in production. Why?" (all six personas); opt-in per `review-panel-selection.md` heuristics/overrides | when matched | when matched |
 
 #### RFC consistency agent (inline; no shared file)
 
@@ -491,48 +328,96 @@ Review the RFC draft for internal contradictions:
 2. §4 flows vs §5 contracts vs §6 rules
 3. §5.2 event consumers vs §5.4 downstream impact
 4. §8 tests vs §4 edge cases
-5. Terminology vs body usage (undefined terms, conflicting names)
-6. Technical Decision Notes vs chosen approach elsewhere
+5. Terminology vs body usage (undefined terms, conflicting names; glossary must be flat A–Z with no writer meta; supplementary tables in Addendum not Terminology)
+6. Subsection headings (`####` / `#####`) vs pseudo-headings (nested `- Label:` bullets, bold paragraphs, or `Edge case:` plain lines without `#####`)
+7. Bold usage (glossary term labels only in Terminology; body must not re-bold defined terms)
+8. Technical Decision Notes vs chosen approach elsewhere
+9. **§4 edge cases** use **Edge case: \<title\>** plus Condition / Behavior / Outcome (and Notes when needed); not one-line telegraphic bullets
+10. **§4 edge cases, §6 rules, §7 metrics/alerts** restate behavior in plain language (table/column names OK); thresholds name **what** is counted and the **time window** (e.g. "3+ PARTIAL runs in rolling 24h", not "≥3 in 24h" alone)
 
 Return `{section_anchor, issue, severity: Block/Mitigate/Monitor/Accept, fix, evidence}` with the two contradicting statements quoted.
 
 ### Conditional agents
 
+See `review-agents/review-panel-selection.md` for canonical rules. Summary:
+
 | Condition | Action |
 |-----------|--------|
-| RFC describes async, queues, `@Transactional`, or multi-threaded flows | Launch `concurrency.md` (otherwise still launch; agent may return no findings) |
+| RFC describes async, queues, `@Transactional`, or multi-threaded flows | Include `concurrency.md` at **any depth** (Light or Full; required, not optional) |
+| Premortem domain signals match (`cross-service`, `auth`, `infra-config`, `rollout`, `concurrency`, `new-public-api`) or user says `include premortem` | Include `premortem.md` at **any depth** (Full does not force it) |
 | RFC is trivial config or documentation-only (see skip rules) | Skip entire Step 2 |
 | User says "skip review" | Skip Step 2 |
+| User says "full review" | Use **Full** depth |
 
 ### Staging review file format
+
+Write under `{reviews_dir}/` using naming rules from `review-staging`. The staging doc uses the universal hierarchy (`## Metadata`, `## Review Statistics`, `## Findings`) plus RFC-specific finding severities (`Block` / `Mitigate` / `Monitor` / `Accept`) in **Severity** until folded into the RFC.
+
+Minimum `## Review Statistics` content per `review-staging`: Panel (Solo/Echo columns), Counts, Deduplication groups, Discarded findings (with Pattern), Severity calibration, Triage placeholder. Each staged finding lists **Agents**, **Pattern**, and **Source** `[Prose]` / `[Premortem]` / `[Code]` when applicable.
 
 ```markdown
 # RFC Review: <title>
 
-**Date:** YYYY-MM-DD
-**RFC draft:** <path or "inline draft">
-**Agents:** quality, implementation, architecture, testing, simplification, prose-clarity, documentation, security, concurrency, premortem, consistency
+## Metadata
+- Type: RFC Review
+- Date: YYYY-MM-DD
+- URL or Artifact: <path or "inline draft">
+- Depth: light | full
+- Domains: concurrency, auth
+- Findings: <staged count>
+- Status: STAGED
 
-## Summary
-<1–2 sentences> · Block: N · Mitigate: N · Monitor: N · Accept: N
+## Review Statistics
 
-## Block
-### 1. <title>
-- **Agent:** ...
-- **Section:** §N ...
-- **Issue:** ...
-- **Evidence:** ...
-- **Fix applied:** yes/no; <what changed in RFC>
+### Panel
+| Agent | Status | Raw | Solo | Echo | Relaunch |
+|-------|--------|-----|------|------|----------|
+| quality | complete | 2 | 1 | 1 | no |
 
-## Mitigate
-...
+### Counts
+- Agents launched: <N>
+- Agents skipped: <N>
+- Raw findings (all agents): <N>
+- Staged findings: <N>
+- Discarded during synthesis: <N>
+- Solo staged (unique agent origin): <N>
+- Echo staged (multi-agent dedup): <N>
 
-## Monitor
-...
+### Deduplication groups
+| Staged # | Agents | Theme |
+|----------|--------|-------|
 
-## Accepted (folded to appendix)
-...
+### Discarded findings
+| Agent | Agent severity | Pattern | Theme | Reason | Notes |
+|-------|----------------|---------|-------|--------|-------|
+
+### Severity calibration
+| Staged # | Agent | Agent severity | Staged severity | Delta |
+|----------|-------|----------------|-----------------|-------|
+
+### Triage outcomes
+Pending triage.
+
+## Findings
+
+### 1. <short title>
+- **Severity**: Block | Mitigate | Monitor | Accept
+- **Agent severity**: Mitigate *(omit when equal)*
+- **Pattern**: quality#logic-error
+- **Agents**: quality
+- **Triage**: pending
+- **Anchor**: §N <RFC section>
+- **Source**: [Prose] | [Premortem] | [Code]
+
+#### Comment (posted as-is when approved)
+<Self-contained, suggestion-tone explanation.>
+
+#### Analysis (not posted)
+<Verification trail, fold target (§N / appendix), severity rationale.>
+---
 ```
+
+Dedup before folding: when two agents describe the same root issue, keep the clearest fix, record the merge in **Deduplication groups**, and discard extras with reason `duplicate` or `severity-merged`. Drop findings already addressed in the draft (`already-mitigated`).
 
 ### Severity map (fold into RFC)
 
@@ -543,11 +428,11 @@ Return `{section_anchor, issue, severity: Block/Mitigate/Monitor/Accept, fix, ev
 | **Monitor** | Add to §7 Operability as metric, log note, or alert |
 | **Accept** | Brief "Accepted Risks" appendix subsection (max 3 bullets) |
 
-Dedup before folding: when two agents describe the same root issue, keep the clearest fix. Drop findings already addressed in the draft.
-
 **Skip Step 2 when:**
 - The RFC is a trivial configuration change or documentation-only tweak
 - User explicitly requests skipping review
+
+**Harness regression:** Read `references/eval-cases.md` when auditing this skill or after a Step 2 gate failure.
 
 ---
 
@@ -555,9 +440,9 @@ Dedup before folding: when two agents describe the same root issue, keep the cle
 
 1. Apply severity map revisions to the RFC draft.
 2. Re-scan Terminology for terms introduced during revisions.
-3. Run the editing checklist when modifying an existing file.
+3. Run the editing checklist in `references/rfc-sections.md` when modifying an existing file.
 4. Present **Markdown RFC only** to the user (no generation-time reasoning, no meta commentary).
-5. Print to console: staging review path, counts folded (Block/Mitigate/Monitor/Accept), and one-line readiness note.
+5. Print to console: staging review path, counts folded (Block/Mitigate/Monitor/Accept), partial-review flag if applicable, and one-line readiness note.
 
 ---
 
@@ -574,14 +459,29 @@ Dedup before folding: when two agents describe the same root issue, keep the cle
 
 ## Integration Points
 
-### With `review-agents` skill (mandatory review pass)
-Step 2 launches shared pattern catalogs from `~/.agents/skills/review-agents/` plus the inline consistency agent. Execution framing and severity mapping live in this skill.
+### With `review-agents` skill (review pass)
+Step 2 launches shared pattern catalogs from `review-agents/` plus the inline consistency agent. Execution framing, tiered depth, and severity mapping live in this skill.
+
+### With `review-staging` skill
+Consumes `review-staging` for path pattern `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md`, required `## Review Statistics`, and matching `.stats.json` sidecar. Write staging before folding findings into the RFC; do not use `{tmp_dir}/rfc-review/`.
 
 ### With `premortem` skill
-`premortem.md` sub-agent reads the standalone `premortem` skill for personas and process. Do not invoke the standalone premortem skill directly in the orchestrator; use the sub-agent in the Step 2 parallel launch.
+`premortem.md` sub-agent reads the standalone `premortem` skill for personas and process. Do not invoke the standalone premortem skill directly in the orchestrator; launch the sub-agent in the Step 2 parallel panel only when `review-panel-selection.md` heuristics or user overrides say launch (Full depth does not force premortem).
 
-### With `review-confluence-doc` skill
-Confluence-hosted RFCs use `review-confluence-doc` for feedback on published pages. This skill owns **authoring** new Markdown RFCs and substantial edits; it does not fetch Confluence.
+### With `review-confluence-doc` skill (redirect)
+Confluence-hosted RFCs/TDDs: use `review-confluence-doc` for published-page review. This skill owns **local Markdown** authoring; it does not fetch Confluence.
 
 ### With `review-plan` skill
 Implementation plans derived from an RFC use `review-plan` at execution time. This skill's Step 2 reviews the RFC design artifact, not the downstream plan.
+
+### With `plans` skill (handoff)
+After Step 3, when the user wants implementation work, offer the `plans` skill. Reference the saved RFC file path (under resolved `{rfcs_dir}`) in the plan header.
+
+### With `grilling` skill
+Use before drafting or after a first RFC draft when design choices need explicit user sign-off. Grilling resolves decisions one at a time; do not duplicate RFC body content in chat. Reference the saved RFC path once it exists.
+
+### With `doc-hierarchy` skill (placement)
+RFCs are **Layer 3** history (`{rfcs_dir}`, typically `docs/history/feature-notes/` flat). Do not file them under Layer 2 `docs/architecture/` or legacy `docs/rfcs/`. Read `doc-hierarchy` for layout rules; run **doc-hierarchy-upkeep** when the RFC changes user-visible behavior documented in Layer 1/2.
+
+### With `agents-best-practices` skill (reference)
+For harness-level questions (approval gates, tool permissions, eval strategy for RFC quality), read `agents-best-practices/references/evals.md` and `security-observability.md`. Regression cases for this harness live in `references/eval-cases.md`. This skill owns the RFC document contract; that skill owns general agent harness design.

@@ -15,7 +15,7 @@ Review an RFC or TDD document hosted on Confluence. Provide quality feedback foc
 
 ## Documentation paths
 
-Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0) before writing review output files. Do not hardcode `./docs/tmp/` when project guidelines document a resolved path.
+Read `{reviews_dir}` and `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Primary review staging docs go under `{reviews_dir}` per `review-staging`; do not use `{tmp_dir}` for the main review artifact.
 
 ## Configuration (from facts document)
 
@@ -24,7 +24,8 @@ This skill reads environment-specific values from the user's facts/profile docum
 | Key | Purpose | Example |
 |-----|---------|---------|
 | `atlassian_domain` | Default Atlassian cloud domain | `acme.atlassian.net` |
-| `docs_tmp_dir` | Directory for review output files (prefer resolved `{tmp_dir}`) | `docs/tmp/` |
+| `docs_tmp_dir` | Legacy alias; prefer resolved `{reviews_dir}` for staging docs | `docs/reviews/` |
+| `reviews_dir` | Primary staging doc directory (see `review-staging`) | `docs/reviews/` |
 
 If a key is missing from `.ai-playbook/facts.md`, follow `using-skills` Step 0 (bootstrap only when Terms triggers fire); ask the user only when resolution is ambiguous.
 
@@ -84,7 +85,7 @@ Use the page title, labels, and content structure to classify. If ambiguous, ask
 
 #### Step 4.0 – Prose Clarity Sub-Agent (Mandatory)
 
-Launch `prose-clarity.md` from `~/.agents/skills/review-agents/` before finalizing Step 4 feedback.
+Launch `documentation.md` (phase 2 prose pass) from `~/.agents/skills/review-agents/` before finalizing Step 4 feedback.
 
 The sub-agent receives:
 1. Full fetched document content (parent page plus child pages from Step 2)
@@ -156,7 +157,7 @@ If the document contains implementation logic (code snippets, pseudocode, algori
 - Do NOT use the full PR-oriented `doing-code-review` workflow (no GitHub PR, no sub-agents, no line comments).
 - Instead, apply the *review lens* from relevant sub-agent focus areas:
   - `quality`: bugs, logic errors, edge cases, error handling
-  - `prose-clarity`: redundant or verbose comments and docstrings inside code blocks
+  - `documentation` (prose): redundant or verbose comments and docstrings inside code blocks
   - `security`: injection, secrets, input validation, auth gaps
   - `concurrency`: race conditions, isolation issues (if concurrent logic is present)
   - `simplification`: over-engineering in the proposed implementation
@@ -169,48 +170,101 @@ If the document contains implementation logic (code snippets, pseudocode, algori
 
 ---
 
+### Step 4.7 – Record Review Statistics (Mandatory)
+
+While merging Step 4, 4.5, and 4.6 returns, populate `## Review Statistics` per `review-staging` before writing the staging file:
+
+1. **Panel:** one row each for `documentation`, `premortem`, `orchestrator` (Steps 4.1–4.5), and each inline code lens used in Step 4.6 (`quality`, `security`, `concurrency`, `simplification`, `documentation-prose-code`). Use Status `skipped` when Step 4.6 did not run. Include Solo/Echo columns per `review-staging`. Write the required `.stats.json` sidecar alongside the staging doc.
+2. **Raw counts:** count every finding each source returned before dedup (orchestrator dimensions count as one combined Raw total).
+3. **Deduplication groups:** when prose, premortem, and orchestrator describe the same root issue, list all contributing sources and the staged finding number kept.
+4. **Discarded findings:** one row per raw finding not staged, with reason codes, **Pattern**, and **Agent severity** from `review-staging`.
+5. **Severity calibration** and **Triage outcomes** placeholder per `review-staging`.
+
+Do not report results to the user until statistics are complete (including explicit `None` rows when a table is empty).
+
+---
+
 ### Step 5 – Present Feedback
 
-Output the feedback to a temporary Markdown file for easy reading, and print a summary to the console.
+Output the feedback to a staging Markdown file per `review-staging`, and print a summary to the console.
 
 **File output:**
-1. Write the full review to `{tmp_dir}/review-<page-title-kebab>-<YYYY-MM-DD>.md`
-   - Use `{tmp_dir}` read from `.ai-playbook/facts.md` TOML at skill start.
+1. Write the full review to `{reviews_dir}/YYYY-MM-DD-confluence-review-<page-title-kebab>.md`
+   - Read `{reviews_dir}` from `.ai-playbook/facts.md` TOML at skill start.
 2. Create the directory if it does not exist.
-3. The file contains the full structured feedback (all sections below) with proper Markdown formatting (headings, bullet lists, code blocks, and tables render correctly in any editor/previewer).
+3. The file uses the universal staging hierarchy: `## Metadata`, `## Review Statistics`, `## Findings` (each finding with **Agents**, **Anchor**, **Source**, `#### Comment`, `#### Analysis`).
 
 **Console output:**
 - Print the file path.
-- Print a condensed summary: count of critical/suggestion/advisory items and the top 3 critical findings.
+- Print a condensed summary: count of Critical/Suggestion/Advisory staged findings, discarded count, and the top 3 Critical themes.
 - Do NOT dump the full review to console; the file is the primary artifact.
 
-**File format:**
+**File format** (see `review-staging` for full template):
 
+```markdown
+# Confluence Review: <Page Title>
+
+## Metadata
+- Type: Confluence Review (<RFC | TDD | Other>)
+- Date: YYYY-MM-DD
+- URL or Artifact: <page URL>
+- Findings: <staged count>
+- Status: STAGED
+
+## Review Statistics
+
+### Panel
+| Agent | Status | Raw | Solo | Echo | Relaunch |
+|-------|--------|-----|------|------|----------|
+| documentation | complete | 2 | 2 | 0 | no |
+| premortem | complete | 4 | 2 | 2 | no |
+| orchestrator | complete | 3 | 3 | 0 | no |
+| quality | skipped | 0 | 0 | 0 | no |
+
+### Counts
+- Agents launched: <N>
+- Agents skipped: <N>
+- Raw findings (all agents): <N>
+- Staged findings: <N>
+- Discarded during synthesis: <N>
+- Solo staged (unique agent origin): <N>
+- Echo staged (multi-agent dedup): <N>
+
+### Deduplication groups
+| Staged # | Agents | Theme |
+|----------|--------|-------|
+
+### Discarded findings
+| Agent | Agent severity | Pattern | Theme | Reason | Notes |
+|-------|----------------|---------|-------|--------|-------|
+
+### Severity calibration
+| Staged # | Agent | Agent severity | Staged severity | Delta |
+|----------|-------|----------------|-----------------|-------|
+
+### Triage outcomes
+Pending triage.
+
+## Findings
+
+### 1. <short title>
+- **Severity**: Critical | Suggestion | Advisory
+- **Agent severity**: Suggestion *(omit when equal)*
+- **Pattern**: premortem#rollback-gap
+- **Agents**: premortem
+- **Triage**: pending
+- **Anchor**: §3.2 Upstream timeout handling
+- **Source**: [Premortem]
+
+#### Comment (posted as-is when approved)
+<Suggestion-tone, comment-ready wording for Confluence.>
+
+#### Analysis (not posted)
+<Persona, verification trail, severity rationale.>
+---
 ```
-📝 Review: <Page Title>
-   Type: <RFC | TDD | Other>
-   URL:  <page URL>
 
-─────────────────────────────────────
-
-🔴 Critical (blocks implementation)
-   • <issue>
-   • [Premortem] <issue> (Persona: <X>)
-   • [Code] <issue>
-
-🟡 Suggestions (improves quality)
-   • <issue>
-   • [Premortem] <issue> (Persona: <X>)
-   • [Code] <issue>
-
-🟢 Strengths
-   • <positive observation>
-
-ℹ️  Advisory (premortem, monitor-level)
-   • <observation> (Persona: <X>)
-
-─────────────────────────────────────
-```
+Optional `## Strengths` section (after Findings) when the document is well-written; list up to 3 bullets. Do not invent issues to fill quotas.
 
 Rules:
 - Be specific: reference the section or paragraph where the issue appears.
@@ -219,7 +273,7 @@ Rules:
 - If the document is well-written, say so. Do not invent issues.
 - Tag premortem findings with `[Premortem]` and the originating persona.
 - Tag code review findings with `[Code]`.
-- Tag prose-clarity findings with `[Prose]`.
+- Tag documentation prose findings with `[Prose]`.
 - **Never cite local or internal files** (e.g. `jvm_guidelines.md`, `CLAUDE.md`, internal playbooks) anywhere in the review output: not in the file, not on console, not in Confluence comments. The document author has no access to these files. State the principle and the reason it matters inline instead.
 - **Write the review doc in comment-ready tone.** The review file is the source the comments are posted from; use the same wording (suggestion tone: "we could", "one option might be") in the file so no rephrasing is needed at posting time.
 - **No em dashes** ("; ") anywhere in the review output: not in the file, not on console, not in Confluence comments. Use commas, semicolons, colons, parentheses, or split into separate sentences.
@@ -228,12 +282,12 @@ Rules:
 
 **Console summary example:**
 ```
-📝 Review written to: {tmp_dir}/review-my-rfc-title-2026-05-19.md
-   🔴 3 critical · 🟡 5 suggestions · ℹ️ 2 advisory
+Review written to: {reviews_dir}/2026-05-19-confluence-review-my-rfc-title.md
+   Critical: 3 · Suggestion: 5 · Advisory: 2 · Discarded: 4
 
    Top critical:
-   1. [Premortem] No rollback strategy for migration (Persona: Operator)
-   2. [Code] SQL migration missing index on high-cardinality column
+   1. No rollback strategy for migration ([Premortem])
+   2. SQL migration missing index on high-cardinality column ([Code])
    3. Missing error handling for upstream timeout in §3
 ```
 
@@ -278,7 +332,7 @@ Apply these to every comment regardless of severity:
 ## Integration Points
 
 ### With `review-agents` skill (mandatory prose pass)
-`prose-clarity.md` is launched in Step 4.0 for all document types. Findings merge into Suggestions, tagged `[Prose]`.
+`documentation.md` (phase 2) is launched in Step 4.0 for all document types. Findings merge into Suggestions, tagged `[Prose]`.
 
 ### With `premortem` skill (mandatory)
 Invoked in Step 4.5 after initial quality analysis. All six personas for RFC/Design documents;
@@ -287,8 +341,11 @@ Mitigations become Suggestions. The premortem is run against the document conten
 
 ### With `doing-code-review` skill (conditional)
 Applied in Step 4.6 only when implementation logic is present in the document (code blocks > 10 lines,
-SQL, pseudocode, config-as-logic). Uses the review lens (quality, prose-clarity, security, concurrency, simplification)
-but NOT the full PR workflow. Findings are tagged `[Code]` in the output.
+SQL, pseudocode, config-as-logic). Uses the review lens (quality, documentation, security, concurrency, simplification)
+but NOT the full PR workflow. Findings are tagged `[Code]` in **Source** and listed under inline lens rows in **Panel**.
+
+### With `review-staging` skill (mandatory)
+All reviews write to `{reviews_dir}/` with full `## Review Statistics` per `review-staging` (Solo/Echo, Pattern, Severity calibration, Triage outcomes). Step 6 Confluence comments post from each finding's `#### Comment` block.
 
 ---
 

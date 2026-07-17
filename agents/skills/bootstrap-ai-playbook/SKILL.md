@@ -180,7 +180,7 @@ Return each resolved path to the caller. Substitute `{plans_dir}`, `{reviews_dir
 | `using-skills` | Step 0 reads `.ai-playbook/facts.md`; invokes this skill only when Terms triggers fire |
 | `doc-hierarchy`, `doc-hierarchy-migrate`, `doc-hierarchy-upkeep` | Migration-complete signal and Step 5b for legacy committed facts |
 | `plans`, `execute-plan`, `doing-code-review`, `review-plan`, `learn`, `done`, `docs-branch` | Read TOML keys from `.ai-playbook/facts.md` |
-| `review-confluence-doc`, `rfc-design` | Read `{tmp_dir}` and caller catalog from repo agent facts; `rfc-design` writes review staging under `{tmp_dir}/rfc-review/` |
+| `review-confluence-doc`, `rfc-design` | Read `{reviews_dir}` and `{tmp_dir}` from repo agent facts; primary review staging under `{reviews_dir}/` per `review-staging` (`rfc-design` never uses `{tmp_dir}/rfc-review/`) |
 
 ## Related
 

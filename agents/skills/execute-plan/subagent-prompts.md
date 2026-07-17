@@ -2,6 +2,8 @@
 
 Copy the relevant template, fill placeholders, and launch via your agent's sub-agent execution capability.
 
+**Orchestrator:** after implement → verify → mark checkboxes → `done` for a task, **launch the next task immediately**. Do not ask the user for permission between tasks, between review rounds, or before Phase 3. See SKILL.md "Continuous execution" and Step 1.5.
+
 Placeholders:
 
 | Placeholder | Meaning |
@@ -23,6 +25,7 @@ Placeholders:
 | `<ADDRESS_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-code-review.log.md` |
 | `<MANIFEST_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` |
 | `<LOG_PASS_NUM>` | `1` on first launch for this log path; orchestrator increments on relaunch |
+| `<REVIEW_MODE_NOTES>` | Fresh-review framing + premortem-required note for Step 3.1 (see SKILL.md Verify-fix vs fresh review) |
 
 Log format and **create vs append** rules: see [agent-logs.md](agent-logs.md). If the log file already exists, **append** Pass `<LOG_PASS_NUM>` to the end; **never overwrite** prior passes. Each `done` reads **only logs from the immediately preceding worker step(s)**; not full session history.
 
@@ -168,13 +171,24 @@ Review round: <REVIEW_ROUND>
 Base branch: <BASE_BRANCH>
 Head: current branch
 
+## Review mode (required)
+
+This Step 3.1 pass is a **fresh adversarial** full-branch review.
+
+- Prior review staging docs (if any) are **history / context only**. Do not treat them as a filter.
+- Do **not** limit work to "verify prior fixes still present" or "confirm the branch is still clean."
+- Re-find defects that prior rounds missed, including negative paths (miss, wrong status, stale id) and success-semantic races on mutating APIs.
+- Green plan Validation Commands are necessary but not sufficient; they do not prove miss-path safety.
+
+<REVIEW_MODE_NOTES>
+
 ## Review Scope (two tiers)
 
 <REVIEW_SCOPE>
 
 **Explicit must-fix**; always report valid findings on listed paths.
 
-**Plan-related extension**; for paths not listed, report a finding only when it is causally related to this plan (implements/completes a task, regression from plan work, wiring or docs implied by an explicit change, contradicts a contract the plan changed). Mark unrelated findings `drop` with a one-line reason; do not auto-drop plan-related findings just because the path was omitted from the plan.
+**Plan-related extension**; for paths not listed, report a finding only when it is causally related to this plan (implements/completes a task, regression from plan work, wiring or docs implied by an explicit change, contradicts a contract the plan altered). Mark unrelated findings `drop` with a one-line reason; do not auto-drop plan-related findings just because the path was omitted from the plan.
 
 ## Diff scope
 
@@ -190,6 +204,20 @@ If you materialize diff snapshot files for parallel sub-agents, write them **onl
 
 Use names `diff-r<REVIEW_ROUND>.patch` (full diff) and `src-diff-r<REVIEW_ROUND>.patch` (source/config only). Do **not** write to repo root or use legacy names like `diff_r5.patch` / `src_diff_r5.patch`. Remove orphan repo-root patch files from prior runs at the start of this step if present.
 
+## Premortem
+
+When Review Scope / Domains / changed code include concurrency, `@Transactional`, `FOR UPDATE`, race ITs, or multi-row mutators: **launch premortem** (do not skip on clear-streak / "quiet" rounds). User `skip premortem` overrides.
+
+## Mutator failure-mode matrix (required in staging doc)
+
+Add section `## Mutator failure-mode matrix` before or after Findings. One row per **new or changed** public mutating API on explicit must-fix paths (for example port `insert*` / `promote*` / `replace*` / `ensure*` / `delete*` / `upsert*`).
+
+| Mutator | Miss / wrong-status / stale-id | Concurrent overlap | Evidence |
+|---------|--------------------------------|--------------------|----------|
+| `Type#method` | checked / gap | checked / gap / n/a | IT name, staged finding #, or code pointer |
+
+If a cell is `gap`, stage a finding (Medium when the miss path can mutate unrelated rows or return a misleading success). If the plan has no mutating APIs: write `N/A: no mutating APIs in this plan`.
+
 ## Mode
 
 Branch review (no PR unless user provided a PR URL). **Required deliverable:** a staging doc on disk under resolved `{reviews_dir}/` at:
@@ -200,9 +228,9 @@ Example: {reviews_dir}/2026-06-05-<PLAN_SLUG>-code-review-r<REVIEW_ROUND>.md
 
 (Use `-code-review-r`; not `-plan-review-r`, which is reserved for pre-execution plan reviews from the `plans` skill.)
 
-Create `{reviews_dir}/` if missing. Follow `doing-code-review` staging-doc format (Summary, per-finding sections with Severity and Status). A chat-only summary is not a substitute.
+Create `{reviews_dir}/` if missing. Follow `doing-code-review` staging-doc format and full `review-staging` **Review Statistics** (Solo/Echo, Pattern, Severity calibration, Triage placeholder; per-finding **Agents** and **Triage**). Write matching `.stats.json` sidecar (required per `review-staging`). A chat-only summary is not a substitute.
 
-**Update execution log** at `<REVIEW_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). Include sub-agent launch details, assessment-pass notes, dropped findings, and full return payload.
+**Update execution log** at `<REVIEW_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). Include sub-agent launch details, assessment-pass notes, dropped findings, mutator matrix summary, and full return payload.
 
 ## Acceptance criteria (orchestrator blocks Step 3.2 / address-review without these)
 
@@ -210,6 +238,7 @@ Create `{reviews_dir}/` if missing. Follow `doing-code-review` staging-doc forma
 2. Doc path is under `{reviews_dir}/` (not `{tmp_dir}/` or chat output only).
 3. Return includes the exact staging doc path and finding counts by severity.
 4. `<REVIEW_LOG_PATH>` exists on disk and is non-empty.
+5. Staging doc includes complete `## Mutator failure-mode matrix` (or explicit N/A line).
 
 ## Return format
 
@@ -218,6 +247,7 @@ Create `{reviews_dir}/` if missing. Follow `doing-code-review` staging-doc forma
 - By severity: Critical X, High Y, Medium Z, Low W
 - Staging doc path: <REVIEW_DOC_PATH> (must exist on disk)
 - Execution log: <REVIEW_LOG_PATH> (must exist on disk)
+- Mutator matrix: complete | N/A | incomplete
 
 ### Medium+ pending findings from doing-code-review (provisional: or "none")
 1. Title; Severity; File:line

@@ -39,7 +39,7 @@ report_hits() {
   local label="$1"
   local pattern="$2"
   local hits
-  hits="$(rg -n "$pattern" "${SCAN_STRICT[@]}" "${GLOB_EXCLUDES[@]}" 2>/dev/null || true)"
+  hits="$(rg -n --hidden "$pattern" "${SCAN_STRICT[@]}" "${GLOB_EXCLUDES[@]}" 2>/dev/null || true)"
   if [ -n "$hits" ]; then
     echo "FAIL: $label"
     echo "$hits"

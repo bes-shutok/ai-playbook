@@ -20,31 +20,16 @@ Review for bugs, correctness issues, and quality problems.
 5. Pipeline ordering: does the described insertion point or execution order actually produce the expected result given the real call sequence?
 6. Test/implementation alignment: could a test pass even if the implementation is wrong? Does the test actually exercise the behavior it claims to cover?
 
-## Naming and Clarity
+## Naming and Structural Clarity
+
+Structural clarity stays in this agent. Comment and doc **prose** (redundant inline comments, verbose Javadoc, stale task tags) is owned by `documentation.md` phase 2.
 
 1. Naming consistency: new names follow existing codebase conventions
 2. Redundant words: if a word is in the package/interface name, do not repeat it in the class name
 3. Cognitive complexity: flag methods with deep nesting or multiple branching paths
 4. Single responsibility: one method doing too many things
 
-## Comment Discipline
-
-In production method and constructor bodies, flag inline comments (`// ...`, `# ...`) that document WHAT the code does. Well-named identifiers should do that work.
-
-Acceptable inline comments (WHY-only, single-line):
-- Idempotency invariants ("idempotency safety-net")
-- Concurrent-race reconciliation rationale
-- Ordered-collection type choice (e.g. `LinkedHashMap` for insertion order)
-- Workaround for a specific external bug (with issue/PR link)
-- Hidden constraint that would surprise a reader
-
-Unacceptable inline comments:
-- Restate what the next line does ("// throws IAE on unknown" above `Enum.valueOf(...)`)
-- Reference the current task/PR ("// added for PROJ-1234", "// used by X flow")
-- Multi-line explanations — move to class or method Javadoc/docstring
-- Section-divider banners ("// === Validation ===") — extract to a named private method instead
-
-When repo rules (CLAUDE.md, project-guidelines) specify a stricter comment policy, apply the repo rule.
+**Ownership (tiered):** runtime behavior and algorithm correctness only. Do not report missing wiring, config binding gaps, or layer placement (see `review-panel-selection.md`).
 
 ## Cache and TTL Operations
 

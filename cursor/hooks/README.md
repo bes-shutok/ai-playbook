@@ -18,23 +18,52 @@ mkdir -p ~/.cursor/hooks
 install -m 755 cursor/hooks/git-safety.sh ~/.cursor/hooks/git-safety.sh
 ```
 
+## Install or update `review-staging-gate.sh`
+
+Optional second line of defense for review-loop / staging docs (pairs with
+`scripts/validate_review_staging.py` synced to `~/.ai-playbook/scripts/`).
+
+```bash
+mkdir -p ~/.cursor/hooks ~/.ai-playbook/scripts
+install -m 755 cursor/hooks/review-staging-gate.sh ~/.cursor/hooks/review-staging-gate.sh
+install -m 644 scripts/validate_review_staging.py ~/.ai-playbook/scripts/validate_review_staging.py
+```
+
+Wire via `~/.cursor/hooks.json` (postToolUse after staging writes, beforeShellExecution
+on review-loop commits, optional stop follow-up). See the script header for exact
+matcher notes. If the validator file is missing, prefer failing closed or warning
+loudly rather than silently allowing stub staging docs.
+
 ## Wire `~/.cursor/hooks.json`
 
-If you do not have `beforeShellExecution` yet, merge the example below. If you already have hooks, add only the `git-safety.sh` entry without removing your other hooks.
+Prefer copying from `cursor/hooks.json.example` (includes `git-safety.sh` and `review-staging-gate.sh`). If you already have hooks, merge both without removing your other entries.
 
-See `cursor/hooks.json.example` for a minimal `hooks.json` fragment.
-
-Required entry:
+See `cursor/hooks.json.example` for the full fragment. Minimum review-staging + git-safety wiring:
 
 ```json
 {
   "version": 1,
   "hooks": {
+    "postToolUse": [
+      {
+        "command": "./hooks/review-staging-gate.sh edit",
+        "matcher": "Write"
+      }
+    ],
     "beforeShellExecution": [
       {
         "command": "./hooks/git-safety.sh",
         "matcher": "git ",
         "failClosed": false
+      },
+      {
+        "command": "./hooks/review-staging-gate.sh commit",
+        "matcher": "git "
+      }
+    ],
+    "stop": [
+      {
+        "command": "./hooks/review-staging-gate.sh stop"
       }
     ]
   }

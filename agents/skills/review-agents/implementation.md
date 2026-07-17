@@ -31,4 +31,6 @@ When new config fields, parameters, or data schema fields are added:
 2. Are all failure paths specified? What does the caller see on failure?
 3. Are partial-success scenarios handled (e.g. some items succeed, some fail)?
 
+**Ownership (tiered):** wiring, integration, completeness, return-value propagation, API schema alignment, config/env gaps. Do not report runtime algorithm bugs when wiring is correct, or structural layer violations (see `review-panel-selection.md`).
+
 Report problems only. No positive observations.

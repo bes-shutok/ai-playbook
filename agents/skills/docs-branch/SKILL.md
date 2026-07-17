@@ -169,7 +169,8 @@ unset _docs_parent _del
 
 docs_branch_is_explicit_delete() {
   _target="$1"
-  for _del in "${DOCS_EXPLICIT_DELETES[@]}"; do
+  # set -u: empty array expansion fails on bash < 4.4 without the + guard
+  for _del in "${DOCS_EXPLICIT_DELETES[@]+"${DOCS_EXPLICIT_DELETES[@]}"}"; do
     [ "$_target" = "$_del" ] && return 0
     case "$_target" in "$_del"/*) return 0 ;; esac
   done
@@ -354,10 +355,73 @@ for shadow_path in "${SHADOW_PATHS[@]}"; do
   fi
 done
 
-for del_path in "${DOCS_EXPLICIT_DELETES[@]}"; do
+for del_path in "${DOCS_EXPLICIT_DELETES[@]+"${DOCS_EXPLICIT_DELETES[@]}"}"; do
   rm -rf -- "${DOCS_WORKTREE:?}/${del_path:?}" 2>/dev/null || true
 done
 unset del_path
+
+# Plan-archive move detection: when a plan was archived on the working branch
+# (moved from plans_dir to plans_completed_dir via ``git mv``), the add-only
+# overlay above copies the new completed/ file into the worktree but leaves
+# the stale old-path copy (``cp -rp`` never deletes). The docs branch would
+# then track both locations forever. Mirror the archive move by removing the
+# stale old-path copy when the working tree no longer has it.
+if [ -f .ai-playbook/facts.md ]; then
+  _plans_dir_cfg=$(awk '/^```toml/{f=1;next} f&&/^```/{exit} f&&/^plans_dir[[:space:]]*=/{gsub(/^plans_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
+  _plans_completed_cfg=$(awk '/^```toml/{f=1;next} f&&/^```/{exit} f&&/^plans_completed_dir[[:space:]]*=/{gsub(/^plans_completed_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
+  _plans_dir_cfg="${_plans_dir_cfg%/}"
+  _plans_completed_cfg="${_plans_completed_cfg%/}"
+  if [ -n "$_plans_dir_cfg" ] && [ -n "$_plans_completed_cfg" ] && \
+     [ -d "${DOCS_WORKTREE}/${_plans_completed_cfg}" ]; then
+    find "${DOCS_WORKTREE}/${_plans_completed_cfg}" -maxdepth 1 -type f -name '*.md' -print0 \
+      | while IFS= read -r -d '' _completed_file; do
+          _base="$(basename "$_completed_file")"
+          _old_worktree="${DOCS_WORKTREE}/${_plans_dir_cfg}/${_base}"
+          _live_old="${_plans_dir_cfg}/${_base}"
+          # Remove only if the old-path copy is stale (absent from working tree).
+          if [ -e "$_old_worktree" ] && [ ! -e "$_live_old" ]; then
+            rm -f -- "$_old_worktree"
+          fi
+        done
+  fi
+  unset _plans_dir_cfg _plans_completed_cfg _completed_file _base _old_worktree _live_old
+fi
+
+# Doc-hierarchy rogue-dir detection: when the ``doc-hierarchy-migrate`` skill
+# moves files out of a module-split dir (``docs/<rogue>/``) into a canonical
+# tree (``architecture/``, ``maintenance/``, ``history/``, ``tmp/``), the
+# add-only overlay leaves the stale ``docs/<rogue>/`` copy on the docs branch
+# forever. Remove non-canonical top-level ``docs/<X>/`` dirs from the worktree
+# when the working tree no longer has them.
+#
+# Guard: only active after the repo has migrated (``docs/maintenance/`` exists
+# on the docs branch, the migration-complete signal). On unmigrated repos the
+# canonical layout does not apply, so the add-only invariant is preserved.
+if [ -d "${DOCS_WORKTREE}/docs/maintenance" ]; then
+  _canonical_docs_roots=" architecture maintenance history tmp "
+  for _wt_entry in "${DOCS_WORKTREE}/docs/"*/; do
+    [ -d "$_wt_entry" ] || continue
+    _wt_entry="${_wt_entry%/}"
+    _dir_name="$(basename "$_wt_entry")"
+    case "$_canonical_docs_roots" in
+      *" $_dir_name "*) continue ;;  # canonical root, keep
+    esac
+    # Non-canonical dir on the docs worktree. Remove only if the working tree
+    # no longer has it (signals a completed migration, not a temporary absence
+    # that the add-only safety net should protect).
+    if [ ! -d "docs/${_dir_name}" ]; then
+      rm -rf -- "${DOCS_WORKTREE:?}/docs/${_dir_name:?}"
+    fi
+  done
+  unset _canonical_docs_roots _wt_entry _dir_name
+fi
+
+# Ephemeral Confluence publish snapshots: prune stale *-cf-out.md and __pycache__
+# from the docs worktree when absent from the live checkout (exception to add-only).
+HYGIENE_SCRIPT="${CONFLUENCE_MIRROR_HYGIENE_SCRIPT:-${HOME}/.ai-playbook/scripts/confluence-mirror-hygiene.sh}"
+if [ -x "$HYGIENE_SCRIPT" ]; then
+  "$HYGIENE_SCRIPT" docs-worktree-prune "$DOCS_WORKTREE"
+fi
 
 # Nested repos must not be staged as submodule gitlinks on the docs branch.
 find "$DOCS_WORKTREE" -mindepth 2 -name '.git' -type d | while read -r d; do rm -rf -- "$d"; done
@@ -397,7 +461,7 @@ find "$DOCS_WORKTREE" -mindepth 2 -name '.git' -type d | while read -r d; do rm 
   for shadow_path in "${SHADOW_PATHS[@]}"; do
     git add -f "$shadow_path" 2>/dev/null || true
   done
-  for del_path in "${DOCS_EXPLICIT_DELETES[@]}"; do
+  for del_path in "${DOCS_EXPLICIT_DELETES[@]+"${DOCS_EXPLICIT_DELETES[@]}"}"; do
     git add -f "$del_path" 2>/dev/null || true
   done
 
@@ -454,6 +518,7 @@ This only works when an old `git stash push --all` run happened after the files 
 - **Never** include `.claude/` (or similar local config dirs) in `SHADOW_PATHS`: they stay local-only and are not synced to the branch.
 - Build `extra_shadow_dirs` from the union of live `.ai-playbook/facts.md` and `refs/heads/docs:.ai-playbook/facts.md`. A stale live facts file must not remove already-configured shadow paths.
 - **Add-only sync:** never treat a missing on-disk shadow file as a deletion on the `docs` branch. Restore fill-only from `refs/heads/docs` for every shadow root (including reviews) before sync. Only paths explicitly deleted in the latest `docs` commit may be removed from the worktree and staged as deletions.
+- **Ephemeral tmp prune:** after the add-only overlay, remove stale `docs/tmp/*-cf-out.md` and `docs/tmp/**/__pycache__/**` from the temporary docs worktree when they are absent from the live checkout (`confluence-mirror-hygiene.sh docs-worktree-prune`). `done` Step 2.65 runs `audit-cf-out` first; cf-out is deleted only when hierarchy promotion is complete or the snapshot is STALE.
 - Before syncing, restore any ignored shadow file that exists on the `docs` branch but is missing on disk (fill-only, never overwrite). This recovers content lost by an earlier manual branch switch and prevents the sync from dropping it from the `docs` backup.
 - Before staging on the `docs` branch, always strip LLM artifact gitignore rules and rules matching `extra_shadow_dirs` from `.gitignore` so the branch can track its own files. For a container root such as `resources/source/`, copy only ignored descendants that are not inside a tracked subtree; skip tracked or unignored children such as committed examples. Use `git add -f` when staging to also bypass any `.git/info/exclude` rules that may block adding gitignored paths.
 - The live project checkout is read-only for shadow paths during sync. Copy shadow content to temp storage, then into the temporary docs worktree.

@@ -1,6 +1,6 @@
 ---
 name: receiving-code-review
-description: Use when receiving or addressing existing code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable. Trigger phrases — "address comments", "address PR comments", "process PR comments", "reviewer comments", "copilot comments", "fix review feedback", "respond to review feedback", "address comments in <GitHub PR URL>". Requires technical rigor and verification, not performative agreement or blind implementation. Do not use for fresh PR review; use doing-code-review instead.
+description: Use when receiving or addressing existing code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable. Trigger phrases: "address comments", "address PR comments", "process PR comments", "reviewer comments", "copilot comments", "fix review feedback", "respond to review feedback", "address comments in <GitHub PR URL>". Requires technical rigor and verification, not performative agreement or blind implementation. Do not use for fresh PR review; use doing-code-review instead.
 ---
 
 # Code Review Reception
@@ -38,7 +38,7 @@ Use this workflow when the user asks to process, triage, plan, address, or reply
 2. Read all unresolved thread bodies before deciding what to implement.
 3. Spot-check resolved or outdated threads against current code before skipping them.
 4. Verify each live comment against the referenced file and line.
-5. **Check branch scope**: before staging any fix, confirm the file belongs to this branch's scope. If a comment touches a file outside the branch's folder (e.g., `individual/<name>/` while on a team branch), plan that fix as a separate commit to the appropriate branch — do not include it in the PR's branch commit.
+5. **Check branch scope**: before staging any fix, confirm the file belongs to this branch's scope. If a comment touches a file outside the branch's folder (e.g., `individual/<name>/` while on a team branch), plan that fix as a separate commit to the appropriate branch; do not include it in the PR's branch commit.
 6. Classify each live comment as correctness bug, test quality, cleanup, docs, false positive, or needs clarification.
 7. When a bot cites a guideline to justify a flag, look up the guideline and confirm it applies to this specific file type before implementing. Standard license copyright headers, for example, are not subject to PII redaction rules even if the guideline covers the same keyword (see `coding_guidelines.md §12`).
 8. Deduplicate comments by root cause. Multiple threads about the same root cause become one task.
@@ -156,10 +156,10 @@ SKIP only when one of these conditions holds:
 
 When classifying findings for user questions (design decisions, architectural changes, refactors):
 
-**Never unilaterally classify a Medium/High finding as "skip"** — always present it as an explicit question to the user. Only the user can decide to defer or reject a non-trivial architectural decision.
+**Never unilaterally classify a Medium/High finding as "skip"**: always present it as an explicit question to the user. Only the user can decide to defer or reject a non-trivial architectural decision.
 
 ```
-❌ WRONG: Present findings #28 and #29 as "Skip — architectural change not needed now"
+❌ WRONG: Present findings #28 and #29 as "Skip: architectural change not needed now"
 ✅ RIGHT: Ask user: "Finding #28 proposes moving TaxJurisdictionConfig to domain/. Should I do this?"
 ```
 
@@ -167,7 +167,7 @@ The only findings that may be silently skipped without asking are:
 - Findings already confirmed as `done` by prior code inspection
 - Findings the user explicitly declined in an earlier question in the same session
 
-All others — regardless of your assessment of their complexity or risk — must be presented to the user.
+All others, regardless of your assessment of their complexity or risk, must be presented to the user.
 
 ## When To Push Back
 
@@ -270,13 +270,26 @@ Rules:
 - Human reviewer threads: reply only. Never resolve them.
 - Never silently resolve any thread.
 
+## Staging doc triage outcomes
+
+When triaging findings from a `doing-code-review` staging doc (execute-plan Phase 3, review-loop step 3):
+
+1. Update each finding **Status** (`done`, `drop`, `pending`, `deferred`) and matching **Triage** field per `review-staging` (`fixed`, `dropped`, `pending`, `deferred`).
+2. Recompute `## Review Statistics` → **Triage outcomes** per agent (Staged, Fixed, Dropped, Deferred, Pending). Do not rewrite synthesis tables (Panel, Discarded, Severity calibration).
+3. Update the matching `.stats.json` sidecar when present (required artifact per `review-staging`).
+
+This gives downstream analysis a ground-truth signal for which agents produce fix-worthy findings.
+
 ## Integration Points
 
 ### With `bootstrap-ai-playbook` skill
 Provider for `{plans_dir}` when saving grouped fix tasks from review feedback. Read path keys from `.ai-playbook/facts.md` (see `using-skills` Step 0).
 
+### With `review-staging` skill
+Triage updates **Triage outcomes** and finding **Triage** fields; preserves immutable synthesis statistics from the review pass.
+
 ### With `execute-plan` skill
-Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review` (`pending` Critical/High/Medium findings). Honors the plan's `## Review Scope`. Triage is authoritative for Phase 3 exit: implements fixes, marks `drop`/`done`, leaves only validated issues at `pending`. The orchestrator counts **remaining Medium+** after this step — not provisional `doing-code-review` counts. Does not commit — the orchestrator runs streak evaluation and `done`, then may start the next review round.
+Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review` (`pending` Critical/High/Medium findings). Honors the plan's `## Review Scope`. Triage is authoritative for Phase 3 exit: implements fixes, marks `drop`/`done`, leaves only validated issues at `pending`. The orchestrator counts **remaining Medium+** after this step, not provisional `doing-code-review` counts. Does not commit; the orchestrator runs streak evaluation and `done`, then may start the next review round.
 
 ## The Bottom Line
 

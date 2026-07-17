@@ -76,6 +76,7 @@ Keep SKILL.md focused:
 - **Essentials only** in main file
 - **Details** in references/
 - **Examples** in assets/
+- **Domain gates only:** do not add lengthy tool-choice, retry-loop, or verification guardrails to compensate for default agent behavior (wrong tool, unverified edits, confirmation loops). State format, scope, and workflow gates; keep procedural "how to edit" rules to one short paragraph when needed.
 
 ### 3. Model-Invoked Design
 
@@ -95,14 +96,32 @@ Do **not** hardcode `docs/plans/`, `docs/reviews/`, `docs/examples/`, or module-
 - **Public example placeholders:** In committed skill and instruction files, use neutral fictitious values only; `PROJ-1234`, `PROJ-1234-feature-name`, `your-org.atlassian.net`, `acme.example.com`. Never real Jira keys, employer ticket prefixes, internal feature slugs, org domains, or session-specific identifiers. Resolve real prefixes from the user's facts document at runtime (`jira_ticket_prefix`, `atlassian_domain`), not in skill bodies. Before commit, run `public_hygiene_scan_script` from user facts.
 - **`doc-hierarchy-migrate`** applies the company three-layer schema when the user explicitly runs a migration; it writes resolved paths into the repo for other skills to read. **`doc-hierarchy`** is schema reference; **`doc-hierarchy-upkeep`** is post-migration Layer 1/2 sync.
 
+### 5. Auditing skill quality
+
+When tightening or reviewing an existing skill (not first-time authoring), read:
+
+- [skill-design-principles.md](references/skill-design-principles.md): predictability, leading words, completion criteria, pruning, failure modes
+- [skill-design-vocabulary.md](references/skill-design-vocabulary.md): full term definitions (premature completion, sediment, context load, etc.)
+
+Apply changes using the conventions in this skill (LICENSE, facts keys, tool-agnostic wording, progressive disclosure layout).
+
 ## Skill Structure Patterns
 
 ### LICENSE.txt (required for every new skill)
 
-Every skill directory must include `LICENSE.txt`. Copy from an existing skill (for example `plans/LICENSE.txt` or `done/LICENSE.txt`); do not create a skill without it.
+Every skill directory must include `LICENSE.txt`; do not create a skill without it.
 
+**First-party skills** (authored in this registry):
+
+- Copy from `plans/LICENSE.txt` or `done/LICENSE.txt`.
 - **License:** MIT
 - **Copyright line:** copy verbatim from `plans/LICENSE.txt` (update year if needed). Personal email stays in `LICENSE.txt` only; never repeat it in `SKILL.md` or other skill body text.
+
+**Vendored skills** (copied or adapted from an upstream repo):
+
+- Copy the upstream root `LICENSE` verbatim into `LICENSE.txt` in the skill directory. Do **not** substitute the first-party copyright from `plans/LICENSE.txt`.
+- Example: [mattpocock/skills LICENSE](https://github.com/mattpocock/skills/blob/main/LICENSE) → `Copyright (c) 2026 Matt Pocock` for vendored Matt Pocock skills (`grilling`, `handoff`, `domain-modeling`, `grill-with-docs`, etc.).
+- Record upstream in `metadata.upstream` in `SKILL.md` frontmatter.
 
 When syncing or vendoring skills, copy the full directory (`SKILL.md`, `LICENSE.txt`, and all support files); never sync `SKILL.md` alone.
 
@@ -706,13 +725,35 @@ Don't restrict when:
 3. Use more concise language
 4. Split into multiple focused skills
 
+## Integration Points
+
+### With `agents-best-practices` skill (provider skill)
+
+`agents-best-practices` covers harness design (loops, permissions, MVP blueprints, evals, MCP connector safety). This skill covers **authoring** skills in the shared registry. Scopes do not overlap; use both when building a new harness that includes custom skills.
+
+**When authoring a skill, read from `agents-best-practices`:**
+
+- `references/skills-and-connectors.md`: skill governance (supply-chain review, version pinning), activation/output eval sets, MCP connector attachment and permission boundaries
+- `references/agent-legibility-feedback-loops.md`: when a skill should encode recurring guidance as validators or policies instead of prompt repetition
+
+**When designing a harness, `agents-best-practices` should reference this skill:**
+
+- Point skill authors to `how-to-write-skills` for repo-specific conventions: `LICENSE.txt`, facts-key externalization, `public_hygiene_scan_script`, tool-agnostic wording, and progressive disclosure layout under `agents/skills/`
+
+Do not duplicate progressive-disclosure or frontmatter guidance from `skills-and-connectors.md` in this file; link to it when governance or eval depth is needed.
+
+Skill predictability vocabulary (vendored from [mattpocock/skills](https://github.com/mattpocock/skills)): [skill-design-principles.md](references/skill-design-principles.md) and [skill-design-vocabulary.md](references/skill-design-vocabulary.md).
+
 ## Additional Resources
 
 ### Detailed Guides
 - **Skill Structure**: See [skill-structure.md](references/skill-structure.md)
+- **Harness skill governance and evals**: See `agents-best-practices/references/skills-and-connectors.md`
 - **Frontmatter Guide**: See [frontmatter-guide.md](references/frontmatter-guide.md)
 - **Progressive Disclosure**: See [progressive-disclosure.md](references/progressive-disclosure.md)
 - **Size Guidelines**: See [skill-sizes.md](references/skill-sizes.md)
+- **Skill design principles and vocabulary** (leading words, premature completion, pruning): See [skill-design-principles.md](references/skill-design-principles.md) and [skill-design-vocabulary.md](references/skill-design-vocabulary.md)
+- **External upstream catalogs** (sources to check before importing or refreshing skills): See [skill-upstream-catalog.md](../../../projects/.ai-playbook/skill-upstream-catalog.md)
 
 ## Quick Reference
 
