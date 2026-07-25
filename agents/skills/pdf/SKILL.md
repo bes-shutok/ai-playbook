@@ -82,8 +82,20 @@ contents = r.pages[0].get_contents()
 image_only = not contents  # True => visible content is an image XObject, not vector text
 ```
 
-- `has_acroform=True`: use a field-filling library (e.g. `pypdf` writer, `fillpdf`). Do not overlay.
+- `has_acroform=True`: use a field-filling library (e.g. `pypdf` writer, `fillpdf`). Do not overlay. See the AcroForm workflow below.
 - `has_acroform=False` (flat): generate a text overlay with `reportlab` and merge it onto the original page. Steps below.
+
+### AcroForm field-fill workflow (has_acroform=True)
+
+For forms with real fillable fields, set each widget's `/V` and verify rendering with **Poppler**, not pdfplumber.
+
+1. **Use partial names when mutating widgets via the writer.** After `writer.append(reader)`, each widget's `/T` is the *partial* name (`f_1[0]`), not the fully-qualified path (`topmostSubform[0].Page1[0].f_1[0]`) that `reader.get_fields()` reports. Match on partial names or the fill silently no-ops. Or use `writer.update_page_form_field_values(page, {fq_name: value}, auto_regenerate=True)`, which accepts fully-qualified names and regenerates appearances.
+2. **Checkboxes need both `/V` and `/AS`.** Set `/V` to the on-state name AND `/AS` to the same name (`/AS` is what the renderer reads; `/V` alone may not show the check). Read the on-state from the widget's `/AP /N` keys (e.g. `['/1']` means on-state is `/1`), not by guessing `/Yes`.
+3. **`/Sig` (signature) widgets cannot hold typed text.** Leave them for wet or digital-ID signing; fill the surrounding "Print name of signer" / "Date" text fields instead.
+4. **Map fields to labels via rect geometry, not field order.** Use `pdfplumber` words with `top = page_height - rect[3]` and find the label *above* each widget rect. A label-printing-order swap (e.g. "7 Reference" typeset above "8 DOB" while the row's left cell is 7) misleads if you trust reading order; the rect is ground truth.
+5. **Verify rendering with Poppler, NEVER pdfplumber.** pdfplumber does not extract text from form-field appearance streams, so it reports every filled value as MISSING even when the value renders correctly. Set `AcroForm /NeedAppearances = True` for safety, then confirm with:
+   - `pdftotext -layout <filled.pdf> -` (Poppler, same engine as macOS Preview) — grep for each value.
+   - `pdftoppm -png -r 200` + a dark-pixel count on the checkbox bbox (border-only ≈ 3-6% dark; checked ≈ 8-25%).
 
 ### Overlay workflow for flat forms
 
