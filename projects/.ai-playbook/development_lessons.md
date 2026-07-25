@@ -4329,3 +4329,25 @@ The final design (two-tier platform-level resolver: registry tier 1, row-evidenc
 **Distinguishing from UL#115 (gate too weak):** UL#115 is a gate that FAILS to fire on a real match. This lesson is a gate that fires correctly on its enumerated set but whose set is provably incomplete for the open-ended leak surface: true negatives on the list, false confidence overall. Fix UL#115 = run the gate correctly; fix this = don't treat enumeration as the primary defense.
 
 **See also:** `learn` SKILL Step 1.2 item 1c (generalize across employer identity) and Step 1.7 (proper-noun justification review) are the canonical home for the judgment-review mechanism; UL#115 (gate-too-weak complement); `agent_workflow_guidelines.md` Family H.
+
+## 204. Invoke the Specialized Skill; Do Not Reimplement Its Workflow With Generic Harness Primitives
+
+**Principle:** Family D (Single source of truth for workflow contracts). A specialized skill (`plans`, `review-plan`, `done`, `execute-plan`, `rfc-design`) owns its workflow: format, branch setup, ordering, and quality gates. The harness's generic primitives (plan-mode enter/exit, hand-rolled markdown in a tool call, an inline single-pass critique) look like shortcuts but silently skip the skill's conventions, producing an artifact that fails the very gate the skill exists to enforce.
+
+**Trigger:** A task maps to a specialized skill that is installed and listed in the session's available skills, but the agent reaches for a generic harness mode or hand-rolled output instead of invoking the skill by name. The user then corrects with a variant of "use the X skill" or "the plan/output is wrong, create a proper one with the X skill."
+
+**Rule:**
+1. Before producing any plan, review, RFC, or session-finalization artifact, check whether an installed skill owns that workflow. If yes, invoke THAT skill (via the Skill tool or its slash command) and follow its steps; do not substitute the harness's plan-mode or a hand-rolled document.
+2. The skill's quality gate is not optional theater. A plan written outside the `plans` skill skips `review-plan`; a review done inline skips the panel catalog; a commit done by hand skips `learn` + `docs-branch`. Each omission is a defect the skill exists to prevent.
+3. If a generic harness mode is already active (e.g. plan mode) when you realize a skill should own the workflow, exit that mode and invoke the skill; do not try to "then run the skill after": the skill IS the workflow, including its own branch/file steps the generic mode blocks.
+4. Corollary of UL#184: invocation is the mode selection. But invocation requires actually invoking: pattern-matching "this looks plannable" and entering generic plan mode is NOT invoking the `plans` skill.
+
+**Why this happens:** Generic plan mode and hand-rolled output feel faster (no Phase 0 branch, no interview, no review gate). The skill's value is invisible until the artifact hits its gate and fails, or until the user notices the skipped conventions. Agents also conflate "thinking about a plan" with "running the plans skill."
+
+**Shape trigger:** The session has `plans`/`review-plan`/`done`/`rfc-design` available AND the agent is about to write a plan/review/RFC/commit via a generic tool call or generic plan mode rather than the Skill tool.
+
+**Example:** Asked to create an implementation plan, the agent entered the harness's generic plan mode, drafted the plan inline, and tried to exit-plan-mode to "then run plans." The user corrected twice ("you should have used plans skill instead"; "the plan is wrong. Create a proper plan with plans skill"). Fix: invoke the `plans` skill, which ran Phase 0 branch setup, wrote the format-correct file, and ran the mandatory `review-plan` gate (3 rounds, caught 2 Blockers + 8 Mediums the hand-rolled version would have shipped with).
+
+**Distinguishing from UL#184 (auto-continue after invocation):** UL#184 fires AFTER a skill is correctly invoked (don't re-ask yes/no between its steps). This lesson fires BEFORE invocation (don't bypass the skill with a generic mode in the first place). Fix UL#184 = stop pausing inside the workflow; fix this = enter the workflow.
+
+**See also:** `plans` SKILL (Plan Quality Gate), `review-plan` SKILL, UL#184 (auto-continue), UL#202 (do not override an agent-enforced gate), `agent_workflow_guidelines.md` Family D.
