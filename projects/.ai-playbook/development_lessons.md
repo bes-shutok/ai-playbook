@@ -4293,17 +4293,39 @@ The final design (two-tier platform-level resolver: registry tier 1, row-evidenc
 **Trigger:** A sub-agent (`done`/`learn`/`review`) enforces a mechanical gate (em-dash scan, linter, size gate, secret scan) against content the orchestrator authored. The gate fires, the sub-agent complies and rewrites. The orchestrator "catches" the rewrite, calls it "silent corruption," and reverts the compliant output (e.g. `git commit --amend` to restore the violating version), framing it as "preserving user intent."
 
 **Rule:**
-1. A sub-agent enforcing a repo gate that returns a compliant result is the gate working as designed — not a malfunction.
+1. A sub-agent enforcing a repo gate that returns a compliant result is the gate working as designed, not a malfunction.
 2. Before overriding any agent-enforced gate, escalate first: "Gate X fired; the agent rewrote it. Accept the compliant version, change the policy, or do a better de-violation pass?" Never amend/restore unilaterally.
 3. "User authored it" / "history artifact" / "master has violations" are NOT exemptions. A policy with no documented carve-out applies to every file the gate scans. Exempting a file class is a POLICY CHANGE (edit the rule/script scope), not a per-file veto.
-4. If the compliant rewrite is semantically poor (blanket `X→Y` that mangles meaning), do a BETTER de-violation pass — not a revert to the violating original.
+4. If the compliant rewrite is semantically poor (blanket `X→Y` that mangles meaning), do a BETTER de-violation pass, not a revert to the violating original.
 
 **Why this happens:** The parent pattern-matches the rewrite to "agents silently corrupt prose" before checking whether a gate drove it, then reverts as confident diligence. The tell: the compliant agent is "silently rewriting" and the violating original is "pristine user prose."
 
-**Shape trigger:** Before reverting a sub-agent's edit, ask: (1) Did a repo gate or SKILL step cause it? (2) Does the pre-edit version actually violate that policy (run the gate yourself)? If yes to both, escalate — don't revert.
+**Shape trigger:** Before reverting a sub-agent's edit, ask: (1) Did a repo gate or SKILL step cause it? (2) Does the pre-edit version actually violate that policy (run the gate yourself)? If yes to both, escalate; do not revert.
 
 **Example (execute-plan Task 1 `done`):** A plan file had many U+2014 em dashes. `done` ran `check-no-em-dash.sh touched` (Step 2.76), substituted replacements, committed. The orchestrator restored the em-dash version from a docs-branch snapshot and amended the commit so HEAD held the violating plan, citing "preserving user prose." The user corrected: the `done` agent was doing its job. A follow-up re-did the de-em-dashification; until then the violation sat in history.
 
-**Distinguishing:** (a) Out-of-scope prose edits (sub-agent making unrelated `AGENTS.md` edits with no gate driving them) ARE revertible — discriminator = gate enforcing, or agent freelancing? (b) UL#115 is a gate that FAILS to fire (false pass); here the gate fired and the parent vetoed the correct outcome.
+**Distinguishing:** (a) Out-of-scope prose edits (sub-agent making unrelated `AGENTS.md` edits with no gate driving them) ARE revertible; discriminator = gate enforcing, or agent freelancing? (b) UL#115 is a gate that FAILS to fire (false pass); here the gate fired and the parent vetoed the correct outcome.
 
 **See also:** UL#115 (`touched` misses committed files; gate-too-weak complement), `done` SKILL Step 2.76, `agent_workflow_guidelines.md` Family A.
+
+## 203. Enumeration-Based Leak Gates Cannot Catch Novel Identifiers; Pair Them With a Judgment Review
+
+**Principle:** Family H (verify the real thing, not the abstraction). A deny-pattern scan verifies the *enumerated* bad-token set, not the *leak surface* (any identifier that fingerprints the employer). The enumeration is always a lagging subset of an open-ended surface.
+
+**Trigger:** A public-repo hygiene/leak scan (regex deny-pattern file, secret scanner, any known-bad-token list) reports PASS on content that nonetheless contains employer fingerprints the list never named: a bare company name, a service prefix, a customer country-code list, a ticket prefix, a person's name, an internal URL.
+
+**Rule:**
+1. A deny-pattern scan is a **backstop**, never the primary leak defense; it only catches identifier classes someone already enumerated. Treat a PASS as "no enumerated token matched," not "no fingerprint present."
+2. The primary defense is a **per-identifier judgment review**: re-read the drafted text and, for every proper noun, run the load-bearing test ("does replacing this with a generic role weaken the rule?"). Redact anything that survives. This catches novel identifiers the scan cannot.
+3. When a leak is found post-PASS, do NOT only add the token to the deny list; that fixes one employer's symptom. Ask which layer failed: drafting (generalization didn't interrogate identifiers) or review (judgment step skipped)? Strengthen the failed layer.
+4. Classes most likely to leak *because they read as legitimate context*: service/product/company names and prefixed slugs, ticket-system prefixes (the prefix alone identifies the tracker), customer/market enumerations, person names/handles, internal hostnames/wiki URLs, exact incidental counts.
+
+**Why this happens:** Enumeration scans feel authoritative (mechanical, deterministic, exit-coded), so a PASS feels like proof of cleanliness. Reviewers anchor on it and stop interrogating the prose; novel identifiers sail through because the scan already "covered" them.
+
+**Shape trigger:** A hygiene/secret scan exits clean on content headed for a public repo, AND the content describes a specific incident (lesson, postmortem, example) rather than abstract guidance. Incident prose is where employer fingerprints hide; abstract rules rarely carry them.
+
+**Example:** A lessons corpus passed the repo's deny-pattern scan (which listed an employer slug and email domain) while still containing the bare company name, a country-code customer list, a ticket prefix, and an employee first name, none on any list. The scan reported PASS; the leaks shipped. Fix: added a per-identifier judgment review to drafting and demoted the scan to an explicit backstop. The judgment review catches the next employer's identifiers; the scan only catches repeats.
+
+**Distinguishing from UL#115 (gate too weak):** UL#115 is a gate that FAILS to fire on a real match. This lesson is a gate that fires correctly on its enumerated set but whose set is provably incomplete for the open-ended leak surface: true negatives on the list, false confidence overall. Fix UL#115 = run the gate correctly; fix this = don't treat enumeration as the primary defense.
+
+**See also:** `learn` SKILL Step 1.2 item 1c (generalize across employer identity) and Step 1.7 (proper-noun justification review) are the canonical home for the judgment-review mechanism; UL#115 (gate-too-weak complement); `agent_workflow_guidelines.md` Family H.
