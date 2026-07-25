@@ -66,8 +66,9 @@ If the answer is yes, capture the deeper verification rule, not only the correct
 ### Generalization pass
 Before writing any lesson to its final destination, apply a generalization pass:
 
-1. **Identify the abstract principle** behind the specific incident. Ask: "What is the underlying pattern, independent of this particular technology, file, or module?"
+1. **Identify the abstract principle** behind the specific incident. Ask: "What is the underlying pattern, independent of this particular technology, file, module, **or employer identity**?" Generalize across all of these axes, not only technology — a rule that still requires a specific company, service name, or ticket system to be stated has not been fully generalized.
 1b. **Name the root-cause family and the shape trigger.** Identify which family in the principle catalog (`coding_guidelines.md` #17+) this incident belongs to, and write the *shape trigger*: the situation (independent of this file/module) that should make a future reader suspect this family. If no family fits, propose one to the catalog rather than leaving the lesson unanchored. See the `generalize` skill (`../generalize/SKILL.md`) for the map procedure.
+1c. **Interrogate every proper noun and identifier in the incident** before drafting. Service names, company names, product names, ticket prefixes/IDs, branch/plan slugs, person names, customer/market lists, internal hostnames/URLs, and exact counts/dates are NOT background color — each one must earn its place. For each, ask: "Would the rule be weaker if I replaced this with a generic role ('the target service', 'a reviewer', 'the new markets', 'the feature branch')?" If no, the generic form IS the lesson; the specific value belongs only in your private notes, never in a corpus that may be public. This step is what stops an example from being drafted around `<employer>-<product>-service` / a country-code list / `<TICKET>-10889` in the first place — those read as incidental context but are employer fingerprints.
 2. **State the general rule first**, then add the specific instance as a concrete example. The rule should remain correct even if the specific tool, framework, or module changes.
 2b. **Format using the standard Principle-based Template**: When adding a new lesson (e.g., to `development_lessons.md`), format it according to the standard template defined in the `generalize` skill (`../generalize/SKILL.md` Phase 4.5).
 3. **Check whether the generalized rule already exists** in canonical docs or instruction files, and whether an existing same-family lesson already covers this shape. If either holds, add only the missing witness and cross-link rather than creating a near-duplicate; do not create a duplicate rule.
@@ -82,6 +83,7 @@ Example:
 - **Too specific**: "Excel column headers in the crypto gains sheet should say 'Quantity' instead of 'Amount'"
 - **Generalized (shared scope)**: "User-facing output labels (column headers, API field names, report section titles) should use self-explanatory terminology, not terse names inherited from upstream source formats." → applies to any project, any output surface → place in `coding_guidelines.md`.
 - **Generalized but project-scoped**: "Post-aggregation validation must run after all groups are accumulated, not per-row." → sounds general but assumes batch row processing with mid-accumulation state, so only relevant in data-pipeline projects → keep in project instruction as full text, do not elevate to `coding_guidelines.md`.
+- **Identity generalization (required on every lesson)**: Draft example *"On `<config-repo>` PR #6, commits added `<country-list>` markets but the title still said `<TICKET>-10889: Add <service>-<market> UAT config draft`"* → the employer fingerprints are the config-repo name, the country list, the ticket prefix+ID, and the service slug. None are load-bearing for the rule "keep the PR title in sync with scope as it expands." Generalize to: *"On a config PR, commits added new markets and segment keys but the title still named only the original market draft"* (rule identical, no employer identity leaked). The discriminator: if replacing the identifier with a role/category leaves the rule intact, the identifier was fingerprint, not lesson.
 
 ### Anti-pattern: premature dismissal as "already covered"
 Before discarding a candidate lesson because an existing rule seems to cover it,
@@ -147,28 +149,29 @@ When research is conducted via web search or other external sources:
 - When the same questions recur across sessions
 - Before making technical decisions with alternatives
 
-## Step 1.7: Sensitive-Detail Redaction Gate (required before any lesson is written)
+## Step 1.7: Proper-Noun Justification Review (required before any lesson is written)
 
-A lesson's value is the *generalized rule*, not the incident's proper nouns. Lessons land in corpora that may be public (this playbook is a public repo; project corpora can be synced, forked, or pasted into tickets/PRs). Before writing ANY lesson — draft, user-level, project-level, or skill-embedded — redact incident-specific identifiers so the lesson survives without them.
+This gate is the second layer of defense after the Step 1.2 generalization pass (item 1c). Where 1.2 prevents identifiers from entering the draft, this gate catches any that slipped through by re-reading the *already drafted* text and forcing a justification per identifier. It is NOT a checklist of known-bad tokens — such lists cannot catch the next employer's service names, ticket prefixes, or the bare company name (the leaks that motivated this gate all bypassed enumeration-based scans). It is a per-identifier judgment review.
 
-**Redact (replace with a generic role/category, never the literal value):**
-- Plan filenames, branch names, ticket IDs, PR URLs, and slugs that encode private context (e.g. `2026-07-24-<private-slug>` → "an execute-plan task"; `feature/<internal-codename>` → "the feature branch").
-- Internal service/module names, internal hostnames, internal domains, employee names, customer names, and anything matching the repo's hygiene deny-pattern file (see `public_hygiene_patterns_file` in facts).
-- Exact counts that fingerprint a private codebase when the count is incidental to the rule (e.g. "58 em dashes" → "many em dashes"; keep exact counts only when they ARE the lesson, e.g. a budget/threshold rule).
-- Dates tied to a specific private run → keep the date only if it's how the corpus indexes; otherwise generalize to "a recent run."
+**Why this matters:** Lessons land in corpora that may be public (this playbook is a public repo; project corpora can be synced, forked, or pasted into tickets/PRs). A lesson's value is the generalized rule; employer fingerprints add zero rule value and identify the employer, the team, the customer base, and sometimes individuals.
 
-**Keep:**
-- The skill/step names that the rule operates on (`done` SKILL Step 2.76, `check-no-em-dash.sh`) — those are public playbook artifacts, not private context.
-- The generalized principle, shape trigger, and rule steps in full.
-- Cross-references to other public lessons/docs.
+**The review (run on the drafted text before each Write/Edit of a lesson):**
 
-**Gate (run before each Write/Edit of a lesson):**
-1. Read the drafted lesson text.
-2. For every proper noun, filename, slug, count, or date, ask: "Is this load-bearing for the rule, or is it incident flavoring?" If flavoring, redact it.
-3. Cross-check against the repo's hygiene deny-pattern file if present; redact any hit.
-4. If a sensitive detail is load-bearing (the rule literally cannot be stated without it), escalate to the user before writing — do NOT silently publish it.
+1. **Inventory every identifier** in the draft. Walk the text and list each: service/module name, company/product name, ticket prefix or ID, branch/plan/PR slug, person name, customer/market list or country-code list, internal hostname/URL/wiki link, exact count, and date.
+2. **For each, run the load-bearing test:** "If I replace this with a generic role or category, does the rule lose any enforceable meaning?" Examples of replacement: a service name → "the target service"; a company name → "the company"; a ticket ID → drop it; a country list → "the new markets"; a person → "a reviewer" / "the author"; a wiki URL → "an internal wiki page"; an exact incidental count → "many". If the rule is unchanged, the identifier was fingerprint — redact it. If removing it genuinely weakens the rule, keep it but flag it for step 4.
+3. **Identifier-class awareness (not a closed list — a shape guide):** the classes that most often leak because they *feel* like legitimate context, but almost never are:
+   - Service/product/company names and their prefixed slugs (`<employer>-<product>-service`)
+   - Ticket-system prefixes and IDs (`PROJ-123`, `<EMPLOYER>-456`) — the prefix alone identifies the employer's tracker
+   - Customer/market enumerations (country codes, region lists) — these fingerprint the customer base
+   - Person names, handles, and GitHub logins
+   - Internal hostnames, domains, and wiki/Confluence URLs (even with the org redacted, a real space key or page path can identify)
+   - Exact counts and dates tied to a specific private run (keep only when the count/date IS the rule, e.g. a byte budget)
+4. **Backstop — deny-pattern cross-check:** after the review, run the repo's hygiene deny-pattern file (`public_hygiene_patterns_file` in facts) against the draft. Treat any hit as a definite redact. This catches identifier classes the judgment review might still rationalize away. Note: the deny-pattern file is itself an incomplete enumeration; the judgment review in steps 1-2 is the primary defense, not the pattern file.
+5. **Escalate true load-bearing cases:** if a sensitive identifier genuinely cannot be removed without gutting the rule (rare), escalate to the user before writing — present the rule with and without the identifier and let the user decide. Do NOT silently publish a load-bearing private identifier.
 
-**Self-application:** If a lesson is later found to have leaked a private identifier (plan name, internal slug, employee name), that is itself a learn-skill output defect: fix the lesson AND tighten this gate's checklist so the same identifier class is caught next time.
+**Keep without question:** public playbook artifacts the rule operates on (`done` SKILL Step 2.76, `check-no-em-dash.sh`, `ruff`) — those are this repo's own content, not employer context. The generalized principle, shape trigger, rule steps, and cross-references to other public lessons/docs are likewise kept in full.
+
+**Self-application:** If a lesson is later found to have leaked a private identifier, that is a learn-skill output defect. Fix the lesson, then ask which layer failed: did Step 1.2 item 1c not prompt the interrogation (root cause = generalization), or did the agent skip/rationationalize the Step 1.7 review (root cause = review discipline)? Strengthen the failed layer; do not just add the new token to a list.
 
 ## Step 2: Placement Rules
 
@@ -500,7 +503,8 @@ Before finishing, verify:
 - every new full-text rule added to instruction files is either (a) a cross-cutting reasoning guard with no suitable canonical doc home, or (b) already has its detailed content in the tier-appropriate canonical guideline file with only a `see … #N` reference in the instruction file
 - Step 6.5 instruction size gate passed: `"${HOME}/.ai-playbook/scripts/check-instruction-size.sh" check` exits 0 from the repo root after compaction
 - Step 6.6 passed: user-level `lessons_index.py <user corpus>` exits 0 (or warn-only cold-start); project corpus gated by skill-gate learn marker refresh before each Write/Edit
-- Step 1.7 redaction gate passed: every new/edited lesson has incident-specific identifiers (plan names, slugs, ticket IDs, internal names, fingerprinting counts) redacted to generic roles; only public playbook artifacts (skill/step/script names) and load-bearing details remain
+- Step 1.2 item 1c applied: every proper noun/identifier in the incident was interrogated for load-bearing status and generalized to a role/category where the rule held without it
+- Step 1.7 proper-noun justification review passed: the drafted lesson was re-read, every identifier ran the load-bearing test, employer fingerprints (service/company/ticket/customer-list/person/URL/count/date) were redacted to generic roles, and the deny-pattern backstop raised no hits; only public playbook artifacts and genuinely load-bearing details remain
 - Step 6.6 concision gate passed: every new/edited lesson sits near the corpus word-count median (≤1.5×), has at most one Distinguishing subsection, and the title is ≤~12 words
 - no hybrid bullets remain where canonical tier already holds the full rule text
 - no new facts keys added for portable policy constants that belong in a skill (see Step 2, Facts vs skill configuration)
