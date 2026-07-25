@@ -50,7 +50,7 @@ Project `docs/maintenance/project-guidelines.md` may add **repo deltas** but mus
 | 1 | `docs/README.md` | [company-decisions.md](company-decisions.md) Layer 1 |
 | 2 | `docs/architecture/`, `docs/maintenance/` | Target layout below; seven architecture filenames in [migration-map.md](migration-map.md) |
 | 3 | `docs/history/` | [company-decisions.md](company-decisions.md) Layer 3 |
-| Ephemeral | `docs/tmp/`, `docs/history/reviews/` | [company-decisions.md](company-decisions.md) Ephemeral section |
+| Ephemeral | `docs/tmp/` (documents only: `.md`/`.patch`), root `tmp/` (throwaway scripts + scratch data: `.py`/`.csv`/`__pycache__/`), `docs/history/reviews/` | [company-decisions.md](company-decisions.md) Ephemeral section |
 
 **Layer 3 layout rules** (forbidden legacy roots, RFC placement, no module-split trees): [migration-map.md](migration-map.md).
 
@@ -62,7 +62,7 @@ docs/
 ├── architecture/               # Layer 2; exactly seven topic files
 ├── maintenance/                # Layer 2; guidelines, wire catalogs, optional dashboards/
 │   └── dashboards/             # optional Grafana exports (index from operational-guides.md)
-├── tmp/                        # Ephemeral (gitignored)
+├── tmp/                        # Ephemeral documents only (gitignored): .md logs, .patch snapshots
 ├── history/
 │   ├── context/                # Layer 3; product/domain context (from legacy docs/context/)
 │   ├── plans/completed/
@@ -71,6 +71,8 @@ docs/
 │   ├── reviews/                # Ephemeral (gitignored)
 │   └── feature-notes/          # Layer 3; RFCs, PRDs, gap analyses (flat files)
 ```
+
+**Scripts vs documents split:** `docs/tmp/` is for **documents** only (`.md` logs, `.patch` diff snapshots - synced to the orphan `docs` branch). Throwaway **scripts and scratch data** (`.py` shadow/verification scripts, `.csv`/`.txt` baseline counts, `__pycache__/`) go in repo-root `tmp/` (gitignored, NOT synced to the `docs` branch). See `agent_workflow_guidelines.md` §50.3.1.
 
 Full filename list and move tables: [migration-map.md](migration-map.md).
 

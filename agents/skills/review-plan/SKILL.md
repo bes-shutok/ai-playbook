@@ -39,6 +39,11 @@ Do not use for:
    introduces that overlaps in purpose with existing code (e.g. a new policy enum that supersedes
    a static-constants class). For each, check whether the plan also deletes the original or
    justifies retention. Unaddressed supersession is a finding for the simplification agent.
+6. **Plan-closure matrix**: for every changed or new production file, migration resource, test,
+   documentation artifact, and validation command named in a task, verify the same work is present
+   in the task's Files list, the global Review Scope, the implementation step, and that each named
+   test runs in its owning task gate. Report any mismatch as implementation, testing, documentation,
+   or consistency finding according to the missing element.
 
 ## Step 2: Launch Sub-Agents in Parallel
 
@@ -235,8 +240,9 @@ Report to user:
 
 ## Iteration Discipline (plans skill gate)
 
-When the user asks to run reviews until clean (e.g. "no medium problems", "until ready"):
+When the user asks to run reviews until clean (e.g. "no medium problems", "until ready", "keep review loop until gates are met", "don't ask anymore"):
 
+0. **No mid-loop re-prompt:** once the user has directed continuous review until the quality gate, do **not** ask execute-plan / continue / another round between iterations. Fold Critical/Suggestion, write the staging doc, and immediately launch the next round until the exit condition holds (or the five-cycle reconciliation gate fires).
 1. **Exit condition and minimum rounds:** see `plans` skill Plan Quality Gate (Blocker=0 AND Medium=0, minimum two rounds).
 2. **Severity alignment:** agents emit Critical/Suggestion/Advisory. Step 5 defines how to fold these into plan actions (Blocker/Medium/Monitor).
 3. **Treat a clean review as data, not as a terminal verdict.** A 0 Blocker / 0 Medium outcome can mean either (a) the plan is correct, or (b) the agent catalog lacks patterns to detect defects. Run the self-audit below before stopping after only one round.
@@ -244,6 +250,21 @@ When the user asks to run reviews until clean (e.g. "no medium problems", "until
 5. **Catalog gap discovered → update the skill before re-iterating.** If the self-audit identifies a missing pattern (e.g. "no agent owns 'type-boundary discipline'", "no agent enumerates switches", "no agent checks for superseded code"), add the pattern to the relevant agent file FIRST, then re-run the review. Patching the plan around a catalog gap leaves the gap for future plans.
 6. **Stop when both conditions hold**: the latest review reports Blocker=0 AND Medium=0 (minimum two rounds completed) AND a self-audit against the change types in the plan finds no additional concerns the catalog would have missed.
 7. **Record self-audit gaps as catalog improvements**, not as one-off plan patches. When the self-audit found something the catalog missed, the fix is two-part: patch the plan AND update the agent file or `SKILL.md`. The catalog improvement is the persistent gain; the plan patch is local.
+
+## Five-Cycle Reconciliation Gate
+
+When a user asks for repeated review-and-amend cycles, count one review-fix cycle only after a complete staged review has been triaged and every valid Critical/Suggestion finding has been amended into the plan. Do not run an unbounded loop.
+
+After five consecutive non-clean cycles since the last reconciliation, stop automatic review launches and run a **plan reconciliation** before a sixth review:
+
+1. Read the five staged review artifacts and their JSON sidecars.
+2. Cluster findings by root cause, including findings fixed in earlier cycles, rather than treating each wording variation as a new issue.
+3. Distinguish an omitted local safeguard from an intrinsic plan weakness such as an unclear state machine, split source of truth, incomplete ordering protocol, overloaded migration, or boundary ambiguity.
+4. Update the plan's Terms, Gist, Design Invariants, task decomposition, and tests when the correction is within the approved architecture. Update the relevant review-agent catalog when the five-cycle record exposes a detection gap.
+5. If reconciliation requires a material architectural, scope, or rollout decision, stop and present the concrete options to the user. Do not assume permission to redesign the plan.
+6. Record the reconciliation result in the next staged review artifact or a linked review note, reset the five-cycle counter, and then resume the normal two-clean-round readiness gate.
+
+A user may set a smaller cycle cap. When they do, run the same reconciliation at that cap. A clean round still requires the normal minimum two complete clean rounds; it does not reset a non-clean-cycle count by itself.
 
 ## Signal-to-Noise Rules
 

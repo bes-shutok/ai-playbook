@@ -147,6 +147,29 @@ When research is conducted via web search or other external sources:
 - When the same questions recur across sessions
 - Before making technical decisions with alternatives
 
+## Step 1.7: Sensitive-Detail Redaction Gate (required before any lesson is written)
+
+A lesson's value is the *generalized rule*, not the incident's proper nouns. Lessons land in corpora that may be public (this playbook is a public repo; project corpora can be synced, forked, or pasted into tickets/PRs). Before writing ANY lesson — draft, user-level, project-level, or skill-embedded — redact incident-specific identifiers so the lesson survives without them.
+
+**Redact (replace with a generic role/category, never the literal value):**
+- Plan filenames, branch names, ticket IDs, PR URLs, and slugs that encode private context (e.g. `2026-07-24-<private-slug>` → "an execute-plan task"; `feature/<internal-codename>` → "the feature branch").
+- Internal service/module names, internal hostnames, internal domains, employee names, customer names, and anything matching the repo's hygiene deny-pattern file (see `public_hygiene_patterns_file` in facts).
+- Exact counts that fingerprint a private codebase when the count is incidental to the rule (e.g. "58 em dashes" → "many em dashes"; keep exact counts only when they ARE the lesson, e.g. a budget/threshold rule).
+- Dates tied to a specific private run → keep the date only if it's how the corpus indexes; otherwise generalize to "a recent run."
+
+**Keep:**
+- The skill/step names that the rule operates on (`done` SKILL Step 2.76, `check-no-em-dash.sh`) — those are public playbook artifacts, not private context.
+- The generalized principle, shape trigger, and rule steps in full.
+- Cross-references to other public lessons/docs.
+
+**Gate (run before each Write/Edit of a lesson):**
+1. Read the drafted lesson text.
+2. For every proper noun, filename, slug, count, or date, ask: "Is this load-bearing for the rule, or is it incident flavoring?" If flavoring, redact it.
+3. Cross-check against the repo's hygiene deny-pattern file if present; redact any hit.
+4. If a sensitive detail is load-bearing (the rule literally cannot be stated without it), escalate to the user before writing — do NOT silently publish it.
+
+**Self-application:** If a lesson is later found to have leaked a private identifier (plan name, internal slug, employee name), that is itself a learn-skill output defect: fix the lesson AND tighten this gate's checklist so the same identifier class is caught next time.
+
 ## Step 2: Placement Rules
 
 **First:** Read path keys from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Use resolved paths for the rest of this run; do not invent layout.
@@ -422,6 +445,8 @@ Two corpora, two gates:
 
 The project corpus IS skill-gate gated: absent or stale `learn.<project>.<session>.marker` blocks Write/Edit to `development_lessons.md` with `Invoke the learn skill before editing the project lessons corpus.` The user-level corpus is NOT skill-gate gated; it remains opt-in strict via the script gate in this step only.
 
+**Commit ownership:** `learn` writes the corpus; it does not commit. When the project corpus path is **not** gitignored, `done` Step 3 item 4b must stage it on the feature branch. Do not treat orphan `docs` sync as a substitute for that commit.
+
 ### User-level lessons-corpus gate (script)
 
 The user-level corpus is opt-in strict: lessons captured as cross-project (`UL#N`) must carry a `**Principle:** Family X` (or `Family excluded (<kind>)`) tag so the corpus stays grep-indexable and the `generalize` audit does not lose them. This subsection enforces that invariant on the **user corpus only** before learn finishes.
@@ -444,6 +469,18 @@ Guards, in order:
 
 **Project-tier dup check (warn-only, no script):** project `development_lessons.md`: optional `grep -oE '^## [0-9]+' <project_corpus> | sort | uniq -d` (warn-only). Project corpus writes are enforced by the skill-gate learn class at edit time, not by this script step.
 
+### Lesson concision gate (required before finishing learn)
+
+Lessons are reference material read mid-task, not prose to admire. A lesson that rambles gets skimmed and the rule is lost — the failure mode the `i-have-adhd` skill exists to prevent. Before finishing, apply this gate to every new or substantially edited lesson (user-level `UL#N` and project `#N`):
+
+1. **Word budget:** a single lesson block should sit near the corpus median, not multiples of it. After drafting, `wc -w` the block (from its `## N.` header to the next `## ` header). If it is more than ~1.5× the median of the last 10 same-corpus lessons, tighten it. The Principle/Trigger/Rule/Why/Shape/Example/See-also skeleton stays; the *words inside each* get cut.
+2. **One discriminator, not three.** A lesson may need one "Distinguishing from #X" subsection when a sibling lesson is a near-miss. Two or more discriminator subsections is a sign the lesson is bundling multiple principles — split it, or fold the distinctions into the General form line.
+3. **No restating the rule in the example.** The Example section shows the incident; it must not re-derive the rule. If the Example paragraph restates Rule steps, cut the restatement.
+4. **Sentences under control.** No sentence should run past ~40 words. Long compound sentences with multiple em-dash/parenthetical asides are a red flag — split them. (Apply the `i-have-adhd` shaping rules: lead with the next action, number multi-step rules, cut tangents.)
+5. **Title under control.** The `## N.` title is a scannable label, not an abstract. If it exceeds ~12 words or contains a semicolon, shorten it (the detail belongs in Principle/Rule, not the header).
+
+This gate is blocking: if a lesson is over budget after one tightening pass, either cut more or split the lesson. Do not finish learn with an over-long lesson in the corpus.
+
 ## Step 7: API Contract Naming Hygiene
 When lessons involve external API naming or endpoint shape:
 - Prefer resource-oriented OpenAPI paths and avoid RPC verb segments (`/set`, `/check`, `/resolve`, `/merge`, `/unsuppress`).
@@ -463,6 +500,8 @@ Before finishing, verify:
 - every new full-text rule added to instruction files is either (a) a cross-cutting reasoning guard with no suitable canonical doc home, or (b) already has its detailed content in the tier-appropriate canonical guideline file with only a `see … #N` reference in the instruction file
 - Step 6.5 instruction size gate passed: `"${HOME}/.ai-playbook/scripts/check-instruction-size.sh" check` exits 0 from the repo root after compaction
 - Step 6.6 passed: user-level `lessons_index.py <user corpus>` exits 0 (or warn-only cold-start); project corpus gated by skill-gate learn marker refresh before each Write/Edit
+- Step 1.7 redaction gate passed: every new/edited lesson has incident-specific identifiers (plan names, slugs, ticket IDs, internal names, fingerprinting counts) redacted to generic roles; only public playbook artifacts (skill/step/script names) and load-bearing details remain
+- Step 6.6 concision gate passed: every new/edited lesson sits near the corpus word-count median (≤1.5×), has at most one Distinguishing subsection, and the title is ≤~12 words
 - no hybrid bullets remain where canonical tier already holds the full rule text
 - no new facts keys added for portable policy constants that belong in a skill (see Step 2, Facts vs skill configuration)
 - exact class names appear only where operationally useful or intentionally canonical; normative instructions and canonical docs use role-based wording instead

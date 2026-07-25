@@ -128,6 +128,7 @@ Never use commit subjects like `Close review loop` or `Review complete` until ex
 - Stopping after first fix pass without a **new** step 1
 - Reviewing `git diff` working tree to claim round N is clean while fixes are uncommitted
 - Batching multiple iterations into one commit
+- **Reopening a clear round** because a late/retry panel agent finishes after staging with new Medium+ or Low noise. The exit is the staged fresh-panel verdict on committed `HEAD`. Note genuine late Mediums as follow-ups (or a new round only if the user asks); do not silently amend the clear staging into “not clear.”
 
 ## Quick prompt (user-facing)
 

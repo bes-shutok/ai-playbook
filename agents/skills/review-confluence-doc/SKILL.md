@@ -50,7 +50,7 @@ If a key is missing from `.ai-playbook/facts.md`, follow `using-skills` Step 0 (
 ### Step 1 – Identify the Document
 
 Accept input in any of these forms:
-- A Confluence page URL (e.g., `https://your-org.atlassian.net/wiki/spaces/TEAM/pages/123456/My+RFC`)
+- A Confluence page URL (e.g., `https://your-org.atlassian.net/wiki/spaces/~SPACE-KEY~/pages/123456/My+RFC`)
 - A page title + space key
 - A page ID
 

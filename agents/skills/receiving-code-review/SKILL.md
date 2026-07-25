@@ -269,6 +269,7 @@ Rules:
 - Bot or automated threads: reply, then resolve in the same step.
 - Human reviewer threads: reply only. Never resolve them.
 - Never silently resolve any thread.
+- **Audience is the reviewer, not your human partner.** Thread replies are public to the PR audience. Do not ask the human partner questions there (cherry-pick? push? which branch? want me to…?), offer them options, or park decisions for them. State the technical answer (and commit SHA when relevant). Put partner-only follow-ups in the chat session.
 
 ## Staging doc triage outcomes
 

@@ -1,14 +1,14 @@
 ---
 name: github-pr-workflow
 description: >
-  GitHub PR workflow and shared GitHub PR operations: use as the common GitHub PR URL protocol for active review and passive review skills, and as the primary skill for PR descriptions, PR stats, splitting a branch diff into PR chunks, creating GitHub PR branches, rebasing stacked PRs after parent squash-merge, and creating squashed PR branches. Trigger phrases: "GitHub PR URL", "write the PR description", "PR stats", "split PR", "PR chunks", "split branch", "split the diff", "create PRs", "create the branches", "rebase pr", "rebase on pre-release", "squash", "squashed branch", "squashed PR", "GitHub PR workflow".
+  GitHub PR workflow and shared GitHub PR operations: use as the common GitHub PR URL protocol for active review and passive review skills, and as the primary skill for PR descriptions, PR stats, splitting a branch diff into PR chunks, creating GitHub PR branches, rebasing a child after parent squash-merge, and creating one-off `-squashed` PR branches (not open-stack restack squash). For refreshing a stacked chain when trunk gains commits (merge parent then optional squash), use update-stacked-branches instead. Trigger phrases: "GitHub PR URL", "write the PR description", "PR stats", "split PR", "PR chunks", "split branch", "split the diff", "create PRs", "create the branches", "rebase pr after squash-merge", "rebase --onto", "squashed branch", "one-off squash", "squashed PR", "GitHub PR workflow".
 ---
 
 # GitHub PR Workflow
 
 **Writing:** Follow `agent_workflow_guidelines.md` §45. PR summaries use plain English (e.g. "API response shape", not "wire contract"). Add `## Terms` when using 3+ project-specific words.
 
-Rules for PR description/stats authoring, splitting a branch diff into appropriately sized PR chunks, creating the actual GitHub PR branches, rebasing stacked PRs, and shared GitHub PR operations used by review skills.
+Rules for PR description/stats authoring, splitting a branch diff into appropriately sized PR chunks, creating the actual GitHub PR branches, reparenting a child after parent squash-merge, and shared GitHub PR operations used by review skills.
 
 **Prerequisite:** GitHub CLI (`gh`) installed and authenticated. Commands below use `gh` syntax.
 
@@ -22,7 +22,9 @@ Use these routing rules before acting:
 |---|---|---|
 | Fresh review, e.g. "let's review <PR URL>" | `doing-code-review` | Fetch PR metadata, files, diff, existing comments, and post review |
 | Existing feedback, e.g. "address comments in <PR URL>" | `receiving-code-review` | Fetch review threads, reply to threads, resolve bot threads |
-| PR administration, e.g. description, stats, split, create, squash, rebase | `github-pr-workflow` | Owns the full task |
+| Trunk moved; refresh stacked chain `A → B → C` (merge then optional squash) | `update-stacked-branches` | Not primary; optional follow-up if PR bases still wrong after restack |
+| Parent already squash-merged; reparent child with `rebase --onto` | `github-pr-workflow` | Owns the full task |
+| PR administration, e.g. description, stats, split, create, squashed branch | `github-pr-workflow` | Owns the full task |
 
 Do not use this skill alone to judge review feedback or produce review findings. Delegate judgment to `doing-code-review` for active review and `receiving-code-review` for passive review feedback.
 
@@ -155,6 +157,7 @@ Reply guidelines:
 - For fixes: describe what changed and reference the file/line if useful.
 - For false positives: explain why the code is correct, citing API signatures, versions, or guidelines as evidence.
 - For PR-description-only updates: state that the description was updated to match the implementation.
+- **Reviewer-facing only:** do not ask your human partner questions in the reply (cherry-pick onto another branch, confirm push, choose options). Those belong in chat; the PR reply stays a closed technical statement for the reviewer.
 
 ### Resolve review threads
 Resolve only bot or automated threads after replying:
@@ -178,23 +181,27 @@ gh api graphql -f query='{ repository(owner:"OWNER", name:"REPO") { pullRequest(
 
 Use when the user asks to squash a multi-commit feature branch into a single clean commit for PR review (e.g. with a `-squashed` postfix).
 
-**Scope:** squash only commits ahead of the remote base (`origin/<base>..HEAD`). On the current branch, `git reset --soft origin/<base>` then one commit is the default. Do not rewrite the entire repository history with `git checkout --orphan` unless the user explicitly asks for a full history squash.
+**Open-stack guard:** if trunk advanced and the parent PR is still open, do **not** soft-reset here first. Run `update-stacked-branches` (absorb trunk / parent), then create a `-squashed` branch only if still needed. Soft-reset without absorb reverts trunk commits.
+
+**Parent tip after a local-only restack:** if `update-stacked-branches` just rewrote `<parent>` locally and has not pushed yet, soft-reset / absorb checks must use the **local** `<parent>` tip (or `parent_tip` from that skill), not a stale `origin/<parent>`. Prefer pushing the restacked parent first, or pass the local parent SHA explicitly.
+
+**Scope:** squash only commits ahead of the chosen base (`<base>..HEAD`). On the current branch, require `git merge-base --is-ancestor <base> HEAD` before `git reset --soft <base>`, then one commit. Do not rewrite the entire repository history with `git checkout --orphan` unless the user explicitly asks for a full history squash.
 
 ### Steps
-1. Identify the base branch (check `git branch -a`; default may be `master` not `main`). Fetch and confirm the remote tip before squashing.
-   - **Stacked PRs:** the soft-reset parent must be the **immediate parent feature branch** (the branch the story PR will target), not `pre-release` or an older ancestor. Before committing, verify scope: `git diff --stat origin/<parent>..HEAD` should match the current story only (file count/order-of-magnitude lines), not sibling work from another stacked branch.
-   - If `git reset --hard` is blocked by workspace policy, reparent with `git commit-tree <tree> -p origin/<parent>` instead.
+1. Resolve `<base>` (trunk or immediate parent feature branch). Fetch remotes, then prefer the **local** tip when a just-restacked parent has not been pushed yet; otherwise use `origin/<base>`. Confirm `git merge-base --is-ancestor <base> HEAD` before soft-reset.
+   - **Stacked PRs:** soft-reset parent must be the **immediate parent feature branch** (the branch the story PR will target), not trunk alone when the PR targets a parent. Before committing, verify scope: `git diff --stat <base>..HEAD` matches the current story only (file count/order-of-magnitude lines), not sibling work from another stacked branch.
+   - If `git reset --hard` is blocked by workspace policy, reparent with `git commit-tree <tree> -p <base>` instead.
 2. Detect format-only files; exclude them from the commit to avoid cluttering the PR:
    ```bash
    git diff -w --ignore-blank-lines <base>..HEAD -- <file>
    # empty output = formatting only; non-empty = real change
    ```
 3. Identify gitignored LLM artifacts (`docs/`, `AGENTS.md`, `CLAUDE.md`, `.claude/`): must NOT be committed; restore to working tree after branch creation.
-4. Create the new branch from the base: `git checkout -b <new-branch> origin/<base>`.
+4. Create the new branch from the base: `git checkout -b <new-branch> <base>`.
 5. Cherry-pick only real-change files: `git checkout <source-branch> -- <file1> <file2> ...`.
 6. Apply any `.gitignore` updates (e.g. add `### LLM Agent Artifacts ###` block) and stage them.
 7. Commit everything in a single squashed commit with a clean, feature-focused message.
-8. Push and open a PR against the base branch with `gh pr create --base <base>`.
+8. Push and open a PR against the base branch with `gh pr create --base <base>` (use the branch name, not a raw SHA).
 9. When the user names teammates for a PR, default to **`gh pr edit --add-reviewer`** (or `--reviewer` on create). Use `--assignee` only when they explicitly say assignee/owner.
 
 ### Gitignore block for LLM artifacts
@@ -210,6 +217,8 @@ Use when the user asks to squash a multi-commit feature branch into a single cle
 When the parent PR has been squash-merged into the target branch, use `git rebase --onto <target> <parent-branch>`, NOT `git rebase <target>`, to exclude already-squashed parent commits and replay only the child's own commits.
 
 If conflicts remain (squash diff ≠ cumulative individual diffs), resolve by taking HEAD (`git checkout --ours`): the squash already contains the correct final state. For `modify/delete` conflicts on files deleted by the squash, `git rm` them. Empty commits (whose changes are fully covered by the squash) are dropped automatically by git and can be ignored.
+
+When trunk merely advanced and the parent PR is **still open**, do not use this section. Use `update-stacked-branches` (see that skill's Phase 1). Soft-reset without absorbing parent first reverts trunk commits.
 
 ## Project-Specific PR Templates That Gate Automation
 
@@ -238,6 +247,7 @@ For PRs against repos with PR-metadata-driven CI (notably `config-repo-prod`), t
 - When drafting a PR description, omit verification sections unless the user explicitly asks for verification details or the repository template requires them.
 - When a user asks for PR stats, prefer concise branch-vs-base counts (for example commits plus doc/non-doc file counts) over full file-change or insertion/deletion totals unless the user explicitly asks for churn metrics.
 - Never reference gitignored files (e.g. `AGENTS.md`, `CLAUDE.md`, `docs/`) in PR descriptions, commit messages, or review replies; they do not appear in the diff and cause spurious review comments. Only mention files that are tracked and visible in the PR.
+- **Title stays in sync with scope:** when you push commits or edit the body of an open PR and the change set is no longer what the current title claims (added regions, modules, or deliverables; narrowed scope; retitled ticket), run `gh pr edit <n> --title "..."` in the same turn as the body/files update. Readers judge the PR from the title first; a stale title after a body refresh looks unfinished.
 
 ## PR Chunk Splitting
 When asked to split a branch diff against a base branch (for example `pre-release`) into multiple PRs:
@@ -280,3 +290,8 @@ When the user asks to actually create the PR branches (not just plan them):
 ### Completion Gate
 - All K PR branches must be pushed AND all K GitHub PRs must be created before the task is reported complete.
 - After creating PRs, verify `git diff <base>...<work> -- .` shows no remaining unaccounted files.
+
+## Integration Points
+
+### With `update-stacked-branches`
+Owns refreshing an open stacked chain when trunk advances. During that restack it owns PR base retarget (`gh pr edit --base`). This skill keeps post-squash-merge `rebase --onto`, one-off `-squashed` branch creation, and other PR admin. See `../update-stacked-branches/SKILL.md`.

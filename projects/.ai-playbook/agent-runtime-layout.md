@@ -34,6 +34,12 @@ Use it when:
 - Scope: provider-neutral harness design (loops, permissions, MVP blueprints, evals, MCP/skills governance). Complements first-party workflow skills (`plans`, `execute-plan`, `learn`, `how-to-write-skills`).
 - Re-sync: `git clone --depth 1` or `rsync` from upstream; preserve upstream `LICENSE` copyright in `LICENSE.txt`; run `public_hygiene_scan_script` before commit.
 
+### ADHD-friendly output style (`agents/skills/i-have-adhd/`)
+- `i-have-adhd`: vendored from [ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd) (MIT; `metadata.upstream` set).
+- Scope: shape replies for ADHD-friendly actionability (lead with next action, numbered steps, no preamble/closers). Opt-in: `/i-have-adhd`; off with "stop adhd mode".
+- Runtime: shared registry covers Cursor, Claude skills path, Gemini/Antigravity skills symlink. Claude Code / Codex / Antigravity also use their native plugin installs when configured on the host.
+- Re-sync: sparse-copy upstream `skills/i-have-adhd/` (drop `agents/`); refresh `LICENSE.txt` from upstream `LICENSE`; run `public_hygiene_scan_script` before commit.
+
 ### Productivity and domain skills (vendored from [mattpocock/skills](https://github.com/mattpocock/skills))
 - **License:** copy [upstream LICENSE](https://github.com/mattpocock/skills/blob/main/LICENSE) verbatim into each skill's `LICENSE.txt` (`Copyright (c) 2026 Matt Pocock`). Do not use the first-party `plans/LICENSE.txt` copyright for vendored copies.
 - `grilling`: one-question-at-a-time decision interview before acting; complements `premortem` (failure modes) and `plans` Phase 1.

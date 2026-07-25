@@ -16,13 +16,13 @@ Additional review context for Java/Spring projects. Append to each sub-agent pro
 
 - `@Transactional` propagation: verify scope covers the full logical unit. Watch for self-invocation bypassing the proxy.
 - `@Async` methods must return `void` or `Future`. Exceptions in async methods are lost unless a custom `AsyncUncaughtExceptionHandler` is configured.
-- `@Scheduled` methods: verify thread pool sizing. Default is single-threaded — one slow task blocks all others.
+- `@Scheduled` methods: verify thread pool sizing. Default is single-threaded: one slow task blocks all others.
 - Bean lifecycle: `@PostConstruct` runs before the application is fully wired. Do not call other beans that depend on late initialization.
 - Profile-conditional beans: verify test profiles wire the correct implementations.
 
 ## Java-Specific Concerns
 
-- Enum-to-enum mapping: flag `OtherEnum.valueOf(sourceEnum.name())` in factory methods as a compile-time safety risk. Prefer exhaustive `switch` expressions — they fail at compile time when enum constants drift, while `valueOf` throws `IllegalArgumentException` at runtime. The `valueOf` shortcut can look like a valid simplification when enum names currently match, but it removes the coverage guarantee silently.
+- Enum-to-enum mapping: flag `OtherEnum.valueOf(sourceEnum.name())` in factory methods as a compile-time safety risk. Prefer exhaustive `switch` expressions: they fail at compile time when enum constants drift, while `valueOf` throws `IllegalArgumentException` at runtime. The `valueOf` shortcut can look like a valid simplification when enum names currently match, but it removes the coverage guarantee silently.
 - Null safety: prefer `Optional` return types for query methods. Never return null from a method declared to return a collection.
 - Stream API: streams are single-use. Reusing a closed stream throws `IllegalStateException`.
 - Checked exceptions: verify exception handling contracts match interface declarations. Wrapping checked exceptions in `RuntimeException` loses the contract.
@@ -32,7 +32,7 @@ Additional review context for Java/Spring projects. Append to each sub-agent pro
 
 ## Transport Exception Mapping
 
-- In transport converters, registries, and dispatchers: verify that ALL client-caused error paths (unsupported enum values, null discriminators from Jackson unknown-value handling, unknown operation types) throw typed domain exceptions mapped to 4xx — never generic `IllegalArgumentException`/`IllegalStateException` that fall through to the 500 handler.
+- In transport converters, registries, and dispatchers: verify that ALL client-caused error paths (unsupported enum values, null discriminators from Jackson unknown-value handling, unknown operation types) throw typed domain exceptions mapped to 4xx, never generic `IllegalArgumentException`/`IllegalStateException` that fall through to the 500 handler.
 - When a `Map.get()` or `EnumMap.get()` returns null for a client-supplied key, the resulting error must surface as 400, not 500.
 
 ## Collection Invariants in Records/Commands
@@ -47,6 +47,19 @@ Additional review context for Java/Spring projects. Append to each sub-agent pro
 - Micrometer metrics: counters, timers, and gauges for key operations.
 - Trace context propagation across async boundaries.
 - Error counters for catch blocks that swallow exceptions.
+
+## Spring Cloud Config / per-workspace overlays
+
+- For active `spring.application.name` (and similar identity keys) in config-repo `.properties`, compare to the **target service** packaged `application.yml`. Do not copy a sibling service's name pattern (for example a long prefixed name `example-crm-*` vs a short unprefixed `crm-*`) from ADR comments or filenames alone.
+- Before requiring a key because a sibling overlay has it, confirm this service has a consumer (binding, post-processor, or fail-fast validator).
+- Before treating a missing overlay key as a boot crash, check whether the JAR already supplies a non-empty default; if it does, prefer a Low go-live checklist note.
+
+## MyBatis (annotation mappers)
+
+- Mutating SQL mapped as `@Select` (`INSERT` / `UPDATE` / `DELETE`, including write CTEs with `RETURNING`) must declare `@Options(flushCache = Options.FlushCachePolicy.TRUE)`. Default SELECT cache policy leaves SqlSession local cache stale across same-transaction retries or follow-up reads.
+- Prefer the same `@Options(flushCache = …)` on `SELECT … FOR UPDATE` that gates a later write when callers re-read in the same session.
+- When a migration adds or renames tables/indexes that local bootstrap checks, flag missing updates to operator verify scripts (for example `docker/verify-local-schema.sh` `EXPECTED_TABLES` / `EXPECTED_INDEXES`) in the same change set.
+- Documented config shapes (ISO alpha-2, enum sets, regex) must fail at the earliest startup gate (`EnvironmentPostProcessor`, `@PostConstruct` on `@ConfigurationProperties`, or fail-fast binder), not only via trim/uppercase or a later binder error.
 
 ## Build and Dependency
 

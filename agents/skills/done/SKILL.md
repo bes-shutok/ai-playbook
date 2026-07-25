@@ -53,11 +53,16 @@ Parallel agent sessions on the **same git repository** must not run `learn`, `do
    LABEL="$(git branch --show-current 2>/dev/null || echo unknown-branch)"
    MAX_WAIT="${DONE_LOCK_AGENT_MAX_WAIT_SECS:-90}"
    LOCK_SCRIPT="${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}"
-   if ! eval "$("$LOCK_SCRIPT" wait-acquire --label "$LABEL" --max-wait "$MAX_WAIT")"; then
+   if ! LOCK_EXPORTS="$("$LOCK_SCRIPT" wait-acquire --label "$LABEL" --max-wait "$MAX_WAIT")"; then
      "$LOCK_SCRIPT" status >&2
      echo "done-lock: blocked after ${MAX_WAIT}s; another done holds the lock" >&2
      echo "done-lock: if holder PID is dead or lock is stale, run: $LOCK_SCRIPT stale-clean" >&2
      exit 2
+   fi
+   eval "$LOCK_EXPORTS"
+   if [[ -z "${DONE_LOCK_DIR:-}" || -z "${DONE_LOCK_TOKEN:-}" ]]; then
+     echo "done-lock: acquire succeeded without lock exports" >&2
+     exit 1
    fi
    ```
 
@@ -343,6 +348,7 @@ After learn and stash steps complete:
 
 0. **Distinguish session changes from pre-existing local changes.** Only commit changes that were made during this session. If `git status` shows uncommitted files that were not touched by you in this session, ask the user before staging them; they may be in-progress work the user does not want committed yet.
 1. Run `git status` and `git diff` (staged + unstaged) to see all changes.
+   **Pre-commit guard (post sub-agent git op):** Step 2 `docs-branch` (and any prior sub-agent `git worktree`/`git checkout`/`git stash` operation) can leave the main repo's index/worktree in a REVERTED state relative to HEAD while HEAD stays correct. Before staging, run `git diff --cached --stat`: if it shows large deletions across files you did not edit this iteration (e.g. +73/-1062 across 14 files) OR the test count dropped vs the last known-good count on HEAD, a leaked revert is staged. Run `git reset --hard HEAD`, re-stage only your intended edits, then re-verify. Never use `git add -A`/`git add .` here, or the rollback is swept into the commit. (Witness: 2026-07-23 group-leftover-crypto-warnings r6; see project `development_lessons.md` lesson on this family.)
 2. Run `git log --oneline -5` to match existing commit message style.
 3. Derive the story key from the current branch name (e.g. `feature/PROJ-1234-...` → `PROJ-1234`). If the branch name contains no story key, use a plain descriptive commit message without a ticket prefix on branches such as `main` or `master`. Ask the user only if the repository convention is unclear and there is no obvious non-ticket fallback.
 4. **Before staging any file, verify it is not gitignored:**
@@ -353,8 +359,9 @@ After learn and stash steps complete:
    ```bash
    git rm --cached <file>
    ```
-   Gitignored files belong on the `docs` branch only (handled in Step 2.1), not on the working feature branch.
-5. Stage relevant non-ignored files. Prefer adding specific files by name; never use `git add -A` or `git add .` unless the user explicitly requests it.
+   Gitignored files belong on the `docs` branch only (handled in Step 2), not on the working feature branch.
+4b. **Session-touched project lessons corpus (non-ignored):** After Step 1 (`learn`), if this session created or updated the project lessons file (`docs/maintenance/development_lessons.md`, or `PROJECT_CORPUS_REL` from `lessons_recall.py`) and `git check-ignore` does **not** match it, **stage and commit it on the feature branch** with the other session changes. Untracked (`??`) is not a skip reason. Syncing the same path to the orphan `docs` branch in Step 2 does **not** replace the feature-branch commit. Only gitignored corpora stay docs-branch-only.
+5. Stage relevant non-ignored files (including 4b when it applies). Prefer adding specific files by name; never use `git add -A` or `git add .` unless the user explicitly requests it.
 6. Write a concise commit message. If there is a story key, prefix with `[<STORY-KEY>]`; otherwise use a plain descriptive subject. Focus on the "why" not the "what".
 7. Commit using a HEREDOC. **Never** add `Co-Authored-By:` or `Co-authored-by:` trailers or use `git commit --trailer` for agent attribution. See user `AGENTS.md` (Git Commit Trailer Policy). If your IDE adds co-author trailers automatically, disable agent attribution in its settings.
 8. Run `git status` after the commit to confirm success.
@@ -477,6 +484,7 @@ Step 2.64 validates session-touched staging docs under `{reviews_dir}/` before d
 - Run Step 2.65 (Confluence mirror validate, audit-cf-out promotion gate, ephemeral `docs/tmp` cleanup) before `docs-branch` when the manifest exists or the session touched Confluence mirrors, wiki pages, or ephemeral publish snapshots.
 - Always verify that new or revised reusable docs, reference material, and explanatory artifacts added in the session are referenced from instructions or related canonical docs where future agents will need them.
 - Never stage or commit a file that is gitignored, even if it appears in `git diff` (it was previously force-tracked). Use `git rm --cached` to remove it from tracking; do not commit it on the feature branch.
+- Never skip a session-touched, non-gitignored project lessons corpus (`development_lessons.md`) just because it is untracked or already synced to the orphan `docs` branch; commit it on the feature branch (Step 3 item 4b).
 - Never add `Co-Authored-By:` or `Co-authored-by:` trailers or use `git commit --trailer` for agent attribution. See user `AGENTS.md` (Git Commit Trailer Policy). Disable automatic agent attribution in IDE settings when present.
 - Never use `--no-verify`.
 - Never commit secrets, PII files (`.env`, credential files), or personal/org-specific information into public repositories.

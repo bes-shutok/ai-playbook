@@ -26,6 +26,8 @@ Orchestrate plan execution from the main agent. Always run Phase 0 (branch setup
 
 **Continuous execution:** Once execute-plan is invoked, run the full plan end-to-end (Phase 1 tasks → Phase 2 → Phase 3 → Phase 4) **without asking for permission between steps**. Brief progress reports are fine; stopping to ask "proceed to Task N?" or "start review?" is not. Pause only on hard gates (failure, timeout, max review rounds, user interrupt, or explicit user abort).
 
+**Terminal-response gate:** A worker or `done` sub-agent completing is a checkpoint, never a completion signal for the parent. The manifest begins with `workflow_state: active` and is the terminal-state receipt: before sending a final response, the parent must read it and confirm it records `workflow_state: complete`, the Phase 5 success checklist, and the archived plan path. If any of these is false, it must continue with the next defined phase or report a hard gate in commentary, not end the task. A user status question, correction, or "why did you stop?" message is also non-terminal: answer it in commentary, re-read the manifest, and resume the next defined phase in the same turn unless the user explicitly pauses or aborts. In particular, a single clear review round, a `done` commit, or a launched next review is not a valid terminal state.
+
 **Announcement is not execution.** Saying you are using this skill does not satisfy it. The parent agent must run the Phase 1 loop (implement sub-agent → verify → mark checkboxes → **done sub-agent** → report) for **each** task. Passing tests or marking all checkboxes in one parent session is **not** a substitute for per-task `done` commits.
 
 ## Invocation detection (run first)
@@ -126,6 +128,8 @@ Do not start Phase 1 until execute-plan is chosen (invocation signal or gate opt
 | Overwrite an existing worker log on relaunch | Same path = append Pass N to end; never truncate `review-r<R>-receiving-code-review.log.md` or other worker logs |
 | Delete `{tmp_dir}/execute-plan/<PLAN_SLUG>/` before success or on failure/interrupt | Tmp logs are removed only in Phase 5 after full successful completion |
 | Exit Phase 3 after one clear round | Requires **two consecutive** clear review rounds (`consecutive_clear_rounds >= 2`) and `review_round <= 10` |
+| Return a final response after a worker checkpoint | A worker final, `done` commit, or review launch is progress only; the parent must pass the terminal-response gate and complete Phase 5 first |
+| Return a final response after answering a status or interruption question | A status/correction question does not pause execution; answer in commentary, then re-read the active manifest and continue unless the user explicitly says pause or abort |
 | Treat post-fix Step 3.1 as "verify prior fixes only" | Causes verification bias; clear rounds must be **fresh adversarial** reviews (promote miss-path after boolean false) |
 | Clear a round with empty mutator failure-mode matrix | Zero Medium+ is not enough; matrix is part of the clear-round quality bar |
 | Skip premortem on clear-streak rounds when plan had concurrency | Premortem stays launched whenever concurrency/transactional mutators are in Review Scope |
@@ -278,6 +282,8 @@ Create `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` if missing:
 
 ```markdown
 # Execute-plan session: <PLAN_SLUG>
+
+workflow_state: active
 
 | Step | Log path | Status |
 |------|----------|--------|
@@ -484,6 +490,7 @@ Pass `<REVIEW_LOG_PATH>` per [agent-logs.md](agent-logs.md). Pass `review_round`
 4. Doc follows `doing-code-review` staging format sufficiently for Step 3.2 parsing (findings with Severity/Status/Triage) and includes populated `## Review Statistics` per `review-staging` (including Solo/Echo, Pattern, Severity calibration).
 5. Doc includes `## Mutator failure-mode matrix` with a row per new/changed public mutator on explicit must-fix paths (or an explicit `N/A: no mutating APIs in this plan` line). Incomplete matrix → relaunch Step 3.1.
 6. When plan scope included concurrency signals: Panel shows `premortem` as `complete` (not `skipped`) unless the user explicitly said `skip premortem`.
+7. **Panel actually ran (anti-Solo-collapse check).** The `## Review Statistics` -> Panel table must show the 7 default agents (`quality`, `implementation`, `testing`, `simplification`, `documentation`, `architecture`, `security`) with status `complete` (ran and returned, even if zero findings) - **not** `folded into Solo` / `Raw=0` with status `skipped`. A staging doc whose only `complete` row is `orchestrator (Solo adversarial pass)` is an inline Solo pass, not a panel review: relaunch Step 3.1 with the panel-launch instruction (see Code Review template "Panel launch" section). Per-step agents (`concurrency`, `premortem`) may be `skipped` only when `review-panel-selection.md` authorizes the skip and the reason is recorded. This gate exists because a wrapped `doing-code-review` sub-agent with no fan-out capability silently collapses to Solo and the "Solo" statistic label passes every other check; see UL#190.
 
 If any check fails, relaunch the review sub-agent; do **not** enter Step 3.2 or launch address-review.
 
@@ -562,6 +569,8 @@ The sub-agent **reads those preceding-step logs before `learn`**; not implement 
 
 **Do not return to Step 3.5 until done sub-agent succeeds.**
 
+The parent must then execute Step 3.5 in the same active run. Do not send a final response merely because the `done` sub-agent returned; it is an iteration checkpoint, not an execute-plan terminal state.
+
 **Done sub-agent verification gate (orchestrator, before Step 3.5):**
 
 1. `done` sub-agent confirmed it read preceding-step logs only (review log; address log if Step 3.3 ran).
@@ -618,6 +627,8 @@ Delete the execute-plan session directory **only after the full workflow succeed
 
 **If any item is false**; do **not** remove tmp files (preserve for resume, debugging, or `learn` on retry).
 
+**Exit-path throwaway-script cleanup (every terminal exit, not just success):** The success-only gate above is correct for `.md` logs (which have resume/`learn` value), but it is the wrong gate for throwaway scripts and scratch data. On ANY terminal exit (user interrupt, max-rounds stop, handoff, crash) where Phase 5 success cleanup did not run, the orchestrator (or the operator before the next `docs-branch` sync) must audit `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for throwaway `.py`/`.csv`/`.txt`/`__pycache__` files and either delete them or relocate them to repo-root `tmp/` per `agent_workflow_guidelines.md` §50.3.1. Reason: `docs-branch` is add-only and never auto-prunes, so throwaway scripts that ride along with the `.md` logs get synced permanently and accumulate across plans. Keep the `.md` logs; drop the scripts.
+
 **Removal (orchestrator runs directly; not a sub-agent):**
 
 ```bash
@@ -633,6 +644,8 @@ test ! -e "{tmp_dir}/execute-plan/<PLAN_SLUG>" && echo "tmp cleanup OK"
 ```
 
 Report successful plan completion to the user, including that session tmp logs and any review diff snapshots under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` were removed. Review staging docs under `{reviews_dir}/` are **not** deleted by this step (separate lifecycle).
+
+Before its final response, the parent must write `workflow_state: complete` plus the archived-plan path and last commit SHA to `manifest.md`, then re-read that receipt. Only after this report condition is true may the parent send its final response for the execute-plan request. A missing session directory or an `active` manifest is evidence that execution is still in progress, not a reason to return a final answer.
 
 ## Sub-Agent Launch Rules
 

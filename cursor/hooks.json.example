@@ -26,8 +26,13 @@
       },
       {
         "command": "./hooks/no-em-dash.sh",
-        "matcher": "Write|StrReplace|EditNotebook|mcp_slack_|Confluence|confluence|Jira|jira|atlassian",
-        "failClosed": true
+        "matcher": "Write|StrReplace|EditNotebook",
+        "failClosed": false
+      },
+      {
+        "command": "./hooks/no-em-dash.sh",
+        "matcher": "mcp_slack_|updateConfluence|createConfluence|editJira|createJira|addCommentToJira|addWorklogToJira|createIssueLink|transitionJira",
+        "failClosed": false
       }
     ],
     "postToolUse": [

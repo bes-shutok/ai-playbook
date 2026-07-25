@@ -65,6 +65,7 @@ At task start: read **`user_facts_path`**, then ownership/repo facts when scoped
 ## Hard rules (keep inline; high frequency)
 
 - **Git push:** never push without explicit user instruction; never force-push without approval.
+- **Slack outbound:** draft-only. Never send, post, schedule, edit, delete, or react in Slack, even when a request's phrasing could imply it. Create drafts only. Change this hard rule only if the user explicitly asks to do so; a request to "answer," "reply," or "write" means create a draft, not send it.
 - **Execute-plan:** per-task `done` commits authorized for that run only; push still requires explicit instruction. See `execute-plan` skill.
 - **Co-authored-by:** never add `Co-authored-by:` / `Co-Authored-By:` trailers; no `git commit --trailer` attribution. Disable Cursor Agent Attribution.
 - **Formatting-only commits:** before commit, inspect full per-file diff; `git diff -w` is insufficient. See `agent_workflow_guidelines.md` #6.

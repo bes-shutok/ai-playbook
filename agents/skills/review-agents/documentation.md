@@ -72,6 +72,13 @@ When review finds current code behavior that module docs, BFF contracts, or high
 - Recommend a **tech debt** or **implementation fix** bullet under the relevant Task (or Core Concepts), with target task key when known.
 - Do not treat gitignored `{reviews_dir}/` staging as sufficient backlog; module high-level tasks docs (path from project guidelines) are the durable tracker.
 
+### Ops / local bootstrap inventory (phase 1)
+
+When a change adds or renames migration-owned tables or indexes that local Docker bootstrap depends on:
+
+- Flag missing updates to operator verify scripts (for example `docker/verify-local-schema.sh` `EXPECTED_TABLES` / `EXPECTED_INDEXES`) and `docker-compose.yml` volume mounts for new migration files.
+- Treat a green verify script that omits a required object as missing documentation/ops inventory, not only as an implementation gap.
+
 ### Plan / RFC prose (phase 1)
 
 When reviewing a plan or RFC draft, flag missing doc tasks for user-visible behavior, glossary links, Layer 2 architecture updates, and module high-level tasks bullets implied by the plan.

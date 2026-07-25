@@ -31,6 +31,14 @@ Structural clarity stays in this agent. Comment and doc **prose** (redundant inl
 
 **Ownership (tiered):** runtime behavior and algorithm correctness only. Do not report missing wiring, config binding gaps, or layer placement (see `review-panel-selection.md`).
 
+## MyBatis SqlSession local cache
+
+When reviewing annotation MyBatis mappers:
+
+1. Mutating SQL on `@Select` (`INSERT` / `UPDATE` / `DELETE`, including write CTEs with `RETURNING`) without `@Options(flushCache = Options.FlushCachePolicy.TRUE)` is a correctness defect: same-session retries or follow-up reads can reuse a stale `null` or prior row.
+2. Prefer the same flush on `SELECT … FOR UPDATE` that gates a later write when callers re-read in the same session.
+3. Do not flag ordinary `@Update` / `@Insert` / `@Delete` methods for missing `flushCache`; those already flush by default.
+
 ## Cache and TTL Operations
 
 Before flagging cache eviction, invalidation, or fallback logic as incomplete or broken:

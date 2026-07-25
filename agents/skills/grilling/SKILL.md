@@ -9,7 +9,14 @@ metadata:
 
 Interview me relentlessly about every aspect of this until we reach a shared understanding. Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
 
-Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
+**Default cadence:** ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
+
+**Batch mode (when the user asks for it):** if they say to ask only unclear questions first and then give suggested solutions in one list (or equivalent), do that instead of one-at-a-time:
+1. List only the **unclear** decision questions (skip anything already decided or look-uppable).
+2. In the **same** reply, after those questions, give **one** numbered list of suggested solutions covering those questions.
+3. Wait for answers or “accept suggested solutions” before acting. Do not write the plan or code until shared understanding is confirmed.
+
+When grilling a plan, make each question self-contained. Define any plan term before using it and include the concrete context needed to decide: the affected table, API, event, or component; the reason it matters; and a short example of the before-and-after behavior. Do not ask the user to choose based on an unexplained label such as a "slice" or a summary of a data flow.
 
 If a *fact* can be found by exploring the environment (filesystem, tools, etc.), look it up rather than asking me. The *decisions*, though, are mine; put each one to me and wait for my answer.
 

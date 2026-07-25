@@ -182,6 +182,14 @@ This Step 3.1 pass is a **fresh adversarial** full-branch review.
 
 <REVIEW_MODE_NOTES>
 
+## Panel launch (required, not optional)
+
+This review is a `doing-code-review` invocation, so `doing-code-review` Hard Gate #1 applies in full: **launch the complete `review-panel-selection.md` panel** (7 default agents: quality, implementation, testing, simplification, documentation, architecture, security; plus conditional concurrency/premortem when their signals match). Launch them in parallel; wait for all before synthesizing.
+
+"Solo" is a Solo-vs-Echo *dedup label* for findings that happen to converge on one agent origin. It is **never** a mode that skips launching the panel agents. A single inline orchestrator pass recorded as "folded into Solo | Raw=0" for all 7 default agents is a Hard-Gate violation, not a valid review shape. If you (the review sub-agent) cannot fan out sub-agents from your execution context, return `blocked: cannot launch panel from this execution context` and let the orchestrator delegate to an invocation that can - do **not** run an inline Solo pass and label it Solo.
+
+Record each launched agent with its actual Raw/Solo/Echo counts in `## Review Statistics` -> Panel. Agents may legitimately return zero findings, but their status must be `complete` (ran), not `folded into Solo` (never launched).
+
 ## Review Scope (two tiers)
 
 <REVIEW_SCOPE>

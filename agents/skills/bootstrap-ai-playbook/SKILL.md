@@ -90,6 +90,9 @@ reviews_dir = "docs/reviews/"
 tmp_dir = "docs/tmp/"
 facts_path = ".ai-playbook/facts.md"
 bootstrap_version = "1"
+# tmp_dir is for DOCUMENTS only (.md logs, .patch diff snapshots) - synced to the orphan docs branch.
+# Throwaway SCRIPTS and scratch data (.py shadow/verification scripts, .csv/.txt, __pycache__/) go
+# in repo-root tmp/ (gitignored, NOT synced to docs branch). See agent_workflow_guidelines.md §50.3.1.
 ```
 
 ## Related Jira tasks

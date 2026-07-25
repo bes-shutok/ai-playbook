@@ -25,6 +25,12 @@ When new config fields, parameters, or data schema fields are added:
 - Is a default value defined? Is it safe?
 - Are migration steps included if the change is not backward-compatible?
 
+## Same-change-set inventory (schema and config shape)
+
+When the diff adds or renames DB tables/indexes, or documents a constrained config shape:
+- Is the operator/local verify inventory updated in the same change set (for example `docker/verify-local-schema.sh` expected tables/indexes)?
+- Does the earliest startup gate (`EnvironmentPostProcessor`, `@PostConstruct` on `@ConfigurationProperties`, or fail-fast binder) enforce documented formats (ISO alpha-2, enum set, regex), or can a bad value pass trim/uppercase and fail later with a vague error?
+
 ## Missing Error Handling
 
 1. What happens when inputs are None, empty, or malformed?

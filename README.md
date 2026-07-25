@@ -18,7 +18,8 @@ Commands can be used in two ways:
 │       ├── bootstrap-ai-playbook/   # repo .ai-playbook/ bootstrap (once per project when triggers fire)
 │       ├── doc-hierarchy/
 │       ├── doc-hierarchy-migrate/
-│       └── doc-hierarchy-upkeep/
+│       ├── doc-hierarchy-upkeep/
+│       └── i-have-adhd/             # vendored ADHD-friendly output style
 ├── claude/
 │   └── skills/
 ├── codex/
@@ -76,6 +77,7 @@ Commands can be used in two ways:
 | `grilling` | `agents/skills/grilling/SKILL.md` | One-question-at-a-time decision interview until shared understanding. | Complements `premortem` (failure modes) and `plans` Phase 1; use when the user asks to grill a plan or design. |
 | `domain-modeling` | `agents/skills/domain-modeling/SKILL.md` | Active ubiquitous-language and ADR discipline. | Glossary and `project-decisions.md` paths aligned with doc-hierarchy; pairs with `grilling` via `grill-with-docs`. |
 | `handoff` | `agents/skills/handoff/SKILL.md` | Compact the session into a handoff doc for a fresh agent. | Output under `{tmp_dir}/handoff/` when repo facts exist; format aligned with `agents-best-practices` compaction handoff. |
+| `i-have-adhd` | `agents/skills/i-have-adhd/SKILL.md` | ADHD-friendly output style: lead with the next action, number steps, no preamble/closers. | Opt-in via `/i-have-adhd`; off with "stop adhd mode". Vendored from [ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd); see `agent-runtime-layout.md`. |
 
 Other vendored skills (`done`, `github-pr-workflow`, `receiving-code-review`, `doing-code-review`, `review-plan`, `tdd-guide`, etc.) live under [`agents/skills/`](agents/skills/). Browse that directory for the full set; register or invoke by skill path the same way as the table entries above.
 

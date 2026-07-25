@@ -199,3 +199,54 @@ mapper, or transport converter.
 In company-scoped repos see `company-guidelines.md` #12. In contract-first OpenAPI CRM
 services see the owning repo's `project-guidelines.md` input validation trust boundary rule
 for schema-as-source and test guardrails.
+
+## 8. Spring Boot 3.5 — Register `EnvironmentPostProcessor` in `spring.factories`
+
+On Spring Boot 3.5, `META-INF/spring/org.springframework.boot.env.EnvironmentPostProcessor`
+alone does **not** load custom `EnvironmentPostProcessor` implementations. Boot still discovers
+EPPs via `META-INF/spring.factories` (`EnvironmentPostProcessorsFactory.fromSpringFactories`).
+
+Register both when migrating forward-compatible:
+
+```properties
+# META-INF/spring.factories
+org.springframework.boot.env.EnvironmentPostProcessor=com.example.MyEnvironmentPostProcessor
+```
+
+**Observed failure:** full `@SpringBootTest` contexts failed during `@ConfigurationProperties`
+`@PostConstruct` validation because deploy-time defaults never ran; unit tests against an
+isolated `ConfigurableEnvironment` still passed.
+
+Before relying on a new EPP in integration tests, confirm discovery with a full-context boot
+test or inspect `EnvironmentPostProcessor` loading for your Boot version.
+
+## 9. Spring Boot 3.4+: prefer `@MockitoBean` / `@MockitoSpyBean` over `@MockBean` / `@SpyBean`
+
+On Spring Boot 3.4+, `org.springframework.boot.test.mock.mockito.MockBean` and
+`SpyBean` are deprecated for removal in Boot 4.0. Use Spring Framework bean overrides instead:
+
+| Deprecated (Boot) | Replacement (Framework) | Import |
+|---|---|---|
+| `@MockBean` | `@MockitoBean` | `org.springframework.test.context.bean.override.mockito.MockitoBean` |
+| `@SpyBean` | `@MockitoSpyBean` | `org.springframework.test.context.bean.override.mockito.MockitoSpyBean` |
+
+**Do not** introduce new `@MockBean` / `@SpyBean` usages on Boot 3.4+ projects. When touching a
+test that still uses the deprecated annotations, migrate that test (or the whole suite in the
+same change set when the touch is small).
+
+**Behavioral note:** `@MockitoSpyBean` requires an existing bean of that type in the context
+(it wraps the real instance). Unlike legacy `@SpyBean`, it does not silently create a missing
+bean. Prefer a real `@SpringBootTest` / slice context bean, or use
+`@MockitoBean(answers = Answers.CALLS_REAL_METHODS)` only when a spy-without-existing-bean is
+intentional.
+
+**Java:**
+```java
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+
+@SpringBootTest
+class ExampleIT {
+    @MockitoSpyBean
+    private SomeMapper someMapper;
+}
+```

@@ -87,6 +87,8 @@ After each sub-agent completes, append to `manifest.md`:
 ```markdown
 # Execute-plan session: <PLAN_SLUG>
 
+workflow_state: active
+
 | Step | Log path | Status |
 |------|----------|--------|
 | Task 1 implement | {tmp_dir}/execute-plan/.../task-1-implement.log.md | success |
@@ -95,7 +97,7 @@ After each sub-agent completes, append to `manifest.md`:
 | consecutive_clear_rounds | (none) | 1 |
 ```
 
-The orchestrator passes the manifest path (for session traceability) plus **only the preceding-step log paths** into each `done` sub-agent prompt. Update `consecutive_clear_rounds` after each Step 3.4 (see execute-plan SKILL.md).
+The orchestrator passes the manifest path (for session traceability) plus **only the preceding-step log paths** into each `done` sub-agent prompt. Update `consecutive_clear_rounds` after each Step 3.4 (see execute-plan SKILL.md). The parent may send a final response only after Phase 5 writes `workflow_state: complete` with the archived-plan path and last commit SHA, then re-reads that terminal receipt. Until then, `workflow_state: active` means auto-continue or report a hard gate in commentary.
 
 ## Done sub-agent: required reads before learn
 

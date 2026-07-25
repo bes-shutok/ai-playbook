@@ -562,6 +562,8 @@ When implementing fixes for PR review comments, every change must belong to the 
 
 37.3. In multi-scope repositories, establish which folders belong to which branches before starting a review fix session. Only then classify each review comment by branch scope.
 
+37.4. **PR thread replies are for the reviewer.** Do not put questions or decision prompts for your human partner in a GitHub review reply (for example "say if you want this cherry-picked onto …"). State the technical answer for the reviewer; keep partner-only options and follow-ups in the chat session.
+
 ## 38. Verify a Skill's Default Behavior Before Writing About It
 
 Before writing any documentation, PR description, or explanation that describes what a skill or tool does by default, read the skill's `SKILL.md` (or the tool's README) to confirm the default output mode, trigger conditions, and opt-in flags.
@@ -664,6 +666,7 @@ Applies to plans, RFCs, PR descriptions, BFF/API docs, Confluence pages, Slack d
 | RED / GREEN (in Gist only) | OK in plan **tasks**; in Gist use **failing test first**, **make test pass** |
 | gated off (the default test run / CI) | **not run in normal `mvn test`**, **only when someone runs them on purpose** |
 | self-contained (integration tests) | **start their own dependency in the test** (for example Testcontainers), **no manual setup** |
+| eagle view / eagle's view | **high-level overview**, **bird's-eye view** (calendar titles, Slack, Confluence) |
 
 45.3. **Code vs docs split:** "wire format" and similar transport vocabulary are fine in `project-guidelines.md`, OpenAPI descriptions, and Java transport comments where the team already uses them. Do not use them in plan **Gist & Examples**, PR summaries, or BFF docs when a plain equivalent exists.
 
@@ -683,6 +686,8 @@ Applies to plans, RFCs, PR descriptions, BFF/API docs, Confluence pages, Slack d
 45.7. **Skill and instruction hooks:** writing-heavy skills (`plans`, `github-pr-workflow`, `rfc-design`, `review-confluence-doc`, `slack-message`) must reference this section. When `learn` captures a wording correction, add the replacement to the table in 45.2 (if universal) or the relevant `dictionary.md` / `docs/glossary.md`.
 
 45.8. **Document results, not deliberation.** In long-lived artifacts (canonical docs, high-level task docs, issue trackers) record the decision and its current-state outcome, not the reasoning path that produced it (why alternatives were rejected, what was extracted/renamed/split from where, phrases like "former Slice 2", or transient caveats like "not exercised yet in the current state"). Keep rationale and alternatives in the single designated decisions/ADR doc; everywhere else state only the result. In an issue/ticket description, describe only that ticket's own scope; do not narrate adjacent or follow-up tickets, extraction history, or prioritization reasoning. State the split/mapping as a plain pointer when needed, not as a justification.
+
+45.9. **Do not overload product-phase labels in meeting or calendar titles.** When a phase name already labels the product or program (for example the new CRM is already called "MVP"), do not reuse that same word as a shorthand for a technical topic ("MVP delivery", "MVP notifications"). Prefer the concrete subject: ownership, Legacy CRM reuse, PII, service boundaries. Phase words stay for scope or timeline only when the meeting is actually about the phase gate itself.
 
 ## 46. Maintain Workflow Invariants Until Explicitly Paused
 
@@ -766,6 +771,8 @@ When an implement sub-agent reports that work for the current task "was already 
 50.2. **Skills own portable policy.** Byte budgets, retry counts, gate mode names, placement ladders, and "when to run" rules belong in the owning skill's `SKILL.md` (for example instruction size budget in `learn` Step 6.5 and `done` Step 2.8).
 
 50.3. **Scripts follow the same split.** Default behavior and constants live in the skill and in shared scripts tracked under repo-root `scripts/` (canonical source), synced to `~/.ai-playbook/scripts/` at runtime. Facts may point at a runtime script path when it varies by machine; facts must not restate the script's policy constants. Only secrets-bearing or machine-specific scripts (e.g. `sync-mcp-credentials.sh`, `public_hygiene_patterns_file`) remain gitignored under `~/.ai-playbook/scripts/`.
+
+50.3.1. **Ephemeral throwaway scripts vs `{tmp_dir}` documents.** `{tmp_dir}` (default `docs/tmp/`) is for **documents** only: execute-plan session logs (`.md`), review scratch (`.md`), diff snapshots (`.patch`) - these have reference value for the next round's `learn` step and are synced to the orphan `docs` branch as a safety net. Throwaway **scripts and scratch data** (`.py` shadow/verification scripts, `.csv`/`.txt` baseline counts, `__pycache__/`) go in repo-root `tmp/`, never `{tmp_dir}`. Root `tmp/` is gitignored and NOT synced to the `docs` branch; throwaway scripts have zero durable value and pollute the safety net when they land in `docs/tmp/`. This fills the gap between §50.3's canonical `scripts/` (committed, shared) and runtime `~/.ai-playbook/scripts/` (gitignored, secrets-bearing): a third category that is ephemeral, project-local, and never backed up.
 
 50.4. **User correction trigger:** When the user says a constant "can live in the skill" or "doesn't need to be in facts", remove the facts key; do not rename it to another facts entry. Update the owning skill instead.
 
@@ -953,6 +960,8 @@ When wiring Google Gemini CLI or Antigravity to the shared skill registry:
 
 58.6. **Cross-reference:** wiring recipes and verify bash in `agent-runtime-layout.md` (Gemini CLI and Antigravity section) and `docs/AGENTS.md` (Verify wiring).
 
+58.7. **Do not let `npx skills add` rewrite the shared registry through a symlink.** When `~/.agents/skills` (or `~/.cursor/skills` / `~/.claude/skills`) is a symlink into `instructions_repo/agents/skills`, a global `skills add --copy` writes into the git tree. That can drop `LICENSE.txt`, reintroduce vendor `agents/` adapters, or otherwise mutate the playbook outside an intentional vendor pass. Prefer: (1) copy upstream `skills/<name>/` into `agents/skills/<name>/` yourself, drop vendor-specific `agents/` folders, set `metadata.upstream`, copy upstream `LICENSE` to `LICENSE.txt`; (2) install Claude/Codex/Antigravity via their native plugin CLIs; (3) never replace the whole `~/.agents/skills` directory symlink with a real folder. After any CLI install that targets `~/.agents/skills`, `ls` the skill dir and `git status` the playbook before assuming the tree is clean.
+
 ## 59. Vision/OCR Reads Need Text-Source Verification Before Correcting an Artifact
 
 When a vision or OCR model interprets a screenshot, photo, or scanned image and its read disagrees with a value already in an artifact (a doc, config, data file, or code), the default hypothesis is that the IMAGE READ is wrong, not the artifact. Image models produce systematic, internally consistent misreads: swapping near-identical words (two verbs that differ by a few characters), dropping prefixes, or normalizing unusual tokens to common ones. A wrong read can therefore look confident and self-consistent and look like an artifact error that needs fixing.
@@ -985,3 +994,17 @@ When `doing-code-review` (or any staged PR review) proposes a concrete code, tes
 60.5. **Housekeeping the author should see:** suggestions such as archiving a completed plan to `{plans_completed_dir}/` belong in a PR comment (Low), not only in internal staging notes.
 
 **Cross-reference:** `doing-code-review` §4.9.0, §4.12 orchestrator polish; `review-agents/testing.md` Actionable fix snippets.
+
+## 61. Interactive Cloud or Registry Auth: Give the Operator a Script
+
+When verification needs private registry or cloud credentials (for example AWS SSO + ECR `docker login`) and the auth step is **interactive** (browser SSO, device code, MFA):
+
+61.1. **Do not** block the agent session on that interactive login, and do not invent personal SSO session names into committed docs.
+
+61.2. Give the operator a short copy-paste shell script (SSO refresh + `docker login` + optional `docker pull` smoke), then wait for them to confirm.
+
+61.3. After they confirm, **re-run** the pull/Compose/Testcontainers checks before claiming the private-image path works.
+
+61.4. Document durable how-tos in the project's Layer 2 local-dev guide with **generic** CLI forms (`aws sso login`, registry host from the image URL). Omit personal profile/session names and other machine-private identity.
+
+**Why this matters:** Agents cannot complete browser SSO for the user. Claiming "Compose and Testcontainers should work" before auth and without a re-check wastes a round trip; hardcoding personal SSO identifiers into the repo leaks private config.

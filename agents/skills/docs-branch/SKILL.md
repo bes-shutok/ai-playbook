@@ -132,6 +132,8 @@ If the repository already contains any `docs/...` branches, stop and consolidate
 
 > **Critical:** Run this entire script as a **single shell invocation**. Shell variables (especially `SHADOW_TMP` and `DOCS_WORKTREE`) do not persist between separate tool calls. Do not use `path` as a loop variable: in zsh it is a special array tied to `PATH` and breaks command lookup mid-script.
 
+> **Target shell is bash, not zsh.** This script uses the `${arr[@]+"${arr[@]}"}` empty-array idiom (see UL#166 for the bash-3.2 hazard it defends against). That idiom is bash-portable but NOT zsh-portable: under zsh, when the array is empty, the guard expands to a single empty-string word and the `for x in ...` loop body runs ONCE with `x=""`, which then aborts at `${x:?}` (`zsh:<line>: <var>: parameter not set`) AFTER the worktree is created but BEFORE the commit, leaving no commit and a partially reset working tree. When the invoking agent's default shell is zsh (macOS default), paste the canonical text into a temp `*.sh` file with a `#!/bin/bash` shebang and invoke `bash <file>`; do NOT paste the body directly into a zsh shell tool call. (UL#189.)
+
 > **Safety model:** Step 2 syncs through a separate temporary worktree. It must never checkout `docs`, run `git clean`, or delete shadow paths in the live project checkout.
 
 ```bash

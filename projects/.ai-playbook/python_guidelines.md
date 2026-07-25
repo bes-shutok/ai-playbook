@@ -395,3 +395,55 @@ default error text changes.
 
 Applies to every Python test that uses `pytest.raises`. Add the `match=` argument at
 RED time; never defer it as "polish" after GREEN.
+
+## 15. Patch ALL Lookups in a Short-Circuit Disjunction When Asserting "None Fired"
+
+When a test asserts that a code path "does not call" a set of helper lookups, and the
+production predicate that selects those lookups is a short-circuit `or` (or `and`) over
+two or more of them — for example `is_known = asset in popular_tokens() or
+contains_popular_token(asset)`, where the test wants to assert NEITHER fires — you MUST
+monkeypatch EVERY lookup in the disjunction, not just the first. Patching only the first
+lookup leaves the second (and third, etc.) UNPINNED: the test's "none fired" assertion
+can pass only because the first spy short-circuited the `or` before reaching the real
+second call, so a future refactor that moves the unpatched lookup to fire unconditionally
+(or before the short-circuit) would keep the test GREEN while breaking the avoidance
+invariant the test was written to pin.
+
+**Principle:** Family H (Verify the real thing, not the abstraction). The "none of the
+lookups fired" assertion is only as strong as the set of lookups the spy actually covers.
+An unpatched lookup is a hole in the coverage the assertion cannot see. Compounded by
+Family G (Data-loss observability): the regression is silent — no exception, no warning,
+just a lookup that runs and a test that still says "0 calls."
+
+```python
+# WRONG - only the first lookup is spied; the short-circuit or hides whether
+# _contains_popular_token would have fired on the real call path
+monkeypatch.setattr(cr, "_get_popular_crypto_tokens", spy_popular)
+# _contains_popular_token is UNPATCHED - a future refactor that moves it above
+# the short-circuit runs the REAL function and the test still sees popular=0
+
+# CORRECT - patch ALL lookups in the disjunction (plus any sibling predicate
+# the code path also consults, e.g. contains_non_latin_characters for is_suspicious)
+monkeypatch.setattr(cr, "_get_popular_crypto_tokens", spy_popular)
+monkeypatch.setattr(cr, "_contains_popular_token", spy_contains_popular)
+monkeypatch.setattr(cr, "contains_non_latin_characters", spy_non_latin)
+assert call_counts == {"popular": 0, "contains_popular": 0, "non_latin": 0}
+```
+
+**How to enumerate the full set:** Read the production predicate literally and list
+every function call on its RHS. A short-circuit `a or b or c` has three; a
+`is_known_token` defined as `asset in popular() or contains_popular(asset)` has two.
+If the guarded block ALSO calls an independent predicate (for example a separate
+`is_suspicious = contains_non_latin_characters(asset)` consulted in the same block),
+patch that too when the invariant is "this whole block did not run."
+
+**Distinguishing from rule #12 (pipeline-stage ordering spies):** #12 patches real
+stages to assert ORDERING (A before B before C) while still running them; the spies
+wrap and delegate so the real stages execute. This rule patches lookups to assert
+NON-INVOCATION (zero calls each); the spies replace and do NOT delegate, because the
+invariant is "the avoidance path fired, so the lookups were never reached." #12 is for
+"did the right stages run in the right order"; this rule is for "did the short-circuit
+prevent the lookups from running at all."
+
+Applies to any "lookup avoidance" or "short-circuit gate" test where the production
+predicate is a compound boolean over multiple helper calls.

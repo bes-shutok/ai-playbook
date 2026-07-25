@@ -41,6 +41,18 @@ CLEAR_ROUND_RE = re.compile(r"0\s+Medium\+?\s+findings;\s*clear\s+round", re.IGN
 FINDING_HEADER_RE = re.compile(r"^(?:F(\d+)|(\d+)\.)\s", re.MULTILINE)
 STUB_BYTE_THRESHOLD = 2000
 LEGACY_MIN_BLOCK_CHARS = 120
+# The 7 default review-panel agents per review-panel-selection.md. A full code
+# review must show each as `complete` (ran). "folded into Solo" / Raw=0-skipped
+# for all of them indicates the panel never launched (Solo-collapse). See UL#190.
+DEFAULT_PANEL_AGENTS = (
+    "quality",
+    "implementation",
+    "testing",
+    "simplification",
+    "documentation",
+    "architecture",
+    "security",
+)
 VALID_DISCARD_REASONS = frozenset({
     "duplicate",
     "already-mitigated",
@@ -277,6 +289,59 @@ def validate_stats_sidecar(staging_path: Path, content: str, result: ValidationR
             )
 
 
+def detect_solo_collapse(staging_path: Path, content: str) -> bool:
+    """Detect Solo-collapse: a code review whose 7 default panel agents never ran.
+
+    Returns True when the staging doc is a code review (not a plan/RFC/confluence
+    review) AND the Panel table shows the default panel agents as folded into
+    Solo / skipped while only an orchestrator-Solo row ran. See UL#190.
+    """
+    filename = staging_path.name.lower()
+    # The filename prefix is the authoritative review-type discriminator:
+    #   -code-review-r<N>  -> execute-plan Phase 3 code review (panel expected)
+    #   -branch-review-    -> standalone doing-code-review branch review (panel expected)
+    #   -plan-review-r<N>  -> pre-execution plan review (NON-panel; Solo OK)
+    #   -rfc-review-       -> RFC review (NON-panel)
+    #   -confluence-review -> Confluence review (NON-panel)
+    # The Type line is NOT used as a discriminator: an execute-plan Phase 3 code
+    # review is legitimately "Branch Review (Plan-based, ...)" but still runs
+    # the full panel, so "Plan-based" must not exempt it.
+    is_panel_review = "-code-review-r" in filename or "-branch-review-" in filename
+    if not is_panel_review:
+        return False
+
+    # Parse the Panel table rows. A row is "panel-ran" for an agent if the
+    # agent name appears and its status is complete (regardless of Raw count;
+    # an agent may legitimately return zero findings).
+    panel_section = content.split("### Panel", 1)[1] if "### Panel" in content else ""
+    # Stop at the next ### subsection.
+    panel_section = re.split(r"\n### ", panel_section, maxsplit=1)[0]
+    folded_or_skipped = 0
+    present_complete = 0
+    for agent in DEFAULT_PANEL_AGENTS:
+        # Match a table row mentioning this agent. Status is the 2nd column.
+        row_re = re.compile(
+            rf"\|\s*[^|]*\b{re.escape(agent)}\b[^|]*\s*\|\s*([^||]+)\s*\|",
+            re.IGNORECASE,
+        )
+        match = row_re.search(panel_section)
+        if not match:
+            continue
+        status = match.group(1).strip().lower()
+        if "folded into solo" in status or status.startswith("skipped"):
+            folded_or_skipped += 1
+        elif status.startswith("complete"):
+            present_complete += 1
+    # Solo-collapse: all of the 7 default agents are folded/skipped, OR none
+    # completed while a majority are folded/skipped (an orchestrator-Solo row
+    # claimed completion in place of the panel).
+    if folded_or_skipped >= 7:
+        return True
+    if present_complete == 0 and folded_or_skipped >= 4:
+        return True
+    return False
+
+
 def validate_staging_file(path: Path, *, hard: bool = False) -> ValidationResult:
     result = ValidationResult(path=path)
     if not path.is_file():
@@ -297,6 +362,18 @@ def validate_staging_file(path: Path, *, hard: bool = False) -> ValidationResult
 
     if "### Panel" not in content:
         result.add_error("missing ### Panel under Review Statistics")
+
+    # Anti-Solo-collapse check (UL#190): a code review must show the 7 default
+    # panel agents as having run, not folded into Solo / skipped. This catches
+    # a wrapped doing-code-review sub-agent that had no fan-out capability and
+    # silently ran an inline Solo pass.
+    if "### Panel" in content and detect_solo_collapse(path, content):
+        result.add_error(
+            "Solo-collapse detected: the 7 default review-panel agents are "
+            "'folded into Solo' or skipped, but only an orchestrator-Solo row "
+            "ran. A code review must launch the full review-panel-selection.md "
+            "panel (Hard Gate #1); 'Solo' is a dedup label, not a mode. See UL#190."
+        )
 
     if "### Counts" not in content and "Agents launched" not in content:
         result.add_warning("missing ### Counts or Agents launched row")
