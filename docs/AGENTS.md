@@ -1,6 +1,6 @@
 # User-level instructions
 
-Cross-project engineering rules. **Source of truth:** `docs/AGENTS.md` in this repository. **Entrypoints:** `~/.codex/AGENTS.md` (symlink); `~/.claude/CLAUDE.md` (thin `@` import); `~/.copilot/copilot-instructions.md` (symlink via codex); `~/.gemini/GEMINI.md` (thin `@` import); Cursor `global-user-instructions.mdc` (`@`). Clone path: `instructions_repo` in `user_facts_path`.
+Cross-project engineering rules. **Source of truth:** `docs/AGENTS.md` in this repository. **Entrypoints:** `~/.codex/AGENTS.md` (symlink); `~/.zcode/AGENTS.md` (thin `@` import); `~/.claude/CLAUDE.md` (thin `@` import); `~/.copilot/copilot-instructions.md` (symlink via codex); `~/.gemini/GEMINI.md` (thin `@` import); Cursor `global-user-instructions.mdc` (`@`). Clone path: `instructions_repo` in `user_facts_path`.
 
 **Hazard:** never symlink `~/.claude/CLAUDE.md` or `~/.gemini/GEMINI.md` to `~/.codex/AGENTS.md` (or the canonical file). Session tools append or rewrite those entrypoints; edits would overwrite the canonical body.
 
@@ -12,6 +12,7 @@ CANONICAL="${INSTRUCTIONS_REPO:?}/docs/AGENTS.md"
 
 test -L ~/.codex/AGENTS.md && test "$(readlink ~/.codex/AGENTS.md)" = "$CANONICAL"
 test -L ~/.copilot/copilot-instructions.md
+grep -q '@' ~/.zcode/AGENTS.md
 grep -q '@' ~/.claude/CLAUDE.md
 grep -q '@' ~/.gemini/GEMINI.md
 test -L ~/.agents/skills
