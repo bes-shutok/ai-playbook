@@ -4376,3 +4376,22 @@ The final design (two-tier platform-level resolver: registry tier 1, row-evidenc
 
 **See also:** review-loop Soften / regression watchlist and exit criteria; receiving-code-review Soften tracking; doing-code-review java-spring / kotlin-spring Transport Exception Mapping; quality.md catalog-loop item; Family H verification and Family D single SOT.
 
+## 206. A Canonical Spec Example Shown In Multiple Formats Must Keep All Formats Consistent
+
+**Principle:** Family D (single source of truth) and Family H (verify the real artifact). When a spec/template presents the same logical example in more than one format (for example a Markdown table and a parallel JSON sidecar, or a YAML block and a prose description), each copy is a real artifact that downstream authors copy verbatim. If the copies disagree on a load-bearing field, consumers encode whichever copy they read first, and the disagreement is invisible until two consumers built from different copies meet.
+
+**Trigger:** A spec or skill defines a structured example twice, in two formats, and a review (or a consumer) finds that the same row/object shows different values for a field the rest of the spec treats as semantically distinct.
+
+**Rule:**
+1. When the same example appears in two formats in one spec, the load-bearing fields (status, id, key, type, severity, lifecycle state) must match across all copies.
+2. After editing one copy, grep the other copy for the shared identifier (row id, pattern, key) and update it in the same pass. Do not leave a "fix the Markdown, forget the JSON" (or vice versa) split.
+3. If the formats genuinely need to differ (one shows an initial state, one a terminal state), label that explicitly in both copies; do not rely on the reader inferring the lifecycle from context.
+
+**Why this happens:** A spec change touches one fenced block (often the human-readable one); the parallel machine-readable block sits a screen or two away and is easy to miss. The two copies feel like "the same example" but are edited independently, so they drift.
+
+**Shape trigger:** A spec change adds or edits a structured example that exists in two formats; or a review reports the same row/object with conflicting field values across sections.
+
+**Example:** A review-skill spec introduced a watchlist example showing the same row (`round`, `pattern`, `anchor`, `prior fix`, `soften reason`) in both a Markdown table and a JSON sidecar block. The Markdown showed the row's lifecycle `status` as `reaffirmed` (terminal); the JSON showed the identical row as `open` (carried forward). Both blocks sat in the same file, screens apart. A focused review caught it; copy-paste consumers would have encoded opposite lifecycle semantics. Fix: set both copies to the same status in one pass and grep the file for the row id to confirm no third copy existed.
+
+**See also:** UL#180 (micro-edit fenced templates, technique), UL#181 (structured staging metadata, why parallel human/machine artifacts exist), `agent_workflow_guidelines.md` Family D (single SOT) and Family H (verify the real artifact).
+
