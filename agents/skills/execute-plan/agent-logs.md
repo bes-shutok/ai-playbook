@@ -94,10 +94,12 @@ workflow_state: active
 | Task 1 implement | {tmp_dir}/execute-plan/.../task-1-implement.log.md | success |
 | Task 1 done | (none) | commit abc1234 |
 | Review r1 doing-code-review | {tmp_dir}/execute-plan/.../review-r1-doing-code-review.log.md | success |
-| consecutive_clear_rounds | (none) | 1 |
+| full_panel_rounds | (none) | 1 |
+| escalation_count | (none) | 0 |
+| source_digest | (none) | `<sha256>` |
 ```
 
-The orchestrator passes the manifest path (for session traceability) plus **only the preceding-step log paths** into each `done` sub-agent prompt. Update `consecutive_clear_rounds` after each Step 3.4 (see execute-plan SKILL.md). The parent may send a final response only after Phase 5 writes `workflow_state: complete` with the archived-plan path and last commit SHA, then re-reads that terminal receipt. Until then, `workflow_state: active` means auto-continue or report a hard gate in commentary.
+The orchestrator passes the manifest path plus only the preceding-step log paths into each `done` prompt. Update the review counters and digest after each Step 3.4.
 
 ## Done sub-agent: required reads before learn
 
@@ -114,7 +116,7 @@ If a required preceding-step log is missing, `done` must not commit; report to o
 
 ## Cleanup after successful completion (Phase 5)
 
-When execute-plan finishes **successfully** (all tasks done, two consecutive clear review rounds, plan archived to `{plans_completed_dir}/`, final `done` committed), the orchestrator removes the entire session directory:
+When execute-plan finishes successfully after one fresh blocking-clean review of the current digest, archives the plan, and commits final changes, the orchestrator removes the session directory:
 
 ```bash
 rm -rf {tmp_dir}/execute-plan/<PLAN_SLUG>
@@ -123,7 +125,7 @@ rm -rf {tmp_dir}/execute-plan/<PLAN_SLUG>
 | Outcome | Tmp directory |
 |---------|----------------|
 | Full success (Phase 5) | **Removed**; logs already consumed by per-step `done` / `learn` |
-| User interrupt, blocked sub-agent, safety cap, validation failure, fewer than two consecutive clear review rounds | **Preserved**; needed for resume and debugging |
+| User interrupt, blocked sub-agent, safety cap, validation failure, or no fresh blocking-clean result | **Preserved**; needed for resume and debugging |
 
 **Scope:** delete only `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for this plan (includes optional `diff-r*.patch` / `src-diff-r*.patch` snapshots). Do not delete sibling slugs, the parent `execute-plan/` folder, or `{reviews_dir}/` staging docs.
 

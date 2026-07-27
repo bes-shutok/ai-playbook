@@ -83,17 +83,17 @@ Use the page title, labels, and content structure to classify. If ambiguous, ask
 
 ### Step 4 – Analyze and Generate Feedback
 
-#### Step 4.0 – Prose Clarity Sub-Agent (Mandatory)
+#### Step 4.0 – Select the review panel
 
-Launch `documentation.md` (phase 2 prose pass) from `~/.agents/skills/review-agents/` before finalizing Step 4 feedback.
+Use `review-panel-selection.md`. A normal RFC or TDD review uses the five-worker panel. A prose-only page may use a focused `contract-docs` panel, adding `correctness-completeness` when the prose specifies normative behavior.
 
-The sub-agent receives:
+Each selected worker receives:
 1. Full fetched document content (parent page plus child pages from Step 2)
 2. Document type from Step 3 (RFC / TDD / Other)
-3. Execution framing: "You are reviewing a Confluence technical document, not a git diff. Apply your pattern catalog to all human-readable prose: section text, bullets, tables, API description fields, and comments inside code blocks. Do not flag missing sections or structural gaps (the orchestrator owns completeness). Return `{section_anchor, quoted_excerpt, issue, severity: Suggestion|Advisory, suggested_action}`."
-4. Output limit: 2–3 findings max; report problems only.
+3. Its assigned lenses, shared severity calibration, and finding budget
+4. Execution framing to quote the reviewed prose and return the shared finding fields plus `descendant_launches`
 
-Merge sub-agent returns into 🟡 Suggestions (default severity Suggestion) and tag with `[Prose]`. Do not duplicate the same prose issue in Step 4.1.
+The `contract-docs` worker applies the prose checks below. Document inconsistency remains `Low` unless tangible consequence justifies promotion.
 
 Review the document for the following quality dimensions (orchestrator-owned; supplement with sub-agent output above):
 
@@ -123,22 +123,16 @@ Review the document for the following quality dimensions (orchestrator-owned; su
 
 ---
 
-### Step 4.5 – Premortem Analysis (Mandatory)
+### Step 4.5 – Risk Worker
 
-After the quality analysis in Step 4, invoke the `premortem` skill against the design/plan described in the document.
+The full panel's `risk` worker always loads security. Load premortem for RFC/Design and TDD risk analysis, using personas as internal reasoning sections without child launches.
 
 **Configuration:**
 - Context type: **RFC/Design** (use all six personas).
 - Frame: "This design was implemented as written. It has failed in production. Why?"
 - Input to premortem: the full document content + any constraints/assumptions identified in Step 4.
 
-**Output handling:**
-- **Blockers** from premortem become 🔴 Critical items in the final feedback.
-- **Mitigations Needed** become 🟡 Suggestions.
-- **Monitor** items are mentioned as advisory notes (not elevated to suggestions unless severe).
-- **Accepted Risks** are omitted from feedback unless they reflect genuinely unacknowledged risks in the document.
-
-Do NOT skip premortem even if the document appears solid; the point is adversarial stress-testing.
+Calibrate every risk finding with the shared consequence tiers and independent blocking status.
 
 ---
 
@@ -153,20 +147,9 @@ If the document contains implementation logic (code snippets, pseudocode, algori
 - Pseudocode describing algorithms or state machines
 - Configuration that encodes business logic (feature flags, routing rules, validation rules)
 
-**How to apply:**
-- Do NOT use the full PR-oriented `doing-code-review` workflow (no GitHub PR, no sub-agents, no line comments).
-- Instead, apply the *review lens* from relevant sub-agent focus areas:
-  - `quality`: bugs, logic errors, edge cases, error handling
-  - `documentation` (prose): redundant or verbose comments and docstrings inside code blocks
-  - `security`: injection, secrets, input validation, auth gaps
-  - `concurrency`: race conditions, isolation issues (if concurrent logic is present)
-  - `simplification`: over-engineering in the proposed implementation
-- Review the code in context of the document's stated goals and constraints.
-- Each finding must reference the specific code block/section.
+**How to apply:** select the workers whose lenses match the implementation logic. Review in document context and anchor every finding to the specific block or section.
 
-**Output handling:**
-- Findings become additional items in the 🔴 Critical or 🟡 Suggestions sections, tagged with `[Code]` prefix.
-- If no implementation logic is present, skip this step silently.
+Tag implementation findings `[Code]`. If no implementation logic is present, skip this pass.
 
 ---
 
@@ -174,10 +157,10 @@ If the document contains implementation logic (code snippets, pseudocode, algori
 
 While merging Step 4, 4.5, and 4.6 returns, populate `## Review Statistics` per `review-staging` before writing the staging file:
 
-1. **Panel:** one row each for `documentation`, `premortem`, `orchestrator` (Steps 4.1–4.5), and each inline code lens used in Step 4.6 (`quality`, `security`, `concurrency`, `simplification`, `documentation-prose-code`). Use Status `skipped` when Step 4.6 did not run. Include Solo/Echo columns per `review-staging`. Write the required `.stats.json` sidecar alongside the staging doc.
+1. **Panel:** one row per actual worker launch with loaded lenses, parent worker, Solo/Echo, and descendant declarations. Write the required `.stats.json` sidecar alongside staging.
 2. **Raw counts:** count every finding each source returned before dedup (orchestrator dimensions count as one combined Raw total).
-3. **Deduplication groups:** when prose, premortem, and orchestrator describe the same root issue, list all contributing sources and the staged finding number kept.
-4. **Discarded findings:** one row per raw finding not staged, with reason codes, **Pattern**, and **Agent severity** from `review-staging`.
+3. **Deduplication groups:** list all contributing workers and the staged finding kept.
+4. **Discarded findings:** record worker, lens pattern, severity, reason, and lead ownership.
 5. **Severity calibration** and **Triage outcomes** placeholder per `review-staging`.
 
 Do not report results to the user until statistics are complete (including explicit `None` rows when a table is empty).
@@ -196,7 +179,7 @@ Output the feedback to a staging Markdown file per `review-staging`, and print a
 
 **Console output:**
 - Print the file path.
-- Print a condensed summary: count of Critical/Suggestion/Advisory staged findings, discarded count, and the top 3 Critical themes.
+- Print a condensed summary by `Critical`, `High`, `Medium`, and `Low`, plus discarded count and top blocking themes.
 - Do NOT dump the full review to console; the file is the primary artifact.
 
 **File format** (see `review-staging` for full template):
@@ -214,54 +197,76 @@ Output the feedback to a staging Markdown file per `review-staging`, and print a
 ## Review Statistics
 
 ### Panel
-| Agent | Status | Raw | Solo | Echo | Relaunch |
-|-------|--------|-----|------|------|----------|
-| documentation | complete | 2 | 2 | 0 | no |
-| premortem | complete | 4 | 2 | 2 | no |
-| orchestrator | complete | 3 | 3 | 0 | no |
-| quality | skipped | 0 | 0 | 0 | no |
+| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |
+|--------|--------|---------------|--------|-----|------|------|----------|
+| contract-docs | documentation, consistency | none | complete | 2 | 2 | 0 | no |
+| risk | security, premortem | none | complete | 4 | 2 | 2 | no |
 
 ### Counts
-- Agents launched: <N>
-- Agents skipped: <N>
-- Raw findings (all agents): <N>
+- Workers launched: <N>
+- Workers skipped: <N>
+- Raw findings (all workers): <N>
 - Staged findings: <N>
 - Discarded during synthesis: <N>
 - Solo staged (unique agent origin): <N>
 - Echo staged (multi-agent dedup): <N>
 
 ### Deduplication groups
-| Staged # | Agents | Theme |
-|----------|--------|-------|
+| Staged # | Workers | Lenses | Theme |
+|----------|---------|--------|-------|
 
 ### Discarded findings
-| Agent | Agent severity | Pattern | Theme | Reason | Notes |
-|-------|----------------|---------|-------|--------|-------|
+| Worker | Worker severity | Pattern | Theme | Reason | Notes |
+|--------|-----------------|---------|-------|--------|-------|
 
 ### Severity calibration
-| Staged # | Agent | Agent severity | Staged severity | Delta |
-|----------|-------|----------------|-----------------|-------|
+| Staged # | Worker | Lens | Worker severity | Staged severity | Delta |
+|----------|--------|------|-----------------|-----------------|-------|
 
 ### Triage outcomes
 Pending triage.
 
 ## Findings
 
-### 1. <short title>
-- **Severity**: Critical | Suggestion | Advisory
-- **Agent severity**: Suggestion *(omit when equal)*
+### Critical
+
+#### F1. <short title>
+- **Severity**: Critical | High | Medium | Low
+- **Blocking**: true | false
+- **Consequence**: <tangible outcome>
+- **Reachability**: expected | common | plausible-edge | theoretical
+- **Blast radius**: global | multi-service | single-service | local
+- **Confidence**: verified | strong-evidence | hypothesis
+- **Worker severity**: Medium *(omit when equal to Severity)*
 - **Pattern**: premortem#rollback-gap
-- **Agents**: premortem
+- **Workers**: risk
 - **Triage**: pending
 - **Anchor**: §3.2 Upstream timeout handling
 - **Source**: [Premortem]
 
 #### Comment (posted as-is when approved)
-<Suggestion-tone, comment-ready wording for Confluence.>
+<Comment-ready wording for Confluence.>
 
 #### Analysis (not posted)
 <Persona, verification trail, severity rationale.>
+
 ---
+
+### High
+
+None.
+
+### Medium
+
+None.
+
+### Low
+
+None.
+
+### Overflow manifest
+| Worker | Pattern | Anchor | Severity | Confidence | Consequence |
+|--------|---------|--------|----------|------------|-------------|
 ```
 
 Optional `## Strengths` section (after Findings) when the document is well-written; list up to 3 bullets. Do not invent issues to fill quotas.
@@ -269,7 +274,7 @@ Optional `## Strengths` section (after Findings) when the document is well-writt
 Rules:
 - Be specific: reference the section or paragraph where the issue appears.
 - Be constructive: suggest what to add/change, not just what's wrong.
-- Limit to the most impactful items (max ~5 critical, ~7 suggestions). Do not produce exhaustive nitpick lists.
+- Apply the shared finding budget. Do not produce exhaustive nitpick lists.
 - If the document is well-written, say so. Do not invent issues.
 - Tag premortem findings with `[Premortem]` and the originating persona.
 - Tag code review findings with `[Code]`.
@@ -283,7 +288,7 @@ Rules:
 **Console summary example:**
 ```
 Review written to: {reviews_dir}/2026-05-19-confluence-review-my-rfc-title.md
-   Critical: 3 · Suggestion: 5 · Advisory: 2 · Discarded: 4
+   Critical: 1 · High: 2 · Medium: 3 · Low: 2 · Discarded: 4
 
    Top critical:
    1. No rollback strategy for migration ([Premortem])
@@ -314,11 +319,11 @@ After presenting feedback on console:
 
 Apply these to every comment regardless of severity:
 
-- **Suggestion tone, never directive.** Use "we could", "one option might be", "what about", "we should probably". Never issue orders ("Add X", "Remove Y", "Change Z"). Severity (Critical/Suggestion/Question) controls whether action is required, not the tone.
+- **Constructive tone, never hostile.** Use direct, actionable wording while keeping blocking status explicit.
 - **No em dashes** ("; ") anywhere in comment text. Use commas, semicolons, colons, or parentheses instead. (See also the global rule in Step 5.)
 - **Plain language (globish).** Short words, short sentences. Avoid jargon a non-native speaker would not know.
 - **Never reference internal machine-specific docs** (e.g. JVM guidelines, CLAUDE.md rules, internal playbooks) in Confluence comments. Explain the principle and its benefits directly instead.
-- **Status lozenges for severity**: use `Critical` (red), `Suggestion` (yellow), `Question` (blue), `Advisory` (yellow) at the start of each comment so the reader can scan severity at a glance.
+- **Status lozenges for severity**: use `Critical`, `High`, `Medium`, or `Low` at the start of each comment.
 
 #### 6.3 Comment lifecycle rules
 
@@ -332,17 +337,14 @@ Apply these to every comment regardless of severity:
 ## Integration Points
 
 ### With `review-agents` skill (mandatory prose pass)
-`documentation.md` (phase 2) is launched in Step 4.0 for all document types. Findings merge into Suggestions, tagged `[Prose]`.
+`contract-docs` loads `documentation.md` for all document types. Findings use shared severities and `[Prose]`.
 
 ### With `premortem` skill (mandatory)
-Invoked in Step 4.5 after initial quality analysis. All six personas for RFC/Design documents;
-Pessimist + Attacker + Operator for TDD documents. Blockers become Critical feedback items.
-Mitigations become Suggestions. The premortem is run against the document content, not against code.
+Loaded inside `risk` in Step 4.5. Personas are reasoning sections, not child launches. Findings use shared severity calibration.
 
 ### With `doing-code-review` skill (conditional)
 Applied in Step 4.6 only when implementation logic is present in the document (code blocks > 10 lines,
-SQL, pseudocode, config-as-logic). Uses the review lens (quality, documentation, security, concurrency, simplification)
-but NOT the full PR workflow. Findings are tagged `[Code]` in **Source** and listed under inline lens rows in **Panel**.
+SQL, pseudocode, config-as-logic). Selects matching workers without using the PR workflow. Findings are tagged `[Code]`.
 
 ### With `review-staging` skill (mandatory)
 All reviews write to `{reviews_dir}/` with full `## Review Statistics` per `review-staging` (Solo/Echo, Pattern, Severity calibration, Triage outcomes). Step 6 Confluence comments post from each finding's `#### Comment` block.

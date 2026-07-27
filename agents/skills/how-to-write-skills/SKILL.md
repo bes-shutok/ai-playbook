@@ -246,7 +246,7 @@ review-agents/
 
 **Anti-patterns:**
 - ❌ Copy-pasting persona definitions or anti-patterns from the standalone skill (creates drift when the source is updated)
-- ❌ Restating constraints already covered in the source skill's anti-patterns (e.g. "max 2-3 findings per persona" already existed in the source skill's anti-patterns section; adding it again as a hard rule in the adapter is redundant)
+- ❌ Restating the shared finding budget in every adapter instead of referencing `severity-calibration.md`
 - ✅ Only add what is context-specific: change-type → persona selection, sub-agent output format, and scope limits unique to this workflow
 
 **When to use:**
@@ -261,7 +261,7 @@ For multi-phase workflows that chain existing skills (for example implement → 
 - Main agent orchestrates only: select work item, launch subagents, verify exit-criteria, update tracking artifacts (plan checkboxes).
 - Put sub-agent launch prompts in `subagent-prompts.md`; the orchestrator skill references templates, not inline walls of text.
 - Each sub-agent reads the consumed skill from `~/.agents/skills/`; do not duplicate `done`, `doing-code-review`, or similar logic inline.
-- Define hard-gates and explicit exit-criteria per phase (tests pass before checkboxes; zero remaining Medium+ after receiving-code-review triage before final archive).
+- Define hard gates and explicit exit criteria per phase (tests pass before checkboxes; zero unresolved blocking findings before final archive).
 - Add bidirectional **Integration Points** on every consumed skill.
 
 ### Orchestrator / Sub-Agent Boundary

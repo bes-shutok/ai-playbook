@@ -94,7 +94,7 @@ For forms with real fillable fields, set each widget's `/V` and verify rendering
 3. **`/Sig` (signature) widgets cannot hold typed text.** Leave them for wet or digital-ID signing; fill the surrounding "Print name of signer" / "Date" text fields instead.
 4. **Map fields to labels via rect geometry, not field order.** Use `pdfplumber` words with `top = page_height - rect[3]` and find the label *above* each widget rect. A label-printing-order swap (e.g. "7 Reference" typeset above "8 DOB" while the row's left cell is 7) misleads if you trust reading order; the rect is ground truth.
 5. **Verify rendering with Poppler, NEVER pdfplumber.** pdfplumber does not extract text from form-field appearance streams, so it reports every filled value as MISSING even when the value renders correctly. Set `AcroForm /NeedAppearances = True` for safety, then confirm with:
-   - `pdftotext -layout <filled.pdf> -` (Poppler, same engine as macOS Preview) — grep for each value.
+   - `pdftotext -layout <filled.pdf> -` (Poppler, same engine as macOS Preview), then grep for each value.
    - `pdftoppm -png -r 200` + a dark-pixel count on the checkbox bbox (border-only ≈ 3-6% dark; checked ≈ 8-25%).
 
 ### Overlay workflow for flat forms
@@ -117,7 +117,7 @@ For forms with real fillable fields, set each widget's `/V` and verify rendering
 A source PDF under `~/Documents`, `~/Desktop`, or `~/Downloads` may be unreadable via the shell (`Operation not permitted`) even with the sandbox disabled, because macOS TCC restricts those folders per-app. Workarounds, in order of preference:
 - Copy the file into the workspace with **Finder via `osascript`** (Finder has its own TCC entitlement):
   ```bash
-  osascript -e 'tell application "Finder" to duplicate (POSIX file "/Users/<user>/Documents/form.pdf") to (POSIX file "<workspace_dir>") with replacing'
+  osascript -e 'tell application "Finder" to duplicate (POSIX file "<source_pdf>") to (POSIX file "<workspace_dir>") with replacing'
   ```
 - If only reading is needed, the agent's `Read` tool may have a separate entitlement even when Bash does not.
 

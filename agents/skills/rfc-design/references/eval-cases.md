@@ -66,27 +66,28 @@ pass_criteria
 **Trigger:** Create mode; Step 1 draft complete; draft looks polished.
 
 **Expected trace:**
-- Launch all Light-depth agents + consistency in parallel
+- Launch the selected Light focused workers in parallel
 - Write staging file under `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` before Step 3 fold-in
 
 **Forbidden trace:**
 - Orchestrator inline review replacing sub-agents
 - Present final RFC with no staging file
 
-**Pass:** Sub-agents launched; staging path recorded.
+**Pass:** Workers launched; staging path recorded.
 
 ---
 
-## RFC-EVAL-005: Light agent set (default)
+## RFC-EVAL-005: Light focused panel (default)
 
 **Trigger:** MVP RFC create; user did not request full review; no async/queue content.
 
 **Expected trace:**
-- Agents: `quality`, `implementation`, `security`, `architecture`, `simplification`, `documentation`, `consistency`
-- Staging Agent status table lists each launched agent
+- Workers: `correctness-completeness`, `design-simplicity`, `contract-docs`, `risk`
+- `contract-docs` loads `documentation` and `consistency`; `risk` loads `security`
+- Staging records `panel_mode: focused` and the selection reason for omitting `testing`
 
 **Forbidden trace:**
-- `testing`, `premortem` launched without Full signal
+- Separate lens workers launched
 - Missing any default Light agent
 
 **Pass:** Agent status table matches Light set.
@@ -115,7 +116,7 @@ pass_criteria
 **Fixture:** Draft §4 edge case: `- Retry on failure` (no Condition / Behavior / Outcome).
 
 **Expected trace:**
-- `documentation` (prose phase) or `quality` returns Block or Mitigate with quoted excerpt
+- `contract-docs` or `correctness-completeness` returns a shared-severity finding with quoted excerpt
 - After fold-in: §4 uses `##### Edge case: ...` with Condition / Behavior / Outcome
 
 **Forbidden trace:**
@@ -130,7 +131,7 @@ pass_criteria
 **Fixture:** Terminology contains `#### Filters and bitmaps` subsection or writer policy table.
 
 **Expected trace:**
-- Sub-agent flags Block/Mitigate
+- Worker flags a blocking or materially actionable finding
 - Fold-in: flat A–Z glossary only; matrices moved to Addendum if needed
 
 **Forbidden trace:**
@@ -179,11 +180,11 @@ pass_criteria
 **Trigger:** User says "full review" on an existing draft.
 
 **Expected trace:**
-- All Full-column agents + consistency (+ concurrency when matched)
-- `testing`, `premortem` present in Agent status
+- All five recommended workers
+- `testing` is present; `risk` records `premortem` or `concurrency` as loaded lenses only when matched
 
 **Forbidden trace:**
-- Light set only when user explicitly requested Full
+- Focused panel only when user explicitly requested Full
 
 **Pass:** Full agent set launched.
 

@@ -290,7 +290,7 @@ Provider for `{plans_dir}` when saving grouped fix tasks from review feedback. R
 Triage updates **Triage outcomes** and finding **Triage** fields; preserves immutable synthesis statistics from the review pass.
 
 ### With `execute-plan` skill
-Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review` (`pending` Critical/High/Medium findings). Honors the plan's `## Review Scope`. Triage is authoritative for Phase 3 exit: implements fixes, marks `drop`/`done`, leaves only validated issues at `pending`. The orchestrator counts **remaining Medium+** after this step, not provisional `doing-code-review` counts. Does not commit; the orchestrator runs streak evaluation and `done`, then may start the next review round.
+Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review`. Triage is authoritative for exit: implement valid fixes, mark `drop` or `done`, and leave only validated unresolved issues at `pending`. The orchestrator counts unresolved findings with `blocking: true`, not severity alone. Accepted fixes identify every owning or affected worker for the targeted follow-up.
 
 ## The Bottom Line
 

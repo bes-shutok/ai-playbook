@@ -1,7 +1,7 @@
 ---
 name: doing-code-review
 description: >
-  Active code review skill. Orchestrates a review panel from review-panel-selection (default 7 agents plus conditional concurrency/premortem) for thorough review of PRs, diffs, or branches. Language-agnostic core with runtime language overlays (Java/Spring, Kotlin/Spring, Python). Two modes: posts PR review comments by default; fix mode (auto-commit) when explicitly asked. Trigger phrases: "let's review", "review this PR", "review the changes", "review changes in", "review branch", "review against", "code review", "look at this PR", "check this PR", "check this diff", "doing-code-review". Do not use for addressing existing reviewer comments; use receiving-code-review instead.
+  Active code review skill. Orchestrates the recommended five-worker panel from review-panel-selection for thorough review of PRs, diffs, or branches. Language-agnostic core with runtime language overlays (Java/Spring, Kotlin/Spring, Python). Two modes: posts PR review comments by default; fix mode (auto-commit) when explicitly asked. Trigger phrases: "let's review", "review this PR", "review the changes", "review changes in", "review branch", "review against", "code review", "look at this PR", "check this PR", "check this diff", "doing-code-review". Do not use for addressing existing reviewer comments; use receiving-code-review instead.
 ---
 
 # Active Code Review
@@ -40,7 +40,7 @@ User args (e.g., "check for secrets", "against branch X") provide context for th
 
 ### Anti-patterns
 
-- Launching fewer sub-agents because the user's request seems narrow or focused. The user asked for a review; launch the panel from `review-panel-selection.md` (default 7 plus any matched conditionals) unless an explicit skip rule applies.
+- Inventing panel composition inline. Use the full or focused panel rules in `review-panel-selection.md`.
 - Reporting grep results, manual scans, or inline analysis as the review output. Sub-agents provide coverage a single pass cannot; the staging doc is the deliverable.
 - Replacing the sub-agent pipeline with a targeted scan because "the user only asked about X." A focused scan cannot find what it was not asked to look for; the selected panel can.
 - Writing diff snapshot files (`*.patch`) to the repo root or other tracked paths. Diff artifacts belong under `{tmp_dir}/` only (see **Diff access** below).
@@ -109,36 +109,32 @@ Load the matching overlay file from this skill's directory (e.g. `java-spring.md
 
 ## Step 3: Launch Sub-Agents in Parallel
 
-Read `review-agents/review-panel-selection.md` to determine the default 7-agent panel and whether `concurrency` / `premortem` launch for this diff. Record `Domains:` in staging metadata.
+Read `review-agents/review-panel-selection.md` to determine the recommended five-worker or focused panel and which conditional lenses `risk` loads. Record selection rationale and Domains in staging metadata.
 
 Launch all selected review worker agents **in parallel** using your agent's sub-agent execution capability (parallel launches when supported). Wait for all to complete before proceeding.
 
-Each agent receives:
+Each worker receives:
 1. **`severity-calibration.md`** (always; tier definitions and decision procedure)
-2. Its own prompt (from the corresponding `.md` file in `~/.agents/skills/review-agents/`)
+2. Its assigned lens catalogs from `review-panel-selection.md`
 3. The language overlay content
 4. Instructions to run `git diff <base>...<head>` (or read `{tmp_dir}/.../diff-r<R>.patch` / `src-diff-r<R>.patch` when the orchestrator materialized snapshots under `{tmp_dir}/`) and read source files for full context
 5. The base and head branch names
-6. Output format: return a JSON array of `{path, line, side, body, severity}` findings; severity is `Low / Medium / High / Critical` per `severity-calibration.md`. **Missing or ambiguous severity in agent output is treated as `Low` until the orchestrator verifies and calibrates.** Sub-agent `body` must already meet §4.12 depth for its severity; do not write one-paragraph stubs expecting the orchestrator to expand them.
+6. Output format: return the shared finding fields plus `path`, `line`, `side`, `body`, `pattern`, and `descendant_launches`.
 7. An explicit constraint: "Do not over-investigate or validate every single line number. Read the diff and key source files, then report findings. Write each `body` to full §4.12 depth: quote contract/doc text, name the code path, describe actual behavior, state why it matters, and suggest fix options. For Medium+, include all four Comment sections inline in `body` using `**Bold headings**`. For any actionable code/test/config fix at any severity, include a concrete before/after or 'could look like' code snippet per §4.9.0 in `body`. Include one sentence why the chosen severity applies (`severity-calibration.md`)."
 
 **Timeout handling:** If a sub-agent has not completed within 10 minutes, launch a replacement with a more focused prompt (limit to first 1500 lines of diff via `| head -1500`, add "read key source files directly" instead of exhaustive investigation). Do not wait indefinitely for stuck agents.
 
-Sub-agents (prepend `severity-calibration.md` to each prompt; specialist files in `~/.agents/skills/review-agents/`):
+Workers:
 
-| Agent file | Focus |
-|---|---|
-| `quality.md` | Bugs, logic errors, edge cases, error handling, correctness, type safety |
-| `implementation.md` | Requirement coverage, correctness of approach, wiring, completeness |
-| `testing.md` | Test coverage, quality, fake tests, independence |
-| `simplification.md` | Over-engineering, excessive abstraction, premature generalization; tagged cuts (`delete:`, `stdlib:`, `native:`, `yagni:`, `shrink:`) |
-| `architecture.md` | God classes, SOLID, DDD, CQRS, clean architecture, aggregates, value objects, extraction opportunities |
-| `documentation.md` | Missing documentation updates; prose clarity in diff (two-phase agent) |
-| `security.md` | Injection, secrets, input validation, data leakage, auth |
-| `concurrency.md` | Race conditions, transactional scope, isolation, locking gaps |
-| `premortem.md` | Design-level failure modes, operational risks, architectural blind spots |
+| Worker | Lenses |
+|--------|--------|
+| `correctness-completeness` | `quality`, `implementation` |
+| `testing` | `testing` |
+| `design-simplicity` | `architecture`, `simplification` |
+| `contract-docs` | `documentation` |
+| `risk` | `security`, plus signaled `concurrency` and `premortem` |
 
-Each agent returns a JSON array. Medium+ `body` values must be self-contained (orchestrator splits into Comment/Analysis and polishes tone; it should not need to re-read sources to fill gaps):
+Each worker returns a JSON array plus `descendant_launches`. Fully expanded findings are self-contained:
 ```json
 [
   {
@@ -146,16 +142,20 @@ Each agent returns a JSON array. Medium+ `body` values must be self-contained (o
     "line": 42,
     "side": "RIGHT",
     "body": "**What the contract says**\nThe OpenAPI `409` response says updates are rejected before any write.\n\n**What the code does**\n`ConsentController` pre-checks status, then the orchestrator re-reads inside `@Transactional` with no row lock. Under READ COMMITTED, a concurrent delete after the re-read can still allow writes.\n\n**Why this matters**\nContract drift: integrators expect strict `409`; the race is documented elsewhere but not in OpenAPI.\n\n**What we could do**\nSoften the OpenAPI description to match runtime behavior, or add `SELECT … FOR UPDATE` before the first mutating statement.",
-    "severity": "Medium"
+    "severity": "Medium",
+    "blocking": false,
+    "consequence": "Integrators may implement a retry contract the service does not provide",
+    "reachability": "common",
+    "blast_radius": "multi-service",
+    "confidence": "verified",
+    "pattern": "quality#contract-drift"
   }
 ]
 ```
 
-The premortem agent maps its output: Block → severity High; Mitigate → severity Medium; Monitor/Accept → dropped (not actionable in a code review).
-
 **Stats sidecar:** write `{reviews_dir}/<same-basename>.stats.json` per `review-staging` in the same pass as the staging doc.
 
-**Conditional agents:** `premortem` and `concurrency` are opt-in per `review-panel-selection.md`. User overrides (`include premortem`, `skip concurrency`, etc.) take precedence.
+**Conditional lenses:** load premortem and concurrency inside `risk` per `review-panel-selection.md`.
 
 **Skip `documentation` entirely** only when internal refactor with no user-visible change **and** no added/modified prose in the diff.
 
@@ -519,57 +519,68 @@ Write all findings to the staging document instead of posting directly. This all
 ## Review Statistics
 
 ### Panel
-| Agent | Status | Raw | Solo | Echo | Relaunch |
-|-------|--------|-----|------|------|----------|
-| quality | complete | 2 | 1 | 1 | no |
-| premortem | skipped | 0 | 0 | 0 | no |
+| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |
+|--------|--------|---------------|--------|-----|------|------|----------|
+| correctness-completeness | quality, implementation | none | complete | 2 | 1 | 1 | no |
+| risk | security | none | complete | 0 | 0 | 0 | no |
 
 ### Counts
-- Agents launched: 10
-- Agents skipped: 1
-- Raw findings (all agents): 5
+- Workers launched: 5
+- Workers skipped: 0
+- Raw findings (all workers): 5
 - Staged findings: 3
 - Discarded during synthesis: 2
 - Solo staged (unique agent origin): 1
 - Echo staged (multi-agent dedup): 2
 
 ### Deduplication groups
-| Staged # | Agents | Theme |
-|----------|--------|-------|
-| 1 | quality, implementation | Null guard missing on batch path |
+| Staged # | Workers | Lenses | Theme |
+|----------|---------|--------|-------|
+| 1 | correctness-completeness | quality, implementation | Null guard missing on batch path |
 
 When none: `None (each staged finding had a single agent origin).`
 
 ### Discarded findings
-| Agent | Agent severity | Pattern | Theme | Reason | Notes |
-|-------|----------------|---------|-------|--------|-------|
+| Worker | Worker severity | Pattern | Theme | Reason | Notes |
+|--------|-----------------|---------|-------|--------|-------|
 | documentation | Low | documentation#prose-verbose-comment | Rename variable | noise | Optional cleanup only |
 
 When none: `None.`
 
 ### Severity calibration
-| Staged # | Agent | Agent severity | Staged severity | Delta |
-|----------|-------|----------------|-----------------|-------|
-| 2 | quality | Low | Medium | upgraded |
+| Staged # | Worker | Lens | Worker severity | Staged severity | Delta |
+|----------|--------|------|-----------------|-----------------|-------|
+| 2 | correctness-completeness | quality | Low | Medium | upgraded |
 
 When none: `None (agent severities matched staged severities).`
 
 ### Triage outcomes
-| Agent | Staged | Fixed | Dropped | Deferred | Pending |
-|-------|--------|-------|---------|----------|---------|
-| quality | 2 | 0 | 0 | 0 | 2 |
+| Worker | Staged | Fixed | Dropped | Deferred | Pending |
+|--------|--------|-------|---------|----------|---------|
+| correctness-completeness | 2 | 0 | 0 | 0 | 2 |
 
 Before triage: Pending = Staged for each agent; Fixed/Dropped/Deferred = 0. After `receiving-code-review`: recompute from finding **Triage** fields.
 
 ## Findings
 
-### 1. <short title>
+### Critical
+
+None.
+
+### High
+
+#### F1. <short title>
+- **Severity**: High | Medium | Low
+- **Blocking**: true | false
+- **Consequence**: <tangible outcome>
+- **Reachability**: expected | common | plausible-edge | theoretical
+- **Blast radius**: global | multi-service | single-service | local
+- **Confidence**: verified | strong-evidence | hypothesis
+- **Worker severity**: Low *(omit when equal to Severity)*
+- **Pattern**: quality#null-handling
+- **Workers**: correctness-completeness, risk
 - **Status**: `pending`
 - **Triage**: pending
-- **Severity**: High | Medium | Low
-- **Agent severity**: Low *(omit when equal to Severity)*
-- **Pattern**: quality#null-handling
-- **Agents**: quality, concurrency
 - **File**: path/to/File.kt
 - **Line**: 115
 
@@ -582,6 +593,18 @@ Before triage: Pending = Staged for each agent; Fixed/Dropped/Deferred = 0. Afte
 <per §4.12 Analysis depth: what was checked, severity rationale, alternatives, dedup/prior-review notes>
 
 ---
+
+### Medium
+
+None.
+
+### Low
+
+None.
+
+### Overflow manifest
+| Worker | Pattern | Anchor | Severity | Confidence | Consequence |
+|--------|---------|--------|----------|------------|-------------|
 ```
 
 Do not include `Side` in staging documents; it is always `RIGHT` for GitHub inline comments and adds noise for branch-only reviews. When posting approved findings to a PR, set `side: RIGHT` in the API payload only (not in the markdown staging file).
@@ -671,7 +694,7 @@ Staging doc hierarchy and `## Review Statistics` are defined in `review-staging`
 Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-skills` Step 0). This skill reads `{reviews_dir}` and other doc paths from that file before writing staging docs under `{reviews_dir}/`.
 
 ### With `execute-plan` skill
-Invoked as a sub-agent in **branch review** mode after all plan tasks are implemented. Review scope comes from the plan's `## Review Scope` section. Output staging doc path: `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` (execute-plan naming; not `-plan-review-r`). The orchestrator loops review → `receiving-code-review` until two consecutive clear review rounds (zero **remaining** Medium+ after triage **and** clear-round quality bar: mutator failure-mode matrix complete; premortem launched when concurrency was in scope; fresh adversarial framing on every Step 3.1, not verify-only). When invoked from execute-plan, honor the Code Review template in `execute-plan/subagent-prompts.md` (fresh review mode, mutator matrix, premortem rule).
+Invoked as a sub-agent in branch review mode after plan implementation. The orchestrator exits after one fresh review of the current digest has zero unresolved blocking findings. Post-fix reviews use blind correctness plus every distinct owning or affected worker.
 
 ## Limitations
 

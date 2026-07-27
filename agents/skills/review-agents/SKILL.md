@@ -9,9 +9,9 @@ This skill is a shared library of review sub-agent pattern catalogs.
 
 **Do not invoke this skill directly.** It is loaded by `doing-code-review`, `review-plan`, `review-confluence-doc`, and `rfc-design`, which provide the execution framing and output format for each context.
 
-**Panel selection:** orchestrators read `review-panel-selection.md` for default panels, conditional launch (`premortem`, `concurrency`), and tiered ownership before launching sub-agents.
+**Panel selection:** orchestrators read `review-panel-selection.md` for the recommended five-worker panel, focused panels, conditional lenses, escalation, launch accounting, and tiered ownership.
 
-**Code review severity:** orchestrators prepend `severity-calibration.md` to every sub-agent prompt alongside the specialist file. RFC/plan reviews use caller-specific severity labels but should apply the same impact-first reasoning where applicable.
+**Severity:** orchestrators prepend `severity-calibration.md` to every worker prompt. Code, plan, RFC, and document reviews all use `Critical`, `High`, `Medium`, and `Low`, with independent blocking status.
 
 ## Agents
 
@@ -33,14 +33,14 @@ This skill is a shared library of review sub-agent pattern catalogs.
 
 **Code review context** (`doing-code-review`): prepend `severity-calibration.md`, then the specialist agent file. Agents receive the git diff and key source files (run `git diff <base>...<head>` directly, or read `{tmp_dir}/.../diff-r<R>.patch` / `src-diff-r<R>.patch` when the orchestrator materialized snapshots under `{tmp_dir}/` per **Diff access** in `doing-code-review`). Return `{path, line, side, body, severity: Low/Medium/High/Critical, pattern: <agent>#<kebab-slug>}` per `severity-calibration.md`. The `body` must meet §4.12 depth in `doing-code-review` for its severity (Medium+ requires four titled sections inline). Actionable code/test/config fixes at any severity must include a §4.9.0 snippet in `body`; test snippets should assert via fixture getters, not duplicated literals. Returns must be self-contained so the orchestrator can dedup, spot-check, and stage without re-reading sources or re-authoring analysis.
 
-**Plan review context** (`review-plan`): agents receive the plan document and referenced source files, return `{location_in_plan, issue, severity: Critical/Suggestion/Advisory, fix, evidence, pattern: <agent>#<kebab-slug>}`. Each return must include **evidence** (what was read, what the source shows) and a concrete fix; not issue stubs the orchestrator must research.
+**Plan review context** (`review-plan`): workers receive the plan and referenced source files, load their assigned lenses, and return `{location_in_plan, issue, severity, blocking, consequence, reachability, blast_radius, confidence, fix, evidence, pattern, descendant_launches}`.
 
-**Confluence doc context** (`review-confluence-doc`): agents receive the full fetched page content (and child pages when applicable). Return `{section_anchor, issue, severity: Critical/Suggestion/Advisory, fix, pattern: <agent>#<kebab-slug>}` with a quoted excerpt of the prose under review. `documentation.md` (phase 2 prose) is mandatory for document prose; other agents run only when implementation logic is present (see `review-confluence-doc` Step 4.6).
+**Confluence doc context** (`review-confluence-doc`): workers receive the full fetched page content and return the shared finding fields plus a quoted excerpt. `contract-docs` is mandatory for document prose; focused panels add other workers only when their domains are present.
 
-**RFC design context** (`rfc-design`): agents receive the Step 1 RFC draft plus original inputs when available. Return `{section_anchor, quoted_excerpt, issue, severity: Block/Mitigate/Monitor/Accept, fix, evidence, pattern: <agent>#<kebab-slug>}`. **Light** depth runs quality, implementation, security, architecture, simplification, documentation, and inline consistency; **Full** depth runs all agents (see `rfc-design` Step 2). Findings fold into RFC sections per severity map; staging file lives under `{reviews_dir}/`.
+**RFC design context** (`rfc-design`): workers receive the draft and original inputs, use the shared severity fields, and preserve the originating lens pattern. Light depth may use a focused panel; Full depth uses the five-worker panel.
 
 The pattern catalogs in each agent file are context-neutral. Execution framing, output depth, and completeness requirements are injected by the orchestrating skill.
 
 **Pattern tag deprecation:** orchestrators accept legacy `prose-clarity#<slug>` in historical reviews; new findings use `documentation#prose-<slug>` or `documentation#missing-<slug>`. Do not emit new `prose-clarity#` tags.
 
-**Review Statistics:** orchestrators must record per-agent raw finding counts, Solo/Echo staged counts, Pattern tags, Severity calibration, and discarded returns in the staging doc `## Review Statistics` section (see `review-staging`). Each staged finding lists originating agent id(s) in **Agents** and the closest **Pattern** id.
+**Review Statistics:** orchestrators record actual worker launches, loaded lenses, parent worker, raw and Solo/Echo counts, pattern tags, calibration, discarded returns, and overflow per `review-staging`.

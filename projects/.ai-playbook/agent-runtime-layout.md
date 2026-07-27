@@ -55,8 +55,8 @@ Use it when:
 - Vendored skills still record `metadata.upstream` per skill; this catalog is the registry-level index.
 
 ### Review staging and panel (`agents/skills/review-staging/`, `review-agents/`, consumers)
-- `review-staging`: gold source for `{reviews_dir}/` staging doc hierarchy and `## Review Statistics` (Panel Solo/Echo, Pattern tags, Severity calibration, Triage outcomes, required `.stats.json` sidecar; `wrong-owner` discard for tiered-ownership tuning).
-- `review-agents`: shared sub-agent pattern catalogs; each return includes `pattern: <agent>#<kebab-slug>`. Panel launch/skip rules and tiered ownership: `review-agents/review-panel-selection.md` (merged `documentation` + legacy `prose-clarity`; opt-in `premortem`/`concurrency`).
+- `review-staging`: gold source for grouped severity output, worker/lens launch accounting, descendant declarations, blocking-aware findings, overflow, and compatible sidecars.
+- `review-agents`: shared lens catalogs bundled into the recommended five workers. `review-panel-selection.md` owns full/focused panels, escalation, conditional risk lenses, and tiered ownership; `severity-calibration.md` owns tangible consequence tiers and finding budgets.
 - Consumers: `doing-code-review`, `review-plan`, `review-loop`, `receiving-code-review`, `rfc-design`, `review-confluence-doc`, `execute-plan` Phase 3, `done` (Step 2.64). Staging docs are gitignored on consumer repos; sync to orphan `docs` branch via `docs-branch`.
 
 ### Claude Code
@@ -169,7 +169,7 @@ python3 -c "import os; assert os.path.realpath(os.path.expanduser('~/.gemini/con
 
 - **`facts.md`:** identity, workspace roots, `shared_docs_dir`, skill keys, brag paths, entrypoints, MCP auth **path keys** (never commit).
 - **`credentials/`:** local OAuth backups for Slack/Atlassian MCP (`mcp-cursor.json`, `mcp-atlassian-mcp-remote/`). Mode `700`/`600`. Never commit.
-- **`scripts/`:** runtime copies of shared agent scripts, synced from the tracked canonical source at repo-root `scripts/` of `instructions_repo` (hygiene runners `scan-public-hygiene.sh`, `check-no-em-dash.sh`, `check-instruction-size.sh`, `done-lock.sh`, `confluence-mirror-hygiene.sh`, plus the lessons gate/adopter/migrator and review-staging validator). Secrets-bearing or machine-specific scripts (e.g. `sync-mcp-credentials.sh`) and `public_hygiene_patterns_file` live here only and stay gitignored; they are not in the tracked source. Paths referenced from facts; portable policy stays in skills.
+- **`scripts/`:** runtime copies of tracked scripts. Phase 1 deploys and byte-checks `validate_review_staging.py` against the repository source; durable symlink or installer management is a later telemetry phase.
 - **`README.md`:** overview of facts + guideline symlink layout (never commit).
 
 ## Shared project guidelines (`projects/.ai-playbook/`)

@@ -184,11 +184,11 @@ This Step 3.1 pass is a **fresh adversarial** full-branch review.
 
 ## Panel launch (required, not optional)
 
-This review is a `doing-code-review` invocation, so `doing-code-review` Hard Gate #1 applies in full: **launch the complete `review-panel-selection.md` panel** (7 default agents: quality, implementation, testing, simplification, documentation, architecture, security; plus conditional concurrency/premortem when their signals match). Launch them in parallel; wait for all before synthesizing.
+Use the worker set supplied in `<REVIEW_MODE_NOTES>`. The initial pass launches the recommended five-worker panel. Post-fix passes launch blind `correctness-completeness` plus every distinct owning or affected worker. If all five are selected, record a full-panel round.
 
-"Solo" is a Solo-vs-Echo *dedup label* for findings that happen to converge on one agent origin. It is **never** a mode that skips launching the panel agents. A single inline orchestrator pass recorded as "folded into Solo | Raw=0" for all 7 default agents is a Hard-Gate violation, not a valid review shape. If you (the review sub-agent) cannot fan out sub-agents from your execution context, return `blocked: cannot launch panel from this execution context` and let the orchestrator delegate to an invocation that can - do **not** run an inline Solo pass and label it Solo.
+"Solo" is a dedup label, not a mode that skips workers. A full-panel staging doc must show all five named workers as complete. A focused pass must record its selection reason.
 
-Record each launched agent with its actual Raw/Solo/Echo counts in `## Review Statistics` -> Panel. Agents may legitimately return zero findings, but their status must be `complete` (ran), not `folded into Solo` (never launched).
+Record each actual launch, loaded lenses, parent worker, and Raw/Solo/Echo counts. Workers return `descendant_launches`; flatten any descendants into Panel and count them toward the six-worker ceiling.
 
 ## Review Scope (two tiers)
 
@@ -214,7 +214,7 @@ Use names `diff-r<REVIEW_ROUND>.patch` (full diff) and `src-diff-r<REVIEW_ROUND>
 
 ## Premortem
 
-When Review Scope / Domains / changed code include concurrency, `@Transactional`, `FOR UPDATE`, race ITs, or multi-row mutators: **launch premortem** (do not skip on clear-streak / "quiet" rounds). User `skip premortem` overrides.
+When concurrency signals exist, the `risk` worker loads concurrency and premortem. Premortem personas remain reasoning sections without child launches.
 
 ## Mutator failure-mode matrix (required in staging doc)
 
@@ -257,10 +257,10 @@ Create `{reviews_dir}/` if missing. Follow `doing-code-review` staging-doc forma
 - Execution log: <REVIEW_LOG_PATH> (must exist on disk)
 - Mutator matrix: complete | N/A | incomplete
 
-### Medium+ pending findings from doing-code-review (provisional: or "none")
+### Blocking pending findings from doing-code-review (provisional: or "none")
 1. Title; Severity; File:line
 
-Do NOT fix code. Do NOT commit. Review only. Loop exit uses remaining Medium+ after address-review triage, not this list.
+Do NOT fix code. Do NOT commit. Review only. Loop exit uses unresolved `blocking: true` after triage.
 ```
 
 ---
@@ -285,8 +285,8 @@ Fix findings on **explicit must-fix** paths when valid. For unlisted paths, fix 
 
 1. Read all findings with Status `pending` in the review doc.
 2. Triage each using two-tier scope: fix valid findings on explicit must-fix paths; for unlisted paths, fix only when plan-related; mark `drop` for false positives or unrelated issues (one-line reason).
-3. Address Critical, High, and Medium findings first.
-4. Low findings: fix only when trivial; otherwise leave pending.
+3. Address unresolved blocking findings first, regardless of severity.
+4. Triage non-blocking findings by tangible consequence.
 5. **Done bar:** Mark `done` only when the executable/canonical artifact named in the finding is fixed (script, monolithic bash block, wired call site). A reference-only snippet update while the runnable block stays stale → leave `pending`.
 6. Run validation after each root-cause fix:
 
@@ -294,7 +294,7 @@ Fix findings on **explicit must-fix** paths when valid. For unlisted paths, fix 
 
 7. Update the review doc: set addressed findings to `done`, false positives/out-of-scope to `drop` with a one-line reason; leave only validated unresolved items at `pending`.
 8. **Update execution log** at `<ADDRESS_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). On Step 3.3 relaunch within the same round R, Pass 2+ **must** be appended to `review-r<R>-receiving-code-review.log.md` without erasing Pass 1. Include triage decisions, pushback rationale, and full return payload.
-9. Do NOT commit; the orchestrator launches **Done (per review iteration)** (Step 3.4), then starts the next review round unless two consecutive clear review rounds have completed (`consecutive_clear_rounds >= 2`).
+9. Do NOT commit; the orchestrator launches Done, then either exits on a fresh blocking-clean digest or starts the targeted follow-up.
 
 ## Return format
 
@@ -309,7 +309,7 @@ Fix findings on **explicit must-fix** paths when valid. For unlisted paths, fix 
 ### Dropped
 - Finding title; reason
 
-### Remaining Medium+
+### Remaining blocking
 - (list or "none")
 
 ### Tests

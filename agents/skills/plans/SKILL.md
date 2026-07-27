@@ -19,7 +19,7 @@ description: "Full plan lifecycle; create, edit, and complete implementation pla
 
 **For detailed plan quality guidance:** Resolve from `{guidelines_path}` or architecture/maintenance docs named in project guidelines (legacy: `docs/domain/plan_quality_guidelines.md`). Otherwise, see Universal Patterns below.
 
-**When updating or optimizing an existing plan:** compare the plan against the current code shape, the RFC/PRD, and any predecessor phase plans before editing. Prefer patching the plan directly when improvements are clear. **Also verify all required sections are present** (`## Gist & Examples`, `## Evaluation Criteria`, `## Review Scope`, `## Validation Commands`); pre-existing plans may be missing them; add any absent sections before making other edits. When Review Scope or Validation Commands exist, check them against the **Scope model (two tiers)** and **Validation Commands (authoring rules)** below. **When the update notes that a code change is "already done", read the actual source file to verify the claim**; do not rely on session summaries or memory; an incorrect "already done" note becomes a review blocker.
+`**When updating or optimizing an existing plan:** compare the plan against the current code shape, git history, task evidence, the RFC/PRD, and any predecessor phase plans before editing. Prefer patching the plan directly when improvements are clear. **Also verify all required sections are present** (`## Gist & Examples`, `## Evaluation Criteria`, `## Review Scope`, `## Validation Commands`); pre-existing plans may be missing them; add any absent sections before making other edits. When Review Scope or Validation Commands exist, check them against the **Scope model (two tiers)** and **Validation Commands (authoring rules)** below. **When the update notes that work is "already done", verify the implementation and commit state from the actual source and git history**; do not rely on session summaries, review labels, or unchecked task text. If implementation has started, preserve completed task history and add or revise only the remaining corrective work instead of relabeling the implemented phase as unstarted or not ready. When an existing on-disk plan differs from the local `docs` shadow branch, treat the on-disk plan as current and the shadow copy as history; never restore stale shadow content over an existing file.
 
 **Save plans to:** `{plans_dir}/<STORY-KEY>-<feature-name>.md` (story key prefix) or `{plans_dir}/YYYY-MM-DD-<feature-name>.md` (date prefix when no story key applies).
 
@@ -391,57 +391,42 @@ Every plan must include a `## Validation Commands` fenced bash block (see plan t
 
 Before finalizing a new or updated plan, run the `review-plan` skill as a sub-agent:
 
-**Execution:** Launch a sub-agent **with the `review-plan` skill instructions** (not a generic `general-purpose` agent doing a single-pass critique). A hand-rolled generic sub-agent that summarizes "looks good" does NOT satisfy this gate: it skips the 9-agent default review catalog and tends to return a falsely clean verdict. The sub-agent must perform the full multi-lens review: 8 shared agents from the review-agents catalog (quality, implementation, architecture, testing, simplification, documentation, security) plus conditional concurrency/premortem per `review-panel-selection.md`, plus an inline consistency agent, returning structured findings. Do NOT run the review inline; always delegate to a `review-plan` sub-agent so the main context stays clean and the full catalog runs.
+**Execution:** Launch a sub-agent with the `review-plan` instructions. It must run the recommended five-worker panel from `review-panel-selection.md`: correctness-completeness, testing, design-simplicity, contract-docs, and risk. Workers load multiple lenses but must not launch nested review agents. Focused panels are valid only under the shared selection rules.
 
 **Sub-agent prompt template:**
 ```
-You are running the review-plan skill. Review the following implementation plan by launching
-8 shared sub-agents from the review-agents catalog (quality, implementation, architecture,
-testing, simplification, documentation, security) plus conditional concurrency/premortem per review-panel-selection.md, plus an inline consistency
-agent, as described in the skill instructions.
+You are running the review-plan skill. Review the following implementation plan with the recommended
+five-worker panel from review-panel-selection.md. Apply severity-calibration.md, record each worker's
+loaded lenses, and do not launch nested review agents.
 
 Read the actual source files referenced in the plan to verify assumptions about data types,
 function signatures, pipeline ordering, and return contracts.
 
-Classify every finding as Blocker, Medium, Low, or Monitor (see severity rules below).
+Classify every finding as Critical, High, Medium, or Low, with independent blocking status.
 
 Write the review output to: `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md`
 (use `-r1`, `-r2`, … for each loop iteration)
 
 Return in the review Summary:
-- counts: Blockers | Medium | Low | Monitor
-- ready=yes only when Blocker=0 AND Medium=0
+- counts: Critical | High | Medium | Low
+- ready=yes only when no unresolved finding has blocking=true
 
 <plan content here>
 ```
 
-**Review severity (plan gate):**
+**Review severity:** use `review-agents/severity-calibration.md`. Document inconsistency alone is Low. Blocking is independent from severity.
 
-| Severity | Meaning | Plan action before next round |
-|----------|---------|-------------------------------|
-| **Blocker** | Plan is wrong or unimplementable as written; execution would fail or violate invariants | Revise tasks, invariants, or scope; mandatory |
-| **Medium** | Plan is implementable but missing wiring, tests, concurrency guards, or has internal contradictions that will cause rework | Revise tasks or add explicit steps/tests; mandatory |
-| **Low** | Doc nits, redundant bullets, minor test gaps with safe fallbacks elsewhere | Fold into plan when trivial; optional same round |
-| **Monitor** | Accepted deferred risk with named owner | Add/update `## Monitor` with owner cross-reference |
-
-Map review-plan agent output when synthesizing: **Block** → Blocker; **Mitigate** that would cause implementation rework or silent failure → Medium; remaining **Mitigate** → Low or Monitor depending on whether a plan step is required.
-
-**If the sub-agent has not completed within 15 minutes**, proceed with an inline spot-check: read the files referenced in the plan, verify branch counts (count all conditional branches in branching constructs), verify helper signatures against actual function definitions, and verify all mutated parameters are listed. Classify inline findings with the same Blocker/Medium/Low/Monitor taxonomy. Continue working; incorporate the agent's findings when it eventually completes. Do not wait idle.
+**If the sub-agent has not completed within 15 minutes**, proceed with an inline spot-check using the same shared severity and blocking contract. Incorporate the delegated result when it completes.
 
 **After the sub-agent completes**, incorporate findings into the plan from the review artifact; do not re-run plan analysis inline:
-1. **Blocker** findings → add or revise plan tasks to address them (mandatory)
-2. **Medium** findings → add or revise plan tasks, tests, invariants, or Review Scope entries (mandatory; same bar as Blockers for loop exit)
-3. **Low** findings → fold into plan when the fix is a one-line clarification; otherwise leave noted in the review artifact
-4. **Monitor** findings → note in the plan's `## Monitor` section; **always resolve ownership**: if an existing plan task or high-level task doc covers the area, assign the item there and cross-reference both ways; if no relevant task exists, suggest creating a new story/task. Never leave a Monitor item as "tracked for a follow-up" without naming its owner task or proposing a new one.
-5. Review output is saved to `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md`
-6. Add a reference line in the plan header: `Plan review: {reviews_dir}/<latest-rN>.md (latest, ready) · …`
-7. Re-check the plan after incorporating findings
-8. **Repeat until zero Blockers AND zero Medium (minimum 2 rounds):** after incorporating all Blocker and Medium findings, re-run the review sub-agent with the next numbered review file (`…-r2.md`, `…-r3.md`, …). Continue the loop until the latest review reports **Blocker=0 AND Medium=0**. One review round is not sufficient when the plan has multiple new or substantially rewritten tasks, or when the prior round had any Medium+ finding.
-9. **Substantive revision resets the review counter to r1.** If you revise the plan substantively **after** a review round declared it ready, the prior verdict no longer covers the new content and the counter restarts (the next review is `-r1.md` again, or you delete the now-stale later rounds). "Substantive" means changes to Design Invariants, task structure (added/removed/reordered tasks), Evaluation Criteria, Review Scope, or scope boundaries. Prose-only clarifications, typo fixes, and addressing Low findings do NOT reset the counter. When in doubt whether a change is substantive, treat it as substantive and re-review. This rule exists because treating a post-revision plan as still-reviewed leads to false "ready" declarations on content the reviewers never saw.
-10. **Minimum two reviews:** run at least two complete review rounds (r1, r2) even if the first review returns zero Blockers and zero Medium. This catches issues that emerge only after applying fixes from the first review (new Blockers, incomplete Medium fixes, or cascading changes). Only stop when both: (a) the latest review round has **Blocker=0 AND Medium=0**, AND (b) at least two review rounds have completed.
-11. **Convergence diagnostic (cut, do not patch):** the loop above is a *termination* criterion, not a *convergence* method. If the Medium/Blocker count is **non-monotonic** (flat or rising across rounds) AND the new findings cluster on a mechanism a recent round ADDED as a fix or safety guard (a `.bak` + lock stack, a pre-emptive consistency check, a fallback resolver, a layered guard), read it as a signal that the mechanism is **over-engineered** for the problem. Each safety layer carries its own edge cases, which is what generates the next round's findings. Do NOT patch the next layer of edge cases; CUT or SIMPLIFY the mechanism (drop the lock and rely on a git-clean precondition; drop the pre-emptive check and rely on a loud failure; collapse the fallback chain to a documented constant). Monotonic decrease = independent defects, keep patching; non-monotonic with findings on recently-added mechanisms = over-engineering, cut. The "cut a pre-emptive check" case rests on the loud-failure-vs-silent-drift distinction: a pre-emptive consistency check is worth cutting when the wrong value it guards would fail LOUDLY (reject + name the offender) anyway, not silently; silent-drift guards (two authorities for one fact) stay.
+1. Fold every accepted finding with `blocking: true`; fold other material findings by consequence.
+2. After fixes, launch blind `correctness-completeness` plus every distinct owning or affected worker.
+3. If that set is all five workers, count it as a full-panel round.
+4. Exit after one fresh review of the current source digest has zero unresolved blocking findings.
+5. Do not run a second clean full panel on the same digest.
+6. Reconcile after three non-monotonic rounds. Before a sixth full-panel round, stop for user direction.
 
-**Ready for execution** means the latest review artifact explicitly states `ready=yes` (or equivalent verdict) with Blocker=0 and Medium=0. Low and Monitor counts do not block handoff to `execute-plan`. **To declare ready, you MUST open and Read the latest review artifact yourself and quote its verdict line in your summary** (e.g. `r2 verdict: ready=yes, Blocker=0, Medium=0`). Do NOT infer readiness from the review sub-agent's chat summary or from "the review completed". A sub-agent summary that omits or softens findings has caused false "Go" declarations; the artifact on disk is the source of truth. A `PreToolUse` hook backstop (`check-plan-review-gate.sh`) additionally blocks `git commit` of a plan file when its newest review artifact records a No-Go verdict, but the hook is mechanical only; the skill text above is the primary control.
+**Ready for execution** means the latest review artifact explicitly states `ready=yes` with zero unresolved blocking findings. Open the artifact and verify its verdict rather than relying on chat summary.
 
 Then verify these structural failure modes and fix them in the plan:
 

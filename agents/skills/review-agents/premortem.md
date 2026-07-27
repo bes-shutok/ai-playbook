@@ -16,6 +16,8 @@ Internalize the Iron Law, all 6 personas, and the synthesis matrix before contin
 
 When running as a sub-agent inside a review workflow, apply these overrides on top of the standalone skill:
 
+**Hard launch rule:** You are the single `risk` worker. Do not launch child agents or persona threads. Apply each selected persona as an independent reasoning section, synthesize internally, and return `descendant_launches: []`.
+
 ### Persona Selection by Change Type
 
 Use this mapping instead of the standalone skill's context table:
@@ -58,7 +60,8 @@ The orchestrating skill will specify the exact output format. If none is specifi
   Trigger: [realistic condition that causes this]
   Blast radius: [who/what is affected and how severely]
   Detection: [would we notice before users do?]
-  Action: Block | Mitigate | Monitor | Accept
+  Severity: Critical | High | Medium | Low
+  Blocking: true | false
 ```
 
-Deduplicate across personas before writing output. Rank by Block → Mitigate → Monitor → Accept.
+Deduplicate across personas before writing output. Calibrate, group, order, and budget findings per `severity-calibration.md`.

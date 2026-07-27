@@ -258,32 +258,32 @@ When a lesson changes RFC authoring workflow, section content requirements, or r
 
 ## Step 2 – Review Pass (Sub-Agents, Tiered)
 
-After Step 1 draft is complete (or when running **Review-local** mode), read `review-agents/review-panel-selection.md` for RFC Light/Full panels and conditional agents, then launch review sub-agents **in parallel** before presenting the final RFC. Do not replace this pass with inline orchestrator analysis.
+After Step 1, read `review-panel-selection.md` and launch the selected workers in parallel.
 
 ### Review depth
 
-| Depth | When | Agents |
-|-------|------|--------|
-| **Light** (default) | MVP RFC, first draft, user did not ask for full review | `quality`, `implementation`, `security`, `architecture`, `simplification`, `documentation`, `concurrency` (when matched; see Conditional agents), inline consistency |
-| **Full** | User says "full review", money/security-critical feature, or RFC touches async/queues/multi-service events | All agents in the table below plus inline consistency |
+| Depth | When | Workers |
+|-------|------|---------|
+| **Light** (default) | MVP RFC, first draft | Focused panel with explicit selection reason |
+| **Full** | User says full review, or high-impact cross-domain design | All five recommended workers |
 | **Skip** | Trivial config/doc tweak, or user says "skip review" | None |
 
 User may request **Full** explicitly; do not default to Full without a signal.
 
 ### Hard gates
 
-1. **Launch all relevant sub-agents before revising the RFC.** Do not skip the pipeline because the draft "looks fine."
+1. **Launch the selected workers before revising the RFC.** Do not skip the pipeline because the draft "looks fine."
 2. **Write the staging review file** under `{reviews_dir}/YYYY-MM-DD-rfc-review-<rfc-slug>-<mode_or_round>.md` and the matching `.stats.json` sidecar before folding findings into the RFC. Include `## Review Statistics` per `review-staging`.
 3. **Fold findings into the RFC structure** (Step 3). Do not present a separate premortem or review report in chat; print only a short summary and the staging file path.
-4. **Partial review gate:** when more than 2 agents fail (see Budget), write the staging file but do **not** fold findings into the RFC until the user chooses re-review or manual continuation.
+4. **Partial review gate:** when any required worker fails after one relaunch, write staging but do not claim a full review.
 
 ### Budget (default)
 
-- Launch all agents for the selected depth in **one parallel batch**; do not run Step 2 twice in one session unless the user requests re-review.
-- **Max 1 relaunch** per agent for insufficient output; record relaunch in the staging file Agent status table.
-- If **more than 2 agents** fail (timeout, empty, or unusable return): write the staging file with partial findings, **do not fold** into the RFC, and report partial review status to the user.
-- **Light:** up to 8 agents (6 shared + consistency, or 7 shared + consistency when `concurrency` matches).
-- **Full:** up to 10 agents (7 shared + conditional concurrency/premortem + consistency); same relaunch and failure rules.
+- Full depth launches the recommended five-worker panel once.
+- Light depth may use a focused panel with a recorded selection reason.
+- Allow one relaunch per failed worker; keep the failed and replacement launches visible in statistics.
+- The hard ceiling is six actual launches, including descendants and escalation.
+- Apply the shared finding budget after deduplication.
 
 ### Orchestrator boundary
 
@@ -295,32 +295,28 @@ User may request **Full** explicitly; do not default to Full without a signal.
 
 **Insufficient sub-agent output:** relaunch the responsible agent with a focused prompt ("expand finding N with quoted RFC section and concrete fix").
 
-### Launch sub-agents in parallel
+### Launch workers in parallel
 
 Each agent receives:
 1. Full RFC draft from Step 1
 2. Original inputs from Step 0 (PRD excerpts, architecture, contracts) when available for evidence checks
-3. Its pattern catalog from `review-agents/<agent>.md` (resolve via shared skills registry)
-4. **Execution framing:** "You are reviewing a Design RFC draft, not a git diff or implementation plan. Read the RFC sections and referenced input context. Apply your pattern catalog to what the RFC **proposes**. Do not flag correct template placement (Terminology before §1, `###` numbered sections). **Do** flag Terminology writer meta, non-alphabetical or subsectioned glossaries, pseudo-headings (`- Label:` / `**Label:**`), operator matrices in Terminology instead of Addendum, **telegraphic edge cases or operability rows** (undefined jargon, missing Condition/Behavior/Outcome in §4, thresholds without units/subjects), and **body prose that assumes Terminology was read** without restating behavior once. Return `{section_anchor, quoted_excerpt, issue, severity: Block/Mitigate/Monitor/Accept, fix, evidence}`."
-5. **Output limit:** 2–3 findings max per agent; report problems only.
+3. Its assigned lens catalogs from `review-agents/`
+4. The shared severity and finding-budget policy
+5. **Execution framing:** review what the RFC proposes, quote evidence, report problems only, and return the shared finding fields plus `descendant_launches`.
 
-#### Shared agents (from `review-agents/`)
+#### Worker bundles
 
-Launch only the agents required by the selected **review depth** and `review-panel-selection.md`. Full depth runs shared agents marked yes in Full plus consistency; Light runs agents marked yes in Light plus consistency. **`concurrency.md` and `premortem.md` follow panel-selection heuristics/overrides** (concurrency is always on for Full; premortem is never forced by Full alone). **`concurrency.md` also runs at Light when the Conditional agents rule matches.**
+Use `review-panel-selection.md`:
 
-| Agent file | Focus in RFC context | Light | Full |
-|---|---|:---:|:---:|
-| `quality.md` | Logic gaps in flows and rules; incorrect assumptions; edge cases missing from §4 | yes | yes |
-| `implementation.md` | Missing wiring, contract field gaps, backward compatibility holes, `(TODO: define)` that block stories; §5 missing per-endpoint JSON bodies | yes | yes |
-| `security.md` | Auth gaps, PII handling, injection surfaces in proposed APIs or events | yes | yes |
-| `architecture.md` | Layer violations, god-service patterns, unnecessary complexity in proposed structure | yes | yes |
-| `testing.md` | §8 tests insufficient for §4 flows or §6 rules; tests that could pass with a broken design | | yes |
-| `simplification.md` | Over-engineered approach for stated MVP scope | yes | yes |
-| `documentation.md` | Missing doc surfaces for user-visible changes; redundant or verbose RFC prose; duplicate sources of truth; **telegraphic §4/§6/§7 bullets** that omit subjects or reuse jargon without restating behavior (two-phase agent) | yes | yes |
-| `concurrency.md` | Race conditions, transactional scope, ordering gaps in proposed behavior | when matched | yes |
-| `premortem.md` | Design-level failure modes; frame: "This RFC was approved, implemented, and failed in production. Why?" (all six personas); opt-in per `review-panel-selection.md` heuristics/overrides | when matched | when matched |
+| Worker | RFC focus |
+|--------|-----------|
+| `correctness-completeness` | Logic, flows, requirements, contracts, compatibility |
+| `testing` | §8 coverage of §4 flows and §6 rules |
+| `design-simplicity` | Architecture boundaries and avoidable complexity |
+| `contract-docs` | Documentation plus RFC consistency checks below |
+| `risk` | Security baseline plus signaled concurrency and premortem reasoning |
 
-#### RFC consistency agent (inline; no shared file)
+#### RFC consistency lens inside `contract-docs`
 
 Review the RFC draft for internal contradictions:
 
@@ -335,23 +331,23 @@ Review the RFC draft for internal contradictions:
 9. **§4 edge cases** use **Edge case: \<title\>** plus Condition / Behavior / Outcome (and Notes when needed); not one-line telegraphic bullets
 10. **§4 edge cases, §6 rules, §7 metrics/alerts** restate behavior in plain language (table/column names OK); thresholds name **what** is counted and the **time window** (e.g. "3+ PARTIAL runs in rolling 24h", not "≥3 in 24h" alone)
 
-Return `{section_anchor, issue, severity: Block/Mitigate/Monitor/Accept, fix, evidence}` with the two contradicting statements quoted.
+Return the shared finding fields with the two contradicting statements quoted.
 
-### Conditional agents
+### Conditional lenses
 
 See `review-agents/review-panel-selection.md` for canonical rules. Summary:
 
 | Condition | Action |
 |-----------|--------|
-| RFC describes async, queues, `@Transactional`, or multi-threaded flows | Include `concurrency.md` at **any depth** (Light or Full; required, not optional) |
-| Premortem domain signals match (`cross-service`, `auth`, `infra-config`, `rollout`, `concurrency`, `new-public-api`) or user says `include premortem` | Include `premortem.md` at **any depth** (Full does not force it) |
+| RFC describes async, queues, `@Transactional`, or multi-threaded flows | Load `concurrency.md` in `risk` |
+| Premortem signals match or user says `include premortem` | Load `premortem.md` in `risk`; personas remain reasoning sections |
 | RFC is trivial config or documentation-only (see skip rules) | Skip entire Step 2 |
 | User says "skip review" | Skip Step 2 |
 | User says "full review" | Use **Full** depth |
 
 ### Staging review file format
 
-Write under `{reviews_dir}/` using naming rules from `review-staging`. The staging doc uses the universal hierarchy (`## Metadata`, `## Review Statistics`, `## Findings`) plus RFC-specific finding severities (`Block` / `Mitigate` / `Monitor` / `Accept`) in **Severity** until folded into the RFC.
+Write under `{reviews_dir}/` using the universal `review-staging` hierarchy and shared severities.
 
 Minimum `## Review Statistics` content per `review-staging`: Panel (Solo/Echo columns), Counts, Deduplication groups, Discarded findings (with Pattern), Severity calibration, Triage placeholder. Each staged finding lists **Agents**, **Pattern**, and **Source** `[Prose]` / `[Premortem]` / `[Code]` when applicable.
 
@@ -370,41 +366,48 @@ Minimum `## Review Statistics` content per `review-staging`: Panel (Solo/Echo co
 ## Review Statistics
 
 ### Panel
-| Agent | Status | Raw | Solo | Echo | Relaunch |
-|-------|--------|-----|------|------|----------|
-| quality | complete | 2 | 1 | 1 | no |
+| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |
+|--------|--------|---------------|--------|-----|------|------|----------|
+| correctness-completeness | quality, implementation | none | complete | 2 | 1 | 1 | no |
 
 ### Counts
-- Agents launched: <N>
-- Agents skipped: <N>
-- Raw findings (all agents): <N>
+- Workers launched: <N>
+- Workers skipped: <N>
+- Raw findings (all workers): <N>
 - Staged findings: <N>
 - Discarded during synthesis: <N>
 - Solo staged (unique agent origin): <N>
 - Echo staged (multi-agent dedup): <N>
 
 ### Deduplication groups
-| Staged # | Agents | Theme |
-|----------|--------|-------|
+| Staged # | Workers | Lenses | Theme |
+|----------|---------|--------|-------|
 
 ### Discarded findings
-| Agent | Agent severity | Pattern | Theme | Reason | Notes |
-|-------|----------------|---------|-------|--------|-------|
+| Worker | Worker severity | Pattern | Theme | Reason | Notes |
+|--------|-----------------|---------|-------|--------|-------|
 
 ### Severity calibration
-| Staged # | Agent | Agent severity | Staged severity | Delta |
-|----------|-------|----------------|-----------------|-------|
+| Staged # | Worker | Lens | Worker severity | Staged severity | Delta |
+|----------|--------|------|-----------------|-----------------|-------|
 
 ### Triage outcomes
 Pending triage.
 
 ## Findings
 
-### 1. <short title>
-- **Severity**: Block | Mitigate | Monitor | Accept
-- **Agent severity**: Mitigate *(omit when equal)*
+### Critical
+
+#### F1. <short title>
+- **Severity**: Critical | High | Medium | Low
+- **Blocking**: true | false
+- **Consequence**: <tangible outcome>
+- **Reachability**: expected | common | plausible-edge | theoretical
+- **Blast radius**: global | multi-service | single-service | local
+- **Confidence**: verified | strong-evidence | hypothesis
+- **Worker severity**: Medium *(omit when equal to Severity)*
 - **Pattern**: quality#logic-error
-- **Agents**: quality
+- **Workers**: correctness-completeness
 - **Triage**: pending
 - **Anchor**: §N <RFC section>
 - **Source**: [Prose] | [Premortem] | [Code]
@@ -414,19 +417,36 @@ Pending triage.
 
 #### Analysis (not posted)
 <Verification trail, fold target (§N / appendix), severity rationale.>
+
 ---
+
+### High
+
+None.
+
+### Medium
+
+None.
+
+### Low
+
+None.
+
+### Overflow manifest
+| Worker | Pattern | Anchor | Severity | Confidence | Consequence |
+|--------|---------|--------|----------|------------|-------------|
 ```
 
 Dedup before folding: when two agents describe the same root issue, keep the clearest fix, record the merge in **Deduplication groups**, and discard extras with reason `duplicate` or `severity-merged`. Drop findings already addressed in the draft (`already-mitigated`).
 
-### Severity map (fold into RFC)
+### Fold into RFC
 
-| Agent severity | RFC action |
+| Finding | RFC action |
 |----------------|------------|
-| **Block** | Revise the cited RFC section before final output (constraints, approach, contracts) |
-| **Mitigate** | Add to §8 Testing and Rollout as critical test or rollout gate |
-| **Monitor** | Add to §7 Operability as metric, log note, or alert |
-| **Accept** | Brief "Accepted Risks" appendix subsection (max 3 bullets) |
+| `blocking: true` | Revise the cited RFC section before final output |
+| Non-blocking behavioral risk | Add the concrete safeguard to §8 Testing and Rollout |
+| Operability risk | Add the concrete metric, log, or alert to §7 |
+| Accepted residual risk | Add a brief Accepted Risks item |
 
 **Skip Step 2 when:**
 - The RFC is a trivial configuration change or documentation-only tweak
@@ -442,7 +462,7 @@ Dedup before folding: when two agents describe the same root issue, keep the cle
 2. Re-scan Terminology for terms introduced during revisions.
 3. Run the editing checklist in `references/rfc-sections.md` when modifying an existing file.
 4. Present **Markdown RFC only** to the user (no generation-time reasoning, no meta commentary).
-5. Print to console: staging review path, counts folded (Block/Mitigate/Monitor/Accept), partial-review flag if applicable, and one-line readiness note.
+5. Print to console: staging review path, counts by shared severity, partial-review flag if applicable, and one-line readiness note.
 
 ---
 
@@ -460,13 +480,13 @@ Dedup before folding: when two agents describe the same root issue, keep the cle
 ## Integration Points
 
 ### With `review-agents` skill (review pass)
-Step 2 launches shared pattern catalogs from `review-agents/` plus the inline consistency agent. Execution framing, tiered depth, and severity mapping live in this skill.
+Step 2 launches the five worker bundles from `review-panel-selection.md`; `contract-docs` includes the RFC consistency lens.
 
 ### With `review-staging` skill
 Consumes `review-staging` for path pattern `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md`, required `## Review Statistics`, and matching `.stats.json` sidecar. Write staging before folding findings into the RFC; do not use `{tmp_dir}/rfc-review/`.
 
 ### With `premortem` skill
-`premortem.md` sub-agent reads the standalone `premortem` skill for personas and process. Do not invoke the standalone premortem skill directly in the orchestrator; launch the sub-agent in the Step 2 parallel panel only when `review-panel-selection.md` heuristics or user overrides say launch (Full depth does not force premortem).
+The `risk` worker reads the premortem catalog when signals match and applies personas as internal reasoning sections without child launches.
 
 ### With `review-confluence-doc` skill (redirect)
 Confluence-hosted RFCs/TDDs: use `review-confluence-doc` for published-page review. This skill owns **local Markdown** authoring; it does not fetch Confluence.

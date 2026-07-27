@@ -3,8 +3,8 @@ name: execute-plan
 description: >
   Orchestrates iterative implementation of a plans-skill implementation plan using sub-agents:
   implement one task at a time (tests must pass), mark plan checkboxes, commit via done; then run
-  review/fix loops until two consecutive clear review rounds (zero remaining Medium+ after
-  receiving-code-review triage), minimum two review rounds, maximum ten review rounds,
+  review/fix loops until one fresh review of the current digest has zero unresolved blocking
+  findings after receiving-code-review triage, with at most five full-panel rounds,
   with done after each review iteration;
   on successful completion, remove session tmp under resolved tmp_dir/execute-plan/<plan-slug>/.
   Trigger phrases and invocations:
@@ -127,13 +127,13 @@ Do not start Phase 1 until execute-plan is chosen (invocation signal or gate opt
 | Pass all session logs into every `done` | Each `done` reads only logs from its preceding step(s), not full history |
 | Overwrite an existing worker log on relaunch | Same path = append Pass N to end; never truncate `review-r<R>-receiving-code-review.log.md` or other worker logs |
 | Delete `{tmp_dir}/execute-plan/<PLAN_SLUG>/` before success or on failure/interrupt | Tmp logs are removed only in Phase 5 after full successful completion |
-| Exit Phase 3 after one clear round | Requires **two consecutive** clear review rounds (`consecutive_clear_rounds >= 2`) and `review_round <= 10` |
+| Repeat a clean full panel on the same digest | Exit after one fresh blocking-clean review |
 | Return a final response after a worker checkpoint | A worker final, `done` commit, or review launch is progress only; the parent must pass the terminal-response gate and complete Phase 5 first |
 | Return a final response after answering a status or interruption question | A status/correction question does not pause execution; answer in commentary, then re-read the active manifest and continue unless the user explicitly says pause or abort |
 | Treat post-fix Step 3.1 as "verify prior fixes only" | Causes verification bias; clear rounds must be **fresh adversarial** reviews (promote miss-path after boolean false) |
-| Clear a round with empty mutator failure-mode matrix | Zero Medium+ is not enough; matrix is part of the clear-round quality bar |
+| Clear a round with empty mutator failure-mode matrix | Zero blocking findings is not enough; the matrix is part of the quality bar |
 | Skip premortem on clear-streak rounds when plan had concurrency | Premortem stays launched whenever concurrency/transactional mutators are in Review Scope |
-| Start review round 11 | Hard cap: **maximum 10** review rounds (`review_round` 1–10); stop and ask the user before exceeding |
+| Start a sixth full-panel round | Stop and ask the user before exceeding the five-round budget |
 | User sends plan path only; parent implements inline | Skipped plan-path gate (Mitigation A); treat as read-only or ask the three-way choice first |
 | `replace_all` or bulk `- [ ]` → `- [x]` across the plan | Violates one-task checkbox discipline; mark only the current task after its `done` |
 
@@ -429,25 +429,25 @@ When all task checkboxes are `[x]`:
 
 Run after all tasks are implemented and final validation passes.
 
-**One review iteration** = Steps 3.1 → 3.2 → (3.3 if needed) → 3.4 (streak + `done`) → **3.5** exit check. Do not start the next review round (3.1 with `N+1`) until Step 3.4 `done` succeeds.
+**One review iteration** = Steps 3.1 -> 3.2 -> (3.3 if needed) -> 3.4 (`done`) -> **3.5** exit check.
 
 **Review end condition (aligned with `plans` skill Plan Quality Gate):**
 
 | Gate | Rule |
 |------|------|
-| **Blocking tier** | Zero **remaining Medium+** after `receiving-code-review` triage each round; Critical, High, or Medium still at Status `pending` in the staging doc |
-| **Minimum rounds** | At least **2** review rounds (`review_round` 1 and 2) even if round 1 is already clear |
-| **Clear streak** | **Two consecutive** clear rounds (`consecutive_clear_rounds >= 2`) before Phase 4 |
-| **Maximum rounds** | **10** review rounds hard cap (`review_round` 1–10); never launch Step 3.1 for round 11 |
-
-Low findings may remain; they do not block Phase 4 once the exit condition is met.
+| **Blocking** | Zero unresolved findings with `blocking: true` after triage |
+| **Freshness** | The clean result reviews the current source digest after the latest fix |
+| **Full-panel budget** | At most five full-panel rounds; ask before a sixth |
+| **Escalation budget** | At most one escalation worker in the active review run |
 
 Track in `manifest.md`:
 
-- `review_round`; current round number (increment when starting Step 3.1; starts at 1)
-- `consecutive_clear_rounds`; clear-round streak (reset to 0 when any remaining Medium+ after triage)
+- `review_round`; current review pass
+- `full_panel_rounds`; increment only when all five base workers launch
+- `escalation_count`; never greater than one in the active run
+- `source_digest`; digest reviewed in the current pass
 
-**Provisional vs accepted findings:** `doing-code-review` output is provisional. Findings marked `drop` (false positives) by address-review do not block a clear round. However, findings marked `done` mean the codebase was mutated, which resets the clear-round streak. Zero Medium+ alone is **not** enough for a clear round; see Step 3.4 **Clear-round quality bar**.
+**Provisional vs accepted findings:** dropped false positives do not block. Any accepted fix mutates the source and requires a fresh targeted review of the new digest. Severity alone does not determine readiness.
 
 ### Verify-fix vs fresh review (do not conflate)
 
@@ -456,25 +456,26 @@ After Step 3.3 address-review mutates code, the **next** Step 3.1 is a **fresh a
 | Pass type | When | Prompt framing |
 |-----------|------|----------------|
 | **Verify-fix** (optional, inline in address-review) | Inside Step 3.3 after fixes | Confirm each fixed finding's executable artifact; re-run validation commands |
-| **Fresh review** (every Step 3.1) | All review rounds, including post-fix | Full branch diff; hunt new defects; prior findings are **context only**, not a filter |
+| **Fresh review** (every Step 3.1) | Initial full panel or post-fix targeted panel | Current full branch diff; prior findings are context, not a filter |
 
-**Forbidden in Step 3.1 prompts (including r2+):** "do not re-report fixed issues", "verify r1 fixes only", "confirm prior round remains clean", or any framing that steers agents to rubber-stamp a clear round. Allowed: list prior staging paths as history; still require full-panel adversarial coverage.
+**Forbidden in Step 3.1 prompts:** verification-only framing that steers workers to rubber-stamp a revision.
 
 **Rationale:** A Phase 3 clear streak after a FOR UPDATE fix still missed a High `promoteToActive` miss-path wipe and Medium ensure-then-promote success semantics on explicit must-fix paths. Confirmation framing caused the miss.
 
 ### Step 3.1: Launch review sub-agent
 
-**Before launching:** read `review_round` from `manifest.md`. If `review_round > 10`, do **not** launch; go to Step 3.5 (max-rounds stop). If entering Phase 3 for the first time, set `review_round = 1` and `consecutive_clear_rounds = 0`.
+**Before launching:** read the review counters from `manifest.md`. If a sixth full-panel round or second escalation would be required, stop at Step 3.5 for user direction.
 
 Launch a sub-agent using your agent's sub-agent execution capability.
 Use the **Code Review** template from [subagent-prompts.md](subagent-prompts.md). Fill `<REVIEW_MODE_NOTES>`:
 
-- Always: fresh adversarial full-branch review (table above).
-- When plan Review Scope or Domains include concurrency / transactional mutators / `FOR UPDATE` / race ITs: instruct `doing-code-review` to **launch premortem** (do not skip on "quiet" clear-streak rounds).
+- Initial pass: fresh adversarial five-worker review.
+- After fixes: blind `correctness-completeness` plus every distinct worker that owned an accepted finding or whose domain the fixes affected.
+- When concurrency signals exist: load premortem and concurrency inside `risk`; do not launch persona children.
 
 The sub-agent runs `doing-code-review` in **branch review** mode (not PR mode unless the user supplied a PR URL). Diff scope is **`git diff <BASE_BRANCH>...HEAD`** (all commits on the feature branch for this plan); not the latest commit alone. Apply the plan's **two-tier Review Scope**: findings on **explicit must-fix** paths are always in scope; for unlisted paths, keep findings only when **plan-related** (causally tied to a plan task, explicit change, or contract the plan altered); drop unrelated findings with a one-line reason.
 
-**Mutator failure-mode matrix (required in staging doc):** The review sub-agent must include `## Mutator failure-mode matrix` listing every **new or changed** public mutating API on explicit must-fix paths (port methods, application services that write). For each: miss / wrong-status / stale-id / concurrent-overlap checked via IT, staged finding, or `checked: yes` with one-line evidence (test name or code path). Missing rows → orchestrator treats the round as **not clear** (Step 3.4) even if Medium+ pending is zero; relaunch review or stage Medium `implementation#missing-negative-coverage`.
+**Mutator failure-mode matrix (required in staging doc):** list every new or changed public mutating API on explicit must-fix paths. Missing rows make the round not clean even when no blocking finding remains.
 
 Review output: `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` (increment `N` each round; use `-code-review-r` prefix to distinguish from pre-execution **plan** reviews at `…-plan-review-r<N>.md`).
 
@@ -489,19 +490,19 @@ Pass `<REVIEW_LOG_PATH>` per [agent-logs.md](agent-logs.md). Pass `review_round`
 3. `<REVIEW_LOG_PATH>` exists and is non-empty.
 4. Doc follows `doing-code-review` staging format sufficiently for Step 3.2 parsing (findings with Severity/Status/Triage) and includes populated `## Review Statistics` per `review-staging` (including Solo/Echo, Pattern, Severity calibration).
 5. Doc includes `## Mutator failure-mode matrix` with a row per new/changed public mutator on explicit must-fix paths (or an explicit `N/A: no mutating APIs in this plan` line). Incomplete matrix → relaunch Step 3.1.
-6. When plan scope included concurrency signals: Panel shows `premortem` as `complete` (not `skipped`) unless the user explicitly said `skip premortem`.
-7. **Panel actually ran (anti-Solo-collapse check).** The `## Review Statistics` -> Panel table must show the 7 default agents (`quality`, `implementation`, `testing`, `simplification`, `documentation`, `architecture`, `security`) with status `complete` (ran and returned, even if zero findings) - **not** `folded into Solo` / `Raw=0` with status `skipped`. A staging doc whose only `complete` row is `orchestrator (Solo adversarial pass)` is an inline Solo pass, not a panel review: relaunch Step 3.1 with the panel-launch instruction (see Code Review template "Panel launch" section). Per-step agents (`concurrency`, `premortem`) may be `skipped` only when `review-panel-selection.md` authorizes the skip and the reason is recorded. This gate exists because a wrapped `doing-code-review` sub-agent with no fan-out capability silently collapses to Solo and the "Solo" statistic label passes every other check; see UL#190.
+6. When concurrency signals exist, the `risk` row records `concurrency` and `premortem` as loaded lenses unless the user explicitly skipped premortem.
+7. **Panel actually ran:** a full-panel pass has complete rows for `correctness-completeness`, `testing`, `design-simplicity`, `contract-docs`, and `risk`. A focused follow-up records its selection reason. Flatten descendants into Panel accounting and reject more than six actual launches.
 
 If any check fails, relaunch the review sub-agent; do **not** enter Step 3.2 or launch address-review.
 
 ### Step 3.2: Triage input (doing-code-review)
 
-Parse the staging doc at the verified path. Count findings by severity where **Status** is `pending` (not `drop`).
+Parse the staging doc at the verified path. Count unresolved findings with `blocking: true`.
 
-| Severity | Blocking tier? | Action |
-|----------|----------------|--------|
-| Critical, High, Medium | Yes (Medium+) | Launch Step 3.3 (`receiving-code-review`); **does not** update the clear-round streak |
-| Low | No | May remain; does not block completion once exit condition is met |
+| Finding | Action |
+|---------|--------|
+| `blocking: true` and unresolved | Launch Step 3.3 (`receiving-code-review`) |
+| `blocking: false` | Triage by consequence; does not by itself block completion |
 
 **Do not use Step 3.2 counts for loop exit.** They only decide whether Step 3.3 runs. Exit criteria are evaluated in Step 3.4 after triage.
 
@@ -509,7 +510,7 @@ Compare rounds: if a finding is identical to a prior round and was already fixed
 
 ### Step 3.3: Launch address-review sub-agent
 
-If any Critical/High/Medium `pending` findings exist from Step 3.2:
+If unresolved blocking findings exist from Step 3.2:
 
 Launch a sub-agent using your agent's sub-agent execution capability.
 Use the **Address Review** template from [subagent-prompts.md](subagent-prompts.md).
@@ -520,41 +521,35 @@ The sub-agent runs `receiving-code-review` against the staging doc (not GitHub t
 
 Pass `<ADDRESS_LOG_PATH>` per [agent-logs.md](agent-logs.md). Orchestrator verifies the log exists before Step 3.4.
 
-If Step 3.2 shows **no** Critical/High/Medium `pending` findings, skip Step 3.3 (no address log) and go to Step 3.4.
+If Step 3.2 shows no unresolved blocking findings, skip Step 3.3 and go to Step 3.4.
 
 **Step 3.3 verification gate (orchestrator, before Step 3.4):**
 
 1. Address sub-agent returned `<ADDRESS_LOG_PATH>` and the file is non-empty.
 2. Staging doc statuses updated (`done`, `drop`, or justified `pending`).
-3. Address log **Remaining Medium+** section parsed (or staging doc re-read for `pending` Critical/High/Medium).
+3. Address log remaining-blocking section parsed, or staging re-read for unresolved `blocking: true`.
 
-### Step 3.4: Evaluate clear-round streak and launch done
+### Step 3.4: Evaluate the current digest and launch done
 
 **Clear round (code-mutation gate):** A round is only "clear" if no code changes were made to fix issues. Findings marked `drop` (false positives) do not mutate code, but findings marked `done` (fixed) do mutate code and require a fresh review.
 
-| Step 3.3 ran? | Clear when (all must hold) |
-|---------------|----------------------------|
-| No (Step 3.2 had zero Medium+ `pending`) | Zero Medium+ pending **and** clear-round quality bar (below) passes |
-| Yes | Zero Critical/High/Medium findings marked `done` **and** zero findings still at Status `pending` (all Medium+ marked `drop`) **and** clear-round quality bar passes |
+| Step 3.3 ran? | Result |
+|---------------|--------|
+| No | Clean when zero unresolved blocking findings and the quality bar passes |
+| Yes with accepted fixes | Not clean; the changed digest requires a fresh targeted review |
+| Yes with drops only | Clean when zero unresolved blocking findings and the quality bar passes |
 
-**Clear-round quality bar (blocks streak increment even when Medium+ pending is 0):**
+**Clear-round quality bar:**
 
 1. **Mutator failure-mode matrix** present and complete (Step 3.1 gate #5); every mutator row has IT evidence, a staged finding, or `checked: yes` with a concrete pointer.
 2. **Not a discard-only quiet round without adversarial depth:** If raw findings were non-zero and **all** were discarded as `noise` / `already-mitigated` / `prior-review`, the review log or staging Analysis must still show the failure-mode matrix was filled from code/IT evidence (not left empty). An empty matrix plus "no findings" after a fix round is **unclear**; relaunch Step 3.1 with fresh-review framing.
-3. **Premortem** launched when required (Step 3.1 gate #6).
+3. Required conditional risk lenses were loaded.
 
-**Streak tracking (`consecutive_clear_rounds`, update before launching done):**
+Record the current source digest and panel counters in `manifest.md`.
 
-| This round | `consecutive_clear_rounds` |
-|------------|----------------------------|
-| Clear (mutation gate + quality bar) | increment by 1 |
-| Unclear (any Medium+ `done`/`pending`, or quality bar failed) | reset to 0 |
+**Loop exit condition:** one fresh clean review of the current digest. Do not run a second clean full panel on the same digest.
 
-Record the current count in `manifest.md`.
-
-**Loop exit condition (success path):** `consecutive_clear_rounds >= 2` **and** `review_round >= 2` after updating the streak for this round. One clear round is **not** enough; after the first, run `done` below, then start the next review round (Step 3.1 with incremented `review_round`) before exiting Phase 3.
-
-**Hard cap:** `review_round` must never exceed **10**. Do not increment past 10 or launch another review sub-agent after round 10 completes Step 3.4.
+**Hard cap:** do not launch a sixth full-panel round or a second escalation within the active run without stopping for user direction.
 
 Launch a sub-agent using your agent's sub-agent execution capability.
 Use the **Done (per review iteration)** template from [subagent-prompts.md](subagent-prompts.md).
@@ -580,13 +575,13 @@ The parent must then execute Step 3.5 in the same active run. Do not send a fina
 
 ### Step 3.5: Continue or exit loop
 
-Update `manifest.md` with current `review_round` and `consecutive_clear_rounds`.
+Update `manifest.md` with `review_round`, `full_panel_rounds`, `escalation_count`, and `source_digest`.
 
 | Condition | Action |
 |-----------|--------|
-| `consecutive_clear_rounds >= 2` **and** `review_round >= 2` | Proceed to Phase 4 (success) |
-| `review_round >= 10` **and** exit condition not met | **Stop**; report remaining Medium+ `pending` findings, last commit SHA, and ask the user: continue with manual fixes, accept remaining items and archive anyway, or abort. Do **not** launch round 11. Preserve tmp logs. |
-| Otherwise | Increment `review_round` by 1; if new value `<= 10`, **return to Step 3.1 immediately** (no prompt); if would exceed 10, use max-rounds stop row above |
+| Current digest has a fresh clean review | Proceed to Phase 4 |
+| A sixth full panel or second escalation is required | Stop; report unresolved blocking findings and ask the user |
+| Otherwise | Increment `review_round` and return to Step 3.1 with the targeted worker set |
 
 ## Phase 4: Archive Plan
 
@@ -621,7 +616,7 @@ Delete the execute-plan session directory **only after the full workflow succeed
 
 1. Every plan task checkbox is `[x]`.
 2. Phase 2 final validation passed.
-3. Phase 3 exited after **two consecutive** clear review rounds (`consecutive_clear_rounds >= 2`, `review_round >= 2`) **or** user explicitly accepted max-rounds stop after round 10 with documented remaining Medium+.
+3. Phase 3 exited after one fresh blocking-clean review of the current digest, or the user explicitly accepted a documented stop.
 4. Last Step 3.4 `done` completed successfully.
 5. Plan file exists at `{plans_completed_dir}/<filename>.md` (Phase 4 archive done).
 
@@ -671,8 +666,8 @@ Before its final response, the parent must write `workflow_state: complete` plus
 4. **Done after every task**; launch the `done` **sub-agent** (Step 1.4) and verify a commit at HEAD before starting the next task; overrides the plans skill handoff default of session-end-only `done`. Parent-agent implementation does not satisfy this gate.
 5. **Done after every review iteration**; launch the `done` **sub-agent** (Step 3.4) before the next review round; address-review fixes must not accumulate uncommitted across iterations.
 6. **Review scope (two tiers)**; **Explicit must-fix** paths from the plan are always in scope. Unlisted paths use **plan-related extension**: keep findings only when causally tied to the plan; drop unrelated issues. Do not treat the explicit list as a ceiling that hides plan-caused defects elsewhere on the branch.
-7. **Two consecutive clear review rounds**; Phase 3 success exit only when the last two iterations had zero **remaining Medium+** after `receiving-code-review` triage (`consecutive_clear_rounds >= 2` and `review_round >= 2`) **and** each clear round passed the **clear-round quality bar** (mutator failure-mode matrix complete; premortem launched when concurrency was in scope; not a discard-only quiet pass without matrix evidence); provisional `doing-code-review` counts alone do not satisfy this gate.
-8. **Maximum ten review rounds**; never launch Step 3.1 when `review_round > 10`; after round 10 without meeting the exit condition, stop and ask the user (do not loop indefinitely).
+7. **One fresh blocking-clean review of the current digest**; the quality bar still requires the mutator matrix and required risk lenses.
+8. **Maximum five full-panel rounds**; stop and ask before a sixth. Targeted rounds do not reset the counter.
 9. **Fresh test output**; never cite stale run results; re-run commands before claiming pass.
 10. **Preceding-step logs before learn**; worker sub-agents write logs; each `done` reads only its immediately prior step's log(s). Missing required log blocks commit.
 11. **Tmp cleanup on success only**; remove `{tmp_dir}/execute-plan/<PLAN_SLUG>/` in Phase 5 after the success checklist passes; never on failure, max-rounds stop, or user interrupt.
@@ -706,7 +701,7 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
    - Write or append `task-<N>-implement.log.md` (retroactive summary is OK if work already exists).
    - Launch **done** with that task's plan commit line; mark **only that task's** checkboxes `[x]`.
    - Gate: `git status` clean for that task's files before Task N+1.
-4. Run Phase 2 full validation, then Phase 3 (minimum 2 clear rounds), Phase 4 archive, Phase 5 tmp cleanup on success.
+4. Run Phase 2 full validation, then Phase 3 until one fresh blocking-clean result, Phase 4 archive, and Phase 5 cleanup.
 
 ## Integration Points
 
@@ -714,7 +709,7 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
 At Phase 0, read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` from `.ai-playbook/facts.md` (see `using-skills` Step 0; bootstrap runs only when Terms triggers fire) before plan-scoped edits or session log writes.
 
 ### Consumes `plans` skill
-Reads plan format, task order, validation commands, review scope, and commit messages. Archives to `{plans_completed_dir}/` when finished. If `plans` Phase 0 already created a feature branch, Phase 0 here auto-continues on definitive branch match (Step 0.1a). Pre-execution plan reviews use `…-plan-review-r<N>.md` with Blocker/Medium gate; Phase 3 code reviews use `…-code-review-r<N>.md` with Medium+ gate; same minimum-two / maximum-ten round discipline.
+Reads plan format, task order, validation commands, review scope, and commit messages. Pre-execution and Phase 3 reviews use the shared blocking-aware cycle.
 
 ### Consumes `tdd-guide` + `unit-test-runner` (via implement sub-agent)
 Implement sub-agent follows RED → GREEN → Refactor for behavioral tasks; runs validation commands with fresh output.
@@ -726,10 +721,10 @@ Only `done` performs git commits. Invoked after each implementation task (Step 1
 Branch/plan-scoped review after all tasks; staging doc is the handoff artifact. Uses full-branch diff (`<BASE_BRANCH>...HEAD`). Applies two-tier Review Scope: explicit must-fix plus plan-related extension for unlisted paths.
 
 ### Consumes `receiving-code-review` skill (sub-agent)
-Triages provisional findings from the staging doc between review rounds. Phase 3 exit counts only **remaining Medium+** still `pending` after this triage; not raw `doing-code-review` output.
+Triages provisional findings between rounds. Phase 3 exit depends on unresolved `blocking: true`, not raw severity counts.
 
 ### Related: `review-loop` skill (standalone)
-For branch hygiene **without** a plan (user asks to loop until clean on current branch), use **`review-loop`** instead of Phase 3. Default exit: one fresh clear round (zero Medium+ before fixes). Phase 3 keeps two consecutive clear rounds and plan-scoped review scope.
+For branch hygiene without a plan, use `review-loop`. Both workflows exit after one fresh blocking-clean review of the current digest.
 
 ### Consumes `review-staging` skill
 Phase 3 staging docs (and plan-review artifacts when present) must follow `review-staging` hierarchy and `## Review Statistics`, including the mutator failure-mode matrix when applicable. Clear-round quality bar treats incomplete staging as not clear.

@@ -1,31 +1,56 @@
 # Review Panel Selection
 
-Single source for which review sub-agents launch or skip. All orchestrators (`doing-code-review`, `review-plan`, `rfc-design`, `review-confluence-doc`) reference this file; do not duplicate skip/launch prose inline.
+Single source for which review workers launch, which lenses they load, and when a focused or escalated panel is valid. All orchestrators (`doing-code-review`, `review-plan`, `rfc-design`, `review-confluence-doc`) reference this file; do not duplicate panel policy inline.
 
-## Default panels
+## Recommended five-worker panel
 
-| Context | Default agents | Conditional agents |
-|---------|----------------|-------------------|
-| Code review | `quality`, `implementation`, `testing`, `simplification`, `documentation`, `architecture`, `security` (7) | `concurrency`, `premortem` |
-| Plan review | Same 7 shared + inline `consistency` (8) | `concurrency`, `premortem` |
-| RFC Light | `quality`, `implementation`, `security`, `architecture`, `simplification`, `documentation` + inline consistency (7) | `concurrency` |
-| RFC Full | All 7 shared + inline consistency (8) | `concurrency` (always), `premortem` (heuristics) |
-| Confluence doc | `documentation` (prose pass always), `premortem` when matched | Step 4.6 code lenses per `review-confluence-doc` |
+Normal full code, plan, and RFC reviews launch exactly these workers:
 
-Prepend `severity-calibration.md` for code review sub-agents only.
+| Worker | Required lenses | Conditional lenses | Owns |
+|--------|-----------------|--------------------|------|
+| `correctness-completeness` | `quality`, `implementation` | none | Runtime correctness, requirement coverage, wiring, compatibility |
+| `testing` | `testing` | none | Test strategy, discriminating assertions, failure paths |
+| `design-simplicity` | `architecture`, `simplification` | none | Dependency direction, maintainability, unnecessary structure |
+| `contract-docs` | `documentation` | `consistency` for plans and RFCs | Contracts, source-of-truth drift, prose, cross-section consistency |
+| `risk` | `security` | `concurrency`, `premortem` when signals below match | Security, ordering, rollout, and operational failure modes |
+
+Prepend `severity-calibration.md` to every worker prompt. Each worker records every loaded lens. Pattern IDs retain the originating lens prefix.
+
+## Launch accounting
+
+- A worker is one launched sub-agent. Every descendant sub-agent is an additional worker.
+- Worker returns declare `descendant_launches`; use an empty list when none launched.
+- Flatten every descendant into staging Panel accounting with its `parent_worker`.
+- Review workers must not launch nested review sub-agents. Premortem personas are independent reasoning sections inside `risk`.
+- The hard ceiling is six actual launches per review pass, including descendants.
+- At most one optional sixth escalation worker may launch in an active review run. Record `escalation_reason`; a second escalation is prohibited until a new run begins.
+- The sixth worker requires an independent high-risk domain that cannot be covered credibly by `risk`, or an explicit user request. Do not use it for routine breadth.
+
+## Focused panels
+
+A narrow review may launch fewer than five workers when the artifact and user request do not need a full panel. Record `panel_mode: focused` and `selection_reason`.
+
+Common focused panels:
+
+- docs-only prose: `contract-docs`, plus `correctness-completeness` when prose specifies normative behavior;
+- test-only change: `correctness-completeness`, `testing`;
+- narrow security review: `correctness-completeness`, `testing`, `risk`;
+- explicit `only check X`: the worker that owns X, plus correctness when the requested review can affect behavior.
+
+Do not label a focused panel as a full review.
 
 ## Manual overrides
 
-User args bypass heuristics when explicit:
-- `include premortem` / `include concurrency` → launch even if heuristics say skip
-- `skip premortem` / `skip concurrency` → skip even if heuristics say launch
-- `only check X` → honor per caller focused-review rules
+User args bypass lens heuristics when explicit:
+- `include premortem` / `include concurrency` -> load that lens in `risk`
+- `skip premortem` / `skip concurrency` -> do not load that conditional lens
+- `only check X` -> honor the focused-panel rules
 
-Record launch/skip rationale in staging doc `## Metadata` `Domains:` (comma-separated tags).
+Record selection and conditional-lens rationale in staging Metadata.
 
-## Conditional: `premortem`
+## Conditional `premortem` lens
 
-**Opt-in.** Launch when **any** domain tag or diff signal matches:
+Load inside `risk` when any domain tag or diff signal matches:
 
 | Signal | Examples |
 |--------|----------|
@@ -44,9 +69,9 @@ Record launch/skip rationale in staging doc `## Metadata` `Domains:` (comma-sepa
 
 Do **not** use changed-line count alone as a skip gate.
 
-## Conditional: `concurrency`
+## Conditional `concurrency` lens
 
-**Opt-in.** Scan **all changed files** (not diff hunks only) for:
+Scan all changed files, not diff hunks only, for:
 
 | Signal | Examples |
 |--------|----------|
@@ -58,44 +83,44 @@ Do **not** use changed-line count alone as a skip gate.
 
 **Default skip** when none match in changed files or their direct call paths visible in the diff.
 
-**execute-plan override:** When the caller is `execute-plan` Phase 3 and plan Review Scope / Domains include concurrency, transactional mutators, `FOR UPDATE`, or race ITs, **launch premortem** even on "quiet" clear-streak rounds unless the user said `skip premortem`. Clear-streak silence is not a skip signal (lock-duration miss when premortem was skipped on a quiet clear-streak round).
+**execute-plan override:** When Phase 3 scope includes concurrency, transactional mutators, `FOR UPDATE`, or race ITs, load `premortem` in `risk` even on quiet follow-up rounds unless the user said `skip premortem`.
 
-## `documentation` agent: two-phase execution
+## `documentation` lens: two-phase execution
 
-The merged `documentation.md` agent runs **one or two phases** per launch:
+The `contract-docs` worker runs one or two documentation phases:
 
 1. **Missing-docs phase** : always when the artifact has user-visible, architectural, or plan-tracking doc impact.
 2. **Prose-clarity phase** : only when human-readable prose was added or modified (same scope as legacy prose-clarity skip inverse).
 
-**Skip entire agent** only when: internal refactor with no user-visible change **and** no prose in diff/plan/RFC body.
+In a focused panel, skip `contract-docs` only for an internal refactor with no user-visible change and no prose in the reviewed artifact.
 
 Pattern tags:
 - Missing docs: `documentation#missing-<slug>`
 - Prose issues: `documentation#prose-<slug>`
 - Deprecated alias (orchestrator accepts, do not emit new): `prose-clarity#<slug>`
 
-Prose findings default to **Low** unless paired with normative contract drift (then severity follows owning agent).
+Prose findings default to `Low` unless the tangible consequence rules in `severity-calibration.md` justify promotion.
 
 ## Tiered ownership (dedup, not discard)
 
-Ownership boundaries affect **which agent leads a dedup group**, not silent discard of a different fix at the same site.
+Ownership boundaries affect which worker and lens lead a dedup group, not silent discard of a different fix at the same site.
 
-| Finding type | Lead agent | Others: do not duplicate same root cause |
-|--------------|------------|------------------------------------------|
-| Runtime logic bug, wrong algorithm, edge case | `quality` | `implementation`, `architecture` |
-| Missing wiring, incomplete feature, return propagation, API schema drift | `implementation` | `quality`, `architecture` |
-| Layer violation, god class, DDD/CQRS breach | `architecture` | `quality`, `implementation` |
-| Missing or weak test | `testing` | `quality` (unless test passes while impl is wrong) |
-| Config/env incomplete for feature to work | `implementation` | `premortem` (unless rollout blast radius) |
-| Cross-service contract unset | `premortem` (when launched) | `quality`, `implementation` |
-| Missing user-facing docs | `documentation` (missing-docs phase) | all |
-| Redundant/verbose prose | `documentation` (prose phase) | `quality`, `simplification` |
+| Finding type | Lead worker | Lead lens |
+|--------------|-------------|-----------|
+| Runtime logic bug, wrong algorithm, edge case | `correctness-completeness` | `quality` |
+| Missing wiring, incomplete feature, return propagation, API schema drift | `correctness-completeness` | `implementation` |
+| Layer violation or excessive structure | `design-simplicity` | `architecture` or `simplification` |
+| Missing or weak test | `testing` | `testing` |
+| Config incomplete for feature to work | `correctness-completeness` | `implementation` |
+| Cross-service, security, concurrency, or rollout failure | `risk` | closest loaded risk lens |
+| Missing user-facing docs or prose issue | `contract-docs` | `documentation` |
+| Plan or RFC internal contradiction | `contract-docs` | `consistency` |
 
 **Hard rule:** When two agents report the **same root cause**, merge into one staged finding; pick the lead agent above.
 
 **Exception:** When two agents report **different fixes** at the same site (e.g. wiring vs runtime behavior), stage one finding with both fixes or keep the higher-severity agent's finding; do not discard the behavioral angle.
 
-### Plan `consistency` agent ownership
+### Plan and RFC `consistency` ownership
 
 **Must report:**
 - Design Invariants / Glossary vs Task step contradictions
@@ -108,9 +133,8 @@ Ownership boundaries affect **which agent leads a dedup group**, not silent disc
 - Wiring gaps in existing codebase (implementation)
 - Security vulnerabilities (security)
 
-Invariant-vs-task contradictions stay with `consistency` even when they sound like quality bugs.
+Invariant-vs-task contradictions stay with the `consistency` lens even when they sound like quality bugs.
 
 ## Recording wrong-owner discards
 
-When tiered ownership merges duplicate root causes, discard non-lead agent returns with reason `wrong-owner` (not `duplicate`). In staging **Notes** and sidecar `lead_agent`, name the lead agent from the ownership table. This enables weekly aggregation: high `wrong-owner` count for an agent suggests merging that lens into the lead agent.
-
+When tiered ownership merges duplicate root causes, discard non-lead returns with reason `wrong-owner`, not `duplicate`. Record `lead_worker` and `lead_lens`.

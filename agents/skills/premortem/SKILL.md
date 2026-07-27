@@ -38,8 +38,9 @@ Do not defend the plan. Do not soften findings. Each persona must genuinely try 
 
 ## Personas
 
-Launch each persona as a distinct thinking thread. Each operates independently and must not
-see other personas' findings until the synthesis phase.
+Treat each persona as a distinct reasoning section. Keep persona observations independent until synthesis.
+
+When this skill is loaded as a lens inside a review worker, do not launch persona sub-agents. A standalone premortem may use separate workers only when the caller explicitly budgets them; every launch counts separately.
 
 | Persona | Focus | Asks |
 |---------|-------|------|
@@ -135,9 +136,7 @@ Blockers become additional plan tasks. Mitigations become test cases or validati
 
 ### With `doing-code-review` skill
 Invoked as one of the shared `review-agents/` sub-agents. The `review-agents/premortem.md` wrapper
-reads this skill for persona definitions and process, then applies sub-agent overrides (change-type
-persona selection, max 2 findings per persona). Only Block and Mitigate findings surface as review
-comments. Opt-in per `review-agents/review-panel-selection.md` (domain tags); not launched by default on localized feature PRs.
+reads this skill for persona definitions and process, then applies review-worker overrides. Personas run as reasoning sections inside the single `risk` worker. Findings follow the shared severity and finding-budget policy.
 
 ### With `tdd-guide` skill
 Invoked during the Bug Fix Workflow (step 4) after defining outcomes but before proposing
@@ -152,9 +151,7 @@ Invoked as `premortem.md` in the Step 2 parallel review pass (not standalone). A
 
 ### With `review-confluence-doc` skill
 Invoked in Step 4.5 after initial quality analysis of a fetched Confluence page.
-All six personas for RFC/Design; Pessimist + Attacker + Operator for TDD docs.
-Blockers become 🔴 Critical items. Mitigations become 🟡 Suggestions.
-Monitor items are shown as ℹ️ Advisory. Output is merged into the review feedback, not shown separately.
+All six personas for RFC/Design; Pessimist + Attacker + Operator for TDD docs. Map consequences to the shared four-tier severity and merge output into the review feedback.
 
 ## Anti-Patterns
 
@@ -164,7 +161,7 @@ Monitor items are shown as ℹ️ Advisory. Output is merged into the review fee
 | Defending the plan instead of attacking | Re-read the Iron Law. Your job is to break it. |
 | All findings are Low severity | Either the plan is excellent or personas are too gentle. Try harder. |
 | Persona overlap (same finding 3×) | Deduplicate aggressively in synthesis |
-| Premortem longer than the plan itself | Cap at 2-3 findings per persona. Quality over quantity. |
+| Premortem longer than the plan itself | Apply the shared finding budget after cross-persona deduplication. |
 | Raising issues already addressed | Read the plan fully before generating findings |
 
 ## Standalone Invocation

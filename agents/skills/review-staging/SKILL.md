@@ -16,10 +16,15 @@ Caller must provide:
 4. `mode_or_round` (string), for example `review-local`, `light`, `full`, or `r1`
 5. `anchor` text for each finding (caller decides)
 6. A list of findings, each with:
-   - `severity`: staged severity per caller skill (document: `Critical` | `Suggestion` | `Advisory`; code: `Critical` | `High` | `Medium` | `Low`)
-   - `agent_severity`: severity the sub-agent returned when it differs from staged (omit when equal)
+   - `severity`: `Critical` | `High` | `Medium` | `Low`
+   - `blocking`: boolean, independent from severity
+   - `consequence`: tangible harmful outcome
+   - `reachability`: `expected` | `common` | `plausible-edge` | `theoretical`
+   - `blast_radius`: `global` | `multi-service` | `single-service` | `local`
+   - `confidence`: `verified` | `strong-evidence` | `hypothesis`
+   - `worker_severity`: severity the worker returned when it differs from staged (omit when equal)
    - `pattern`: catalog pattern id in form `<agent>#<kebab-slug>` (for example `quality#null-handling`, `documentation#prose-verbose-comment`, `concurrency#transaction-scope`); use `unknown` when the agent did not tag one. Legacy `prose-clarity#<slug>` remains valid in historical reviews; new findings use `documentation#prose-<slug>` or `documentation#missing-<slug>`
-   - `agents`: one or more sub-agent ids that reported the issue
+   - `workers`: one or more worker ids that reported the issue
    - `source_tag`: `[Prose]` | `[Premortem]` | `[Code]` (omit when not applicable)
    - `comment` (posted text) and `analysis` (not posted)
    - `triage`: `pending` | `fixed` | `dropped` | `deferred` (set after triage; default `pending` at review pass)
@@ -27,12 +32,14 @@ Caller must provide:
    - `Depth`: `light` | `full` (RFC/plan reviews)
    - `Domains`: comma-separated tags from diff/plan (for example `concurrency`, `SQL`, `auth`, `docs-only`)
    - `Round`: `r1`, `r2`, … when part of a loop
+   - `Panel mode`: `full` | `focused`
+   - `Selection reason`: required for focused panels
+   - `Source digest`: SHA-256 of reviewed content
+   - `Escalation reason`: required only for a sixth worker
 8. **Review Statistics** (required on every review, including zero-finding rounds):
-   - Panel rows: every sub-agent launched or skipped (includes **Solo** / **Echo** staged counts per agent)
-   - Deduplication groups: which agents reported the same root issue before merge
-   - Discarded findings: raw agent returns removed during synthesis, each with reason code and **Pattern**
-   - Severity calibration: rows where agent severity differs from staged severity
-   - Triage outcomes: per-agent rollup after `receiving-code-review` or equivalent (placeholder until triage runs)
+   - Panel rows: every actual worker launch or skip, with loaded lenses, `parent_worker`, and Solo/Echo counts
+   - Deduplication, discarded findings, severity calibration, and triage outcomes by worker and lens
+   - Overflow manifest for credible non-blocking candidates not fully expanded
 
 ## Documentation paths
 
@@ -57,15 +64,17 @@ Create `{reviews_dir}` if it does not exist.
 
 Every review orchestrator (plan, branch, PR, RFC, Confluence) **must** populate `## Review Statistics` while synthesizing findings, not after the fact from memory.
 
-1. **Panel:** one row per sub-agent file launched (`quality`, `implementation`, …) or explicitly skipped. Columns: `Status`, `Raw`, `Solo`, `Echo`, `Relaunch`. `Raw` = findings returned before dedup (0 when "No findings"). `Solo` = staged findings where that agent is the only origin (not in a multi-agent dedup group). `Echo` = staged findings where that agent shares a dedup group with another agent.
-2. **During dedup:** when two or more agents describe the same root issue, add one row to **Deduplication groups** listing every contributing agent and the staged finding number you kept.
-3. **During discard:** for every raw finding not staged, add one row to **Discarded findings** with exactly one reason code, **Pattern**, and **Agent severity**. Keep `Theme` to one short phrase (under 12 words). For tiered-ownership merges, use `wrong-owner` on non-lead agent returns and put `lead: <agent-id>` in **Notes**.
-4. **Severity calibration:** when agent severity differs from staged severity for a kept finding, add one row per contributing agent to **Severity calibration** (`upgraded` or `downgraded`). Omit rows when severities match.
+1. **Panel:** one row per actual worker launch or explicitly skipped base worker. Columns: `Worker`, `Lenses`, `Parent worker`, `Status`, `Raw`, `Solo`, `Echo`, `Relaunch`. Flatten descendants into additional rows. The five full-panel workers declare `descendant_launches`, normally `[]`.
+2. **During dedup:** list every contributing worker and lens for the kept finding.
+3. **During discard:** record Worker, Pattern, Worker severity, reason, and lead ownership.
+4. **Severity calibration:** record worker and lens when returned severity differs from staged severity.
 5. **Counts:** recompute from Panel + tables; staged finding count must match `## Findings` entries.
 6. **Zero-finding rounds:** still write the full `## Review Statistics` section (Panel + Counts + explicit `None` rows where applicable).
 7. **Synthesis stats are immutable:** Panel, Deduplication groups, Discarded findings, Severity calibration, and Counts describe the review pass only; do not rewrite them during triage.
-8. **Triage outcomes:** at review pass, write `### Triage outcomes` with `Pending triage` or per-agent Staged counts and zeros for Fixed/Dropped/Deferred/Pending. After triage (`receiving-code-review`, plan fold, PR triage), update this table and each finding's **Triage** field. Map finding **Status** to **Triage**: `done` → `fixed`; `drop` → `dropped`; `pending` → `pending`; `deferred` → `deferred`.
-9. **Pattern:** sub-agents should return `pattern` in their structured output; orchestrator copies it to findings and discarded rows. When missing, infer best-effort from agent file section heading or use `unknown`.
+8. **Triage outcomes:** roll up per worker and lens. Map `done` to `fixed`, `drop` to `dropped`, and retain pending/deferred.
+9. **Pattern:** workers return a lens-prefixed pattern; use `unknown` only when the catalog cannot be identified.
+10. **Budget:** fully expand every Critical, every blocking finding, up to five additional non-blocking High/Medium findings per worker, and up to two additional non-blocking Low findings per worker.
+11. **Overflow:** additional credible non-blocking candidates go under `### Overflow manifest` with Worker, Pattern, Anchor, Severity, Confidence, and one-line Consequence.
 
 ### Discard reason codes (use exactly one per discarded row)
 
@@ -107,63 +116,74 @@ The staging doc must follow this structure exactly, including required headings:
 - Depth: light | full *(omit when not applicable)*
 - Domains: concurrency, SQL *(omit when unknown)*
 - Round: r1 *(omit on first non-loop review)*
+- Panel mode: full | focused
+- Selection reason: <required for focused>
+- Source digest: <sha256>
+- Escalation reason: <required for sixth worker>
 - Findings: <staged count>
 - Status: STAGED
 
 ## Review Statistics
 
 ### Panel
-| Agent | Status | Raw | Solo | Echo | Relaunch |
-|-------|--------|-----|------|------|----------|
-| quality | complete | 2 | 1 | 1 | no |
-| premortem | skipped | 0 | 0 | 0 | no |
+| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |
+|--------|--------|---------------|--------|-----|------|------|----------|
+| correctness-completeness | quality, implementation | none | complete | 2 | 1 | 1 | no |
+| risk | security | none | complete | 0 | 0 | 0 | no |
 
 Status values: `complete`, `failed`, `relaunch-complete`, `skipped`, `timeout`.
 
 ### Counts
-- Agents launched: <N>
-- Agents skipped: <N>
-- Raw findings (all agents): <N>
+- Workers launched: <N>
+- Workers skipped: <N>
+- Raw findings (all workers): <N>
 - Staged findings: <N>
 - Discarded during synthesis: <N>
 - Solo staged (unique agent origin): <N>
 - Echo staged (multi-agent dedup): <N>
 
 ### Deduplication groups
-| Staged # | Agents | Theme |
-|----------|--------|-------|
-| 1 | quality, concurrency | Race on profile status re-read |
+| Staged # | Workers | Lenses | Theme |
+|----------|---------|--------|-------|
+| 1 | correctness-completeness, risk | quality, concurrency | Race on profile status re-read |
 
 When none: `None (each staged finding had a single agent origin).`
 
 ### Discarded findings
-| Agent | Agent severity | Pattern | Theme | Reason | Notes |
-|-------|----------------|---------|-------|--------|-------|
-| quality | Medium | quality#config-binding | Config binding gap | wrong-owner | lead: implementation |
+| Worker | Worker severity | Pattern | Theme | Reason | Notes |
+|--------|-----------------|---------|-------|--------|-------|
+| correctness-completeness | Medium | quality#config-binding | Config binding gap | wrong-owner | lead lens: implementation |
 
 When none: `None.`
 
 ### Severity calibration
-| Staged # | Agent | Agent severity | Staged severity | Delta |
-|----------|-------|----------------|-----------------|-------|
-| 1 | quality | Low | Medium | upgraded |
+| Staged # | Worker | Lens | Worker severity | Staged severity | Delta |
+|----------|--------|------|-----------------|-----------------|-------|
+| 1 | correctness-completeness | quality | Low | Medium | upgraded |
 
 When none: `None (agent severities matched staged severities).`
 
 ### Triage outcomes
-| Agent | Staged | Fixed | Dropped | Deferred | Pending |
-|-------|--------|-------|---------|----------|---------|
-| quality | 1 | 0 | 0 | 0 | 1 |
+| Worker | Lens | Staged | Fixed | Dropped | Deferred | Pending |
+|--------|------|--------|-------|---------|----------|---------|
+| correctness-completeness | quality | 1 | 0 | 0 | 0 | 1 |
 
 Before triage: write zeros for Fixed/Dropped/Deferred and set Pending = Staged, or one line `Pending triage.` After triage: recompute per agent from finding **Triage** fields.
 
 ## Findings
 
-### 1. <short title>
-- **Severity**: Critical | Suggestion | Advisory
-- **Agent severity**: Low *(omit when equal to Severity)*
+### Critical
+
+#### F1. <short title>
+- **Severity**: Critical | High | Medium | Low
+- **Blocking**: true | false
+- **Consequence**: <tangible outcome>
+- **Reachability**: expected | common | plausible-edge | theoretical
+- **Blast radius**: global | multi-service | single-service | local
+- **Confidence**: verified | strong-evidence | hypothesis
+- **Worker severity**: Low *(omit when equal to Severity)*
 - **Pattern**: quality#race-condition
-- **Agents**: quality, concurrency
+- **Workers**: correctness-completeness, risk
 - **Triage**: pending
 - **Anchor**: <section heading or nearby prose anchor text>
 - **Source**: [Prose] | [Premortem] | [Code]
@@ -174,6 +194,22 @@ Before triage: write zeros for Fixed/Dropped/Deferred and set Pending = Staged, 
 #### Analysis (not posted)
 <Verification trail and severity rationale.>
 ---
+
+### High
+
+None.
+
+### Medium
+
+None.
+
+### Low
+
+None.
+
+### Overflow manifest
+| Worker | Pattern | Anchor | Severity | Confidence | Consequence |
+|--------|---------|--------|----------|------------|-------------|
 ```
 
 ## Comment and Analysis depth requirements
@@ -182,21 +218,11 @@ Caller must ensure each finding's:
 - `#### Comment` is self-contained, suggestion-tone, and contains enough detail to act without follow-up chat (depth depends on severity, following the same intent as other review skills).
 - `#### Analysis` contains verification trail and severity rationale. It is never posted.
 
-## Per-finding severity mapping conventions (caller-owned)
+## Severity and ordering
 
-This skill does not enforce how callers classify issues. It only enforces the output severity values:
+All callers use `review-agents/severity-calibration.md`. Findings appear under `### Critical`, `### High`, `### Medium`, and `### Low` in that exact order. Within a group, order by blocking, blast radius, reachability, confidence, then finding ID.
 
-- **Code review** (`doing-code-review`): `Critical` | `High` | `Medium` | `Low` per `review-agents/severity-calibration.md`
-- **Document review** (Confluence, etc.): `Critical` | `Suggestion` | `Advisory`
-- **RFC review** (`rfc-design`): `Block` | `Mitigate` | `Monitor` | `Accept`
-- **Plan review** (`review-plan`): `Critical` | `Suggestion` | `Advisory`
-
-Orchestrators record **Severity calibration** when agent severity differs from staged severity. Missing agent severity on code-review findings is treated as **Low** until verified (`doing-code-review` Step 3).
-
-Document/plan severities (Confluence, plan review):
-- `Critical`: blocks implementation or merge
-- `Suggestion`: improves quality, usually requires action
-- `Advisory`: monitor-level or optional notes
+A review is clean only when no unresolved finding has `blocking: true`.
 
 ## Output discipline
 
@@ -224,8 +250,12 @@ Minimum schema:
   "round": "r1",
   "depth": "full",
   "domains": ["concurrency", "SQL"],
+  "panel_mode": "full",
+  "selection_reason": null,
+  "source_digest": "<sha256>",
+  "escalation_reason": null,
   "counts": {
-    "agents_launched": 10,
+    "workers_launched": 5,
     "raw_findings": 5,
     "staged_findings": 3,
     "discarded": 2,
@@ -233,29 +263,30 @@ Minimum schema:
     "echo_staged": 2
   },
   "panel": [
-    {"agent": "quality", "status": "complete", "raw": 2, "solo": 1, "echo": 1, "relaunch": false}
+    {"worker": "correctness-completeness", "lenses": ["quality", "implementation"], "parent_worker": null, "descendant_launches": [], "status": "complete", "raw": 2, "solo": 1, "echo": 1, "relaunch": false}
   ],
   "deduplication_groups": [
-    {"staged": 1, "agents": ["quality", "concurrency"], "theme": "Race on profile status re-read"}
+    {"staged": 1, "workers": ["correctness-completeness", "risk"], "lenses": ["quality", "concurrency"], "theme": "Race on profile status re-read"}
   ],
   "discarded": [
-    {"agent": "quality", "agent_severity": "Medium", "pattern": "quality#config-binding", "theme": "Config binding gap", "reason": "wrong-owner", "lead_agent": "implementation", "notes": "lead: implementation"}
+    {"worker": "correctness-completeness", "worker_severity": "Medium", "pattern": "quality#config-binding", "theme": "Config binding gap", "reason": "wrong-owner", "lead_worker": "correctness-completeness", "lead_lens": "implementation"}
   ],
   "severity_calibration": [
-    {"staged": 1, "agent": "quality", "agent_severity": "Low", "staged_severity": "Medium", "delta": "upgraded"}
+    {"staged": 1, "worker": "correctness-completeness", "lens": "quality", "worker_severity": "Low", "staged_severity": "Medium", "delta": "upgraded"}
   ],
   "triage_outcomes": [
-    {"agent": "quality", "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0, "pending": 1}
+    {"worker": "correctness-completeness", "lens": "quality", "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0, "pending": 1}
   ],
   "findings": [
-    {"id": 1, "severity": "Medium", "agent_severity": "Low", "pattern": "quality#race-condition", "agents": ["quality", "concurrency"], "triage": "pending", "theme": "Race on profile status re-read"}
-  ]
+    {"id": 1, "severity": "Medium", "blocking": true, "consequence": "Concurrent update can lose a persisted state change", "reachability": "common", "blast_radius": "single-service", "confidence": "verified", "pattern": "quality#race-condition", "workers": ["correctness-completeness", "risk"], "triage": "pending", "theme": "Race on profile status re-read"}
+  ],
+  "overflow": []
 }
 ```
 
 Markdown staging doc remains the primary human artifact. Triage skills update `triage_outcomes` and finding `triage` in the sidecar when they update the `.md` file.
 
-**Aggregation fields:** include `lead_agent` on discarded rows when `reason` is `wrong-owner`. Weekly panel-tuning scripts can sum `wrong-owner` counts per agent to identify merge-into candidates.
+Legacy sidecars keep `agent`, `agents`, and caller-specific severity labels. New sidecars use worker rows and the four shared severities.
 
 ## Integration Points
 
@@ -263,12 +294,11 @@ Provider skill for staged review hierarchy and statistics. Consumers **must** fo
 
 | Consumer skill | Staging path pattern | Notes |
 |----------------|---------------------|-------|
-| `review-plan` | `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` | Document severities; map to plan actions in Step 5 |
+| `review-plan` | `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` | Shared severities and blocking-aware plan actions |
 | `doing-code-review` | `{reviews_dir}/YYYY-MM-DD-PR-*`, `YYYY-MM-DD-branch-review-*`, or execute-plan `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Code severities; optional `Status` per finding for PR triage |
 | `review-loop` | Same as `doing-code-review` branch / execute-plan patterns with `-r<N>` | Requires statistics every round, including clear rounds |
 | `receiving-code-review` | Updates existing staging under `{reviews_dir}/` | Triage Status→Triage map, Triage outcomes table, and matching `.stats.json` sidecar |
-| `rfc-design` | `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` | May keep caller-specific severity labels in findings; statistics section still required |
+| `rfc-design` | `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` | Shared severities; statistics section required |
 | `review-confluence-doc` | `{reviews_dir}/YYYY-MM-DD-confluence-review-<slug>.md` | Tag `[Prose]` / `[Premortem]` / `[Code]` in Source field |
 | `execute-plan` Phase 3 | `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Not `-plan-review-r`; review logs reference staging path with statistics |
 | `done` | Session-touched staging under `{reviews_dir}/` | Step 2.64 validates before docs-branch sync |
-
