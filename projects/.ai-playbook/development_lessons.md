@@ -4395,3 +4395,24 @@ The final design (two-tier platform-level resolver: registry tier 1, row-evidenc
 
 **See also:** UL#180 (micro-edit fenced templates, technique), UL#181 (structured staging metadata, why parallel human/machine artifacts exist), `agent_workflow_guidelines.md` Family D (single SOT) and Family H (verify the real artifact).
 
+
+
+## 207. Execute-Plan Must Detect When the Plan File Under Execution Was Rewritten by an Intermediate docs-branch Sync
+
+**Principle:** Family H (verify the real artifact) and Family D (single source of truth). The plan file under active execute-plan execution is tracked on BOTH the feature branch and the orphan `docs` branch (plans are not gitignored). A `done` sub-agent's docs-branch sync is add-only for gitignored paths, but it pulls a *revised* tracked plan file back into the working tree when the orphan branch carries a newer version (for example, from concurrent plan-review rounds). The orchestrator then finds its in-flight plan has changed scope, checkboxes, and task structure between the Phase 1 read and the next task iteration.
+
+**Trigger:** An execute-plan run where plan-review rounds ran against the plan before or during execution, a `done` docs-branch sync lands a docs-sync commit on the feature branch between two orchestrator steps, and the next read of the plan shows task structure or scope that does not match the Phase 0/1 read.
+
+**Rule:**
+1. After every `done` sub-agent returns during an execute-plan run, the orchestrator must re-read (or diff) the plan file before selecting the next task.
+2. If the plan's task structure, Review Scope, Validation Commands, or unchecked-item count changed since the last read, surface the change to the user and get an explicit decision (follow the updated plan vs. finish the original scope vs. abort) before continuing. Do not silently continue against either version.
+3. `git log --oneline <last-known-base>..HEAD -- <plan-path>` reveals docs-sync revisions; a `docs: update from <branch-slug>` commit that touched the plan path is the cause.
+4. When the user chooses the updated plan, re-derive the task inventory and remaining-checkbox set from the current working-tree version.
+
+**Shape trigger:** an execute-plan `done` sub-agent returns, and the next orchestrator step finds the plan's task count, titles, Review Scope, or Validation Commands do not match the earlier read; OR a docs-sync commit appears in `git log` between two task commits and touched the plan path.
+
+**Distinguishing from #118:** #118 covers gitignored paths crossing into feature commits via *improvised* git ops. This lesson covers a *correct* canonical docs-branch sync that mutates a *tracked* plan file because the orphan branch carried a revision. #118 is about crossing the gitignored/tracked boundary illegally; this is about two legitimately-tracked copies of the same file diverging and the sync reconciling them.
+
+**Example:** An execute-plan run on a five-worker review panel plan started against a 3-task plan. Between the Task 2 and Task 3 `done` runs, a docs-sync commit landed carrying a revised plan from r1-r4 plan-review rounds: Task 3 had grown from 7 to ~25 items and changed its title. The Task 3 `done` sub-agent flagged the discrepancy. The orchestrator confirmed the docs-sync was the cause, surfaced the fork to the user, and on the user's direction re-derived Task 3's inventory from the working-tree version and continued.
+
+**See also:** UL#118, UL#96, `execute-plan` anti-pattern table, `done` Step 2, `docs-branch` skill, Family H and Family D.
