@@ -39,6 +39,14 @@ Common focused panels:
 
 Do not label a focused panel as a full review.
 
+### Review-loop follow-ups
+
+When `review-loop` runs a targeted round after fixes:
+
+- Always include `correctness-completeness` plus every worker that owned a staged finding or whose domain the fixes touched.
+- Before loop **exit**, if the clear-candidate round would omit `design-simplicity`, include it in a hybrid pass (see `review-loop` exit criteria). Do not exit on contract-docs/risk-only cleanliness alone after architecture-relevant code landed earlier on the branch.
+- When a soften watchlist has `open` rows, include the lead worker for each open pattern (tiered ownership table above).
+
 ## Manual overrides
 
 User args bypass lens heuristics when explicit:

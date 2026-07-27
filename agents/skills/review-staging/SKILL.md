@@ -75,6 +75,7 @@ Every review orchestrator (plan, branch, PR, RFC, Confluence) **must** populate 
 9. **Pattern:** workers return a lens-prefixed pattern; use `unknown` only when the catalog cannot be identified.
 10. **Budget:** fully expand every Critical, every blocking finding, up to five additional non-blocking High/Medium findings per worker, and up to two additional non-blocking Low findings per worker.
 11. **Overflow:** additional credible non-blocking candidates go under `### Overflow manifest` with Worker, Pattern, Anchor, Severity, Confidence, and one-line Consequence.
+12. **Soften watchlist:** when the review is part of a `review-loop` (or any multi-round branch review), include `### Soften watchlist` under `## Review Statistics`. Carry forward open rows from the previous round; update statuses after workers reaffirm or restage. Use `None.` when the run has no softened findings yet.
 
 ### Discard reason codes (use exactly one per discarded row)
 
@@ -95,6 +96,7 @@ Every review orchestrator (plan, branch, PR, RFC, Confluence) **must** populate 
 | `invalid-anchor` | File, line, section, or excerpt anchor wrong after orchestrator check |
 | `excerpt-mismatch` | Quoted excerpt not found in artifact (document reviews) |
 | `wrong-owner` | Same root cause as another raw finding, but this agent is not the tiered lead (see `review-agents/review-panel-selection.md`); Notes must name `lead: <agent-id>` |
+| `softened-reaffirmed` | Prior soften watchlist item re-checked; still intentional; Notes cite soften reason |
 
 When using `wrong-owner`, the orchestrator keeps the lead agent's finding (or merges into dedup group) and discards non-lead copies. Do not use `duplicate` when tiered ownership identifies a lead agent; use `wrong-owner` so aggregation can count ownership misses per agent.
 
@@ -210,6 +212,13 @@ None.
 ### Overflow manifest
 | Worker | Pattern | Anchor | Severity | Confidence | Consequence |
 |--------|---------|--------|----------|------------|-------------|
+
+### Soften watchlist
+| Round | Pattern / finding | Anchor | Prior fix | Soften reason | Status |
+|-------|-------------------|--------|-----------|---------------|--------|
+| r24 | architecture#exception-ownership | ProfileTransportConverter | InvalidPropertyValueException | Restore consent-owned mapping | open |
+
+When none: `None.`
 ```
 
 ## Comment and Analysis depth requirements
@@ -280,11 +289,14 @@ Minimum schema:
   "findings": [
     {"id": 1, "severity": "Medium", "blocking": true, "consequence": "Concurrent update can lose a persisted state change", "reachability": "common", "blast_radius": "single-service", "confidence": "verified", "pattern": "quality#race-condition", "workers": ["correctness-completeness", "risk"], "triage": "pending", "theme": "Race on profile status re-read"}
   ],
-  "overflow": []
+  "overflow": [],
+  "soften_watchlist": [
+    {"round": "r24", "pattern": "architecture#exception-ownership", "anchor": "ProfileTransportConverter", "prior_fix": "InvalidPropertyValueException", "soften_reason": "Restore consent-owned mapping", "status": "open"}
+  ]
 }
 ```
 
-Markdown staging doc remains the primary human artifact. Triage skills update `triage_outcomes` and finding `triage` in the sidecar when they update the `.md` file.
+Use `"soften_watchlist": []` when the run has no softened findings. Multi-round / review-loop orchestrators must carry `open` rows forward.
 
 Legacy sidecars keep `agent`, `agents`, and caller-specific severity labels. New sidecars use worker rows and the four shared severities.
 

@@ -34,6 +34,7 @@ Additional review context for Java/Spring projects. Append to each sub-agent pro
 
 - In transport converters, registries, and dispatchers: verify that ALL client-caused error paths (unsupported enum values, null discriminators from Jackson unknown-value handling, unknown operation types) throw typed domain exceptions mapped to 4xx, never generic `IllegalArgumentException`/`IllegalStateException` that fall through to the 500 handler.
 - When a `Map.get()` or `EnumMap.get()` returns null for a client-supplied key, the resulting error must surface as 400, not 500.
+- **Endpoint-owned error taxonomy:** a typed 4xx is not enough when the exception maps to the **wrong module error code** for that route. Match structural request-shape failures to the endpoint's owning module (example: null elements or missing discriminators on `/v1/user-updates` use profile-owned `InvalidPropertyValueException` / profile `ApiError` codes, consistent with `OperationConverterRegistry`, not consent-updates `InvalidConsentUpdateRequestException`). Field validation that is clearly consent-op-specific may still use consent-owned exceptions. Flag `architecture#exception-ownership` or `quality#wrong-endpoint-error-code` when HTTP status is 400 but the wire `code` / handler ownership is wrong for the path.
 
 ## Collection Invariants in Records/Commands
 

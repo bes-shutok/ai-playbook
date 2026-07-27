@@ -82,6 +82,8 @@ Apply in order; the first match wins:
 | **Concurrency / race** | Medium | Race window achievable under stated TTL/load; verify I/O cost before claiming | Data loss or double-spend in achievable window → **High** |
 | **Security** | High | (none) | Trivial exploit → **Critical** |
 | **Feature-flag gated bug** | Same as ungated | Flag does **not** reduce severity; judge impact when flag is on |
+| **Wrong module / endpoint error code** (typed 4xx, wrong `ApiError` ownership) | Low if only naming and clients ignore `code` | Integrators or shared handlers key on `code`, or sibling endpoint docs document a different code for the same failure shape → **Medium** | Wrong code causes incorrect client retry/alert routing on a normal path → **High** |
+| **Catalog-loop N+1** (per-key repo read; bulk API exists) | Low when N is tiny and local | Hot path or catalog expected to grow beyond a handful of keys → **Medium** | (rare) unbounded catalog without pagination causes availability harm → **High** |
 
 **Pre-existing pattern** does not reduce severity of **new** code introduced by this PR. Note pre-existing instances as EXISTING debt at **Low** or omit (`doing-code-review` §4.11).
 

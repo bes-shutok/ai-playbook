@@ -54,5 +54,6 @@ Before flagging cache eviction, invalidation, or fallback logic as incomplete or
 2. Memory loading: unbounded collections loaded entirely into memory
 3. Missing batch APIs: repeated single-item calls where batch alternatives exist
 4. No resilience contract: missing timeouts, retries, or circuit breakers for external calls
+5. **Catalog / config-list loops:** a `for` over allowlist, catalog, deny-keys, feature flags, or similar config that calls a single-key repository/persistence method per iteration is reportable **even when the list size is 1 today**, when a bulk/batch read already exists on the same repository port or mapper (or an equivalent load-all-by-user/by-parent method is one adapter call away). Prefer one load then in-memory filter. Pattern: `quality#catalog-loop-n-plus-one`. Skip the DB load entirely when the catalog returns an empty key list for this request. Do not dismiss solely because current N is small; note Low severity when blast radius is still local and N is tiny.
 
 Report problems only. No positive observations.

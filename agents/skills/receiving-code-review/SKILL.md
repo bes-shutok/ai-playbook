@@ -271,6 +271,15 @@ Rules:
 - Never silently resolve any thread.
 - **Audience is the reviewer, not your human partner.** Thread replies are public to the PR audience. Do not ask the human partner questions there (cherry-pick? push? which branch? want me to…?), offer them options, or park decisions for them. State the technical answer (and commit SHA when relevant). Put partner-only follow-ups in the chat session.
 
+## Soften / intentional revert tracking
+
+When addressing review findings (staging triage or ad-hoc partner feedback):
+
+1. If a finding was already `fixed` / `done` and a later change **restores the prior behavior**, or the partner asks to **soften / undo** that fix, do **not** silently leave triage as `fixed`.
+2. Mark the finding triage appropriately (`dropped` or `deferred` with reason) and append a row to `### Soften watchlist` in the current (or newest) staging doc with status `open`.
+3. Tell the partner the item is on the soften watchlist so the next `review-loop` / `doing-code-review` round must reaffirm or restage it.
+4. Commit messages that undo a review fix should say so explicitly (for example `Soften rN F12: …`) so later rounds can discover the revert from git history if the watchlist was missed.
+
 ## Staging doc triage outcomes
 
 When triaging findings from a `doing-code-review` staging doc (execute-plan Phase 3, review-loop step 3):
@@ -278,6 +287,7 @@ When triaging findings from a `doing-code-review` staging doc (execute-plan Phas
 1. Update each finding **Status** (`done`, `drop`, `pending`, `deferred`) and matching **Triage** field per `review-staging` (`fixed`, `dropped`, `pending`, `deferred`).
 2. Recompute `## Review Statistics` → **Triage outcomes** per agent (Staged, Fixed, Dropped, Deferred, Pending). Do not rewrite synthesis tables (Panel, Discarded, Severity calibration).
 3. Update the matching `.stats.json` sidecar when present (required artifact per `review-staging`).
+4. When a soften/revert applies, update `### Soften watchlist` in the same pass (status `open` until a later review reaffirms or restages).
 
 This gives downstream analysis a ground-truth signal for which agents produce fix-worthy findings.
 

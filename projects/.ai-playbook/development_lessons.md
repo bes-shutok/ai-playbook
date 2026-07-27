@@ -4357,3 +4357,22 @@ The final design (two-tier platform-level resolver: registry tier 1, row-evidenc
 **Distinguishing from UL#184 (auto-continue after invocation):** UL#184 fires AFTER a skill is correctly invoked (don't re-ask yes/no between its steps). This lesson fires BEFORE invocation (don't bypass the skill with a generic mode in the first place). Fix UL#184 = stop pausing inside the workflow; fix this = enter the workflow.
 
 **See also:** `plans` SKILL (Plan Quality Gate), `review-plan` SKILL, UL#184 (auto-continue), UL#202 (do not override an agent-enforced gate), `agent_workflow_guidelines.md` Family D.
+
+## 205. Softened review fixes need a cross-round watchlist
+
+**Principle:** Family H (Verification discipline) and Family D (single process SOT for review readiness).
+
+**Trigger:** A review-loop (or multi-round branch review) marks a finding fixed, then a later commit or triage softens/reverts that fix; OR a focused clear round omits the worker that owned earlier architecture/ownership findings; OR an external/bot review later finds issues the loop declared clean.
+
+**Rule:**
+1. Maintain a soften watchlist across rounds. Soften/revert after fixed keeps the item open until a later review reaffirms (still intentional) or restages.
+2. Do not exit the loop on zero blocking findings alone when open softens remain, or when the clear-candidate focused panel never re-ran design-simplicity on the tip after architecture-relevant code landed.
+3. Treat typed 4xx as insufficient when the wire error code / owning module is wrong for the endpoint; treat per-key repository reads over a catalog list as N+1 even when the list is size 1 today if a bulk read already exists.
+4. Encode these in the review skills (review-loop, review-staging, language overlays, quality/architecture lenses), not as one-off chat advice.
+
+**Shape trigger:** Commit subject or triage says "soften" / "restore prior" after a review fix; or loop exit used a docs/risk-only focused panel; or external review finds exception-ownership or catalog-loop issues after a clean loop.
+
+**Example:** A branch review fixed wrong exception ownership on a mixed transport converter, then a same-day soften restored the sibling-module exception. Later focused rounds exited blocking-clean without re-checking. An external PR bot restaged both that ownership issue and a catalog-key N+1 loop the quality lens already described but agents skipped because N was tiny.
+
+**See also:** review-loop Soften / regression watchlist and exit criteria; receiving-code-review Soften tracking; doing-code-review java-spring / kotlin-spring Transport Exception Mapping; quality.md catalog-loop item; Family H verification and Family D single SOT.
+

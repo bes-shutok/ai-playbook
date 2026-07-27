@@ -103,6 +103,7 @@ Detect architectural and design problems. Code that works but violates SOLID pri
 - Tight coupling between modules: change in one module requires changes in another
 - Unclear module ownership: multiple modules modifying same entities
 - Module doing too many things: no clear single responsibility
+- **Exception ownership at transport:** structural failures on an endpoint (null collection elements, missing op discriminator, unknown profile op) must throw the **owning module's** typed exception so `TransportExceptionHandler` emits the endpoint-correct `ApiError` code. Do not reuse a sibling module's invalid-request exception just because both map to HTTP 400. Pattern: `architecture#exception-ownership`.
 
 ## DDD Layer Violations
 

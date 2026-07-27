@@ -83,16 +83,42 @@ python3 "$VALIDATOR" --hard "$STAGING_PATH"
 
 Cursor hooks also warn via `postToolUse` after staging writes, block review-loop commits when validation fails, and may inject a `stop` follow-up if the newest round file is still a stub.
 
+## Soften / regression watchlist (cross-round)
+
+Maintain a **soften watchlist** for the active loop run (session tmp or the latest staging doc section `### Soften watchlist`).
+
+Add an entry when **any** of these happen after a finding was staged as `fixed` / `done`:
+
+- A later commit **reverts** the fix (or restores the prior behavior) with rationale such as "soften", "keep X", "intentional", or partner pushback
+- Triage marks the finding `dropped` / `deferred` **after** a fix commit already landed
+- The partner explicitly declines a fix that was already implemented
+
+Each watchlist row: `round`, finding id or pattern, anchor path, one-line prior fix, one-line soften reason, `status` (`open` | `reaffirmed` | `restaged`).
+
+**Every subsequent `doing-code-review` round** (full or focused) must:
+
+1. Pass the open watchlist into worker prompts.
+2. For each open item, either **re-stage** (behavior still wrong / soften was incorrect) or **reaffirm** (still intentional; record one-line reason in the new staging doc).
+3. Leave `open` items only when the owning worker was not launched this round; then the next round that launches that worker must close them.
+
+Do **not** treat a prior soften as "already reviewed; skip." Softens are the main source of silent reintroduction (example: exception-ownership fix reverted same day).
+
 ## Exit criteria (default)
 
-Stop only when a fresh review of committed `HEAD` reports zero unresolved blocking findings and no fixes were applied in that iteration.
+Stop only when **all** of the following hold on a fresh review of committed `HEAD`:
+
+1. Zero unresolved findings with `blocking: true`
+2. No fixes were applied in that iteration
+3. Every soften-watchlist item is `reaffirmed` or `restaged` (then fixed or explicitly dropped with partner confirmation) in that same fresh round or an earlier round of this run whose tip digest for the watchlist anchors is unchanged
+4. **Design-simplicity coverage before exit:** if the clear-candidate round used `panel_mode: focused` and omitted `design-simplicity`, run one more pass that includes `design-simplicity` (hybrid is enough: correctness + design-simplicity + any other owners still needed). Skip this extra pass only when the immediately preceding round in this run was a **full** panel that already completed `design-simplicity` on the same tip digest.
 
 | Signal | Valid exit? |
 |--------|-------------|
-| Fresh review -> 0 unresolved blocking -> no step 3 needed | **Yes** |
+| Fresh review -> 0 unresolved blocking -> no step 3 -> watchlist closed -> design-simplicity covered | **Yes** |
 | Fixed issues → grep clean / "looks good" | **No** |
 | Same round: review → fix → "0 open" | **No** |
 | Postfix verification in the same round | **No** |
+| Focused docs/risk-only clear round with open softens or no design-simplicity since last full panel | **No** |
 
 ## Limits
 
@@ -107,10 +133,11 @@ Never use commit subjects like `Close review loop` or `Review complete` until ex
 
 1. **Continuous iterations:** after `done` succeeds, increment `review_round` and return to step 1 unless exit criteria or `max_rounds` hit.
 2. **Sub-agents:** launch `doing-code-review` with the panel from `review-panel-selection.md`; do not replace with inline grep.
-3. **Targeted revisions:** after fixes, launch blind `correctness-completeness` plus every distinct worker that owned a finding or whose domain the fixes affected. If all five are selected, count a full-panel round.
-4. **Commits:** only `done` commits; one iteration -> one commit when fixes ran.
-5. **Push:** requires explicit user instruction.
-6. **PR mode:** if user gave a PR URL, still write staging docs; optional post to PR via `doing-code-review` Direct mode.
+3. **Targeted revisions:** after fixes, launch blind `correctness-completeness` plus every distinct worker that owned a finding or whose domain the fixes affected. If all five are selected, count a full-panel round. When the soften watchlist has `open` items, also launch the worker that owns each open pattern (see `review-panel-selection.md` tiered ownership).
+4. **Exit hybrid:** before accepting a focused clear round as loop exit, ensure `design-simplicity` ran on the current tip digest (see Exit criteria item 4). Do not exit on contract-docs/risk-only cleanliness alone after architecture-relevant code landed earlier in the branch.
+5. **Commits:** only `done` commits; one iteration -> one commit when fixes ran.
+6. **Push:** requires explicit user instruction.
+7. **PR mode:** if user gave a PR URL, still write staging docs; optional post to PR via `doing-code-review` Direct mode.
 
 ## Anti-patterns
 
@@ -120,12 +147,14 @@ Never use commit subjects like `Close review loop` or `Review complete` until ex
 - Stopping after first fix pass without a **new** step 1
 - Reviewing `git diff` working tree to claim round N is clean while fixes are uncommitted
 - Batching multiple iterations into one commit
-- Reopening a clear round because of late non-blocking noise.
+- Reopening a clear round because of late non-blocking noise
+- Exiting while soften-watchlist items remain `open` or unexamined
+- Declaring exit after a focused panel that never re-ran `design-simplicity` on the tip when earlier rounds only fixed docs/schema
 
 ## Quick prompt (user-facing)
 
 ```text
-review-loop on current branch vs <base>. Run a full review, then targeted follow-ups after fixes, until one fresh review finds zero unresolved blocking findings. Max 5 full-panel rounds.
+review-loop on current branch vs <base>. Run a full review, then targeted follow-ups after fixes, until one fresh review finds zero unresolved blocking findings, the soften watchlist is closed, and design-simplicity covered the tip. Max 5 full-panel rounds.
 ```
 
 ## Integration Points

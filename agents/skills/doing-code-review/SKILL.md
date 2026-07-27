@@ -111,6 +111,8 @@ Load the matching overlay file from this skill's directory (e.g. `java-spring.md
 
 Read `review-agents/review-panel-selection.md` to determine the recommended five-worker or focused panel and which conditional lenses `risk` loads. Record selection rationale and Domains in staging metadata.
 
+**Soften watchlist (multi-round / review-loop):** Before launching workers, read `### Soften watchlist` from the previous staging doc for this branch (and git log subjects matching `Soften r` when the section is missing). Pass every `open` row into each relevant worker prompt. Workers must either restage the issue or return an explicit reaffirmation; the orchestrator records the outcome in the new staging doc. Do not discard with `prior-review` alone when the prior outcome was a soften/revert.
+
 Launch all selected review worker agents **in parallel** using your agent's sub-agent execution capability (parallel launches when supported). Wait for all to complete before proceeding.
 
 Each worker receives:
@@ -119,8 +121,9 @@ Each worker receives:
 3. The language overlay content
 4. Instructions to run `git diff <base>...<head>` (or read `{tmp_dir}/.../diff-r<R>.patch` / `src-diff-r<R>.patch` when the orchestrator materialized snapshots under `{tmp_dir}/`) and read source files for full context
 5. The base and head branch names
-6. Output format: return the shared finding fields plus `path`, `line`, `side`, `body`, `pattern`, and `descendant_launches`.
-7. An explicit constraint: "Do not over-investigate or validate every single line number. Read the diff and key source files, then report findings. Write each `body` to full §4.12 depth: quote contract/doc text, name the code path, describe actual behavior, state why it matters, and suggest fix options. For Medium+, include all four Comment sections inline in `body` using `**Bold headings**`. For any actionable code/test/config fix at any severity, include a concrete before/after or 'could look like' code snippet per §4.9.0 in `body`. Include one sentence why the chosen severity applies (`severity-calibration.md`)."
+6. Open soften-watchlist items that match this worker's lenses (pattern prefix / ownership), when any
+7. Output format: return the shared finding fields plus `path`, `line`, `side`, `body`, `pattern`, and `descendant_launches`.
+8. An explicit constraint: "Do not over-investigate or validate every single line number. Read the diff and key source files, then report findings. Write each `body` to full §4.12 depth: quote contract/doc text, name the code path, describe actual behavior, state why it matters, and suggest fix options. For Medium+, include all four Comment sections inline in `body` using `**Bold headings**`. For any actionable code/test/config fix at any severity, include a concrete before/after or 'could look like' code snippet per §4.9.0 in `body`. Include one sentence why the chosen severity applies (`severity-calibration.md`)."
 
 **Timeout handling:** If a sub-agent has not completed within 10 minutes, launch a replacement with a more focused prompt (limit to first 1500 lines of diff via `| head -1500`, add "read key source files directly" instead of exhaustive investigation). Do not wait indefinitely for stuck agents.
 
@@ -215,7 +218,7 @@ Would the suggested fix require duplicating code? If yes, rewrite as rename or c
 Performance, scale, and race findings require concrete evidence:
 - TOCTOU/race: verify the race window is achievable given actual TTL and operation time. For batch loops under a lock lease, compute: (item count × per-item I/O cost) vs lease duration. If the estimate is well under the lease, downgrade severity and suggest a monitoring metric rather than a code fix.
 - Latency/timeout: require measured latency or known gateway limits
-- Scalability: state a realistic upper bound for the domain
+- Scalability: state a realistic upper bound for the domain. **Exception:** do not drop a finding solely because current N is small when a loop issues per-item repository/persistence reads over a config, catalog, allowlist, or similar bounded list and a bulk/batch read already exists on the same port or mapper. Flag as missing batch use (`quality#catalog-loop-n-plus-one`); severity may stay Low when N is small today.
 - Suggested fix cost: when proposing "add fallback" or "add guard", state the cost (extra I/O per call, lock contention, memory) and confirm the failure scenario being guarded against is reachable given the lifecycle. A "fix" that adds N DB reads per tick for a scenario that cannot occur is worse than the "problem".
 
 Drop findings where the impact is negligible even if technically correct (e.g. a log line might be off by 1 second, a counter might briefly disagree with another counter). Review comments should surface risks that affect users, correctness, or operability, not theoretical imprecisions with no practical consequence.
