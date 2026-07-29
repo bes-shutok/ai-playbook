@@ -43,7 +43,7 @@ User args (e.g., "check for secrets", "against branch X") provide context for th
 - Inventing panel composition inline. Use the full or focused panel rules in `review-panel-selection.md`.
 - Reporting grep results, manual scans, or inline analysis as the review output. Sub-agents provide coverage a single pass cannot; the staging doc is the deliverable.
 - Replacing the sub-agent pipeline with a targeted scan because "the user only asked about X." A focused scan cannot find what it was not asked to look for; the selected panel can.
-- Writing diff snapshot files (`*.patch`) to the repo root or other tracked paths. Diff artifacts belong under `{tmp_dir}/` only (see **Diff access** below).
+- Writing diff/review capture files to the repo root or other tracked paths. Diff artifacts belong under `{tmp_dir}/` only (see **Diff access** below; canonical rule in `agent_workflow_guidelines.md` §50.3.2).
 
 ## Step 1: Gather Context
 
@@ -98,9 +98,9 @@ Load the matching overlay file from this skill's directory (e.g. `java-spring.md
 
 **Hard rules:**
 
-- Do **not** write diff artifacts to the repo root, tracked paths, or `{reviews_dir}/`.
-- Do **not** use legacy repo-root names like `diff_r5.patch` or `src_diff_r5.patch`.
-- At the start of a review round, remove orphan `diff_r*.patch` / `src_diff_r*.patch` files from the repo root if a prior run left them behind.
+- Do **not** write diff/review artifacts to the repo root, tracked paths, or `{reviews_dir}/`: no patch, diff, or capture file of any name (canonical rule + filename examples in `agent_workflow_guidelines.md` §50.3.2).
+- Prefer no on-disk capture. If a tool truncates large `git diff` stdout: (1) read the runtime's saved capture for that command when one exists; (2) otherwise materialize under `{tmp_dir}/code-review/<session-slug>/diff-r1.patch` (create the directory first). Never invent a repo-root scratch file to work around truncation.
+- At the start of a review round, remove orphan `diff_r*.patch` / `src_diff_r*.patch` / `*diff-capture*` files from the repo root if a prior run left them behind.
 
 **Cleanup:**
 
@@ -124,6 +124,9 @@ Each worker receives:
 6. Open soften-watchlist items that match this worker's lenses (pattern prefix / ownership), when any
 7. Output format: return the shared finding fields plus `path`, `line`, `side`, `body`, `pattern`, and `descendant_launches`.
 8. An explicit constraint: "Do not over-investigate or validate every single line number. Read the diff and key source files, then report findings. Write each `body` to full §4.12 depth: quote contract/doc text, name the code path, describe actual behavior, state why it matters, and suggest fix options. For Medium+, include all four Comment sections inline in `body` using `**Bold headings**`. For any actionable code/test/config fix at any severity, include a concrete before/after or 'could look like' code snippet per §4.9.0 in `body`. Include one sentence why the chosen severity applies (`severity-calibration.md`)."
+9. **Scratch / truncation (mandatory on every worker and on any sub-agent whose job is to return full `git diff` output):** "Never write `git diff` or review captures to the repo root (see **Diff access** / `agent_workflow_guidelines.md` §50.3.2). If a tool truncates stdout, read the runtime's saved capture for the command or write only under `{tmp_dir}/code-review/<slug>/`. Prefer re-running `git diff` and reading sources over inventing a root scratch file."
+
+When launching a sub-agent whose job is "return full `git diff` output", include item 9 verbatim and resolve `{tmp_dir}` from the target repo's `.ai-playbook/facts.md` into an absolute path in the prompt (do not leave the placeholder unresolved for that helper).
 
 **Timeout handling:** If a sub-agent has not completed within 10 minutes, launch a replacement with a more focused prompt (limit to first 1500 lines of diff via `| head -1500`, add "read key source files directly" instead of exhaustive investigation). Do not wait indefinitely for stuck agents.
 
@@ -293,6 +296,8 @@ Orchestrator-specific additions (not duplicated in severity-calibration):
 
 **Actionable fix comments should include a code snippet.** When a finding proposes something the author can apply in code immediately (not an open question, scope-confirmation ask, or optional doc-only note), include a concrete before/after or "could look like" snippet in the Comment body so the author can act without a follow-up chat. Single-token fixes ("rename to X") and prose-only doc edits are exempt. Staging doc Comment sections follow the same rule. Applies at **all severities**, including Low test-gap and config findings.
 
+When a finding presents multiple actionable fix options, include a concrete example for each option, such as one implementation snippet per alternative and a separate regression-test snippet when a test is part of the recommendation. Keep the surrounding explanation concise so the examples carry the detail.
+
 **Test and review-comment snippets:** In suggested test bodies, assert against values already held in a fixture or builder variable (for example `outbox.getCampaignId()`), not a second copy of the same literal. Duplicated literals in setup and asserts can both pass when the mapping is wrong.
 
 ### 4.9.1 No References To Gitignored Local Docs In Posted Comments
@@ -378,6 +383,10 @@ This applies to all sub-agents, but is most relevant for architectural findings 
 The staging doc has two audiences:
 - **Comment**: read by the PR/branch author (and posted to GitHub when approved). It must stand alone: the author should understand the issue, why it matters, and what to do **without** asking for a follow-up explanation.
 - **Analysis**: internal scratch for the reviewer; never posted. Holds verification steps, severity rationale, alternatives, and dropped counterarguments.
+
+**Posted Comment surface (no process metacomments):** Keep `#### Comment` about the code, contract, or behavior under review. Do **not** put reviewer-process chatter in Comment text that will post to the PR: follow-up ticket IDs created outside this PR, cross-references to other finding IDs (`F4`, `F5`), "when ticket X lands", joint ownership/config asides, or "see F4 for userId". Those belong in `#### Analysis` or Metadata only.
+
+**Narrow triage edits:** When the user asks to change a staged finding in a specific way (for example "only ask for a PII comment"), apply that scope only. Do not expand the Comment into adjacent asks (Javadoc on unrelated fields, bundled naming rationale, extra soft asks) unless the user also requested those.
 
 **Do not trade clarity for brevity on Medium+ findings.** A one-sentence Comment that only names the mismatch (for example "OpenAPI overstates the guarantee") is insufficient.
 
@@ -621,6 +630,8 @@ Do not include `Side` in staging documents; it is always `RIGHT` for GitHub inli
 - `edit`: user modified Comment before post (PR staged mode)
 
 After triage, update `## Review Statistics` → **Triage outcomes** and each finding's **Triage** per `review-staging`. Update the required `.stats.json` sidecar alongside the staging doc.
+
+**Triage presentation freeze** (see `review-agents/severity-calibration.md` § Ordering): do not reshuffle Findings by blocking, blast radius, reachability, or confidence during triage. Keep ascending finding-ID order within each severity section. When a finding's severity changes, move only that block into the matching `###` section.
 
 **After writing the staging doc**, inform the user:
 

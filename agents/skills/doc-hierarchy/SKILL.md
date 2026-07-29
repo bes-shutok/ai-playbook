@@ -63,13 +63,13 @@ docs/
 ├── maintenance/                # Layer 2; guidelines, wire catalogs, optional dashboards/
 │   └── dashboards/             # optional Grafana exports (index from operational-guides.md)
 ├── tmp/                        # Ephemeral documents only (gitignored): .md logs, .patch snapshots
-├── history/
-│   ├── context/                # Layer 3; product/domain context (from legacy docs/context/)
-│   ├── plans/completed/
-│   ├── investigations/         # Layer 3; other investigation notes (flat files)
-│   ├── migrations/
-│   ├── reviews/                # Ephemeral (gitignored)
-│   └── feature-notes/          # Layer 3; RFCs, PRDs, gap analyses (flat files)
+├── history/                    # Layer 3 high-level tree (required)
+│   ├── context/                # optional product/domain context (from legacy docs/context/)
+│   ├── plans/completed/        # optional plans archive
+│   ├── investigations/         # optional investigation notes (flat files)
+│   ├── migrations/             # optional service/data migration notes
+│   ├── reviews/                # optional ephemeral, gitignored staging
+│   └── feature-notes/          # optional RFCs, PRDs, gap analyses; flat files plus samples/ assets
 ```
 
 **Scripts vs documents split:** `docs/tmp/` is for **documents** only (`.md` logs, `.patch` diff snapshots - synced to the orphan `docs` branch). Throwaway **scripts and scratch data** (`.py` shadow/verification scripts, `.csv`/`.txt` baseline counts, `__pycache__/`) go in repo-root `tmp/` (gitignored, NOT synced to the `docs` branch). See `agent_workflow_guidelines.md` §50.3.1.

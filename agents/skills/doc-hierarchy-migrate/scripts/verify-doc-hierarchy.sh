@@ -78,7 +78,6 @@ gate_step2() {
   fi
   test ! -e docs/reviews || fail "docs/reviews still at root"
   test ! -d docs/history/reviews/reviews || fail "docs/history/reviews/reviews nested (bad mv)"
-  test -e docs/history/reviews || fail "docs/history/reviews missing"
   git check-ignore -q docs/history/reviews/ 2>/dev/null || fail "docs/history/reviews/ not gitignored"
   git check-ignore -q docs/tmp/ 2>/dev/null || fail "docs/tmp/ not gitignored"
   shopt -s nullglob
@@ -119,10 +118,10 @@ gate_step4() {
   if [ -d docs/history/feature-notes ]; then
     while IFS= read -r d; do
       fail "nested feature-notes dir: $d"
-    done < <(find docs/history/feature-notes -mindepth 1 -maxdepth 1 -type d ! -name proposals 2>/dev/null)
+    done < <(find docs/history/feature-notes -mindepth 1 -maxdepth 1 -type d ! -name proposals ! -name samples 2>/dev/null)
     while IFS= read -r d; do
       fail "deep nested feature-notes dir: $d"
-    done < <(find docs/history/feature-notes -mindepth 2 -type d ! -path '*/proposals/*' 2>/dev/null)
+    done < <(find docs/history/feature-notes -mindepth 2 -type d ! -path '*/proposals/*' ! -path '*/samples/*' 2>/dev/null)
   fi
 }
 
@@ -170,7 +169,13 @@ validate_opening_toml_facts() {
   for key in plans_dir reviews_dir tmp_dir; do
     dir=$(toml_value_for_key "$file" "$key")
     dir="${dir%/}/"
-    [ -d "$dir" ] || fail ".ai-playbook/facts.md stale or missing directory for $key: $dir"
+    if [ -d "$dir" ]; then
+      continue
+    fi
+    case "$dir" in
+      docs/history/*/) [ -d docs/history ] || fail ".ai-playbook/facts.md stale or missing directory for $key: $dir" ;;
+      *) fail ".ai-playbook/facts.md stale or missing directory for $key: $dir" ;;
+    esac
   done
 }
 
@@ -217,7 +222,7 @@ gate_step6_finish() {
     rg -q '^# Moved to|^This document moved to' docs/ --glob '!docs/history/**' --glob '!docs/tmp/**' 2>/dev/null && \
       fail "stub redirect still present under docs/"
     rg 'docs/history/feature-notes/[a-zA-Z0-9_-]+/' docs/architecture docs/maintenance AGENTS.md 2>/dev/null \
-      | grep -v 'feature-notes/proposals/' | rg -q . && \
+      | rg -v 'feature-notes/(proposals|samples)/' | rg -q . && \
       fail "nested history/feature-notes path referenced in canonical docs"
     rg -q 'docs/(context|plans|proposals)/' --glob '*.java' --glob '*.kt' --glob '*.{yml,yaml,sh,md}' . \
       --glob '!docs/history/**' --glob '!docs/tmp/**' --glob '!docs/history/reviews/**' 2>/dev/null && \
@@ -249,11 +254,8 @@ gate_step6_finish() {
   test ! -e docs/reviews || fail "docs/reviews at root"
   test ! -f docs/history/doc-migration.md || fail "doc-migration.md metainfo present"
 
-  test -d docs/history/plans || fail "docs/history/plans/ missing (plans_dir target)"
-  test -d docs/history/context || fail "docs/history/context/ missing"
-  test -d docs/history/investigations || fail "docs/history/investigations/ missing"
-  test -d docs/history/migrations || fail "docs/history/migrations/ missing"
-  test -d docs/history/feature-notes || fail "docs/history/feature-notes/ missing"
+  # Layer 3 subfolders are created only when the service has that kind of history.
+  # The high-level docs/history/ tree is the required layout boundary.
 
   if [ -f docs/README.md ]; then
     rg -q '^\| \[architecture/|^\| \[maintenance/' docs/README.md 2>/dev/null && fail "README has per-file catalog tables"
@@ -573,7 +575,7 @@ gate_self_test() {
     echo "OK: migrated layout passes full as expected"
   fi
 
-  local module_work nested_work legacy_ref_work
+  local module_work nested_work samples_work optional_history_work legacy_ref_work
   module_work="$SELF_TEST_TMP_ROOT/module-split"
   prepare_self_test_worktree "$module_work" expected || return 1
   mkdir -p "$module_work/docs/foo"
@@ -598,6 +600,31 @@ gate_self_test() {
     echo "$out" | rg -q 'nested feature-notes dir' \
       || fail "nested feature-notes step4 failed for unexpected reason: $out"
     echo "OK: nested feature-notes fails step4 as expected"
+  fi
+
+  samples_work="$SELF_TEST_TMP_ROOT/feature-note-samples"
+  prepare_self_test_worktree "$samples_work" expected || return 1
+  mkdir -p "$samples_work/docs/history/feature-notes/samples"
+  echo 'fixture' > "$samples_work/docs/history/feature-notes/samples/example.json"
+  commit_self_test_worktree "$samples_work" "add feature-note samples" || return 1
+  if ! out=$(REPO_ROOT="$samples_work" "$script_dir/verify-doc-hierarchy.sh" step4 2>&1); then
+    fail "feature-notes samples should pass step4 but failed: $out"
+  else
+    echo "OK: optional feature-notes samples pass step4 as expected"
+  fi
+
+  optional_history_work="$SELF_TEST_TMP_ROOT/optional-history"
+  prepare_self_test_worktree "$optional_history_work" expected || return 1
+  rmdir "$optional_history_work/docs/history/context" \
+        "$optional_history_work/docs/history/investigations" \
+        "$optional_history_work/docs/history/migrations" \
+        "$optional_history_work/docs/history/reviews" \
+        "$optional_history_work/docs/history/plans" \
+        "$optional_history_work/docs/history/feature-notes"
+  if ! out=$(REPO_ROOT="$optional_history_work" "$script_dir/verify-doc-hierarchy.sh" full 2>&1); then
+    fail "missing optional history folders should pass full but failed: $out"
+  else
+    echo "OK: missing optional history folders pass full as expected"
   fi
 
   legacy_ref_work="$SELF_TEST_TMP_ROOT/legacy-ref"

@@ -121,7 +121,7 @@ Repo agent runtime (`.ai-playbook/`) is always gitignored. Bootstrap writes TOML
 | `docs/<module>/*` durable design | **MERGE** into architecture topics; **DELETE** source tree |
 | `docs/<module>/*` RFC | **MOVE** → `history/feature-notes/{SERVICE}_rfc.md` or `{module}-rfc.md` (flat) |
 | `docs/<module>/*` task tracker | **MOVE** → `history/feature-notes/{module}-service-high-level-tasks.md` (flat) |
-| `history/feature-notes/<module>/` nested dirs | **Flatten** to flat `feature-notes/` files |
+| `history/feature-notes/<module>/` nested dirs | **Flatten** to flat `feature-notes/` files; retain only optional `proposals/` or `samples/` asset folders |
 
 Record each `<module>` name in the Step 0 classification table. Code modules (`src/`, Maven modules) are unrelated; only **documentation** trees under `docs/<name>/` are in scope.
 

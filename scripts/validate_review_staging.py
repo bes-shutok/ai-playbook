@@ -655,37 +655,23 @@ def validate_current_payload(
 
 
 def validate_finding_order(findings: list, result: ValidationResult) -> None:
+    """Require severity buckets Critical→Low, then ascending finding ID.
+
+    Blocking / blast_radius / reachability / confidence are finding metadata only;
+    they must not reshuffle presentation (stable through triage).
+    """
     severity_rank = {value: index for index, value in enumerate(SEVERITY_ORDER)}
-    blast_rank = {
-        "global": 0,
-        "multi-service": 1,
-        "single-service": 2,
-        "local": 3,
-    }
-    reach_rank = {
-        "expected": 0,
-        "common": 1,
-        "plausible-edge": 2,
-        "theoretical": 3,
-    }
-    confidence_rank = {
-        "verified": 0,
-        "strong-evidence": 1,
-        "hypothesis": 2,
-    }
 
     def key(row: dict) -> tuple:
         return (
             severity_rank.get(row.get("severity"), 99),
-            0 if row.get("blocking") is True else 1,
-            blast_rank.get(row.get("blast_radius"), 99),
-            reach_rank.get(row.get("reachability"), 99),
-            confidence_rank.get(row.get("confidence"), 99),
             row.get("id", 0),
         )
 
     if findings != sorted(findings, key=key):
-        result.add_error("findings are not ordered by severity and tie-break rules")
+        result.add_error(
+            "findings are not ordered by severity then ascending finding ID"
+        )
 
 
 def validate_finding_budget(findings: list, result: ValidationResult) -> None:

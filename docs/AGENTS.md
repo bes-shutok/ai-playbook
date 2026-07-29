@@ -95,7 +95,7 @@ Rename skill → update front matter, title, self-refs. Shared skills → edit `
 
 ## Plans and temporary artifacts (summary)
 
-Plans: resolved `{plans_dir}` only; see `plans` skill. RFCs on doc-hierarchy repos: `docs/history/feature-notes/`. Temp artifacts: `{tmp_dir}`; promote or delete same cycle; never reference `{tmp_dir}` from canonical docs.
+Plans: resolved `{plans_dir}` only; see `plans` skill. RFCs on doc-hierarchy repos: `docs/history/feature-notes/`. Temp artifacts: `{tmp_dir}`; promote or delete same cycle; never reference `{tmp_dir}` from canonical docs. Never dump `git diff` / review captures at the repo root (use `{tmp_dir}/code-review/…` or Cursor `agent-tools`; see `agent_workflow_guidelines.md` §50.3.2).
 
 ## Gitignored docs safety (summary)
 

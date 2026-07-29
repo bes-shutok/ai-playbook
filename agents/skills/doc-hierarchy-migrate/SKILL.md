@@ -88,7 +88,7 @@ Merge table: [migration-map.md Layer 2 merge](../doc-hierarchy/migration-map.md#
 
 ## Step 4: Flatten Layer 3
 
-Flat `history/feature-notes/` + `proposals/` only. **Gate:** `REPO_ROOT=<service-repo> "$SKILL_INSTALL/scripts/verify-doc-hierarchy.sh" step4`
+Flat `history/feature-notes/` files plus optional `proposals/` and `samples/` asset folders only. **Gate:** `REPO_ROOT=<service-repo> "$SKILL_INSTALL/scripts/verify-doc-hierarchy.sh" step4`
 
 ## Step 5: Layer 1 and instructions
 

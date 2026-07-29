@@ -216,7 +216,7 @@ for candidate in "${SHADOW_CANDIDATES[@]}"; do
     SHADOW_PATHS+=("$candidate")
   fi
 done
-for extra_path in "${EXTRA_SHADOW_DIRS[@]}"; do
+for extra_path in "${EXTRA_SHADOW_DIRS[@]+"${EXTRA_SHADOW_DIRS[@]}"}"; do
   clean_extra="${extra_path%/}"
   [ -e "$clean_extra" ] || continue
   _already_shadowed=0
@@ -273,7 +273,7 @@ for shadow_path in "${SHADOW_PATHS[@]}"; do
     parent=$(dirname "$src")
     mkdir -p "${SHADOW_TMP}/${parent}"
     _extra_shadow_root=0
-    for extra_path in "${EXTRA_SHADOW_DIRS[@]}"; do
+    for extra_path in "${EXTRA_SHADOW_DIRS[@]+"${EXTRA_SHADOW_DIRS[@]}"}"; do
       [ "${extra_path%/}" = "$src" ] && _extra_shadow_root=1 && break
     done
     if [ -d "$src" ] && [ "$_extra_shadow_root" -eq 1 ]; then
@@ -317,7 +317,7 @@ if [ -e "${SHADOW_TMP}/.gitignore" ]; then
 
   grep -vE '^/?\.?github/docs/?$|^/docs/?$|^/\.ai-playbook/?$|^/AGENTS\.md$|^/CLAUDE\.md$|^/GEMINI\.md$|^/COPILOT\.md$|^AGENTS\.md$|^GEMINI\.md$|^CLAUDE\.md$|^/?docs/personal/?$|^/?docs/tmp/?$|^/?docs/reviews/?$|^/?docs/history/reviews/?$' "${SHADOW_TMP}/.gitignore" > "$FILTERED_GITIGNORE" || true
 
-  for extra_path in "${EXTRA_SHADOW_DIRS[@]}"; do
+  for extra_path in "${EXTRA_SHADOW_DIRS[@]+"${EXTRA_SHADOW_DIRS[@]}"}"; do
     clean_extra="${extra_path%/}"
     [ -e "$clean_extra" ] || continue
     git check-ignore -v -- "$clean_extra" 2>/dev/null \

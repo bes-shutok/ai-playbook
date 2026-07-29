@@ -227,9 +227,13 @@ Caller must ensure each finding's:
 - `#### Comment` is self-contained, suggestion-tone, and contains enough detail to act without follow-up chat (depth depends on severity, following the same intent as other review skills).
 - `#### Analysis` contains verification trail and severity rationale. It is never posted.
 
+**Comment vs Analysis split:** Comment is author-facing (code/contract/behavior only). Analysis holds reviewer process notes (other finding IDs, follow-up tickets, triage history, joint-config ownership). When the user narrows a staged ask (for example "PII comment only"), edit Comment to that scope only; do not expand into adjacent soft asks. See `doing-code-review` §4.12.
+
 ## Severity and ordering
 
-All callers use `review-agents/severity-calibration.md`. Findings appear under `### Critical`, `### High`, `### Medium`, and `### Low` in that exact order. Within a group, order by blocking, blast radius, reachability, confidence, then finding ID.
+All callers use `review-agents/severity-calibration.md`. Findings appear under `### Critical`, `### High`, `### Medium`, and `### Low` in that exact order. Within a group, order by **ascending finding ID** only (stable discovery order). Do not reorder by blocking, blast radius, reachability, or confidence.
+
+**Triage presentation freeze** (see `review-agents/severity-calibration.md` § Ordering): update Status / Triage / Comment / Analysis / Severity in place. If severity changes, move that finding into the correct section and keep ID order there. Do not reshuffle siblings. Sidecar `findings` array must use the same order as the markdown (severity sections, then ascending id).
 
 A review is clean only when no unresolved finding has `blocking: true`.
 
