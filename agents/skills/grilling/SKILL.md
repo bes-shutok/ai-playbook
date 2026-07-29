@@ -7,14 +7,19 @@ metadata:
 
 # Grilling
 
-Interview me relentlessly about every aspect of this until we reach a shared understanding. Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+Interview me relentlessly about every aspect of this until we reach a shared understanding. Walk down each branch of the decision tree. For each question, provide your recommended answer.
 
-**Default cadence:** ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
+**Default cadence (unclear-first sequential, clear tail batched):** the interview runs in three phases:
 
-**Batch mode (when the user asks for it):** if they say to ask only unclear questions first and then give suggested solutions in one list (or equivalent), do that instead of one-at-a-time:
-1. List only the **unclear** decision questions (skip anything already decided or look-uppable).
-2. In the **same** reply, after those questions, give **one** numbered list of suggested solutions covering those questions.
-3. Wait for answers or “accept suggested solutions” before acting. Do not write the plan or code until shared understanding is confirmed.
+1. **Look up facts.** Resolve anything that is a *fact* (filesystem, git, tooling) by exploring the environment rather than asking. Skip anything already decided or look-uppable.
+2. **Ask unclear questions one at a time.** Sort the genuinely **unclear** decision questions most-unclear-first. Ask a single self-contained question and wait for the answer before the next — especially when one question determines how the next is framed (e.g. "targeted edit or rewrite?" cannot be answered until "what is broken?" is settled). Each question must carry: the concrete context (affected table, API, event, or component), why it matters, a **recommended decision**, the **reasoning**, and a **before/after example**.
+3. **Clamp the clear tail.** Once only low-ambiguity questions remain, present them as one numbered confirmation block with suggested solutions, and let the user accept-in-batch or override per item.
+
+A question qualifies for the tail block only when **all three** hold: (a) **no upstream dependency** on any still-open one-at-a-time question; (b) a **defensible default** exists with concrete reasoning, not just "it depends"; (c) **low surprise** — flipping the answer is a confirm-or-tweak, not a redesign. If any fails, keep it one-at-a-time. Failure signal: if a tail question's recommendation reads "depending on Q1," it belongs upstream.
+
+This respects the user's time without collapsing dependent decisions: the unclear core is resolved sequentially, and only the genuinely clear remainder is batched.
+
+**Batch-all mode (when the user asks for it):** if they explicitly want every question at once ("show me everything," "batch mode"), present all remaining decision questions in one reply with a single numbered suggested-solutions list, then wait.
 
 When grilling a plan, make each question self-contained. Define any plan term before using it and include the concrete context needed to decide: the affected table, API, event, or component; the reason it matters; and a short example of the before-and-after behavior. Do not ask the user to choose based on an unexplained label such as a "slice" or a summary of a data flow.
 
@@ -34,4 +39,4 @@ During plan creation, grilling can deepen Phase 1 requirements discovery when sc
 Use before drafting or after a first RFC draft when design choices need explicit user sign-off. Reference the saved RFC path once it exists; do not duplicate RFC content in chat.
 
 ### With `grill-with-docs` / `domain-modeling` skills
-When the user wants terminology and decisions captured during the interview, use `grill-with-docs` (combines this skill with inline `domain-modeling`). After shared understanding without doc capture, offer `domain-modeling` to persist resolved terms and ADRs.
+When the user wants terminology and decisions captured during the interview, use `grill-with-docs` (combines this skill with inline `domain-modeling`). When running the default hybrid cadence, doc capture happens between one-at-a-time questions, not deferred to the end of the batch. After shared understanding without doc capture, offer `domain-modeling` to persist resolved terms and ADRs.
