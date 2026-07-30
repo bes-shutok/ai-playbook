@@ -447,3 +447,53 @@ prevent the lookups from running at all."
 
 Applies to any "lookup avoidance" or "short-circuit gate" test where the production
 predicate is a compound boolean over multiple helper calls.
+
+## 16. In a Script's `--selftest`, Patch `sys.modules[__name__]`, Not `import <module>`
+
+When a Python file runs both as a program and as its own test suite (a `--selftest`
+mode invoked as `python3 my_tool.py --selftest`), the module under test is registered
+under the key `__main__`, NOT under its filename. A test inside that file that wants to
+monkeypatch a module-level function or attribute the production code looks up by name
+must patch the live module via `sys.modules[__name__]`. Patching `import my_tool as
+self_mod` and then `self_mod.<attr> = ...` creates a SECOND module instance (`my_tool`
+distinct from `__main__`); the production code reads the attribute off `__main__` while
+the test wrote it onto `my_tool`, so the patch is invisible and the test asserts against
+unpatched behavior.
+
+```python
+# my_tool.py run as: python3 my_tool.py --selftest
+
+def on_disk_generation(path):           # the function production code calls by name
+    ...
+
+def publish_with_recheck(path):
+    g = on_disk_generation(path)        # looked up on the live module (__main__)
+    ...
+
+# WRONG when run as a script: `import my_tool` loads my_tool a SECOND time;
+# patching my_tool.on_disk_generation does not affect publish_with_recheck,
+# which resolves on_disk_generation on __main__ at call time
+import my_tool as self_mod              # second instance - patch is invisible
+self_mod.on_disk_generation = lambda p: 99
+assert publish_with_recheck(path) == 99 # FAILS or passes for the wrong reason
+
+# CORRECT: patch the live module the script actually runs as
+import sys
+sys.modules[__name__].on_disk_generation = lambda p: 99
+assert publish_with_recheck(path) == 99
+```
+
+**Principle:** Family H (Verify the real thing, not the abstraction). The test must
+mutate the exact module object the production code resolves names against, or it is
+testing a different module than the one that will run.
+
+**Trigger shape:** the file has an `if __name__ == "__main__":` dispatch with a
+`--selftest` flag, AND a self-test function needs to monkeypatch a module-level name
+that the same file's production code calls by its bare name. This is common in
+single-file CLI tools, scripts with registry-based self-tests, and any module that is
+both importable and directly executable.
+
+**When `import <module>` IS correct:** when the test and production code are in
+different files (the test imports the module under test normally), there is only one
+instance and a plain `import` patch works. The double-instance trap is specific to
+self-tests defined inside the file under test and executed as `__main__`.

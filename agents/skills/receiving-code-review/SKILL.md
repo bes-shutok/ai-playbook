@@ -39,13 +39,14 @@ Use this workflow when the user asks to process, triage, plan, address, or reply
 3. Spot-check resolved or outdated threads against current code before skipping them.
 4. Verify each live comment against the referenced file and line.
 5. **Check branch scope**: before staging any fix, confirm the file belongs to this branch's scope. If a comment touches a file outside the branch's folder (e.g., `individual/<name>/` while on a team branch), plan that fix as a separate commit to the appropriate branch; do not include it in the PR's branch commit.
-6. Classify each live comment as correctness bug, test quality, cleanup, docs, false positive, or needs clarification.
-7. When a bot cites a guideline to justify a flag, look up the guideline and confirm it applies to this specific file type before implementing. Standard license copyright headers, for example, are not subject to PII redaction rules even if the guideline covers the same keyword (see `coding_guidelines.md §12`).
-8. Deduplicate comments by root cause. Multiple threads about the same root cause become one task.
-9. If any item is unclear, stop and ask before implementing.
-10. Implement one root-cause task at a time and verify after each fix.
-11. Use `github-pr-workflow` to reply to each thread after implementation or after deciding no code change is needed.
-12. Resolve bot or automated threads only after replying. Never resolve human reviewer threads.
+6. Map each live comment's problem shape to the root-cause families and search the applicable project and user-level lesson corpora for relevant learnings. Apply repository-specific facts from those learnings when evaluating the feedback.
+7. Classify each live comment as correctness bug, test quality, cleanup, docs, false positive, or needs clarification.
+8. When a bot cites a guideline to justify a flag, look up the guideline and confirm it applies to this specific file type before implementing. Standard license copyright headers, for example, are not subject to PII redaction rules even if the guideline covers the same keyword (see `coding_guidelines.md §12`).
+9. Deduplicate comments by root cause. Multiple threads about the same root cause become one task.
+10. If any item is unclear, stop and ask before implementing.
+11. Implement one root-cause task at a time and verify after each fix.
+12. Use `github-pr-workflow` to reply to each thread after implementation or after deciding no code change is needed.
+13. Resolve bot or automated threads only after replying. Never resolve human reviewer threads.
 
 Every CR comment thread must get a reply before it is resolved. For fixes, reference the commit SHA when available and describe what changed. For false positives, explain why no change was made.
 

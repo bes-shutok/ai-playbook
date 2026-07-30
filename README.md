@@ -81,6 +81,22 @@ Commands can be used in two ways:
 
 Other vendored skills (`done`, `github-pr-workflow`, `receiving-code-review`, `doing-code-review`, `review-plan`, `tdd-guide`, etc.) live under [`agents/skills/`](agents/skills/). Browse that directory for the full set; register or invoke by skill path the same way as the table entries above.
 
+## Scripts
+| Script | What It Does |
+|---|---|
+| `scripts/facts_paths.py` | Facts-file key resolution and repo-anchor/project-key derivation (stdlib leaf). |
+| `scripts/validate_review_staging.py` | Review staging doc and stats-sidecar validator; sidecar/conservation authority. |
+| `scripts/summarize_review_stats.py` | Private review corpus discovery, conservation audit, and effectiveness report for Phase 2 review-effectiveness telemetry. Allowlisted facts-driven discovery (imports `facts_paths`), SHA-256 inventory into a local-only baseline under `~/.ai-playbook/review-telemetry/`, single-authority cutover classification (delegates per-sidecar classification to `validate_review_staging`), TOCTOU-safe private permissions, and a process-wide advisory lock across discover to publish. Aggregates current and legacy sidecars into cohort comparisons and emits a privacy-safe effectiveness report (`--json-report` / `--markdown-report`) with per-cohort `retain`, `review needed`, or `inconclusive` verdicts and an overall verdict. Path-level data and identifiers never enter tracked files. Run `python3 scripts/summarize_review_stats.py --selftest` for the built-in selftests. |
+
+### Review Effectiveness Report
+`scripts/summarize_review_stats.py --strict-audit` compares the pre-cutover baseline corpus against post-cutover (five-worker) growth reviews and writes a runtime-private effectiveness report when given `--json-report` / `--markdown-report` paths (conventionally `~/.ai-playbook/review-telemetry/effectiveness-report.{json,md}`, local only, never committed; both report flags default to none, so `--strict-audit` alone writes no report).
+
+- **Cohort key** = `(review type, role, size bucket, domain-risk class)`, each derivable from both current and legacy sidecars. Panel mode is NOT a cohort key; it is the baseline/growth discriminator. Period (`baseline`/`growth`) is the sole within-cohort discriminator.
+- **Verdict per cohort**: `inconclusive` when fewer than ten reviews on either side, or growth-side triage coverage is below 80% (baseline coverage does not gate, baseline is raw-only); otherwise `retain` only when median launches per initial full review fall by at least 25%, accepted unique findings do not fall by more than 20%, and the growth-side dropped-finding rate does not rise by more than 10 percentage points; else `review needed`. No automatic policy mutation.
+- **Overall verdict**: `inconclusive` when there are zero evaluable cohorts; `retain` only when every evaluable cohort retains; otherwise `review needed` (per-cohort conjunction, no weighted average).
+- **Privacy**: reports emit only aggregate counts and cohort verdicts. Repository names, paths, review filenames, ticket IDs, feature names, and content digests never appear. Privacy is enforced by a deny inventory built at audit time from the real corpus (`--emit-deny-inventory <path>` writes the built inventory to a runtime-private file under `~/.ai-playbook/review-telemetry/`); a fixed regex is kept only as a coarse pre-filter. Assert none of the built inventory strings appear in the public reports with `rg -nF -f <deny-inventory.txt> <report.json> <report.md>`. Historical review Markdown and sidecars are immutable read-only inputs (mechanically proven by a digest-comparison test, not a manual checkbox).
+- **Determinism**: aggregate JSON is byte-stable across runs (canonical key order, stable trailing newline).
+
 ## Usage Examples (Hybrid)
 ### A) Registered Command Mode (`.opencode/command`)
 ```bash

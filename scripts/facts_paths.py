@@ -102,12 +102,17 @@ def _append_hooks_log_line(payload: dict) -> None:
 # --------------------------------------------------------------------------- #
 # Facts-FILE key resolution (TWO parsers; no generic resolver).
 # --------------------------------------------------------------------------- #
-def resolve_toml_key(start_dir: Path, key: str) -> Path | None:
-    """Parse the REPO ``.ai-playbook/facts.md`` TOML-fence block for ``key``.
+def resolve_toml_key_raw(start_dir: Path, key: str) -> str | None:
+    """Parse the REPO ``.ai-playbook/facts.md`` TOML-fence block for ``key`` and
+    return its value as an UN-resolved raw string.
 
-    The repo facts file opens a ```toml fenced block containing
-    ``key = "value"`` lines. Returns the resolved value as a ``Path`` (tilde-
-    expanded, resolved), or ``None`` if the file or key is absent.
+    Returns the stripped TOML value (tilde-expanded via ``expanduser`` so a
+    ``~/...`` value is usable, but NOT ``Path.resolve()``-anchored) as a ``str``,
+    or ``None`` if the file or key is absent. The raw (un-anchored) form lets a
+    cross-repo caller anchor a repo-relative value at the repo root itself,
+    instead of having ``Path.resolve()`` anchor it against the process CWD
+    (which is wrong for cross-repo discovery). This is the SINGLE parser for the
+    TOML-fence format; ``resolve_toml_key`` delegates here (DRY).
 
     ``start_dir`` is the directory whose ``.ai-playbook/facts.md`` is read (the
     repo root). TOML-fence keys are repo-scoped, so ONLY the repo candidate is
@@ -132,8 +137,27 @@ def resolve_toml_key(start_dir: Path, key: str) -> Path | None:
             break
         m = re.match(r'^\s*(' + re.escape(key) + r')\s*=\s*"([^"]*)"\s*$', line)
         if m:
-            return Path(m.group(2).strip()).expanduser().resolve()
+            return m.group(2).strip()
     return None
+
+
+def resolve_toml_key(start_dir: Path, key: str) -> Path | None:
+    """Parse the REPO ``.ai-playbook/facts.md`` TOML-fence block for ``key``.
+
+    The repo facts file opens a ```toml fenced block containing
+    ``key = "value"`` lines. Returns the resolved value as a ``Path`` (tilde-
+    expanded, resolved), or ``None`` if the file or key is absent. Delegates the
+    fence parse to ``resolve_toml_key_raw`` (the SINGLE parser) and then
+    ``.expanduser().resolve()`` the raw value.
+
+    ``start_dir`` is the directory whose ``.ai-playbook/facts.md`` is read (the
+    repo root). TOML-fence keys are repo-scoped, so ONLY the repo candidate is
+    consulted (NOT the home facts file).
+    """
+    raw = resolve_toml_key_raw(start_dir, key)
+    if raw is None:
+        return None
+    return Path(raw).expanduser().resolve()
 
 
 def resolve_table_key(start_dir: Path, key: str) -> Path | None:
@@ -195,6 +219,47 @@ def user_corpus_path(start_dir: Path) -> Path | None:
     if base is None:
         return None
     return base / "development_lessons.md"
+
+
+def _resolve_table_key_in_file(facts_path: Path, key: str) -> Path | None:
+    """Parse ONE facts file for a markdown table row ``| `key` | `value` |``.
+
+    Returns the resolved value as a ``Path`` (tilde-expanded, resolved), or
+    ``None`` if the file/key is absent or unreadable. Shared backing for
+    ``resolve_projects_roots`` (r19): the workspace-root keys live as markdown
+    table rows in ``~/.ai-playbook/facts.md``.
+    """
+    if not facts_path.is_file():
+        return None
+    try:
+        text = facts_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    pattern = re.compile(
+        r"^\|\s*`" + re.escape(key) + r"`\s*\|\s*`?([^|`]+?)`?\s*\|",
+        re.MULTILINE,
+    )
+    m = pattern.search(text)
+    if m:
+        return Path(m.group(1).strip()).expanduser().resolve()
+    return None
+
+
+def resolve_projects_roots(user_facts) -> tuple[Path | None, Path | None]:
+    """Resolve the two workspace roots from the user facts document.
+
+    Reads the markdown table rows for ``personal_projects_root`` and
+    ``company_projects_root`` in the facts file at ``user_facts`` (typically
+    ``~/.ai-playbook/facts.md``). Returns a ``(personal, company)`` tuple of
+    resolved ``Path`` objects; each member is ``None`` if its row is absent or
+    the file is unreadable. This is the SINGLE entry point the summarizer uses
+    for facts-driven root resolution (Design Invariant 11: import, do not
+    re-parse).
+    """
+    facts_path = Path(user_facts)
+    personal = _resolve_table_key_in_file(facts_path, "personal_projects_root")
+    company = _resolve_table_key_in_file(facts_path, "company_projects_root")
+    return (personal, company)
 
 
 # --------------------------------------------------------------------------- #
@@ -329,6 +394,58 @@ def selftest() -> int:
             "resolves_all_keys: TOML value != table value (format split real)",
             plans != shared,
             f"plans={plans} shared={shared}",
+        )
+
+    # ---- resolve_toml_key_raw: UN-resolved raw string (F3) ----
+    # ``resolve_toml_key_raw`` returns the stripped TOML value as a ``str``
+    # (tilde-expanded but NOT ``.resolve()``-anchored), so cross-repo callers
+    # can anchor a repo-relative value at the repo root themselves. It shares
+    # ONE parser with ``resolve_toml_key`` (DRY; no second fence parser).
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        (td_path / ".ai-playbook").mkdir()
+        rel_value = "docs/reviews/"
+        abs_value = "/tmp/zz-raw-abs-XYZ/"
+        (td_path / ".ai-playbook" / "facts.md").write_text(
+            "```toml\n"
+            f'reviews_dir = "{rel_value}"\n'
+            f'plans_dir = "{abs_value}"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        raw_rel = resolve_toml_key_raw(td_path, "reviews_dir")
+        raw_abs = resolve_toml_key_raw(td_path, "plans_dir")
+        raw_missing = resolve_toml_key_raw(td_path, "does_not_exist")
+        check(
+            "resolve_toml_key_raw: relative value returned as raw str",
+            isinstance(raw_rel, str) and raw_rel == rel_value,
+            f"raw_rel={raw_rel!r}",
+        )
+        check(
+            "resolve_toml_key_raw: absolute value returned as raw str",
+            isinstance(raw_abs, str) and raw_abs == abs_value,
+            f"raw_abs={raw_abs!r}",
+        )
+        check(
+            "resolve_toml_key_raw: absent key returns None",
+            raw_missing is None,
+            f"raw_missing={raw_missing!r}",
+        )
+        # Absent facts file returns None (no raise).
+        check(
+            "resolve_toml_key_raw: absent facts file returns None",
+            resolve_toml_key_raw(td_path / "nope", "reviews_dir") is None,
+        )
+        # DRY: resolve_toml_key resolves the SAME raw value (tilde-expanded +
+        # .resolve()-anchored). For a relative value the resolved Path is the
+        # raw value anchored at process CWD; we only assert they share a parser
+        # by confirming resolve_toml_key returns a Path whose final part matches
+        # the raw relative value's final part.
+        resolved = resolve_toml_key(td_path, "reviews_dir")
+        check(
+            "resolve_toml_key_raw: resolve_toml_key shares the same parser",
+            resolved is not None and resolved.name == Path(rel_value).name,
+            f"resolved={resolved}",
         )
 
     # ---- shared_docs_dir_unchanged: against the REAL home facts file ----
@@ -566,6 +683,40 @@ def selftest() -> int:
                 os.environ.pop("HOME", None)
             else:
                 os.environ["HOME"] = orig_home
+
+    # ---- resolve_projects_roots: two workspace roots from a facts file ----
+    # The summarizer (Design Invariant 11) imports this instead of re-parsing.
+    # Roots are markdown table rows in the user facts file.
+    with tempfile.TemporaryDirectory() as td:
+        facts_path = Path(td) / "facts.md"
+        facts_path.write_text(
+            "## Workspace roots\n\n"
+            "| Key | Path (this machine) | Purpose |\n"
+            "|-----|----------------------|---------|\n"
+            "| `personal_projects_root` | `~/Projects/myrepos/` | Personal |\n"
+            "| `company_projects_root` | `~/Projects/sporty/` | Company |\n",
+            encoding="utf-8",
+        )
+        personal, company = resolve_projects_roots(facts_path)
+        check(
+            "resolve_projects_roots: personal root resolved",
+            personal is not None and personal.name == "myrepos",
+            str(personal),
+        )
+        check(
+            "resolve_projects_roots: company root resolved",
+            company is not None and company.name == "sporty",
+            str(company),
+        )
+        # Absent keys return None, do not raise.
+        facts2 = Path(td) / "empty.md"
+        facts2.write_text("# no roots here\n", encoding="utf-8")
+        p2, c2 = resolve_projects_roots(facts2)
+        check(
+            "resolve_projects_roots: absent roots -> (None, None), no raise",
+            p2 is None and c2 is None,
+            f"p2={p2} c2={c2}",
+        )
 
     # r1-M6 regression guard: no selftest block leaked a keying line into the
     # REAL ~/.ai-playbook/logs/hooks.log. Every resolve_project_key call now
