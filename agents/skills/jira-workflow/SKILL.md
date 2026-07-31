@@ -1,6 +1,6 @@
 ---
 name: jira-workflow
-description: Jira workflow for creating/updating Jira stories and creating git branches from Jira tickets. Trigger phrases: "create a Jira story", "update Jira ticket", "create a branch for PROJ-XXXXX".
+description: "Jira workflow for creating/updating Jira stories and creating git branches from Jira tickets. Trigger phrases: \"create a Jira story\", \"update Jira ticket\", \"create a branch for PROJ-XXXXX\"."
 ---
 
 # Jira Workflow
@@ -18,7 +18,7 @@ description: Jira workflow for creating/updating Jira stories and creating git b
 - When updating repurposed tickets, prefer **Goal / Problem / Product decisions / Deliverables / Acceptance criteria / References** sections. Do **not** add **Out of scope** sections unless the user explicitly asks for them.
 - Do **not** add a separate **Dependencies** section that lists follow-up Jira keys for parallel or later stories. Mention cutover or timing coordination inline under the relevant deliverable slice only when it helps humans (for example "timed with profile batch migration follow-up").
 - A ticket describes only its **own** scope. Omit extraction/split history ("former Slice 2"), prioritization reasoning ("lowest near-term priority"), and transient current-state caveats; that meta belongs in planning/decision docs, not the ticket. See agent_workflow_guidelines.md §45.8 (document results, not deliberation).
-- **Writing style (mandatory):** no em dashes (`—`) in ticket summaries, descriptions, or comments; use commas, semicolons, colons, or short sentences, and prefer globish. Before saving a ticket body via your Atlassian integration, scan the composed text for `—` and replace every occurrence. See agent_workflow_guidelines.md §39 and §45.
+- **Writing style (mandatory):** no em dash character (U+2014) in ticket summaries, descriptions, or comments; use commas, semicolons, colons, or short sentences, and prefer globish. Before saving a ticket body via your Atlassian integration, scan the composed text for U+2014 and replace every occurrence. See agent_workflow_guidelines.md §39 and §45.
 - Match MVP product vocabulary in ticket text to canonical repo docs (for example single-client MVP; avoid multi-tenant ingestion language when docs state the company is the sole source).
 - When repurposing an existing Jira issue, review older comments for stale scope. If your own older comments now conflict with the active story body and Jira comment deletion is available, delete the outdated comments instead of leaving superseding clarification comments that keep obsolete guidance visible.
 - When cleaning up Jira comments after a story-scope change, do not touch comments left by other people unless the user explicitly asks for that.

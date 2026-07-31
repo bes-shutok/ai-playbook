@@ -1,6 +1,6 @@
 ---
 name: receiving-code-review
-description: Use when receiving or addressing existing code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable. Trigger phrases: "address comments", "address PR comments", "process PR comments", "reviewer comments", "copilot comments", "fix review feedback", "respond to review feedback", "address comments in <GitHub PR URL>". Requires technical rigor and verification, not performative agreement or blind implementation. Do not use for fresh PR review; use doing-code-review instead.
+description: "Use when receiving or addressing existing code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable. Trigger phrases: \"address comments\", \"address PR comments\", \"process PR comments\", \"reviewer comments\", \"copilot comments\", \"fix review feedback\", \"respond to review feedback\", \"address comments in <GitHub PR URL>\". Requires technical rigor and verification, not performative agreement or blind implementation. Do not use for fresh PR review; use doing-code-review instead."
 ---
 
 # Code Review Reception

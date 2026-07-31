@@ -336,6 +336,7 @@ description: What + When      # Required: max 1024 chars
 - Frontmatter must end with `---` before the Markdown content
 - Use spaces for indentation, not tabs
 - File must be named `SKILL.md` (case-sensitive)
+- **Quote `description` in double quotes whenever its value contains a colon followed by a space** (for example `Trigger phrases: "do X", "do Y"`). An unquoted plain YAML scalar treats any `: ` inside the value as a new mapping key, so the frontmatter fails to parse and the skill silently fails to load (`copilot skill list` reports it under "failed to load"). Escape embedded double quotes as `\"`. Run `copilot skill list` after adding or editing a description to confirm it still loads.
 
 ### Description Best Practices
 
@@ -701,9 +702,10 @@ Don't restrict when:
 
 **Solutions**:
 1. Check file location: `agents/skills/<skill-name>/SKILL.md` in `skills_repo_path` (and local mirrors if used)
-2. Verify frontmatter syntax (valid YAML)
-3. Check file name is `SKILL.md` (uppercase)
-4. Reload skills per your agent environment (restart session or refresh skill index)
+2. Verify frontmatter syntax (valid YAML); run `copilot skill list` to surface parse errors directly (reported as "failed to load" with a file path and line/column)
+3. Check `description` for an unquoted colon-space (for example `Trigger phrases: "..."`); quote the whole value if present (see Frontmatter Requirements)
+4. Check file name is `SKILL.md` (uppercase)
+5. Reload skills per your agent environment (restart session or refresh skill index)
 
 ### Skill Not Triggering
 
