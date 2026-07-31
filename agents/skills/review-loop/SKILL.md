@@ -32,9 +32,9 @@ BASE_BRANCH="${BASE_BRANCH:-}"   # user override, else detect below
 
 **Base branch** (pick first that applies):
 
-1. User named it (`against master`, `vs pre-release`, PR base URL).
+1. User named it (`against master`, PR base URL).
 2. Open PR for `HEAD_BRANCH`: use PR base from `gh pr view` / `github-pr-workflow`.
-3. Repo default integration branch (`pre-release`, `main`, or `master` per project `AGENTS.md`).
+3. Repo default integration branch (`main` or `master` per project `AGENTS.md`).
 
 **Diff scope (every review round):** `git diff ${BASE_BRANCH}...HEAD` on **committed** `HEAD` only. Do not review uncommitted fixes as proof the round is clean; commit first, then start the next round.
 

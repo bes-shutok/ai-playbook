@@ -4,7 +4,7 @@ description: >
   Restack a stacked git branch chain when trunk gains commits: bottom-up merge or
   explicit-base 3-way, optional squash, force-with-lease push. Use when the user asks
   to refresh a PR stack after trunk moved, update a branch chain, restack stacked
-  branches, merge trunk into a stack, rebase on pre-release / master for an open
+  branches, merge trunk into a stack, rebase on master for an open
   stack, or restack PROJ-1234 on master then PROJ-5678 on PROJ-1234. "Rebase" in
   user speech maps here for open stacks; post-squash-merge child reparent stays
   github-pr-workflow (rebase --onto).
@@ -30,7 +30,7 @@ description: >
 3. **Pick Method A vs B from rewrite state**, not from "trunk advanced alone." Method B is only for a parent tip that was rewritten this session (see Phase 1). Naive `git merge <parent>` after a parent squash uses an ancient merge-base and conflicts everywhere.
 4. **Backups are load-bearing.** Phase 0 creates `backup/<branch>-<YYYYMMDD>` for every chain branch **before** rewriting any tip. Method B uses those dated refs as `backup_parent` / `backup_branch`. Keep them until the full chain finishes.
 5. Squash is optional. Ask **once per restack session**; the answer applies to every link unless the user opts out per branch.
-6. **Push** only with explicit approval. Prefer asking once for the whole stack or per link after that link verifies. Use `--force-with-lease` after a fresh fetch of that branch. Never bare `--force`. **Never** force-push trunk / default / shared integration branch names (`main`, `master`, `pre-release`, or the repo default).
+6. **Push** only with explicit approval. Prefer asking once for the whole stack or per link after that link verifies. Use `--force-with-lease` after a fresh fetch of that branch. Never bare `--force`. **Never** force-push trunk / default / shared integration branch names (`main`, `master`, or the repo default).
 7. Prefer **local** tips when `origin/<branch>` is behind local. **Exception:** trunk always comes from current `origin/<trunk>`.
 8. No `git reset --hard` to discard work unless the user asks. Restore mid-restack with the **Restore from backup** commands below.
 
@@ -181,7 +181,7 @@ DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
 current=$(git branch --show-current)
 test "$current" = "<branch>" || { echo "wrong checkout: $current"; exit 1; }
 case "<branch>" in
-  "$DEFAULT_BRANCH"|"<trunk>"|main|master|pre-release)
+  "$DEFAULT_BRANCH"|"<trunk>"|main|master)
     echo "refusing force-push to trunk/default/integration: <branch>"; exit 1 ;;
 esac
 git fetch origin <branch>
@@ -222,7 +222,7 @@ Confirm ancestry for each link. Completion: every link verified; push status rep
 - Naive-merging a child after the parent was squashed in the same restack
 - Discarding Phase 0 backups before the full chain finishes
 - Pushing before no-reversal verification
-- Force-pushing `main` / `master` / `pre-release`
+- Force-pushing `main` / `master`
 
 ## Integration Points
 
