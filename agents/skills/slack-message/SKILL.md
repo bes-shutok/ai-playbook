@@ -21,6 +21,8 @@ description: Use this skill whenever the user wants to send, post, draft, or upd
 
 **Always** return the full draft inside **one** outer fenced code block so the user can copy it intact. Short prose before/after the fence is fine (channel name, “does this look good?”); the **complete postable text** must live inside the fence.
 
+**Never** reply with only “draft saved” / draft id / Drafts & Sent instructions and omit the fenced body. After every draft-save (including revisions), show the full preview fence in the same chat turn. If you already saved and forgot the fence, show it immediately in the next reply.
+
 Format:
 
 ````
@@ -78,6 +80,7 @@ Apply to every draft. Scan the final text before showing the preview.
 - **HTTP status codes.** Do not use a bare number (`409`) when Product or cross-team readers need to understand the outcome. Write the standard name with the code: `409 Conflict`, `404 Not Found`, `200 OK`. First mention may be `HTTP 409 Conflict`; later mentions can shorten to `409 Conflict` if context is clear.
 - **API response vs caller behavior.** When describing consent/messaging checks, separate what the API returns from what callers should do. Say the endpoint returns HTTP `200 OK` with `decision: "DENY"` and `reason: …`; then say callers should not deliver when `decision` is `DENY`. Do not write vague shorthand like "do not send (`DENY`)" without stating it is the JSON response field.
 - **Internal engineering refs.** Product-facing Slack posts should not cite ADR numbers, plan filenames, or ticket-only context unless the audience uses them. Use endpoint names, user-visible behavior, and plain outcome language. Jira keys (e.g. `PROJ-1234`) are fine when the thread is already task-scoped.
+- **No doc-revision meta.** Do not put internal document version labels in Slack (for example `v0.3.2`, “wiki version 8”, “local Markdown synced”). Link the living page or repo path; readers care about the content, not the edit counter. Keep version tables in the doc itself.
 - **Validation evidence stays private by default.** Use repository checks, source links, and detailed evidence to validate the answer for the user, but do not paste long evidence sections into Slack unless the user explicitly asks for them. For cross-team technical replies, lead with the conclusion and only the shortest operationally useful bullets.
 - **Source-backed decision replies.** Use inline hyperlinks at the claim they support. In draft-save bodies use the hyperlink style required by the active Slack draft tool (see Hyperlinks above). When compressing analysis, keep the strongest concrete tradeoffs and risk bullets in shorter form instead of smoothing them into generic narrative.
 - **Role-sensitive decision replies.** Before drafting a message to a named stakeholder when their role affects the framing, read the available ownership facts and any supplied primary-thread comment. When replying to a Product stakeholder, present the system design as the consequence or enabling detail of their stated product choice. Do not ask them to validate implementation mechanics or frame the message as a peer architecture correction.
