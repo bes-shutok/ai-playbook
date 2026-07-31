@@ -20,6 +20,15 @@ Review for bugs, correctness issues, and quality problems.
 5. Pipeline ordering: does the described insertion point or execution order actually produce the expected result given the real call sequence?
 6. Test/implementation alignment: could a test pass even if the implementation is wrong? Does the test actually exercise the behavior it claims to cover?
 
+## Construction-Time Validation Order
+
+For value objects, records, structs, or commands whose constructor / init block defensively copies collections (or other inputs) and then checks emptiness or other caller-visible invariants:
+
+1. Prefer validating null/empty (and similar input invariants) **before** reassignment when post-copy validation would turn null inputs into opaque failures from the copy helper (for example NPE from a defensive-copy API) instead of the type's documented validation error.
+2. Defensive copy after successful validation remains fine.
+3. Pattern: `quality#validate-after-assign`. Default **Low**; promote when it hides a reachable wrong error type on a public API.
+4. Language-specific copy/validate APIs belong in the language overlay and Guideline Pack, not in this catalog.
+
 ## Naming and Structural Clarity
 
 Structural clarity stays in this agent. Comment and doc **prose** (redundant inline comments, verbose Javadoc, stale task tags) is owned by `documentation.md` phase 2.

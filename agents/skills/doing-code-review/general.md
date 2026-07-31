@@ -21,6 +21,7 @@ Additional review context for projects where no specific language overlay matche
 - **Coverage**: new code paths have corresponding tests.
 - **Determinism**: tests do not depend on timing, network, or external state.
 - **Isolation**: tests clean up after themselves and do not affect other tests.
+- **Harness fidelity**: new request-boundary middleware/filters need a full-stack (or framework-registered) proof; out-of-container unit construction does not close `testing#harness-fidelity-gap`. Resolve harness naming from the Guideline Pack.
 
 ## Observability
 

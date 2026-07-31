@@ -18,7 +18,7 @@ Additional review context for Python projects. Append to each sub-agent prompt.
 
 - **`async`/`await`**: verify async functions are awaited. Calling without `await` returns a coroutine object that never executes.
 - **Blocking in async**: do not call blocking I/O (`requests`, `time.sleep`, file I/O) inside async functions. Use `asyncio.to_thread()` or async libraries.
-- **Task cancellation**: verify `asyncio.Task` handles `CancelledError` properly — do not swallow it.
+- **Task cancellation**: verify `asyncio.Task` handles `CancelledError` properly , do not swallow it.
 
 ## Framework-Specific (Django/FastAPI/Flask)
 
@@ -31,6 +31,7 @@ Additional review context for Python projects. Append to each sub-agent prompt.
 - **pytest**: verify fixtures have correct scope. `session`-scoped fixtures sharing mutable state between tests is a common bug.
 - **Mocking**: `unittest.mock.patch` target must be the import path where the object is used, not where it is defined.
 - **Async tests**: use `pytest-asyncio` with `@pytest.mark.asyncio`. Verify test runner supports async fixtures.
+- **Request-boundary harness fidelity:** new ASGI/WSGI middleware, FastAPI/Starlette middleware, Django middleware, or Flask `before_request` hooks that gate public status codes need a test through the real app/test client that registers production middleware. Constructing the middleware class alone does not prove registration. Maps `testing#harness-fidelity-gap`. Resolve naming from the Guideline Pack / sibling tests.
 
 ## Packaging and Dependencies
 

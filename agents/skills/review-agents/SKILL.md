@@ -13,6 +13,16 @@ This skill is a shared library of review sub-agent pattern catalogs.
 
 **Severity:** orchestrators prepend `severity-calibration.md` to every worker prompt. Code, plan, RFC, and document reviews all use `Critical`, `High`, `Medium`, and `Low`, with independent blocking status.
 
+## Agnostic catalogs vs loadable conventions
+
+| Layer | Where | Contains |
+|-------|-------|----------|
+| Pattern catalogs | `review-agents/*.md` (this skill) | Language- and project-agnostic defect shapes and `pattern` IDs |
+| Language / stack overlays | `doing-code-review/<overlay>.md` | Stack triggers that map abstract patterns to framework APIs |
+| Guideline Pack | Built by `doing-code-review` Step 2.5 from facts | Shared language guidelines (`shared_docs_dir`); when company-scoped, **company guidelines** (`company_guidelines_master` under `company_ownership_docs_dir`) **together with** project guidelines (`project_guidelines_rel`) |
+
+**Do not** put a single project's test-class suffixes, runner names, or module paths into these catalogs as universal requirements. Express the abstract rule here; let overlays name framework types; let the Guideline Pack (company + project when company-scoped) and in-repo sibling tests name local conventions.
+
 ## Agents
 
 | File | Focus |
@@ -31,7 +41,7 @@ This skill is a shared library of review sub-agent pattern catalogs.
 
 ## How orchestrating skills use these agents
 
-**Code review context** (`doing-code-review`): prepend `severity-calibration.md`, then the specialist agent file. Agents receive the git diff and key source files (run `git diff <base>...<head>` directly, or read `{tmp_dir}/.../diff-r<R>.patch` / `src-diff-r<R>.patch` when the orchestrator materialized snapshots under `{tmp_dir}/` per **Diff access** in `doing-code-review`). Never write review/diff captures to the repo root; on stdout truncation prefer the runtime's saved capture or `{tmp_dir}/code-review/<slug>/` (canonical rule in `agent_workflow_guidelines.md` §50.3.2). Return `{path, line, side, body, severity: Low/Medium/High/Critical, pattern: <agent>#<kebab-slug>}` per `severity-calibration.md`. The `body` must meet §4.12 depth in `doing-code-review` for its severity (Medium+ requires four titled sections inline). Actionable code/test/config fixes at any severity must include a §4.9.0 snippet in `body`; test snippets should assert via fixture getters, not duplicated literals. Returns must be self-contained so the orchestrator can dedup, spot-check, and stage without re-reading sources or re-authoring analysis.
+**Code review context** (`doing-code-review`): prepend `severity-calibration.md`, then the specialist agent file, then the language overlay, then the **Guideline Pack** index (paths + section hints; workers open sections on demand). Agents receive the git diff and key source files (run `git diff <base>...<head>` directly, or read `{tmp_dir}/.../diff-r<R>.patch` / `src-diff-r<R>.patch` when the orchestrator materialized snapshots under `{tmp_dir}/` per **Diff access** in `doing-code-review`). Never write review/diff captures to the repo root; on stdout truncation prefer the runtime's saved capture or `{tmp_dir}/code-review/<slug>/` (canonical rule in `agent_workflow_guidelines.md` §50.3.2). Return `{path, line, side, body, severity: Low/Medium/High/Critical, pattern: <agent>#<kebab-slug>}` per `severity-calibration.md`. The `body` must meet §4.12 depth in `doing-code-review` for its severity (Medium+ requires four titled sections inline). Actionable code/test/config fixes at any severity must include a §4.9.0 snippet in `body`; test snippets should assert via fixture getters, not duplicated literals. Returns must be self-contained so the orchestrator can dedup, spot-check, and stage without re-reading sources or re-authoring analysis.
 
 **Plan review context** (`review-plan`): workers receive the plan and referenced source files, load their assigned lenses, and return `{location_in_plan, issue, severity, blocking, consequence, reachability, blast_radius, confidence, fix, evidence, pattern, descendant_launches}`.
 

@@ -292,6 +292,20 @@ When triaging findings from a `doing-code-review` staging doc (execute-plan Phas
 
 This gives downstream analysis a ground-truth signal for which agents produce fix-worthy findings.
 
+## Agent corpus feedback (accepted human findings)
+
+When accepted external or human-partner review findings reveal a defect shape the active review panel missed:
+
+1. Map each accepted finding to an **abstract** pattern family (language/project-agnostic), not to a project-specific class or suffix name.
+2. Propose the smallest corpus update:
+   - New/extended pattern in `review-agents/<lens>.md` when the shape is universal
+   - Stack trigger in `doing-code-review/<overlay>.md` when the shape needs framework APIs
+   - **Company** guideline note (`company_guidelines_master` under `company_ownership_docs_dir`) when the convention is shared across company repos
+   - **Project** guideline note (`project_guidelines_rel`) when the convention is repo-local
+   - When both apply, update company for the shared rule and project for the delta; do not duplicate the full company rule only in the project file
+3. Do **not** hardcode one repo's test-class suffix or runner name into shared agent catalogs.
+4. Offer to apply the skill/guideline patch in the same session when the partner wants it; otherwise record the proposal in chat (or `learn` when they ask to capture the lesson).
+
 ## Integration Points
 
 ### With `bootstrap-ai-playbook` skill
@@ -302,6 +316,9 @@ Triage updates **Triage outcomes** and finding **Triage** fields; preserves immu
 
 ### With `execute-plan` skill
 Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review`. Triage is authoritative for exit: implement valid fixes, mark `drop` or `done`, and leave only validated unresolved issues at `pending`. The orchestrator counts unresolved findings with `blocking: true`, not severity alone. Accepted fixes identify every owning or affected worker for the targeted follow-up.
+
+### With `doing-code-review` / `review-agents`
+Accepted human findings that the panel missed feed Step 2.5 Guideline Pack awareness and optional catalog/overlay patches (see **Agent corpus feedback** above). Pattern IDs stay abstract; overlays and guidelines carry stack/project detail.
 
 ## The Bottom Line
 

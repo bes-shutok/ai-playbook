@@ -76,6 +76,49 @@ Determine the primary language/framework from the changed files and project stru
 
 Load the matching overlay file from this skill's directory (e.g. `java-spring.md`). The overlay content is appended to each sub-agent prompt as additional language-specific review context.
 
+**Layering rule:** `review-agents/*.md` catalogs stay **language- and project-agnostic** (abstract patterns and pattern IDs only). Stack-specific triggers live in these overlays. Project-specific naming, runner splits, and local harness conventions live in company/project guidelines and are discovered in Step 2.5. Never hardcode a single project's test-class suffix or runner name into an agent catalog or overlay as a universal requirement.
+
+## Step 2.5: Discover related guidelines (Guideline Pack)
+
+After choosing the language overlay, build a **Guideline Pack** so workers can apply local conventions without baking them into shared agent files.
+
+### Resolve paths from facts
+
+Read `user_facts_path` (`~/.ai-playbook/facts.md`), then when under `company_projects_root` also `company_ownership_facts`, then the repo's `repo_facts_rel` (`.ai-playbook/facts.md`). Resolve:
+
+| Key / source | Use |
+|--------------|-----|
+| `shared_docs_dir` | Shared **language** guidelines (`java_guidelines.md`, `jvm_guidelines.md`, `kotlin_guidelines.md`, `python_guidelines.md`, `coding_guidelines.md`, …) |
+| `company_guidelines_master` | Canonical **company** engineering guidelines (under `company_ownership_docs_dir`, for example `…/<company-root>/.ai-playbook/company-guidelines.md`). Prefer this master over any repo `company_guidelines_repo_mirror_rel` copy. |
+| `project_guidelines_rel` | **Project** guidelines in the current repo (often `docs/maintenance/project-guidelines.md`) |
+
+### Company + project together
+
+When the workspace is under `company_projects_root` (company-scoped):
+
+1. Attach **both** `company_guidelines_master` and `project_guidelines_rel` to the Guideline Pack whenever each file exists. Do not treat company guidelines as optional once a project file is present, and do not skip the project file when only company rules seem relevant.
+2. Use them **together**: company rules own cross-repo conventions (for example test-class naming scope); project rules own repo deltas and indexes (for example which Failsafe patterns or MockMvc rules apply here). When both speak to the same topic, apply company baseline then project deltas; do not invent a third convention.
+3. Personal / non-company repos: omit `company_guidelines_master`; use `shared_docs_dir` + `project_guidelines_rel` (and any personal ownership guidelines facts name).
+
+### Overlay → shared language guideline map
+
+| Overlay | Primary shared files under `shared_docs_dir` |
+|---------|-----------------------------------------------|
+| `java-spring` | `java_guidelines.md`, `jvm_guidelines.md`, `coding_guidelines.md` |
+| `kotlin-spring` | `kotlin_guidelines.md`, `jvm_guidelines.md`, `coding_guidelines.md` |
+| `python` | `python_guidelines.md`, `coding_guidelines.md` |
+| `general` | `coding_guidelines.md` |
+
+### What to pass (progressive disclosure)
+
+Do **not** bulk-paste entire guideline files into every worker prompt.
+
+1. List absolute paths for the language overlay (already loaded) plus the shared language files, and when company-scoped the **pair** `company_guidelines_master` + `project_guidelines_rel` (each if present on disk).
+2. Add **section / rule hints** by worker lens and Domains. Prefer each file's own index when present (company numbered rules; project "Testing patterns" / rule-number tables). Examples for the testing worker: company test naming; project MockMvc / integration-runner / harness rules.
+3. Instruct workers: open only the hinted sections on demand; apply abstract patterns from the lens catalog; for concrete harness names, class suffixes, and runner commands, read **company and project guidelines together** plus sibling tests in this repo. Do not invent a convention that contradicts either file.
+
+Record in staging Metadata: `guideline_pack` with overlay id and the guideline paths actually attached (not the full file bodies), including whether company and project were both present.
+
 ## Diff access (orchestrator and sub-agents)
 
 **Preferred:** Each review sub-agent runs `git diff <base>...<head>` and reads changed source files directly. No patch files are required.
@@ -119,14 +162,16 @@ Each worker receives:
 1. **`severity-calibration.md`** (always; tier definitions and decision procedure)
 2. Its assigned lens catalogs from `review-panel-selection.md`
 3. The language overlay content
-4. Instructions to run `git diff <base>...<head>` (or read `{tmp_dir}/.../diff-r<R>.patch` / `src-diff-r<R>.patch` when the orchestrator materialized snapshots under `{tmp_dir}/`) and read source files for full context
-5. The base and head branch names
-6. Open soften-watchlist items that match this worker's lenses (pattern prefix / ownership), when any
-7. Output format: return the shared finding fields plus `path`, `line`, `side`, `body`, `pattern`, and `descendant_launches`.
-8. An explicit constraint: "Do not over-investigate or validate every single line number. Read the diff and key source files, then report findings. Write each `body` to full §4.12 depth: quote contract/doc text, name the code path, describe actual behavior, state why it matters, and suggest fix options. For Medium+, include all four Comment sections inline in `body` using `**Bold headings**`. For any actionable code/test/config fix at any severity, include a concrete before/after or 'could look like' code snippet per §4.9.0 in `body`. Include one sentence why the chosen severity applies (`severity-calibration.md`)."
-9. **Scratch / truncation (mandatory on every worker and on any sub-agent whose job is to return full `git diff` output):** "Never write `git diff` or review captures to the repo root (see **Diff access** / `agent_workflow_guidelines.md` §50.3.2). If a tool truncates stdout, read the runtime's saved capture for the command or write only under `{tmp_dir}/code-review/<slug>/`. Prefer re-running `git diff` and reading sources over inventing a root scratch file."
+4. The **Guideline Pack** index from Step 2.5 (paths + section/rule hints for this worker). Instruction: "Lens catalogs are language/project-agnostic. Use the overlay for stack triggers. For naming, runners, and harness conventions, read Guideline Pack sections on demand: when company-scoped, use **company guidelines and project guidelines together** (company baseline, project deltas); mirror sibling tests in this repo. Do not require a project-specific test-class suffix unless those guidelines or siblings establish it. Prefer `company_guidelines_master` over a repo company-guidelines mirror."
+5. Instructions to run `git diff <base>...<head>` (or read `{tmp_dir}/.../diff-r<R>.patch` / `src-diff-r<R>.patch` when the orchestrator materialized snapshots under `{tmp_dir}/`) and read source files for full context
+6. The base and head branch names
+7. Open soften-watchlist items that match this worker's lenses (pattern prefix / ownership), when any
+8. Output format: return the shared finding fields plus `path`, `line`, `side`, `body`, `pattern`, and `descendant_launches`.
+9. An explicit constraint: "Do not over-investigate or validate every single line number. Read the diff and key source files, then report findings. Write each `body` to full §4.12 depth: quote contract/doc text, name the code path, describe actual behavior, state why it matters, and suggest fix options. For Medium+, include all four Comment sections inline in `body` using `**Bold headings**`. For any actionable code/test/config fix at any severity, include a concrete before/after or 'could look like' code snippet per §4.9.0 in `body`. Include one sentence why the chosen severity applies (`severity-calibration.md`)."
+10. **Scratch / truncation (mandatory on every worker and on any sub-agent whose job is to return full `git diff` output):** "Never write `git diff` or review captures to the repo root (see **Diff access** / `agent_workflow_guidelines.md` §50.3.2). If a tool truncates stdout, read the runtime's saved capture for the command or write only under `{tmp_dir}/code-review/<slug>/`. Prefer re-running `git diff` and reading sources over inventing a root scratch file."
+11. **Coverage-claim audit (when the worker builds or updates a mutator/failure-mode matrix):** a cell that cites an out-of-container constructor test for a request-boundary component cannot mark production wiring as `checked: yes`. Leave unchecked or stage `testing#coverage-claim-unchecked` / `testing#harness-fidelity-gap` until a Guideline Pack–conformant full-context harness proof exists.
 
-When launching a sub-agent whose job is "return full `git diff` output", include item 9 verbatim and resolve `{tmp_dir}` from the target repo's `.ai-playbook/facts.md` into an absolute path in the prompt (do not leave the placeholder unresolved for that helper).
+When launching a sub-agent whose job is "return full `git diff` output", include item 10 verbatim and resolve `{tmp_dir}` from the target repo's `.ai-playbook/facts.md` into an absolute path in the prompt (do not leave the placeholder unresolved for that helper).
 
 **Timeout handling:** If a sub-agent has not completed within 10 minutes, launch a replacement with a more focused prompt (limit to first 1500 lines of diff via `| head -1500`, add "read key source files directly" instead of exhaustive investigation). Do not wait indefinitely for stuck agents.
 

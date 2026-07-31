@@ -40,6 +40,16 @@ Additional review context for Java/Spring projects. Append to each sub-agent pro
 
 - Domain records, commands, and DTOs with collection parameters: verify compact constructors check for null elements (not just null/empty). A missing `stream().anyMatch(Objects::isNull)` guard allows NPEs to surface later at runtime in hard-to-diagnose locations.
 - OpenAPI Generator optional array properties on request models often default to `new ArrayList<>()`. When the client omits the field from JSON, Jackson leaves the empty list in place (not `null`). Partial-update handlers that only check `steps == null` will still forward `[]` upstream. Treat omitted and empty collections as "no change" when the upstream contract distinguishes `null` from empty.
+- Maps abstract `quality#validate-after-assign`: when a compact constructor does `List.copyOf(...)` (or similar) and only then checks emptiness, prefer null/empty checks on the inputs before the copy so null lists fail with the type's validation error instead of NPE from `copyOf`.
+
+## Request-boundary harness fidelity (Spring)
+
+Maps abstract `testing#harness-fidelity-gap` / `testing#coverage-claim-unchecked` to Spring MVC:
+
+- New `@Component` / `@WebFilter` `OncePerRequestFilter`, `HandlerInterceptor`, or `FilterRegistrationBean` needs a test that exercises the **Spring-registered** filter/interceptor chain (for example `@SpringBootTest` with `@AutoConfigureMockMvc`, `MockMvcBuilders.webAppContextSetup`, or a slice that loads the production filter beans).
+- `MockMvcBuilders.standaloneSetup(controller)` without explicitly adding the production filters does **not** close harness fidelity for a production `@Component` filter.
+- Manually `new MyFilter(...)` unit tests are useful for branch logic but do not prove dispatcher registration or path matching.
+- Resolve test class naming and Surefire vs Failsafe placement from the Guideline Pack: when company-scoped, read **company guidelines together with project guidelines** (and sibling tests in-repo). Prefer `company_guidelines_master` over a repo mirror. This overlay does not require any particular class-name suffix.
 
 ## Observability
 

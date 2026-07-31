@@ -121,6 +121,7 @@ The staging doc must follow this structure exactly, including required headings:
 - Panel mode: full | focused
 - Selection reason: <required for focused>
 - Source digest: <sha256>
+- Guideline pack: overlay=<id>; company=<path or none>; project=<path or none>; shared=<paths>; hints=<section/rule hints by worker> *(omit when Step 2.5 not applicable; when company-scoped, company and project are the paired convention sources)*
 - Escalation reason: <required for sixth worker>
 - Findings: <staged count>
 - Status: STAGED

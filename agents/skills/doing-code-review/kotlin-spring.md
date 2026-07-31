@@ -37,6 +37,7 @@ Additional review context for Kotlin/Spring projects. Append to each sub-agent p
 - **MockK** over Mockito for Kotlin: Mockito struggles with final classes, companion objects, and coroutines.
 - **`runTest`** for coroutine tests: ensures proper virtual time advancement and structured concurrency.
 - Verify `@SpringBootTest` tests do not accidentally load the full context when a slice (`@WebMvcTest`, `@DataJpaTest`) suffices.
+- **Request-boundary harness fidelity:** same Spring mapping as `java-spring.md` (`OncePerRequestFilter`, `HandlerInterceptor`, `FilterRegistrationBean` vs `standaloneSetup` without filters). Maps `testing#harness-fidelity-gap`. Resolve naming from the Guideline Pack; do not invent a required class-name suffix here.
 
 ## Transport Exception Mapping
 
@@ -47,3 +48,4 @@ Additional review context for Kotlin/Spring projects. Append to each sub-agent p
 ## Collection Invariants in Data Classes/Commands
 
 - Data classes and command objects with collection parameters: verify constructors or `init {}` blocks check for null elements (relevant for Java-interop collections where `List<T>` can still contain nulls at runtime despite non-nullable type parameter). A missing guard allows NPEs to surface later in hard-to-diagnose locations.
+- Maps `quality#validate-after-assign`: prefer validating emptiness/null on inputs before `toList()` / defensive copy reassignment when post-copy checks would hide clearer failures.

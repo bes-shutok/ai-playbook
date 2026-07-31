@@ -85,6 +85,7 @@ If nothing to cut: `Lean already. Ship.` (report zero simplification findings; d
 - Hand-written code that Lombok can generate: builders, constructors, getters/setters, utility classes, `toString`/`equals`/`hashCode`
 - Switch/if-else dispatch: enumerate every chain in new or modified code; flag discriminators with more than 4 cases (prefer EnumMap or enum-with-behavior); flag parallel switches on the same discriminator across methods
 - Raw string literals for field names, operation names, or error keys from an API contract or enum: use constants or `.name()` on the source enum
+- Fully-qualified type names in method bodies when the type is already imported, or when a normal import matches the file's existing style (`simplification#shrink-fqcn-import`). Default **Low**. Do not invent language-specific import rules beyond what the overlay and local file style show.
 
 ### `stdlib:` / `native:` reinvented wheels
 
