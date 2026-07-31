@@ -18,7 +18,7 @@ Additional review context for Python projects. Append to each sub-agent prompt.
 
 - **`async`/`await`**: verify async functions are awaited. Calling without `await` returns a coroutine object that never executes.
 - **Blocking in async**: do not call blocking I/O (`requests`, `time.sleep`, file I/O) inside async functions. Use `asyncio.to_thread()` or async libraries.
-- **Task cancellation**: verify `asyncio.Task` handles `CancelledError` properly , do not swallow it.
+- **Task cancellation**: verify `asyncio.Task` handles `CancelledError` properly; do not swallow it.
 
 ## Framework-Specific (Django/FastAPI/Flask)
 

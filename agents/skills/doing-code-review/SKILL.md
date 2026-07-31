@@ -117,7 +117,7 @@ Do **not** bulk-paste entire guideline files into every worker prompt.
 2. Add **section / rule hints** by worker lens and Domains. Prefer each file's own index when present (company numbered rules; project "Testing patterns" / rule-number tables). Examples for the testing worker: company test naming; project MockMvc / integration-runner / harness rules.
 3. Instruct workers: open only the hinted sections on demand; apply abstract patterns from the lens catalog; for concrete harness names, class suffixes, and runner commands, read **company and project guidelines together** plus sibling tests in this repo. Do not invent a convention that contradicts either file.
 
-Record in staging Metadata: `guideline_pack` with overlay id and the guideline paths actually attached (not the full file bodies), including whether company and project were both present.
+Record in staging Metadata under the `Guideline pack:` field (the field name `review-staging` requires; do not use a snake_case key) with overlay id and the guideline paths actually attached (not the full file bodies), including whether company and project were both present.
 
 ## Diff access (orchestrator and sub-agents)
 
