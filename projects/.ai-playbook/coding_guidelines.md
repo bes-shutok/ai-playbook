@@ -448,8 +448,8 @@ while a coverage matrix marks the live path "checked". The fix is a data trace: 
 set the fixture fields to different-but-realistic values so a conflation fails visibly, assert against the
 real collaborator, and for request boundaries require a full-context harness that loads the registered
 chain (resolve naming from company and project guidelines; do not invent a universal class-name suffix).
-(Illustrative anchors: tax-reporting #71, #72, #99, #100, #101, #116, #120, #123, #132; crm-profile
-development_lessons #28.)
+(Illustrative anchors: tax-reporting #71, #72, #99, #100, #101, #116, #120, #123, #132;
+request-boundary harness fidelity also encoded in review-agents `testing#harness-fidelity-gap`.)
 
 **Exception:** A purely structural claim (a file exists, a function is exported) can be settled by
 inspection alone. The family bites for any claim about semantics, behavior, or data identity.
