@@ -442,9 +442,14 @@ as N-case, count the implemented branches.
 quantity, but the objects name two different economic values that happen to share a label, so the
 comparison is meaningless. Or a test verifies "YES/NO" rendering against a flag the fixture sets via a
 nested object, but the real renderer reads a different field, so the test passes against a mock and the
-production path is untested. The fix is a data trace: read the implementation, set the fixture fields to
-different-but-realistic values so a conflation fails visibly, and assert against the real collaborator.
-(Illustrative anchors: tax-reporting #71, #72, #99, #100, #101, #116, #120, #123, #132.)
+production path is untested. Or a request-boundary filter/middleware is covered only by constructing it
+outside the application container (or by a controller harness that never registers production filters),
+while a coverage matrix marks the live path "checked". The fix is a data trace: read the implementation,
+set the fixture fields to different-but-realistic values so a conflation fails visibly, assert against the
+real collaborator, and for request boundaries require a full-context harness that loads the registered
+chain (resolve naming from company and project guidelines; do not invent a universal class-name suffix).
+(Illustrative anchors: tax-reporting #71, #72, #99, #100, #101, #116, #120, #123, #132; crm-profile
+development_lessons #28.)
 
 **Exception:** A purely structural claim (a file exists, a function is exported) can be settled by
 inspection alone. The family bites for any claim about semantics, behavior, or data identity.
