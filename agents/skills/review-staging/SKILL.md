@@ -311,7 +311,7 @@ Provider skill for staged review hierarchy and statistics. Consumers **must** fo
 
 | Consumer skill | Staging path pattern | Notes |
 |----------------|---------------------|-------|
-| `review-plan` | `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` | Shared severities and blocking-aware plan actions |
+| `review-plan` | `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` | Shared severities and blocking-aware plan actions; inlines sidecar schema (Step 3) and runs `--hard` validator gate before reporting round complete |
 | `doing-code-review` | `{reviews_dir}/YYYY-MM-DD-PR-*`, `YYYY-MM-DD-branch-review-*`, or execute-plan `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Code severities; optional `Status` per finding for PR triage |
 | `review-loop` | Same as `doing-code-review` branch / execute-plan patterns with `-r<N>` | Requires statistics every round, including clear rounds |
 | `receiving-code-review` | Updates existing staging under `{reviews_dir}/` | Triage Status→Triage map, Triage outcomes table, and matching `.stats.json` sidecar |

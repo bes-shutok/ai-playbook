@@ -274,8 +274,13 @@ User may request **Full** explicitly; do not default to Full without a signal.
 
 1. **Launch the selected workers before revising the RFC.** Do not skip the pipeline because the draft "looks fine."
 2. **Write the staging review file** under `{reviews_dir}/YYYY-MM-DD-rfc-review-<rfc-slug>-<mode_or_round>.md` and the matching `.stats.json` sidecar before folding findings into the RFC. Include `## Review Statistics` per `review-staging`.
-3. **Fold findings into the RFC structure** (Step 3). Do not present a separate premortem or review report in chat; print only a short summary and the staging file path.
-4. **Partial review gate:** when any required worker fails after one relaunch, write staging but do not claim a full review.
+3. **Mechanical gate (before folding findings into the RFC):** run the review-staging validator on the staging path; do not proceed to folding until the staging doc and its `.stats.json` sidecar both pass:
+   ```bash
+   VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"
+   python3 "$VALIDATOR" --hard "$STAGING_PATH"
+   ```
+4. **Fold findings into the RFC structure** (Step 3). Do not present a separate premortem or review report in chat; print only a short summary and the staging file path.
+5. **Partial review gate:** when any required worker fails after one relaunch, write staging but do not claim a full review.
 
 ### Budget (default)
 
@@ -483,7 +488,7 @@ Dedup before folding: when two agents describe the same root issue, keep the cle
 Step 2 launches the five worker bundles from `review-panel-selection.md`; `contract-docs` includes the RFC consistency lens.
 
 ### With `review-staging` skill
-Consumes `review-staging` for path pattern `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md`, required `## Review Statistics`, and matching `.stats.json` sidecar. Write staging before folding findings into the RFC; do not use `{tmp_dir}/rfc-review/`.
+Consumes `review-staging` for path pattern `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md`, required `## Review Statistics`, and matching `.stats.json` sidecar. Write staging before folding findings into the RFC; do not use `{tmp_dir}/rfc-review/`. A `--hard` validator gate runs over the staging path before findings are folded into the RFC.
 
 ### With `premortem` skill
 The `risk` worker reads the premortem catalog when signals match and applies personas as internal reasoning sections without child launches.

@@ -275,9 +275,12 @@ def parse_markdown_findings(content: str) -> list[dict]:
     triage}`` dicts, one per ``#### F<N>.`` block.
 
     Severity is read from the enclosing ``### <Severity>`` group heading;
-    blocking from a ``- **blocking**``/``- **non-blocking**`` bullet; triage
-    from a ``**Triage**: <value>`` bullet. Used by the Markdown/sidecar
-    conservation cross-check.
+    blocking from either the canonical ``- **Blocking**: true | false`` bullet
+    documented in ``review-staging/SKILL.md`` (the primary, human-facing
+    template every producer skill emits) or the legacy bare ``- **blocking**``
+    / ``- **non-blocking**`` bullet (older staging docs); triage from a
+    ``**Triage**: <value>`` bullet. Used by the Markdown/sidecar conservation
+    cross-check.
     """
     findings_match = re.search(r"^## Findings\s*$", content, re.MULTILINE)
     if not findings_match:
@@ -305,9 +308,14 @@ def parse_markdown_findings(content: str) -> list[dict]:
             continue
         if current is None:
             continue
-        if re.search(r"-\s*\*\*blocking\*\*", line):
+        labeled_blocking = re.search(
+            r"-\s*\*\*[Bb]locking\*\*\s*:\s*(true|false)\b", line
+        )
+        if labeled_blocking:
+            current["blocking"] = labeled_blocking.group(1) == "true"
+        elif re.search(r"-\s*\*\*blocking\*\*(?!\s*:)", line):
             current["blocking"] = True
-        elif re.search(r"-\s*\*\*non-blocking\*\*", line):
+        elif re.search(r"-\s*\*\*non-blocking\*\*(?!\s*:)", line):
             current["blocking"] = False
         triage = re.search(r"\*\*Triage\*\*:\s*(\S+)", line)
         if triage:
@@ -1151,11 +1159,10 @@ def _current_findings_markdown(findings: list[dict], *, title: str = "conservati
             fid = finding.get("id", 0)
             blocking = finding.get("blocking", False)
             triage = finding.get("triage", "pending")
-            label = "blocking" if blocking else "non-blocking"
             lines.extend(
                 [
                     f"#### F{fid}. Sample finding {fid}",
-                    f"- **{label}**",
+                    f"- **Blocking**: {'true' if blocking else 'false'}",
                     f"- **Triage**: {triage}",
                     "#### Comment",
                     (

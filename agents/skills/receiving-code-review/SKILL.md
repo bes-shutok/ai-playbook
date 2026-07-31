@@ -289,6 +289,11 @@ When triaging findings from a `doing-code-review` staging doc (execute-plan Phas
 2. Recompute `## Review Statistics` → **Triage outcomes** per agent (Staged, Fixed, Dropped, Deferred, Pending). Do not rewrite synthesis tables (Panel, Discarded, Severity calibration).
 3. Update the matching `.stats.json` sidecar when present (required artifact per `review-staging`).
 4. When a soften/revert applies, update `### Soften watchlist` in the same pass (status `open` until a later review reaffirms or restages).
+5. **Mechanical gate (after the triage update):** re-run the review-staging validator on the staging path so a malformed triage update (broken Triage outcomes, drifted sidecar) cannot be handed back to the orchestrator:
+   ```bash
+   VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"
+   python3 "$VALIDATOR" --hard "$STAGING_PATH"
+   ```
 
 This gives downstream analysis a ground-truth signal for which agents produce fix-worthy findings.
 
@@ -312,7 +317,7 @@ When accepted external or human-partner review findings reveal a defect shape th
 Provider for `{plans_dir}` when saving grouped fix tasks from review feedback. Read path keys from `.ai-playbook/facts.md` (see `using-skills` Step 0).
 
 ### With `review-staging` skill
-Triage updates **Triage outcomes** and finding **Triage** fields; preserves immutable synthesis statistics from the review pass.
+Triage updates **Triage outcomes** and finding **Triage** fields; preserves immutable synthesis statistics from the review pass. The triage update ends with a `--hard` validator gate (Step 4.5) before the staging doc is handed back to the orchestrator.
 
 ### With `execute-plan` skill
 Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review`. Triage is authoritative for exit: implement valid fixes, mark `drop` or `done`, and leave only validated unresolved issues at `pending`. The orchestrator counts unresolved findings with `blocking: true`, not severity alone. Accepted fixes identify every owning or affected worker for the targeted follow-up.

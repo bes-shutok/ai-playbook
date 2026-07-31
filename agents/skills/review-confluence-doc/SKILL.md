@@ -176,6 +176,11 @@ Output the feedback to a staging Markdown file per `review-staging`, and print a
    - Read `{reviews_dir}` from `.ai-playbook/facts.md` TOML at skill start.
 2. Create the directory if it does not exist.
 3. The file uses the universal staging hierarchy: `## Metadata`, `## Review Statistics`, `## Findings` (each finding with **Agents**, **Anchor**, **Source**, `#### Comment`, `#### Analysis`).
+4. **Mechanical gate (before reporting the review):** write the matching `.stats.json` sidecar (required artifact per `review-staging`) and run the validator on the staging path; do not report the review complete until both pass:
+   ```bash
+   VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"
+   python3 "$VALIDATOR" --hard "$STAGING_PATH"
+   ```
 
 **Console output:**
 - Print the file path.
@@ -347,7 +352,7 @@ Applied in Step 4.6 only when implementation logic is present in the document (c
 SQL, pseudocode, config-as-logic). Selects matching workers without using the PR workflow. Findings are tagged `[Code]`.
 
 ### With `review-staging` skill (mandatory)
-All reviews write to `{reviews_dir}/` with full `## Review Statistics` per `review-staging` (Solo/Echo, Pattern, Severity calibration, Triage outcomes). Step 6 Confluence comments post from each finding's `#### Comment` block.
+All reviews write to `{reviews_dir}/` with full `## Review Statistics` per `review-staging` (Solo/Echo, Pattern, Severity calibration, Triage outcomes). Step 5 ends with a `--hard` validator gate over the staging path and its `.stats.json` sidecar before the review is reported. Step 6 Confluence comments post from each finding's `#### Comment` block.
 
 ---
 

@@ -85,9 +85,26 @@ After all workers complete, synthesize from their returns. The orchestrator dedu
 4. **Incomplete agent output**: if a finding lacks `evidence` or a concrete `fix`, relaunch that agent focused on the gap; do not fill it inline. Failed relaunches: Panel Status `failed` or `timeout`, discards use `agent-failed` or `insufficient-evidence`.
 5. **Record statistics**: populate full `## Review Statistics` per `review-staging` (Panel with Solo/Echo, Counts, Deduplication groups, Discarded with Pattern, Severity calibration, Triage placeholder) before writing `## Findings`. Write the matching `.stats.json` sidecar in the same pass.
 
+**Sidecar schema (inlined here so it is in context without loading `review-staging`; authoritative copy lives there).** Every `.stats.json` must carry, at minimum:
+- Top level: `panel_mode` (`"full"` | `"focused"`), `source_digest` (lowercase 64-hex sha256 of the reviewed plan bytes, via `compute_source_digest("plan", plan_bytes)`), `escalation_reason` (`null` unless a sixth worker was launched), `selection_reason` (`null` when `panel_mode == "full"`).
+- Each `panel[]` row: `descendant_launches` (`[]` for the five base workers, which launch no children).
+- Each `findings[]` row: `id` as an **integer** (`1`, not `"F1"`), plus `severity`, `blocking`, `consequence`, `reachability`, `blast_radius`, `confidence`, `pattern`, `workers`, `triage`.
+- `discarded[]` rows with `reason: "wrong-owner"` must carry `lead_worker` + `lead_lens` (or `lead_agent`).
+
+Skipping the sidecar is not allowed for plan reviews: the mechanical gate below fails the round if the sidecar is missing or schema-non-compliant.
+
 ## Step 4: Output
 
 Write the review to `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md` and `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.stats.json` (read `{reviews_dir}` from `.ai-playbook/facts.md` TOML; use `-r1`, `-r2`, … per loop iteration). Follow the staged hierarchy and **Review Statistics** section from `review-staging` (gold source).
+
+**Mechanical gate (before reporting round complete):** run the review-staging validator on the staging path and confirm the `.stats.json` sidecar exists; do not report the round complete until both pass. This catches sidecar schema drift (string-vs-integer finding ids, missing consequence fields, missing `panel_mode`/`source_digest`/`descendant_launches`) that prose-only "follow `review-staging`" instructions cannot:
+
+```bash
+VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"
+python3 "$VALIDATOR" --hard "$STAGING_PATH"
+```
+
+Cursor hooks also warn via `postToolUse` after staging writes and may inject a `stop` follow-up if the newest round file is still a stub.
 
 ```markdown
 # Plan Review: <Plan Title>
@@ -288,4 +305,4 @@ Adapted from `doing-code-review`:
 ## Integration Points
 
 ### With `review-staging` skill
-Writes `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` and the matching `.stats.json` sidecar. Follow `review-staging` for hierarchy, required `## Review Statistics`, and naming. Read `{reviews_dir}` from `.ai-playbook/facts.md` TOML.
+Writes `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` and the matching `.stats.json` sidecar. Follow `review-staging` for hierarchy, required `## Review Statistics`, and naming. Read `{reviews_dir}` from `.ai-playbook/facts.md` TOML. The sidecar JSON schema is inlined in Step 3 so it is in the producer's context without a load step, and the Step 4 mechanical gate runs `validate_review_staging.py --hard` before the round is reported complete.

@@ -387,6 +387,8 @@ Every plan must include a `## Validation Commands` fenced bash block (see plan t
 
 5. **Boolean mutator negative paths:** When a task adds or changes a public method that returns `boolean` / `Optional` success from a **multi-row SQL CTE or multi-statement write** (activate + supersede, claim + update, insert + promote, compare-and-set), the plan **must** include at least one RED→GREEN IT in `given/expects` form where the call **returns false / empty** (missing row, wrong status, stale id) and asserts **no destructive side effects** on unrelated rows (for example prior ACTIVE not superseded; other keys untouched). Happy-path and concurrent-success ITs alone are not enough; execute-plan Phase 3 will still require a mutator failure-mode matrix, but the plan must force the negative IT into implementation.
 
+6. **Zero-match assertions must negate the search command:** When a validation command's stated success condition is "no remaining hits" / "returns empty" / a stale-reference sweep with zero matches expected, the command itself must assert that explicitly (`! grep ...`, `grep -L`, or equivalent). A bare `grep`/`rg` search exits non-zero when there are zero matches, which is the **opposite** of what "no remaining hits" means as a pass condition; a plan that pastes the search command without negating it fails its own gate exactly when the underlying work is correct.
+
 ## Plan Quality Gate
 
 Before finalizing a new or updated plan, run the `review-plan` skill as a sub-agent:
@@ -432,6 +434,7 @@ Then verify these structural failure modes and fix them in the plan:
 
 - **Current ownership:** if a prior phase extracted or renamed the owner of behavior, put new work in the final owner, not the old location. Avoid "implement in A, then move to B" churn unless the refactor itself is the goal.
 - **Coherent commits:** each task ending in a commit must leave the code compiling. Do not split one required model/signature propagation across multiple commits when the intermediate state cannot compile.
+- **Constructor-signature-change audit:** when a task adds, removes, or reorders a constructor parameter on an existing class, grep the whole repo for `new ClassName(` before finalizing the task and list every direct construction site explicitly (production and test). A compatibility method overload preserves *behavior* for existing callers but does not preserve *construction* call sites, which still need the new argument to compile. For each listed site, state whether it exercises the changed method (needs a configured stub proving the new behavior) or not (an unconfigured mock is enough) — do not describe a test as "unaffected" without checking whether it stubs/verifies the method the constructor change feeds into.
 - **Right-layer tests:** place failing tests at the layer that can observe the behavior. A mocked downstream collaborator cannot verify logic owned by that collaborator.
 - **Side-effect safety:** when adding a guard around an irreversible side effect, specify failure semantics explicitly (claim/confirm/release, fail-open/fail-closed, TTL) so retries do not skip work that never succeeded.
 - **Existing constants and config:** verify whether metrics, properties, flags, or key prefixes already exist before planning new ones. Reuse existing names unless the RFC requires a new external contract.
