@@ -266,6 +266,7 @@ Minimum schema:
   "domains": ["concurrency", "SQL"],
   "panel_mode": "full",
   "selection_reason": null,
+  "source_kind": "code",
   "source_digest": "<sha256>",
   "escalation_reason": null,
   "counts": {
@@ -302,6 +303,8 @@ Minimum schema:
 ```
 
 Use `"soften_watchlist": []` when the run has no softened findings. Multi-round / review-loop orchestrators must carry `open` rows forward.
+
+`source_kind` declares what `source_digest` hashes: `"code"` (the stored diff bytes), `"plan"` / `"rfc"` / `"document"` (the reviewed document's UTF-8 bytes). Producers SHOULD set it; `review-plan` (and other document reviewers) MUST set it. When `source_kind` is declared, `source_digest` must be a lowercase 64-char hex SHA-256 (placeholders like `"<sha256>"` fail the validator). The `--source-plan` flag on `validate_review_staging.py` recomputes the plan's digest and fails hard on a mismatch, so a digest recorded before a fold of the reviewed artifact is rejected as stale.
 
 Legacy sidecars keep `agent`, `agents`, and caller-specific severity labels. New sidecars use worker rows and the four shared severities.
 
