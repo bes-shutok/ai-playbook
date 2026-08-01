@@ -250,7 +250,7 @@ For PRs against repos with PR-metadata-driven CI (notably `config-repo-prod`), t
 - **Title stays in sync with scope:** when you push commits or edit the body of an open PR and the change set is no longer what the current title claims (added regions, modules, or deliverables; narrowed scope; retitled ticket), run `gh pr edit <n> --title "..."` in the same turn as the body/files update. Readers judge the PR from the title first; a stale title after a body refresh looks unfinished.
 
 ## PR Chunk Splitting
-When asked to split a branch diff against a base branch (for example `pre-release`) into multiple PRs:
+When asked to split a branch diff against a base branch (for example `master`) into multiple PRs:
 
 ### Sizing Rules
 - Target fewer than 10 non-doc files per chunk; hard max is 15 non-doc files.

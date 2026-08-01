@@ -30,17 +30,19 @@ HEAD_BRANCH=$(git branch --show-current)
 BASE_BRANCH="${BASE_BRANCH:-}"   # user override, else detect below
 ```
 
+Read `{reviews_dir}`, `{tmp_dir}`, and `review_large_diff_bytes` from `.ai-playbook/facts.md` (opening TOML block; same source as `using-skills` Step 0). Absent `review_large_diff_bytes` ⇒ default `10240`.
+
 **Base branch** (pick first that applies):
 
-1. User named it (`against master`, `vs pre-release`, PR base URL).
-2. Open PR for `HEAD_BRANCH`: use PR base from `gh pr view` / `github-pr-workflow`.
-3. Repo default integration branch (`pre-release`, `main`, or `master` per project `AGENTS.md`).
+1. User named it (`against master`, PR base URL); unambiguous.
+2. Open PR for `HEAD_BRANCH`: use PR base from `gh pr view` / `github-pr-workflow`; unambiguous.
+3. Neither applies: resolve to the repo default integration branch (`main` or `master` per project `AGENTS.md`). Then, in an **interactive top-level session**, ask the user to confirm that base before round 1; in a **non-interactive / sub-agent context (risk-F1)** (invoked as a sub-agent of `execute-plan` Phase 3 or in a session with no user at the console, e.g. CI/scheduled), accept the resolved default without prompting. Either way, **record the resolved base + reason in the staging-doc Metadata** (for example `Base resolved non-interactively: main (repo default; no PR/arg, autonomous sub-agent)`) so the resolution is auditable rather than silent.
+
+If `git diff ${BASE_BRANCH}...HEAD | wc -c` exceeds `review_large_diff_bytes` (default 10240), the round-1 `doing-code-review` launch confirms the basis with the user (interactive) or records it in Metadata (non-interactive).
 
 **Diff scope (every review round):** `git diff ${BASE_BRANCH}...HEAD` on **committed** `HEAD` only. Do not review uncommitted fixes as proof the round is clean; commit first, then start the next round.
 
 **Re-resolve the file set every round (required):** at the start of Step 1 in *each* round, re-run `git diff --name-only ${BASE_BRANCH}...HEAD` (committed mode) or `git status --short` (working-tree mode) and confirm the file list matches what this round intends to review. Do not cache the file set from round 1. A loop mutates the tree between rounds (fixes applied, files added by `learn`/`done`, partner edits), so a round-1 snapshot goes stale and silently drops new/changed files from later rounds, which produces a false "clean" exit on a partial review. If the file count changed since the prior round, the new files are in scope for the fresh review even if they bundle a different concern than the original change; do not dismiss them as out-of-scope without recording why.
-
-Read `{reviews_dir}` and `{tmp_dir}` from `.ai-playbook/facts.md` (see `using-skills` Step 0).
 
 ## One iteration
 
@@ -157,6 +159,7 @@ Never use commit subjects like `Close review loop` or `Review complete` until ex
 
 ```text
 review-loop on current branch vs <base>. Run a full review, then targeted follow-ups after fixes, until one fresh review finds zero unresolved blocking findings, the soften watchlist is closed, and design-simplicity covered the tip. Max 5 full-panel rounds.
+If no base is named or the diff is large (>10 kB), the loop asks you to confirm the comparison base before round 1 (skipped silently in non-interactive sub-agent runs, with the resolution recorded).
 ```
 
 ## Integration Points

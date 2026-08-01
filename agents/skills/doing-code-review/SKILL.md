@@ -44,8 +44,21 @@ User args (e.g., "check for secrets", "against branch X") provide context for th
 - Reporting grep results, manual scans, or inline analysis as the review output. Sub-agents provide coverage a single pass cannot; the staging doc is the deliverable.
 - Replacing the sub-agent pipeline with a targeted scan because "the user only asked about X." A focused scan cannot find what it was not asked to look for; the selected panel can.
 - Writing diff/review capture files to the repo root or other tracked paths. Diff artifacts belong under `{tmp_dir}/` only (see **Diff access** below; canonical rule in `agent_workflow_guidelines.md` §50.3.2).
+- Silently inferring the diff base for a branch review, or proceeding when the basis is ambiguous: ask the user for the comparison base instead. Leaving `<base>` as a literal placeholder in a branch review is this anti-pattern.
 
 ## Step 1: Gather Context
+
+### Resolve the comparison basis
+
+Resolve the `<base>` / `<head>` to diff against before any `git diff` or sub-agent launch. The resolution depends on the review source:
+
+- **PR URL:** base and head resolve unambiguously via `github-pr-workflow`. This is the "obvious" case; no prompt is needed.
+- **Branch review, base not obvious:** do **not** leave `<base>` as a placeholder. If the base cannot be resolved with confidence (no `against X` arg, no single open PR, ambiguous integration branch), resolve it via the tier fallback (the repo's default integration branch per `AGENTS.md`). Then branch on the execution context:
+  - **Interactive top-level session:** ask the user explicitly, "What branch/commit should I diff against?" (or confirm the resolved default) before any `git diff` or sub-agent launch.
+  - **Non-interactive / sub-agent context (risk-F1):** when invoked as a sub-agent of `execute-plan` Phase 3 or `review-loop`, or in a session with no user at the console (CI/scheduled), do **not** prompt. Accepting the resolved default is required to honour `execute-plan`'s "no asking between steps" contract (`execute-plan/SKILL.md:27`). Record the resolution + reason in the staging-doc Metadata (for example `Base resolved non-interactively: main (repo default; no PR/arg, autonomous sub-agent)`) so it is auditable rather than silent. The prompt fires only in an interactive top-level session.
+- **Magnitude check (all modes):** after resolving the base, run `git diff <base>...<head> | wc -c`. If the byte count exceeds `review_large_diff_bytes` (default `10240`), the change is unexpectedly large. Read `review_large_diff_bytes` from the opening TOML block in `.ai-playbook/facts.md` (same source as the **Documentation paths:** preamble above; absent key ⇒ default `10240`); this read is pinned to Step 1 because the magnitude check runs here, before the later `### Resolve paths from facts` subsection. On a large diff:
+  - **Interactive top-level session:** confirm the basis with the user before launching sub-agents (state the size and proposed base; proceed only once the user confirms). **Decline path:** if the user does not confirm (declines, names a different base, or aborts), re-resolve to the corrected base and re-run the magnitude check, or stop; do not launch against an unconfirmed base.
+  - **Non-interactive context:** skip the confirmation prompt (the orchestrator's autonomy contract takes precedence) but still record the diff size and the resolved base in the staging Metadata.
 
 For a GitHub PR URL, use `github-pr-workflow` to resolve owner, repo, PR number, base branch, head branch, changed files, diff, and existing review comments.
 

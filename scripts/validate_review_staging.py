@@ -377,7 +377,7 @@ def validate_discarded_findings(content: str, result: ValidationResult) -> None:
     for line in tail.splitlines():
         if not line.strip().startswith("|"):
             continue
-        if re.match(r"^\|\s*Agent\s*\|", line):
+        if re.match(r"^\|\s*(?:Agent|Worker)\s*\|", line):
             continue
         if re.match(r"^\|[-:| ]+\|$", line):
             continue
@@ -403,7 +403,14 @@ def validate_stats_sidecar(
 ) -> None:
     staged_count = extract_staged_count(content)
     # Hard gate: never waive the sidecar when the doc claims staged findings.
-    if metadata_allows_stats_skip(content) and staged_count == 0:
+    # Also never waive when the caller explicitly asked for a digest check
+    # (--source-plan): a waived sidecar would silently skip the stale-digest
+    # comparison, which matters most on the clear round that gates execution.
+    if (
+        metadata_allows_stats_skip(content)
+        and staged_count == 0
+        and expected_digest is None
+    ):
         return
     if metadata_allows_stats_skip(content) and staged_count > 0:
         result.add_error(
@@ -2388,6 +2395,170 @@ def _selftest_producer_artifacts(root: Path, check) -> None:
     )
 
 
+def _selftest_source_plan_cli(root: Path, check) -> None:
+    """The --source-plan CLI flag must recompute the plan digest and reach the
+    stale-digest comparison. Pins the main() wiring that
+    validate_staging_file(expected_digest=...) already covers at the function
+    level in _selftest_source_digest. Each case must be DISCRIMINATING: it must
+    fail if the wiring were severed (expected_digest dropped), not pass via the
+    presence-only path."""
+    import io
+
+    plan_path = root / "plan.md"
+    plan_bytes = b"# Plan\n## Tasks\n1. do foo\n"
+    plan_path.write_bytes(plan_bytes)
+    plan_digest = compute_source_digest("plan", plan_bytes)
+
+    # A second, different file so we can prove the digest comparison actually
+    # ran (a severed-wiring regression would pass regardless of which file we
+    # point at; pointing at the wrong file and asserting exit 1 is the
+    # discriminating positive-vs-negative contrast).
+    other_path = root / "other.md"
+    other_path.write_bytes(b"# Not the plan\n")
+
+    payload = json.loads(json.dumps(_current_clear_payload()))
+    payload["source_digest"] = plan_digest
+    payload["source_kind"] = "plan"
+    staging = _write_staging(
+        root, "2026-07-17-plan-review-cli-r1.md",
+        _current_clear_markdown("cli"), payload,
+    )
+
+    # Case A (discriminating): point --source-plan at the CORRECT plan -> exit 0.
+    rc_fresh = main(["--hard", str(staging), "--source-plan", str(plan_path)])
+    check("--source-plan fresh (correct plan) exits 0", rc_fresh == 0)
+
+    # Case A' (the discriminating twin): point --source-plan at a DIFFERENT
+    # existing file -> exit 1. This is what makes Case A meaningful: if the
+    # wiring were severed (expected_digest dropped), both A and A' would exit 0.
+    rc_wrong_file = main(["--hard", str(staging), "--source-plan", str(other_path)])
+    check(
+        "--source-plan against a different file exits 1 (wiring is live)",
+        rc_wrong_file == 1,
+    )
+
+    # Case B: fold the plan (digest changes) -> exit 1 with stale error AND the
+    # F7 path hint naming the hashed file.
+    plan_path.write_bytes(plan_bytes + b"\nfolded F1\n")
+    buf = io.StringIO()
+    real_stderr = sys.stderr
+    sys.stderr = buf
+    try:
+        rc_stale = main(["--hard", str(staging), "--source-plan", str(plan_path)])
+    finally:
+        sys.stderr = real_stderr
+    stale_text = buf.getvalue()
+    check(
+        "--source-plan stale (post-fold) digest exits 1 with stale error",
+        rc_stale == 1 and "stale" in stale_text and "source_digest" in stale_text,
+    )
+    check(
+        "stale-digest error includes the hashed source-path hint (F7)",
+        str(plan_path) in stale_text,
+    )
+
+    # Case C: missing source-plan file -> exit 1.
+    rc_missing = main(
+        ["--hard", str(staging), "--source-plan", str(root / "nope.md")]
+    )
+    check("--source-plan missing file exits 1", rc_missing == 1)
+
+
+def _selftest_discarded_header_skip(root: Path, check) -> None:
+    """The discarded-findings header skip must recognize the authoritative
+    `| Worker | Worker severity | Pattern | Theme | Reason | Notes |` header
+    (review-staging/SKILL.md:156, review-plan/SKILL.md:152), not only the legacy
+    `| Agent |` header. Pre-fix, line 380 matched `^\\|\\s*Agent\\s*\\|` only, so a
+    correctly-formatted `| Worker |` header row was parsed as a data row. Its
+    cells become `(Worker, Worker severity, Pattern, Theme, Reason, Notes)`; the
+    reason cell (index 4) is the literal `Reason`, which is not a valid discard
+    code, so the validator emitted a spurious
+    `unknown discard reason code: Reason` warning.
+
+    Discrimination nuance (testing-F2 + the IMPORTANT nuance in the plan): a
+    naive "warnings contains unknown discard reason code" assertion would PASS
+    pre-fix AND post-fix because the negative-twin data row (with reason
+    `not-a-real-reason`) always emits that warning regardless of the bug. So the
+    RED-phase discriminating assertion targets the header-skip bug specifically:
+    the spurious warning's reason token is the literal `Reason` (the column
+    header). Pre-fix the header is parsed as data -> reason="Reason" -> the
+    `unknown discard reason code: Reason` warning IS present -> assertion (a)
+    FAILS, exposing the bug. Post-fix the header is skipped -> that warning is
+    GONE -> assertion (a) PASSES. Assertion (b) pins the negative twin so the
+    fix cannot over-skip genuine data rows.
+
+    Assert on `result.warnings` (a list[str]), NOT `result.ok`: `add_warning`
+    does not flip `ok` (lines 148-149), so an `result.ok` assertion would
+    false-pass (testing-F2).
+    """
+    import json as _json
+
+    # Reuse the canonical fixtures the way _selftest_source_plan_cli does
+    # (lines 2419-2425). The fixture MUST be a full current-format staging doc,
+    # NOT a stub; a stub fails validate_staging_file for unrelated structural
+    # reasons (missing ## Metadata / ## Review Statistics / ### Panel).
+    payload = _json.loads(_json.dumps(_current_clear_payload()))
+    md = _current_clear_markdown("discarded-header")
+
+    # Inject a populated Discarded section in place of the canonical `None.`
+    # (replace ONLY the first `### Discarded findings\\nNone.` occurrence).
+    # Header row + `|---|` separator + two data rows: one valid (`duplicate`),
+    # one with a BAD reason (`not-a-real-reason`) as the negative twin.
+    populated = (
+        "| Worker | Worker severity | Pattern | Theme | Reason | Notes |\n"
+        "|---|---|---|---|---|---|\n"
+        "| correctness-completeness | High | quality#edge-case | dup | "
+        "duplicate | same as F1 |\n"
+        "| testing | Medium | testing#gap | bad | not-a-real-reason | none |"
+    )
+    fixture_md = md.replace(
+        "### Discarded findings\nNone.",  # canonical _current_clear_markdown form (dedented)
+        f"### Discarded findings\n{populated}",
+        1,
+    )
+    # Defensive: confirm the injection actually landed (a silent no-op replace
+    # would make this test exercise nothing).
+    check(
+        "discarded-header fixture injected (None. replaced)",
+        "not-a-real-reason" in fixture_md and "| Worker | Worker severity |"
+        in fixture_md,
+    )
+
+    staging = _write_staging(
+        root, "2026-07-17-branch-review-discarded-header.md", fixture_md, payload,
+    )
+    result = validate_staging_file(staging, hard=False)
+
+    # The fixture's BAD data row guarantees the Discarded section is parsed and
+    # the reason-code check fires, so warnings must be non-empty.
+    check(
+        "discarded-header fixture yields non-empty warnings",
+        len(result.warnings) > 0,
+    )
+
+    # Assertion (b) - the negative twin: the BAD-reason data row is STILL caught.
+    # This holds both pre-fix and post-fix; it proves the fix did not over-skip
+    # genuine data rows (testing-F1).
+    check(
+        "discarded-header: BAD data row (not-a-real-reason) still warned",
+        any("unknown discard reason code: not-a-real-reason" in w for w in result.warnings),
+    )
+
+    # Assertion (a) - the discriminating RED assertion: NO warning should
+    # mention the literal reason token `Reason` (the column header). Pre-fix the
+    # `| Worker |` header is parsed as a data row -> reason cell (index 4) is the
+    # literal `Reason` -> `unknown discard reason code: Reason` is emitted ->
+    # this assertion FAILS (RED), exposing the bug. Post-fix the header is
+    # skipped -> the `Reason`-token warning is GONE -> this assertion PASSES
+    # (GREEN). Assert via `not any(...)` so the post-fix expectation is encoded
+    # directly; the RED run demonstrates the failure, the GREEN run the pass.
+    check(
+        "discarded-header: Worker header row NOT parsed as data "
+        "(no `unknown discard reason code: Reason`)",
+        not any("unknown discard reason code: Reason" in w for w in result.warnings),
+    )
+
+
 def run_selftest() -> int:
     import tempfile
 
@@ -2406,6 +2577,8 @@ def run_selftest() -> int:
             ("full_panel_completion", _selftest_full_panel_completion),
             ("readiness_independence", _selftest_readiness_independence),
             ("producer_artifacts", _selftest_producer_artifacts),
+            ("source_plan_cli", _selftest_source_plan_cli),
+            ("discarded_header_skip", _selftest_discarded_header_skip),
         ):
             fn(root, check)
 
@@ -2443,6 +2616,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run fixture checks and exit",
     )
+    parser.add_argument(
+        "--source-plan",
+        metavar="PATH",
+        help=(
+            "Reviewed plan file. Recompute its SHA-256 digest and compare to "
+            "sidecar.source_digest; fail hard on mismatch (stale review after "
+            "a fold). Plan reviews only (source_kind=plan)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.selftest:
@@ -2466,13 +2648,57 @@ def main(argv: list[str] | None = None) -> int:
     else:
         parser.error("path or --newest-for-branch is required")
 
-    result = validate_staging_file(target, hard=args.hard)
+    expected_digest: str | None = None
+    source_kind: str | None = None
+    if args.source_plan:
+        # --source-plan is plan-only: hardcode source_kind and compute the
+        # digest of the named plan file. RFC/document reviewers needing the
+        # same gate should add their own flag then (recipe is byte-identical).
+        source_kind = "plan"
+        source_path = Path(args.source_plan).expanduser().resolve()
+        if not source_path.is_file():
+            payload = {"ok": False, "errors": [f"source file not found: {source_path}"]}
+            if args.json:
+                print(json.dumps(payload))
+            else:
+                print(f"ERROR: source file not found: {source_path}", file=sys.stderr)
+            return 1
+        try:
+            source_bytes = source_path.read_bytes()
+        except OSError as exc:
+            print(f"ERROR: cannot read source file: {exc}", file=sys.stderr)
+            return 1
+        expected_digest = compute_source_digest("plan", source_bytes)
+        # Stash the path so the stale-digest error can name it (F7: an agent
+        # that points --source-plan at the wrong file gets an actionable hint
+        # instead of an opaque "artifact may have changed").
+        _SOURCE_PATH_FOR_ERROR = str(source_path)
+    else:
+        _SOURCE_PATH_FOR_ERROR = None
+
+    result = validate_staging_file(
+        target,
+        hard=args.hard,
+        expected_digest=expected_digest,
+        source_kind=source_kind,
+    )
     if args.json:
         print(json.dumps(result.to_dict(), indent=2))
     else:
         for warning in result.warnings:
             print(f"WARN: {warning}", file=sys.stderr)
         for error in result.errors:
+            # Augment stale-digest errors with the hashed source path so an
+            # agent that pointed --source-plan at the wrong file (e.g. the
+            # staging doc instead of the plan) gets an actionable hint (F7).
+            if (
+                _SOURCE_PATH_FOR_ERROR
+                and "source_digest is stale" in error
+            ):
+                error = (
+                    f"{error}; or --source-plan points at the wrong file "
+                    f"(hashed: {_SOURCE_PATH_FOR_ERROR})"
+                )
             print(f"ERROR: {error}", file=sys.stderr)
         if result.ok:
             print(f"OK: {target}")

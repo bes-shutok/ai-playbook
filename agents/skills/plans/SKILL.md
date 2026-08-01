@@ -420,15 +420,17 @@ Return in the review Summary:
 
 **If the sub-agent has not completed within 15 minutes**, proceed with an inline spot-check using the same shared severity and blocking contract. Incorporate the delegated result when it completes.
 
-**After the sub-agent completes**, incorporate findings into the plan from the review artifact; do not re-run plan analysis inline:
+**After the sub-agent completes**, incorporate findings into the plan from the review artifact; do not re-run plan analysis inline. (These rules govern **plan** reviews only, `source_kind: "plan"`. Code/branch reviews follow `doing-code-review` and `review-loop`, whose post-fix worker selection, every owning or affected worker, is unaffected by the Medium+ narrowing in rule 4.)
 1. Fold every accepted finding with `blocking: true`; fold other material findings by consequence.
-2. After fixes, launch blind `correctness-completeness` plus every distinct owning or affected worker.
-3. If that set is all five workers, count it as a full-panel round.
-4. Exit after one fresh review of the current source digest has zero unresolved blocking findings.
-5. Do not run a second clean full panel on the same digest.
-6. Reconcile after three non-monotonic rounds. Before a sixth full-panel round, stop for user direction.
+2. **A fold is a digest change, regardless of severity.** After ANY fold (blocking or non-blocking) that edits the plan artifact, the source digest has changed: recompute it and launch a fresh round before exit is allowed. A non-blocking fold is not exempt: a fold that looks mechanical (test rewrite, grep broadening, scoping tweak, preserve-note) can still break a path, a test, or a validation command. Re-probe because the digest moved, not because the finding was severe.
+3. **Re-probe set after a fold:** launch blind `correctness-completeness` plus every distinct owning or affected worker whose domain the folds touched. The blind `correctness-completeness` probe is mandatory on every post-fold round; it is the regression catcher for folds and must not be dropped.
+4. **Final-round worker selection (when the prior round found zero blocking):** the final round is the blind `correctness-completeness` probe plus only the workers that produced a **Medium or higher** finding in the prior round. Low-only and finding-free workers are not re-launched. If no worker produced Medium+, the final round is the blind `correctness-completeness` probe alone. This is the only round where the Medium+ rule narrows the panel; rounds that follow a fold of a blocking finding still launch every affected worker per rule 3.
+5. If the re-probe set is all five workers, count it as a full-panel round.
+6. Exit only when one fresh review on the **post-fold** digest reports zero unresolved blocking findings. "Same digest" in rule 7 means the exact post-fold digest; an exit on a pre-fold digest is never valid.
+7. Do not run a second clean full panel on the same digest.
+8. Reconcile after three non-monotonic rounds. Before a sixth full-panel round, stop for user direction.
 
-**Ready for execution** means the latest review artifact explicitly states `ready=yes` with zero unresolved blocking findings. Open the artifact and verify its verdict rather than relying on chat summary.
+**Ready for execution** means the latest review artifact explicitly states `ready=yes` with zero unresolved blocking findings. Open the artifact and verify its verdict rather than relying on chat summary. The post-fold-digest requirement (rule 6) is enforced by the `--source-plan` mechanical gate in `review-plan` Step 4; a `ready=yes` recorded before a fold fails that gate and does not count.
 
 Then verify these structural failure modes and fix them in the plan:
 

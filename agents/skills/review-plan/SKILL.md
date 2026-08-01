@@ -86,7 +86,7 @@ After all workers complete, synthesize from their returns. The orchestrator dedu
 5. **Record statistics**: populate full `## Review Statistics` per `review-staging` (Panel with Solo/Echo, Counts, Deduplication groups, Discarded with Pattern, Severity calibration, Triage placeholder) before writing `## Findings`. Write the matching `.stats.json` sidecar in the same pass.
 
 **Sidecar schema (inlined here so it is in context without loading `review-staging`; authoritative copy lives there).** Every `.stats.json` must carry, at minimum:
-- Top level: `panel_mode` (`"full"` | `"focused"`), `source_digest` (lowercase 64-hex sha256 of the reviewed plan bytes, via `compute_source_digest("plan", plan_bytes)`), `escalation_reason` (`null` unless a sixth worker was launched), `selection_reason` (`null` when `panel_mode == "full"`).
+- Top level: `panel_mode` (`"full"` | `"focused"`), `source_kind` (`"plan"` for plan reviews), `source_digest` (lowercase 64-hex sha256 of the reviewed plan bytes, via `compute_source_digest("plan", plan_bytes)`), `escalation_reason` (`null` unless a sixth worker was launched), `selection_reason` (`null` when `panel_mode == "full"`). The digest must reflect the **post-fold** plan bytes the final round reviewed; recording a pre-fold digest is a stale-review error caught by the mechanical gate below.
 - Each `panel[]` row: `descendant_launches` (`[]` for the five base workers, which launch no children).
 - Each `findings[]` row: `id` as an **integer** (`1`, not `"F1"`), plus `severity`, `blocking`, `consequence`, `reachability`, `blast_radius`, `confidence`, `pattern`, `workers`, `triage`.
 - `discarded[]` rows with `reason: "wrong-owner"` must carry `lead_worker` + `lead_lens` (or `lead_agent`).
@@ -97,12 +97,16 @@ Skipping the sidecar is not allowed for plan reviews: the mechanical gate below 
 
 Write the review to `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md` and `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.stats.json` (read `{reviews_dir}` from `.ai-playbook/facts.md` TOML; use `-r1`, `-r2`, … per loop iteration). Follow the staged hierarchy and **Review Statistics** section from `review-staging` (gold source).
 
-**Mechanical gate (before reporting round complete):** run the review-staging validator on the staging path and confirm the `.stats.json` sidecar exists; do not report the round complete until both pass. This catches sidecar schema drift (string-vs-integer finding ids, missing consequence fields, missing `panel_mode`/`source_digest`/`descendant_launches`) that prose-only "follow `review-staging`" instructions cannot:
+**Mechanical gate (before reporting round complete):** run the review-staging validator on the staging path and confirm the `.stats.json` sidecar exists; do not report the round complete until both pass. This catches sidecar schema drift (string-vs-integer finding ids, missing consequence fields, missing `panel_mode`/`source_digest`/`descendant_launches`) **and stale-review-on-folded-plan** (sidecar `source_digest` no longer matches the plan on disk) that prose-only "follow `review-staging`" instructions cannot:
 
 ```bash
 VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"
-python3 "$VALIDATOR" --hard "$STAGING_PATH"
+STAGING_PATH="{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md"
+PLAN_PATH="<path-to-the-plan-file-under-review>.md"   # whose bytes source_digest must match
+python3 "$VALIDATOR" --hard "$STAGING_PATH" --source-plan "$PLAN_PATH"
 ```
+
+`--source-plan` recomputes the plan's SHA-256 and fails hard if it differs from the sidecar's `source_digest`. Pass the plan path on every round, especially after folds: a `ready=yes` recorded against a pre-fold digest fails the gate and cannot be reported as round-complete.
 
 Cursor hooks also warn via `postToolUse` after staging writes and may inject a `stop` follow-up if the newest round file is still a stub.
 
