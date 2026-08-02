@@ -540,3 +540,34 @@ adjacent, group them via comments, not by reordering past a required field.
 passes arguments by keyword (`Key(composite=..., tx_id=...)`), appending a defaulted
 field at the end is source- and behavior-compatible: no call site needs editing. The
 ordering constraint is therefore also the lowest-impact amendment.
+
+## 18. Avoid RST Pluralization Escapes in Docstrings; Rephrase Instead
+
+In a docstring, do not write a backslash-space RST pluralization escape such as
+`:attr:`leg`\ s` to pluralize an inline `literal`/`attr`/`class` role target. The
+trailing `\ s` is an inline markup ambiguity workaround that CPython's docstring
+parser flags as a `SyntaxWarning` under Python 3.14 (and may warn on later
+versions). The warning fires at import time and pollutes test output.
+
+```python
+# WRONG - emits SyntaxWarning under Python 3.14
+"""Each event holds one or more :attr:`leg`\ s (token movements)."""
+
+# CORRECT - rephrased as plain prose, no markup ambiguity
+"""Each event holds one or more legs (token movements).
+
+Each leg is one token movement within the parent transaction.
+"""
+```
+
+**Principle:** Family C (Representation / mechanical contract), reinforced by
+Family H (the import-time `SyntaxWarning` is the real signal). When an inline
+RST role cannot be pluralized without an escape, drop the role and use plain
+prose for the pluralized noun; keep the role for the singular cross-reference
+only. If a docstring truly needs pluralized inline literals, use a raw string
+(`r"""..."""`) or rephrase.
+
+**Trigger shape:** a docstring references a code object inline with an RST role
+(`:attr:`, `:class:`, `:meth:`, `` `x` ``) and the surrounding prose needs the
+plural form of that noun. Do not append `\ s`; rephrase the sentence so the
+plural noun is plain text.
