@@ -497,3 +497,46 @@ both importable and directly executable.
 different files (the test imports the module under test normally), there is only one
 instance and a plain `import` patch works. The double-instance trap is specific to
 self-tests defined inside the file under test and executed as `__main__`.
+
+## 17. A Defaulted Dataclass Field Must Come After Every Non-Defaulted Field
+
+Python's `@dataclass` generates `__init__` from the declared field order, and Python
+itself forbids a parameter with a default from preceding a parameter without one. So
+a field declared `field: T = default` MUST appear after every field declared
+`field: T` (no default), or class definition raises
+`TypeError: non-default argument(s) follow default argument(s)` at import time.
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class Key:
+    tx_id: str | None = None      # defaulted
+    composite: bytes              # NON-defaulted - placed AFTER a defaulted field
+    # -> TypeError: non-default argument(s) follow default argument(s)
+
+# CORRECT: defaulted fields last, in dependency order
+@dataclass
+class Key:
+    composite: bytes              # required fields first
+    tx_id: str | None = None      # defaulted fields last
+    event_id: str | None = None   # additional defaulted fields keep coming last
+```
+
+**Principle:** Family C (Representation / mechanical contract enforced by the
+language), reinforced by Family H (the import-time `TypeError` is the real signal,
+not a per-call runtime error). Adding an optional defaulted field to an existing
+dataclass whose later fields are required is the load-bearing case: the new field
+cannot be inserted in "logical" position mid-class; it must be appended after the
+last required field.
+
+**Trigger shape:** a task adds an optional field (`... : T | None = None`) to a
+`@dataclass` that already has at least one non-defaulted field, and the natural
+placement (grouping it with related fields) would put it before a required field.
+Append defaulted fields at the end of the class; if related fields must stay
+adjacent, group them via comments, not by reordering past a required field.
+
+**Field ordering does not affect keyword call sites.** When every construction site
+passes arguments by keyword (`Key(composite=..., tx_id=...)`), appending a defaulted
+field at the end is source- and behavior-compatible: no call site needs editing. The
+ordering constraint is therefore also the lowest-impact amendment.
