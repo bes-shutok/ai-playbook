@@ -28,7 +28,7 @@ Orchestrate plan execution from the main agent. Always run Phase 0 (branch setup
 
 **Terminal-response gate:** A worker or `done` sub-agent completing is a checkpoint, never a completion signal for the parent. The manifest begins with `workflow_state: active` and is the terminal-state receipt: before sending a final response, the parent must read it and confirm it records `workflow_state: complete`, the Phase 5 success checklist, and the archived plan path. If any of these is false, it must continue with the next defined phase or report a hard gate in commentary, not end the task. A user status question, correction, or "why did you stop?" message is also non-terminal: answer it in commentary, re-read the manifest, and resume the next defined phase in the same turn unless the user explicitly pauses or aborts. In particular, a single clear review round, a `done` commit, or a launched next review is not a valid terminal state.
 
-**Announcement is not execution.** Saying you are using this skill does not satisfy it. The parent agent must run the Phase 1 loop (implement sub-agent → verify → mark checkboxes → **done sub-agent** → report) for **each** task. Passing tests or marking all checkboxes in one parent session is **not** a substitute for per-task `done` commits.
+**Announcement is not execution.** Saying you are using this skill does not satisfy it. The parent agent must run the Phase 1 loop (implement sub-agent → verify → refresh marker → mark checkboxes → **done sub-agent** → report) for **each** task. Passing tests or marking all checkboxes in one parent session is **not** a substitute for per-task `done` commits.
 
 ## Invocation detection (run first)
 
@@ -135,7 +135,9 @@ Do not start Phase 1 until execute-plan is chosen (invocation signal or gate opt
 | Skip premortem on clear-streak rounds when plan had concurrency | Premortem stays launched whenever concurrency/transactional mutators are in Review Scope |
 | Start a sixth full-panel round | Stop and ask the user before exceeding the five-round budget |
 | User sends plan path only; parent implements inline | Skipped plan-path gate (Mitigation A); treat as read-only or ask the three-way choice first |
-| `replace_all` or bulk `- [ ]` → `- [x]` across the plan | Violates one-task checkbox discipline; mark only the current task after its `done` |
+| `replace_all` or bulk `- [ ]` → `- [x]` across the plan | Violates one-task checkbox discipline; refresh marker, mark only the current task, then launch `done` |
+| Edit plan Markdown without a fresh skill-gate marker | Apply **Plan-file edits (skill-gate)** before every plan-file write; do not bypass or weaken skill-gate |
+| Recovery launches `done` before marking that task's checkboxes | Apply **Plan-file edits (skill-gate)**, mark that task's checkboxes, then launch `done`, matching Phase 1, so marker-protected plan edits land in that task's commit |
 
 If the user asks why per-task commits are missing, the usual cause is **Step 1.4 was skipped** while the parent agent implemented work directly.
 
@@ -303,7 +305,7 @@ Why: a doc-hierarchy migration moves whole subtrees (`docs/<x>/` -> `docs/mainte
 Check:
 
 1. `grep -nE 'docs/(tax|domain|plans|personal|reviews)/' <plan>` (adapt the prefix alternation to the migration's actual moved subtrees).
-2. For each stale hit, translate to the migrated location. Also rewrite segmented code-path literals (`"docs" / "tax"` -> `"docs" / "maintenance" / "tax"`) so they match the authoritative source path, not just the prose.
+2. For each stale hit: apply **Plan-file edits (skill-gate)** immediately before that plan-file write, then translate the hit (including segmented code-path literals such as `"docs" / "tax"` -> `"docs" / "maintenance" / "tax"`). Do not batch multiple plan-file writes under one prior refresh.
 3. Re-run the grep until clean, then run the plan's `## Validation Commands` once to confirm targets resolve.
 
 This is a pre-Phase-1 plan-maintenance pass (its own commit, not one of the plan's tasks) so per-task commits stay clean. Skip on repos without the migration-complete signal, or when the grep returns clean (plan post-dates the migration). See `development_lessons.md` in the affected repo for the concrete incident this checkpoint codifies.
@@ -315,6 +317,10 @@ This is a pre-Phase-1 plan-maintenance pass (its own commit, not one of the plan
 | `shared_docs_dir` | Coding/stack guidelines for implement sub-agent | Resolve from `~/.ai-playbook/facts.md`; see `agent-runtime-layout.md` there |
 | `tmp_dir` | Project tmp root for execute-plan logs (read from `.ai-playbook/facts.md` TOML at Phase 0) | `docs/tmp/` |
 
+### Plan-file edits (skill-gate)
+
+Before any plan Markdown write, refresh the plans-class skill-gate marker per `ai-playbook/agents/hooks/skill-gate/README.md` Marker WRITE RECIPE (invoke the README recipe VERBATIM; do not restate script paths or constants here; FAIL-LOUD if unwritable: stop and report; do not edit the plan). Run the recipe from the repository workspace root (same project cwd the gated write hook will see), not from an unrelated shell cwd. Applies to Step 0.4b, Step 1.3, Recovery, and any other plan-content edit. Phase 4 `git mv` alone is exempt.
+
 ## Orchestrator Responsibilities
 
 The main agent (you) only:
@@ -324,7 +330,7 @@ The main agent (you) only:
 3. Identifies the **topmost incomplete task** (first `### Task N:` that still has any `- [ ]` item).
 4. Launches sub-agents in sequence (never parallel for implement/done/review-fix).
 5. Verifies sub-agent exit criteria before advancing (artifact exists, tests pass, log non-empty); **does not redo sub-agent work** (see `how-to-write-skills` Orchestrator / Sub-Agent Boundary).
-6. Updates plan checkboxes (`- [ ]` → `- [x]`) after a task passes verification.
+6. Refreshes the plans-class skill-gate marker (**Plan-file edits (skill-gate)** / Step 1.3), then updates plan checkboxes (`- [ ]` → `- [x]`) for that task only after verification passes.
 7. Launches the **`done` sub-agent after every task** (Step 1.4) and after **every review iteration** (Step 3.4).
 8. Reports brief progress between steps (task completed, commit SHA, next step starting); **immediately continues** to the next step without waiting for user confirmation.
 
@@ -365,7 +371,7 @@ If the sub-agent reports failure or tests do not pass: do not mark checkboxes; d
 
 ### Step 1.3: Mark plan progress
 
-After verification passes, update the plan file: change every completed `- [ ]` to `- [x]` for **that task's clauses only**.
+After verification passes, apply **Plan-file edits (skill-gate)**, then update the plan file: change every completed `- [ ]` to `- [x]` for **that task's clauses only**.
 
 **Never** bulk-update checkboxes across tasks (`replace_all`, scripted sweep, or marking Tasks 1–N in one edit). Incomplete tasks must keep `- [ ]` until their own Step 1.4 succeeds.
 
@@ -679,6 +685,7 @@ Before its final response, the parent must write `workflow_state: complete` plus
 17. **No per-step continuation prompts**; after Task N `done`, Phase 2 pass, or review-round `done`, auto-start the next defined step. Ask the user only on failure, timeout, max review rounds, user interrupt, or explicit abort.
 18. **Fresh review framing on every Step 3.1**; never prompt clear-streak rounds as verification-only; prior findings are context, not a filter.
 19. **Premortem when concurrency in scope**; do not skip premortem on quiet clear-streak rounds if the plan Review Scope / Domains include concurrency, transactional mutators, or race ITs (user `skip premortem` overrides).
+20. **Skill-gate marker before plan-file edits**; before any plan Markdown edit (Step 1.3, Step 0.4b path rewrites, Recovery checkbox marking, or any other plan-content edit), apply **Plan-file edits (skill-gate)**. Do not bypass or weaken skill-gate. Phase 4 `git mv` alone does not need a marker refresh. In Recovery, mark that task's checkboxes before launching `done`.
 
 ## User Interruption
 
@@ -696,10 +703,12 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
 
 1. Run Phase 0 and Step 0.4 (branch setup + session tmp dir + manifest).
 2. **Do not** re-implement from scratch or batch-mark all `[x]`.
-3. For each task in document order:
+3. For each task in document order (same order as Phase 1):
    - Verify that task's scope only (plan validation command subset or task `Files:` list).
    - Write or append `task-<N>-implement.log.md` (retroactive summary is OK if work already exists).
-   - Launch **done** with that task's plan commit line; mark **only that task's** checkboxes `[x]`.
+   - Apply **Plan-file edits (skill-gate)**.
+   - Mark **only that task's** checkboxes `[x]` (same rule as Step 1.3).
+   - Launch **done** with that task's plan commit line.
    - Gate: `git status` clean for that task's files before Task N+1.
 4. Run Phase 2 full validation, then Phase 3 until one fresh blocking-clean result, Phase 4 archive, and Phase 5 cleanup.
 
@@ -709,7 +718,7 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
 At Phase 0, read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` from `.ai-playbook/facts.md` (see `using-skills` Step 0; bootstrap runs only when Terms triggers fire) before plan-scoped edits or session log writes.
 
 ### Consumes `plans` skill
-Reads plan format, task order, validation commands, review scope, and commit messages. Pre-execution and Phase 3 reviews use the shared blocking-aware cycle.
+Reads plan format, task order, validation commands, review scope, and commit messages. Pre-execution and Phase 3 reviews use the shared blocking-aware cycle. Before any plan-file edit, refreshes the plans-class marker per **Plan-file edits (skill-gate)** (same obligation as `plans` Writing).
 
 ### Consumes `tdd-guide` + `unit-test-runner` (via implement sub-agent)
 Implement sub-agent follows RED → GREEN → Refactor for behavioral tasks; runs validation commands with fresh output.

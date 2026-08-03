@@ -3933,3 +3933,110 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 **Distinguishing from the ruff-on-re-export lesson and #149 (pytest class naming):** both of those produce `ImportError` at collection from a config/tool action (ruff auto-fix deleted a re-export; `python_classes` deselected a class). This lesson produces `IndentationError` from a KILLED sub-agent's interrupted delete step. Same failure signature family (collection aborts before tests run), different root cause (interrupted refactor vs tool config). The shared fix is the parse/collect smoke check; the distinct fix here is "the orphan duplicates a canonical block, delete it, do not merge."
 
 **See also:** the ruff-on-re-export lesson (`ImportError` at collection is the failure signal, but from ruff auto-fix not a kill), #149 (test class silently deselected by `python_classes`, a config cause), coding_guidelines.md #25 (Family H parent: verify the real thing, not the abstraction), `execute-plan` skill (inline recovery after sub-agent failure is allowed; this lesson is the verification step that makes that recovery safe).
+
+## 186. Plan Validation Greps Must Target Each Obligation, Not Context Spillover
+
+**Principle:** Family H (verify the real thing, not the abstraction) cross with Family A (equivalence-class coverage). A plan `## Validation Commands` check that greps one structural anchor with a large context window (`-A`/`-B`) and hopes a sibling obligation appears nearby verifies the wrong thing. It proves the anchor exists, not that each required obligation is present. Missing siblings still exit 0.
+
+**Trigger:** Authoring or reviewing a plan whose Validation Commands use a wide context window around one heading or phrase to "also cover" nearby Hard Gates, anti-pattern rows, Recovery order, or Step subsections.
+
+**Rule:**
+1. Give each critical structural obligation its own dedicated search that fails when THAT obligation is absent (unique string, ordered pair, or section-anchored pattern).
+2. Do not treat a large context window around a different match as proof a sibling obligation exists. Context spillover is documentation convenience, not a gate.
+3. When a review finding asks to add Validation Commands coverage for an obligation already correct in skill prose, treat gate coverage as a distinct surface. Do not drop as "already fixed in the skill."
+4. After editing Validation Commands, temporarily remove one target obligation and confirm the dedicated check fails.
+
+**Why this happens:** Authors minimize command count. One greppable heading feels like it covers the whole section. Triage that drops Validation Command asks because the skill body is already right leaves the false-green gate in place.
+
+**Shape trigger (when to suspect this family):** Validation Commands pass green while a fresh review finds a missing Step subsection, anti-pattern row, Recovery order, or Hard Gate the plan claimed to check; OR address-review drops a Validation Commands finding because `SKILL.md` already states the rule.
+
+**Distinguishing from #171:** #171 is a wrong ripgrep flag that exits 2 and matches nothing. This is a correct grep that answers the wrong sufficiency claim (anchor present, sibling absent).
+
+**Example (playbook execute-plan skill-gate marker plan, review r1):** The structural validation loop grepped nearby anchors with wide context and stayed green while Step 0.4b, Recovery marker-before-done order, and dedicated anti-pattern / Hard Gate checks were missing. Pass 1 dropped similar asks because skill text was already correct. Pass 2 staging required the Validation Commands; dedicated greps were added and the false-green closed.
+
+**Witness (same plan, review r3):** Step 0.4b stayed inside a shared `-A45` structural loop. Stripping the local "immediately before that plan-file write" clause still matched the later shared `Plan-file edits` section inside that window. Pull Step 0.4b out of the wide loop; use a tight `-A12` plus the local phrase so shared cross-refs cannot false-green.
+
+**See also:** #171 (wrong `rg -E` flag; different false-green mechanism), #179 (skill internal contradiction after partial edit), #189 (same-line character order; different false-green), `plans` Validation Commands authoring rules, `receiving-code-review` staging triage, coding_guidelines.md #18/#25 (Family A / Family H).
+
+
+## 187. Pairwise Before-Last Checks Do Not Prove Full Order
+
+**Principle:** Family A (equivalence-class coverage) cross with Family E (temporal / ordering invariants). A gate that only asserts each of N steps precedes the final step (`a < z` and `b < z`) leaves adjacent middle orders unchecked. A swapped middle pair still exits 0.
+
+**Trigger:** Authoring or reviewing Validation Commands that extract line numbers for a required sequence and compare each step only against the last step.
+
+**Rule:**
+1. For an ordered sequence of N actions, assert the full chain (`a < b < c`), not only each element before the last.
+2. After writing the check, simulate the swapped adjacent pair that should fail and confirm the check exits non-zero.
+3. Name the intended order in the check comment so reviewers can see which pairs are load-bearing.
+
+**Why this happens:** Authors treat "everything before the final action" as enough. That is not a total order; middle swaps remain green.
+
+**Shape trigger (when to suspect this family):** Ordered validation stays green while a review finds an adjacent swap (for example mark-before-marker) still allowed; OR a simulation that only swaps the middle pair still passes.
+
+**Example (playbook execute-plan skill-gate marker plan, review r2):** Recovery ordered check required `marker_ln < done_ln` and `mark_ln < done_ln`. Simulation with marker after mark stayed green. Tightened to `marker_ln < mark_ln < done_ln`; the swap then failed.
+
+**See also:** #186 (context spillover false-green; different mechanism), coding_guidelines.md #18/#22 (Family A / Family E), `plans` Validation Commands authoring rules.
+
+## 188. Lead Multi-Action Skill Steps With the Gate Action
+
+**Principle:** Family E (temporal / ordering invariants). Agents treat the first imperative sentence of a step as the start of execution. A later "first refresh the marker" clause loses to an opening "update the plan file".
+
+**Trigger:** Editing a skill step that has a precondition gate (marker refresh, lock acquire, validation) plus a following mutation.
+
+**Rule:**
+1. Put the gate or precondition verb in the first imperative of the step ("apply X, then update Y"), not in a follow-up sentence after the mutation.
+2. Prefer one ordered sentence over two paragraphs that reverse the order.
+3. After editing, re-read the step opening: if an agent obeyed only the first sentence, would the gate still run first?
+
+**Why this happens:** Multi-sentence steps are read as sequential scripts. Opening with the mutation trains the wrong order even when a later sentence states the gate.
+
+**Shape trigger (when to suspect this family):** A review finds a skill step whose first sentence mutates a gated artifact and a later sentence requires the gate first; OR an agent edits the gated file before refreshing the marker while "following" the step.
+
+**Example (execute-plan Step 1.3, review r2):** The step opened with "update the plan file" then said "Apply Plan-file edits before updating checkboxes." Collapsed to one sentence that leads with the marker refresh.
+
+**See also:** #179 (contradiction after partial edit; wrong order vs conflicting rules), #186, #189 (same-line character order for Validation Commands), `execute-plan` Plan-file edits (skill-gate).
+
+## 189. Same-Line Presence Does Not Prove Character Order
+
+**Principle:** Family E (temporal / ordering invariants) cross with Family H (verify the real thing).
+
+**Trigger:** Authoring or reviewing Validation Commands that assert phrase A must precede phrase B inside a step, using a presence grep for both tokens, or a line-number compare that treats equal lines as ordered.
+
+**Rule:**
+1. When both phrases can appear on one line, assert character order inside the matched window (for example `case "$window" in *'A'*'B'*)`), not only that both tokens exist.
+2. Do not treat `a_ln <= b_ln` as proof when `a_ln == b_ln`; same-line inversion stays green.
+3. After writing the check, simulate same-line reverse order and two-sentence reverse order; both must fail.
+
+**Why this happens:** Presence and line equality prove anchors exist, not left-to-right order on the same line.
+
+**Shape trigger (when to suspect this family):** An ordered Validation Command stays green after inverting two phrases on one line, or after swapping two adjacent sentences while both tokens remain in the window.
+
+**Distinguishing from #187 / #188:** #187 is an incomplete multi-line chain (`a < z` and `b < z`). #188 is skill prose that leads with the mutation. This lesson is a gate that cannot see character order when both tokens share a line.
+
+**Example (playbook execute-plan skill-gate marker plan, review r3):** Step 1.3 presence and structural greps stayed green on inverted wording. A line-number `-le` check also false-greened when both phrases shared a line. Replaced with a character-order `case` requiring `Plan-file edits` before `update the plan file` inside the Step 1.3 window.
+
+**See also:** #186 (context spillover), #187 (pairwise-before-last), #188 (lead skill steps with the gate), #190 (fail-closed abort / polarity), `plans` Validation Commands authoring rules, coding_guidelines.md #22/#25 (Family E / Family H).
+
+
+## 190. Validation Blocks Must Abort Explicitly; Token Presence Is Not Polarity
+
+**Principle:** Family H (verify the real thing) cross with Family B (error-policy propagation). A Validation Commands block that runs required greps without an explicit abort on miss, or that asserts a policy by grepping a token that survives inverted wording, reports exit 0 while the obligation is absent or reversed. Bash `set -e` and `!` do not fix this: inverted commands and mid-`&&` failures are exempt.
+
+**Trigger:** Authoring or reviewing a multi-check Validation Commands bash block, especially after adding dedicated greps that "should" fail on miss.
+
+**Rule:**
+1. Wrap every required positive check so miss aborts: `grep ... || { echo ...; exit 1; }` or `if ! { ... }; then exit 1; fi`. Do not rely on bare grep exit status or `test A && test B` alone to stop the block.
+2. For forbidden matches, use `if grep ...; then echo ...; exit 1; fi`. Do not rely on `! grep` (or `set -e` with `!`) as the abort mechanism.
+3. When asserting a policy polarity (FAIL-LOUD stop, must refresh), grep for the positive obligation verbs inside a tight window, and abort on inverted phrases (`continue editing`, `without refreshing`, `skip.*marker`). Token leftovers (`unwritable`, `WRITE RECIPE`) are not enough.
+4. After writing, mutate: strip one required obligation, add a bypass phrase, invert polarity wording. Each mutation must exit non-zero before the hygiene command runs.
+
+**Why this happens:** Authors paste greps into a script and assume non-zero stops the script. Without `set -e` (or even with it for `!` / mid-pipeline), later commands including hygiene still run and the overall exit is 0.
+
+**Shape trigger (when to suspect this family):** Validation Commands stay green after removing a Hard Gate or anti-pattern row, after adding bypass language, or after rewriting a FAIL-LOUD stop as continue-editing; OR a review finds `! grep` / bare presence greps as the only fail path.
+
+**Distinguishing from #186 / #189:** #186 is wrong sufficiency (context spillover). #189 is same-line character order. This lesson is abort policy and polarity of wording.
+
+**Example (playbook execute-plan skill-gate marker plan, review r4):** The shipped Validation Commands stayed green when Hard Gate #20, the anti-pattern row, Recovery marker order, or bypass language were mutated. Polarity greps for `unwritable` stayed green when shared Plan-file edits said continue editing. Fixed with explicit `|| exit 1` / `if grep; then exit 1; fi` and polarity-positive plus inverted-polarity checks.
+
+**See also:** #186 (context spillover), #187 (pairwise-before-last), #189 (same-line order), `plans` Validation Commands authoring rules, coding_guidelines.md #19/#25 (Family B / Family H).

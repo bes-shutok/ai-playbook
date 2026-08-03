@@ -151,6 +151,8 @@ SKIP only when one of these conditions holds:
   - Finding was already confirmed as `done` by prior code inspection
 ```
 
+Do **not** drop a finding that asks to strengthen `## Validation Commands` solely because the skill or implementation prose already states the obligation. Skill correctness and validation-gate coverage are separate surfaces (see `development_lessons.md` #186).
+
 "Optional" or "Low" severity signals lower priority for the reviewer, not permission to defer action. If the fix is large or opens a new subsystem, say so briefly in the report but proceed unless a push-back condition above triggers. The Triage Decision Rule below still gates design-decision findings (architectural moves, refactors) - those remain ask-first regardless of severity.
 
 ## Triage Decision Rule
