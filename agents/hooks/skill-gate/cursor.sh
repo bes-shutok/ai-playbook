@@ -4,9 +4,9 @@
 # Gates Write|StrReplace|EditNotebook on gated plan files. Passes hook cwd
 # to the core so plans_dir resolves from .ai-playbook/facts.md.
 #
-# Cursor deny/allow shape:
-#   {"allow_tool": true}
-#   {"allow_tool": false, "deny_reason": "..."}
+# Cursor deny/allow shape (match sibling hooks; permission is required):
+#   {"permission":"allow"}
+#   {"permission":"deny","user_message":"...","agent_message":"..."}
 #
 # Session: SID="$(python3 ~/.ai-playbook/scripts/session_channel.py)"
 set -u
@@ -63,9 +63,15 @@ except Exception:
 allow = bool(obj.get("allow_tool", True))
 deny = obj.get("deny_reason", "")
 deny = deny if isinstance(deny, str) else str(deny)
-out = {"allow_tool": allow}
-if not allow:
-    out["deny_reason"] = deny
+# Cursor preToolUse expects permission; allow_tool alone is not enough.
+if allow:
+    out = {"permission": "allow"}
+else:
+    out = {
+        "permission": "deny",
+        "user_message": deny,
+        "agent_message": deny,
+    }
 sys.stdout.write(json.dumps(out))
 '
 exit 0

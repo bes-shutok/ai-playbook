@@ -49,17 +49,17 @@ Ask the user for confirmation to create a new branch:
 Ask the user:
 
 ```
-I'll create a new branch for this plan:
+I'll create a new local branch for this plan:
 - Base: current branch (<current-branch>)
 - New branch name: <computed-branch-name>
-- This branch will track origin (push -u on first commit)
+- Push stays off until you explicitly ask to push
 
 Proceed with branch creation? (yes/no)
 ```
 
 Wait for explicit user confirmation before proceeding.
 
-### Step 0.2; Create and push the branch
+### Step 0.2; Create the branch
 
 If the user confirms (yes):
 
@@ -77,8 +77,9 @@ else
 fi
 
 git checkout -b "$BRANCH_NAME"
-git push -u origin "$BRANCH_NAME"
 ```
+
+Do **not** run `git push` here. Branch-create confirmation is not push authorization. Push only after an explicit user request in the current message (user `AGENTS.md` Git Push Policy).
 
 If the user declines (no):
 
@@ -149,7 +150,7 @@ Before writing tasks, define explicit criteria for evaluating whether the final 
 **Ask:**
 1. **What quality dimensions matter most for this change?** (examples: correctness, performance, maintainability, security, test coverage, observability)
 2. **What metrics or checks will verify success?** (examples: specific test commands, load test targets, latency SLO checks, security scan results)
-3. **What are the release gates?** (examples: code review approval, CI passing, performance regression tests, security sign-off)
+3. **What proves repository implementation is done?** Separate local, repo-verifiable **Done when** checks from deployed, cross-team, or human-owned **Ship when** conditions.
 
 Write these to the requirements buffer as `## Evaluation Criteria`. This becomes a required section in the final plan.
 
@@ -174,7 +175,9 @@ Present the validated requirements and evaluation criteria back to the user in s
 - <quality dimension>: <specific check or metric>
 - <quality dimension>: <specific check or metric>
 
-**Release gates:** <what must pass before this can ship>
+**Done when:** <local and repository-verifiable implementation checks>
+
+**Ship when:** <deployed, cross-team, or human-owned conditions; prose only>
 
 Proceed with writing the plan? (yes/no; if no, tell me what to adjust)
 ```
@@ -206,8 +209,11 @@ Every plan follows this exact structure; no variations:
 - <dimension> (e.g., correctness, performance, maintainability): <specific check or metric>
 - <dimension>: <specific check or metric>
 
-**Release gates:**
-- <what must pass before this can ship>
+**Done when:**
+- <local and repository-verifiable implementation check>
+
+**Ship when:**
+- <deployed, cross-team, or human-owned condition; no checklist item>
 
 ## Review Scope
 
@@ -264,7 +270,25 @@ Examples:
 
 **Rules:**
 - Title is always `# Plan: <name>`; no other heading format.
-- Every item is `- [ ]`; concrete and verifiable, never vague.
+- Every included task item is `- [ ]`; concrete and verifiable, never vague.
+- **Checklist inclusion gate:** first classify every proposed candidate as **repository implementation**, **external prerequisite**, or **release condition**.
+- In this classification, a release condition means release gate.
+- **Fail closed on ambiguity:** if ownership, target, or evidence source is unclear, do not label the candidate as repository implementation, and do not open a release-gate exception. Put it under **Ship when** as an external prerequisite or release gate until ownership is affirmative.
+- Only repository implementation becomes an **executable plan task** and uses `- [ ]` by default. Put external prerequisites and release conditions under **Ship when** as prose.
+- A release condition may become an executable plan task only as an exception. External prerequisites are never exception-admissible. Ask the user, receive an explicit confirmation, and record `exception confirmed by user: <exact confirmation text or stable message reference>; item: <specific checklist action>; target/environment: <specific target or environment>; confirmation time/session: <time and session>`, `why executable now: <reason>`, and `completion evidence: <observable evidence>` beside the task in the plan file. Chat-only confirmation is insufficient. Consumers must verify that the receipt is current and binds the confirmation to that item, target or environment, and time or session, then still follow higher-level authorization rules for external writes.
+- Acceptable exception: `- [ ] Run the repository-owned release validation script against <ENVIRONMENT>; exception confirmed by user: <stable message reference>; item: run the repository-owned release validation script; target/environment: <ENVIRONMENT>; confirmation time/session: <YYYY-MM-DD HH:MM, current session>; why executable now: the script and required credentials are available in this repo and session; completion evidence: successful command output recorded in the task log.`
+- Reject: `why executable now: user said yes`. Confirmation permits the exception but does not explain why the executor can complete it now.
+- Use this short **allow/deny** guide:
+
+  | Candidate | Classification | Checklist |
+  |---|---|---|
+  | Update a local script, docs, or tests | Repository implementation | Allow |
+  | Deploy to `<STAGING_ENVIRONMENT>` | Release gate | Deny by default; exception-only with confirmation receipt, `why executable now`, and observable completion evidence (this-service / repository-owned deploy only; never other-team deploy) |
+  | Probe work owned by `<OTHER_TICKET>` | External prerequisite | Deny; put under Ship when |
+  | Human merges the pull request | Release gate | Deny by default; exception-only with confirmation receipt, `why executable now`, and observable completion evidence |
+
+- Optional Jira or equivalent tracking for **Ship when** items is allowed only after the user confirms ticket creation. Never auto-create tracking tickets.
+- **Anti-pattern:** do not copy rollout checklist shapes from completed plans. Completed history is immutable context, not a template for Ship-when work.
 - For behavior changes: use the RED → GREEN → commit TDD cycle above.
 - For non-behavior changes (config, docs, SQL): use concise `- [ ]` action items with exact file paths.
 - Include inline code snippets when the implementation pattern is non-obvious.
@@ -275,7 +299,7 @@ Examples:
 - **Do not make bare "inherited/validated/previously-reviewed/tested" claims.** Phrasing like "gate-core inherited," "validated by prior rounds," or "unchanged and already tested" creates a review blind spot: `review-plan` panels treat the assertion as proof and skip re-measuring the mechanism. If a mechanism genuinely carries over, name the specific mechanism AND the input/condition it was validated against (e.g. "the fence-aware parser resets `in_fence` at each heading; tested against the real corpus's odd fence count"), or re-state what the mechanism does and how it is tested in THIS plan. A claim of validity is not a substitute for the test.
 - Every plan must include a **Review Scope** section (see below).
 - Every plan must include a **Gist & Examples** section (see Universal Patterns).
-- Every plan must include an **Evaluation Criteria** section defining quality dimensions and release gates (see Phase 1).
+- Every plan must include an **Evaluation Criteria** section defining quality dimensions, **Done when**, and **Ship when** (see Phase 1).
 - Before finalizing, verify pre-computation bug pattern checks are addressed (see Universal Patterns).
 
 ## Documentation Impact Assessment
@@ -389,15 +413,15 @@ Every plan must include a `## Validation Commands` fenced bash block (see plan t
 
 6. **Zero-match assertions must negate the search command:** When a validation command's stated success condition is "no remaining hits" / "returns empty" / a stale-reference sweep with zero matches expected, the command itself must assert that explicitly (`! grep ...`, `grep -L`, or equivalent). A bare `grep`/`rg` search exits non-zero when there are zero matches, which is the **opposite** of what "no remaining hits" means as a pass condition; a plan that pastes the search command without negating it fails its own gate exactly when the underlying work is correct.
 
-7. **Dedicated greps per structural obligation (no context spillover):** When Validation Commands assert that several structural obligations exist (Hard Gates, anti-pattern rows, Recovery order, named Step subsections), give each obligation its own dedicated search that fails when THAT obligation is absent. Do not rely on a wide `-A`/`-B` context window around a different anchor to "also cover" siblings. Context spillover is not a gate (see `development_lessons.md` #186).
+7. **Dedicated greps per structural obligation (no context spillover):** When Validation Commands assert that several structural obligations exist (Hard Gates, anti-pattern rows, Recovery order, named Step subsections), give each obligation its own dedicated search that fails when THAT obligation is absent. Do not rely on a wide `-A`/`-B` context window around a different anchor to "also cover" siblings. Context spillover is not a gate (see `development_lessons.md` #187).
 
-8. **Full chain for ordered sequences:** When Validation Commands assert an N-step order (for example marker → mark → Launch done), require the full chain (`a < b < c`), not only each step before the last (`a < c` and `b < c`). Pairwise-before-last checks still green on a middle swap. After writing the check, simulate the swapped adjacent pair and confirm it fails (see `development_lessons.md` #187).
+8. **Full chain for ordered sequences:** When Validation Commands assert an N-step order (for example marker → mark → Launch done), require the full chain (`a < b < c`), not only each step before the last (`a < c` and `b < c`). Pairwise-before-last checks still green on a middle swap. After writing the check, simulate the swapped adjacent pair and confirm it fails (see `development_lessons.md` #188).
 
-9. **Character order when phrases can share a line:** When Validation Commands assert that phrase A must precede phrase B inside one step, do not rely on presence-only greps or `a_ln <= b_ln` (same-line inversion stays green). Assert character order inside the matched window (for example a `case` pattern `*A*B*`). Simulate same-line reverse order and two-sentence reverse order; both must fail (see `development_lessons.md` #189).
+9. **Character order when phrases can share a line:** When Validation Commands assert that phrase A must precede phrase B inside one step, do not rely on presence-only greps or `a_ln <= b_ln` (same-line inversion stays green). Assert character order inside the matched window (for example a `case` pattern `*A*B*`). Simulate same-line reverse order and two-sentence reverse order; both must fail (see `development_lessons.md` #190).
 
-10. **Explicit abort on every required check (fail-closed block):** Multi-check Validation Commands must abort on miss or forbidden match. Wrap positive greps with `|| { echo …; exit 1; }` (or `if ! { … }; then exit 1; fi`). For forbidden matches use `if grep …; then echo …; exit 1; fi`. Do not rely on bare grep exit status, `test A && test B` alone, `! grep`, or `set -e` (bash exempts `!` and non-final `&&` failures). After writing, strip one required obligation or add a bypass phrase and confirm the block exits non-zero before hygiene (see `development_lessons.md` #190).
+10. **Explicit abort on every required check (fail-closed block):** Multi-check Validation Commands must abort on miss or forbidden match. Wrap positive greps with `|| { echo …; exit 1; }` (or `if ! { … }; then exit 1; fi`). For forbidden matches use `if grep …; then echo …; exit 1; fi`. Do not rely on bare grep exit status, `test A && test B` alone, `! grep`, or `set -e` (bash exempts `!` and non-final `&&` failures). After writing, strip one required obligation or add a bypass phrase and confirm the block exits non-zero before hygiene (see `development_lessons.md` #191).
 
-11. **Polarity-aware policy greps:** When asserting FAIL-LOUD stop, marker refresh, or similar policy, grep for the positive obligation verbs inside a tight window, and abort on inverted phrases (`continue editing`, `without refreshing`, `skip.*marker`). Presence of leftover tokens (`unwritable`, `WRITE RECIPE`) is not polarity. Simulate inverted wording and confirm failure (see `development_lessons.md` #190).
+11. **Polarity-aware policy greps:** When asserting FAIL-LOUD stop, marker refresh, or similar policy, grep for the positive obligation verbs inside a tight window, and abort on inverted phrases (`continue editing`, `without refreshing`, `skip.*marker`). Presence of leftover tokens (`unwritable`, `WRITE RECIPE`) is not polarity. Simulate inverted wording and confirm failure (see `development_lessons.md` #191).
 
 ## Plan Quality Gate
 
@@ -499,7 +523,7 @@ Core plan quality principles applicable across all projects and languages:
 
 - **Gist & Examples section**: Every plan must include a human-readable "Gist & Examples" section after the header that explains: what changes (plain language), why the change is needed (problem statement or context), concrete input/output examples showing before/after behavior, and edge cases that motivated design decisions. This serves as the on-ramp for both implementers and reviewers who need context before diving into tasks.
 
-- **Evaluation Criteria section**: Every plan must include an "Evaluation Criteria" section that defines how quality will be assessed for the final product. This includes quality dimensions (correctness, performance, maintainability, security, test coverage, observability) with specific checks or metrics for each, and release gates (what must pass before the change can ship). Criteria must be precise and verifiable; not vague statements like "it should work" but concrete tests, commands, or metrics.
+- **Evaluation Criteria section**: Every plan must include an "Evaluation Criteria" section that defines how quality will be assessed for the final product. This includes quality dimensions (correctness, performance, maintainability, security, test coverage, observability) with specific checks or metrics for each, **Done when** criteria for repository implementation, and **Ship when** conditions for deployed, cross-team, or human-owned evidence. Criteria must be precise and verifiable; not vague statements like "it should work" but concrete tests, commands, metrics, or named release conditions.
 
 - **Core concepts**: Edge cases (boundary conditions requiring explicit handling), negative requirements (what must NOT be done), acceptance criteria (definition of done), validation sequence (ordered steps in which processing must occur).
 
@@ -555,7 +579,10 @@ Announce: "Running `done` to finalize the plan-creation session (learn + docs-br
 Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-skills` Step 0). This skill reads `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}`, and `{rfcs_dir}` from that file.
 
 ### With `execute-plan` skill
-Consumer of plan format, task order, `## Validation Commands`, `## Review Scope`, per-task commit lines, and completed-plan archival. Shares Phase 0 branch-setup semantics: `plans` runs it at plan creation; `execute-plan` runs it at implementation start and reuses an existing feature branch when appropriate. Both skills refresh the plans-class skill-gate marker per `ai-playbook/agents/hooks/skill-gate/README.md` Marker WRITE RECIPE before plan-file edits. After plan creation or update, hand off to `execute-plan` when the user wants automated iterative implementation with per-task commits and post-implementation review loops.
+Consumer of plan format, task order, `## Validation Commands`, `## Review Scope`, per-task commit lines, and completed-plan archival. It executes only tasks admitted by the Checklist inclusion gate: repository implementation, or a release gate with a current bound exception receipt plus `why executable now` and observable `completion evidence`. External prerequisites are never exception-admissible. Shares Phase 0 branch-setup semantics: `plans` runs it at plan creation; `execute-plan` runs it at implementation start and reuses an existing feature branch when appropriate. Both skills refresh the plans-class skill-gate marker per `ai-playbook/agents/hooks/skill-gate/README.md` Marker WRITE RECIPE before plan-file edits. After plan creation or update, hand off to `execute-plan` when the user wants automated iterative implementation with per-task commits and post-implementation review loops.
+
+### With `review-plan` skill
+The `plans` skill provides the Checklist inclusion gate to its consumer, `review-plan`. Plan review verifies that checklist items are repository implementation, and that every release-gate exception has a current bound receipt plus a meaningful `why executable now` and observable `completion evidence`. External prerequisites remain blocking and are never exception-admissible.
 
 ### With `grilling` skill
 When Phase 1 requirements discovery hits ambiguous scope or trade-offs, and the user asks to grill a decision, invoke `grilling` for one-question-at-a-time resolution. Do not replace the plans interview structure; grilling deepens specific decisions.

@@ -14,6 +14,10 @@ Use this skill for **active review**: producing new review findings for a PR, di
 
 Do not use this skill for implementing, triaging, or replying to existing review comments. Use `receiving-code-review` for passive review feedback. For GitHub PR operations (fetching metadata, files, diffs, existing comments, posting reviews), use the shared primitives in `github-pr-workflow`.
 
+**Caller: `execute-plan` Phase 3.** The execute-plan **parent** is this skill's orchestrator by default: it launches lens workers and writes the staging doc. Do not wrap this skill in a nested "Code Review" sub-agent when the parent can fan out (see `execute-plan` Step 3.1). Nested recovery is only for hosts that cannot launch workers.
+
+**Doc/skill-only diffs.** When the review scope is Markdown, skills, or guidelines and the plan's Validation Commands are grep/hygiene (no production mutators), the `testing` worker uses those commands as primary evidence. Do not invent mutation trees, scratch validators, or throwaway harnesses under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` or `{tmp_dir}/code-review/`.
+
 ## Modes
 
 | Mode | Trigger | Behavior |
@@ -55,7 +59,7 @@ Resolve the `<base>` / `<head>` to diff against before any `git diff` or sub-age
 - **PR URL:** base and head resolve unambiguously via `github-pr-workflow`. This is the "obvious" case; no prompt is needed.
 - **Branch review, base not obvious:** do **not** leave `<base>` as a placeholder. If the base cannot be resolved with confidence (no `against X` arg, no single open PR, ambiguous integration branch), resolve it via the tier fallback (the repo's default integration branch per `AGENTS.md`). Then branch on the execution context:
   - **Interactive top-level session:** ask the user explicitly, "What branch/commit should I diff against?" (or confirm the resolved default) before any `git diff` or sub-agent launch.
-  - **Non-interactive / sub-agent context (risk-F1):** when invoked as a sub-agent of `execute-plan` Phase 3 or `review-loop`, or in a session with no user at the console (CI/scheduled), do **not** prompt. Accepting the resolved default is required to honour `execute-plan`'s "no asking between steps" contract (`execute-plan/SKILL.md:27`). Record the resolution + reason in the staging-doc Metadata (for example `Base resolved non-interactively: main (repo default; no PR/arg, autonomous sub-agent)`) so it is auditable rather than silent. The prompt fires only in an interactive top-level session.
+  - **Non-interactive / execute-plan or review-loop context (risk-F1):** when the execute-plan parent is orchestrating Phase 3, when invoked via the recovery Code Review template, when under `review-loop`, or in a session with no user at the console (CI/scheduled), do **not** prompt. Accepting the resolved default is required to honour `execute-plan`'s "no asking between steps" contract (`execute-plan/SKILL.md` Continuous execution). Record the resolution + reason in the staging-doc Metadata (for example `Base resolved non-interactively: main (repo default; no PR/arg, execute-plan Phase 3)`) so it is auditable rather than silent. The prompt fires only in an interactive top-level session.
 - **Magnitude check (all modes):** after resolving the base, run `git diff <base>...<head> | wc -c`. If the byte count exceeds `review_large_diff_bytes` (default `10240`), the change is unexpectedly large. Read `review_large_diff_bytes` from the opening TOML block in `.ai-playbook/facts.md` (same source as the **Documentation paths:** preamble above; absent key ⇒ default `10240`); this read is pinned to Step 1 because the magnitude check runs here, before the later `### Resolve paths from facts` subsection. On a large diff:
   - **Interactive top-level session:** confirm the basis with the user before launching sub-agents (state the size and proposed base; proceed only once the user confirms). **Decline path:** if the user does not confirm (declines, names a different base, or aborts), re-resolve to the corrected base and re-run the magnitude check, or stop; do not launch against an unconfirmed base.
   - **Non-interactive context:** skip the confirmation prompt (the orchestrator's autonomy contract takes precedence) but still record the diff size and the resolved base in the staging Metadata.
@@ -766,7 +770,7 @@ Staging doc hierarchy and `## Review Statistics` are defined in `review-staging`
 Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-skills` Step 0). This skill reads `{reviews_dir}` and other doc paths from that file before writing staging docs under `{reviews_dir}/`.
 
 ### With `execute-plan` skill
-Invoked as a sub-agent in branch review mode after plan implementation. The orchestrator exits after one fresh review of the current digest has zero unresolved blocking findings. Post-fix reviews use blind correctness plus every distinct owning or affected worker.
+Phase 3: the execute-plan **parent** runs this skill as the review orchestrator and launches lens workers (default). Nested "Code Review" sub-agent only when the parent cannot fan out. Exits after one fresh review of the current digest has zero unresolved blocking findings. Post-fix reviews use blind correctness plus every distinct owning or affected worker.
 
 ## Limitations
 

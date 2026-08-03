@@ -52,7 +52,7 @@ Task: ### Task <TASK_NUM>: <TASK_TITLE>
 
 ## Rules
 
-1. Implement ONLY this task; every `- [ ]` clause in the task section above.
+1. Implement ONLY this task's admissible clauses. Complete every `- [ ]` that is repository implementation, or a release-gate exception that already records a current bound receipt plus **why executable now** and a `completion evidence` criterion. Refuse and return `blocked` for external prerequisites or release-gate items missing that receipt shape; do not implement unauthorized work.
 2. Follow RED → GREEN when the task specifies it; run tests and show fresh output.
 3. Touch only files listed under this task's `Files:` (plus imports/wiring required for compile).
 4. Fix ALL test failures before returning; including failures that seem unrelated.
@@ -159,10 +159,13 @@ Return (orchestrator blocks the next review round without these):
 
 ---
 
-## Code Review
+## Code Review (recovery only)
+
+Use this template **only** when the execute-plan parent **cannot** fan out lens workers. Default Phase 3 path: the parent runs `doing-code-review` and launches the **Review lens worker** template below. Do not use this recovery template to reintroduce nested review orchestration when the parent can launch workers.
 
 ```
-You are reviewing all changes made for an implementation plan.
+You are the recovery review orchestrator for one execute-plan Phase 3 round.
+The parent could not fan out lens workers; you must run doing-code-review yourself.
 
 Read and follow: ~/.agents/skills/doing-code-review/SKILL.md
 
@@ -170,6 +173,15 @@ Plan: <PLAN_PATH>
 Review round: <REVIEW_ROUND>
 Base branch: <BASE_BRANCH>
 Head: current branch
+Source digest: <SOURCE_DIGEST>
+
+## Session handoff (required; do not invent)
+
+- Commits on branch for this plan: <COMMIT_ONELINERS>
+- Phase 2 validation: pass | fail (summary)
+- Known run incidents / intentional deviations (from parent session): <INCIDENTS_OR_NONE>
+- Review Scope excerpt: <REVIEW_SCOPE>
+- Doc/skill-only plan? yes | no (if yes: testing evidence = Validation Commands; no mutation trees under session tmp)
 
 ## Review mode (required)
 
@@ -189,6 +201,10 @@ Use the worker set supplied in `<REVIEW_MODE_NOTES>`. The initial pass launches 
 "Solo" is a dedup label, not a mode that skips workers. A full-panel staging doc must show all five named workers as complete. A focused pass must record its selection reason.
 
 Record each actual launch, loaded lenses, parent worker, and Raw/Solo/Echo counts. Workers return `descendant_launches`; flatten any descendants into Panel and count them toward the six-worker ceiling.
+
+## Heartbeat
+
+Within the first tool-using turns, create or append `<REVIEW_LOG_PATH>` with status `in_progress`, the worker launch list, and base/head. Do not wait until the end to create the log.
 
 ## Review Scope (two tiers)
 
@@ -261,6 +277,37 @@ Create `{reviews_dir}/` if missing. Follow `doing-code-review` staging-doc forma
 1. Title; Severity; File:line
 
 Do NOT fix code. Do NOT commit. Review only. Loop exit uses unresolved `blocking: true` after triage.
+```
+
+---
+
+## Review lens worker
+
+Use from the execute-plan **parent** during Step 3.1 (default path). One launch per selected lens. Launch the panel in parallel.
+
+```
+You are one review lens worker for an execute-plan Phase 3 pass.
+
+Lens: <LENS_NAME>
+Plan: <PLAN_PATH>
+Base: <BASE_BRANCH>
+Head: HEAD
+Diff: git diff <BASE_BRANCH>...HEAD
+
+Read lens catalogs and instructions from ~/.agents/skills/review-agents/ as selected by the parent for this lens. Apply ~/.agents/skills/doing-code-review/SKILL.md worker return rules (JSON findings + descendant_launches; §4.12 depth).
+
+## Scope
+
+<REVIEW_SCOPE>
+<REVIEW_MODE_NOTES>
+
+## Doc/skill-only note (when parent says yes)
+
+If this is a Markdown/skills plan whose Validation Commands are grep/hygiene: use those commands as testing evidence. Do not create mutation trees, scratch validators, or throwaway scripts under the execute-plan session tmp directory.
+
+## Return
+
+Self-contained findings JSON only. Do not write the staging doc (parent synthesizes). Do not commit.
 ```
 
 ---

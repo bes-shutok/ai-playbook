@@ -1010,3 +1010,7 @@ When verification needs private registry or cloud credentials (for example AWS S
 61.4. Document durable how-tos in the project's Layer 2 local-dev guide with **generic** CLI forms (`aws sso login`, registry host from the image URL). Omit personal profile/session names and other machine-private identity.
 
 **Why this matters:** Agents cannot complete browser SSO for the user. Claiming "Compose and Testcontainers should work" before auth and without a re-check wastes a round trip; hardcoding personal SSO identifiers into the repo leaks private config.
+
+## 62. Implementation Plan Checklists Contain Executable Tasks Only
+
+Implementation-plan checklists contain executable plan tasks only. Keep deployed, cross-team, and human-owned conditions under **Ship when** as narrative prose. Checklist exceptions and optional Jira tracking require user confirmation; follow the `plans`, `review-plan`, and `execute-plan` skills for the authoring, review, and execution procedures. Completed history remains immutable under `docs/maintenance/project-decisions.md` ADR-0001.

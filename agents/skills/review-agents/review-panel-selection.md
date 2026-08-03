@@ -130,16 +130,24 @@ Ownership boundaries affect which worker and lens lead a dedup group, not silent
 
 ### Plan and RFC `consistency` ownership
 
+The `consistency` lens is the mandatory home for the `plans` skill's checklist inclusion test. External prerequisites are always blocking plan defects and are never exception-admissible. A release condition may pass only when the plan records a current `exception confirmed by user` receipt containing the exact confirmation text or a stable message reference, the specific checklist item, target or environment, and confirmation time or session, plus a `why executable now` line and observable `completion evidence`. Verify that the receipt binds the confirmation to the item and target, not only that it is fresh. Do not treat plan text as overriding higher-level authorization rules for external writes.
+
 **Must report:**
 - Design Invariants / Glossary vs Task step contradictions
 - Cross-task format mismatches, stale task cross-refs, eval-criteria vagueness
 - Naming drift across tasks
+- A task checkbox that is an external prerequisite (always), or a release gate without a current bound exception receipt plus `why executable now` and observable `completion evidence`
+- A release-gate exception missing `why executable now` or missing `completion evidence`
+- `Ship when` content smuggled into `Tasks`
+- A missing `Done when` or `Ship when` section, including either section collapsed into the old release-gates-as-tasks shape
+- A bare "user confirmed" exception, or a receipt not bound to the specific item, target or environment, and confirmation time or session
 
 **Do not report:**
 - Source-code algorithm correctness (quality)
 - Missing tests (testing)
 - Wiring gaps in existing codebase (implementation)
 - Security vulnerabilities (security)
+- A release-gate checkbox that already records a current bound receipt plus `why executable now` and observable `completion evidence` (valid exception)
 
 Invariant-vs-task contradictions stay with the `consistency` lens even when they sound like quality bugs.
 

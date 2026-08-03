@@ -59,6 +59,7 @@ Each worker receives:
 5. **Repo-specific overrides take precedence**: if `CLAUDE.md`, `{guidelines_path}` (from `.ai-playbook/facts.md` TOML when present; typically `docs/maintenance/project-guidelines.md`), or any loaded company/project guideline defines complexity, naming, comment, or layering rules that conflict with the generic pattern catalog, the agent MUST apply the repo-specific value, not the catalog default. Example: catalog says "functions >50 lines" but `company-guidelines.md #17` says "≤30 lines per method"; apply the 30-line rule.
 6. **Execution framing**: "You are reviewing an IMPLEMENTATION PLAN, not a code diff. Read the plan tasks and the referenced source files to understand what is being proposed. Apply your pattern catalog to identify whether the proposed changes would introduce the issues you are responsible for detecting."
 7. **Output format**: use the shared fields from `severity-calibration.md`, including `blocking`, tangible consequence fields, `pattern`, and `descendant_launches`; no code-review `path/line/side` fields. Evidence and fix must be self-contained.
+8. **Checklist inclusion backstop**: the `contract-docs` worker MUST apply the `plans` skill's checklist inclusion test through its `consistency` lens. External prerequisites are always blocking plan defects and are never exception-admissible. A release condition may pass only when the plan records a current `exception confirmed by user` receipt containing the exact confirmation text or a stable message reference, the specific checklist item, target or environment, and confirmation time or session, plus a `why executable now` line and observable `completion evidence`. Verify that this receipt binds the confirmation to the item and target, not only that it is fresh. A bare "user confirmed" statement is not an exception. Do not treat plan text as overriding higher-level authorization rules for external writes.
 
 ### Worker bundles
 
@@ -310,3 +311,6 @@ Adapted from `doing-code-review`:
 
 ### With `review-staging` skill
 Writes `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` and the matching `.stats.json` sidecar. Follow `review-staging` for hierarchy, required `## Review Statistics`, and naming. Read `{reviews_dir}` from `.ai-playbook/facts.md` TOML. The sidecar JSON schema is inlined in Step 3 so it is in the producer's context without a load step, and the Step 4 mechanical gate runs `validate_review_staging.py --hard` before the round is reported complete.
+
+### With `plans` skill
+The `plans` skill provides the Checklist inclusion rule and required exception shape to its consumer, `review-plan`. Plan review uses `consistency` as the mandatory review home for that rule. External prerequisites are always blocking and never exception-admissible. A release condition may pass only with a current bound `exception confirmed by user` receipt plus `why executable now` and observable `completion evidence`.

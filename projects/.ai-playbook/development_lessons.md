@@ -3934,7 +3934,27 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **See also:** the ruff-on-re-export lesson (`ImportError` at collection is the failure signal, but from ruff auto-fix not a kill), #149 (test class silently deselected by `python_classes`, a config cause), coding_guidelines.md #25 (Family H parent: verify the real thing, not the abstraction), `execute-plan` skill (inline recovery after sub-agent failure is allowed; this lesson is the verification step that makes that recovery safe).
 
-## 186. Plan Validation Greps Must Target Each Obligation, Not Context Spillover
+## 186. Plan Validation Commands Must Discriminate; Multi-File OR and Peer-Name OR Are False Greens
+
+**Principle:** Family H (Verify the real thing, not the abstraction). Cross with Family A (Equivalence-class coverage).
+
+**Trigger:** Authoring or reviewing a plan whose `## Validation Commands` prove Task Done when via `grep` over skill or doc files, especially after a review fold that added new phrases.
+
+**Rule:**
+1. One `grep PATTERN file1 file2 file3` exits 0 if **any** file matches. Require the new phrase with a **per-file** grep (or `&&` chain) when each file owns a contract.
+2. Do not OR a required **new** phrase with a **pre-existing** peer name (`inclusion|review-plan|execute-plan`). Pre-existing Integration Points headings green the gate with zero inclusion-gate work. Require inclusion language **and** the peer name as separate greps.
+3. Closed pause enumerations need **per-anchor** greps (or one same-line pattern each). A single hit under Hard Gates does not prove Continuous execution and Step 1.5 were updated.
+4. Prefer positives that fail on the pre-change tree for the new contract (`Checklist inclusion`, `delete-without-Ship-when`, `^## 62\.`). Soft ORs that already match today are not Task Done when.
+
+**Why this happens:** Authors pack "prove coverage" into one alternation for brevity. Under continuous-execution pressure, implementers satisfy the greps with the cheapest pre-existing match.
+
+**Shape trigger:** Plan review finds Validation Commands green on the current tree before the task edits land; OR Task 4 can pass while a named skill still lacks the new phrase.
+
+**Example (2026-08-03 plan-executable-task-gates review loop):** r2–r4 blocked on multi-file `why executable now` OR, Integration Points ORing peer skill names with inclusion, and a single `inclusion-check failure` hit for three pause lists. Fold: per-file greps, IP AND splits, three pause anchors plus dedicated Inclusion Hard Gate (not the ask-only list).
+
+**See also:** #87 (touched-mode false green), #182 (gate every producer), coding_guidelines.md #25 (Family H), `plans` / `review-plan` Validation Commands guidance, `docs/plans/2026-08-03-plan-executable-task-gates.md`, #187–#191 (Validation Commands false-green family from skill-gate marker plan).
+
+## 187. Plan Validation Greps Must Target Each Obligation, Not Context Spillover
 
 **Principle:** Family H (verify the real thing, not the abstraction) cross with Family A (equivalence-class coverage). A plan `## Validation Commands` check that greps one structural anchor with a large context window (`-A`/`-B`) and hopes a sibling obligation appears nearby verifies the wrong thing. It proves the anchor exists, not that each required obligation is present. Missing siblings still exit 0.
 
@@ -3956,10 +3976,10 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **Witness (same plan, review r3):** Step 0.4b stayed inside a shared `-A45` structural loop. Stripping the local "immediately before that plan-file write" clause still matched the later shared `Plan-file edits` section inside that window. Pull Step 0.4b out of the wide loop; use a tight `-A12` plus the local phrase so shared cross-refs cannot false-green.
 
-**See also:** #171 (wrong `rg -E` flag; different false-green mechanism), #179 (skill internal contradiction after partial edit), #189 (same-line character order; different false-green), `plans` Validation Commands authoring rules, `receiving-code-review` staging triage, coding_guidelines.md #18/#25 (Family A / Family H).
+**See also:** #171 (wrong `rg -E` flag; different false-green mechanism), #179 (skill internal contradiction after partial edit), #190 (same-line character order; different false-green), `plans` Validation Commands authoring rules, `receiving-code-review` staging triage, coding_guidelines.md #18/#25 (Family A / Family H).
 
 
-## 187. Pairwise Before-Last Checks Do Not Prove Full Order
+## 188. Pairwise Before-Last Checks Do Not Prove Full Order
 
 **Principle:** Family A (equivalence-class coverage) cross with Family E (temporal / ordering invariants). A gate that only asserts each of N steps precedes the final step (`a < z` and `b < z`) leaves adjacent middle orders unchecked. A swapped middle pair still exits 0.
 
@@ -3976,9 +3996,9 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **Example (playbook execute-plan skill-gate marker plan, review r2):** Recovery ordered check required `marker_ln < done_ln` and `mark_ln < done_ln`. Simulation with marker after mark stayed green. Tightened to `marker_ln < mark_ln < done_ln`; the swap then failed.
 
-**See also:** #186 (context spillover false-green; different mechanism), coding_guidelines.md #18/#22 (Family A / Family E), `plans` Validation Commands authoring rules.
+**See also:** #187 (context spillover false-green; different mechanism), coding_guidelines.md #18/#22 (Family A / Family E), `plans` Validation Commands authoring rules.
 
-## 188. Lead Multi-Action Skill Steps With the Gate Action
+## 189. Lead Multi-Action Skill Steps With the Gate Action
 
 **Principle:** Family E (temporal / ordering invariants). Agents treat the first imperative sentence of a step as the start of execution. A later "first refresh the marker" clause loses to an opening "update the plan file".
 
@@ -3995,9 +4015,9 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **Example (execute-plan Step 1.3, review r2):** The step opened with "update the plan file" then said "Apply Plan-file edits before updating checkboxes." Collapsed to one sentence that leads with the marker refresh.
 
-**See also:** #179 (contradiction after partial edit; wrong order vs conflicting rules), #186, #189 (same-line character order for Validation Commands), `execute-plan` Plan-file edits (skill-gate).
+**See also:** #179 (contradiction after partial edit; wrong order vs conflicting rules), #187, #190 (same-line character order for Validation Commands), `execute-plan` Plan-file edits (skill-gate).
 
-## 189. Same-Line Presence Does Not Prove Character Order
+## 190. Same-Line Presence Does Not Prove Character Order
 
 **Principle:** Family E (temporal / ordering invariants) cross with Family H (verify the real thing).
 
@@ -4012,14 +4032,14 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **Shape trigger (when to suspect this family):** An ordered Validation Command stays green after inverting two phrases on one line, or after swapping two adjacent sentences while both tokens remain in the window.
 
-**Distinguishing from #187 / #188:** #187 is an incomplete multi-line chain (`a < z` and `b < z`). #188 is skill prose that leads with the mutation. This lesson is a gate that cannot see character order when both tokens share a line.
+**Distinguishing from #188 / #189:** #188 is an incomplete multi-line chain (`a < z` and `b < z`). #189 is skill prose that leads with the mutation. This lesson is a gate that cannot see character order when both tokens share a line.
 
 **Example (playbook execute-plan skill-gate marker plan, review r3):** Step 1.3 presence and structural greps stayed green on inverted wording. A line-number `-le` check also false-greened when both phrases shared a line. Replaced with a character-order `case` requiring `Plan-file edits` before `update the plan file` inside the Step 1.3 window.
 
-**See also:** #186 (context spillover), #187 (pairwise-before-last), #188 (lead skill steps with the gate), #190 (fail-closed abort / polarity), `plans` Validation Commands authoring rules, coding_guidelines.md #22/#25 (Family E / Family H).
+**See also:** #187 (context spillover), #188 (pairwise-before-last), #189 (lead skill steps with the gate), #191 (fail-closed abort / polarity), `plans` Validation Commands authoring rules, coding_guidelines.md #22/#25 (Family E / Family H).
 
 
-## 190. Validation Blocks Must Abort Explicitly; Token Presence Is Not Polarity
+## 191. Validation Blocks Must Abort Explicitly; Token Presence Is Not Polarity
 
 **Principle:** Family H (verify the real thing) cross with Family B (error-policy propagation). A Validation Commands block that runs required greps without an explicit abort on miss, or that asserts a policy by grepping a token that survives inverted wording, reports exit 0 while the obligation is absent or reversed. Bash `set -e` and `!` do not fix this: inverted commands and mid-`&&` failures are exempt.
 
@@ -4035,8 +4055,72 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **Shape trigger (when to suspect this family):** Validation Commands stay green after removing a Hard Gate or anti-pattern row, after adding bypass language, or after rewriting a FAIL-LOUD stop as continue-editing; OR a review finds `! grep` / bare presence greps as the only fail path.
 
-**Distinguishing from #186 / #189:** #186 is wrong sufficiency (context spillover). #189 is same-line character order. This lesson is abort policy and polarity of wording.
+**Distinguishing from #187 / #190:** #187 is wrong sufficiency (context spillover). #190 is same-line character order. This lesson is abort policy and polarity of wording.
 
 **Example (playbook execute-plan skill-gate marker plan, review r4):** The shipped Validation Commands stayed green when Hard Gate #20, the anti-pattern row, Recovery marker order, or bypass language were mutated. Polarity greps for `unwritable` stayed green when shared Plan-file edits said continue editing. Fixed with explicit `|| exit 1` / `if grep; then exit 1; fi` and polarity-positive plus inverted-polarity checks.
 
-**See also:** #186 (context spillover), #187 (pairwise-before-last), #189 (same-line order), `plans` Validation Commands authoring rules, coding_guidelines.md #19/#25 (Family B / Family H).
+**See also:** #187 (context spillover), #188 (pairwise-before-last), #190 (same-line order), `plans` Validation Commands authoring rules, coding_guidelines.md #19/#25 (Family B / Family H).
+
+
+## 192. Tests That Pass Green Do Not Prove They Skip Gitignored Personal Data
+
+**Principle:** Family H (verify the real thing) cross with Family C (single resolution path). A "tests must read committed synthetic data" rule enforced by static grep + a passing run does NOT prove compliance when production code resolves a default registry/config path into the gitignored per-user directory. Tests pass by reading the user's real personal data off disk; on a fresh clone (where that path is gitignored and absent) they would fail or behave differently. Static grep misses this: the offending code constructs the path programmatically (`repo_root / ... / str(year) / ...`), so no forbidden literal appears in the test. Only a runtime file-open audit catches it.
+
+**Trigger:** A "no personal data" / synthetic-data-only rule AND production code resolves a default path under a gitignored per-user directory (config registries, fixture files, snapshots).
+
+**Rule:**
+1. When production code resolves a per-user/gitignored data path with a default, tests exercising that code MUST inject the committed example/template path explicitly (kwarg, monkeypatched loader, or fixture override) - never rely on the production default, even when the personal file exists locally.
+2. The production resolver MUST fall back to the committed template when the per-user path is absent, so a fresh clone works out of the box.
+3. Add a runtime guard test: run the module under a `sys.addaudithook` file-open audit (in a subprocess, since the hook is process-global) and fail if any forbidden gitignored path is opened. Mutation-verify by reverting the injection and confirming the guard fails.
+4. Static grep for the forbidden path string is insufficient as the sole guard when the path is constructed programmatically.
+
+**Shape trigger (when to suspect this family):** A test passes green on one developer's machine but would fail on a fresh clone; production code constructs a path under a gitignored per-user directory; a "no personal data" rule is enforced only by static grep; a user asks "are we sure these tests only use synthetic data?".
+
+**Distinguishing from the "skipped-in-CI tests need static-guard coverage" lesson:** that lesson is about tests that `pytest.skip` when their real fixture is absent, so a defect never surfaces in CI - caught by extending the static guard's scan list. This is the inverse: tests that do NOT skip (they pass) by silently reading real data that happens to exist locally. The skipped-test case never runs; this case runs and reads the wrong source. Only a runtime audit catches it, because the test never fails.
+
+**Example (on-chain tx tagger plan):** Production hardcoded `repo_root / "resources" / "source" / str(year) / "berachain_contracts.json"` (the gitignored per-user registry). Three e2e tests passed by reading the author's real registry; on a fresh clone they would raise `FileProcessingError`. Static grep for `resources/source/2025` in tests found only docstring comments. A `sys.addaudithook` audit caught the two real registries opened at runtime. Fixed by adding `contracts_path`/`lp_snapshot_path` kwargs (tests inject the `example/` path) + a production `example/` fallback + a subprocess-audit guard test (mutation-verified).
+
+**See also:** Family H / C (coding_guidelines.md #19/#22), AGENTS.md crypto-tests rule.
+
+## 193. A Rename Is Incomplete Until the Source Path Is Gone From HEAD
+
+**Principle:** Family H (verify the real thing, not the abstraction). Cross with Family D (single source of truth for the live path).
+
+`git mv` (or add-destination + delete-source) is complete only when HEAD no longer lists the old path. Staging or committing only the destination leaves both paths tracked. Callers that follow the old path and callers that follow the new path diverge silently.
+
+**Trigger:** Archiving, relocating, or renaming a tracked file when the agent stages with `git add <dest>` instead of a true rename, or when a partial `git mv` leaves the source still tracked.
+
+**Rule:**
+1. Prefer `git mv <src> <dest>` (or an equivalent staged rename), not "copy content to dest then add dest".
+2. Before calling the move done, run `git status` / `git ls-files -- <src>` and confirm the source is deleted or shows as renamed, and that HEAD after commit no longer contains `<src>`.
+3. If both paths appear in `git ls-files` after the intended archive commit, treat that as a failed archive and delete the stale source in a follow-up commit before Phase 5 cleanup.
+
+**Shape trigger (when to suspect this family):** A completed/ or moved path exists while the old active path is still tracked; `git log --follow` and `git ls-files` disagree on which path is live; a second delete commit appears right after an archive commit.
+
+**Distinguishing from #74 (`git mv` nesting when dest exists):** #74 is about directory nesting (`dest/<basename>/`). This lesson is about an incomplete rename that leaves the original path tracked alongside the destination.
+
+**Example (execute-plan Phase 4 archive):** An archive commit added `docs/plans/completed/<plan>.md` without removing `docs/plans/<plan>.md`. Both paths stayed in HEAD until a follow-up delete commit. Phase 5 success checklist item 5 ("plan exists under completed/") was true while the active path still poisoned future plan discovery.
+
+**See also:** UL#74 (git mv nesting), execute-plan Phase 4, Family H / D.
+
+## 194. Fix a Skim Surface and Its Validation Pin in the Same Change
+
+**Principle:** Family A (equivalence-class coverage) cross with Family H (verify the real thing). Cross with Family D (Validation Commands are part of the same contract as the prose they police).
+
+Editing policy prose on a skim surface (anti-pattern table, Integration Points, Hard Gate, Scope note) without updating `## Validation Commands` in the same change leaves the gate green on the old obligation. The next review re-finds the gap as if the prose fix never landed.
+
+**Trigger:** A review or address pass rewrites a skim surface, and Validation still greps only an older sibling surface, a spillover context window, or a negative pattern that the Integration Points text itself can false-match.
+
+**Rule:**
+1. When you change a load-bearing skim surface, add or retarget a Validation pin for that surface in the same edit (same task / same address commit).
+2. Prefer positive pins on the new obligation (path + distinctive phrase) over broad negatives that match the plan's own IP or glossary text.
+3. Re-run Validation after the prose fix; if it still passes without the new pin matching, the pin is wrong or missing.
+
+**Shape trigger (when to suspect this family):** Multiple review rounds keep filing "Validation under-pins X" after X was just rewritten; a negative grep fails on the plan's own allow/deny or IP wording; authoring cites lessons #187/#191 but the new surface has no command.
+
+**Distinguishing from UL#187 / UL#191:** #187 is obligation vs context spillover. #191 is missing abort / polarity-blind token presence. This lesson is the lockstep rule: prose fix and Validation pin must land together, or the next panel treats the fix as incomplete.
+
+**Example (plan-executable-task-gates Phase 3):** Address rounds fixed Recovery, Scope, leave-fail-closed, and vacuous-why surfaces while Validation lagged. Later rounds kept blocking on under-pins and false-positive negatives until pins were added beside each surface and negatives were narrowed away from IP spillover.
+
+**See also:** UL#186, UL#187, UL#191, plans Validation authoring, review-plan inclusion checks.
+

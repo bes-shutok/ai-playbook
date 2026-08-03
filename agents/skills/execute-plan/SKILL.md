@@ -24,7 +24,7 @@ description: >
 
 Orchestrate plan execution from the main agent. Always run Phase 0 (branch setup) first; do not skip it. Delegate heavy work to sub-agents so context stays clean. Do not implement tasks inline unless a sub-agent fails and you must recover.
 
-**Continuous execution:** Once execute-plan is invoked, run the full plan end-to-end (Phase 1 tasks → Phase 2 → Phase 3 → Phase 4) **without asking for permission between steps**. Brief progress reports are fine; stopping to ask "proceed to Task N?" or "start review?" is not. Pause only on hard gates (failure, timeout, max review rounds, user interrupt, or explicit user abort).
+**Continuous execution:** Once execute-plan is invoked, run the full plan end-to-end (Phase 1 tasks → Phase 2 → Phase 3 → Phase 4 → Phase 5) **without asking for permission between steps**. Brief progress reports are fine; stopping to ask "proceed to Task N?" or "start review?" is not. Pause only on hard gates (inclusion-check failure, failure, timeout, max review rounds, user interrupt, or explicit user abort).
 
 **Terminal-response gate:** A worker or `done` sub-agent completing is a checkpoint, never a completion signal for the parent. The manifest begins with `workflow_state: active` and is the terminal-state receipt: before sending a final response, the parent must read it and confirm it records `workflow_state: complete`, the Phase 5 success checklist, and the archived plan path. If any of these is false, it must continue with the next defined phase or report a hard gate in commentary, not end the task. A user status question, correction, or "why did you stop?" message is also non-terminal: answer it in commentary, re-read the manifest, and resume the next defined phase in the same turn unless the user explicitly pauses or aborts. In particular, a single clear review round, a `done` commit, or a launched next review is not a valid terminal state.
 
@@ -82,7 +82,7 @@ Also treat as already chosen when any legacy signal below applies (same outcome 
 
 When `invoked = true` **and** a plan path is available (in the message, from prior context, or from the slash command argument), announce the run contract and continue:
 
-> Using execute-plan on `<plan-path>`: Phase 0 branch setup → session tmp dir → one implement sub-agent + `done` commit per task (auto-continue through all tasks) → Phase 2 validation → minimum 2 clear review rounds → archive plan.
+> Using execute-plan on `<plan-path>`: Phase 0 branch setup → session tmp dir → one implement sub-agent + `done` commit per task (auto-continue through all tasks) → Phase 2 validation → Phase 3 parent-orchestrated review panel until one fresh blocking-clean digest → archive plan → Phase 5 terminal receipt then session tmp cleanup.
 
 **Commit authorization:** An execute-plan invocation **overrides** session-level "do not commit unless asked" **for this run only**. Step 1.4 and Step 3.4 `done` sub-agents must commit without a separate commit prompt. **Push** still requires explicit user instruction (see user `AGENTS.md` Git Push Policy).
 
@@ -138,20 +138,23 @@ Do not start Phase 1 until execute-plan is chosen (invocation signal or gate opt
 | `replace_all` or bulk `- [ ]` → `- [x]` across the plan | Violates one-task checkbox discipline; refresh marker, mark only the current task, then launch `done` |
 | Edit plan Markdown without a fresh skill-gate marker | Apply **Plan-file edits (skill-gate)** before every plan-file write; do not bypass or weaken skill-gate |
 | Recovery launches `done` before marking that task's checkboxes | Apply **Plan-file edits (skill-gate)**, mark that task's checkboxes, then launch `done`, matching Phase 1, so marker-protected plan edits land in that task's commit |
+| Silently execute or skip-mark non-executable rollout work | The inclusion check must pause before Step 1.2 (Phase 1) and again in Recovery for every checklist item including already `[x]`; never silently execute, silently skip, or mark `[x]` an item that fails inclusion |
+| Nest a Phase 3 "Code Review" sub-agent that re-runs `doing-code-review` | Double nesting loses session context, hides progress, and often hangs; the execute-plan parent must be the review orchestrator and launch lens workers directly |
+| Invent mutation/scratch harnesses under the session tmp for Markdown-only plans | When Validation Commands are grep/hygiene, use those as testing evidence; do not create `mutant-*` trees or throwaway validators under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` |
 
 If the user asks why per-task commits are missing, the usual cause is **Step 1.4 was skipped** while the parent agent implemented work directly.
 
 ## Sub-agent execution logs
 
-Worker sub-agents (implement, doing-code-review, receiving-code-review) **write a log file before returning**. Each `done` sub-agent **reads only the log(s) from the worker step(s) that immediately preceded it** before `learn`.
+Implement and receiving-code-review sub-agents **write their assigned log file before returning**. Phase 3 review lens workers return findings to the parent and do not own per-lens log paths. **Default path:** the Phase 3 parent maintains `<REVIEW_LOG_PATH>` with the heartbeat and synthesis. **Recovery path:** when Step 3.1 uses the nested Code Review recovery template, that recovery orchestrator owns `<REVIEW_LOG_PATH>` (heartbeat and final pass) instead of the parent. Each `done` sub-agent **reads only the log(s) from the worker step(s) that immediately preceded it** before `learn`.
 
-See [agent-logs.md](agent-logs.md) for path convention, required sections, and manifest format.
+See [agent-logs.md](agent-logs.md) for path convention, required sections, heartbeat, and manifest format.
 
 **Orchestrator duties:**
 
 1. Derive `<PLAN_SLUG>` from the plan filename and ensure `{tmp_dir}/execute-plan/<PLAN_SLUG>/` exists before the first sub-agent.
-2. Assign the log path and `<LOG_PASS_NUM>` for each worker launch (`1` first time; increment on relaunch of the same path). Pass both in the prompt.
-3. After each worker returns, verify its log file exists, is non-empty, and **on relaunch still contains prior passes** (append-only; see [agent-logs.md](agent-logs.md) write semantics). Update `manifest.md`. Confirm exit criteria from the log; do not re-run tests or re-review inline to duplicate the worker.
+2. Assign the log path and `<LOG_PASS_NUM>` to implement and receiving-code-review worker launches (`1` first time; increment on relaunch of the same path). Pass both in those prompts. For Phase 3 lens workers, do not assign per-lens log paths. Default: parent owns `<REVIEW_LOG_PATH>`. Recovery: pass `<REVIEW_LOG_PATH>` to the nested recovery orchestrator so it owns heartbeat and final updates.
+3. After a worker that received a defined log path returns, verify its log file exists, is non-empty, and **on relaunch still contains prior passes** (append-only; see [agent-logs.md](agent-logs.md) write semantics). Update `manifest.md`. For default Phase 3 lens workers, record their launch and result in the parent-owned review log. In recovery mode, the nested orchestrator writes that log; the parent only verifies it. Confirm exit criteria from the applicable log or worker return; do not re-run tests or re-review inline to duplicate the worker.
 4. Pass **only the preceding-step log path(s)** into each `done` sub-agent (Step 1.4 / Step 3.4); see [agent-logs.md](agent-logs.md). Do not paste log bodies into orchestrator context; paths and pass/fail summaries are enough for gating.
 
 **Prerequisite:** A plan file at `{plans_dir}/<name>.md` created per the `plans` skill, with `## Review Scope`, `## Validation Commands`, and `### Task N:` sections.
@@ -201,17 +204,17 @@ When on a default branch or when the user declined Step 0.1b, announce: "Before 
 Ask the user:
 
 ```
-I'll create a new branch for this plan execution:
+I'll create a new local branch for this plan execution:
 - Base: current branch (<current-branch>)
 - New branch name: <computed-branch-name>
-- This branch will track origin (push -u on first commit)
+- Push stays off until you explicitly ask to push
 
 Proceed with branch creation? (yes/no)
 ```
 
 Wait for explicit user confirmation before proceeding.
 
-### Step 0.2: Create and push the branch
+### Step 0.2: Create the branch
 
 If the user confirms (yes):
 
@@ -237,12 +240,11 @@ fi
 # Create the new branch from the current HEAD
 git checkout -b "$BRANCH_NAME"
 
-# Set up tracking and push to origin (empty branch, before any work)
-git push -u origin "$BRANCH_NAME"
-
 # Report success
-echo "Created and pushed branch: $BRANCH_NAME (tracking origin/$BRANCH_NAME)"
+echo "Created local branch: $BRANCH_NAME"
 ```
+
+Do **not** run `git push` here. Branch-create confirmation is not push authorization. **Push** still requires explicit user instruction in the current message (see user `AGENTS.md` Git Push Policy).
 
 If the user declines (no):
 
@@ -352,6 +354,27 @@ Rules:
 - A task is incomplete if **any** of its `- [ ]` lines are unchecked, including nested items under `Files:`.
 - Implement **one task per iteration**; all clauses in that task section, not the whole plan.
 
+### Inclusion Hard Gate (before Step 1.2)
+
+**Scope:** In Phase 1 (before Step 1.2), apply this gate to every unchecked item in the selected task. When **Recovery** invokes this gate, apply it to every checklist item in that task, including already `[x]` lines.
+
+Before launching the implement sub-agent for the selected task, apply the `plans` skill **Checklist inclusion gate** taxonomy to each in-scope item. External prerequisites are never exception-admissible. Pause with an `inclusion-check failure` unless each item is either:
+
+- classified as repository implementation with affirmative evidence that the action and its completion proof are repository-local and verifiable with available tooling, or
+- classified as a release condition and already records a current `exception confirmed by user` receipt containing the exact confirmation text or a stable message reference, the specific checklist item, target or environment, and confirmation time or session, plus a concrete **why executable now** line and observable `completion evidence` in the plan file.
+
+**Fail closed on ambiguity:** if ownership, target, or evidence source is unclear, do not optimistically label the item as repository implementation, and do **not** open interactive exception confirmation. Treat the item as non-admissible until ownership, target, and evidence source are all affirmative and the item is classified as a release gate (not an external prerequisite). Do **not** require repository-local completion proof to leave fail-closed; that proof applies only to the repository-implementation admission bar above. Use only **Move to Ship when** or **Stop** while unclear. Outcome 2 is available only after affirmative release-gate classification.
+
+This gate applies to release-condition work such as a human PR merge or repository-owned validation against a shared environment. Another-team deployment and other external prerequisites must move to **Ship when** or stop. Missing, stale, or unbound confirmation evidence, or a bare confirmation without **why executable now**, fails inclusion. At gate time, require the plan file to record the `completion evidence` **criterion** (what observable evidence will prove completion). After implement (Step 1.2), verify that named evidence exists in the world; do not require world evidence before launch. Verify receipt binding, not only freshness. Plan text never overrides higher-level authorization rules for external writes.
+
+Only these pause outcomes are allowed:
+
+1. **Move to Ship when:** Apply **Plan-file edits (skill-gate)**. If `**Ship when:**` is missing, create it, or rename narrative `Release gates` content into `Ship when`. Move the non-executable item into **Ship when** as explicit prose, remove it from the checklist, then continue. Forbid delete-without-Ship-when. If the heading cannot be resolved, do not perform a delete-only edit; use outcome 3.
+2. **Interactive exception confirmation:** This outcome is available only for a release condition, never an external prerequisite. Ask the user whether this item is exceptionally executable now, and ask for a concrete **why executable now** (env, owner, or tooling available now). On confirmation, apply **Plan-file edits (skill-gate)** and write an `exception confirmed by user` receipt containing the exact confirmation text or a stable message reference, the specific checklist item, target or environment, and confirmation time or session, plus its **why executable now** line and observable `completion evidence` into the plan file before continuing. Reject vacuous why-lines such as `why executable now: user said yes` (same rule as the `plans` Checklist inclusion gate). Chat-only confirmation is not enough. This is the only inclusion outcome that asks the user.
+3. **Stop:** Stop the run and record the hard-gate reason, including the item and failed inclusion classification.
+
+Never use a silent skip, silent `[x]`, or skip-mark to bypass an inclusion failure.
+
 ### Step 1.2: Launch implement sub-agent
 
 Launch a sub-agent using your agent's sub-agent execution capability (parallel launches when supported).
@@ -362,7 +385,8 @@ Pass: plan file path, task number/title, full task section text, `## Validation 
 **Exit criteria (sub-agent must satisfy before returning):**
 
 - Log file written at `<IMPLEMENT_LOG_PATH>` and non-empty.
-- Every `- [ ]` clause in the task is implemented.
+- Every repository-implementation clause is implemented.
+- For every admitted exception clause, verify the named `completion evidence` instead of requiring repository implementation. If that evidence does not exist, keep the clause unchecked and stop.
 - RED/GREEN steps followed when the task specifies TDD (`Run → expect RED`, `Run → expect GREEN`).
 - Validation command(s) from the plan pass with fresh output.
 - No unrelated files changed outside the task's `Files:` list (unless the plan explicitly requires cross-file wiring).
@@ -371,7 +395,7 @@ If the sub-agent reports failure or tests do not pass: do not mark checkboxes; d
 
 ### Step 1.3: Mark plan progress
 
-After verification passes, apply **Plan-file edits (skill-gate)**, then update the plan file: change every completed `- [ ]` to `- [x]` for **that task's clauses only**.
+After verification passes, apply **Plan-file edits (skill-gate)**, then update the plan file: change every completed `- [ ]` to `- [x]` for **that task's clauses only**. An admitted exception is complete only when its named `completion evidence` exists.
 
 **Never** bulk-update checkboxes across tasks (`replace_all`, scripted sweep, or marking Tasks 1–N in one edit). Incomplete tasks must keep `- [ ]` until their own Step 1.4 succeeds.
 
@@ -417,6 +441,7 @@ The user already invoked execute-plan; continuing through all tasks is the defau
 
 **Only stop between tasks when:**
 
+- An inclusion-check failure reaches one of the allowed Inclusion Hard Gate pause outcomes
 - Step 1.2 or 1.4 failed and you need user input to recover
 - The user interrupted or explicitly said stop/pause
 - All task checkboxes are `[x]` (proceed to Phase 2, also without asking)
@@ -468,38 +493,45 @@ After Step 3.3 address-review mutates code, the **next** Step 3.1 is a **fresh a
 
 **Rationale:** A Phase 3 clear streak after a FOR UPDATE fix still missed a High `promoteToActive` miss-path wipe and Medium ensure-then-promote success semantics on explicit must-fix paths. Confirmation framing caused the miss.
 
-### Step 3.1: Launch review sub-agent
+### Step 3.1: Parent-orchestrated code review (default)
 
 **Before launching:** read the review counters from `manifest.md`. If a sixth full-panel round or second escalation would be required, stop at Step 3.5 for user direction.
 
-Launch a sub-agent using your agent's sub-agent execution capability.
-Use the **Code Review** template from [subagent-prompts.md](subagent-prompts.md). Fill `<REVIEW_MODE_NOTES>`:
+**Default (required when the parent can fan out workers):** the execute-plan **parent** is the `doing-code-review` orchestrator. Do **not** wrap Phase 3 in a nested "Code Review" sub-agent that re-reads `doing-code-review` and launches its own panel (double nesting). That hop loses session context, hides progress, and has hung without producing a staging doc.
 
-- Initial pass: fresh adversarial five-worker review.
-- After fixes: blind `correctness-completeness` plus every distinct worker that owned an accepted finding or whose domain the fixes affected.
-- When concurrency signals exist: load premortem and concurrency inside `risk`; do not launch persona children.
+1. Read `~/.agents/skills/doing-code-review/SKILL.md` and run it in **branch review** mode (not PR mode unless the user supplied a PR URL).
+2. Resolve worker set from `review-panel-selection.md` and `<REVIEW_MODE_NOTES>`:
+   - Initial pass: fresh adversarial five-worker review (`correctness-completeness`, `testing`, `design-simplicity`, `contract-docs`, `risk`).
+   - After fixes: blind `correctness-completeness` plus every distinct worker that owned an accepted finding or whose domain the fixes affected.
+   - When concurrency signals exist: load premortem and concurrency inside `risk`; do not launch persona children.
+3. Launch **lens worker** sub-agents in parallel using the **Review lens worker** template from [subagent-prompts.md](subagent-prompts.md). Workers analyze; the parent synthesizes the staging doc (orchestrator / sub-agent boundary).
+4. Diff scope is **`git diff <BASE_BRANCH>...HEAD`** (all commits on the feature branch for this plan); not the latest commit alone. Apply the plan's **two-tier Review Scope**: findings on **explicit must-fix** paths are always in scope; for unlisted paths, keep findings only when **plan-related** (causally tied to a plan task, explicit change, or contract the plan altered); drop unrelated findings with a one-line reason.
+5. **Doc/skill-only plans:** when explicit must-fix paths are Markdown/skills/guidelines and `## Validation Commands` are grep/hygiene (no production mutators), the `testing` worker treats those commands as the primary evidence. Do **not** invent mutation trees, scratch validators, or throwaway harnesses under `{tmp_dir}/execute-plan/<PLAN_SLUG>/`.
 
-The sub-agent runs `doing-code-review` in **branch review** mode (not PR mode unless the user supplied a PR URL). Diff scope is **`git diff <BASE_BRANCH>...HEAD`** (all commits on the feature branch for this plan); not the latest commit alone. Apply the plan's **two-tier Review Scope**: findings on **explicit must-fix** paths are always in scope; for unlisted paths, keep findings only when **plan-related** (causally tied to a plan task, explicit change, or contract the plan altered); drop unrelated findings with a one-line reason.
+**Heartbeat (before waiting on workers):** create or append `<REVIEW_LOG_PATH>` immediately with Pass status `in_progress`: panel worker list, base/head digests, and launch time. A silent multi-hour wait with no log is a skill violation. See [agent-logs.md](agent-logs.md) Heartbeat.
 
-**Mutator failure-mode matrix (required in staging doc):** list every new or changed public mutating API on explicit must-fix paths. Missing rows make the round not clean even when no blocking finding remains.
+**Timeout (operational):** wall-clock from Step 3.1 start. If **20 minutes** elapse without both (a) a non-empty staging doc at the expected `{reviews_dir}/...-code-review-r<N>.md` path and (b) a non-empty `<REVIEW_LOG_PATH>`, **stop** and ask the user: wait longer, relaunch a focused panel, or continue with parent-inline recovery for missing workers. Do not leave a nested or parent-orchestrated review running indefinitely.
+
+**Mutator failure-mode matrix (required in staging doc):** list every new or changed public mutating API on explicit must-fix paths. Missing rows make the round not clean even when no blocking finding remains. For doc/skill-only plans: `N/A: no mutating APIs in this plan`.
 
 Review output: `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` (increment `N` each round; use `-code-review-r` prefix to distinguish from pre-execution **plan** reviews at `…-plan-review-r<N>.md`).
 
-Pass `<REVIEW_LOG_PATH>` per [agent-logs.md](agent-logs.md). Pass `review_round` / `<REVIEW_ROUND>` = current `review_round` from manifest.
+**Default:** the parent writes `<REVIEW_LOG_PATH>` (heartbeat + synthesis); do **not** pass it to lens workers. **Recovery:** pass `<REVIEW_LOG_PATH>` into the Code Review (recovery) template so that nested orchestrator owns heartbeat and final pass. Pass `review_round` / `<REVIEW_ROUND>` = current `review_round` from manifest. See [agent-logs.md](agent-logs.md).
 
-**Diff snapshots (optional):** If the review sub-agent materializes diff files for parallel worker agents, they must live only under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` as `diff-r<R>.patch` and `src-diff-r<R>.patch` per `doing-code-review` **Diff access**. Before launching Step 3.1, remove orphan repo-root `diff_r*.patch` / `src_diff_r*.patch` files from prior runs if present. Phase 5 cleanup removes session diff snapshots with review logs.
+**Diff snapshots (optional):** If the parent materializes diff files for parallel workers, they must live only under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` as `diff-r<R>.patch` and `src-diff-r<R>.patch` per `doing-code-review` **Diff access**. Before launching Step 3.1, remove orphan repo-root `diff_r*.patch` / `src_diff_r*.patch` files from prior runs if present. Phase 5 cleanup removes session diff snapshots with review logs.
+
+**Recovery only (parent cannot fan out workers):** use the **Code Review (recovery)** template from [subagent-prompts.md](subagent-prompts.md). That template requires a **Session handoff** block (digest, commits, validation status, known run incidents / intentional deviations, Review Scope excerpt). Prefer fixing fan-out over recovery. Never use recovery to reintroduce silent double nesting when the parent *can* launch workers.
 
 **Step 3.1 verification gate (orchestrator, before Step 3.2):**
 
-1. Review sub-agent returned the exact `{reviews_dir}/...` staging doc path.
-2. That file exists on disk and is non-empty (chat summary alone does not satisfy Step 3.1).
-3. `<REVIEW_LOG_PATH>` exists and is non-empty.
-4. Doc follows `doing-code-review` staging format sufficiently for Step 3.2 parsing (findings with Severity/Status/Triage) and includes populated `## Review Statistics` per `review-staging` (including Solo/Echo, Pattern, Severity calibration).
-5. Doc includes `## Mutator failure-mode matrix` with a row per new/changed public mutator on explicit must-fix paths (or an explicit `N/A: no mutating APIs in this plan` line). Incomplete matrix → relaunch Step 3.1.
-6. When concurrency signals exist, the `risk` row records `concurrency` and `premortem` as loaded lenses unless the user explicitly skipped premortem.
-7. **Panel actually ran:** a full-panel pass has complete rows for `correctness-completeness`, `testing`, `design-simplicity`, `contract-docs`, and `risk`. A focused follow-up records its selection reason. Flatten descendants into Panel accounting and reject more than six actual launches.
+1. Staging doc exists at the exact `{reviews_dir}/...-code-review-r<N>.md` path and is non-empty (chat summary alone does not satisfy Step 3.1).
+2. `<REVIEW_LOG_PATH>` exists and is non-empty (heartbeat plus final pass).
+3. Doc follows `doing-code-review` staging format sufficiently for Step 3.2 parsing (findings with Severity/Status/Triage) and includes populated `## Review Statistics` per `review-staging` (including Solo/Echo, Pattern, Severity calibration).
+4. Doc includes `## Mutator failure-mode matrix` with a row per new/changed public mutator on explicit must-fix paths (or an explicit `N/A: no mutating APIs in this plan` line). Incomplete matrix → relaunch Step 3.1.
+5. When concurrency signals exist, the `risk` row records `concurrency` and `premortem` as loaded lenses unless the user explicitly skipped premortem.
+6. **Panel actually ran:** a full-panel pass has complete rows for `correctness-completeness`, `testing`, `design-simplicity`, `contract-docs`, and `risk`. A focused follow-up records its selection reason. Flatten descendants into Panel accounting and reject more than six actual launches.
 
-If any check fails, relaunch the review sub-agent; do **not** enter Step 3.2 or launch address-review.
+If any check fails, relaunch the missing workers or re-synthesize the staging doc; do **not** enter Step 3.2 or launch address-review.
 
 ### Step 3.2: Triage input (doing-code-review)
 
@@ -597,6 +629,15 @@ Move the completed plan per `plans` skill lifecycle:
 git mv {plans_dir}/<filename>.md {plans_completed_dir}/<filename>.md
 ```
 
+**Archive completeness gate (required):** After the move (before or as part of the archive commit), confirm the active path is gone from the index and from HEAD after commit:
+
+```bash
+git status --short -- {plans_dir}/<filename>.md {plans_completed_dir}/<filename>.md
+git ls-files -- {plans_dir}/<filename>.md   # must print nothing after staging the rename
+```
+
+If `git ls-files` still lists the active path, the archive is incomplete (destination added without source deleted). Fix with a true rename or an explicit delete of the active path before Phase 5. Do not treat "completed/ file exists" as sufficient while the old path remains tracked. (UL#193)
+
 Include the plan move in a commit immediately after the last Step 3.4 `done` (same `done` sub-agent scope if uncommitted, or a follow-up `done` if needed).
 
 ### Step 4.1: Update parent rollout tracker (when applicable)
@@ -628,9 +669,11 @@ Delete the execute-plan session directory **only after the full workflow succeed
 
 **If any item is false**; do **not** remove tmp files (preserve for resume, debugging, or `learn` on retry).
 
-**Exit-path throwaway-script cleanup (every terminal exit, not just success):** The success-only gate above is correct for `.md` logs (which have resume/`learn` value), but it is the wrong gate for throwaway scripts and scratch data. On ANY terminal exit (user interrupt, max-rounds stop, handoff, crash) where Phase 5 success cleanup did not run, the orchestrator (or the operator before the next `docs-branch` sync) must audit `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for throwaway `.py`/`.csv`/`.txt`/`__pycache__` files and either delete them or relocate them to repo-root `tmp/` per `agent_workflow_guidelines.md` §50.3.1. Reason: `docs-branch` is add-only and never auto-prunes, so throwaway scripts that ride along with the `.md` logs get synced permanently and accumulate across plans. Keep the `.md` logs; drop the scripts.
+**Terminal receipt (before removal):** While `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` still exists, write `workflow_state: complete` plus the archived-plan path and last commit SHA, then re-read that receipt and confirm it. Capture the verified receipt fields into the final user report. Do **not** delete the session directory before this write-and-re-read succeeds. A missing session directory or an `active` manifest is evidence that execution is still in progress, not a reason to return a final answer.
 
-**Removal (orchestrator runs directly; not a sub-agent):**
+**Exit-path throwaway-script cleanup (every terminal exit, not just success):** The success-only gate above is correct for `.md` logs (which have resume/`learn` value), but it is the wrong gate for throwaway scripts and scratch data. On ANY terminal exit (user interrupt, max-rounds stop, handoff, crash) where Phase 5 success cleanup did not run, the orchestrator (or the operator before the next `docs-branch` sync) must audit `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for throwaway `.py`/`.sh`/`.csv`/`.txt`/`__pycache__` files and scratch dirs such as `mutant-*` / `mutants/`, and either delete them or relocate them to repo-root `tmp/` per `agent_workflow_guidelines.md` §50.3.1. Reason: `docs-branch` is add-only and never auto-prunes, so throwaway scripts that ride along with the `.md` logs get synced permanently and accumulate across plans. Keep the `.md` logs and `manifest.md`; drop the scripts and mutant scratch trees.
+
+**Removal (orchestrator runs directly; not a sub-agent; only after terminal receipt):**
 
 ```bash
 TMP_DIR="{tmp_dir}/execute-plan/<PLAN_SLUG>"
@@ -644,9 +687,7 @@ TMP_DIR="{tmp_dir}/execute-plan/<PLAN_SLUG>"
 test ! -e "{tmp_dir}/execute-plan/<PLAN_SLUG>" && echo "tmp cleanup OK"
 ```
 
-Report successful plan completion to the user, including that session tmp logs and any review diff snapshots under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` were removed. Review staging docs under `{reviews_dir}/` are **not** deleted by this step (separate lifecycle).
-
-Before its final response, the parent must write `workflow_state: complete` plus the archived-plan path and last commit SHA to `manifest.md`, then re-read that receipt. Only after this report condition is true may the parent send its final response for the execute-plan request. A missing session directory or an `active` manifest is evidence that execution is still in progress, not a reason to return a final answer.
+Report successful plan completion to the user, including the verified terminal-receipt fields and that session tmp logs and any review diff snapshots under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` were removed. Review staging docs under `{reviews_dir}/` are **not** deleted by this step (separate lifecycle). Only after the terminal receipt was written and re-read may the parent send its final response for the execute-plan request.
 
 ## Sub-Agent Launch Rules
 
@@ -654,15 +695,17 @@ Before its final response, the parent must write `workflow_state: complete` plus
 |-----------|--------------|
 | Implement task | No |
 | Done (per task / per review iteration) | No |
-| Code review | No |
+| Phase 3 review lens workers | Yes (launch the selected panel in parallel) |
+| Phase 3 nested "Code Review" orchestrator | No (forbidden by default; recovery template only) |
 | Address review | No |
 
-- Always wait for each sub-agent to finish before launching the next.
+- Always wait for each **sequential** step (implement, done, address-review) to finish before launching the next.
+- Phase 3 lens workers launch in parallel; wait for the panel before synthesizing the staging doc.
 - Use your agent's sub-agent execution capability.
 - Pass absolute plan path and task excerpt in every prompt.
 - Sub-agents must read the referenced skills (`tdd-guide`, `unit-test-runner`, `done`, `doing-code-review`, `receiving-code-review`) from `~/.agents/skills/` (or `agents/skills/` in the skills repository per `skills_repo_path` in `~/.ai-playbook/facts.md`).
 
-**Timeout:** If a sub-agent has not completed within 20 minutes, report status to the user and ask whether to wait, relaunch focused, or continue inline.
+**Timeout:** If a sequential sub-agent (implement, done, address-review) or the Phase 3 panel wall-clock has not produced its required artifacts within 20 minutes, report status to the user and ask whether to wait, relaunch focused, or continue inline. For Step 3.1, "required artifacts" means non-empty staging doc **and** non-empty `<REVIEW_LOG_PATH>` (see Step 3.1 Timeout).
 
 ## Hard Gates
 
@@ -675,17 +718,19 @@ Before its final response, the parent must write `workflow_state: complete` plus
 7. **One fresh blocking-clean review of the current digest**; the quality bar still requires the mutator matrix and required risk lenses.
 8. **Maximum five full-panel rounds**; stop and ask before a sixth. Targeted rounds do not reset the counter.
 9. **Fresh test output**; never cite stale run results; re-run commands before claiming pass.
-10. **Preceding-step logs before learn**; worker sub-agents write logs; each `done` reads only its immediately prior step's log(s). Missing required log blocks commit.
+10. **Preceding-step logs before learn**; implement and address-review workers write their assigned logs; Phase 3 lens workers have no log path; the parent (default) or recovery orchestrator owns `<REVIEW_LOG_PATH>`; each `done` reads only its immediately prior step's log(s). Missing required log blocks commit.
 11. **Tmp cleanup on success only**; remove `{tmp_dir}/execute-plan/<PLAN_SLUG>/` in Phase 5 after the success checklist passes; never on failure, max-rounds stop, or user interrupt.
 12. **Plan-path gate only when `invoked = false`**; run invocation detection first. Bare plan path only → three-way choice. **`execute plan <path>` and `execute <plan-path>` (under `.../plans/...`) must never trigger the gate.**
 13. **Session dir before edits**; no plan-scoped production/test edits before `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` exists (execute-plan runs only; manual/read-only do not create the session directory).
 14. **One task's checkboxes per Step 1.3**; no bulk `- [ ]` → `- [x]` across the plan file.
 15. **Phase 3 required for success**; archive only after Phase 3 exit condition or documented user abort after Phase 2.
 16. **Review diff artifacts in session tmp only**; never write `*.patch` diff snapshots to repo root or outside `{tmp_dir}/execute-plan/<PLAN_SLUG>/`; use `diff-r<R>.patch` / `src-diff-r<R>.patch` naming per `doing-code-review` **Diff access**.
-17. **No per-step continuation prompts**; after Task N `done`, Phase 2 pass, or review-round `done`, auto-start the next defined step. Ask the user only on failure, timeout, max review rounds, user interrupt, or explicit abort.
+17. **No per-step continuation prompts**; after Task N `done`, Phase 2 pass, or review-round `done`, auto-start the next defined step. Ask the user only on failure, timeout, max review rounds, user interrupt, or explicit abort. An inclusion pause is not by itself a mandatory ask; ask only when the selected Inclusion Hard Gate outcome is interactive exception confirmation.
 18. **Fresh review framing on every Step 3.1**; never prompt clear-streak rounds as verification-only; prior findings are context, not a filter.
 19. **Premortem when concurrency in scope**; do not skip premortem on quiet clear-streak rounds if the plan Review Scope / Domains include concurrency, transactional mutators, or race ITs (user `skip premortem` overrides).
 20. **Skill-gate marker before plan-file edits**; before any plan Markdown edit (Step 1.3, Step 0.4b path rewrites, Recovery checkbox marking, or any other plan-content edit), apply **Plan-file edits (skill-gate)**. Do not bypass or weaken skill-gate. Phase 4 `git mv` alone does not need a marker refresh. In Recovery, mark that task's checkboxes before launching `done`.
+21. **Inclusion Hard Gate before implementation**; Phase 1: classify every unchecked item before Step 1.2. Recovery: classify every checklist item including already `[x]`. While ownership, target, or evidence source is unclear, do **not** open interactive exception; use only Move to Ship when or Stop. On other `inclusion-check failure` outcomes: move explicit prose to **Ship when** after creating the heading or renaming narrative `Release gates` content; admit a **release gate** (never an external prerequisite) only via ask-then-write of a current bound exception receipt plus **why executable now** and `completion evidence`; or stop with a recorded hard-gate reason. Forbid delete-without-Ship-when and silent skip-`[x]`.
+22. **Parent-orchestrated Phase 3 panel**; the execute-plan parent runs `doing-code-review` and launches lens workers directly. Do not nest a "Code Review" sub-agent that re-orchestrates the panel when the parent can fan out. Write the review heartbeat log before waiting. Enforce the 20-minute Step 3.1 artifact timeout.
 
 ## User Interruption
 
@@ -704,6 +749,7 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
 1. Run Phase 0 and Step 0.4 (branch setup + session tmp dir + manifest).
 2. **Do not** re-implement from scratch or batch-mark all `[x]`.
 3. For each task in document order (same order as Phase 1):
+   - Before verification or checkbox marking, apply the **Inclusion Hard Gate** to every checklist item in that task (including already `[x]` lines). External prerequisites are never exception-admissible. On failure, set the item back to `- [ ]`. While ownership, target, or evidence source is unclear, use only **Move to Ship when** or **Stop** (do **not** open interactive exception). To admit a release gate, use only Inclusion Hard Gate outcome 2: ask the user whether the item is exceptionally executable now and for a concrete **why executable now**, then write the bound receipt plus that why and `completion evidence`. Reject vacuous why-lines such as `why executable now: user said yes`. Self-written receipts without that ask are forbidden. Or stop with a recorded hard-gate reason.
    - Verify that task's scope only (plan validation command subset or task `Files:` list).
    - Write or append `task-<N>-implement.log.md` (retroactive summary is OK if work already exists).
    - Apply **Plan-file edits (skill-gate)**.
@@ -718,7 +764,7 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
 At Phase 0, read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` from `.ai-playbook/facts.md` (see `using-skills` Step 0; bootstrap runs only when Terms triggers fire) before plan-scoped edits or session log writes.
 
 ### Consumes `plans` skill
-Reads plan format, task order, validation commands, review scope, and commit messages. Pre-execution and Phase 3 reviews use the shared blocking-aware cycle. Before any plan-file edit, refreshes the plans-class marker per **Plan-file edits (skill-gate)** (same obligation as `plans` Writing).
+As a consumer of `plans`, reads plan format, task order, validation commands, review scope, and commit messages. Before Step 1.2 and during Recovery, consumes the `plans` Checklist inclusion gate (Recovery: every checklist item including already `[x]`). It requires repository implementation or a release condition with a current receipt bound to the item, target, and time or session plus **why executable now** and completion evidence. External prerequisites are never exception-admissible. Pre-execution and Phase 3 reviews use the shared blocking-aware cycle. Before any plan-file edit, refreshes the plans-class marker per **Plan-file edits (skill-gate)** (same obligation as `plans` Writing).
 
 ### Consumes `tdd-guide` + `unit-test-runner` (via implement sub-agent)
 Implement sub-agent follows RED → GREEN → Refactor for behavioral tasks; runs validation commands with fresh output.
@@ -726,8 +772,8 @@ Implement sub-agent follows RED → GREEN → Refactor for behavioral tasks; run
 ### Consumes `done` skill (sub-agent, per task + per review iteration)
 Only `done` performs git commits. Invoked after each implementation task (Step 1.4) and after each review iteration (Step 3.4). Each invocation receives sub-agent log paths and must read them before `learn`; see [agent-logs.md](agent-logs.md).
 
-### Consumes `doing-code-review` skill (sub-agent)
-Branch/plan-scoped review after all tasks; staging doc is the handoff artifact. Uses full-branch diff (`<BASE_BRANCH>...HEAD`). Applies two-tier Review Scope: explicit must-fix plus plan-related extension for unlisted paths.
+### Consumes `doing-code-review` skill (parent-orchestrated in Phase 3)
+After all tasks, the execute-plan **parent** runs `doing-code-review` as the review orchestrator and launches lens workers as sub-agents. Staging doc is the handoff artifact. Uses full-branch diff (`<BASE_BRANCH>...HEAD`). Applies two-tier Review Scope: explicit must-fix plus plan-related extension for unlisted paths. Nested "Code Review" sub-agent only as recovery when the parent cannot fan out (see Step 3.1).
 
 ### Consumes `receiving-code-review` skill (sub-agent)
 Triages provisional findings between rounds. Phase 3 exit depends on unresolved `blocking: true`, not raw severity counts.
