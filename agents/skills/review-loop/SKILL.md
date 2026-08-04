@@ -154,6 +154,7 @@ Never use commit subjects like `Close review loop` or `Review complete` until ex
 - Reopening a clear round because of late non-blocking noise
 - Exiting while soften-watchlist items remain `open` or unexamined
 - Declaring exit after a focused panel that never re-ran `design-simplicity` on the tip when earlier rounds only fixed docs/schema
+- **Declaring CLEAR from a relaunch while the original worker may still finish.** If a worker is stuck and you relaunch, interrupt or cancel the original agent first, or wait until every originally launched worker ID is terminal. Reconcile findings from both outputs before staging exit. A late primary that overwrites a zero-finding relaunch JSON after CLEAR invalidates the exit; amend staging and treat exit criteria as unmet until a fresh clear-candidate round (or an explicit partner stop) closes the residual.
 
 ## Quick prompt (user-facing)
 
