@@ -231,6 +231,7 @@ Rules:
 - Prefer concrete bullets over narrative.
 - **Succinct vs telegraphic:** Bullets must stay skimmable **and** self-contained for readers who land mid-document (§4 edge cases, §6 rules, §7 alerts). Succinct is short with complete meaning; telegraphic drops subjects, uses undefined jargon, or hides thresholds (e.g. "alert if ≥3 in 24h" without saying **what** is counted). When a term is in Terminology, still spell out the behavior once in edge cases and operability rows (table/column names OK).
 - **§5 Contracts:** prefer **implementation blueprints** (JSON request/response bodies, event payloads, DDL/SQL) over wordy explanations. If a fact is not in a fenced example, it is not implementation-ready. Minimum bar: `references/contract-blueprint-example.md`.
+- **Separate protection domains:** when a design applies similar security mechanisms at different trust boundaries, give each domain its own contract subsection with key ownership, format, lifecycle, and failure policy. Describe cross-domain interaction in a separate end-to-end flow so shared vocabulary does not imply shared keys or rotation semantics.
 - Every bullet must be either:
   - a requirement
   - a decision
