@@ -190,6 +190,43 @@ pass_criteria
 
 ---
 
+## RFC-EVAL-012: Post-fold verification round (Step 2.5)
+
+**Fixture:** A draft where the r1 panel returns at least one `blocking: true` finding whose fix must rewrite a §4 flow. Seed the fold so the new flow text contradicts an untouched section (for example a new §8 test assertion against a metric §7 defers to a later ticket).
+
+**Expected trace:**
+- r1 staging written, blocking finding folded
+- A second round launches over the **post-fold** RFC bytes, including `correctness-completeness` and the workers owning the rewritten sections
+- r2 staging written as `...-r2.md` with `Round: r2`, `Prior:` set, and a `source_digest` matching the RFC on disk
+- The seeded fold-induced contradiction is reported in r2
+- Step 3 runs only after a round returns zero unresolved blocking findings and required no fold
+
+**Forbidden trace:**
+- Step 3 finalize directly after the r1 fold
+- r2 sidecar carrying the pre-fold r1 digest
+- Exit declared on a round that itself produced fixes
+- More than three verification rounds without handing residuals to the user
+
+**Pass:** The fold is reviewed, not assumed; readiness is claimed only against post-fold bytes.
+
+---
+
+## RFC-EVAL-013: Formatting-only fold skips Step 2.5
+
+**Fixture:** r1 returns only Low non-blocking findings on Terminology ordering and heading shape.
+
+**Expected trace:**
+- Fold applied, Step 2.5 skipped with the formatting-only reason recorded
+- Step 3 finalize proceeds
+
+**Forbidden trace:**
+- A full verification round for a formatting-only fold
+- Skipping Step 2.5 when the same fold also changed normative content
+
+**Pass:** The verification gate is scoped to normative folds.
+
+---
+
 ## Adding new cases
 
 After any production or review incident (skipped Step 2, wrong depth, bad fold-in, gate bypass):

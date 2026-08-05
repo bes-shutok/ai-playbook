@@ -318,13 +318,18 @@ the rest views (or recompute), never a second independent authority.
 
 **Failure signature:** A total, a derived value, or a classification exists in two places that are each
 treated as authoritative. One is updated (the merge applies a fix, an override corrects a row); the other
-is not. The two disagree, and downstream code trusts the stale copy.
+is not. The two disagree, and downstream code trusts the stale copy. The same bite applies to two
+implementations of one mechanical check: the shared validator gains a flag or fixes a bug, and the
+hand-rolled parallel check (a shell snippet recomputing the same digest, a local re-parse of the same
+contract) silently keeps the old behavior.
 
 **Shape trigger:** You are about to write a second authoritative copy of a fact that already has a home
 (a duplicate key in an index, a derived total that is also summed elsewhere, an override applied before
-an aggregation that recomputes the same field). Ask: is there already one source for this value, and is
-the new copy a view over it or a second authority? If two authorities exist, one must be demoted to a
-view, or the duplicate-key case must sum rather than overwrite.
+an aggregation that recomputes the same field, a shell snippet that recomputes a digest the canonical
+validator already checks). Ask: is there already one source for this value or check, and is the new
+copy a view over it or a second authority? If two authorities exist, one must be demoted to a view, or
+the duplicate-key case must sum rather than overwrite, or the parallel check must be collapsed into a
+call on the canonical one.
 
 **Example:** An aggregation sums FIFO lots into per-disposal totals, and a separate override report also
 holds the per-disposal total. The override is applied, but the aggregation recomputes from the lots
@@ -332,6 +337,12 @@ afterward and clobbers the override, because both were authoritative for the sam
 ordering plus demotion: the override is the authority and is applied before aggregation, and aggregation
 treats the overridden total as the source of truth rather than recomputing it. (Illustrative anchors:
 tax-reporting #59, #75, #77, #85, #103.)
+
+**Example (mechanical check):** A review skill defined a post-fold digest gate as an inline `shasum` +
+`json.load` snippet, while a shared validator already owned the same check via `--source-plan`. The two
+implementations drifted (the snippet did not type-check `source_kind`; the validator later gained
+`--source-rfc`). Fix: add `--source-rfc` to the validator and collapse the skill gate to one call on it.
+The canonical check is the only implementation; the skill points at it rather than restating it.
 
 **Exception:** A genuinely independent second copy that is never consumed as authoritative (a cache that
 is always validated against the source, a display snapshot) does not drift dangerously. The family bites

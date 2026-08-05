@@ -2464,6 +2464,93 @@ def _selftest_source_plan_cli(root: Path, check) -> None:
     check("--source-plan missing file exits 1", rc_missing == 1)
 
 
+def _selftest_source_rfc_cli(root: Path, check) -> None:
+    """The --source-rfc CLI flag must recompute the RFC digest and reach the
+    stale-digest comparison, with the sidecar's source_kind type-checked as
+    'rfc'. Mirrors _selftest_source_plan_cli. Each case must be DISCRIMINATING:
+    it must fail if the wiring were severed (expected_digest dropped), not pass
+    via the presence-only path."""
+    import io
+
+    rfc_path = root / "rfc.md"
+    rfc_bytes = b"# RFC\n## Goals\n1. do foo\n"
+    rfc_path.write_bytes(rfc_bytes)
+    rfc_digest = compute_source_digest("rfc", rfc_bytes)
+
+    other_path = root / "other-rfc.md"
+    other_path.write_bytes(b"# Not the rfc\n")
+
+    payload = json.loads(json.dumps(_current_clear_payload()))
+    payload["source_digest"] = rfc_digest
+    payload["source_kind"] = "rfc"
+    staging = _write_staging(
+        root, "2026-07-17-rfc-review-cli-r1.md",
+        _current_clear_markdown("cli"), payload,
+    )
+
+    # Case A: point --source-rfc at the CORRECT rfc -> exit 0.
+    rc_fresh = main(["--hard", str(staging), "--source-rfc", str(rfc_path)])
+    check("--source-rfc fresh (correct rfc) exits 0", rc_fresh == 0)
+
+    # Case A': point --source-rfc at a DIFFERENT file -> exit 1.
+    rc_wrong_file = main(["--hard", str(staging), "--source-rfc", str(other_path)])
+    check(
+        "--source-rfc against a different file exits 1 (wiring is live)",
+        rc_wrong_file == 1,
+    )
+
+    # Case B: fold the RFC (digest changes) -> exit 1 with stale error AND the
+    # F7 path hint naming the hashed file via --source-rfc.
+    rfc_path.write_bytes(rfc_bytes + b"\nfolded F1\n")
+    buf = io.StringIO()
+    real_stderr = sys.stderr
+    sys.stderr = buf
+    try:
+        rc_stale = main(["--hard", str(staging), "--source-rfc", str(rfc_path)])
+    finally:
+        sys.stderr = real_stderr
+    stale_text = buf.getvalue()
+    check(
+        "--source-rfc stale (post-fold) digest exits 1 with stale error",
+        rc_stale == 1 and "stale" in stale_text and "source_digest" in stale_text,
+    )
+    check(
+        "stale-digest error names --source-rfc and the hashed source-path (F7)",
+        "--source-rfc" in stale_text and str(rfc_path) in stale_text,
+    )
+
+    # Case C: missing source-rfc file -> exit 1.
+    rc_missing = main(
+        ["--hard", str(staging), "--source-rfc", str(root / "nope.md")]
+    )
+    check("--source-rfc missing file exits 1", rc_missing == 1)
+
+    # Case D: source_kind mismatch — sidecar says 'plan' but flag is --source-rfc
+    # -> exit 1 with a mismatch error. Pins that the flag type-checks the
+    # sidecar's declared kind rather than asserting it in prose.
+    payload_plan = json.loads(json.dumps(_current_clear_payload()))
+    payload_plan["source_digest"] = rfc_digest
+    payload_plan["source_kind"] = "plan"
+    staging_plan = _write_staging(
+        root, "2026-07-17-rfc-review-cli-r1-plan.md",
+        _current_clear_markdown("cli"), payload_plan,
+    )
+    rc_kind_mismatch = main(
+        ["--hard", str(staging_plan), "--source-rfc", str(rfc_path)]
+    )
+    buf2 = io.StringIO()
+    real_stderr2 = sys.stderr
+    sys.stderr = buf2
+    try:
+        main(["--hard", str(staging_plan), "--source-rfc", str(rfc_path)])
+    finally:
+        sys.stderr = real_stderr2
+    check(
+        "--source-rfc rejects a sidecar declaring source_kind=plan",
+        rc_kind_mismatch == 1 and "source_kind mismatch" in buf2.getvalue(),
+    )
+
+
 def _selftest_discarded_header_skip(root: Path, check) -> None:
     """The discarded-findings header skip must recognize the authoritative
     `| Worker | Worker severity | Pattern | Theme | Reason | Notes |` header
@@ -2578,6 +2665,7 @@ def run_selftest() -> int:
             ("readiness_independence", _selftest_readiness_independence),
             ("producer_artifacts", _selftest_producer_artifacts),
             ("source_plan_cli", _selftest_source_plan_cli),
+            ("source_rfc_cli", _selftest_source_rfc_cli),
             ("discarded_header_skip", _selftest_discarded_header_skip),
         ):
             fn(root, check)
@@ -2625,6 +2713,20 @@ def main(argv: list[str] | None = None) -> int:
             "a fold). Plan reviews only (source_kind=plan)."
         ),
     )
+    parser.add_argument(
+        "--source-rfc",
+        metavar="PATH",
+        help=(
+            "Reviewed RFC file. Recompute its SHA-256 digest and compare to "
+            "sidecar.source_digest; fail hard on mismatch (stale review after "
+            "a fold). RFC reviews only (source_kind=rfc). The digest recipe is "
+            "byte-identical to --source-plan; this flag exists so the sidecar's "
+            "source_kind is type-checked rather than asserted in prose. For "
+            "generic document reviews use source_kind=document in the sidecar "
+            "and pass the digest via --source-plan until a --source-doc flag is "
+            "added."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.selftest:
@@ -2650,12 +2752,22 @@ def main(argv: list[str] | None = None) -> int:
 
     expected_digest: str | None = None
     source_kind: str | None = None
+    source_flag_name: str | None = None  # for the stale-digest error hint
+    if args.source_plan and args.source_rfc:
+        parser.error("--source-plan and --source-rfc are mutually exclusive")
     if args.source_plan:
-        # --source-plan is plan-only: hardcode source_kind and compute the
-        # digest of the named plan file. RFC/document reviewers needing the
-        # same gate should add their own flag then (recipe is byte-identical).
         source_kind = "plan"
         source_path = Path(args.source_plan).expanduser().resolve()
+        source_flag_name = "--source-plan"
+    elif args.source_rfc:
+        # --source-rfc: RFC reviews. The digest recipe is byte-identical to
+        # --source-plan (plain SHA-256 of the file bytes); a separate flag keeps
+        # the sidecar's source_kind type-checked against the flag used.
+        source_kind = "rfc"
+        source_path = Path(args.source_rfc).expanduser().resolve()
+        source_flag_name = "--source-rfc"
+
+    if source_kind is not None:
         if not source_path.is_file():
             payload = {"ok": False, "errors": [f"source file not found: {source_path}"]}
             if args.json:
@@ -2668,9 +2780,9 @@ def main(argv: list[str] | None = None) -> int:
         except OSError as exc:
             print(f"ERROR: cannot read source file: {exc}", file=sys.stderr)
             return 1
-        expected_digest = compute_source_digest("plan", source_bytes)
+        expected_digest = compute_source_digest(source_kind, source_bytes)
         # Stash the path so the stale-digest error can name it (F7: an agent
-        # that points --source-plan at the wrong file gets an actionable hint
+        # that points the source flag at the wrong file gets an actionable hint
         # instead of an opaque "artifact may have changed").
         _SOURCE_PATH_FOR_ERROR = str(source_path)
     else:
@@ -2689,14 +2801,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"WARN: {warning}", file=sys.stderr)
         for error in result.errors:
             # Augment stale-digest errors with the hashed source path so an
-            # agent that pointed --source-plan at the wrong file (e.g. the
-            # staging doc instead of the plan) gets an actionable hint (F7).
+            # agent that pointed the source flag at the wrong file (e.g. the
+            # staging doc instead of the plan/rfc) gets an actionable hint (F7).
             if (
-                _SOURCE_PATH_FOR_ERROR
+                source_flag_name
+                and _SOURCE_PATH_FOR_ERROR
                 and "source_digest is stale" in error
             ):
                 error = (
-                    f"{error}; or --source-plan points at the wrong file "
+                    f"{error}; or {source_flag_name} points at the wrong file "
                     f"(hashed: {_SOURCE_PATH_FOR_ERROR})"
                 )
             print(f"ERROR: {error}", file=sys.stderr)
