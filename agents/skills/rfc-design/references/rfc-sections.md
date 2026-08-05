@@ -116,6 +116,7 @@ Rules:
 - Cap the RFC at the three to five highest-value diagrams (the encrypted-direction map counts toward the cap). Do not diagram every linear happy path.
 - Do not put secrets, sample ciphertext, or real credentials in diagrams.
 - Mermaid `sequenceDiagram` message text must not contain `;` (it ends the statement and leaves the next line as a parse error). Use a comma, or put multi-line text in quotes with `\n`. Semicolons inside quoted `flowchart` node labels are fine.
+- When concurrent actors contend on `SELECT ... FOR UPDATE` (or equivalent exclusive row lock), the diagram must show peer acquisition blocked while the lock holder runs the remote generate/write path. The holder that just generated material becomes Ready from that material; do not diagram a post-commit re-select of the same rows unless a separate validation step is required. Clamp "already initialized on first look" and "waiter after init commit" into one shared load path in prose and diagrams.
 - If no trigger applies, state one line under §3 Assumptions: `No workflow diagrams: all §4 flows are linear single-actor paths and no encrypted edge-auth hop is in scope.`
 - No arrows (→) in prose. No shorthand. (Arrows inside a fenced Mermaid diagram are fine.)
 - **Edge cases must be readable standalone:** each field is one or more complete sentences. Do not use telegraphic clause chains (`do X; alert if ≥3 in 24h`) or jargon-only bullets that assume Terminology was read first. Name tables/columns when they disambiguate (e.g. `segment_batch_watermark.last_processed_at`).
@@ -372,8 +373,10 @@ When modifying an existing RFC document (adding sections, updating decisions, re
 
 11. **Readable-not-telegraphic**  -  §4 edge cases use the **Edge case: \<title\>** + Condition/Behavior/Outcome format (not one-line shorthand). §6 rules and §7 metric/alert rows state **who/what/when** in plain language; Terminology defines terms once, body sections restate behavior where a mid-doc reader needs it. Thresholds include subject and window (not `≥3 in 24h` alone).
 
-12. **Diagrams**  -  If any edited flow or edge-auth/crypto path meets a complexity or encrypted-direction trigger, ensure a diagram exists or the §3 N/A one-liner is present. After editing Mermaid `sequenceDiagram` blocks, reject message text that contains `;`.
+12. **Diagrams**  -  If any edited flow or edge-auth/crypto path meets a complexity or encrypted-direction trigger, ensure a diagram exists or the §3 N/A one-liner is present. After editing Mermaid `sequenceDiagram` blocks, reject message text that contains `;`. For exclusive row-lock bootstrap races, show peer `FOR UPDATE` wait, do not re-select generated material after commit, and clamp initialized/waiter load paths.
 
 13. **Capacity addendum**  -  If any capacity trigger applies (API CPU / payload expansion / shared DB / import contention), ensure the footprint Addendum or the §3 N/A one-liner is present.
 
 14. **Cryptographic collision assumptions**  -  When a flow uses a keyed digest or hash for uniqueness or lookup and rejects multi-match APIs because collisions are not a normal case, add a short collision note next to that flow: not formally impossible; order-of-magnitude birthday bound; unique-index implication; mismatch after digest hit is fail-closed, not a multi-owner list.
+
+15. **Schema ownership prose**  -  When the project marks production schema as DBA-owned and Flyway (or equivalent) as test-only, RFC and Layer 2 bootstrap wording must say schema deployment / DBA-owned change (test migrations may seed), not "Flyway creates" production rows.
