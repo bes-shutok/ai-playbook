@@ -107,8 +107,15 @@ Must include:
 - Notes: (optional; use for accepted lag, decision refs, or pointers to §7)
 
 Rules:
-- Keep flows readable. No diagrams required.
-- No arrows (→). No shorthand.
+- Keep flows readable. Numbered steps remain normative; any diagrams are visual aids, not a substitute for the numbered steps.
+- Diagrams (required when applicable): add a fenced Mermaid `flowchart` or `sequenceDiagram` under a flow when **any** of these hold:
+  - the flow has three or more decision branches, **or**
+  - concurrent actors race on shared state (for example two app instances plus an external service contending for a lock), **or**
+  - a cross-trust-boundary handoff that readers routinely mis-order (for example initialize → release → remote call → re-lock with winner/loser branches).
+- Cap the RFC at the three to five highest-value diagrams. Do not diagram every linear happy path.
+- Do not put secrets, sample ciphertext, or real credentials in diagrams.
+- If no flow meets a trigger, state one line under §3 Assumptions: `No workflow diagrams: all §4 flows are linear single-actor paths.`
+- No arrows (→) in prose. No shorthand. (Arrows inside a fenced Mermaid diagram are fine.)
 - **Edge cases must be readable standalone:** each field is one or more complete sentences. Do not use telegraphic clause chains (`do X; alert if ≥3 in 24h`) or jargon-only bullets that assume Terminology was read first. Name tables/columns when they disambiguate (e.g. `segment_batch_watermark.last_processed_at`).
 - Include only edge cases that impact business correctness, money, user experience, or support load.
 - **Multi-flow structure**: when multiple flows share most steps, structure as a base flow covering the shared path, plus derived flows that document only their divergences. Each derived flow must open with "Flow X applies with one divergence at step N" (or "Flow X applies in full") and close with "All other steps identical to Flow X."
@@ -295,7 +302,15 @@ Use `### Addendum A. <title>`, `### Addendum B. <title>`, … for supplementary 
 - Operator or filter matrices (e.g. MVP catalog operators)
 - Naming or design comparisons too long for Terminology
 - Overflow accepted risks when §8 is already dense
-- Throughput or storage footprint calculations (Event Ingestion-style demand × size bands). When the deployable shares one database instance across modules, inventory all modules. Include a sources-of-truth table if planning inputs override an older ADR. Label illustrative CPU/bytes; idle-box fit is not a release gate until shared-load measurement. Stretch concurrency needs abort alerts. Expanded request encodings need a worked body-size check against existing caps.
+- Throughput or storage footprint calculations (required when applicable, see triggers below).
+  - **Triggers (add a `### Addendum <letter>. Throughput and storage footprint` when any hold):**
+    1. The design adds or changes CPU-costly work on a hot API path (crypto, compression, large validation).
+    2. Request or response encoding expands payload size against existing body or field caps.
+    3. Persistence grows per-entity storage, adds indexes, or carries rewrite/backfill risk.
+    4. The deployable shares one database instance across modules or workloads that will run concurrently with the new path.
+    5. Baseline/import or burst traffic can contend with steady sync traffic.
+  - **When applicable, the addendum MUST include:** demand × size bands (active entities, sync RPS ceiling, burst/import posture) with labels `established` | `planning assumption` | `illustrative`; a sources-of-truth table when planning inputs override an older ADR; API fit-check against existing latency/admission budgets (not new hard SLOs unless product asks); storage bands for **every** logical database on a shared instance, not only the module owning the feature delta; a worked body-size example when encoding expands requests; and measurement gates (idle-box success is not capacity truth under shared load; stretch concurrency is opt-in with abort alerts).
+  - **If none of the triggers apply**, state one line under §3 Assumptions: `No capacity addendum: no material API CPU, payload, or shared-storage change.` The existing §8 rule still holds: net-new downstream volume needs an explicit capacity review gate before go-live.
 
 Addendum sections follow the same `####` subsection rules as §1–8. Do not duplicate Terminology definitions in Addendum prose without a one-line pointer from Terminology (e.g. "See Addendum A").
 

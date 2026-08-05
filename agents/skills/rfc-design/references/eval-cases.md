@@ -247,6 +247,80 @@ pass_criteria
 
 ---
 
+## RFC-EVAL-015: Complex-flow diagram missing
+
+**Fixture:** Draft §4 has a multi-branch init race — two app instances plus an external key service contend for a lock, with winner/loser branches and a re-lock step — and no fenced Mermaid diagram.
+
+**Trigger:** Create or Review-local at Light depth.
+
+**Expected trace:**
+- `contract-docs` (consistency lens item 12) returns a finding tagged for the missing diagram, quoting the flow title
+- After fold-in: the affected flow has a fenced `sequenceDiagram` (or `flowchart`) **or** a §3 N/A one-liner is present
+- Finding severity reflects that numbered steps remain normative (diagram is an aid, not a contract gap)
+
+**Forbidden trace:**
+- Diagram absence accepted under blanket "no diagrams required" reasoning
+- Finding only in chat; RFC left without diagram or N/A line
+
+**Pass:** Diagram-or-N/A rule enforced; the new §4 trigger is applied, not the legacy "no diagrams" line.
+
+---
+
+## RFC-EVAL-016: Capacity addendum missing
+
+**Fixture:** Draft adds per-request crypto work on a hot API path and writes to a database instance shared with sibling modules, but has no `### Addendum <letter>. Throughput and storage footprint` and no §3 N/A line.
+
+**Trigger:** Create or Review-local at Light depth.
+
+**Expected trace:**
+- `contract-docs` (consistency lens item 11) returns a finding naming the missing addendum and the triggered condition(s)
+- After fold-in: addendum exists with demand × size bands and sources-of-truth labels, **or** the §3 N/A one-liner is present (latter only acceptable if the trigger was mis-assessed)
+
+**Forbidden trace:**
+- Missing addendum accepted because "performance is deferred"
+- Addendum added without `established` / `planning assumption` / `illustrative` labels
+
+**Pass:** Capacity trigger gate enforced; labeling rule applied.
+
+---
+
+## RFC-EVAL-017: False-green idle-box CPU
+
+**Fixture:** Addendum claims the new path "fits the 30 s budget" citing a 1 ms/op measurement from an idle box, with no shared-load measurement gate and no abort alerts on stretch concurrency.
+
+**Trigger:** Review-local at Light depth.
+
+**Expected trace:**
+- `contract-docs` (consistency lens item 11) returns a finding that idle-box fit is not capacity truth under shared load
+- Severity is at least material (not Low) when the shared instance also serves sibling modules
+- After fold-in: addendum states a measurement gate (shared-load test required before go-live) and stretch concurrency is opt-in with abort alerts
+
+**Forbidden trace:**
+- Idle-box number accepted as a release green
+- Finding downgraded to Low solely because "numbers are illustrative"
+
+**Pass:** Idle-box-is-not-truth rule enforced; measurement gate wording present after fold.
+
+---
+
+## RFC-EVAL-018: Diagram overkill
+
+**Fixture:** Draft §4 includes a fenced Mermaid diagram for every linear CRUD flow (single-actor, no branches), totalling 8 diagrams.
+
+**Trigger:** Create or Review-local at Light depth.
+
+**Expected trace:**
+- `design-simplicity` returns a finding to keep only the complex subset (cap 3–5 highest-value diagrams)
+- After fold-in: linear happy-path diagrams removed; complex flows retain theirs
+
+**Forbidden trace:**
+- All 8 diagrams retained as "thoroughness"
+- Finding routed only to `contract-docs` when the issue is succinctness, not contract correctness
+
+**Pass:** Diagram-cap rule enforced; linear paths are not diagrammed.
+
+---
+
 ## Adding new cases
 
 After any production or review incident (skipped Step 2, wrong depth, bad fold-in, gate bypass):

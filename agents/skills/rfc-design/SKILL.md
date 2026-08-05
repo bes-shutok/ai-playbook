@@ -152,7 +152,7 @@ Read `references/rfc-sections.md` for the full section template. Summary:
 
 **Subsection rule:** Inside `### 2. Problem, Goals, Non-goals` (and §3, §5, §7, §8, etc.), use **`#### Subsection title`** plus a blank line, then bullets or prose. Do **not** use nested list labels (`- Problem statement:`) or bold inline titles (`**Goals:**`) as pseudo-headings; they do not separate visually in Confluence or Markdown previews.
 
-**Edit mode (mandatory):** Before changing an existing RFC, read this skill and `references/rfc-sections.md`, then run the **Editing checklist** in `rfc-sections.md` before presenting the update.
+**Edit mode (mandatory):** Before changing an existing RFC, read this skill and `references/rfc-sections.md`, then run the **Editing checklist** in `rfc-sections.md` before presenting the update. **Diagrams:** if any edited §4 flow meets a complexity trigger (≥3 decision branches, concurrent actors racing on shared state, or a cross-trust-boundary handoff), ensure a fenced Mermaid diagram exists under that flow or the §3 N/A one-liner is present; do not leave a blanket "no diagrams" stance on a now-complex flow.
 
 ---
 
@@ -197,6 +197,8 @@ The checklist MUST include:
 - Which RFC sections will be present with real content vs "Not applicable for MVP"
 - Any inferred scope decisions marked `(TODO: confirm)`
 - Any missing technical decisions that block implementation-ready details
+- **Capacity addendum applicable?** (API CPU / payload expansion / shared DB instance / import-or-burst contention): yes → plan `### Addendum <letter>. Throughput and storage footprint`; no → record the §3 N/A one-liner from `references/rfc-sections.md` Addendum
+- **Complex-flow diagrams applicable?** (≥3 decision branches, concurrent actors racing on shared state, or cross-trust-boundary handoff): yes → list candidate §4 flows; no → record the §3 N/A one-liner from `references/rfc-sections.md` §4
 
 Hard gate rules:
 - Do NOT generate any RFC sections until:
@@ -235,6 +237,7 @@ Rules:
 - **Succinct vs telegraphic:** Bullets must stay skimmable **and** self-contained for readers who land mid-document (§4 edge cases, §6 rules, §7 alerts). Succinct is short with complete meaning; telegraphic drops subjects, uses undefined jargon, or hides thresholds (e.g. "alert if ≥3 in 24h" without saying **what** is counted). When a term is in Terminology, still spell out the behavior once in edge cases and operability rows (table/column names OK).
 - **§5 Contracts:** prefer **implementation blueprints** (JSON request/response bodies, event payloads, DDL/SQL) over wordy explanations. If a fact is not in a fenced example, it is not implementation-ready. Minimum bar: `references/contract-blueprint-example.md`.
 - **Separate protection domains:** when a design applies similar security mechanisms at different trust boundaries, give each domain its own contract subsection with key ownership, format, lifecycle, and failure policy. Describe cross-domain interaction in a separate end-to-end flow so shared vocabulary does not imply shared keys or rotation semantics.
+- **Complex-flow diagrams:** when any §4 applicability trigger in `references/rfc-sections.md` §4 fires (≥3 decision branches, concurrent actors racing on shared state, or a cross-trust-boundary handoff), a fenced Mermaid `flowchart` or `sequenceDiagram` is required under the affected flow. Numbered steps stay normative; the diagram is an aid. If no flow qualifies, record the §3 N/A one-liner.
 - Every bullet must be either:
   - a requirement
   - a decision
@@ -341,6 +344,8 @@ Review the RFC draft for internal contradictions:
 8. Technical Decision Notes vs chosen approach elsewhere
 9. **§4 edge cases** use **Edge case: \<title\>** plus Condition / Behavior / Outcome (and Notes when needed); not one-line telegraphic bullets
 10. **§4 edge cases, §6 rules, §7 metrics/alerts** restate behavior in plain language (table/column names OK); thresholds name **what** is counted and the **time window** (e.g. "3+ PARTIAL runs in rolling 24h", not "≥3 in 24h" alone)
+11. **Capacity addendum** — when any Addendum trigger applies (API CPU / payload expansion / shared DB instance / import-or-burst contention), `### Addendum <letter>. Throughput and storage footprint` exists with sources-of-truth labels (`established` | `planning assumption` | `illustrative`); otherwise the §3 N/A one-liner is present. Illustrative idle-box CPU must not be described as a release green without a shared-load measurement gate.
+12. **Complex-flow diagrams** — when any §4 diagram trigger applies (≥3 decision branches, concurrent actors racing on shared state, or a cross-trust-boundary handoff), the affected flow has a fenced Mermaid diagram or the §3 N/A one-liner is present. Blanket "no diagrams" guidance must not cover a flow that now meets a trigger.
 
 Return the shared finding fields with the two contradicting statements quoted.
 
