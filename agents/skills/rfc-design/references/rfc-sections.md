@@ -295,6 +295,7 @@ Use `### Addendum A. <title>`, `### Addendum B. <title>`, … for supplementary 
 - Operator or filter matrices (e.g. MVP catalog operators)
 - Naming or design comparisons too long for Terminology
 - Overflow accepted risks when §8 is already dense
+- Throughput or storage footprint calculations (Event Ingestion-style demand × size bands). When the deployable shares one database instance across modules, inventory all modules. Include a sources-of-truth table if planning inputs override an older ADR. Label illustrative CPU/bytes; idle-box fit is not a release gate until shared-load measurement. Stretch concurrency needs abort alerts. Expanded request encodings need a worked body-size check against existing caps.
 
 Addendum sections follow the same `####` subsection rules as §1–8. Do not duplicate Terminology definitions in Addendum prose without a one-line pointer from Terminology (e.g. "See Addendum A").
 
