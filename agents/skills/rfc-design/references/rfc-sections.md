@@ -362,7 +362,7 @@ When modifying an existing RFC document (adding sections, updating decisions, re
 
 6. **Technical Decision Notes**  -  Any non-obvious technical choice added or substantially revised must follow the full structure defined in §Technical Decision Notes: Constraints → Options table (constraints as columns) → Elimination trail (one sentence per eliminated option) → Recommendation with decision trail → Reversibility note (one sentence per constraint). Partial structures (e.g. recommendation without elimination trail, or options table without reversibility note) are not compliant.
 
-7. **Closed decisions**  -  When a decision has been made, collapse any options-comparison content to a single named subsection containing: the decision, who made it, when, and the rationale. Remove pros/cons tables for eliminated options; they add noise to a reader trying to understand what will be built.
+7. **Closed decisions**  -  When a decision has been made, collapse any options-comparison content to a single named subsection containing: the decision, who made it, when, and the rationale. When Product or Ops settled the choice in a chat thread, add that permalink as a provenance footnote in the same change set (outcome remains the durable citation). Remove pros/cons tables for eliminated options; they add noise to a reader trying to understand what will be built.
 
 8. **Process-tense labels**  -  Do not use labels that were only meaningful during the review/drafting stage. Replace "(current)" with "(existing)" or "(pre-RFC)", remove "(new)" from stable flow/section headings, and avoid "Refactored" in stable section titles. Use stable descriptive names that remain accurate after the RFC is implemented.
 
@@ -375,3 +375,5 @@ When modifying an existing RFC document (adding sections, updating decisions, re
 12. **Diagrams**  -  If any edited flow or edge-auth/crypto path meets a complexity or encrypted-direction trigger, ensure a diagram exists or the §3 N/A one-liner is present. After editing Mermaid `sequenceDiagram` blocks, reject message text that contains `;`.
 
 13. **Capacity addendum**  -  If any capacity trigger applies (API CPU / payload expansion / shared DB / import contention), ensure the footprint Addendum or the §3 N/A one-liner is present.
+
+14. **Cryptographic collision assumptions**  -  When a flow uses a keyed digest or hash for uniqueness or lookup and rejects multi-match APIs because collisions are not a normal case, add a short collision note next to that flow: not formally impossible; order-of-magnitude birthday bound; unique-index implication; mismatch after digest hit is fail-closed, not a multi-owner list.
