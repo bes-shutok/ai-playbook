@@ -4,7 +4,7 @@ Read this file when drafting or editing RFC sections (Step 1 and substantial edi
 
 ## Document order (must follow exactly)
 
-1. `# Terminology` (or `# Dictionary`) - **only** content before numbered sections
+1. `# Terminology` (or `# Dictionary`)  -  **only** content before numbered sections
 2. `### 1. Header` through `### 8. Testing & Rollout`
 3. Optional `### Addendum A.` … (supplementary matrices, naming notes; not glossary entries)
 
@@ -45,8 +45,8 @@ Must include:
 - Created date (infer from current date if not provided; mark `(TODO: confirm)` if inferred)
 - Last updated date (same rule as created date)
 - Links:
- - PRD link or identifier (or `(TODO: add link)`)
- - Architecture doc link or identifier (or `(TODO: add link)`)
+  - PRD link or identifier (or `(TODO: add link)`)
+  - Architecture doc link or identifier (or `(TODO: add link)`)
 
 Keep this section compact. Metadata bullets live under `### 1. Header`; use `####` for sub-blocks such as **Scope of this document** when they need visual separation from the link list.
 
@@ -77,9 +77,9 @@ Structure: use **`#### In-scope`**, **`#### Dependencies`**, **`#### Assumptions
 Must include:
 - In-scope components (owned by this team/service) with 1-line responsibility each
 - Dependencies (external components THIS service requires):
- - Only list if THIS service directly depends on them
- - State what THIS service needs from them (1 line)
- - Omit owner/team unless critical to unblock implementation
+  - Only list if THIS service directly depends on them
+  - State what THIS service needs from them (1 line)
+  - Omit owner/team unless critical to unblock implementation
 - Assumptions that affect behavior (only those relevant to MVP and implementation)
 
 Rules:
@@ -137,11 +137,11 @@ Include only what is in scope per confirmed coverage:
 2. **MVP priority labels** (when multiple endpoints): `Must` / `Optional` / `Later` in the inventory table.
 3. **Contract notes:** short bullets (idempotency, headers, enum constraints, conflict codes); no multi-sentence narratives where a JSON field or status code suffices.
 4. **§5.1.1 Example request / response bodies:** one `##### METHOD /path` subsection per endpoint (no `(example)` suffix):
- - Repeat the inventory Description as the first prose line under the heading (OpenAPI `summary` parity).
- - Request body (JSON fence, or `none`)
- - Response body (JSON fence, happy path)
- - Error bodies for write endpoints and non-obvious failures (`4xx`/`5xx` with `code`, `message`, and relevant `details`)
- - Use realistic field names, enums, nesting, and timestamps; `(TODO: define)` only inside JSON for unknown fields, not instead of the fence
+   - Repeat the inventory Description as the first prose line under the heading (OpenAPI `summary` parity).
+   - Request body (JSON fence, or `none`)
+   - Response body (JSON fence, happy path)
+   - Error bodies for write endpoints and non-obvious failures (`4xx`/`5xx` with `code`, `message`, and relevant `details`)
+   - Use realistic field names, enums, nesting, and timestamps; `(TODO: define)` only inside JSON for unknown fields, not instead of the fence
 
 **Per-endpoint checklist (§5.1.1):**
 
@@ -169,9 +169,9 @@ For each event/message:
 - **Payload** (code fence, JSON) with PII fields clearly marked
 - Producer
 - Consumers (if known)
- - **Always include this field** - it documents the integration contract and what downstream services expect from THIS service
- - List known services that subscribe to or consume this event
- - This is different from Section 3 dependencies (what THIS service requires); this documents what THIS service provides to others
+  - **Always include this field** - it documents the integration contract and what downstream services expect from THIS service
+  - List known services that subscribe to or consume this event
+  - This is different from Section 3 dependencies (what THIS service requires); this documents what THIS service provides to others
 - When emitted
 - Delivery semantics: at-least-once / at-most-once / exactly-once (or `(TODO: define)`)
 - Ordering guarantee (or state none)
@@ -186,10 +186,10 @@ Rules:
 - Use the best-fit SQL dialect if DB engine is known.
 - If DB engine is unknown, use generic SQL and mark engine-specific details `(TODO: confirm)`.
 - Include:
- - table definition(s)
- - primary key
- - important indexes
- - key constraints that can be determined
+  - table definition(s)
+  - primary key
+  - important indexes
+  - key constraints that can be determined
 - Keep DDL minimal but sufficient for implementation stories.
 
 **Less obvious tables (multi-table or async pipelines):** add three layers, not prose-only summaries:
@@ -221,13 +221,13 @@ Purpose: define implementation behavior and precedence.
 
 Must include:
 - Ordered rules (numbered) that define:
- - decision logic
- - precedence (what wins when conflicts happen)
- - idempotency/dedup behavior (if applicable)
+  - decision logic
+  - precedence (what wins when conflicts happen)
+  - idempotency/dedup behavior (if applicable)
 - For each rule:
- - trigger/inputs (1 line)
- - behavior (1–3 bullets)
- - output/effect (1 line)
+  - trigger/inputs (1 line)
+  - behavior (1–3 bullets)
+  - output/effect (1 line)
 
 Rules:
 - Only include rules that matter for correctness (money, identity, eligibility, state transitions).
@@ -240,25 +240,25 @@ Purpose: minimum viable observability for MVP.
 
 Must include:
 - 4–5 metrics total (operational + business mixed), each with:
- - name
- - type (counter/gauge/histogram/timer)
- - emitted by (service + operation)
- - labels (max 4)
- - what to do when abnormal (1 line)
+  - name
+  - type (counter/gauge/histogram/timer)
+  - emitted by (service + operation)
+  - labels (max 4)
+  - what to do when abnormal (1 line)
 - Key logs (only if non-obvious):
- - what is logged
- - what is NEVER logged (PII safety if relevant)
+  - what is logged
+  - what is NEVER logged (PII safety if relevant)
 - Alerts (only if clearly justified by MVP risk):
- - condition
- - severity
- - owning/on-call team (or `(TODO: confirm)`)
+  - condition
+  - severity
+  - owning/on-call team (or `(TODO: confirm)`)
 
 Rules:
 - Do NOT create long SLO/SLA theory. Keep it operational.
 - **"When abnormal" must be self-explanatory:** name the counted signal, threshold, and time window (e.g. "page on-call when PARTIAL run count ≥ 3 in rolling 24h"), not bare thresholds (`≥3 in 24h`).
 - If nothing meaningful is stated in inputs, write:
- - `Not applicable for MVP: observability handled elsewhere` (only if supported by inputs) OR
- - provide minimal metrics anyway (preferred).
+  - `Not applicable for MVP: observability handled elsewhere` (only if supported by inputs) OR
+  - provide minimal metrics anyway (preferred).
 
 ---
 
@@ -269,22 +269,22 @@ Structure: use **`#### Critical tests`**, **`#### Phases`** (or rollout steps), 
 
 Must include:
 - Critical tests (max ~10 bullets unless inputs demand more), focused on:
- - edge/marginal business cases
- - idempotency/dedup (if applicable)
- - failure modes that cause user-visible or financial impact
+  - edge/marginal business cases
+  - idempotency/dedup (if applicable)
+  - failure modes that cause user-visible or financial impact
 - For each test bullet:
- - scenario/trigger
- - expected behavior
- - assertion (what is checked)
+  - scenario/trigger
+  - expected behavior
+  - assertion (what is checked)
 
 Rollout:
 - If there are migrations, flags, or backfills, list:
- - steps (numbered)
- - rollback plan (1–3 bullets)
+  - steps (numbered)
+  - rollback plan (1–3 bullets)
 - When the implementation is intentionally split into deployable phases, add a short phase-separation subsection in §8 before the rollout steps. For each phase include: scope, dependency on earlier phases, and whether it is a safe ship boundary on its own.
 - When a feature adds **net-new volume** to a downstream service (previously 0 or near-0, now potentially high), add an explicit capacity review gate in the rollout plan before the trigger goes live. A feature that *reduces* volume (e.g. via suppression) does not need this gate. State which service, what the volume change is, and why it is new.
 - If no rollout info exists in inputs:
- - state `(TODO: define rollout plan)` only if needed for MVP delivery.
+  - state `(TODO: define rollout plan)` only if needed for MVP delivery.
 
 ---
 
@@ -330,27 +330,27 @@ When modifying an existing RFC document (adding sections, updating decisions, re
 
 ### Checklist before committing any RFC change
 
-1. **Section order** - Terminology → `### 1` Header → … → `### 8` Testing & Rollout → optional Addendum(es). Do not add, rename, reorder, merge, or omit numbered sections 1–8.
+1. **Section order**  -  Terminology → `### 1` Header → … → `### 8` Testing & Rollout → optional Addendum(es). Do not add, rename, reorder, merge, or omit numbered sections 1–8.
 
-2. **Terminology** - Flat A–Z glossary only before §1; no topic subsections, writer meta, or operator matrices. New terms in the edit must be added to Terminology (alphabetically). Prefer plain BE-readable wording for uncommon metaphors; if jargon stays for concision, it must be defined here. Supplementary tables go in Addendum. Body: no ambiguous **eval** catch-alls; name the specific operation.
+2. **Terminology**  -  Flat A–Z glossary only before §1; no topic subsections, writer meta, or operator matrices. New terms in the edit must be added to Terminology (alphabetically). Prefer plain BE-readable wording for uncommon metaphors; if jargon stays for concision, it must be defined here. Supplementary tables go in Addendum. Body: no ambiguous **eval** catch-alls; name the specific operation.
 
-3. **Subsection headings** - Use `####` for Problem statement, Goals, In-scope, Contract notes, Critical tests, etc. Use `#####` for edge-case titles and per-endpoint blocks under §5.1.1. Replace nested `- Label:` list items and bold pseudo-headings when touching a section.
+3. **Subsection headings**  -  Use `####` for Problem statement, Goals, In-scope, Contract notes, Critical tests, etc. Use `#####` for edge-case titles and per-endpoint blocks under §5.1.1. Replace nested `- Label:` list items and bold pseudo-headings when touching a section.
 
-4. **Bold** - Glossary term labels only in Terminology. Body uses headings and backticks, not bold for emphasis or re-defined terms.
+4. **Bold**  -  Glossary term labels only in Terminology. Body uses headings and backticks, not bold for emphasis or re-defined terms.
 
-5. **Placement of new content** - Place new content in the section closest to the detail it justifies:
- - Cross-cutting decisions → Section 3 (Scope & Dependencies)
- - Flow-specific decisions → Section 4 (Functional Overview)
- - Closed decisions (no open alternatives) → inline rationale in the relevant section or a named appendix subsection; do NOT present them as open option comparisons.
+5. **Placement of new content**  -  Place new content in the section closest to the detail it justifies:
+   - Cross-cutting decisions → Section 3 (Scope & Dependencies)
+   - Flow-specific decisions → Section 4 (Functional Overview)
+   - Closed decisions (no open alternatives) → inline rationale in the relevant section or a named appendix subsection; do NOT present them as open option comparisons.
 
-6. **Technical Decision Notes** - Any non-obvious technical choice added or substantially revised must follow the full structure defined in §Technical Decision Notes: Constraints → Options table (constraints as columns) → Elimination trail (one sentence per eliminated option) → Recommendation with decision trail → Reversibility note (one sentence per constraint). Partial structures (e.g. recommendation without elimination trail, or options table without reversibility note) are not compliant.
+6. **Technical Decision Notes**  -  Any non-obvious technical choice added or substantially revised must follow the full structure defined in §Technical Decision Notes: Constraints → Options table (constraints as columns) → Elimination trail (one sentence per eliminated option) → Recommendation with decision trail → Reversibility note (one sentence per constraint). Partial structures (e.g. recommendation without elimination trail, or options table without reversibility note) are not compliant.
 
-7. **Closed decisions** - When a decision has been made, collapse any options-comparison content to a single named subsection containing: the decision, who made it, when, and the rationale. Remove pros/cons tables for eliminated options; they add noise to a reader trying to understand what will be built.
+7. **Closed decisions**  -  When a decision has been made, collapse any options-comparison content to a single named subsection containing: the decision, who made it, when, and the rationale. Remove pros/cons tables for eliminated options; they add noise to a reader trying to understand what will be built.
 
-8. **Process-tense labels** - Do not use labels that were only meaningful during the review/drafting stage. Replace "(current)" with "(existing)" or "(pre-RFC)", remove "(new)" from stable flow/section headings, and avoid "Refactored" in stable section titles. Use stable descriptive names that remain accurate after the RFC is implemented.
+8. **Process-tense labels**  -  Do not use labels that were only meaningful during the review/drafting stage. Replace "(current)" with "(existing)" or "(pre-RFC)", remove "(new)" from stable flow/section headings, and avoid "Refactored" in stable section titles. Use stable descriptive names that remain accurate after the RFC is implemented.
 
-9. **Open question resolution propagation** - When resolving an RFC open question (changing status from "defer" or "open" to decided), grep the entire document for all references to the old state; assumptions, edge cases, flow descriptions, rules, and inline mentions. Update every reference in the same changeset. A resolved question with stale references elsewhere in the RFC is worse than an open question because it creates contradictions.
+9. **Open question resolution propagation**  -  When resolving an RFC open question (changing status from "defer" or "open" to decided), grep the entire document for all references to the old state; assumptions, edge cases, flow descriptions, rules, and inline mentions. Update every reference in the same changeset. A resolved question with stale references elsewhere in the RFC is worse than an open question because it creates contradictions.
 
-10. **Substantial edits** - When the edit changes contracts (§5), flows (§4), business rules (§6), or rollout (§8), run **Step 2 – Review pass** before presenting the updated RFC. Skip Step 2 for typo-only or single-bullet clarifications unless the user requests a full review.
+10. **Substantial edits**  -  When the edit changes contracts (§5), flows (§4), business rules (§6), or rollout (§8), run **Step 2 – Review pass** before presenting the updated RFC. Skip Step 2 for typo-only or single-bullet clarifications unless the user requests a full review.
 
-10. **Readable-not-telegraphic** - §4 edge cases use the **Edge case: \<title\>** + Condition/Behavior/Outcome format (not one-line shorthand). §6 rules and §7 metric/alert rows state **who/what/when** in plain language; Terminology defines terms once, body sections restate behavior where a mid-doc reader needs it. Thresholds include subject and window (not `≥3 in 24h` alone).
+10. **Readable-not-telegraphic**  -  §4 edge cases use the **Edge case: \<title\>** + Condition/Behavior/Outcome format (not one-line shorthand). §6 rules and §7 metric/alert rows state **who/what/when** in plain language; Terminology defines terms once, body sections restate behavior where a mid-doc reader needs it. Thresholds include subject and window (not `≥3 in 24h` alone).

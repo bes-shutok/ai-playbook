@@ -1,10 +1,10 @@
 ---
 name: rfc-design
 description: >
- Create, edit, or structurally review Design RFCs in Markdown. Use for design RFC, feature design,
- technical design doc, architecture RFC, API design, or /rfc-design. Modes: create (full intake),
- edit (existing file), review-local (Step 2 only). Confluence-hosted pages: use review-confluence-doc.
- Creation uses intake gates, then draft plus tiered review-agents pass before final output.
+  Create, edit, or structurally review Design RFCs in Markdown. Use for design RFC, feature design,
+  technical design doc, architecture RFC, API design, or /rfc-design. Modes: create (full intake),
+  edit (existing file), review-local (Step 2 only). Confluence-hosted pages: use review-confluence-doc.
+  Creation uses intake gates, then draft plus tiered review-agents pass before final output.
 ---
 
 # Command: Generate MVP Design RFC (Implementation-ready, succinct)
@@ -172,10 +172,10 @@ Required inputs (as text available in the current context, from any of the above
 Hard gate rules:
 - Until the user gives an explicit "go ahead" signal, you MUST NOT generate any part of the RFC (no section drafts, no outlines, no partials).
 - In this mode, you may ONLY:
- - list what inputs are missing
- - ask targeted questions to obtain missing details
- - request specific missing excerpts ONLY if they are not present in CLI/context arguments and cannot be found in the repo 
- - restate what was received in a short inventory (no interpretation)
+  - list what inputs are missing
+  - ask targeted questions to obtain missing details
+  - request specific missing excerpts ONLY if they are not present in CLI/context arguments and cannot be found in the repo 
+  - restate what was received in a short inventory (no interpretation)
 
 Proceed signal:
 - Only start generating the RFC after the user explicitly indicates readiness, e.g. "OK, proceed", "Go ahead", or "Generate the RFC".
@@ -190,18 +190,18 @@ After all inputs are provided (but before generating the RFC), produce an **Assu
 
 The checklist MUST include:
 - In-scope surfaces for THIS RFC:
- - Backend / Frontend / Mobile (iOS) / Mobile (Android) / DevOps-Infrastructure
+  - Backend / Frontend / Mobile (iOS) / Mobile (Android) / DevOps-Infrastructure
 - MVP scope boundaries:
- - explicitly in MVP
- - explicitly deferred (if stated)
+  - explicitly in MVP
+  - explicitly deferred (if stated)
 - Which RFC sections will be present with real content vs "Not applicable for MVP"
 - Any inferred scope decisions marked `(TODO: confirm)`
 - Any missing technical decisions that block implementation-ready details
 
 Hard gate rules:
 - Do NOT generate any RFC sections until:
- 1) the checklist is produced, AND
- 2) the user confirms the checklist AND gives the Proceed signal.
+  1) the checklist is produced, AND
+  2) the user confirms the checklist AND gives the Proceed signal.
 
 **Fast path:** When the user message includes both complete inputs and an explicit proceed/generate signal, present the checklist and start Step 1 in the same turn after a one-line assumption summary. Do not block on a second confirmation unless the checklist contains `(TODO: confirm)` items that block implementation-ready contracts.
 
@@ -213,8 +213,8 @@ Inference is allowed, but controlled.
 
 Rules:
 - Do NOT infer:
- - ownership, authority, approvals, or named stakeholders
- - compliance regimes (e.g. GDPR) unless explicitly in the inputs
+  - ownership, authority, approvals, or named stakeholders
+  - compliance regimes (e.g. GDPR) unless explicitly in the inputs
 - If database engine is not specified, use **generic SQL** for DDL where possible and mark engine-specific parts as `(TODO: confirm)`.
 - If you include engine-specific SQL examples while the decision is pending, label them as examples and add a one-line portability note.
 - When referencing internal repository documents, use document names (in parentheses) and do not use file paths or Markdown links to internal `.md` files.
@@ -236,11 +236,11 @@ Rules:
 - **§5 Contracts:** prefer **implementation blueprints** (JSON request/response bodies, event payloads, DDL/SQL) over wordy explanations. If a fact is not in a fenced example, it is not implementation-ready. Minimum bar: `references/contract-blueprint-example.md`.
 - **Separate protection domains:** when a design applies similar security mechanisms at different trust boundaries, give each domain its own contract subsection with key ownership, format, lifecycle, and failure policy. Describe cross-domain interaction in a separate end-to-end flow so shared vocabulary does not imply shared keys or rotation semantics.
 - Every bullet must be either:
- - a requirement
- - a decision
- - a contract
- - a dependency
- - or an implementation task input
+  - a requirement
+  - a decision
+  - a contract
+  - a dependency
+  - or an implementation task input
 - Do NOT list obvious/generic statements unless explicitly required by provided inputs.
 - Keep non-contract sections short; §5 endpoint inventories are expected to be complete, not minimal.
 - Use stable headings so Jira stories can link to specific sections.
@@ -279,10 +279,10 @@ User may request **Full** explicitly; do not default to Full without a signal.
 1. **Launch the selected workers before revising the RFC.** Do not skip the pipeline because the draft "looks fine."
 2. **Write the staging review file** under `{reviews_dir}/YYYY-MM-DD-rfc-review-<rfc-slug>-<mode_or_round>.md` and the matching `.stats.json` sidecar before folding findings into the RFC. Include `## Review Statistics` per `review-staging`.
 3. **Mechanical gate (before folding findings into the RFC):** run the review-staging validator on the staging path; do not proceed to folding until the staging doc and its `.stats.json` sidecar both pass:
- ```bash
- VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"
- python3 "$VALIDATOR" --hard "$STAGING_PATH"
- ```
+   ```bash
+   VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"
+   python3 "$VALIDATOR" --hard "$STAGING_PATH"
+   ```
 4. **Fold findings into the RFC structure** (Step 3). Do not present a separate premortem or review report in chat; print only a short summary and the staging file path.
 5. **Partial review gate:** when any required worker fails after one relaunch, write staging but do not claim a full review.
 6. **Post-fold verification gate:** when the fold revised any section for a `blocking: true` finding, run Step 2.5 before Step 3. The fold is an unreviewed edit to the artifact under review; a pre-fold clean panel is not evidence that the folded text is correct.
@@ -509,7 +509,7 @@ RFC_PATH="{rfcs_dir}/<rfc-file>.md"
 python3 "$VALIDATOR" --hard "$STAGING_PATH" --source-rfc "$RFC_PATH"
 ```
 
-`--source-rfc` recomputes the RFC's SHA-256 and fails hard if it differs from the sidecar's `source_digest`, and type-checks the sidecar's `source_kind` is `rfc`. Pass the RFC path on every round, especially after folds: a readiness claim recorded against a pre-fold digest fails the gate and cannot be reported as round-complete. Do not report the round complete or proceed to Step 3 until the check passes. If the installed validator lacks `--source-rfc` (stale install), refresh it from `scripts/validate_review_staging.py` in the playbook repo first - do not fall back to a hand-rolled digest compare.
+`--source-rfc` recomputes the RFC's SHA-256 and fails hard if it differs from the sidecar's `source_digest`, and type-checks the sidecar's `source_kind` is `rfc`. Pass the RFC path on every round, especially after folds: a readiness claim recorded against a pre-fold digest fails the gate and cannot be reported as round-complete. Do not report the round complete or proceed to Step 3 until the check passes. If the installed validator lacks `--source-rfc` (stale install), refresh it from `scripts/validate_review_staging.py` in the playbook repo first  -  do not fall back to a hand-rolled digest compare.
 
 ### Round bookkeeping
 
@@ -536,10 +536,10 @@ Verification rounds use `-r<N>` in the staging filename (`...-<mode>-r2.md`, `-r
 - Succinct, actionable, implementation-ready to the level achievable from inputs.
 - No filler, no generic best practices, no compliance assumptions unless explicitly in inputs.
 - Respect the hard gates:
- - Step 0 (input collection only)
- - Step 0.1 (assumptions and coverage confirmation before generation)
- - Step 2 (review pass before final RFC unless skip rule applies)
- - Step 2.5 (post-fold verification round whenever blocking findings were folded)
+  - Step 0 (input collection only)
+  - Step 0.1 (assumptions and coverage confirmation before generation)
+  - Step 2 (review pass before final RFC unless skip rule applies)
+  - Step 2.5 (post-fold verification round whenever blocking findings were folded)
 
 ## Integration Points
 
