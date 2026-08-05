@@ -332,7 +332,7 @@ When modifying an existing RFC document (adding sections, updating decisions, re
 
 1. **Section order** — Terminology → `### 1` Header → … → `### 8` Testing & Rollout → optional Addendum(es). Do not add, rename, reorder, merge, or omit numbered sections 1–8.
 
-2. **Terminology** — Flat A–Z glossary only before §1; no topic subsections, writer meta, or operator matrices. New terms in the edit must be added to Terminology (alphabetically). Supplementary tables go in Addendum. Body: no ambiguous **eval** catch-alls; name the specific operation.
+2. **Terminology** — Flat A–Z glossary only before §1; no topic subsections, writer meta, or operator matrices. New terms in the edit must be added to Terminology (alphabetically). Prefer plain BE-readable wording for uncommon metaphors; if jargon stays for concision, it must be defined here. Supplementary tables go in Addendum. Body: no ambiguous **eval** catch-alls; name the specific operation.
 
 3. **Subsection headings** — Use `####` for Problem statement, Goals, In-scope, Contract notes, Critical tests, etc. Use `#####` for edge-case titles and per-endpoint blocks under §5.1.1. Replace nested `- Label:` list items and bold pseudo-headings when touching a section.
 

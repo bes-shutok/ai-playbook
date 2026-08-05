@@ -647,7 +647,7 @@ Before pushing to a public repository (especially vendored skills), verify both 
 
 Applies to plans, RFCs, PR descriptions, BFF/API docs, Confluence pages, Slack drafts, and any other text meant for humans to read (not code comments or internal transport-layer notes).
 
-45.1. **Default vocabulary:** use common English when it carries the same meaning as insider jargon. Short sentences, active voice. Complements §39 (globish); §45 adds actionable replacements and glossary rules.
+45.1. **Default vocabulary:** use common English when it carries the same meaning as insider jargon. Short sentences, active voice. Write for a typical backend peer, not only for readers who already know the team's metaphors. Complements §39 (globish); §45 adds actionable replacements and glossary rules. Concision does not exempt undefined jargon: if a niche term stays because it is shorter, put it in `## Terms` / `# Terminology` (or spell it out on first use per 45.5).
 
 45.2. **Prefer plain terms in human-facing docs** (use the right column unless the audience is transport/OpenAPI code). Examples in this table use generic placeholders per §20, not real endpoints, fields, or domain nouns from one project.
 
@@ -667,6 +667,8 @@ Applies to plans, RFCs, PR descriptions, BFF/API docs, Confluence pages, Slack d
 | gated off (the default test run / CI) | **not run in normal `mvn test`**, **only when someone runs them on purpose** |
 | self-contained (integration tests) | **start their own dependency in the test** (for example Testcontainers), **no manual setup** |
 | eagle view / eagle's view | **high-level overview**, **bird's-eye view** (calendar titles, Slack, Confluence) |
+| ingress / egress (API metaphor) | **request path that accepts …**, **response that returns …** (or define in Terms if kept) |
+| blast radius | **compromise scope**, **impact of one leaked key** |
 
 45.3. **Code vs docs split:** "wire format" and similar transport vocabulary are fine in `project-guidelines.md`, OpenAPI descriptions, and Java transport comments where the team already uses them. Do not use them in plan **Gist & Examples**, PR summaries, or BFF docs when a plain equivalent exists.
 

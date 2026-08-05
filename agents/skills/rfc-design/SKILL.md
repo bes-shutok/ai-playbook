@@ -11,7 +11,7 @@ description: >
 # Intent: Produce a concise, actionable, implementation-ready RFC suitable for linking into Jira stories.
 # Note: Command verbosity is acceptable. Output must be succinct and implementation-oriented.
 
-**Writing:** Follow `agent_workflow_guidelines.md` §45. RFC prose uses plain English; add `## Terms` when using 3+ project-specific words. Transport/code docs may keep "wire format" where the team already uses it.
+**Writing:** Follow `agent_workflow_guidelines.md` §45. Audience is typical backend engineers, not only authors who already know the domain or security jargon. Prefer plain English that a BE peer can read without a glossary. When a project-specific, networking, or security metaphor still earns its place for concision (for example survivor, tombstone, fail closed), it must appear in `# Terminology` before body use. Concision alone does not exempt undefined jargon. Transport/code docs may keep "wire format" where the team already uses it.
 
 ## Core Concepts
 - Hard gate: a mandatory stop point where RFC generation cannot continue without explicit user confirmation.
@@ -25,7 +25,7 @@ description: >
 | User intent | Mode | Skill path |
 |-------------|------|------------|
 | Create or draft a new Design RFC | **Create** | Steps 0 → 0.1 → 1 → 2 → 3 |
-| Update an existing Markdown RFC file | **Edit** | **Read this skill + `references/rfc-sections.md` first**; skip Steps 0–0.1 unless scope changed; apply editing checklist; run Step 2 (Light) when edit is substantial **or** after a formatting/readability cleanup pass (formatting alone misses contract gaps). Use targeted edits (`StrReplace`), not full-file overwrite, on large RFCs. |
+| Update an existing Markdown RFC file | **Edit** | **Read this skill + `references/rfc-sections.md` first**; skip Steps 0–0.1 unless scope changed; apply editing checklist; run Step 2 (Light) when edit is substantial **or** after a formatting/readability cleanup pass (formatting alone misses contract gaps). Use targeted edits (`StrReplace`), not full-file overwrite, on large RFCs. Step 2.5 applies to edit-mode folds too. |
 | Review a local Markdown RFC only | **Review-local** | Step 2 on the provided draft; no regeneration |
 | Review an RFC/TDD on Confluence | **Redirect** | `review-confluence-doc` (fetch page, quality feedback) |
 | Turn an approved RFC into an implementation plan | **Handoff** | `plans` skill; reference the saved RFC path in the plan header |
@@ -42,6 +42,7 @@ description: >
 | Intake | Step 0.1 – Assumptions and coverage | Yes | Coverage checklist for user confirm |
 | Draft | Step 1 – Generate RFC draft | No (after gates) | Full RFC sections 1–8 per structure below |
 | Review | Step 2 – Review pass (sub-agents) | Tiered (light default; full on request) | Staging review file under `{reviews_dir}/`; revised RFC |
+| Verify | Step 2.5 – Post-fold verification round | Yes, whenever blocking findings were folded | Fresh staging round `-r<N>` over the post-fold RFC bytes |
 | Deliver | Step 3 – Finalize | No | Markdown RFC only (findings folded in; no separate review artifact in chat) |
 | Handoff (optional) | After Step 3 | No | Offer `plans` when user wants implementation planning |
 
@@ -106,9 +107,11 @@ The Terminology block is for **readers** implementing the RFC. It is **not** a p
 ### What to define
 
 - Explain terms (including abbreviations) that may be ambiguous, security-sensitive, or domain-specific.
+- Prefer rewording metaphors that are uncommon for backend readers (for example API "ingress"/"egress") into request/response wording. If the metaphor stays, define it here.
+- Define coined contract phrases used as nouns in rules or flows (for example semantic no-op, merge lineage, crypto-shredding) even when they are concise.
 - Do NOT explain universally known technical terms (API, HTTP, JSON, DB, UI).
 
-Must be explained if used: RBAC, SSO, IAM, PII; company/product abbreviations; cross-domain abbreviations whose meaning is not obvious.
+Must be explained if used: RBAC, SSO, IAM, PII; company/product abbreviations; cross-domain abbreviations whose meaning is not obvious; project lifecycle metaphors (survivor, tombstone) and security shorthand (fail closed, cryptographic oracle) when the body keeps those words.
 
 ### Format
 
@@ -282,13 +285,15 @@ User may request **Full** explicitly; do not default to Full without a signal.
    ```
 4. **Fold findings into the RFC structure** (Step 3). Do not present a separate premortem or review report in chat; print only a short summary and the staging file path.
 5. **Partial review gate:** when any required worker fails after one relaunch, write staging but do not claim a full review.
+6. **Post-fold verification gate:** when the fold revised any section for a `blocking: true` finding, run Step 2.5 before Step 3. The fold is an unreviewed edit to the artifact under review; a pre-fold clean panel is not evidence that the folded text is correct.
 
 ### Budget (default)
 
-- Full depth launches the recommended five-worker panel once.
+- Full depth launches the recommended five-worker panel once **per round**.
 - Light depth may use a focused panel with a recorded selection reason.
 - Allow one relaunch per failed worker; keep the failed and replacement launches visible in statistics.
-- The hard ceiling is six actual launches, including descendants and escalation.
+- The hard ceiling is six actual launches **per round**, including descendants and escalation.
+- At most three verification rounds (Step 2.5). If blocking findings remain after the third, stop and report the residuals to the user instead of folding again.
 - Apply the shared finding budget after deduplication.
 
 ### Orchestrator boundary
@@ -366,6 +371,9 @@ Minimum `## Review Statistics` content per `review-staging`: Panel (Solo/Echo co
 - URL or Artifact: <path or "inline draft">
 - Depth: light | full
 - Domains: concurrency, auth
+- Round: r1
+- Prior: `{reviews_dir}/<prior-rN>.md` *(omit on the first round)*
+- Source digest: <sha256 of the exact RFC bytes this round reviewed>
 - Findings: <staged count>
 - Status: STAGED
 
@@ -454,21 +462,70 @@ Dedup before folding: when two agents describe the same root issue, keep the cle
 | Operability risk | Add the concrete metric, log, or alert to §7 |
 | Accepted residual risk | Add a brief Accepted Risks item |
 
-**Skip Step 2 when:**
+**Skip Step 2 and Step 2.5 when:**
 - The RFC is a trivial configuration change or documentation-only tweak
 - User explicitly requests skipping review
 
-**Harness regression:** Read `references/eval-cases.md` when auditing this skill or after a Step 2 gate failure.
+**Harness regression:** Read `references/eval-cases.md` when auditing this skill or after a Step 2 or Step 2.5 gate failure.
+
+---
+
+## Step 2.5 – Post-fold Verification Round
+
+Run after every fold that revised a section for a `blocking: true` finding. Skip only when the fold touched nothing but Terminology ordering, heading shape, or other formatting with no normative content change.
+
+### Exit condition
+
+Stop iterating when **one fresh round over the current post-fold RFC bytes** returns zero unresolved `blocking: true` findings **and** that round required no fold. A round that produced fixes is not an exit round; the fixed text has not been reviewed yet.
+
+### Round composition
+
+Read `review-panel-selection.md` and launch:
+
+- `correctness-completeness` always.
+- Every worker that owned a staged finding in the previous round.
+- Every worker whose domain the fold touched, judged by the sections the fold rewrote, not by the finding that triggered it. Rewriting a flow for a `risk` finding puts that flow back in scope for `correctness-completeness` and `testing`.
+- `design-simplicity` on the exit round when earlier rounds only folded contracts, tests, or prose. Do not exit on `contract-docs` and `risk` cleanliness alone after §4 flows or §5 contracts were rewritten.
+
+Give each worker the post-fold RFC, the previous round's staging file, and the instruction to review the current text on its own merits rather than grading the previous fixes.
+
+### Fold-induced defect classes to check explicitly
+
+The fold writes new normative text under time pressure and is the most likely source of these:
+
+1. New text contradicts a section the fold did not touch (a new test assertion against a deferred metric, a new flow step against an existing non-goal).
+2. A fix names a mechanism without specifying its ordering, durability, or failure policy, leaving the next layer of the same gap.
+3. A rewritten flow acquires a lock, a remote call, or a transaction boundary that the original flow did not have.
+4. A fix applied at the first cited anchor while sibling instances of the same defect elsewhere in the RFC still carry the old wording.
+
+### Mechanical digest gate
+
+Each round's sidecar `source_digest` must be the SHA-256 of the exact RFC bytes **that round reviewed**, so a fold invalidates the previous round's digest by construction. Verify before reporting a round complete:
+
+```bash
+VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"
+STAGING_PATH="{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-r<N>.md"
+RFC_PATH="{rfcs_dir}/<rfc-file>.md"
+python3 "$VALIDATOR" --hard "$STAGING_PATH" --source-rfc "$RFC_PATH"
+```
+
+`--source-rfc` recomputes the RFC's SHA-256 and fails hard if it differs from the sidecar's `source_digest`, and type-checks the sidecar's `source_kind` is `rfc`. Pass the RFC path on every round, especially after folds: a readiness claim recorded against a pre-fold digest fails the gate and cannot be reported as round-complete. Do not report the round complete or proceed to Step 3 until the check passes. If the installed validator lacks `--source-rfc` (stale install), refresh it from `scripts/validate_review_staging.py` in the playbook repo first — do not fall back to a hand-rolled digest compare.
+
+### Round bookkeeping
+
+Verification rounds use `-r<N>` in the staging filename (`...-<mode>-r2.md`, `-r3`, …) and set `Round:` plus `Prior:` in Metadata. Count a round only after its findings are triaged and every accepted blocking finding is folded. After three verification rounds with blocking findings still open, stop and hand the residuals to the user.
 
 ---
 
 ## Step 3 – Finalize
 
+**Precondition:** Step 2.5 reached its exit condition, or the fold was formatting-only, or the user explicitly stopped the loop. Never finalize on a pre-fold clean panel.
+
 1. Apply severity map revisions to the RFC draft.
 2. Re-scan Terminology for terms introduced during revisions.
 3. Run the editing checklist in `references/rfc-sections.md` when modifying an existing file.
 4. Present **Markdown RFC only** to the user (no generation-time reasoning, no meta commentary).
-5. Print to console: staging review path, counts by shared severity, partial-review flag if applicable, and one-line readiness note.
+5. Print to console: staging review path for the exit round, round count, counts by shared severity, partial-review flag if applicable, and one-line readiness note.
 
 ---
 
@@ -482,6 +539,7 @@ Dedup before folding: when two agents describe the same root issue, keep the cle
   - Step 0 (input collection only)
   - Step 0.1 (assumptions and coverage confirmation before generation)
   - Step 2 (review pass before final RFC unless skip rule applies)
+  - Step 2.5 (post-fold verification round whenever blocking findings were folded)
 
 ## Integration Points
 
@@ -489,7 +547,7 @@ Dedup before folding: when two agents describe the same root issue, keep the cle
 Step 2 launches the five worker bundles from `review-panel-selection.md`; `contract-docs` includes the RFC consistency lens.
 
 ### With `review-staging` skill
-Consumes `review-staging` for path pattern `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md`, required `## Review Statistics`, and matching `.stats.json` sidecar. Write staging before folding findings into the RFC; do not use `{tmp_dir}/rfc-review/`. A `--hard` validator gate runs over the staging path before findings are folded into the RFC.
+Consumes `review-staging` for path pattern `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode_or_round>.md`, required `## Review Statistics`, and matching `.stats.json` sidecar. Write staging before folding findings into the RFC; do not use `{tmp_dir}/rfc-review/`. A `--hard` validator gate runs over the staging path before findings are folded into the RFC. Each round records `source_kind: "rfc"` and a `source_digest` over the exact RFC bytes that round reviewed; Step 2.5 rechecks that digest against the file on disk so a pre-fold review cannot be reported as an exit round.
 
 ### With `premortem` skill
 The `risk` worker reads the premortem catalog when signals match and applies personas as internal reasoning sections without child launches.
