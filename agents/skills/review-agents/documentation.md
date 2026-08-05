@@ -151,7 +151,25 @@ When prose is needed, check for:
 
 Suggest **delete**, a **concrete shorter rewrite**, or **code refactor** in the finding body. Quote the original and show replacement when practical.
 
-#### 4. Language and doc-type conventions
+#### 4. Is every niche term defined or spelled out?
+
+For prose that survives gates 1–3, check glossary coverage for a typical backend reader who does not already know the team's domain or security slang.
+
+Flag when a niche term is used as if defined and the reader has no glossary entry or inline spelling-out to lean on:
+
+- **Networking metaphor for HTTP APIs:** "ingress API", "protected egress" when the audience is app developers (prefer "request path that accepts …", "response that returns …").
+- **Coined contract noun used as a rule:** "semantic no-op", "merge lineage", "survivor", "tombstone" with no `# Terminology` / `## Terms` entry.
+- **Security shorthand left undefined:** "fail closed", "cryptographic oracle", "blast radius", "compromise scope".
+- **Glossary present but incomplete:** term used many times in body, absent from `# Terminology` / `## Terms` (or only in an unreachable gitignored path).
+- **RFC / plan prose:** applies to Goals, flows, §6 rules, §7 metrics/alerts, anywhere a mid-doc reader could mis-implement without the definition.
+
+**Do not flag:** API, HTTP, JSON, DB, UI; standard library or framework names already spelled out on first use; terms defined in Terminology; section-local notation covered by a "Terms used in this section" table.
+
+**Fix (offer both unless one is clearly better):** reword to plain English, **or** add a one-line A–Z glossary bullet in `# Terminology` / `## Terms` and keep the concise term. When a single first use is the only occurrence, spelling it out inline is acceptable in place of a glossary entry.
+
+This is a glossary-coverage gate, not a length gate: a term kept for concision is fine once it is defined.
+
+#### 5. Language and doc-type conventions
 
 Apply the **language overlay** section "Comment and documentation prose" appended to this prompt. When repo guidelines (`project-guidelines.md`, `company-guidelines.md`, loaded overlays) conflict with generic rules, **repo rules win**.
 

@@ -227,6 +227,26 @@ pass_criteria
 
 ---
 
+## RFC-EVAL-014: Undefined kept jargon flagged by documentation phase 2
+
+**Fixture:** RFC draft §4 flow uses "protected egress" and "blast radius" as normative wording with no `# Terminology` / `## Terms` entry and no inline first-use spelling-out.
+
+**Trigger:** Create or Review-local at Light depth.
+
+**Expected trace:**
+- `contract-docs` (`documentation` phase 2) returns a finding tagged `documentation#prose-undefined-jargon`
+- Severity `Low` (wording-only), with both fix options in the body: reword to plain English **or** add a one-line A–Z glossary bullet
+- Finding quotes the undefined term and names the missing glossary section
+
+**Forbidden trace:**
+- Finding omitted because "concision is acceptable"
+- Finding tagged only with the legacy alias `prose-clarity#…`
+- Single fix option presented as mandatory when either reword or glossary-entry would resolve it
+
+**Pass:** Correct pattern tag; both fix options present; severity respects the documentation default-Low rule.
+
+---
+
 ## Adding new cases
 
 After any production or review incident (skipped Step 2, wrong depth, bad fold-in, gate bypass):
