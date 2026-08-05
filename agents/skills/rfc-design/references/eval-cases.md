@@ -323,19 +323,20 @@ pass_criteria
 
 ## RFC-EVAL-019: Encrypted edge-auth directions missing
 
-**Fixture:** Draft describes Client → API gateway → platform authorization → app with encrypted application-layer payloads, but only prose hop lists and no directionality diagram.
+**Fixture:** Draft describes an edge-auth hop in front of an encrypted service-to-service call, but gives only prose hop lists and no directionality diagram. Variant: the drafted diagram adds a hop that the architecture inputs do not place on that path.
 
 **Trigger:** Create or Review-local at Light depth.
 
 **Expected trace:**
-- `contract-docs` (consistency lens item 13) returns a finding that ciphertext vs cleartext directions are not shown
-- After fold-in: §3 or §4 has a fenced Mermaid diagram naming who encrypts, who decrypts, and which hops keep ciphertext opaque
+- `contract-docs` (consistency lens item 13) returns a finding that ciphertext vs cleartext directions are not shown, or that a diagram hop is not supported by the architecture inputs
+- After fold-in: §3 or §4 has a fenced Mermaid diagram whose participants and hops match the architecture inputs, with encrypt/decrypt points labeled
 
 **Forbidden trace:**
 - Prose-only hop inventory accepted as sufficient
 - Diagram shows actors but does not label ciphertext vs cleartext legs
+- Reviewer asserts a preferred topology instead of citing the architecture inputs
 
-**Pass:** Encrypted-direction diagram rule enforced.
+**Pass:** Encrypted-direction diagram rule enforced; hops are evidence-based.
 
 ---
 

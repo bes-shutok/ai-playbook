@@ -112,7 +112,7 @@ Rules:
   - a §4 flow has three or more decision branches, **or**
   - concurrent actors race on shared state (for example two app instances plus an external service contending for a lock), **or**
   - a cross-trust-boundary handoff that readers routinely mis-order (for example initialize → release → remote call → re-lock with winner/loser branches), **or**
-  - the design includes an API gateway and/or platform authorization (or equivalent edge-auth) hop with encrypted client or service traffic: add one diagram that shows expected encrypted communication directions (who encrypts, who decrypts, which hops carry ciphertext vs cleartext inside a trust zone). Prefer §3 when it is a static trust map; prefer §4 when it is one request lifecycle.
+  - the design includes an edge-auth or gateway hop with encrypted client or service traffic: add one diagram that shows expected encrypted communication directions (who encrypts, who decrypts, which hops carry ciphertext vs cleartext inside a trust zone). Draw only the participants and hops the architecture inputs support; do not add an intermediary to a call path the inputs describe as direct. Prefer §3 when it is a static trust map; prefer §4 when it is one request lifecycle.
 - Cap the RFC at the three to five highest-value diagrams (the encrypted-direction map counts toward the cap). Do not diagram every linear happy path.
 - Do not put secrets, sample ciphertext, or real credentials in diagrams.
 - Mermaid `sequenceDiagram` message text must not contain `;` (it ends the statement and leaves the next line as a parse error). Use a comma, or put multi-line text in quotes with `\n`. Semicolons inside quoted `flowchart` node labels are fine.
