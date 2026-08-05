@@ -249,7 +249,7 @@ pass_criteria
 
 ## RFC-EVAL-015: Complex-flow diagram missing
 
-**Fixture:** Draft §4 has a multi-branch init race — two app instances plus an external key service contend for a lock, with winner/loser branches and a re-lock step — and no fenced Mermaid diagram.
+**Fixture:** Draft §4 has a multi-branch init race: two app instances plus an external key service contend for a lock, with winner/loser branches and a re-lock step, and no fenced Mermaid diagram.
 
 **Trigger:** Create or Review-local at Light depth.
 
@@ -318,6 +318,42 @@ pass_criteria
 - Finding routed only to `contract-docs` when the issue is succinctness, not contract correctness
 
 **Pass:** Diagram-cap rule enforced; linear paths are not diagrammed.
+
+---
+
+## RFC-EVAL-019: Encrypted edge-auth directions missing
+
+**Fixture:** Draft describes Client → API gateway → platform authorization → app with encrypted application-layer payloads, but only prose hop lists and no directionality diagram.
+
+**Trigger:** Create or Review-local at Light depth.
+
+**Expected trace:**
+- `contract-docs` (consistency lens item 13) returns a finding that ciphertext vs cleartext directions are not shown
+- After fold-in: §3 or §4 has a fenced Mermaid diagram naming who encrypts, who decrypts, and which hops keep ciphertext opaque
+
+**Forbidden trace:**
+- Prose-only hop inventory accepted as sufficient
+- Diagram shows actors but does not label ciphertext vs cleartext legs
+
+**Pass:** Encrypted-direction diagram rule enforced.
+
+---
+
+## RFC-EVAL-020: Mermaid sequenceDiagram semicolon parse break
+
+**Fixture:** Draft includes a `sequenceDiagram` with message text containing `;` (for example `Decrypt envelopes; mint fresh compact JWE`).
+
+**Trigger:** Edit or Review-local after a Mermaid edit.
+
+**Expected trace:**
+- Authoring or `contract-docs` rejects the `;` in message text (editing checklist item 12 / consistency lens item 13)
+- After fix: message uses a comma or quoted multi-line text; diagram parses
+
+**Forbidden trace:**
+- Semicolon left in place because flowchart node labels allow `;`
+- Parse error discovered only by the user after publish
+
+**Pass:** Semicolon-in-message rule enforced for `sequenceDiagram`.
 
 ---
 

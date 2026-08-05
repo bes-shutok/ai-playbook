@@ -108,13 +108,15 @@ Must include:
 
 Rules:
 - Keep flows readable. Numbered steps remain normative; any diagrams are visual aids, not a substitute for the numbered steps.
-- Diagrams (required when applicable): add a fenced Mermaid `flowchart` or `sequenceDiagram` under a flow when **any** of these hold:
-  - the flow has three or more decision branches, **or**
+- Diagrams (required when applicable): add a fenced Mermaid `flowchart` or `sequenceDiagram` when **any** of these hold:
+  - a §4 flow has three or more decision branches, **or**
   - concurrent actors race on shared state (for example two app instances plus an external service contending for a lock), **or**
-  - a cross-trust-boundary handoff that readers routinely mis-order (for example initialize → release → remote call → re-lock with winner/loser branches).
-- Cap the RFC at the three to five highest-value diagrams. Do not diagram every linear happy path.
+  - a cross-trust-boundary handoff that readers routinely mis-order (for example initialize → release → remote call → re-lock with winner/loser branches), **or**
+  - the design includes an API gateway and/or platform authorization (or equivalent edge-auth) hop with encrypted client or service traffic: add one diagram that shows expected encrypted communication directions (who encrypts, who decrypts, which hops carry ciphertext vs cleartext inside a trust zone). Prefer §3 when it is a static trust map; prefer §4 when it is one request lifecycle.
+- Cap the RFC at the three to five highest-value diagrams (the encrypted-direction map counts toward the cap). Do not diagram every linear happy path.
 - Do not put secrets, sample ciphertext, or real credentials in diagrams.
-- If no flow meets a trigger, state one line under §3 Assumptions: `No workflow diagrams: all §4 flows are linear single-actor paths.`
+- Mermaid `sequenceDiagram` message text must not contain `;` (it ends the statement and leaves the next line as a parse error). Use a comma, or put multi-line text in quotes with `\n`. Semicolons inside quoted `flowchart` node labels are fine.
+- If no trigger applies, state one line under §3 Assumptions: `No workflow diagrams: all §4 flows are linear single-actor paths and no encrypted edge-auth hop is in scope.`
 - No arrows (→) in prose. No shorthand. (Arrows inside a fenced Mermaid diagram are fine.)
 - **Edge cases must be readable standalone:** each field is one or more complete sentences. Do not use telegraphic clause chains (`do X; alert if ≥3 in 24h`) or jargon-only bullets that assume Terminology was read first. Name tables/columns when they disambiguate (e.g. `segment_batch_watermark.last_processed_at`).
 - Include only edge cases that impact business correctness, money, user experience, or support load.
@@ -368,4 +370,8 @@ When modifying an existing RFC document (adding sections, updating decisions, re
 
 10. **Substantial edits**  -  When the edit changes contracts (§5), flows (§4), business rules (§6), or rollout (§8), run **Step 2 – Review pass** before presenting the updated RFC. Skip Step 2 for typo-only or single-bullet clarifications unless the user requests a full review.
 
-10. **Readable-not-telegraphic**  -  §4 edge cases use the **Edge case: \<title\>** + Condition/Behavior/Outcome format (not one-line shorthand). §6 rules and §7 metric/alert rows state **who/what/when** in plain language; Terminology defines terms once, body sections restate behavior where a mid-doc reader needs it. Thresholds include subject and window (not `≥3 in 24h` alone).
+11. **Readable-not-telegraphic**  -  §4 edge cases use the **Edge case: \<title\>** + Condition/Behavior/Outcome format (not one-line shorthand). §6 rules and §7 metric/alert rows state **who/what/when** in plain language; Terminology defines terms once, body sections restate behavior where a mid-doc reader needs it. Thresholds include subject and window (not `≥3 in 24h` alone).
+
+12. **Diagrams**  -  If any edited flow or edge-auth/crypto path meets a complexity or encrypted-direction trigger, ensure a diagram exists or the §3 N/A one-liner is present. After editing Mermaid `sequenceDiagram` blocks, reject message text that contains `;`.
+
+13. **Capacity addendum**  -  If any capacity trigger applies (API CPU / payload expansion / shared DB / import contention), ensure the footprint Addendum or the §3 N/A one-liner is present.
