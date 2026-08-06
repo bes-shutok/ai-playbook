@@ -124,3 +124,5 @@ A source PDF under `~/Documents`, `~/Desktop`, or `~/Downloads` may be unreadabl
 ### Personal-data forms (AEOI/CRS, KYC, tax)
 
 These forms require identity data (name, DOB, tax ID, address). Do not hardcode values from the model's prior knowledge. Pull values from a gitignored facts file or ask the user, and record a single source of truth there for future sessions. Leave signature lines blank for wet-signing unless explicitly told otherwise.
+
+Before delivery, reconcile every static identity field with that source of truth. Treat signing place and date as dynamic fields: use an explicitly confirmed current value, never a location or date copied from a template or earlier draft.
