@@ -140,6 +140,7 @@ Example: `// skip deleted profiles` + `if (status != DELETED)` → rename guard 
 
 When prose is needed, check for:
 - **Redundancy:** same idea in comment and code, or stated twice in adjacent comments
+- **Decision restated from another doc:** the same rule, decision, or contract is now stated in two or more documents (or doc + code constant); suggest extracting the decision into its single owning document (single source of truth) and replacing the other statements with links; each extra copy is a future diverging statement, so propose consolidation rather than adding another restatement
 - **Drift risk:** comment asserts behavior the code does not enforce (or vice versa)
 - **Buried lead:** constraint hidden after setup text
 - **Wall of text:** dense paragraph where one sentence suffices

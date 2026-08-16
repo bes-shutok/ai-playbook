@@ -66,6 +66,7 @@ docs/
 ├── history/                    # Layer 3 high-level tree (required)
 │   ├── context/                # optional product/domain context (from legacy docs/context/)
 │   ├── plans/completed/        # optional plans archive
+│   ├── backlog/completed/      # optional future-work ideas (pre-plan); move to completed/ archive when the implementing plan completes
 │   ├── investigations/         # optional investigation notes (flat files)
 │   ├── migrations/             # optional service/data migration notes
 │   ├── reviews/                # optional ephemeral, gitignored staging
