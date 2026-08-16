@@ -4126,3 +4126,22 @@ Editing policy prose on a skim surface (anti-pattern table, Integration Points, 
 
 **See also:** UL#186, UL#187, UL#191, plans Validation authoring, review-plan inclusion checks.
 
+
+## 195. The Reporter's Environment Is Part of the Reproduction Command
+
+**Principle:** Family H (verify the real thing, not the abstraction): running the reporter's command in a different environment verifies nothing about their report.
+
+When the identical command behaves differently in the agent shell versus the user's terminal, diagnose in this order:
+
+1. Get `time` numbers from the user's run: wall clock vs CPU. Low CPU% with long wall means waiting (network, locks, sleeps); high sys CPU means memory pressure; high user CPU means compute. This one ratio splits the hypothesis space.
+2. Reproduce through their environment loader, e.g. `zsh -i -c '<command>'`, which inherits profile exports the agent shell lacks.
+3. Diff the environments (`comm -13 <(env | cut -d= -f1 | sort) <(zsh -i -c env | cut -d= -f1 | sort)`), then grep the codebase for reads of the differing names (`getenv|environ`).
+4. Prove causality in both directions: unset in the interactive shell (fixes it?) and set a dummy in the agent shell (breaks it?).
+
+**Shape trigger (when to suspect this family):** "works for the agent, fails for the user" with identical code; guards or tests green in review while the reporter sees failure or slowness; re-runs do not warm up.
+
+**Distinguishing from machine-slowness causes (swap, throttling):** those show high sys CPU or uniform slowdown across commands. Environment-gated branches show idle waiting and selectivity by command.
+
+**Example:** Tests calling an application entry point read an API-key env var exported in the developer's shell profile; the agent shell lacked it, so live network fetches during tests stayed invisible across several review rounds and were first misdiagnosed as swap thrash until the low CPU percentage excluded it.
+
+**See also:** project corpus entry for the incident repo (guards plan lesson), UL#191-adjacent fail-closed family, Family H.
