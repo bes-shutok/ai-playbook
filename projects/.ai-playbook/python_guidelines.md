@@ -571,3 +571,20 @@ only. If a docstring truly needs pluralized inline literals, use a raw string
 (`:attr:`, `:class:`, `:meth:`, `` `x` ``) and the surrounding prose needs the
 plural form of that noun. Do not append `\ s`; rephrase the sentence so the
 plural noun is plain text.
+
+## 19. Ruff PLR0913 Counts Defaulted Parameters in max-args
+
+Ruff's `PLR0913` (too many arguments) counts every parameter in the signature,
+including ones with default values. When a reviewer (or your own estimate)
+claims that removing or swapping one parameter "drops the count below the
+threshold", verify arithmetically with defaults included, or empirically with
+`ruff check --select PLR0913 <file>`, before restructuring the code.
+
+**Principle:** Family C (Representation / mechanical contract). The lint rule's
+counting rule is part of its contract; reasoning about it as if defaults were
+free produces wrong refactor plans.
+
+**Trigger shape:** a refactor is justified by a parameter-count claim ("this
+swap gets us to N args"). Recount with defaults included before acting; if the
+literal claim is wrong, satisfy the intent (fewer params, no new `noqa`) by
+another route, such as splitting the function.
