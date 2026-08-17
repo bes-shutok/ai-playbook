@@ -433,6 +433,7 @@ Compaction pass (required):
   - Add only a one-line `see company-guidelines.md #N` reference in instruction files (repo-relative label for humans; canonical edit target remains the facts key).
 - When multiple instruction bullets share the same governing principle, merge into one generalized rule with examples rather than keeping N specific variants.
 - When a rule can be stated more concisely without losing its enforceable meaning, shorten it; prefer one-sentence rules over multi-sentence explanations.
+- Byte-budget compaction fidelity audit: when rewriting or condensing an instruction bullet to fit the size budget, diff-audit the rewrite against its canonical source so every enumerated option, example, and qualifier survives (e.g. a three-option rule must not surface as two options; named fixture examples must not be dropped). Saving bytes never authorizes silently removing a rule element; if the element does not fit, move it to the canonical doc and leave a pointer.
 - When an instruction rule is only needed for specific infrequent task types (for example Jira story creation, PR description writing, PR chunk splitting), move it to a dedicated skill such as `jira-pr-workflow` rather than keeping it in the always-loaded instruction files; add or update the trigger description in the skill's front matter.
 - Do not remove a rule solely to save space; only when the canonical doc or a more general rule already covers it.
 
