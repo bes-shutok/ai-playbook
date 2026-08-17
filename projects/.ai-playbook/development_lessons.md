@@ -4244,3 +4244,20 @@ When the identical command behaves differently in the agent shell versus the use
 **Example (2026-08-17 review fix round, hermeticity test suite):** A reviewer requested replacing import-time env simulation with a function-scoped `simulated_user_shell(monkeypatch)` fixture. Because the suite's autouse env-pin fixture deletes the key per test and autouse fixtures instantiate first, the requested fixture's `setenv` would run AFTER the deletion, leaving the key present in the body and inverting the test's meaning. Import-time mutation plus a session-config cleanup hook was kept instead.
 
 **See also:** UL#89 (autouse fixture rewiring and double `cache_clear`), project hermeticity lesson (autouse env pin is primary; body-level `setenv` runs after the fixture and wins), Family H.
+
+## 201. Byte-Equal Assertions on Office-Format Outputs Flake on Embedded Wall-Clock Timestamps; Compare Normalized Zip Streams
+
+**Principle:** Family E (temporal/ordering invariants). Office formats (xlsx, docx, pptx) are zip containers whose writers embed the save-time wall clock twice: per-entry zip `date_time` metadata, and content-level metadata (xlsx `docProps/core.xml` `dcterms:created`/`dcterms:modified`, defaulting to now). Two independently generated files with identical report content therefore differ in raw bytes whenever their saves straddle a second boundary or the creation instants differ; a raw byte-equality assertion is a time-dependent assertion that flakes nondeterministically.
+
+**Trigger:** A test asserts `read_bytes()` or hash equality between two separately saved office/zip-container artifacts, passed when written, and fails intermittently later; or a review asks whether a byte comparison of generated documents is deterministic.
+
+**Rule:**
+1. Never assert raw byte equality between two independently saved zip-container artifacts; normalize before comparing.
+2. Normalize by rewriting every zip entry into a fresh in-memory zip with a fixed `date_time` (e.g. `(1980, 1, 1, 0, 0, 0)`), sorted entry order, and fixed compression; exclude pure metadata entries that carry creation timestamps (e.g. `docProps/core.xml`) when they carry none of the content under test.
+3. Guard the helper with its own deterministic test: force differing creation metadata and a save gap over 1 s, assert raw bytes DIFFER (precondition proving the hazard is real) and normalized bytes are EQUAL.
+
+**Shape trigger (when to suspect this family):** An intermittently failing equality assertion whose operands are binary outputs of any format that is a zip container or otherwise stamps save time into the artifact.
+
+**Example (2026-08-17 test-hermeticity follow-up):** A wiring test compared two `extract.xlsx` outputs byte-for-byte to prove the report was unaffected by a fetch step. openpyxl embedded zip entry timestamps and `wb.properties.created`, so runs straddling a second boundary failed. Fix: a module-level `_normalized_xlsx(path)` helper (fixed date_time, sorted entries, `core.xml` excluded) replaced the raw comparison, plus a guard test forcing different timestamps that asserts raw bytes differ and normalized bytes are equal.
+
+**See also:** UL corpus time-dependent-assertion cluster; project testing guidance on deterministic comparison helpers.
