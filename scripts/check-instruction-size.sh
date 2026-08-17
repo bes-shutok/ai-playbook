@@ -65,7 +65,8 @@ is_instruction_path() {
 
 case "$MODE" in
   check)
-    if list_oversized >/dev/null; then
+    overs="$(list_oversized || true)"
+    if [[ -n "$overs" ]]; then
       print_report 2
       exit 1
     fi

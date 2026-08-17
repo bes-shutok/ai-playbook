@@ -4145,3 +4145,81 @@ When the identical command behaves differently in the agent shell versus the use
 **Example:** Tests calling an application entry point read an API-key env var exported in the developer's shell profile; the agent shell lacked it, so live network fetches during tests stayed invisible across several review rounds and were first misdiagnosed as swap thrash until the low CPU percentage excluded it.
 
 **See also:** project corpus entry for the incident repo (guards plan lesson), UL#191-adjacent fail-closed family, Family H.
+
+## 196. Detection-Guard Tests Ship a Runtime-Generated Positive Control
+
+**Principle:** Family H (verify the real thing, not the abstraction). A guard test that only asserts "no hits on the clean tree" verifies nothing about the detector: a broken hook, a wrong event name, or a mis-parsed probe output all stay green. The passing run is the abstraction; the detector firing is the real thing.
+
+**Trigger:** Writing or reviewing a test whose job is to DETECT a forbidden action (opening gitignored personal data, outbound network, forbidden imports) rather than assert output; especially when promoting such a guard from opt-in to always-on, where a broken detector would otherwise hide indefinitely behind a green suite.
+
+**Rule:**
+1. Keep a permanent positive control in the same suite: a synthetic violating fixture that performs the forbidden action, written to the temp dir at RUNTIME. Never commit it under the guarded tree: a glob-matching committed violator makes the guard flag its own fixture on every run.
+2. Assert the guard's exact raw detection output (the reported path or string), never a shared exit code. Nonzero rc also covers unrelated failures (import or collection errors in the fixture), so an rc assertion cannot distinguish detection from breakage.
+3. Before trusting the exact-string assertion, prove the mechanism once with a negative control: same probe with the detector disabled, expecting zero hits.
+
+**Shape trigger (when to suspect this family):** A scan or audit guard test that has never visibly fired; an opt-in gate promoted to always-on without a fired-at-least-once witness; rc-only assertions in detector tests.
+
+**Distinguishing from UL#192 (runtime audit catches gitignored-path opens):** #192 introduces the detector (subprocess audit hook) and verifies it once by manual mutation. This lesson makes the verification permanent and self-contained: the victim is generated, asserted, and discarded on every run, so a later refactor that breaks the hook fails the suite immediately.
+
+**Example:** An opt-in file-open audit guard was promoted to run by default. Its new sibling test wrote a tiny module that opens a forbidden path into the temp dir, ran the probe subprocess on that absolute path, and asserted the exact reported path in the raw hit list. A standalone dry-run first confirmed the raw-hit format and that removing the hook emptied the list (negative control), so the exact-string assertion was meaningful, not ceremonial.
+
+**See also:** UL#192 (runtime file-open audit), UL#171 (positive control for grep gates), Family H.
+
+## 197. Blind Worker Panels Are Hermetic by Launch Mechanism, Not Prompt Discipline
+
+**Principle:** Family A (mechanical invariants over prompt advice). A "workers were not told what to find" guarantee must live in the launch mechanism (ephemeral read-only sandbox, cwd outside the target repo, ambient variables unset, inputs embedded verbatim), not in prompt wording that asks workers to ignore context. A worker that inherits repo instructions or ambient environment measures contamination, not the thing under test: it can rationalize a planted defect away, or surface it only because context leaked.
+
+**Trigger:** Launching fresh workers for a canary eval, blind review panel, or grading run in an environment without a native sub-agent launcher, typically by shelling out to an agent CLI.
+
+**Rule:**
+1. Probe the CLI once with a trivial prompt before committing to the batch; a failed trust or sandbox check costs one cheap probe, a contaminated batch costs a full re-run.
+2. Launch each worker from a scratch cwd outside the target repo with ephemeral and read-only sandbox flags (for `codex exec`: `--skip-git-repo-check --ephemeral -s read-only`), so no repo instruction files auto-load and no worker can write.
+3. Pass each worker only: role framing, calibration text, its lens catalogs by path, the target document verbatim, and the output format. Nothing that names the planted defect or the expected finding.
+4. When the eval plants an ambient input (a demo credential variable), verify it is unset in the launching environment immediately before launch, and record that check in the artifact.
+
+**Shape trigger (when to suspect this family):** A canary that passes or fails every round suspiciously consistently; worker outputs echo instruction-file prose the prompt never included; a canary flips result after workers were launched from a different directory.
+
+**Distinguishing from UL#153:** #153 fixes who must fan out the panel (the parent, when a wrapped sub-agent cannot); this lesson fixes how each launched worker stays blind (mechanism, not prompt).
+
+**Example (2026-08-16 review-panel hermeticity canary, r1):** Panel workers were launched from an OS tmp scratch dir via `codex exec --skip-git-repo-check --ephemeral -s read-only` after the first probe failed with a trusted-directory error. The planted ambient demo-key variable was verified unset before launch. The testing worker independently staged the planted hermeticity gap (High, blocking) on the first run, so no charter fix or re-run was needed.
+
+**See also:** UL#153 (panel fan-out responsibility), UL#195 (the environment is part of the reproduction command), review-plan canary procedure.
+
+## 198. A Silent No-Op Mutation Indicts the Harness, Not the Guard
+
+**Principle:** Family H (verify the real thing, not the abstraction). In a mutation-based negative-path check, "the guard did not trip" is ambiguous between two causes: the guard is weak, or the mutation never applied. A degradation hardcoded from memory (a sed targeting one remembered literal) no-ops silently when the artifact's actual value differs, and the intact line still satisfies the guard.
+
+**Trigger:** Writing or debugging a mutation self-check for a text predicate (a grep/awk guard over a doc, log, or config), typically a one-shot harness on a temp copy, and the harness reports that a degradation failed to trip its guard.
+
+**Rule:**
+1. Write degradations value-agnostically: substitute any acceptable value of the field (`severity=(Medium|High|Critical)` to `severity=Low`), not the single literal you remember reading. An alternation over the legal value set cannot no-op on a legal input.
+2. Or derive the mutation from the artifact itself: grep the actual file for the real line before writing the substitution.
+3. When a check reports "did not trip", diff the mutated copy against the original (or assert the substitution changed a line) before touching the guard; only an applied mutation indicts the guard.
+4. Do not be reassured by the safe fail direction: a no-op mutation reports failure (fail-closed) but misdirects you to debug a correct guard.
+
+**Shape trigger (when to suspect this family):** A negative-path harness fails "did not trip" for one degradation while sibling degradations pass, and the temptation is to weaken or fix the guard. Diff the mutated copy first.
+
+**Distinguishing from UL#84 (sed substring corruption):** #84's mechanical pass silently reports success on wrongly-mutated bytes (fail-open), verified by a byte-level diff after the edit. This lesson is the complementary direction: the pass silently reports failure on un-mutated bytes, and the verification (prove the mutation applied) precedes any judgment of the guard. UL#79's disable-and-confirm-RED procedure assumes the neutralization took effect; this guards the neutralization step itself.
+
+**Example (2026-08-16 review-panel hermeticity plan, final validation self-check):** A severity degradation targeted the literal `severity=Medium`, but the canary evidence line carried `severity=High`; the sed was a no-op, the original line still matched the guard, and the harness printed `FAIL: NEG-H3 did not trip for severity=Low`. Re-running with the value-agnostic alternation tripped all three severity degradations; no guard defect existed.
+
+**See also:** UL#79 (disable-and-confirm-RED), UL#196 (positive controls for detector tests), UL#84 (wrong-offset sed corruption), Family H.
+
+## 199. Run Canonical Validation Blocks by Extraction, Never by Retyping
+
+**Principle:** Family H (verify the real thing, not the abstraction). A validation command block in a plan or doc is the canonical executable artifact. Retyping it into a new shell invocation re-authors every predicate under time pressure, and a single transcription slip (a quoted `\&` where the original had `&`, a lost `$`, a renamed variable) silently changes what the suite tests while all context lines still look right.
+
+**Trigger:** You are about to re-run a plan's or doc's validation commands from a context where the block is not directly executable (orchestrator re-verification, a fresh phase gate, a CI parity check), and the block is sitting in a fenced code block one Read away.
+
+**Rule:**
+1. Extract the fenced block from the source file and execute the extracted file (`awk` the ```bash fence to a temp script, run it, delete it). The source file is the only authority on predicate text.
+2. Treat a transcription-derived failure as a suspect, not a finding: before diagnosing the repo, diff your invocation against the canonical block character by character (shell metacharacters first: `&`, `$`, quotes, backslashes).
+3. Symmetrically, never paste-run a block from chat memory when the file exists on disk; chat restatements of command blocks are paraphrases until proven byte-identical.
+
+**Shape trigger (when to suspect this family):** A validation suite you re-ran fails exactly one check that passed for another agent minutes ago on the same tree, and the failing check involves sed/awk string surgery. Compare the command text before the tree.
+
+**Distinguishing from UL#198:** #198 guards mutation self-checks against no-op degradations (the check harness). This lesson guards re-execution of the canonical suite against predicate drift (the run itself). Both fail by making the operator debug a healthy artifact.
+
+**Example (2026-08-16 review-panel hermeticity plan, Phase 2 re-validation):** The orchestrator re-ran the plan's validation block from a retyped copy; the retyped `sed` replacement used `\&` (literal ampersand) where the canonical block used `&` (whole match), so the canary-selection pipeline emitted `&` instead of a path and H1 failed on a healthy tree. Extracting the fenced block verbatim from the plan file and running it produced `ALL CHECKS PASSED`.
+
+**See also:** UL#198 (silent no-op mutations indict the harness), plans-skill validation-command authoring rules, Family H.

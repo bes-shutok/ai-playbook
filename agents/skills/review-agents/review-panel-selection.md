@@ -9,7 +9,7 @@ Normal full code, plan, and RFC reviews launch exactly these workers:
 | Worker | Required lenses | Conditional lenses | Owns |
 |--------|-----------------|--------------------|------|
 | `correctness-completeness` | `quality`, `implementation` | none | Runtime correctness, requirement coverage, wiring, compatibility |
-| `testing` | `testing` | none | Test strategy, discriminating assertions, failure paths |
+| `testing` | `testing` | none | Test strategy, discriminating assertions, failure paths, test hermeticity (ambient-input enumeration) |
 | `design-simplicity` | `architecture`, `simplification` | none | Dependency direction, maintainability, unnecessary structure |
 | `contract-docs` | `documentation` | `consistency` for plans and RFCs | Contracts, source-of-truth drift, prose, cross-section consistency |
 | `risk` | `security` | `concurrency`, `premortem` when signals below match | Security, ordering, rollout, and operational failure modes |

@@ -35,6 +35,12 @@ if not isinstance(v, str):
 if not isinstance(v, str):
     v = ti.get("path")
 cwd = obj.get("cwd")
+# Cursor preToolUse often sends cwd as "" / missing. Falling through to the
+# hook process cwd (~/.cursor) keys markers to the wrong project. Prefer the
+# write target parent so resolve_project_key walks to the repo under edit.
+if not (isinstance(cwd, str) and cwd.strip()) and isinstance(v, str) and v.startswith("/"):
+    import os as _os
+    cwd = _os.path.dirname(v)
 sys.stdout.write((v if isinstance(v, str) else "") + "\n")
 sys.stdout.write((cwd if isinstance(cwd, str) else "") + "\n")
 ')

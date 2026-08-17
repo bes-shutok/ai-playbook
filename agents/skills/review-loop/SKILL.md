@@ -50,7 +50,7 @@ If `git diff ${BASE_BRANCH}...HEAD | wc -c` exceeds `review_large_diff_bytes` (d
 |------|-------|----------------|
 | 1 | `doing-code-review` | Branch review mode; staging doc **before** reporting to user |
 | 2 | Triage | Count findings still `pending` with `blocking: true` |
-| 3 | `receiving-code-review` | Only if step 2 count > 0; fix or `drop` each finding; update staging doc statuses |
+| 3 | `receiving-code-review` | Only if step 2 count > 0; fix or `drop` each finding; update staging doc statuses; after fixes land, run the **Generalize-on-fix** step from `receiving-code-review` |
 | 4 | `done` | learn → docs-branch → commit (authorized per iteration) |
 
 **Do not** merge step 3 fixes into the same round's step 1 verdict. Step 1's output is **provisional findings before fixes**.

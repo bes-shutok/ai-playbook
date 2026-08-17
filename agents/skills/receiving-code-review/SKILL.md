@@ -313,6 +313,12 @@ When accepted external or human-partner review findings reveal a defect shape th
 3. Do **not** hardcode one repo's test-class suffix or runner name into shared agent catalogs.
 4. Offer to apply the skill/guideline patch in the same session when the partner wants it; otherwise record the proposal in chat (or `learn` when they ask to capture the lesson).
 
+## Generalize-on-fix
+
+After a finding is accepted **and** its fix lands (staging triage or ad-hoc partner feedback), prompt a `generalize` pass on the incident: map the instance fix to its root-cause principle family and propose the smallest corpus/catalog update. Follow the `generalize` skill for the pass itself; do not re-implement its extraction here. Narrow instance fixes (that path, that glob) let sibling defects survive later rounds.
+
+This is the sibling rule to **Agent corpus feedback** above: that section generalizes findings the panel missed; this step applies the same abstraction to every accepted fix. Do not duplicate its corpus-update placement steps here.
+
 ## Integration Points
 
 ### With `bootstrap-ai-playbook` skill

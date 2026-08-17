@@ -81,7 +81,10 @@ When a change adds or renames migration-owned tables or indexes that local Docke
 
 ### Plan / RFC prose (phase 1)
 
-When reviewing a plan or RFC draft, flag missing doc tasks for user-visible behavior, glossary links, Layer 2 architecture updates, and module high-level tasks bullets implied by the plan.
+When reviewing a plan or RFC draft:
+
+- Flag missing doc tasks for user-visible behavior, glossary links, Layer 2 architecture updates, and module high-level tasks bullets implied by the plan.
+- Flag plan test tasks that drive orchestration entry points (`main`, CLI) without environment pinning, citing the `testing.md` hermeticity enumeration; the `testing` worker leads the dedup per `review-panel-selection.md`.
 
 ---
 

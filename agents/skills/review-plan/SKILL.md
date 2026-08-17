@@ -66,7 +66,7 @@ Each worker receives:
 | Worker | Lenses and plan focus |
 |--------|-----------------------|
 | `correctness-completeness` | `quality` and `implementation`: proposed behavior, assumptions, wiring, compatibility |
-| `testing` | `testing`: discriminating tests, negative paths, verification gaps |
+| `testing` | `testing`: discriminating tests, negative paths, verification gaps, hermeticity of proposed tests (ambient-input enumeration per testing.md) |
 | `design-simplicity` | `architecture` and `simplification`: dependency direction, replacement map, avoidable complexity |
 | `contract-docs` | `documentation` and inline `consistency`: scope closure, internal contradictions, naming, stale references |
 | `risk` | `security`, plus signaled `concurrency` and `premortem`: security, ordering, rollout, operational failures |

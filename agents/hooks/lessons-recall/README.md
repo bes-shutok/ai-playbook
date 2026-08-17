@@ -48,12 +48,16 @@ SID="$(python3 ~/.ai-playbook/scripts/session_channel.py)"
 
 This idiom is PINNED here so the plans-skill marker recipe and every adapter
 use the SAME artifact (Family D single source). The helper prints
-``CLAUDE_CODE_SESSION_ID or CURSOR_SESSION_ID or ""`` with NO
-trailing newline (Claude at v9; Cursor optional at v2 via the session bridge).
-When `SID` is empty the adapter OMITS `--session-id`, so the core keys the
-literal `no-session` and uses the FULL window. Per-session isolation is
-Claude-only at v9 and Cursor-without-bridge at v9; optional Cursor bridge
-install (v2) supplies `CURSOR_SESSION_ID` per composer tab.
+``CLAUDE_CODE_SESSION_ID or CURSOR_SESSION_ID or CURSOR_CONVERSATION_ID or ""``
+with NO trailing newline (Claude at v9; Cursor hook bridge at v2 via
+`CURSOR_SESSION_ID`; Cursor agent-shell fallback at v3 via
+`CURSOR_CONVERSATION_ID`, which matches the bridged session id for the same
+composer tab). When `SID` is empty the adapter OMITS `--session-id`, so the
+core keys the literal `no-session` and uses the FULL window. Per-session
+isolation is Claude-only at v9 and Cursor-without-bridge at v9; optional Cursor
+bridge install (v2) supplies `CURSOR_SESSION_ID` per composer tab; v3 also lets
+agent-shell marker writers (learn/plans) key the same session without the bridge
+env var.
 
 The cores NEVER import `session_channel.py`; they accept `--session-id` as
 opaque data, so the agent-agnostic-core invariant holds.
@@ -63,16 +67,26 @@ opaque data, so the agent-agnostic-core invariant holds.
 `session_channel.py` evaluates **one subprocess environment** per hook invocation:
 
 ```text
-CLAUDE_CODE_SESSION_ID  →  if set and non-empty, use it
-else CURSOR_SESSION_ID  →  if set and non-empty, use it
-else ""                 →  adapter omits --session-id (no-session key)
+CLAUDE_CODE_SESSION_ID     →  if set and non-empty, use it
+else CURSOR_SESSION_ID     →  if set and non-empty, use it (hook bridge)
+else CURSOR_CONVERSATION_ID →  if set and non-empty, use it (Cursor agent shell)
+else ""                    →  adapter omits --session-id (no-session key)
 ```
 
-**Claude wins when both vars are set in the same process.** Cursor does not override
-Claude. The precedence rule exists for the rare case where both env vars leak into
-one hook subprocess (for example `CLAUDE_CODE_SESSION_ID` exported in your shell
-while Cursor hooks also set `CURSOR_SESSION_ID`). In that edge case, hooks use the
-Claude session id, not Cursor's.
+**Claude wins when both Claude and any Cursor var are set in the same process.**
+`CURSOR_SESSION_ID` wins over `CURSOR_CONVERSATION_ID` when both are set.
+Cursor does not override Claude. The precedence rule exists for the rare case
+where env vars leak into one hook subprocess (for example
+`CLAUDE_CODE_SESSION_ID` exported in your shell while Cursor hooks also set
+`CURSOR_SESSION_ID`). In that edge case, hooks use the Claude session id, not
+Cursor's.
+
+**Cursor agent shell vs hook subprocess (v3):** Cursor injects
+`CURSOR_CONVERSATION_ID` into the agent process and `CURSOR_SESSION_ID` into
+hook subprocesses (via `cursor-session-bridge.sh`). Those values match for the
+same composer tab. Without the conversation-id fallback, learn/plans marker
+writes from the agent shell keyed `no-session` while the gate keyed the hashed
+session id, so the gate blocked even after a fresh `learn` marker.
 
 **Normal case (Claude + Cursor on the same repo):** each agent runs hooks in its
 own subprocess tree with its own env. Claude Code sets `CLAUDE_CODE_SESSION_ID`

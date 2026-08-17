@@ -61,6 +61,11 @@ v = ti.get("file_path")
 if not isinstance(v, str):
     v = ti.get("path")
 cwd = obj.get("cwd")
+# Empty payload cwd must not fall through to the hook process cwd (e.g. ~/.claude):
+# that keys gated markers to the wrong project. Prefer the write-target parent.
+if not (isinstance(cwd, str) and cwd.strip()) and isinstance(v, str) and v.startswith("/"):
+    import os as _os
+    cwd = _os.path.dirname(v)
 sys.stdout.write((v if isinstance(v, str) else "") + "\n")
 sys.stdout.write((cwd if isinstance(cwd, str) else "") + "\n")
 ')

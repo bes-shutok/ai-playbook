@@ -73,19 +73,20 @@ SID="$(python3 ~/.ai-playbook/scripts/session_channel.py)"
 
 This idiom is PINNED here so the plans-skill marker recipe and every adapter
 use the SAME artifact (Family D single source). The helper prints
-``CLAUDE_CODE_SESSION_ID or CURSOR_SESSION_ID or ""`` with NO
-trailing newline (Claude at v9; Cursor optional at v2 via the session bridge).
-When `SID` is empty the adapter OMITS `--session-id`, so the core keys the
-literal `no-session` and uses the FULL window. Per-session isolation is
-Claude-only at v9 and Cursor-without-bridge at v9; optional Cursor bridge
-install (v2) supplies `CURSOR_SESSION_ID` per composer tab. The
-cores NEVER import `session_channel.py`; they accept `--session-id` as opaque
-data.
+``CLAUDE_CODE_SESSION_ID or CURSOR_SESSION_ID or CURSOR_CONVERSATION_ID or ""``
+with NO trailing newline (Claude at v9; Cursor hook bridge at v2; Cursor
+agent-shell conversation fallback at v3). When `SID` is empty the adapter OMITS
+`--session-id`, so the core keys the literal `no-session` and uses the FULL
+window. Per-session isolation is Claude-only at v9 and Cursor-without-bridge at
+v9; optional Cursor bridge install (v2) supplies `CURSOR_SESSION_ID` per
+composer tab; v3 also lets agent-shell marker writers key the same session via
+`CURSOR_CONVERSATION_ID`. The cores NEVER import `session_channel.py`; they
+accept `--session-id` as opaque data.
 
 **Precedence and multi-agent use:** see `agents/hooks/lessons-recall/README.md`
 (**Session channel precedence**, **Same repository, multiple agents**). Summary:
-Claude wins if both `CLAUDE_CODE_SESSION_ID` and `CURSOR_SESSION_ID` are set in
-the same hook subprocess; normally each agent only sets its own var, so Claude
+Claude wins over any Cursor var; `CURSOR_SESSION_ID` wins over
+`CURSOR_CONVERSATION_ID`; normally each agent only sets its own var, so Claude
 and Cursor hooks on the same repo do not interfere.
 
 Only the Claude adapter warns on empty SID (`CLAUDE_CODE_SESSION_ID absent;
@@ -278,6 +279,14 @@ lessons-recall one-shot):
 The adapter tolerates `.tool_input.filePath` (camelCase) and `.tool_input.file_path`.
 Pin a per-hook `timeout` so a stuck core degrades to a miss (see "Host hook
 timeout" above; r2-M3).
+
+**Empty payload `cwd` (Cursor observed):** Cursor `preToolUse` often sends
+`cwd` as missing or `""`. Adapters MUST NOT fall through to the hook process
+cwd (`~/.cursor` or, if a second adapter also runs, `~/.claude`): that keys
+gated markers to the wrong project hash. When `cwd` is empty and the write
+target is an absolute path, Cursor and Claude skill-gate adapters derive
+`--cwd` from `dirname(target)` so `resolve_project_key` walks to the repo
+under edit.
 
 ### agy (PreToolUse)
 

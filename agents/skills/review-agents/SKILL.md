@@ -31,7 +31,7 @@ This skill is a shared library of review sub-agent pattern catalogs.
 | `quality.md` | Bugs, logic errors, edge cases, error handling, correctness, type safety |
 | `implementation.md` | Requirement coverage, wiring, completeness, return value propagation |
 | `architecture.md` | God classes, SOLID, DDD, CQRS, clean architecture, aggregates, value objects |
-| `testing.md` | Test coverage, quality, fake tests, independence |
+| `testing.md` | Test coverage, quality, fake tests, independence, hermeticity (ambient inputs) |
 | `simplification.md` | Over-engineering, excessive abstraction, premature generalization; tagged output (`delete:`, `stdlib:`, `native:`, `yagni:`, `shrink:`) |
 | `documentation.md` | Missing docs for user-visible changes; prose clarity (merged from legacy `prose-clarity.md`) |
 | `review-panel-selection.md` | Default panels, conditional launch rules, tiered ownership (orchestrator reference; not a sub-agent) |

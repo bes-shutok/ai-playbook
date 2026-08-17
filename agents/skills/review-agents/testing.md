@@ -9,6 +9,15 @@ Review test coverage and quality.
 3. Coverage gaps: functions or branches without test coverage
 4. Integration test needs: system boundaries requiring integration tests
 
+## Test Hermeticity (ambient inputs)
+
+For every new or changed test (code review) or test-bearing plan task (plan review):
+
+1. Enumerate the ambient inputs reachable from the code under test over the call graph the test drives. Cover all four families: env-var reads (`getenv`, `environ` accessors) anywhere the driven code or its transitive callees resolve configuration from the environment; network clients (`urlopen`, `requests`, `httpx`, raw socket use) behind any imported collaborator the code calls; filesystem dependence on cwd-relative paths (anything resolved against the current working directory rather than an injected root or temp dir) and on gitignored or uncommitted files; and clock, timezone, or locale dependence (current-time reads, local timezone, locale-sensitive parsing or formatting).
+2. Verify each enumerated input is controlled by exactly one named mechanism: pinned (the test sets it in a fixture), patched (a seam replaces the collaborator), or injected (a parameter passes it in). Name the mechanism in the review output; an ambient input with no named mechanism is a finding, even when the suite is green on the reviewer's machine.
+3. Flag any test that drives an orchestration entry point (`main`, CLI command, batch-script entry) without explicit environment pinning. An entry point inherits the whole ambient environment; a suite that is green only where a gating env var happens to be absent proves nothing about the branches real machines take.
+4. Pattern: `testing#hermeticity-gap`. Default severity follows the **Environment-dependent test** row in `severity-calibration.md` (Medium). When the reachable input can hit a paid or live API or read personal data, severity is High and the finding is blocking: running the suite itself then creates side-effect or privacy risk, and a green run in a clean environment verifies nothing.
+
 ## Harness Fidelity (request / middleware boundaries)
 
 When the diff adds or changes a **request-boundary** component that the runtime registers into the HTTP or RPC stack (framework filters, middleware, interceptors, gateway plugins, or equivalent):
