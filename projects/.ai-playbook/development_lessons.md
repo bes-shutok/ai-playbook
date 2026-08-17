@@ -4223,3 +4223,21 @@ When the identical command behaves differently in the agent shell versus the use
 **Example (2026-08-16 review-panel hermeticity plan, Phase 2 re-validation):** The orchestrator re-ran the plan's validation block from a retyped copy; the retyped `sed` replacement used `\&` (literal ampersand) where the canonical block used `&` (whole match), so the canary-selection pipeline emitted `&` instead of a path and H1 failed on a healthy tree. Extracting the fenced block verbatim from the plan file and running it produced `ALL CHECKS PASSED`.
 
 **See also:** UL#198 (silent no-op mutations indict the harness), plans-skill validation-command authoring rules, Family H.
+
+## 200. A Requested Fixture Runs AFTER a Same-Scope Autouse Fixture
+
+**Principle:** Family H (verify the real thing, not the abstraction). In pytest, autouse fixtures are instantiated before non-autouse fixtures of the SAME scope for a given test. So a requested function-scoped fixture cannot "pre-seed" state that a function-scoped autouse fixture tears down or overrides: the autouse body runs first, the requested fixture's setup runs after, and its values win in the test body. Assuming the opposite order silently inverts a test's meaning.
+
+**Trigger:** A test needs to simulate an environment (env var set, working directory, module global) that a suite-wide autouse fixture pins, deletes, or resets per test, and you are about to move the simulation from the test body (or import time) into a requested fixture so it "runs before" the pin.
+
+**Rule:**
+1. Never use a requested same-scope fixture to pre-arrange state an autouse fixture of that scope guards against; ordering guarantees the autouse body wins the "before" slot and the requested fixture overwrites afterward.
+2. When the assertion is "the guard removed the value" (import-time or pre-session mutation, checked in the body), keep the mutation where it provably precedes the autouse fixture: import-time module mutation in the test module itself.
+3. For restoration, prefer session-level cleanup hooks (`request.config.add_cleanup`) over `teardown_module` when partial deselection or teardown failure must not leak the mutation to other modules.
+4. Verify ordering empirically (one print/pytest trace) before committing to either mechanism; do not reason it out from fixture names.
+
+**Shape trigger (when to suspect this family):** A test that "sets up" state to be cleaned by a guard fixture passes when it should fail (or vice versa), and the diff moved a `setenv`/`setattr` from a test body into a named fixture during review.
+
+**Example (2026-08-17 review fix round, hermeticity test suite):** A reviewer requested replacing import-time env simulation with a function-scoped `simulated_user_shell(monkeypatch)` fixture. Because the suite's autouse env-pin fixture deletes the key per test and autouse fixtures instantiate first, the requested fixture's `setenv` would run AFTER the deletion, leaving the key present in the body and inverting the test's meaning. Import-time mutation plus a session-config cleanup hook was kept instead.
+
+**See also:** UL#89 (autouse fixture rewiring and double `cache_clear`), project hermeticity lesson (autouse env pin is primary; body-level `setenv` runs after the fixture and wins), Family H.
