@@ -105,7 +105,7 @@ for p in "${SHADOW_CANDIDATES[@]}"; do
     SNAPSHOT_PATHS+=("$p")
     parent=$(dirname "$clean")
     mkdir -p "${SNAPSHOT_TMP}/${parent}"
-    cp -rp "$clean" "${SNAPSHOT_TMP}/${parent}/"
+    cp -Rp "$clean" "${SNAPSHOT_TMP}/${parent}/"
   fi
 done
 [ -e ".claude" ] && SNAPSHOT_PATHS+=(".claude/")
@@ -240,7 +240,7 @@ if [ -d "${EXEC_TMP}/execute-plan" ]; then
   for session_dir in "${EXEC_TMP}/execute-plan"/*/; do
     [ -f "${session_dir}manifest.md" ] || continue
     EXECUTE_PLAN_BACKUP=$(mktemp -d)
-    cp -rp "${session_dir%/}" "${EXECUTE_PLAN_BACKUP}/"
+    cp -Rp "${session_dir%/}" "${EXECUTE_PLAN_BACKUP}/"
     break  # one active session per run
   done
 fi
@@ -268,7 +268,7 @@ docs_branch_cleanup() {
 trap docs_branch_cleanup EXIT INT TERM
 
 for shadow_path in "${SHADOW_PATHS[@]}"; do
-  src="${shadow_path%/}"  # strip trailing slash so cp -rp copies the item itself
+  src="${shadow_path%/}"  # strip trailing slash so cp -Rp copies the item itself (capital R preserves symlinks; lowercase -r follows them, which fails on OS-protected symlink targets and diverges from docs-branch history)
   if [ -e "$src" ]; then
     parent=$(dirname "$src")
     mkdir -p "${SHADOW_TMP}/${parent}"
@@ -285,7 +285,7 @@ for shadow_path in "${SHADOW_PATHS[@]}"; do
             cp -p "$ignored_path" "${SHADOW_TMP}/${ignored_path}"
           done
     else
-      cp -rp "$src" "${SHADOW_TMP}/${parent}/"
+      cp -Rp "$src" "${SHADOW_TMP}/${parent}/"
     fi
   fi
 done
@@ -353,7 +353,7 @@ for shadow_path in "${SHADOW_PATHS[@]}"; do
   mkdir -p "${DOCS_WORKTREE}/${parent}"
   # Add-only: overlay disk snapshot; never rm -rf because files are absent from disk.
   if [ -e "${SHADOW_TMP}/${src}" ]; then
-    cp -rp "${SHADOW_TMP}/${src}" "${DOCS_WORKTREE}/${parent}/"
+    cp -Rp "${SHADOW_TMP}/${src}" "${DOCS_WORKTREE}/${parent}/"
   fi
 done
 
@@ -365,7 +365,7 @@ unset del_path
 # Plan-archive move detection: when a plan was archived on the working branch
 # (moved from plans_dir to plans_completed_dir via ``git mv``), the add-only
 # overlay above copies the new completed/ file into the worktree but leaves
-# the stale old-path copy (``cp -rp`` never deletes). The docs branch would
+# the stale old-path copy (``cp -Rp`` never deletes). The docs branch would
 # then track both locations forever. Mirror the archive move by removing the
 # stale old-path copy when the working tree no longer has it.
 if [ -f .ai-playbook/facts.md ]; then
@@ -528,6 +528,6 @@ This only works when an old `git stash push --all` run happened after the files 
 - **Never run `git stash clear`** in repos using this workflow, stash entries are the secondary backup layer alongside the `docs` branch.
 - **Never delete shadow paths in the live checkout.** Deletes on the `docs` branch are allowed only for paths explicitly removed in the prior `docs` commit, and only inside the temporary docs worktree.
 - **Nested git repos in SHADOW_PATHS** (e.g. `docs/personal/`): strip their `.git` inside the temporary docs worktree before staging (`find "$DOCS_WORKTREE" -mindepth 2 -name '.git' -type d | while read -r d; do rm -rf "$d"; done`). Without this, git treats them as submodule gitlinks and does not stage individual files.
-- **Snapshot path correctness is data-loss critical**: `cp -rp docs/foo SHADOW_TMP/` creates `SHADOW_TMP/foo/` (just the basename), NOT `SHADOW_TMP/docs/foo/`. Use the parent-preserving pattern everywhere: `parent=$(dirname "$src"); mkdir -p "${SHADOW_TMP}/${parent}"; cp -rp "$src" "${SHADOW_TMP}/${parent}/"`. If the snapshot path doesn't match the worktree copy path, the sync silently omits content from the docs branch.
+- **Snapshot path correctness is data-loss critical**: `cp -Rp docs/foo SHADOW_TMP/` creates `SHADOW_TMP/foo/` (just the basename), NOT `SHADOW_TMP/docs/foo/`. Use the parent-preserving pattern everywhere: `parent=$(dirname "$src"); mkdir -p "${SHADOW_TMP}/${parent}"; cp -Rp "$src" "${SHADOW_TMP}/${parent}/"`. If the snapshot path doesn't match the worktree copy path, the sync silently omits content from the docs branch.
 - **Never run whole-repo `git clean`** during docs-branch sync. The worktree implementation does not need it.
 - **Preserve active execute-plan session logs** (`{tmp_dir}/execute-plan/<plan-slug>/` with `manifest.md`): the live checkout must remain untouched while the temporary docs worktree is updated.
