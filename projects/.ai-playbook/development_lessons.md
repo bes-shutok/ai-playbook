@@ -4261,3 +4261,15 @@ When the identical command behaves differently in the agent shell versus the use
 **Example (2026-08-17 test-hermeticity follow-up):** A wiring test compared two `extract.xlsx` outputs byte-for-byte to prove the report was unaffected by a fetch step. openpyxl embedded zip entry timestamps and `wb.properties.created`, so runs straddling a second boundary failed. Fix: a module-level `_normalized_xlsx(path)` helper (fixed date_time, sorted entries, `core.xml` excluded) replaced the raw comparison, plus a guard test forcing different timestamps that asserts raw bytes differ and normalized bytes are equal.
 
 **See also:** UL corpus time-dependent-assertion cluster; project testing guidance on deterministic comparison helpers.
+
+## 202. Verify the Current Branch Immediately Before Committing After a User Turn Gap
+
+**Principle:** Family D (single source of truth). Branch continuity is not stable across turn boundaries: the user may squash-merge the working branch and switch to the default branch between agent turns, so a commit prepared from the previous turn's branch assumption lands on the wrong branch.
+
+**Trigger:** Any `git commit` in a new user turn when the previous turn committed to a non-default branch, especially after a long gap or a user message in between.
+
+**Rule:** Run `git branch --show-current` (and glance at `git log -3` for an unexpected squash commit) in the same command sequence as the staging, not from cached context. If HEAD differs from the expected branch: check whether the expected branch was merged/deleted (`git reflog -5`, compare the squash commit's stat vs the branch diff); only then decide where the commit belongs. Never move or reset branches on the assumption the commit is misplaced until that comparison confirms it - the "wrong" branch may be the new canonical home.
+
+**Example:** After a feature branch was fully committed at its tip, the next user turn requested a small follow-up; the commit printed `[master <sha>]` because the user had squash-merged the branch to master and deleted it between turns. Reflog showed the checkout and the squash; the commit belonged on master after all, and verifying first avoided a pointless cherry-pick + master reset.
+
+**See also:** UL#71 (verify working tree vs HEAD after sub-agent git ops); UL#193 (archive completeness gate).
