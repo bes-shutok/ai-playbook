@@ -4273,3 +4273,27 @@ When the identical command behaves differently in the agent shell versus the use
 **Example:** After a feature branch was fully committed at its tip, the next user turn requested a small follow-up; the commit printed `[master <sha>]` because the user had squash-merged the branch to master and deleted it between turns. Reflog showed the checkout and the squash; the commit belonged on master after all, and verifying first avoided a pointless cherry-pick + master reset.
 
 **See also:** UL#71 (verify working tree vs HEAD after sub-agent git ops); UL#193 (archive completeness gate).
+
+## 203. Complete a Skill's Confirmation Hard Gates Before Dispatching Any Other Task Work
+
+**Principle:** Family D (single source of truth). A skill's ordered workflow IS the process source of truth: when a phase is a hard gate requiring explicit user confirmation, work dispatched past the unconfirmed gate (even read-only exploration) reads as skipping the gate, and the user's trust in "the skill was followed to the point" is broken even if the outcome is identical.
+
+**Trigger:** Executing any skill whose phases include "wait for explicit user confirmation" hard gates (plan-creation branch setup, requirements validation), when tempted to parallelize exploration or scaffolding while the gate pends.
+
+**Rule:** Before dispatching exploration agents, searches, or file writes for the task, walk the skill's phases in order and stop at each confirmation gate until the user answers. If parallel work is already in flight when a gate is reached, let it finish silently but present the gate's exact confirmation prompt next; never present results from beyond the gate in the same breath as asking for the confirmation (it pre-answers the question). The gate prompt must use the skill's prescribed format verbatim.
+
+**Example:** During a plan-creation session, exploration sub-agents were dispatched before the skill's Phase 0 branch-creation confirmation was posed; the user interrupted with "shouldn't we change branch as per the skill? Do you follow the skill to the point?" The branch was correct in intent, but the gate had been jumped. Re-posing the exact Phase 0 prompt and completing each gate in order restored the contract.
+
+**See also:** UL#202 (verify branch before commit); UL#190/UL#191 (ordered-assertion and fail-closed validation gates).
+
+## 204. Forbidden-Pattern Gates Embedded in Committable Documents Must Be Self-Match Immune
+
+**Principle:** Family H (verify the real thing, not the abstraction). A forbidden-pattern grep embedded in a document that will itself be committed (a plan's validation block, a README check) deterministically matches the document's own pattern literal once the document is tracked, so the gate fails forever no matter how clean the swept surface is - and the "fix" of sweeping the document's own checker text makes it worse.
+
+**Trigger:** Authoring any validation command of the form "fail if pattern P is found" inside an artifact that is itself in the scanned set and will be committed (plan files checked into the repo, contributor docs, CI config).
+
+**Rule:** Bracket-escape one literal character in the pattern (e.g. write `name[.]ext` instead of `name.ext`) so the document's own escaped text cannot satisfy the regex, while genuine unescaped occurrences still match. Add a note beside the command telling future editors not to "normalize" the escape back to a plain dot. Verify the gate empirically against the TRACKED state (intent-to-add the document, run the gate) before relying on it; a working-tree-only check proves nothing about post-commit behavior.
+
+**Example:** A plan-review round empirically simulated `git add -N` on a plan whose validation block contained `git grep 'legacy_name.yaml'`: the gate matched the plan's own line 250 and would exit 1 after every commit. The escaped form `legacy_name[.]yaml` kept genuine carriers (a glossary entry, a backlog reference) matching while the plan's own text became immune.
+
+**See also:** UL#191 (fail-closed validation blocks); plans-skill Validation Commands authoring rules (zero-match negation).
