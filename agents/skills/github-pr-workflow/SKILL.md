@@ -21,12 +21,12 @@ Use these routing rules before acting:
 | User intent | Primary skill | This skill provides |
 |---|---|---|
 | Fresh review, e.g. "let's review <PR URL>" | `doing-code-review` | Fetch PR metadata, files, diff, existing comments, and post review |
-| Existing feedback, e.g. "address comments in <PR URL>" | `receiving-code-review` | Fetch review threads, reply to threads, resolve bot threads |
+| Existing feedback, e.g. "address comments in <PR URL>" | `receiving-review` | Fetch review threads, reply to threads, resolve bot threads |
 | Trunk moved; refresh stacked chain `A → B → C` (merge then optional squash) | `update-stacked-branches` | Not primary; optional follow-up if PR bases still wrong after restack |
 | Parent already squash-merged; reparent child with `rebase --onto` | `github-pr-workflow` | Owns the full task |
 | PR administration, e.g. description, stats, split, create, squashed branch | `github-pr-workflow` | Owns the full task |
 
-Do not use this skill alone to judge review feedback or produce review findings. Delegate judgment to `doing-code-review` for active review and `receiving-code-review` for passive review feedback.
+Do not use this skill alone to judge review feedback or produce review findings. Delegate judgment to `doing-code-review` for active review and `receiving-review` for passive review feedback.
 
 ## Doc migration PR descriptions
 
@@ -96,7 +96,7 @@ Use `path`, `line`, and `side: "RIGHT"` on the PR head commit. Do not parse the 
 Post with `event: "COMMENT"` unless `doing-code-review` marks a Critical or High severity issue with clear production risk.
 
 ### Fetch review threads for passive review feedback
-Use this when `receiving-code-review` needs to triage existing Copilot or human reviewer threads:
+Use this when `receiving-review` needs to triage existing Copilot or human reviewer threads:
 ```bash
 gh api graphql -f query='
 {
@@ -140,6 +140,14 @@ for i, thread in enumerate(threads):
 
 Replace `OWNER`, `REPO`, and `PR_NUMBER` with values from the PR context.
 
+Passive review work must also fetch top-level PR Conversation comments because they are separate from inline review threads:
+
+```bash
+gh api repos/{owner}/{repo}/issues/{pr}/comments --paginate
+```
+
+Classify each finding as an inline review thread or a top-level Conversation comment before replying. Do not assume the reply operation is interchangeable between them.
+
 ### Reply to review threads
 Reply in the thread, not as a top-level PR comment:
 ```bash
@@ -158,6 +166,14 @@ Reply guidelines:
 - For false positives: explain why the code is correct, citing API signatures, versions, or guidelines as evidence.
 - For PR-description-only updates: state that the description was updated to match the implementation.
 - **Reviewer-facing only:** do not ask your human partner questions in the reply (cherry-pick onto another branch, confirm push, choose options). Those belong in chat; the PR reply stays a closed technical statement for the reviewer.
+
+### Reply to top-level PR Conversation comments
+
+A top-level PR Conversation comment is an issue comment, not an inline review thread. The REST and GraphQL mutations used for inline review-thread replies do not attach a child reply to an issue comment. When GitHub's web UI exposes a Reply control for the Conversation comment, use that control so the response remains directly associated with the feedback. Do not create an unrelated top-level comment when a direct UI reply is available.
+
+If UI control is unavailable in the current environment, do not delete or repost existing responses to simulate a reply. Leave reviewer feedback unchanged and report the capability gap to the user. A quoted top-level comment is only a fallback when the user explicitly accepts that presentation.
+
+Never delete reviewer comments. Deleting the agent's own response is allowed only when the user explicitly requests comment cleanup and the exact comment IDs have been verified.
 
 ### Resolve review threads
 Resolve only bot or automated threads after replying:

@@ -22,7 +22,7 @@ Placeholders:
 | `<PLAN_SLUG>` | Kebab-case slug for log directory |
 | `<IMPLEMENT_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-implement.log.md` |
 | `<REVIEW_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
-| `<ADDRESS_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-code-review.log.md` |
+| `<ADDRESS_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review.log.md` |
 | `<MANIFEST_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` |
 | `<LOG_PASS_NUM>` | `1` on first launch for this log path; orchestrator increments on relaunch |
 | `<REVIEW_MODE_NOTES>` | Fresh-review framing + premortem-required note for Step 3.1 (see SKILL.md Verify-fix vs fresh review) |
@@ -317,7 +317,7 @@ Self-contained findings JSON only. Do not write the staging doc (parent synthesi
 ```
 You are addressing code review findings for a completed plan.
 
-Read and follow: ~/.agents/skills/receiving-code-review/SKILL.md
+Read and follow: ~/.agents/skills/receiving-review/SKILL.md
 
 Plan: <PLAN_PATH>
 Review doc: <REVIEW_DOC_PATH>
@@ -340,7 +340,7 @@ Fix findings on **explicit must-fix** paths when valid. For unlisted paths, fix 
 <VALIDATION_COMMANDS>
 
 7. Update the review doc: set addressed findings to `done`, false positives/out-of-scope to `drop` with a one-line reason; leave only validated unresolved items at `pending`.
-8. **Update execution log** at `<ADDRESS_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). On Step 3.3 relaunch within the same round R, Pass 2+ **must** be appended to `review-r<R>-receiving-code-review.log.md` without erasing Pass 1. Include triage decisions, pushback rationale, and full return payload.
+8. **Update execution log** at `<ADDRESS_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). On Step 3.3 relaunch within the same round R, Pass 2+ **must** be appended to `review-r<R>-receiving-review.log.md` without erasing Pass 1. Include triage decisions, pushback rationale, and full return payload.
 9. Do NOT commit; the orchestrator launches Done, then either exits on a fresh blocking-clean digest or starts the targeted follow-up.
 
 ## Return format

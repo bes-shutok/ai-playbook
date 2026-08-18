@@ -1,7 +1,7 @@
 ---
 name: doing-code-review
 description: >
-  Active code review skill. Orchestrates the recommended five-worker panel from review-panel-selection for thorough review of PRs, diffs, or branches. Language-agnostic core with runtime language overlays (Java/Spring, Kotlin/Spring, Python). Two modes: posts PR review comments by default; fix mode (auto-commit) when explicitly asked. Trigger phrases: "let's review", "review this PR", "review the changes", "review changes in", "review branch", "review against", "code review", "look at this PR", "check this PR", "check this diff", "doing-code-review". Do not use for addressing existing reviewer comments; use receiving-code-review instead.
+  Active code review skill. Orchestrates the recommended five-worker panel from review-panel-selection for thorough review of PRs, diffs, or branches. Language-agnostic core with runtime language overlays (Java/Spring, Kotlin/Spring, Python). Two modes: posts PR review comments by default; fix mode (auto-commit) when explicitly asked. Trigger phrases: "let's review", "review this PR", "review the changes", "review changes in", "review branch", "review against", "code review", "look at this PR", "check this PR", "check this diff", "doing-code-review". Do not use for addressing existing reviewer comments; use receiving-review instead.
 ---
 
 # Active Code Review
@@ -12,7 +12,7 @@ description: >
 
 Use this skill for **active review**: producing new review findings for a PR, diff, or branch.
 
-Do not use this skill for implementing, triaging, or replying to existing review comments. Use `receiving-code-review` for passive review feedback. For GitHub PR operations (fetching metadata, files, diffs, existing comments, posting reviews), use the shared primitives in `github-pr-workflow`.
+Do not use this skill for implementing, triaging, or replying to existing review comments. Use `receiving-review` for passive review feedback. For GitHub PR operations (fetching metadata, files, diffs, existing comments, posting reviews), use the shared primitives in `github-pr-workflow`.
 
 **Caller: `execute-plan` Phase 3.** The execute-plan **parent** is this skill's orchestrator by default: it launches lens workers and writes the staging doc. Do not wrap this skill in a nested "Code Review" sub-agent when the parent can fan out (see `execute-plan` Step 3.1). Nested recovery is only for hosts that cannot launch workers.
 
@@ -634,7 +634,7 @@ When none: `None (agent severities matched staged severities).`
 |--------|--------|-------|---------|----------|---------|
 | correctness-completeness | 2 | 0 | 0 | 0 | 2 |
 
-Before triage: Pending = Staged for each agent; Fixed/Dropped/Deferred = 0. After `receiving-code-review`: recompute from finding **Triage** fields.
+Before triage: Pending = Staged for each agent; Fixed/Dropped/Deferred = 0. After `receiving-review`: recompute from finding **Triage** fields.
 
 ## Findings
 

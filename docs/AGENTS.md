@@ -73,7 +73,7 @@ At task start: read **`user_facts_path`**, then ownership/repo facts when scoped
 - **Em dashes:** never use the em dash character (U+2014) in generated text; see `agent_workflow_guidelines.md` §39. Before commit, run `check-no-em-dash.sh` (`done` Step 2.76; default `~/.ai-playbook/scripts/check-no-em-dash.sh`).
 - **Paths in docs/skills:** use `~/` home-relative paths, not `/Users/...`.
 - **Public hygiene:** neutral placeholders in committed skills; run `public_hygiene_scan_script` before skill commits.
-- **GitHub PR URL:** invoke `doing-code-review` or `receiving-code-review` per intent; see `agent_workflow_guidelines.md` #42 area / PR workflow skills.
+- **GitHub PR URL:** invoke `doing-code-review` or `receiving-review` per intent; see `agent_workflow_guidelines.md` #42 area / PR workflow skills.
 - **Confluence ownership:** never update Confluence pages created by someone else unless the user specifically asks for that page to be changed. For any such page, request explicit user approval for each individual change before editing.
 - **Personal projects:** local git only unless user asks to push/open PR (`personal_projects_root` in facts).
 - **Compaction:** run `learn` before allowing context compaction.

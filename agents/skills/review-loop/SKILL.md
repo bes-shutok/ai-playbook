@@ -3,7 +3,7 @@ name: review-loop
 description: >
   Orchestrate repeat review-fix-done cycles on the current branch until a fresh code review
   reports zero unresolved blocking findings before any fixes. Use when the user asks to run a review loop,
-  keep reviewing until clean, or repeat doing-code-review + receiving-code-review + done.
+  keep reviewing until clean, or repeat doing-code-review + receiving-review + done.
   Trigger phrases: "review loop", "review-loop", "until clean", "keep reviewing until clean",
   "review fix done loop". Not for execute-plan Phase 3 (use execute-plan) or one-shot review
   (use doing-code-review only).
@@ -19,7 +19,7 @@ Run **fresh review → fix (if needed) → done → repeat** on the **current br
 |----------------|-------------|
 | Standalone "loop until clean" on current branch | `execute-plan` Phase 3 (plan-scoped only) |
 | | `doing-code-review` (one-shot review, no loop) |
-| | `receiving-code-review` (address existing PR threads) |
+| | `receiving-review` (address existing PR threads) |
 
 ## Resolve scope (Step 0)
 
@@ -50,7 +50,7 @@ If `git diff ${BASE_BRANCH}...HEAD | wc -c` exceeds `review_large_diff_bytes` (d
 |------|-------|----------------|
 | 1 | `doing-code-review` | Branch review mode; staging doc **before** reporting to user |
 | 2 | Triage | Count findings still `pending` with `blocking: true` |
-| 3 | `receiving-code-review` | Only if step 2 count > 0; fix or `drop` each finding; update staging doc statuses; after fixes land, run the **Generalize-on-fix** step from `receiving-code-review` |
+| 3 | `receiving-review` | Only if step 2 count > 0; fix or `drop` each finding; update staging doc statuses; after fixes land, run the **Generalize-on-fix** step from `receiving-review` |
 | 4 | `done` | learn → docs-branch → commit (authorized per iteration) |
 
 **Do not** merge step 3 fixes into the same round's step 1 verdict. Step 1's output is **provisional findings before fixes**.
@@ -168,7 +168,7 @@ If no base is named or the diff is large (>10 kB), the loop asks you to confirm 
 ### Consumes `doing-code-review` skill
 Step 1 each round: branch review mode; staging doc before reporting. Diff scope is committed `BASE...HEAD` only.
 
-### Consumes `receiving-code-review` skill
+### Consumes `receiving-review` skill
 Step 3 when blocking findings remain: triage and fix; update staging statuses.
 
 ### Consumes `done` skill

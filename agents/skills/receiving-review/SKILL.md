@@ -1,9 +1,9 @@
 ---
-name: receiving-code-review
-description: "Use when receiving or addressing existing code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable. Trigger phrases: \"address comments\", \"address PR comments\", \"process PR comments\", \"reviewer comments\", \"copilot comments\", \"fix review feedback\", \"respond to review feedback\", \"address comments in <GitHub PR URL>\". Requires technical rigor and verification, not performative agreement or blind implementation. Do not use for fresh PR review; use doing-code-review instead."
+name: receiving-review
+description: "Use when receiving or addressing existing review feedback from a pull request, RFC, document, or other review system, before implementing suggestions, especially if feedback seems unclear or technically questionable. Trigger phrases: \"address comments\", \"process review feedback\", \"reviewer comments\", \"fix review feedback\", \"respond to review feedback\". Requires technical rigor and verification, not performative agreement or blind implementation. Do not use for a fresh review; use the source's active-review skill instead."
 ---
 
-# Code Review Reception
+# Review Reception
 
 ## Boundary
 
@@ -30,23 +30,24 @@ WHEN receiving code review feedback:
 6. IMPLEMENT: One item at a time, test each
 ```
 
-## GitHub PR Feedback Workflow
+## Feedback-source Workflow
 
 Use this workflow when the user asks to process, triage, plan, address, or reply to existing PR review comments.
 
-1. Use `github-pr-workflow` to resolve the PR context and fetch all review threads.
+1. Use the applicable source-specific workflow skill to resolve the feedback context and fetch all live comments or threads.
 2. Read all unresolved thread bodies before deciding what to implement.
 3. Spot-check resolved or outdated threads against current code before skipping them.
 4. Verify each live comment against the referenced file and line.
-5. **Check branch scope**: before staging any fix, confirm the file belongs to this branch's scope. If a comment touches a file outside the branch's folder (e.g., `individual/<name>/` while on a team branch), plan that fix as a separate commit to the appropriate branch; do not include it in the PR's branch commit.
-6. Map each live comment's problem shape to the root-cause families and search the applicable project and user-level lesson corpora for relevant learnings. Apply repository-specific facts from those learnings when evaluating the feedback.
-7. Classify each live comment as correctness bug, test quality, cleanup, docs, false positive, or needs clarification.
-8. When a bot cites a guideline to justify a flag, look up the guideline and confirm it applies to this specific file type before implementing. Standard license copyright headers, for example, are not subject to PII redaction rules even if the guideline covers the same keyword (see `coding_guidelines.md §12`).
-9. Deduplicate comments by root cause. Multiple threads about the same root cause become one task.
-10. If any item is unclear, stop and ask before implementing.
-11. Implement one root-cause task at a time and verify after each fix.
-12. Use `github-pr-workflow` to reply to each thread after implementation or after deciding no code change is needed.
-13. Resolve bot or automated threads only after replying. Never resolve human reviewer threads.
+5. Identify the feedback source and load its source-specific workflow skill before replying or mutating feedback. The source adapter owns comment or thread retrieval, reply mechanics, resolution, and cleanup.
+6. **Check branch scope**: before staging any fix, confirm the file belongs to this branch's scope. If a comment touches a file outside the branch's folder (e.g., `individual/<name>/` while on a team branch), plan that fix as a separate commit to the appropriate branch; do not include it in the PR's branch commit.
+7. Map each live comment's problem shape to the root-cause families and search the applicable project and user-level lesson corpora for relevant learnings. Apply repository-specific facts from those learnings when evaluating the feedback.
+8. Classify each live comment as correctness bug, test quality, cleanup, docs, false positive, or needs clarification.
+9. When a bot cites a guideline to justify a flag, look up the guideline and confirm it applies to this specific file type before implementing. Standard license copyright headers, for example, are not subject to PII redaction rules even if the guideline covers the same keyword (see `coding_guidelines.md §12`).
+10. Deduplicate comments by root cause. Multiple threads about the same root cause become one task.
+11. If any item is unclear, stop and ask before implementing.
+12. Implement one root-cause task at a time and verify after each fix.
+13. Use the source adapter to reply to each comment after implementation or after deciding no code change is needed.
+14. Follow the source adapter's rules for resolution. Never silently delete, resolve, or replace feedback or responses.
 
 Every CR comment thread must get a reply before it is resolved. For fixes, reference the commit SHA when available and describe what changed. For false positives, explain why no change was made.
 
@@ -262,17 +263,16 @@ You understand 1,2,3,6. Unclear on 4,5.
 ✅ "Understand 1,2,3,6. Need clarification on 4 and 5 before implementing."
 ```
 
-## GitHub Thread Replies
+## Source Thread Replies
 
-Use `github-pr-workflow` for the exact GitHub GraphQL commands.
+Use the source-specific workflow skill for exact reply, resolution, and cleanup mechanics.
 
 Rules:
-- Reply in the review thread, not as a top-level PR comment.
-- Do not reply "Fixed" or cite a follow-up branch until the change exists in the working tree or a pushed commit on that branch.
-- Bot or automated threads: reply, then resolve in the same step.
-- Human reviewer threads: reply only. Never resolve them.
-- Never silently resolve any thread.
-- **Audience is the reviewer, not your human partner.** Thread replies are public to the PR audience. Do not ask the human partner questions there (cherry-pick? push? which branch? want me to…?), offer them options, or park decisions for them. State the technical answer (and commit SHA when relevant). Put partner-only follow-ups in the chat session.
+
+- Reply in the existing source thread or comment when the source supports it.
+- Do not reply "Fixed" or cite a follow-up branch until the change exists in the working tree or a published commit on that branch.
+- Keep replies addressed to the reviewer or document participant, not the human partner directing the work.
+- Do not delete or replace reviewer feedback. Do not delete and repost your own response merely to change its location unless the user explicitly requests comment cleanup.
 
 ## Soften / intentional revert tracking
 

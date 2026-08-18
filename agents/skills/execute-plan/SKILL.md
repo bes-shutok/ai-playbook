@@ -4,7 +4,7 @@ description: >
   Orchestrates iterative implementation of a plans-skill implementation plan using sub-agents:
   implement one task at a time (tests must pass), mark plan checkboxes, commit via done; then run
   review/fix loops until one fresh review of the current digest has zero unresolved blocking
-  findings after receiving-code-review triage, with at most five full-panel rounds,
+  findings after receiving-review triage, with at most five full-panel rounds,
   with done after each review iteration;
   on successful completion, remove session tmp under resolved tmp_dir/execute-plan/<plan-slug>/.
   Trigger phrases and invocations:
@@ -125,7 +125,7 @@ Do not start Phase 1 until execute-plan is chosen (invocation signal or gate opt
 | Skip Phase 3 because implementation looks complete | Review/fix loop is mandatory; each iteration still ends with `done` |
 | `done` without preceding-step log files | `learn` needs the immediately prior worker log(s) on disk; chat return text alone is insufficient |
 | Pass all session logs into every `done` | Each `done` reads only logs from its preceding step(s), not full history |
-| Overwrite an existing worker log on relaunch | Same path = append Pass N to end; never truncate `review-r<R>-receiving-code-review.log.md` or other worker logs |
+| Overwrite an existing worker log on relaunch | Same path = append Pass N to end; never truncate `review-r<R>-receiving-review.log.md` or other worker logs |
 | Delete `{tmp_dir}/execute-plan/<PLAN_SLUG>/` before success or on failure/interrupt | Tmp logs are removed only in Phase 5 after full successful completion |
 | Repeat a clean full panel on the same digest | Exit after one fresh blocking-clean review |
 | Return a final response after a worker checkpoint | A worker final, `done` commit, or review launch is progress only; the parent must pass the terminal-response gate and complete Phase 5 first |
@@ -146,14 +146,14 @@ If the user asks why per-task commits are missing, the usual cause is **Step 1.4
 
 ## Sub-agent execution logs
 
-Implement and receiving-code-review sub-agents **write their assigned log file before returning**. Phase 3 review lens workers return findings to the parent and do not own per-lens log paths. **Default path:** the Phase 3 parent maintains `<REVIEW_LOG_PATH>` with the heartbeat and synthesis. **Recovery path:** when Step 3.1 uses the nested Code Review recovery template, that recovery orchestrator owns `<REVIEW_LOG_PATH>` (heartbeat and final pass) instead of the parent. Each `done` sub-agent **reads only the log(s) from the worker step(s) that immediately preceded it** before `learn`.
+Implement and receiving-review sub-agents **write their assigned log file before returning**. Phase 3 review lens workers return findings to the parent and do not own per-lens log paths. **Default path:** the Phase 3 parent maintains `<REVIEW_LOG_PATH>` with the heartbeat and synthesis. **Recovery path:** when Step 3.1 uses the nested Code Review recovery template, that recovery orchestrator owns `<REVIEW_LOG_PATH>` (heartbeat and final pass) instead of the parent. Each `done` sub-agent **reads only the log(s) from the worker step(s) that immediately preceded it** before `learn`.
 
 See [agent-logs.md](agent-logs.md) for path convention, required sections, heartbeat, and manifest format.
 
 **Orchestrator duties:**
 
 1. Derive `<PLAN_SLUG>` from the plan filename and ensure `{tmp_dir}/execute-plan/<PLAN_SLUG>/` exists before the first sub-agent.
-2. Assign the log path and `<LOG_PASS_NUM>` to implement and receiving-code-review worker launches (`1` first time; increment on relaunch of the same path). Pass both in those prompts. For Phase 3 lens workers, do not assign per-lens log paths. Default: parent owns `<REVIEW_LOG_PATH>`. Recovery: pass `<REVIEW_LOG_PATH>` to the nested recovery orchestrator so it owns heartbeat and final updates.
+2. Assign the log path and `<LOG_PASS_NUM>` to implement and receiving-review worker launches (`1` first time; increment on relaunch of the same path). Pass both in those prompts. For Phase 3 lens workers, do not assign per-lens log paths. Default: parent owns `<REVIEW_LOG_PATH>`. Recovery: pass `<REVIEW_LOG_PATH>` to the nested recovery orchestrator so it owns heartbeat and final updates.
 3. After a worker that received a defined log path returns, verify its log file exists, is non-empty, and **on relaunch still contains prior passes** (append-only; see [agent-logs.md](agent-logs.md) write semantics). Update `manifest.md`. For default Phase 3 lens workers, record their launch and result in the parent-owned review log. In recovery mode, the nested orchestrator writes that log; the parent only verifies it. Confirm exit criteria from the applicable log or worker return; do not re-run tests or re-review inline to duplicate the worker.
 4. Pass **only the preceding-step log path(s)** into each `done` sub-agent (Step 1.4 / Step 3.4); see [agent-logs.md](agent-logs.md). Do not paste log bodies into orchestrator context; paths and pass/fail summaries are enough for gating.
 
@@ -539,7 +539,7 @@ Parse the staging doc at the verified path. Count unresolved findings with `bloc
 
 | Finding | Action |
 |---------|--------|
-| `blocking: true` and unresolved | Launch Step 3.3 (`receiving-code-review`) |
+| `blocking: true` and unresolved | Launch Step 3.3 (`receiving-review`) |
 | `blocking: false` | Triage by consequence; does not by itself block completion |
 
 **Do not use Step 3.2 counts for loop exit.** They only decide whether Step 3.3 runs. Exit criteria are evaluated in Step 3.4 after triage.
@@ -553,7 +553,7 @@ If unresolved blocking findings exist from Step 3.2:
 Launch a sub-agent using your agent's sub-agent execution capability.
 Use the **Address Review** template from [subagent-prompts.md](subagent-prompts.md).
 
-The sub-agent runs `receiving-code-review` against the staging doc (not GitHub threads unless a PR exists). It triages provisional findings: implements valid fixes, marks false positives/out-of-scope as `drop`, marks addressed items `done`, and re-runs validation commands.
+The sub-agent runs `receiving-review` against the staging doc (not GitHub threads unless a PR exists). It triages provisional findings: implements valid fixes, marks false positives/out-of-scope as `drop`, marks addressed items `done`, and re-runs validation commands.
 
 **Address completeness:** Mark a finding `done` only when the **executable/canonical artifact** named in the finding is fixed (script, monolithic bash block, wired call site, or config the runtime actually reads). Updating a non-executable reference snippet while the runnable block or script remains stale does **not** satisfy address-review; leave the finding `pending` or fix the executable artifact.
 
@@ -703,7 +703,7 @@ Report successful plan completion to the user, including the verified terminal-r
 - Phase 3 lens workers launch in parallel; wait for the panel before synthesizing the staging doc.
 - Use your agent's sub-agent execution capability.
 - Pass absolute plan path and task excerpt in every prompt.
-- Sub-agents must read the referenced skills (`tdd-guide`, `unit-test-runner`, `done`, `doing-code-review`, `receiving-code-review`) from `~/.agents/skills/` (or `agents/skills/` in the skills repository per `skills_repo_path` in `~/.ai-playbook/facts.md`).
+- Sub-agents must read the referenced skills (`tdd-guide`, `unit-test-runner`, `done`, `doing-code-review`, `receiving-review`) from `~/.agents/skills/` (or `agents/skills/` in the skills repository per `skills_repo_path` in `~/.ai-playbook/facts.md`).
 
 **Timeout:** If a sequential sub-agent (implement, done, address-review) or the Phase 3 panel wall-clock has not produced its required artifacts within 20 minutes, report status to the user and ask whether to wait, relaunch focused, or continue inline. For Step 3.1, "required artifacts" means non-empty staging doc **and** non-empty `<REVIEW_LOG_PATH>` (see Step 3.1 Timeout).
 
@@ -775,7 +775,7 @@ Only `done` performs git commits. Invoked after each implementation task (Step 1
 ### Consumes `doing-code-review` skill (parent-orchestrated in Phase 3)
 After all tasks, the execute-plan **parent** runs `doing-code-review` as the review orchestrator and launches lens workers as sub-agents. Staging doc is the handoff artifact. Uses full-branch diff (`<BASE_BRANCH>...HEAD`). Applies two-tier Review Scope: explicit must-fix plus plan-related extension for unlisted paths. Nested "Code Review" sub-agent only as recovery when the parent cannot fan out (see Step 3.1).
 
-### Consumes `receiving-code-review` skill (sub-agent)
+### Consumes `receiving-review` skill (sub-agent)
 Triages provisional findings between rounds. Phase 3 exit depends on unresolved `blocking: true`, not raw severity counts.
 
 ### Related: `review-loop` skill (standalone)

@@ -8,7 +8,7 @@ Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase
 |-------|----------|
 | Implement task N | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-implement.log.md` |
 | Phase 3 review round R (parent default, or recovery orchestrator) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
-| Address review round R | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-code-review.log.md` |
+| Address review round R | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review.log.md` |
 | Session manifest (orchestrator) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` |
 | Review diff snapshots (optional) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/diff-r<R>.patch`, `src-diff-r<R>.patch` |
 
@@ -38,7 +38,7 @@ The orchestrator sets `<LOG_PASS_NUM>`: `1` on first launch for that path; incre
 
 **Verify after write:** if the file existed before this pass, its prior content must still be present at the top; the new `## Pass N` block must be at the end.
 
-This matters most for **address review** (`review-r<R>-receiving-code-review.log.md`): Step 3.3 may be relaunched within round R; a retry must append Pass 2+, not clobber Pass 1.
+This matters most for **address review** (`review-r<R>-receiving-review.log.md`): Step 3.3 may be relaunched within round R; a retry must append Pass 2+, not clobber Pass 1.
 
 Apply the same create/append rules to implement logs, address-review logs, and the Phase 3 review log (`review-r<R>-doing-code-review.log.md`). Lens workers do not own a log path.
 
@@ -82,7 +82,7 @@ When the staging doc is written, append a final Pass (or update via append block
 
 ## Log file format (required)
 
-**Ownership:** implement and receiving-code-review workers update their assigned log before returning. Phase 3 lens workers have no log path and return findings only. The Phase 3 review log (`review-r<R>-doing-code-review.log.md`) is owned by the execute-plan **parent** on the default path, or by the nested recovery orchestrator when Step 3.1 uses recovery. Do not tell lens workers to write that review log.
+**Ownership:** implement and receiving-review workers update their assigned log before returning. Phase 3 lens workers have no log path and return findings only. The Phase 3 review log (`review-r<R>-doing-code-review.log.md`) is owned by the execute-plan **parent** on the default path, or by the nested recovery orchestrator when Step 3.1 uses recovery. Do not tell lens workers to write that review log.
 
 Workers that own a log path **update it before returning** (create or append per table above). Minimum sections per pass:
 
@@ -90,7 +90,7 @@ Workers that own a log path **update it before returning** (create or append per
 # <agent-type> log
 
 - **Plan:** <PLAN_PATH>
-- **Agent:** implement | doing-code-review | receiving-code-review
+- **Agent:** implement | doing-code-review | receiving-review
 - **Task / round:** Task <N> | review r<R>
 - **Pass:** <LOG_PASS_NUM>
 - **Status:** success | blocked | in_progress
@@ -148,7 +148,7 @@ Read logs from the worker step(s) that **directly preceded this `done` invocatio
 | `done` invocation | Preceding step(s) | Log(s) to read |
 |-------------------|-------------------|----------------|
 | Per task (Step 1.4) | Step 1.2 implement | `task-<N>-implement.log.md` for that task only |
-| Per review iteration (Step 3.4) | Step 3.1 review; Step 3.3 address if it ran | `review-r<R>-doing-code-review.log.md`; plus `review-r<R>-receiving-code-review.log.md` only when Step 3.3 ran |
+| Per review iteration (Step 3.4) | Step 3.1 review; Step 3.3 address if it ran | `review-r<R>-doing-code-review.log.md`; plus `review-r<R>-receiving-review.log.md` only when Step 3.3 ran |
 
 Do **not** pass implement logs into review-iteration `done`, or prior rounds' review/address logs into a later iteration.
 

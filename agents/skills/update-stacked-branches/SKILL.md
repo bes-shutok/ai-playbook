@@ -230,6 +230,6 @@ Confirm ancestry for each link. Completion: every link verified; push status rep
 
 PR admin, `-squashed` branch creation, and post-squash-merge `rebase --onto` stay there. During an open-stack restack, this skill owns `gh pr edit --base`. Use github-pr-workflow only if bases are still wrong afterward.
 
-### With `doing-code-review` / `receiving-code-review`
+### With `doing-code-review` / `receiving-review`
 
 History rewrite invalidates prior line anchors. Prefer a fresh review pass after restack if review continuity matters.
