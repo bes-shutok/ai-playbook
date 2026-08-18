@@ -588,3 +588,28 @@ free produces wrong refactor plans.
 swap gets us to N args"). Recount with defaults included before acting; if the
 literal claim is wrong, satisfy the intent (fewer params, no new `noqa`) by
 another route, such as splitting the function.
+
+## 20. Render Decimal in User-Facing Text With `:f`, Never Bare Interpolation
+
+When a `Decimal` value reaches text a human reads (report cell, CSV field,
+markdown table, log line), format it with an explicit `:f` spec (or quantize
+first). Bare f-string interpolation passes an empty format spec, which falls
+back to `str()`, and `str()` switches to scientific notation once the adjusted
+exponent drops below -6: `str(Decimal("0.00000001"))` returns `"1E-8"`. Small
+tolerances, rates, and per-unit fees are exactly the values that trip it.
+
+```python
+# WRONG - renders "tolerance 1E-8"
+f"tolerance {tolerance}"
+# CORRECT - renders "tolerance 0.00000001"
+f"tolerance {tolerance:f}"
+```
+
+**Principle:** Family C (Representation / mechanical contract). The value is
+arithmetically correct but representationally wrong, and the failure is silent:
+nothing raises, and value-comparing tests still pass because they compare the
+Decimal, not the rendered cell.
+
+**Trigger shape:** an f-string interpolating a raw `Decimal` into any
+user-facing string, most often a tolerance or rate with more than six decimal
+places.
