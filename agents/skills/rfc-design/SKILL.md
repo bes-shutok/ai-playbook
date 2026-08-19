@@ -3,7 +3,7 @@ name: rfc-design
 description: >
   Create, edit, or structurally review Design RFCs in Markdown. Use for design RFC, feature design,
   technical design doc, architecture RFC, API design, or /rfc-design. Modes: create (full intake),
-  edit (existing file), review-local (Step 2 only). Confluence-hosted pages: use review-confluence-doc.
+  edit (existing file), review-local (Step 2 only). Confluence-hosted pages: use review-confluence-doc, including its publication and Mermaid diagram integrity checks.
   Creation uses intake gates, then draft plus tiered review-agents pass before final output.
 ---
 
