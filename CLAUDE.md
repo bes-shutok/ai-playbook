@@ -1,29 +1,23 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This repository is a command-spec library. Each Markdown file is an executable prompt/instruction set.
+This repository is a skill library. Each skill under `agents/skills/` is an executable prompt/instruction set packaged as a `SKILL.md`.
 
-- `create-documentation/`: commands for RFCs, bug tickets, TDD docs, and documentation-learning workflows.
+- `agents/skills/`: first-party and vendored skills; the canonical skill layer for this repository.
 - `projects/.ai-playbook/`: shared cross-project guidelines and agent runtime folder mapping (`agent-runtime-layout.md`).
-- `README.md`: source-of-truth index for command catalog, usage, and registration examples.
+- `README.md`: source-of-truth index for the skill catalog and usage.
 - `.opencode/command/`: local registration target used at runtime; create it locally as needed and avoid committing generated copies.
 
 ## Build, Test, and Development Commands
 There is no compile/build pipeline. Main workflows are registration and execution.
 
-- Register commands locally:
+- Commands live as skills under `agents/skills/`. Each agent loads them from its skill registry or symlink; register or alias them per agent as needed (for example, into a local `.opencode/command/` directory) and do not commit generated copies.
+- Run a skill in direct mode (Codex example):
 ```bash
-mkdir -p .opencode/command
-cp create-documentation/create-design-rfc.md .opencode/command/create-design-rfc.md
-cp create-documentation/create-tdd.md .opencode/command/create-tdd.md
-cp create-documentation/create-bug-ticket.md .opencode/command/create-bug-ticket.md
-```
-- Run a command in direct mode (Codex example):
-```bash
-codex exec "$(cat create-documentation/create-design-rfc.md)
+codex exec "$(cat agents/skills/tdd-design/SKILL.md)
 
 Context:
-$(cat ./context/rfc-input.md)"
+$(cat ./context/tdd-input.md)"
 ```
 - Audit files quickly:
 ```bash
@@ -34,7 +28,7 @@ bash ~/.ai-playbook/scripts/scan-public-hygiene.sh   # from instructions repo ro
 ## Coding Style & Naming Conventions
 - Use Markdown with clear section headings and concise, enforceable instructions.
 - Prefer imperative language for rules (for example, “Do X”, “Do not Y”).
-- Keep command filenames kebab-case and descriptive (for example, `create-design-rfc.md`).
+- Keep skill names kebab-case and descriptive (for example, `tdd-design`).
 - For non-trivial specs, include a terminology/core-concepts section near the top.
 - Keep examples, Markdown links, and documented repo paths repository-relative; do not commit machine-specific absolute filesystem paths such as `/Users/...`.
 - Verify actual on-disk runtime source folders before documenting which agent uses which commands or skills; do not guess from folder names alone.
@@ -43,18 +37,18 @@ bash ~/.ai-playbook/scripts/scan-public-hygiene.sh   # from instructions repo ro
 ## Skill Design Guidelines
 - A skill must provide unique workflow logic or domain knowledge; do not create skills for behavior any competent agent should exhibit by default (for example, "look at existing code before implementing" or "run tests before claiming done").
 - Keep the main `SKILL.md` language-agnostic. Extract language-specific details (test runners, framework idioms, CLI commands) into separate files within the skill directory (for example, `java-kotlin.md`, `python.md`).
-- When two skills overlap significantly, merge them — prefer one skill with sections over two skills with duplicated concepts.
+- When two skills overlap significantly, merge them; prefer one skill with sections over two skills with duplicated concepts.
 - When a skill is only useful in a specific project (not cross-project), it belongs in that project's repo, not in the shared skill registry.
-- When a skill is consumed by multiple other skills (cross-cutting), document the integration in both directions: the provider skill lists an "Integration Points" section describing each consumer and how it integrates; each consumer skill adds a specific step in its workflow referencing the provider. This prevents drift and keeps each skill self-contained.
+- When a skill is consumed by multiple other skills (cross-cutting), document the integration in both directions: the provider skill lists an "Integration Points" section describing each consumer and how it integrates; each consumer skill adds a specific step in its workflow referencing the provider. This prevents drift and keeps each skill self-contained. When an Integration Points entry describes the peer skill's behavior, verify the claim against that skill's actual steps (read its `SKILL.md`) so the entry cannot over-claim or misattribute the peer's role.
 - When a skill produces substantial structured output (multi-section feedback, tables, formatted analysis), write to a temporary Markdown file and print only a summary + file path to the console. Console is not suitable for large text blocks; the file is the primary artifact for reading.
-- Never hardcode personal paths, org-specific domains, project names, ticket prefixes, or team identifiers in skill files. Externalize environment-specific values to a user facts document (e.g., `facts.md`) and reference them by key. Skills in this repository are public — they must not contain any personal or sensitive information.
+- Never hardcode personal paths, org-specific domains, project names, ticket prefixes, or team identifiers in skill files. Externalize environment-specific values to a user facts document (e.g., `facts.md`) and reference them by key. Skills in this repository are public; they must not contain any personal or sensitive information.
 - When a skill needs environment-specific configuration (paths, domains, credentials), add a "Configuration (from facts document)" section listing required keys, their purpose, and fallback defaults.
 - Every new skill directory must include `LICENSE.txt` (MIT; copy from `agents/skills/plans/LICENSE.txt`). Personal email belongs only in the LICENSE copyright line, not in `SKILL.md`.
 
 ## Testing Guidelines
-- Validate command changes by running the command with realistic sample context.
+- Validate skill changes by running the skill with realistic sample context.
 - Confirm expected hard gates and required output structure still trigger.
-- Ensure README command names, aliases, and paths match actual files.
+- Ensure README skill names and paths match actual files.
 - For `learn` flows, confirm lessons are placed in the correct scope and do not duplicate guidance.
 - When reviewing uncommitted changes for confidential data, path leakage, or naming issues, inspect the actual changed file set from `git status --short`, including untracked files, before narrowing the review to a subset of files.
 - Before committing skill or instruction changes, run the hygiene scan from `public_hygiene_scan_script` in user facts (exit 0 required). Deny patterns: `public_hygiene_patterns_file` (template: `docs/scan-public-hygiene.patterns.example`). Personal contact email is allowed only in `LICENSE.txt` copyright lines.
@@ -71,12 +65,12 @@ bash ~/.ai-playbook/scripts/scan-public-hygiene.sh   # from instructions repo ro
 - When a runtime source directory is itself a symlink (e.g. `~/.claude/skills → ../.agents/skills`), mirror this with a symlink in the repo (e.g. `claude/skills → ../agents/skills`) rather than a separate copy.
 - After every sync or import of external files, scan all changed files for absolute paths and sensitive information (company domains, employee names, internal service names, environment names, internal URLs, credentials). Run the hygiene scan from user facts before commit. Mask sensitive content in both the repo copy and the origin source before committing.
 - Do not vendor skills that are managed autonomously by an agent (e.g. `~/.codex/skills`). Only vendor skills from registries you manage directly (e.g. `~/.agents/skills`).
-- Do not maintain a `create-documentation/` command that duplicates an existing skill in `agents/skills/`. The skill is the canonical form; remove the command copy and update all doc references to point to the skill.
+- Do not add a parallel command-file layer that duplicates a skill in `agents/skills/`; the skill is the canonical form. Remove the duplicate command copy and update all doc references to point to the skill.
 
 ## Commit & Pull Request Guidelines
 Git history is currently minimal (`init`, `Readme added`), so use short, clear subjects and keep each commit scoped to one logical change.
 
-- Preferred commit style: `<area>: <concise summary>` (example: `create-documentation: tighten create-tdd completeness rules`).
-- PRs should include changed command files and rationale.
-- PRs should call out behavior changes in command gates/output.
-- PRs should update `README.md` when command names, paths, or usage changes.
+- Preferred commit style: `<area>: <concise summary>` (example: `skills: tighten tdd-design completeness rules`).
+- PRs should include changed skill files and rationale.
+- PRs should call out behavior changes in skill gates/output.
+- PRs should update `README.md` when skill names, paths, or usage changes.

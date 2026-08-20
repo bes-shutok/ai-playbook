@@ -1,13 +1,13 @@
-# Useful Agentic Commands Setup
+# Useful Agentic Skills Setup
 
 ## What This Repo Is
-This repository is an agent instruction library: it contains first-party command specs plus vendored shared agent skills, Claude skills, and Codex skills mirrored from the local home directory.
+This repository is a skill library: first-party workflow skills live under `agents/skills/`, alongside vendored shared agent skills, Claude skills, and Codex skills mirrored from the local home directory.
 
 For the verified runtime source-to-repository mapping used on this machine, see [projects/.ai-playbook/agent-runtime-layout.md](projects/.ai-playbook/agent-runtime-layout.md). For external skill sources to consult when extending the registry, see [projects/.ai-playbook/skill-upstream-catalog.md](projects/.ai-playbook/skill-upstream-catalog.md).
 
-Commands can be used in two ways:
-1. Registered command mode: copy/link files into `.opencode/command/` and invoke by command name.
-2. Direct file/manual mode: pass command file content to `codex`, `opencode`, or `claude`, or paste it manually in an interactive session.
+Skills can be used in two ways:
+1. Skill mode: each agent loads skills from `agents/skills/` (directly or via its own registry or symlink); register or alias them per agent as needed.
+2. Direct file/manual mode: pass a `SKILL.md` file's content to `codex`, `opencode`, or `claude`, or paste it manually in an interactive session.
 
 ## Repository Layout
 ```text
@@ -32,19 +32,14 @@ Commands can be used in two ways:
 ├── docs/
 │   ├── AGENTS.md
 │   └── scan-public-hygiene.patterns.example
-├── projects/
-│   └── .ai-playbook/
-│       ├── agent-runtime-layout.md
-│       └── *-guidelines.md
-└── create-documentation/
-    ├── create-bug-ticket.md
-    ├── create-design-rfc.md
-    └── create-tdd.md
+└── projects/
+    └── .ai-playbook/
+        ├── agent-runtime-layout.md
+        └── *-guidelines.md
 ```
 
 - `claude/skills/`: symlink to `agents/skills/`, mirroring `~/.claude/skills → ~/.agents/skills`.
 - `projects/.ai-playbook/`: shared cross-project guidelines plus runtime-layout documentation; mirrored at `~/Projects/.ai-playbook/` via directory symlink.
-- `create-documentation/`: commands for generating structured documentation artifacts.
 
 ## Agent Folder Map
 - Shared skills such as `$learn` come from `~/.agents/skills` in the current setup.
@@ -55,14 +50,14 @@ Commands can be used in two ways:
 - Gemini CLI discovers skills from `~/.agents/skills` (no separate `~/.gemini/skills` symlink needed). Antigravity global skills live under `~/.gemini/config/skills/` (symlink to the shared registry). Global instructions via `~/.gemini/GEMINI.md` (`@` import of `docs/AGENTS.md`).
 - See [projects/.ai-playbook/agent-runtime-layout.md](projects/.ai-playbook/agent-runtime-layout.md) for the full verified mapping and mirror rules.
 
-## Command Catalog
-| Command | File | What It Does | Key Behavior |
+## Skill Catalog
+| Skill | File | What It Does | Key Behavior |
 |---|---|---|---|
-| `create-bug-ticket` | `create-documentation/create-bug-ticket.md` | Builds a concise Jira incident/bug description. | Enforces strict ticket size limit (`<= 800 chars`) and moves deep detail into a separate temporary Markdown document. |
-| `create-design-rfc` | `agents/skills/rfc-design/SKILL.md` | Generates an MVP design RFC (implementation-ready, succinct). | **Canonical:** `rfc-design` skill. `create-documentation/create-design-rfc.md` is a redirect stub for OpenCode registration only. Hard gates, tiered review, section template in `references/rfc-sections.md`. |
-| `create-tdd` | `create-documentation/create-tdd.md` | Generates a technical design document with strict completeness rules. | Requires mandatory sections and detailed testable content; enforces strong inference/traceability constraints. |
+| `jira-workflow` | `agents/skills/jira-workflow/SKILL.md` | Jira workflow: create/update Jira stories, create git branches from tickets, and build bug/incident tickets. | "Bug / Incident Ticket Format" section: strict ticket size limit (`<= 800 chars`, target 400), abbreviations clarified on first use, over-limit escalation asks the user what to trim; deep detail moves to a temporary Markdown document. |
+| `tdd-design` | `agents/skills/tdd-design/SKILL.md` | Generates a Technical Design Document with strict completeness rules. | Fixed sections 1–11 plus completeness/closure, semantic non-collapse, required-fields enforcement, traceability, and force diff completeness gates. |
 | `learn` | `agents/skills/learn/SKILL.md` | Extracts lessons from communication and applies documentation governance rules. | Classifies lessons, enforces placement scope rules, and requires retroactive consistency checks. Invoked as a skill (`$learn`). |
 | `review-confluence-doc` | `agents/skills/review-confluence-doc/SKILL.md` | Reviews RFC/TDD documents on Confluence for quality, clarity, and actionability. | Fetches Confluence page via Atlassian MCP, provides structured feedback on console, optionally posts accepted feedback as a page comment. |
+| `confluence-page-sync` | `agents/skills/confluence-page-sync/SKILL.md` | Publishes and synchronizes local documents (RFCs, TDDs, design docs) to Confluence. | Full-body page updates, parent/child page creation, Mermaid diagram integrity via stored-HTML verification, and the Confluence version/source-revision ledger in the repository sync manifest. |
 | `execute-plan` | `agents/skills/execute-plan/SKILL.md` | Orchestrates iterative implementation of a plans-skill plan via sub-agents. | Hard-gates every checklist item through the executable plan-task inclusion rule before implementation; then uses targeted review loops and one fresh blocking-clean exit. |
 | `plans` | `agents/skills/plans/SKILL.md` | Full plan lifecycle: create, edit, and complete implementation plans. | Applies the checklist inclusion gate: executable plan tasks only. External prerequisites stay under Ship when and are never exception-admissible. Release-gate checklist exceptions require a bound receipt, why executable now, and completion evidence. |
 | `review-plan` | `agents/skills/review-plan/SKILL.md` | Reviews implementation plans for correctness, completeness, and risk. | Treats checklist inclusion failures as blocking. External prerequisites never clear via exception. A release-gate exception passes only with bound receipt, why executable now, and completion evidence. |
@@ -71,7 +66,7 @@ Commands can be used in two ways:
 | `doc-hierarchy-upkeep` | `agents/skills/doc-hierarchy-upkeep/SKILL.md` | Keep Layer 1 and Layer 2 docs current after code changes on migration-complete repos. | Requires migration-complete signal; same PR/session as behavior or contract changes. |
 | `bootstrap-ai-playbook` | `agents/skills/bootstrap-ai-playbook/SKILL.md` | Bootstraps the gitignored repo agent runtime dir (`.ai-playbook/`). | Gitignore gate, on-disk path discovery, `.ai-playbook/facts.md` creation or refresh; runs once per project when triggers fire (not every session); consumer skills read cached TOML keys from `.ai-playbook/facts.md`. |
 | `agents-best-practices` | `agents/skills/agents-best-practices/SKILL.md` | Provider-neutral agent harness design and audit reference. | MVP blueprints, tool/permission matrices, workflow orchestration theory, skills/MCP governance, evals, and launch checklists; complements `how-to-write-skills`, `learn`, `plans`, and `execute-plan`. Vendored from upstream (see `agent-runtime-layout.md`). |
-| `rfc-design` | `agents/skills/rfc-design/SKILL.md` | Create, edit, or review Design RFCs in Markdown. | Mode router (create/edit/review-local), tiered review pass (default agents include architecture, simplification, documentation; concurrency when matched at any depth), staging review under `{reviews_dir}/` per `review-staging`, regression evals in `references/eval-cases.md`; section template in `references/rfc-sections.md`; Confluence pages use `review-confluence-doc`. |
+| `rfc-design` | `agents/skills/rfc-design/SKILL.md` | Create, edit, or review Design RFCs in Markdown. | Mode router (create/edit/review-local), tiered review pass (default agents include architecture, simplification, documentation; concurrency when matched at any depth), staging review under `{reviews_dir}/` per `review-staging`, regression evals in `references/eval-cases.md`; section template in `references/rfc-sections.md`; Confluence pages: reviews via `review-confluence-doc`; publishing via `confluence-page-sync`. |
 | `review-staging` | `agents/skills/review-staging/SKILL.md` | Gold source for review staging docs under `{reviews_dir}/` and `## Review Statistics`. | Panel Solo/Echo, Pattern tags, discard reason codes, Severity calibration, Triage outcomes; required `.stats.json` sidecar; `wrong-owner` discard code for panel tuning. Consumed by all review orchestrators. |
 | `review-loop` | `agents/skills/review-loop/SKILL.md` | Repeat review-fix-done until one fresh review has zero unresolved blocking findings. | Starts with the five-worker panel and uses targeted post-fix workers. |
 | `cursor-agent-diagnose` | `agents/skills/cursor-agent-diagnose/SKILL.md` | Diagnose Cursor IDE agent runtime failures (shell, hooks, skills, done lock, gh account). | Ordered checklist with bundled `run.sh`; distinguishes IDE bugs from local config; minimal recovery map. |
@@ -99,38 +94,30 @@ Other vendored skills (`done`, `github-pr-workflow`, `receiving-review`, `doing-
 - **Determinism**: aggregate JSON is byte-stable across runs (canonical key order, stable trailing newline).
 
 ## Usage Examples (Hybrid)
-### A) Registered Command Mode (`.opencode/command`)
-```bash
-# Register commands (example)
-mkdir -p .opencode/command
-cp create-documentation/create-design-rfc.md .opencode/command/create-design-rfc.md
-cp create-documentation/create-tdd.md .opencode/command/create-tdd.md
-cp create-documentation/create-bug-ticket.md .opencode/command/create-bug-ticket.md
-```
-
+### A) Skill Invocation
 ```text
-# Then invoke from your agent chat/command interface (examples)
-/create-design-rfc <PRD + architecture + service docs context>
-/create-tdd <TDD template + PRD + architecture + service docs context>
-/create-bug-ticket <incident summary + impact + expected behavior + references>
+# Invoke via your agent's skill mechanism (by name or trigger phrase), examples:
+rfc-design <PRD + architecture + service docs context>
+tdd-design <TDD template + PRD + architecture + service docs context>
+jira-workflow "create a bug ticket: <incident summary + impact + expected behavior + references>"
 ```
 
 ### B) Direct File / Manual Mode
 ```bash
 # Codex CLI (non-interactive)
-codex exec "$(cat create-documentation/create-design-rfc.md)
+codex exec "$(cat agents/skills/rfc-design/SKILL.md)
 
 Context:
 $(cat ./context/rfc-input.md)"
 
 # OpenCode CLI (non-interactive)
-opencode run "$(cat create-documentation/create-tdd.md)
+opencode run "$(cat agents/skills/tdd-design/SKILL.md)
 
 Context:
 $(cat ./context/tdd-input.md)"
 
 # Claude Code CLI (non-interactive)
-claude -p "$(cat create-documentation/create-bug-ticket.md)
+claude -p "$(cat agents/skills/jira-workflow/SKILL.md)
 
 Context:
 $(cat ./context/incident-input.md)"
@@ -139,17 +126,17 @@ $(cat ./context/incident-input.md)"
 ```text
 # Interactive fallback (codex / opencode / claude):
 1) Start your CLI in interactive mode.
-2) Paste the target command file content.
+2) Paste the target SKILL.md content.
 3) Append task-specific context and inputs.
 4) Execute and iterate.
 ```
 
-## How to Add a New Command
-1. Create a new Markdown command spec in the appropriate folder.
-2. Use a specific filename that avoids collisions with existing command names.
-3. Add the command to the table in this README.
-4. Add at least one usage example (registered mode and/or direct mode).
-5. If a new command name collides (like `learn.md`), register it with a disambiguated alias.
+## How to Add a New Skill
+1. Create `agents/skills/<name>/SKILL.md` with a kebab-case name and frontmatter (`name`, trigger-phrase `description`).
+2. Copy the MIT `LICENSE.txt` from `agents/skills/plans/LICENSE.txt` into the new skill directory.
+3. Add the skill to the catalog table in this README.
+4. Add bidirectional Integration Points: the provider skill lists its consumers; each consumer references the provider in its workflow.
+5. Run the public hygiene scan from repo root (`bash ~/.ai-playbook/scripts/scan-public-hygiene.sh`; exit 0 required) before committing.
 
 ## Vendored Agent Assets
 Refresh the mirrored agent assets from the local home directory with:
@@ -168,10 +155,10 @@ Source mapping:
 
 ## Lessons Learned
 1. After a series of back-and-forth iterations, invoke the `$learn` skill to capture misunderstandings, mistakes, and corrections so the same issues are less likely to repeat.
-2. Use `$learn` to capture lessons and propagate them into documentation, instruction files such as `AGENTS.md`, and command specs.
+2. Use `$learn` to capture lessons and propagate them into documentation, instruction files such as `AGENTS.md`, and skill files.
 3. For tool dependencies needed by commands/skills, prefer an isolated shared virtual environment over mutating system-managed Python installations.
 4. Before changing host-level tooling, state execution context and impact; if a command is interrupted, verify partial side effects before continuing.
 
 ## Current Status
-- All files currently in this repo are used as command files.
+- All first-party workflows in this repo are exposed as skills under `agents/skills/`.
 - Shared agent skills, local Claude skills, and local Codex skills are now vendored into this repository.

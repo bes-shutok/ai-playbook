@@ -2,14 +2,15 @@
 name: rfc-design
 description: >
   Create, edit, or structurally review Design RFCs in Markdown. Use for design RFC, feature design,
-  technical design doc, architecture RFC, API design, or /rfc-design. Modes: create (full intake),
-  edit (existing file), review-local (Step 2 only). Confluence-hosted pages: use review-confluence-doc, including its publication and Mermaid diagram integrity checks.
+  architecture RFC, API design, or /rfc-design. Full Technical Design Documents (fixed sections 1-11)
+  use tdd-design. Modes: create (full intake), edit (existing file), review-local (Step 2 only).
+  Hosted-page reviews: use review-confluence-doc. Publishing or synchronizing to Confluence: use confluence-page-sync.
   Creation uses intake gates, then draft plus tiered review-agents pass before final output.
 ---
 
-# Command: Generate MVP Design RFC (Implementation-ready, succinct)
+# rfc-design: Generate MVP Design RFC (Implementation-ready, succinct)
 # Intent: Produce a concise, actionable, implementation-ready RFC suitable for linking into Jira stories.
-# Note: Command verbosity is acceptable. Output must be succinct and implementation-oriented.
+# Note: Skill verbosity is acceptable. Output must be succinct and implementation-oriented.
 
 **Writing:** Follow `agent_workflow_guidelines.md` §45. Audience is typical backend engineers, not only authors who already know the domain or security jargon. Prefer plain English that a BE peer can read without a glossary. When a project-specific, networking, or security metaphor still earns its place for concision (for example survivor, tombstone, fail closed), it must appear in `# Terminology` before body use. Concision alone does not exempt undefined jargon. Transport/code docs may keep "wire format" where the team already uses it.
 
@@ -27,12 +28,14 @@ description: >
 | Create or draft a new Design RFC | **Create** | Steps 0 → 0.1 → 1 → 2 → 3 |
 | Update an existing Markdown RFC file | **Edit** | **Read this skill + `references/rfc-sections.md` first**; skip Steps 0–0.1 unless scope changed; apply editing checklist; run Step 2 (Light) when edit is substantial **or** after a formatting/readability cleanup pass (formatting alone misses contract gaps). Use targeted edits (`StrReplace`), not full-file overwrite, on large RFCs. Step 2.5 applies to edit-mode folds too. |
 | Review a local Markdown RFC only | **Review-local** | Step 2 on the provided draft; no regeneration |
-| Review an RFC/TDD on Confluence | **Redirect** | `review-confluence-doc` (fetch page, quality feedback) |
+| Create a Technical Design Document (TDD) | **Redirect** | `tdd-design` (fixed sections 1-11 completeness gates) |
+| Review an RFC/TDD on Confluence | **Redirect** | `review-confluence-doc` (fetch page, review and comment only) |
+| Publish or sync an RFC/TDD to Confluence | **Handoff** | `confluence-page-sync` (page updates, Mermaid integrity, ledger) |
 | Turn an approved RFC into an implementation plan | **Handoff** | `plans` skill; reference the saved RFC path in the plan header |
 
 **Announce at start:** "I'm using the rfc-design skill in **{mode}** mode."
 
-**Do not use** for implementation plans (`plans`), code review (`doing-code-review`), or Confluence page review (`review-confluence-doc`).
+**Do not use** for implementation plans (`plans`), code review (`doing-code-review`), Confluence page review (`review-confluence-doc`), Confluence publishing (`confluence-page-sync`), or Technical Design Documents (`tdd-design`).
 
 ## Workflow Overview
 
@@ -153,6 +156,8 @@ Read `references/rfc-sections.md` for the full section template. Summary:
 **Subsection rule:** Inside `### 2. Problem, Goals, Non-goals` (and §3, §5, §7, §8, etc.), use **`#### Subsection title`** plus a blank line, then bullets or prose. Do **not** use nested list labels (`- Problem statement:`) or bold inline titles (`**Goals:**`) as pseudo-headings; they do not separate visually in Confluence or Markdown previews.
 
 **Edit mode (mandatory):** Before changing an existing RFC, read this skill and `references/rfc-sections.md`, then run the **Editing checklist** in `rfc-sections.md` before presenting the update. **Diagrams:** if any edited §4 flow meets a complexity trigger (≥3 decision branches, concurrent actors racing on shared state, or a cross-trust-boundary handoff), ensure a fenced Mermaid diagram exists under that flow or the §3 N/A one-liner is present; do not leave a blanket "no diagrams" stance on a now-complex flow.
+
+**Title alignment:** When an RFC title is authoritative in an external source such as Confluence, verify that source and preserve its exact reader-facing wording unless the user explicitly requests a rename. Do not introduce internal glossary terms or ticket-led framing into the title as a substitute for that source wording.
 
 ---
 
@@ -561,7 +566,10 @@ Consumes `review-staging` for path pattern `{reviews_dir}/YYYY-MM-DD-rfc-review-
 The `risk` worker reads the premortem catalog when signals match and applies personas as internal reasoning sections without child launches.
 
 ### With `review-confluence-doc` skill (redirect)
-Confluence-hosted RFCs/TDDs: use `review-confluence-doc` for published-page review. This skill owns **local Markdown** authoring; it does not fetch Confluence.
+Reviewing a Confluence-hosted RFC/TDD: use `review-confluence-doc` (fetch page, structured feedback, optional comment posting). It is review-only; it does not publish or update pages. This skill owns **local Markdown** authoring; it does not fetch Confluence.
+
+### With `confluence-page-sync` skill (publication)
+Publishing or synchronizing an RFC/TDD to Confluence: hand off to `confluence-page-sync`, which owns page updates, Mermaid diagram integrity, and the sync manifest ledger. This skill owns local Markdown authoring; the Confluence page is a rendered derivative of the repository document, never the source of truth.
 
 ### With `review-plan` skill
 Implementation plans derived from an RFC use `review-plan` at execution time. This skill's Step 2 reviews the RFC design artifact, not the downstream plan.

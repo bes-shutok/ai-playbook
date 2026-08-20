@@ -31,18 +31,6 @@ If a key is missing from `.ai-playbook/facts.md`, follow `using-skills` Step 0 (
 
 ## Workflow
 
-### Confluence publication and diagram integrity
-
-When the task includes publishing or refreshing a local RFC/TDD copy on Confluence, treat the repository document as the source of truth and the page as a rendered derivative.
-
-1. Publish the complete document body in one intentional update. Do not test connectivity by replacing a live page with a short stub.
-2. Preserve Mermaid diagrams as fenced `mermaid` source blocks when the target Confluence space natively renders Mermaid code blocks. Do not add a second Mermaid extension macro or image embed for the same source block: Confluence can render the fenced block and the extension independently, producing duplicate diagrams.
-3. If the target page already uses native Mermaid extension blocks, inspect the stored HTML before editing. Reuse that representation only when the source code block and extension are a known single-rendering pair. After publishing, verify the page has exactly one rendering representation per intended diagram: no duplicate extension/image derivative alongside a natively rendered Mermaid block.
-4. Verify the published page through HTML, not only the editor preview. Count Mermaid source blocks, Mermaid extension nodes, and image embeds. For a native fenced-block target, expected counts are: one Mermaid source block per diagram, zero Mermaid extension nodes, and zero generated image embeds. Also confirm that the page still contains the full body.
-5. Record the resulting Confluence `version.number`, last-modified timestamp, source revision, and sync status in the repository's existing sync manifest or ledger. Set `synced` only after the full-body update and HTML verification succeed.
-
-These checks apply after any full-body replacement because Confluence stores presentation derivatives (for example, Mermaid extension nodes) alongside source content and can retain or duplicate them when the body is reconstructed.
-
 ### Step 0 – Pre-requisite: Verify Atlassian integration
 
 1. Verify you can read Confluence pages via your environment's **Atlassian integration** (page fetch capability).
@@ -365,6 +353,9 @@ SQL, pseudocode, config-as-logic). Selects matching workers without using the PR
 
 ### With `review-staging` skill (mandatory)
 All reviews write to `{reviews_dir}/` with full `## Review Statistics` per `review-staging` (Solo/Echo, Pattern, Severity calibration, Triage outcomes). Step 5 ends with a `--hard` validator gate over the staging path and its `.stats.json` sidecar before the review is reported. Step 6 Confluence comments post from each finding's `#### Comment` block.
+
+### With `confluence-page-sync` skill (redirect)
+Publishing, page updates, and diagram-integrity checks are owned by `confluence-page-sync`. When the user asks to push a local RFC/TDD to Confluence, refresh a page from its repository source, or verify diagram rendering on a stored page, redirect the request to `confluence-page-sync` instead of executing it here; this skill remains read + comment only.
 
 ---
 

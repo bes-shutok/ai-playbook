@@ -112,6 +112,8 @@ Templates: [instruction-templates.md](instruction-templates.md).
 | `github-pr-workflow` | Doc migration PR description rules from `company-decisions.md` |
 | `review-confluence-doc` | Reads `{reviews_dir}` (and `{tmp_dir}` for scratch only) from `.ai-playbook/facts.md`; review staging under `{reviews_dir}/` per `review-staging` |
 | `rfc-design` | Reads `{reviews_dir}`, `{rfcs_dir}`, `{proposals_dir}`, `{tmp_dir}` from `.ai-playbook/facts.md`; saves RFCs under `{rfcs_dir}` (Layer 3 `history/feature-notes/`); review staging under `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` (never `{tmp_dir}/rfc-review/`) |
+| `tdd-design` | Reads `{rfcs_dir}`, `{proposals_dir}` from `.ai-playbook/facts.md`; finished TDDs are Layer 3 history files under `{rfcs_dir}` like `rfc-design`; drafts under `{proposals_dir}` when present |
+| `confluence-page-sync` | Reads `{tmp_dir}` (page-fetch and HTML scratch) from `.ai-playbook/facts.md`; writes the sync manifest under `docs/maintenance/`; writes or refreshes page mirrors under `docs/history/context/confluence/` and the README page-id index for the pages it publishes (Step 4) per `confluence-mirror-hygiene.sh` |
 | `how-to-write-skills` | Bidirectional Integration Points requirement for skill family consumers |
 | `using-skills` | Step 0 reads `.ai-playbook/facts.md`; invokes bootstrap only when Terms triggers fire |
 

@@ -1,7 +1,44 @@
-# Command: Generate Technical Design Document (TDD)
+---
+name: tdd-design
+description: >
+  Create Technical Design Documents (TDD) in Markdown with exhaustive, implementation-grade
+  completeness rules: fixed sections 1–11 plus completeness and closure, semantic non-collapse,
+  required-fields enforcement, internal-vs-external call path, traceability, and force diff
+  completeness gates. Trigger phrases: "create TDD", "technical design document",
+  "TDD for <feature>". TDD here means Technical Design Document; test-driven development
+  methodology lives in tdd-guide.
+---
+
+# TDD Design
+
 # Intent: Enforce exhaustive, explicit, implementation-grade TDD output
-# Note: This command is intentionally verbose to force correctness.
-#       Verbosity of the command is NOT a problem. Verbosity of the OUTPUT is.
+# Note: This skill is intentionally verbose to force correctness.
+#       Verbosity of the skill is NOT a problem. Verbosity of the OUTPUT is.
+
+## Core Concepts
+
+- **TDD = Technical Design Document:** a Markdown design artifact with a fixed section structure 1–11. This skill does NOT cover test-driven development; the Kent Beck TDD and Tidy First methodology lives in the `tdd-guide` skill ("create a TDD" here means produce the document, not the red/green/refactor workflow).
+- **Completeness and closure:** every rule, restriction, or denial must state what is allowed instead or what is explicitly out of scope; no one-sided rules, no implicit exceptions.
+- **Semantic non-collapse:** enumerated lists must not collapse into summary statements across revisions; density preservation treats semantic thinning as a correctness error even when formatting looks cleaner.
+- **Required-fields enforcement:** when a section defines a required structure, all required fields must be present for each item; undeterminable fields stay present as `(TODO: define)` instead of being omitted.
+- **Internal vs external call path:** an API Gateway's presence never implies internal service-to-service use; default to direct internal communication and never infer network topology.
+- **Traceability:** MAJOR flows (user-facing, cross-service, policy-enforcing, event-emitting) require Source references subsections; MINOR flows forbid them.
+- **Force diff completeness:** details derivable from the PRD, architecture documents, and diagrams must survive regeneration; invalid items are marked "Outdated / Conflicts with source" with an explanation, never silently dropped.
+
+## Documentation paths
+
+Read path keys from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0; `bootstrap-ai-playbook` when triggers fire). Do not hardcode fixed repository locations.
+
+| Key | Role | Post-migration default (Layer 3) |
+|-----|------|----------------------------------|
+| `{rfcs_dir}` | Finished TDDs: Layer 3 history files, like RFCs (flat) | `docs/history/feature-notes/` |
+| `{proposals_dir}` | TDD **drafts** not yet approved for the history corpus (optional key) | `docs/history/feature-notes/proposals/` or legacy `docs/proposals/` |
+
+Save rules:
+
+1. Resolve `{rfcs_dir}` and `{proposals_dir}` from the facts TOML; use on-disk paths only (bootstrap never invents paths).
+2. Finished TDDs are Layer 3 history files like RFCs: save them as flat files under `{rfcs_dir}`.
+3. Drafts the user has not approved for the history corpus go under `{proposals_dir}` when that key exists; otherwise ask before writing under `{rfcs_dir}`.
 
 Generate a **Technical Design Document (TDD)** in **Markdown format**.
 
@@ -346,7 +383,7 @@ This applies especially to:
 
 ## Section-by-Section Requirements
 
-### 1. 🧭 Introduction
+### 1. Introduction
 
 Purpose: context and ownership only.
 
@@ -385,7 +422,7 @@ If unclear:
 
 ---
 
-### 2. 🎯 Objectives & Scope
+### 2. Objectives & Scope
 
 Purpose: define intent, boundaries, applicability.
 
@@ -437,7 +474,7 @@ Forbidden here:
 
 ---
 
-### 3. 📐 Functional Overview
+### 3. Functional Overview
 
 Purpose: describe runtime behavior precisely.
 
@@ -476,7 +513,7 @@ Rules:
 
 ---
 
-### 4. ⚙️ System Impact Overview
+### 4. System Impact Overview
 
 Purpose: structural participation map (not behavior, not deltas).
 
@@ -568,7 +605,7 @@ If trust is assumed, it MUST be stated explicitly.
 
 ---
 
-### 5. 🧱 Detailed Technical Design
+### 5. Detailed Technical Design
 
 Purpose: describe implementation-level details sufficient for direct coding, testing, and review.
 
@@ -707,14 +744,14 @@ The following conceptual blocks MUST remain distinct:
 
 Section 5 content MUST be organized into two depth tiers:
 
-Tier 1 — Authoritative Implementation Requirements (MANDATORY)
+Tier 1: Authoritative Implementation Requirements (MANDATORY)
 - API contracts and semantics
 - Data model ownership and invariants
 - Business logic rules and precedence
 - Validation rules
 - Error contracts (codes, retriability, visibility)
 
-Tier 2 — Operational & Failure Detail (ALLOWED, COLLAPSIBLE)
+Tier 2: Operational & Failure Detail (ALLOWED, COLLAPSIBLE)
 - Step-by-step algorithms
 - Failure modes and recovery paths
 - Caching, outbox, retry behavior
@@ -850,7 +887,7 @@ If unknown, mark `(TODO: confirm)` explicitly.
 
 ---
 
-### 7. 📊 Observability & Metrics
+### 7. Observability & Metrics
 
 Purpose: ensure the system is operable, debuggable, and observable in production.
 
@@ -1006,7 +1043,7 @@ Silence on sampling implies ambiguity and is not allowed.
 
 ---
 
-### 8. 🧪 Testing Strategy
+### 8. Testing Strategy
 
 Purpose: define how correctness, safety, and regressions are prevented.
 
@@ -1145,7 +1182,7 @@ This rule exists to prevent flaky or underspecified tests.
 
 ---
 
-### 9. ⚖️ Risks, Trade-offs & Limitations
+### 9. Risks, Trade-offs & Limitations
 
 Rules:
 - For each risk:
@@ -1155,7 +1192,7 @@ Rules:
 
 ---
 
-### 10. 📅 Timeline & Milestones
+### 10. Timeline & Milestones
 
 Rules:
 - Include only if data exists
@@ -1165,7 +1202,7 @@ Rules:
 
 ---
 
-### 11. 📌 Appendix
+### 11. Appendix
 
 Rules:
 - Reference material only
@@ -1174,7 +1211,7 @@ Rules:
 
 ---
 
-## Output Formatting Rules (Output Only – Do NOT Simplify Command)
+## Output Formatting Rules (Output Only – Do NOT Simplify Skill)
 
 These rules apply **only to the generated TDD output**.
 
@@ -1193,3 +1230,22 @@ Produce:
 - With no summarisation loss
 - With no meta leakage
 - Suitable for direct implementation and review
+
+---
+
+## Integration Points
+
+### With `review-confluence-doc` skill (published TDD review)
+Reviewing a Technical Design Document published to Confluence: use `review-confluence-doc` (fetch the page, structured feedback, optional comments); tell the reviewer this is a technical design document per this skill's Core Concepts, not a test design document. This skill owns local Markdown authoring only; it does not fetch or modify hosted pages.
+
+### With `rfc-design` skill (sibling generator)
+`rfc-design` generates Design RFCs with its own intake gates and section structure; this skill generates Technical Design Documents with sections 1–11 and the completeness gates above. Route design-RFC requests to `rfc-design`; keep Technical Design Document requests here.
+
+### With `confluence-page-sync` skill (publication handoff)
+Publishing or syncing a finished TDD to Confluence: hand off to `confluence-page-sync`, which owns page updates, diagram integrity, and the sync manifest ledger. This skill owns local Markdown authoring only.
+
+### With `tdd-guide` skill (disambiguation)
+`tdd-guide` owns Kent Beck test-driven development and Tidy First methodology. Requests for the TDD document stay here; requests for the TDD methodology (red/green/refactor workflow) route to `tdd-guide`.
+
+### With `bootstrap-ai-playbook` skill (path-key consumer)
+This skill reads `{rfcs_dir}` and `{proposals_dir}` from `.ai-playbook/facts.md`; `bootstrap-ai-playbook` writes and refreshes that file when Terms triggers fire (`using-skills` Step 0).

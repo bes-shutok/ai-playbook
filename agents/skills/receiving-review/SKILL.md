@@ -317,6 +317,8 @@ When accepted external or human-partner review findings reveal a defect shape th
 
 After a finding is accepted **and** its fix lands (staging triage or ad-hoc partner feedback), prompt a `generalize` pass on the incident: map the instance fix to its root-cause principle family and propose the smallest corpus/catalog update. Follow the `generalize` skill for the pass itself; do not re-implement its extraction here. Narrow instance fixes (that path, that glob) let sibling defects survive later rounds.
 
+**Class-exhaustive fixes for recurring classes.** When accepted findings are new instances of a class an earlier round of the same loop already fixed (more aliased probes, more unpinned obligations, more understated records), fix the class, not the instances: enumerate the full membership mechanically (per-probe match counts in each target file, obligation inventory rebuilt from fix-commit history, per-record diff audit over every record), fix every member in one pass, and record members verified clean as evidence for the next round. A finding list is a sample of the class, not the census; instance-scoped fixes to a class-level defect guarantee the next fresh round re-finds the surviving members.
+
 This is the sibling rule to **Agent corpus feedback** above: that section generalizes findings the panel missed; this step applies the same abstraction to every accepted fix. Do not duplicate its corpus-update placement steps here.
 
 ## Integration Points

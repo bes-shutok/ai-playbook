@@ -17,7 +17,7 @@ set -euo pipefail
 ROOT="${PUBLIC_HYGIENE_REPO_ROOT:-.}"
 PATTERNS_FILE="${PUBLIC_HYGIENE_PATTERNS_FILE:-${HOME}/.ai-playbook/public-hygiene.patterns}"
 
-SCAN_STRICT=(agents/skills create-documentation projects)
+SCAN_STRICT=(agents/skills projects)
 GLOB_EXCLUDES=(
   --glob '!**/LICENSE.txt'
   --glob '!docs/facts.md.example'
@@ -36,7 +36,7 @@ print_usage() {
 Usage: scan-public-hygiene.sh [--changed-from <ref>] [--selftest] [--help]
 
 Modes:
-  (no args)               Scan the full tracked tree (agents/skills, create-documentation, projects).
+  (no args)               Scan the full tracked tree (agents/skills, projects).
   --changed-from <ref>    Scan only files changed relative to <ref> (git diff <ref>:
                           working tree vs ref, including uncommitted edits) plus untracked
                           files under the scan scope.
@@ -151,7 +151,7 @@ changed_files_in_scope() {
     [ -z "$p" ] && continue
     [ -f "$p" ] || continue
     case "$p" in
-      agents/skills/*|create-documentation/*|projects/*) ;;
+      agents/skills/*|projects/*) ;;
       *) continue ;;
     esac
     # Apply the same GLOB_EXCLUDES the full-tree scan uses, by matching each

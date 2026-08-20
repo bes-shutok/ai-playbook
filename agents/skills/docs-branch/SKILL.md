@@ -82,6 +82,7 @@ The `SNAPSHOT_PATHS` and `SHADOW_PATHS` loops below use `SHADOW_CANDIDATES` inst
 - [`doc-hierarchy-upkeep`](../doc-hierarchy-upkeep/SKILL.md): Layer 1/2 upkeep after migration
 - [`bootstrap-ai-playbook`](../bootstrap-ai-playbook/SKILL.md): writes `.ai-playbook/facts.md`; path keys read via `using-skills` Step 0
 - `done`: invokes this skill automatically before committing
+- [`confluence-page-sync`](../confluence-page-sync/SKILL.md): owns wiki page republish and stored-HTML verification; route republish work there (never edit Confluence pages during a docs sync)
 
 ## When to Use
 

@@ -214,7 +214,7 @@ rsync -a --delete --exclude '.DS_Store' ~/.agents/skills/ ./agents/skills/
 ## Related Files
 - `README.md`: overview and usage index for this repository.
 - `skill-upstream-catalog.md`: external skill/plugin/harness sources for vendoring and periodic refresh (this directory).
-- `AGENTS.md` (repo root): guidance for maintaining **this** command-spec repository only.
+- `AGENTS.md` (repo root): guidance for maintaining **this** skill-library repository only.
 - `docs/AGENTS.md`: version-controlled **user-level** cross-project instructions (canonical source for Codex, Claude Code, Copilot CLI, Gemini CLI, Cursor).
 - `bootstrap-ai-playbook` skill: creates/updates repo `.ai-playbook/facts.md` (`repo_facts_rel`; no machine paths in repo).
 - `projects/.ai-playbook/`: canonical shared cross-project guidelines and this runtime-layout doc; runtime directory symlink at `~/Projects/.ai-playbook/`.

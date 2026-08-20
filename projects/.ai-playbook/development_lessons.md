@@ -2225,6 +2225,8 @@ A single domain rule (a scope limit, a routing decision, a threshold-based exclu
 
 **Witness (vocabulary migration in shared docs, gold-source consumer surface):** The same shape applies when a shared-doc gold source is renamed and consumer files echo the old token in EXAMPLE tables. After the review-skill gold source (`agents/skills/review-staging/SKILL.md`) renamed its example-table columns `Agent`/`Agent severity` to `Worker`/`Worker severity`, three consumer skills (`review-plan`, `review-confluence-doc`, `rf-design`) still carried the old column labels in their `### Discarded findings` / `### Severity calibration` example tables. The drift survived a per-file diff inspection because the stale headers sat in pre-existing UNCHANGED context lines (a `git diff` does not surface them); only a full-file grep for `| Agent |` / `Agent severity` against the new vocabulary caught it. The prescribed fix in "How to apply" (grep the stale token across the corpus) is the same; the example-table case adds the watch-out that a diff-based review is blind to stale lines the migration did not touch, so the grep must run over file CONTENTS, not over a diff. See the 2026-07-27 five-worker-review-panel plan Task 3 inspection log.
 
+**Witness (gold-source rule addition with no stale token, 2026-08-19 skill-split plan review r2):** The drift also fires with NO stale token to grep. A prior fix round added a flat format rule to the `review-staging` gold source ("no fenced code blocks in finding bodies") while a consumer review skill's own Comment examples still mandated fenced code blocks, so the corpus was internally contradictory even though no old wording survived anywhere; a stale-token grep returns empty here by construction. The sweep for this direction is semantic: after any gold-source rule change, grep consumers for mandates of the now-forbidden shape (here, fenced-block example syntax), not only for the previous vocabulary. The fix harmonized both files on a preferred shape (inline spans) with fenced blocks conditionally allowed, i.e. a rule added without checking consumers may need softening rather than one-sided propagation.
+
 ---
 
 
@@ -3796,7 +3798,9 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **Example (2026-07-29 grilling skill edit):** The grilling skill was edited to make batch mode the default. The default-cadence section was rewritten, but the opening sentence still said "resolving dependencies between decisions one-by-one," which described the OLD one-at-a-time default and now contradicted the new batch default. The edit was correct in its section; the file as a whole pulled in two directions. The user flagged it ("maybe the last fix made the skill less clear"). Fix: rewrote the lead and the cadence into a single described hybrid (unclear-first sequential, clear-tail batched) so no restatement survived. The fix was to align the stale clause, not revert the improvement.
 
-**See also:** #121 (self-check blind spot, engine layer), #178 (treat a loaded skill's gates as the contract; same Family H root applied to gates vs format), coding_guidelines.md #25 (Family H parent), `how-to-write-skills` skill.
+**Witness (skill-split plan, review r9, 2026-08-20):** The prior fix round landed the child-ID-only parent-list rule in a publisher skill's Step 4 key-set sentence, but Step 2 item 4 (a different step restating the child-record rule) and Step 4's own parenthetical still taught the pre-fix child-titles-in-parent shape, and the adjacent rebuild clause claimed the parent list is rebuilt from the child entries, a source the entry schema cannot provide (child entries record no parent reference). Three review workers merged the contradiction into one Low. The fix aligned all three spans in one pass and pinned the reworded Step 2 obligation with an exact-match-count probe (grep -c; fail on non-zero exit or a count other than 1) so both revert and duplication fail. Refinements: the post-edit sweep greps old-shape phrases across the whole skill, not only renamed terms, and a derivation claim may name only sources the schema actually records.
+
+**See also:** #121 (self-check blind spot, engine layer), #178 (treat a loaded skill's gates as the contract; same Family H root applied to gates vs format), #194 (fix surface and validation pin in lockstep), coding_guidelines.md #25 (Family H parent), `how-to-write-skills` skill.
 
 ## 180. A Privacy Leak-Scan Deny-Set Built From Real Input Must Exclude Tokens That Are Also the Public Output's Own Vocabulary, or the Scan False-Matches Non-Private Substrings
 
@@ -3867,7 +3871,7 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **Witness (gate-side drift, 2026-08-01 playbook review-skills plan, Task 4):** the inverse direction, where the *gate* itself lagged the gold source. After `review-staging/SKILL.md` renamed its Discarded-findings example-table header `| Agent |` to `| Worker | Worker severity | … |`, the validator's `validate_discarded_findings` header-skip regex (line 380) still matched only `^\|\s*Agent\s*\|`. A correctly-formatted `| Worker |` header was parsed as a data row, its `Reason` cell read as the discard code, and the gate emitted a spurious `unknown discard reason code: Reason` warning on the very shape the gold source mandates (the gate flags a compliant artifact as invalid). The canonical fixture `_current_clear_markdown` uses `None.` for the Discarded section, so the header-skip path was never exercised and the bug survived. Fix: `^\|\s*(?:Agent|Worker)\s*\|`, gated by a new RED→GREEN self-test whose discriminating assertion (no `unknown discard reason code: Reason`) fails pre-fix and passes post-fix, while a negative-twin BAD row (`not-a-real-reason`) keeps warning both phases to prove the fix does not over-skip genuine data rows. This is the third leg of the rename incident: producers lagged (#182), sibling consumers lagged (#181 witness at line 2226), and the enforcement gate lagged. See `scripts/validate_review_staging.py` and #184 (the artifact-side inverse: artifact wrong, gate right).
 
-**See also:** coding_guidelines.md #17 (Family D parent), coding_guidelines.md #18 (Family A parent), #165 (gate overridden), #178 (gates skipped), #181 (the rename's consumer-side witness, line 2226), #184 (the artifact-side inverse: artifact wrong, gate right; this lesson's gate-side witness is the opposite), #144/#148 (the staging-contract content this enforces), `agents-best-practices/references/agent-legibility-feedback-loops.md` (the harness pattern: validators belong at every producer), `review-staging/SKILL.md`, `validate_review_staging.py`.
+**See also:** coding_guidelines.md #17 (Family D parent), coding_guidelines.md #18 (Family A parent), #165 (gate overridden), #178 (gates skipped), #181 (the rename's consumer-side witness, line 2226), #184 (the artifact-side inverse: artifact wrong, gate right; this lesson's gate-side witness is the opposite), #210 (the dual: gate inputs need owned producers on every advertised path), #144/#148 (the staging-contract content this enforces), `agents-best-practices/references/agent-legibility-feedback-loops.md` (the harness pattern: validators belong at every producer), `review-staging/SKILL.md`, `validate_review_staging.py`.
 
 ## 183. A pytest Factory Fixture (Returns a Callable the Test Invokes) Must NOT Have a Leading Underscore; Ruff PT019 Fires per Test Parameter That Requests It
 
@@ -3977,6 +3981,14 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 **Example (playbook execute-plan skill-gate marker plan, review r1):** The structural validation loop grepped nearby anchors with wide context and stayed green while Step 0.4b, Recovery marker-before-done order, and dedicated anti-pattern / Hard Gate checks were missing. Pass 1 dropped similar asks because skill text was already correct. Pass 2 staging required the Validation Commands; dedicated greps were added and the false-green closed.
 
 **Witness (same plan, review r3):** Step 0.4b stayed inside a shared `-A45` structural loop. Stripping the local "immediately before that plan-file write" clause still matched the later shared `Plan-file edits` section inside that window. Pull Step 0.4b out of the wide loop; use a tight `-A12` plus the local phrase so shared cross-refs cannot false-green.
+
+**Witness (skill-split plan, review r4):** A catalog-wiring check batched four files into one `git grep -- f1 f2 f3 f4` invocation. Pathspec lists are any-of: one wired file satisfied the check while deleting another file's wiring bullet still passed. Rewritten as per-file grep loops with `test -f` pre-checks.
+
+**Witness (command-fold plan, review r4, 2026-08-20):** Two dedicated probes greped single common tokens (`stored HTML`, `duplicate`) that also matched unrelated prose in the same file; deleting the guarded rule text outright left both green. A separate forbidden-wording obligation was frontmatter-scoped, but the only sweep was whole-file and narrow, so a case variant inside the frontmatter passed undetected, and the sweep could not simply be widened because the term legitimately appears in body prose. Fixes: quote a distinctive multi-word span verbatim from the normative rule line (verify the span is unique in the file before adopting), and for region-scoped obligations extract the region first (for example sed between the first two `---` markers), assert extraction failed closed via an anchor line (for example `^name:`), then sweep that region case-insensitively. Dedicated means deleting the guarded sentence breaks the probe (rule 4); a labeled single-token grep is a false-green wearing a dedication label.
+
+**Witness (command-fold plan, review r5, 2026-08-20):** A systematic aliasing audit of the whole validation block, `grep -c` per pattern per target file at HEAD, found 13 of 37 positive probes aliased (5 reported by review, 8 more in checks the finding never named). Each was replaced by a distinctive verbatim span verified to match exactly once, and each replacement was proven by two-way simulation with the probe's real flags: deleting the pinned line makes the new probe fail, while the old pattern (run with its actual `-qi` form, not a case-sensitive approximation) stays green, which is the alias proof. One new probe pinned a rule half no pattern had ever covered (the sync-status gate). The audit method, not the finding list, found the majority of the aliases (see #209).
+
+**Witness (same plan, review r6, 2026-08-20):** Three r1-added routing clauses (trigger phrases routed from the folded command into destination skills) still had no probe; the r5 audit enumerated the block's existing probes and fix-commit-derived restored clauses, but not routing clauses the plan's own initial tasks added. Each clause got a dedicated span probe verified to match exactly once (uniqueness checked before adopting). Derivation: the obligation inventory is "which phrase must exist in which file" over the whole plan, not only probes-plus-fix-history.
 
 **See also:** #171 (wrong `rg -E` flag; different false-green mechanism), #179 (skill internal contradiction after partial edit), #190 (same-line character order; different false-green), `plans` Validation Commands authoring rules, `receiving-code-review` staging triage, coding_guidelines.md #18/#25 (Family A / Family H).
 
@@ -4297,3 +4309,136 @@ When the identical command behaves differently in the agent shell versus the use
 **Example:** A plan-review round empirically simulated `git add -N` on a plan whose validation block contained `git grep 'legacy_name.yaml'`: the gate matched the plan's own line 250 and would exit 1 after every commit. The escaped form `legacy_name[.]yaml` kept genuine carriers (a glossary entry, a backlog reference) matching while the plan's own text became immune.
 
 **See also:** UL#191 (fail-closed validation blocks); plans-skill Validation Commands authoring rules (zero-match negation).
+
+## 205. Capture Exit-Code Evidence by Redirection, Not Pipelines
+
+**Principle:** Family H (verify the real thing, not the abstraction: `$?` after a pipeline is the LAST segment's status, and bash's `PIPESTATUS` array is bash-only; under zsh it expands empty, so the capture step records a number that belongs to a different command than the one under test).
+
+**Trigger:** A task must record a command's authoritative exit code as verification evidence (an expected-nonzero harness run, an exit-contract gate), the command's output is long so it gets piped (`| tail`, `| head`, `| grep -c`), and the shell is the agent's default (macOS zsh), not a verified bash.
+
+**Rule:**
+1. When the exit code is the deliverable, do not pipe. Redirect to a file and read `$?` in the same shell invocation (`cmd > /tmp/x.log 2>&1; rc=$?`; echo `rc` there too, since separate tool calls lose shell state).
+2. If a pipe is unavoidable, use `set -o pipefail` plus `$?`, or the current shell's own construct (bash `${PIPESTATUS[0]}`, zsh `${pipestatus[1]}`: different case and indexing), and echo it once before trusting it.
+3. When the expected code is nonzero, assert equality explicitly (expected 3, observed 3) so a mis-captured 0 fails the check visibly instead of passing it.
+
+**Shape trigger:** An implement log, run report, or validation table records exit 0 for a command that should have failed (or the reverse), and the recorded command line ends in a pipe segment.
+
+**Example:** A harness run was expected to exit 3 (validation differences found). The run was piped to `tail` and the code captured with bash `PIPESTATUS` syntax under zsh; the log recorded 0. Re-running with output redirection captured the authoritative 3. The re-run was cheap only because the command was idempotent (artifacts regenerate, appends dedup by signature); that is luck, not a property to rely on.
+
+**See also:** UL#152 (zsh vs bash expansion aborts in skill scripts); UL#191 (validation polarity).
+
+## 206. Interim Validation Runs Must Reference Only Artifacts That Exist At That Stage
+
+**Principle:** Family H (verify the real thing) cross with Family E (temporal/ordering invariants). A plan's final validation block may reference artifacts that several tasks create over time. When an interim task re-runs a subset of that block early, a missing operand path makes the search tool exit with an error status (rg exit 2), and under `if <tool> …; then fail; fi` any non-zero exit skips the fail branch. The check goes vacuously green not only for the missing path but for every path in the same invocation.
+
+**Trigger:** A plan schedules an interim validation subset (a mid-plan commit gate) that reuses checks referencing files a later task creates; or a validation grep "passes" during staged execution while the artifact under test does not exist yet.
+
+**Rule:**
+1. Scope each interim validation subset to paths that exist at that execution point; run the full block unchanged only at the final task.
+2. When a check lists multiple paths, `test -f` each path first so a missing operand fails loudly instead of erroring into a silent pass.
+3. After authoring, simulate the interim run with the later artifact absent and confirm the check fails or is explicitly scoped out.
+
+**Shape trigger (when to suspect this family):** A staged or per-task validation run reports green while one of its target paths does not exist on disk yet; the command is a search tool invoked with a missing path operand inside an if-then fail guard.
+
+**Distinguishing from #191:** #191 is abort policy within one complete block (bare greps, polarity wording). This is a temporal scoping error: the block is correct at the final stage but silently disabled when re-run early against future paths.
+
+**Example:** A skill-split plan's mid-plan commit task re-ran the final block's forbidden-path sweep over two skill directories while only the first existed; rg exited 2 on the missing directory, the if-then fail branch became unreachable, and the sweep would have stayed green even with a violation inside the existing directory. Fixed by scoping the interim sweep to the existing directory and leaving the two-directory sweep to the final task.
+
+**See also:** #191 (fail-closed validation blocks), #187 (per-obligation greps), `plans` Validation Commands authoring rules.
+
+## 207. Migration Folds Must Derive Their Probe Set From the Deleted Source
+
+**Principle:** Family A (equivalence-class coverage) cross with Family D (single source of truth). When a plan deletes an artifact and folds its content into surviving artifacts, authors derive Validation Commands from the destination's new prose. That verifies the rewrite, not the migration: the obligation inventory lives in the source being deleted, and every obligation the author fails to enumerate stays silently dropped while the block runs green.
+
+**Trigger:** A plan task deletes a file, command spec, or section and redistributes its rules into other files (command-to-skill folds, doc merges, checklist consolidation); the validation block grew only destination-side greps.
+
+**Rule:**
+1. Before writing the fold task, inventory every enforceable obligation in the source slated for deletion (read it from the parent commit, for example `git show <rev>^:<path>`).
+2. Map each inventory row to a destination location AND a dedicated probe that fails when that obligation is absent (per #187).
+3. Make prose remnant sweeps case-insensitive (`grep -niE` with lowercased alternatives): natural-language obligations appear in arbitrary case, and a case-sensitive pattern silently shrinks the equivalence class.
+4. An obligation mentioned only in plan prose ("fold rule X into skill Y") is unpinned; it needs its own fail-closed probe.
+
+**Shape trigger (when to suspect this family):** A post-fold review reports "dropped rule", "unpinned obligation", or "sweep missed a case variant" findings against a plan whose validation block only greps the surviving files.
+
+**Distinguishing from #187:** #187 says each obligation needs its own grep. This lesson says where the obligation list comes from: the deleted source's inventory, not the destination's new text. A block can satisfy #187 (one grep per named obligation) and still miss every obligation the author never enumerated because the source was already gone.
+
+**Example:** A skill-split plan removed a command file and folded its rules into a surviving skill. The first review round found two of the command's rules silently dropped, four obligations named only in prose with no probe, and a remnant sweep whose case-sensitive pattern missed lowercase mentions. Fixed by restoring the rules (verified against the parent commit before editing), adding four dedicated fail-closed probes, and lowercasing the sweep pattern with `-i`.
+
+**Witness (second-round recurrence on the same fold, 2026-08-19 review r2):** After the first fix round restored the section-level drops and added probes, the next review round on the same fold still found four more dropped obligations (single-sentence rules hiding in the deleted command's intro and item sub-clauses), two sibling literals of an already-pinned check left unpinned, and two earlier-restored rules with no probe of their own. Refinements: (1) the source inventory is sentence-granular, not section-granular; enumerate every imperative clause, including one-line asides. (2) Restoring a rule without adding its probe is an incomplete fix; every restored obligation gets its own fail-closed probe in the same pass. (3) When a check pins one literal of a multi-token rule, pin the sibling tokens too. All four missed one-liners were verbatim in the deleted source, so a per-line grep of each rule-bearing source line against the destination would have flagged them mechanically.
+
+**Witness (third-round recurrence on the same fold, 2026-08-20 review r3):** Four more single-sentence clauses surfaced (provided-context and code-inspection clauses in the section intro, "No speculation. No technical detail." in item 1, "No class or method names." in item 5), and the r2 fix's own probe set had dropped one of its approved probes (the incident-ticket trigger phrase); all five are now pinned by dedicated fail-closed probes. Refinements: (1) the r2 witness's closing recommendation (per-line grep of each rule-bearing source line against the destination) was never encoded as a check in the plan, so r3 re-found the class by manual review; a remediation recorded only in the corpus cannot protect a plan already written, so encode the mechanical source-vs-destination diff as a Validation Commands entry (or run it once as a gate) in the same fix pass. (2) When a fix round restores N clauses, verify the probe set literally matches the approved fix list; a silently dropped probe is the same defect one level up.
+
+**Witness (fourth-round recurrence on the same fold, 2026-08-20 review r4):** Two final source clauses surfaced (an "only as navigational anchors" sentence in the section intro, plus a known-repro/no-internal-logic extension inside one required-sections item); both restored verbatim from the parent commit and pinned by three new fail-closed probes. The same round found two EXISTING probes green but useless: their single common tokens matched unrelated prose, so the guarded rule could be deleted without tripping them (mechanism and fix under #187's r4 witness). Refinement: sentence-granular inventory does not converge on its own; every fix round re-derives the inventory from the source blob AND audits the existing probe set's patterns, not just probe presence.
+
+**Witness (closure round on the same fold, 2026-08-20 review r5):** The address pass rebuilt the complete restored-clause set from `git show` of every fix commit r1-r4: 14 clauses total, 9 already pinned, 5 unpinned (exactly the reported five), and zero stragglers beyond them, the first round with no newly surfaced source clause. The enumeration came from fix-commit history, not from the finding list, and the sweep additionally pinned a rule half that had never been covered by any probe (the sync-status gate). The class-sweep method, generalized in #209, is what closed the recurrence; per-round instance fixing had not.
+
+**See also:** #187 (per-obligation greps), #191 (fail-closed blocks), #206 (stage-scoped interim validation), #208 (rc-split negative assertions), `plans` Validation Commands authoring rules.
+
+## 208. Negative-Assertion Checks Must Split the Search Tool's Exit Codes
+
+**Principle:** Family H (verify the real thing). A forbidden-pattern check of the form `if rg <pattern> <paths>; then fail; fi` treats every non-zero exit as "no forbidden match". rg defines rc 0 = match, rc 1 = clean no-match, rc >= 2 = error (missing operand, bad regex), and a missing tool surfaces as shell rc 127. The fail branch therefore fires only on rc 0, and every error mode, including the tool being absent, silently passes the very check meant to police it. A path pre-check (`test -f`) closes only the missing-operand hole, not the missing-tool hole.
+
+**Trigger:** Authoring or reviewing any validation sweep whose pass condition is "pattern NOT found" (plan Validation Commands, hygiene scanners, CI gates) around rg/grep wrapped in if-then-fail polarity.
+
+**Rule:**
+1. Split the tool's exit codes three ways: rc 0 = forbidden match, exit 1 with the matched lines; rc 1 = clean pass; rc >= 2 (including 127) = tool error, exit 1 with a distinct message. A small helper (for example `expect_rg_no_match <pattern> <paths>...`) keeps every sweep in the block consistent.
+2. The rc-split subsumes both pre-checks: a missing swept path exits 2 and a missing tool exits 127, both now failing loudly. If a helper is not viable, pre-check `command -v <tool>` AND `test -f` every swept path instead.
+3. Demonstrate all three branches empirically before trusting the check: seeded forbidden match (temp file containing the pattern), tool-absent (run under `env PATH=/nonexistent`), clean pass.
+
+**Shape trigger:** A forbidden-pattern gate reports green in an environment where the search tool is not installed, or a review demo shows the gate passing vacuously with the tool removed from PATH.
+
+**Distinguishing from #206 and #191:** #206 is the temporal missing-operand case at interim stages, and its `test -f` fix covers paths only; #191 is abort policy within a complete block. This lesson is the exit-code conflation: "no match" (rc 1) and "tool error" (rc >= 2) must not share a pass branch.
+
+**Example:** In round 3 of a skill-split plan review, the two forbidden-pattern sweeps (emoji headings in a skill file; absolute home-directory paths in new skill directories) used bespoke if-then-fail forms. Re-running one sweep under `env PATH=/nonexistent /bin/bash` produced rc 127 and a silent pass: without rg installed, both sweeps would pass while checking nothing. Fixed by an `expect_rg_no_match` helper with the three-way split; all three branches were demonstrated (rc 127 -> RG ERROR, exit 1; seeded match -> FORBIDDEN MATCH, exit 1; clean tree -> exit 0).
+
+**See also:** #191 (fail-closed blocks), #204 (self-match immunity), #205 (exit-code capture), #206 (stage-scoped interim validation), #207 (fold probes), `plans` Validation Commands authoring rules (rule 10).
+
+## 209. Recurring Fix Classes Demand Exhaustive Mechanical Sweeps, Not Reported-Instance Fixes
+
+**Principle:** Family A (equivalence-class coverage) cross Family D (the fix scope is the whole class the finding instantiates; the finding list is a sample, not the census).
+
+**Trigger:** A review-fix loop where a fresh round's findings are all (or mostly) new instances of defect classes prior rounds already fixed: more aliased probes, more unpinned obligations, more understated records.
+
+**Rule:**
+1. Treat the recurrence itself as the signal. When a finding's class matches a class an earlier round fixed, stop fixing instances; enumerate the class's full membership mechanically and fix every member in one pass.
+2. Enumerate by derivation, not by the finding list: per-probe match-count audit (`grep -c` per pattern per target file; count >1 means aliased), obligation inventory rebuilt from fix-commit history (`git show` of every prior fix commit), per-record diff audit over every record.
+3. Prove each member fix by two-way simulation with the probe's real flags: deleting the pinned line must make the new probe fail, and the old pattern, run exactly as written (e.g. `-qi`), must stay green; that is the alias proof.
+4. Record cleared members too. A member verified clean is round-over-round evidence the class closed; write it down so the next round does not re-litigate it.
+
+**Why this matters:** Instance-scoped fixes to a class-level defect guarantee recurrence: each residue batch costs a full review round plus a fix round. Observed: three consecutive rounds each found residue of the prior round's fixes; the recurrence stopped only when the address pass swept the classes exhaustively.
+
+**Shape trigger:** A review loop's staging docs cite the same defect categories round after round ("more aliased probes", "more unpinned clauses") with new instance IDs while fixes keep landing.
+
+**Distinguishing from #133 and #207:** #133 propagates a discipline to sibling call sites when established; #207 derives fold probes from the deleted source. This lesson is the loop-level trigger rule: when the review re-finds a fixed class, the enumeration method comes from the class itself, and the fix must cover the enumeration, not the finding.
+
+**Example (2026-08-20 command-fold plan review loop, r5):** Rounds r3 and r4 each fixed reported instances of probe aliasing, unpinned restored clauses, and understated task records; r5's fresh panel re-found all three classes (4 Low findings, all residue). The r5 address swept instead: a match-count audit of all 37 positive probes in the validation block found 13 aliased (the 5 reported plus 8 more in checks the finding never named); the restored-clause set rebuilt from fix commits r1-r4 totaled 14 clauses (9 already pinned, 5 probes added, zero stragglers); a per-task diff audit found one more understated record beyond the three reported and verified a fourth adjacent task clean, recorded as cleared. Two-way deletion simulation confirmed all 18 new and de-aliased probes discriminate.
+
+**Witness (same loop, r6, 2026-08-20):** The record class recurred a third time (a Review Scope "untouched" claim gone stale plus task records understating the round's edits); the address swept both surfaces together, extending the scope sentence and every touched task's record note in one pass. The unpinned-clause residue was enumerated from the plan's routing table rather than the finding's three instances (see #187 r6 witness). The round's one genuinely new shape (a blocking gate-input ownership gap) became #210, not a residue fix.
+
+**See also:** #133 (sibling propagation), #186/#187 (probe discrimination and the aliasing audit), #194 (fix surface and pin in lockstep), #207 (fold inventory from deleted source), `receiving-review` Generalize-on-fix, coding_guidelines.md #18/#19 (Family A / Family D parents).
+
+## 210. Gate Inputs Need Owned Producer Steps on Every Advertised Path
+
+**Principle:** Family D (single source of truth: a gate-governed artifact has exactly one owned producer) cross Family A (equivalence-class coverage: every advertised path, not only the one first exercised).
+
+**Trigger:** A workflow step (skill step, plan task) is wired to a validator as its completion gate - record the artifact, then run validate - and the workflow advertises more than one path (for example update vs create/new child).
+
+**Rule:**
+1. Enumerate the validator's required inputs from the validator's own code/schema, not from the happy path: every file-existence check, required field, and index membership rule.
+2. For each required input and each advertised path, name the owned producing step. A path where an input has no producer is a dead-end: the gate fails at run time or the path skips it.
+3. Keep ownership single and claimed accurately: a peer document's description of who writes the artifact must match the producing step's real scope ("for the pages it publishes"), never over-claim.
+4. Name the validator script as the schema authority; inline the required fields in the producing step so the writer sees them at write time (per #182 rule 2).
+
+**Why this happens:** A gate survives splits and folds because it is one line ("run validate"); its input-producing obligations are scattered lines that get dropped or left with the old owner. Text-presence probes pass because the gate line exists; nothing executes the unexercised path.
+
+**Shape trigger (when to suspect this family):** A step mandates "record the manifest entry and run validate" for artifacts a new path creates; a peer doc claims write ownership of an artifact its workflow never writes; probes grep text presence but none trace gate inputs to producers per path.
+
+**Distinguishing from #182 and #206:** #182 is gate coverage across producers and schema inlining; this is input coverage across paths within one producer that already has the gate. #206 is temporal (input not created yet at check time); this is structural (no step ever creates it on that path).
+
+**Example (2026-08-20 playbook skill-split plan, review r6, blocking):** A publisher skill's ledger step recorded manifest entries and mandated the mirror-hygiene validator, and the split extended it to created/child pages. No step wrote the mirror file the validator requires (`missing mirror file {local_path}`), and the peer hierarchy skill's Integration row claimed mirror writes it never performed. Fix: the publisher owns the mirror write (new sub-item naming the 8 required frontmatter keys, the `{page_id}-{slug}.md` filename, `local_path` recording, the hygiene script as schema authority), the peer row corrected to "writes or refreshes page mirrors for the pages it publishes", plus a fail-closed probe pinning the sub-item.
+
+**Follow-up witness (same plan, r7, blocking):** the r6 fix closed only the flagged input, so the next round found a sibling unowned input as blocking again (README page-id index membership). The r7 fix enumerated the validator's full input surface (13 inputs), closing the class and catching an unowned input no reviewer flagged (the manifest's top-level `pages` array key).
+
+**Witness (same plan, r8, zero blocking):** the input-ownership class held: a fresh panel verified the r7 validator-input enumeration complete and staged no blocking findings, only drift introduced by the r7 wording itself (not residue): the key-set sentence read as an exclusive entry schema, contradicting the ledger fields each entry also records, and the parent entry restated child facts. The fix words the entry as the validator's non-exclusive read-set plus the named ledger fields, and the parent lists child page IDs only. The round's recurring record-lag class (a round record cannot cite corpus output the learn step appends after it) closed mechanically: the record pre-declares the witness paragraph the learn step will append.
+
+**See also:** #182 (gate every producer; the dual direction), #206 (temporal variant), #187 (dedicated probes), #207 (derive obligations from the moved source), coding_guidelines.md #18/#21 (Family A / Family D parents).

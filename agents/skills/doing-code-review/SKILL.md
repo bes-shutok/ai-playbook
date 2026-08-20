@@ -185,7 +185,7 @@ Each worker receives:
 6. The base and head branch names
 7. Open soften-watchlist items that match this worker's lenses (pattern prefix / ownership), when any
 8. Output format: return the shared finding fields plus `path`, `line`, `side`, `body`, `pattern`, and `descendant_launches`.
-9. An explicit constraint: "Do not over-investigate or validate every single line number. Read the diff and key source files, then report findings. Write each `body` to full §4.12 depth: quote contract/doc text, name the code path, describe actual behavior, state why it matters, and suggest fix options. For Medium+, include all four Comment sections inline in `body` using `**Bold headings**`. For any actionable code/test/config fix at any severity, include a concrete before/after or 'could look like' code snippet per §4.9.0 in `body`. Include one sentence why the chosen severity applies (`severity-calibration.md`)."
+9. An explicit constraint: "Do not over-investigate or validate every single line number. Read the diff and key source files, then report findings. Write each `body` to full §4.12 depth: quote contract/doc text, name the code path, describe actual behavior, state why it matters, and suggest fix options. For Medium+, include all four Comment sections inline in `body` using `**Bold headings**`. For any actionable code/test/config fix at any severity, include a concrete before/after or 'could look like' code snippet per §4.9.0 in `body`, preferring inline backtick spans for short snippets and keeping any fenced snippet free of heading-like lines (lines starting with `#`). Include one sentence why the chosen severity applies (`severity-calibration.md`)."
 10. **Scratch / truncation (mandatory on every worker and on any sub-agent whose job is to return full `git diff` output):** "Never write `git diff` or review captures to the repo root (see **Diff access** / `agent_workflow_guidelines.md` §50.3.2). If a tool truncates stdout, read the runtime's saved capture for the command or write only under `{tmp_dir}/code-review/<slug>/`. Prefer re-running `git diff` and reading sources over inventing a root scratch file."
 11. **Coverage-claim audit (when the worker builds or updates a mutator/failure-mode matrix):** a cell that cites an out-of-container constructor test for a request-boundary component cannot mark production wiring as `checked: yes`. Leave unchecked or stage `testing#coverage-claim-unchecked` / `testing#harness-fidelity-gap` until a Guideline Pack–conformant full-context harness proof exists.
 
@@ -357,7 +357,7 @@ Orchestrator-specific additions (not duplicated in severity-calibration):
 
 **Pre-existing pattern does not reduce severity of newly introduced issues** (severity-calibration; §4.11 NEW vs EXISTING).
 
-**Actionable fix comments should include a code snippet.** When a finding proposes something the author can apply in code immediately (not an open question, scope-confirmation ask, or optional doc-only note), include a concrete before/after or "could look like" snippet in the Comment body so the author can act without a follow-up chat. Single-token fixes ("rename to X") and prose-only doc edits are exempt. Staging doc Comment sections follow the same rule. Applies at **all severities**, including Low test-gap and config findings.
+**Actionable fix comments should include a code snippet.** When a finding proposes something the author can apply in code immediately (not an open question, scope-confirmation ask, or optional doc-only note), include a concrete before/after or "could look like" snippet in the Comment body so the author can act without a follow-up chat. In finding bodies, prefer inline backtick spans for short snippets and keep any fenced snippet free of heading-like lines (lines starting with `#`); `review-staging` is the format gold source. Single-token fixes ("rename to X") and prose-only doc edits are exempt. Staging doc Comment sections follow the same rule. Applies at **all severities**, including Low test-gap and config findings.
 
 When a finding presents multiple actionable fix options, include a concrete example for each option, such as one implementation snippet per alternative and a separate regression-test snippet when a test is part of the recommendation. Keep the surrounding explanation concise so the examples carry the detail.
 
@@ -515,30 +515,13 @@ The `409` response for `PATCH /v1/consent-updates` says consent updates are "rej
 This is contract drift, not a typical happy-path logic bug. OpenAPI readers expect strict `409`; api-reference §8b documents the race as an accepted MVP limitation. Integrators or codegen clients may assume behavior the runtime does not fully guarantee.
 
 **What we could do**
-One option: soften the OpenAPI `409` description to match api-reference (document the READ COMMITTED race). Another: tighten with row lock before the first mutating statement (Java snippet below).
-```
-
-```java
-ProfileRow profile = profileRepository.findByIdForUpdate(profileId);
-if (profile.getStatus() == ProfileStatus.DELETED) {
-    throw new ProfileDeletedException(profileId);
-}
+One option: soften the OpenAPI `409` description to match api-reference (document the READ COMMITTED race). Another: tighten with row lock before the first mutating statement, for example `ProfileRow profile = profileRepository.findByIdForUpdate(profileId);` then `if (profile.getStatus() == ProfileStatus.DELETED) { throw new ProfileDeletedException(profileId); }`.
 ```
 
 #### Comment example (Low, test gap with snippet)
 
 ```markdown
-`shouldPublish` only asserts no-throw. We could pull the published message and assert fields from the fixture (Java snippet below). Use getters from `outbox`, not duplicated literals in asserts.
-```
-
-```java
-sendIntentEventPublisher.publish(outbox);
-MessageExt received = pullMessageByKey(outbox.getDedupeKey());
-JsonNode json = objectMapper.readTree(received.getBody());
-assertThat(received.getKeys()).isEqualTo(outbox.getDedupeKey());
-assertThat(json.get("sendIntentId").asText()).isEqualTo(outbox.getSendIntentId());
-assertThat(json.get("campaignId").asText()).isEqualTo(outbox.getCampaignId());
-assertThat(json.get("channel").asText()).isEqualTo(outbox.getChannel().value());
+`shouldPublish` only asserts no-throw. We could pull the published message and assert fields from the fixture, for example `MessageExt received = pullMessageByKey(outbox.getDedupeKey());` then `JsonNode json = objectMapper.readTree(received.getBody());` and `assertThat(json.get("campaignId").asText()).isEqualTo(outbox.getCampaignId());`. Use getters from `outbox`, not duplicated literals in asserts.
 ```
 
 #### Analysis example (same finding)

@@ -184,6 +184,8 @@ Return each resolved path to the caller. Substitute `{plans_dir}`, `{reviews_dir
 | `doc-hierarchy`, `doc-hierarchy-migrate`, `doc-hierarchy-upkeep` | Migration-complete signal and Step 5b for legacy committed facts |
 | `plans`, `execute-plan`, `doing-code-review`, `review-plan`, `learn`, `done`, `docs-branch` | Read TOML keys from `.ai-playbook/facts.md` |
 | `review-confluence-doc`, `rfc-design` | Read `{reviews_dir}` and `{tmp_dir}` from repo agent facts; primary review staging under `{reviews_dir}/` per `review-staging` (`rfc-design` never uses `{tmp_dir}/rfc-review/`) |
+| `confluence-page-sync` | Reads `{tmp_dir}` from repo agent facts for page-fetch and HTML scratch |
+| `tdd-design` | Reads `{rfcs_dir}` / `{proposals_dir}` from repo agent facts; finished TDDs are Layer 3 history files like RFCs; drafts under `{proposals_dir}` when present |
 
 ## Related
 

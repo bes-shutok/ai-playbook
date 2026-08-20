@@ -1,6 +1,6 @@
 ---
 name: jira-workflow
-description: "Jira workflow for creating/updating Jira stories and creating git branches from Jira tickets. Trigger phrases: \"create a Jira story\", \"update Jira ticket\", \"create a branch for PROJ-XXXXX\"."
+description: "Jira workflow for creating/updating Jira stories and creating git branches from Jira tickets. Trigger phrases: \"create a Jira story\", \"update Jira ticket\", \"create a bug ticket\", \"create an incident ticket\", \"create a branch for PROJ-XXXXX\"."
 ---
 
 # Jira Workflow
@@ -222,11 +222,14 @@ If the Atlassian integration is unavailable:
 
 # Bug / Incident Ticket Format
 
-When creating bug or incident tickets, use this constrained format.
+When creating bug or incident tickets, use this constrained format. Use provided textual context (alerts, incidents, Slack threads, logs); inspect relevant code to understand behavior; perform external research only if required to understand behavior. Technical identifiers are allowed only as navigational anchors.
+
+Abbreviations may be used, but MUST be clarified in parentheses on first use, e.g. MQ (message queue).
 
 ## Hard Size Rules
 - Jira description: **hard max 800 characters**, target 400
 - Count characters. If over 800, rewrite/compress or move detail to a supporting doc.
+- If still over 800 characters after rewrite, stop and ask the user what to trim.
 - Move all deep technical context to a temporary Markdown document (no size limit).
 
 ## Jira Description MUST NOT contain
@@ -237,19 +240,22 @@ When creating bug or incident tickets, use this constrained format.
 
 ## Required Sections (plain text, no markdown headers in Jira)
 
-1. **Incident Summary**: 1-2 sentences. What is broken, who is impacted, why it matters now.
-2. **Impact**: 1 short paragraph or 2 bullets. User/business impact, duration/frequency.
-3. **Current Behavior**: observable behavior based on errors/logs/metrics.
-4. **Expected Behavior**: outcome-focused, testable, no solution design.
-5. **Acceptance Criteria**: 2-4 bullets, outcome-based, independently verifiable.
+Do NOT include ticket type or priority; those are Jira metadata.
+
+1. **Incident Summary**: 1-2 sentences. What is broken, who is impacted, why it matters now. No speculation. No technical detail.
+2. **Impact**: 1 short paragraph or 2 bullets. User/business impact, duration/frequency. If unknown, explicitly state what is unknown.
+3. **Current Behavior**: observable behavior based on errors/logs/metrics or known repro; no explanation of internal logic.
+4. **Expected Behavior**: outcome-focused, testable, no solution design. If unclear, stop and ask questions before writing.
+5. **Acceptance Criteria**: 2-4 bullets, outcome-based, independently verifiable. No class or method names.
 6. **Technical References**: short list of class/API/method names only.
 7. **Supporting Material**: reference to the temporary Markdown document.
 
 ## Supporting Markdown Document
-Contains everything excluded from Jira: domain concepts, timelines, logs, code walkthroughs, reproduction steps, assumptions, risks.
+Contains everything excluded from Jira: domain concepts, timelines, logs, code walkthroughs, reproduction steps, assumptions, risks. Must not restate the Jira summary or Acceptance Criteria verbatim.
 
 ## Final Validation
 - Jira description ≤ 800 characters
 - Readable by non-engineers
 - No conceptual sections in Jira
 - All depth in supporting doc
+- Output does not look templated or auto-generated

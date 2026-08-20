@@ -130,7 +130,7 @@ HYGIENE="${CONFLUENCE_MIRROR_HYGIENE_SCRIPT:-${HOME}/.ai-playbook/scripts/conflu
    - `docs/history/context/confluence/README.md` indexes manifest pages.
    - Engineering spike docs with a Confluence sync ledger (for example ADR-46) match manifest `confluence_version` after an intentional wiki push (`sync_status: synced`). Use `pending` when repo mirrors are ahead of wiki per project-guidelines #92.
 
-3. After a live Confluence push, refresh mirror bodies from the published wiki content (or authoritative repo spike sections), bump manifest versions, and set `sync_status: synced` in the same session. Do not leave truncated wiki pages; republish the full body before marking synced.
+3. After a live Confluence push, refresh mirror bodies from the published wiki content (or authoritative repo spike sections), bump manifest versions, and set `sync_status: synced` in the same session. Do not leave truncated wiki pages; republish the full body before marking synced (via `confluence-page-sync`).
 
 4. **Cleanup only after audit passes:**
 

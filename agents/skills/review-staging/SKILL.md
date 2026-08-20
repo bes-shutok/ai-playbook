@@ -230,6 +230,8 @@ Caller must ensure each finding's:
 
 **Comment vs Analysis split:** Comment is author-facing (code/contract/behavior only). Analysis holds reviewer process notes (other finding IDs, follow-up tickets, triage history, joint-config ownership). When the user narrows a staged ask (for example "PII comment only"), edit Comment to that scope only; do not expand into adjacent soft asks. See `doing-code-review` §4.12.
 
+**Snippet format in finding bodies:** prefer inline backtick spans for short snippets; keep any fenced snippet free of heading-like lines (lines starting with `#`). The `--hard` validator walks headings line-by-line without fence tracking, so a fenced block whose content contains a severity-heading-like (`### Medium`) or finding-heading-like (`#### F9.`) line corrupts block splitting and fails the gate.
+
 ## Severity and ordering
 
 All callers use `review-agents/severity-calibration.md`. Findings appear under `### Critical`, `### High`, `### Medium`, and `### Low` in that exact order. Within a group, order by **ascending finding ID** only (stable discovery order). Do not reorder by blocking, blast radius, reachability, or confidence.
@@ -304,7 +306,7 @@ Minimum schema:
 
 Use `"soften_watchlist": []` when the run has no softened findings. Multi-round / review-loop orchestrators must carry `open` rows forward.
 
-`source_kind` declares what `source_digest` hashes: `"code"` (the stored diff bytes), `"plan"` / `"rfc"` / `"document"` (the reviewed document's UTF-8 bytes). Producers SHOULD set it; `review-plan` (and other document reviewers) MUST set it. When `source_kind` is declared, `source_digest` must be a lowercase 64-char hex SHA-256 (placeholders like `"<sha256>"` fail the validator). The `--source-plan` flag on `validate_review_staging.py` recomputes the plan's digest and fails hard on a mismatch, so a digest recorded before a fold of the reviewed artifact is rejected as stale.
+`source_kind` declares what `source_digest` hashes: `"code"` (the stored diff bytes), `"plan"` / `"rfc"` / `"document"` (the reviewed document's UTF-8 bytes). Producers SHOULD set it; `review-plan` (and other document reviewers) MUST set it. When `source_kind` is declared, `source_digest` must be a lowercase 64-char hex SHA-256 (placeholders like `"<sha256>"` fail the validator). The `--source-plan` flag on `validate_review_staging.py` recomputes the plan's digest and fails hard on a mismatch, so a digest recorded before a fold of the reviewed artifact is rejected as stale. In multi-round loops, re-derive the digest from the current round's reviewed artifact for every round; never copy a digest from a prior round's staging doc (the copy misattributes findings to a stale tree, and only a recompute flag can catch it).
 
 Legacy sidecars keep `agent`, `agents`, and caller-specific severity labels. New sidecars use worker rows and the four shared severities.
 
