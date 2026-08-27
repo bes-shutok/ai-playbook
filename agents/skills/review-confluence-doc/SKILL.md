@@ -9,7 +9,7 @@ description: >
 
 # Review Confluence Document
 
-**Writing:** Follow `agent_workflow_guidelines.md` §45 when suggesting rewrites. Feedback should prefer plain English (e.g. "API contract", not "wire contract") and recommend a `## Terms` section when the page uses 3+ project-specific words.
+**Writing:** Follow `agent_workflow_guidelines.md` §45 when suggesting rewrites. Keep feedback respectful and collaborative, and phrase every suggestion with softeners such as "could we please", "please consider", "one option might be" instead of imperative forms ("Remove this section", "Add a rollback plan"). Feedback should prefer plain English (e.g. "API contract", not "wire contract") and recommend a `## Terms` section when the page uses 3+ project-specific words.
 
 Review an RFC or TDD document hosted on Confluence. Provide quality feedback focused on clarity, actionability, and missing context.
 
@@ -101,6 +101,10 @@ Review the document for the following quality dimensions (orchestrator-owned; su
 - Are terms defined or unambiguous?
 - Is the writing concise and skimmable?
 - Are there vague statements that need specifics?
+
+#### 4.1.1 Boundary and direction check
+
+Before flagging a contradiction between the reviewed page and a local or linked contract, identify the owner and direction of each API or data flow. Distinguish an external integration API from the internal service API it wraps, and distinguish external request payloads from internal service-to-service messages. Trace the request path and compare like-for-like surfaces. If the differences are intentional boundary choices, do not report them as contradictions.
 
 #### 4.2 Actionability
 - Can an engineer implement from this document without guessing?
@@ -285,7 +289,7 @@ Rules:
 - Tag code review findings with `[Code]`.
 - Tag documentation prose findings with `[Prose]`.
 - **Never cite local or internal files** (e.g. `jvm_guidelines.md`, `CLAUDE.md`, internal playbooks) anywhere in the review output: not in the file, not on console, not in Confluence comments. The document author has no access to these files. State the principle and the reason it matters inline instead.
-- **Write the review doc in comment-ready tone.** The review file is the source the comments are posted from; use the same wording (suggestion tone: "we could", "one option might be") in the file so no rephrasing is needed at posting time.
+- **Write the review doc in comment-ready tone.** The review file is the source the comments are posted from; use the same wording (suggestion tone: "please consider", "we could", "one option might be"; never imperative form) in the file so no rephrasing is needed at posting time.
 - **No em dashes** ("; ") anywhere in the review output: not in the file, not on console, not in Confluence comments. Use commas, semicolons, colons, parentheses, or split into separate sentences.
 - **Spell out jargon and acronyms on first use.** Engineering shorthand (e.g. "p99 latency", "OCP", "JWKS", "CSRF") is opaque to readers from adjacent disciplines or non-native speakers. Where a term is used, briefly expand it the first time (e.g. "p99 latency under 200ms, meaning 99% of requests complete in under 200ms").
 - **Verify acronym meaning from the document, not from industry default.** Acronyms in document titles or section headers may have project-specific meanings (e.g. "TDD" can mean "Technical Design Document" rather than "Test-Driven Development"). Do not raise findings that depend on a particular expansion of an acronym without confirming the author's intent from the document content. If unclear, ask before posting.
@@ -324,7 +328,8 @@ After presenting feedback on console:
 
 Apply these to every comment regardless of severity:
 
-- **Constructive tone, never hostile.** Use direct, actionable wording while keeping blocking status explicit.
+- **Constructive tone, never hostile.** Keep blocking status explicit while the wording stays respectful; severity lives in the status lozenge, not in harsh phrasing.
+- **Suggestion tone, never imperative form.** Phrase every comment as a suggestion or question with common softeners that still convey the point: "please consider ...", "we could ...", "one option might be ...", "could we ...?". Do not write orders ("Remove this section", "Add a rollback plan", "Rewrite §3") at any severity. Avoid "Consider doing X" as well: it sounds soft but still reads as an instruction the reader must comply with; prefer "Please consider doing X. What do you think?".
 - **No em dashes** ("; ") anywhere in comment text. Use commas, semicolons, colons, or parentheses instead. (See also the global rule in Step 5.)
 - **Plain language (globish).** Short words, short sentences. Avoid jargon a non-native speaker would not know.
 - **Never reference internal machine-specific docs** (e.g. JVM guidelines, CLAUDE.md rules, internal playbooks) in Confluence comments. Explain the principle and its benefits directly instead.

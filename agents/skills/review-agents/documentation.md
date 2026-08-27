@@ -2,6 +2,8 @@
 
 Two-phase agent: **(1) missing documentation**, **(2) prose clarity**. Run phase 1 when the change has user-visible or architectural doc impact. Run phase 2 only when human-readable prose was added or modified in the artifact under review.
 
+**Core mandate:** reduce documentation to the minimum required. Keep only what the code cannot fully express on its own: reasons, constraints, conclusions, requirements. Excessive comments and restated documentation are defects to remove, not neutral text to preserve.
+
 **Boundary with sibling agents:**
 - `simplification.md`: over-engineered code structure (not prose, not missing docs).
 - `quality.md`: runtime correctness and structural clarity (naming, cognitive complexity). Comment/doc **prose** lives here in phase 2, not in quality.
@@ -90,7 +92,7 @@ When reviewing a plan or RFC draft:
 
 ## Phase 2: Prose clarity
 
-Run this phase when the diff, plan body, or RFC draft contains added or modified human-readable prose.
+Run this phase when the diff, plan body, or RFC draft contains added or modified human-readable prose. Also run it ad hoc on the specific documents and comments named by review feedback (see `receiving-review` **Documentation and Comment Findings**); in that mode the named artifacts are the scope and no diff is required.
 
 Review **prose in the artifact**: inline comments (any length), block comments, docstrings, Javadoc/KDoc, module headers, README/markdown sections, OpenAPI description fields, plan task prose, and RFC section bullets.
 
@@ -144,7 +146,7 @@ Example: `// skip deleted profiles` + `if (status != DELETED)` → rename guard 
 When prose is needed, check for:
 - **Redundancy:** same idea in comment and code, or stated twice in adjacent comments
 - **Decision restated from another doc:** the same rule, decision, or contract is now stated in two or more documents (or doc + code constant); suggest extracting the decision into its single owning document (single source of truth) and replacing the other statements with links; each extra copy is a future diverging statement, so propose consolidation rather than adding another restatement
-- **Drift risk:** comment asserts behavior the code does not enforce (or vice versa)
+- **Drift risk:** comment asserts behavior the code does not enforce (or vice versa); for prose the code has already outgrown, apply the **Outdated documentation** disposition below
 - **Buried lead:** constraint hidden after setup text
 - **Wall of text:** dense paragraph where one sentence suffices
 - **Stale narrative:** comment describes old behavior after code changed in the same PR
@@ -188,6 +190,19 @@ Also apply doc-type rules:
 | **Migration / SQL scripts** | One-line purpose at top; inline only for non-obvious data fixes |
 | **Markdown docs in PR** | Plain language; no duplicate sections; link instead of pasting long excerpts |
 | **Plan / RFC prose** | Tasks self-explanatory via naming; no telegraphic bullets without subjects |
+
+### Outdated documentation: remove or freeze
+
+Apply when a comment, doc section, or document contradicts what the current code does and appears outdated: the code moved on and the prose still describes the old behavior, contract, or architecture.
+
+1. Decide the disposition explicitly. Do not reword outdated prose in active docs to restate old behavior as current, and do not patch wording without first deciding keep, remove, or freeze.
+2. **Remove as obsolete** when the text has no ongoing value: nothing depends on it, no reader will ask about the design it explains, and the code plus remaining docs already carry the truth.
+3. **Freeze as historical context** when the text records past decisions, constraints, or migration rationale readers may still need. Move it to the repo's frozen/history location (for example the Layer 3 history area per `doc-hierarchy` where that convention applies) instead of keeping it in active docs. Leave a one-line pointer at the old location when readers may come looking.
+4. When the contradiction is introduced by the current change itself (doc and code updated together), fixing the doc in place is the normal path; remove-or-freeze is for prose the code has already outgrown.
+
+Boundary: when the outdated text is a normative contract consumers rely on (OpenAPI, public API docs), the mismatch is a correctness/contract finding owned by `quality.md`; this agent still owns the prose disposition (fix in place, soften, remove, or freeze).
+
+Use pattern `documentation#prose-outdated-doc` for remove-or-freeze findings. In code review, scope is prose in the diff plus contradictions the diff introduces into existing docs; docs outside the diff follow the orchestrator's doc-scope rules (`doing-code-review` §4.9.2).
 
 ### Do not flag (phase 2)
 

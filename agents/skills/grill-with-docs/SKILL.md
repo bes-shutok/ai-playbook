@@ -1,7 +1,6 @@
 ---
 name: grill-with-docs
 description: Relentless interview to sharpen a plan or design while updating glossary and architectural decisions inline. Use when the user wants to grill and document terminology or ADRs as you go.
-disable-model-invocation: true
 metadata:
   upstream: "https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs"
 ---
@@ -33,4 +32,4 @@ This skill is a documented combination of `grilling` plus inline `domain-modelin
 After shared understanding and docs are captured, offer `premortem` for failure-mode analysis.
 
 ### With `rfc-design` / `plans` skills
-When the subject is a feature design or implementation plan, reference the RFC or plan path once it exists; write ubiquitous terms to the repo glossary, not duplicated into chat.
+`plans` Phase 1 invokes this skill through its confidence gate whenever an unclear requirement point is rated low-confidence; confirmed answers feed the plan's requirements buffer, while high-confidence points skip the grill and are listed in the plan's `## Assumptions` section instead. When the subject is a feature design or implementation plan, reference the RFC or plan path once it exists; write ubiquitous terms to the repo glossary, not duplicated into chat.

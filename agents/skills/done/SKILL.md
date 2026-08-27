@@ -19,7 +19,7 @@ Run `/learn` to capture lessons from this session, then commit all uncommitted c
 - **Do not** delegate this workflow to a Task/subagent that tries to exec a skill path.
 - **Do** read each skill file (`~/.agents/skills/<name>/SKILL.md`) and execute its steps in **this** agent session using normal tools (shell for scripts, Read/Write for skill logic).
 
-**Workflow continuity:** This skill executes as a continuous sequence of steps (0 → 1 → 2.65 → 2.64 → 2 → 2.5 → 2.6 → 2.7 → 2.75 → 2.76 → 2.8 → 3 → 4 → 5 → 6 → 7). After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification. **Exception:** Step 0 uses a short agent wait (`DONE_LOCK_AGENT_MAX_WAIT_SECS`, default 90s); on timeout return `blocked` with lock `status` instead of polling for hours. **An empty project working tree is not a stop condition:** still run Steps 2.65, 2.64, 2, and 6 and finish with Step 7.
+**Workflow continuity:** This skill executes as a continuous sequence of steps (0 → 1 → 2.65 → 2.64 → 2.63 → 2 → 2.5 → 2.6 → 2.7 → 2.75 → 2.76 → 2.8 → 3 → 4 → 5 → 6 → 7). After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification. **Exception:** Step 0 uses a short agent wait (`DONE_LOCK_AGENT_MAX_WAIT_SECS`, default 90s); on timeout return `blocked` with lock `status` instead of polling for hours. **An empty project working tree is not a stop condition:** still run Steps 2.65, 2.64, 2.63, 2, and 6 and finish with Step 7.
 
 ## Configuration (from facts document)
 
@@ -157,7 +157,28 @@ done
 
 On failure: complete the staging doc per `review-staging` (Metadata, Review Statistics, Findings with Comment/Analysis) before continuing. Do not sync stub staging docs to the orphan `docs` branch.
 
-**After Step 2.64 completes, immediately continue to Step 2.**
+**After Step 2.64 completes, immediately continue to Step 2.63.**
+
+## Step 2.63: Clean stale Vim swap files
+
+Remove only verified stale Vim swap files before `docs-branch` snapshots ignored files. These files are editor recovery artifacts, not untracked work to preserve. Never delete a swap file for a live editor process or a file whose owner cannot be verified.
+
+1. Find candidate swap files, excluding `.git`:
+
+   ```bash
+   find . -path ./.git -prune -o -type f \( -name '.*.swp' -o -name '.*.swo' -o -name '.*.swn' \) -print
+   ```
+
+2. For each candidate, run `file -- <path>`. Continue only when it identifies a `Vim swap file` and reports a PID.
+
+3. Check the PID with `ps -p <pid> -o command=`.
+   - If the PID is live and its command names the edited document, preserve the swap file and report it as active.
+   - If the PID is dead, remove that exact candidate with `rm -f -- <path>` and report it as removed.
+   - If the PID is live but the document does not match, or the header has no usable PID, preserve the file and report that cleanup needs manual confirmation.
+
+4. Do not remove other untracked, ignored, backup, lock, or temporary files automatically. This cleanup is deliberately limited to verified stale Vim swaps.
+
+**After Step 2.63 completes, immediately continue to Step 2.**
 
 ## Step 2: Preserve Gitignored Docs and Instructions
 

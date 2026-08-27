@@ -50,7 +50,7 @@ If `git diff ${BASE_BRANCH}...HEAD | wc -c` exceeds `review_large_diff_bytes` (d
 |------|-------|----------------|
 | 1 | `doing-code-review` | Branch review mode; staging doc **before** reporting to user |
 | 2 | Triage | Count findings still `pending` with `blocking: true` |
-| 3 | `receiving-review` | Only if step 2 count > 0; fix or `drop` each finding; update staging doc statuses; after fixes land, run the **Generalize-on-fix** step from `receiving-review` |
+| 3 | `receiving-review` | Only if step 2 count > 0; fix or `drop` each finding; update staging doc statuses; after fixes land, run the **Generalize-on-fix** step from `receiving-review`; capture valid findings not fixed in this run as durable backlog items per `receiving-review` **Backlog capture** |
 | 4 | `done` | learn → docs-branch → commit (authorized per iteration) |
 
 **Do not** merge step 3 fixes into the same round's step 1 verdict. Step 1's output is **provisional findings before fixes**.
@@ -124,6 +124,8 @@ Stop only when **all** of the following hold on a fresh review of committed `HEA
 | Postfix verification in the same round | **No** |
 | Focused docs/risk-only clear round with open softens or no design-simplicity since last full panel | **No** |
 
+**Before reporting loop exit:** every valid finding from this run that was not fixed (deferred, scope-dropped, or excluded by user instruction) must have a durable backlog item per `receiving-review` **Backlog capture**. Include the fixed-vs-backlogged tally and backlog item paths in the exit report; gitignored staging docs are never the only record.
+
 ## Limits
 
 | Limit | Default | On exceed |
@@ -153,6 +155,7 @@ Never use commit subjects like `Close review loop` or `Review complete` until ex
 - Batching multiple iterations into one commit
 - Reopening a clear round because of late non-blocking noise
 - Exiting while soften-watchlist items remain `open` or unexamined
+- Reporting loop exit with deferred or scope-dropped valid findings recorded only in the gitignored staging doc
 - Declaring exit after a focused panel that never re-ran `design-simplicity` on the tip when earlier rounds only fixed docs/schema
 - **Declaring CLEAR from a relaunch while the original worker may still finish.** If a worker is stuck and you relaunch, interrupt or cancel the original agent first, or wait until every originally launched worker ID is terminal. Reconcile findings from both outputs before staging exit. A late primary that overwrites a zero-finding relaunch JSON after CLEAR invalidates the exit; amend staging and treat exit criteria as unmet until a fresh clear-candidate round (or an explicit partner stop) closes the residual.
 
@@ -169,7 +172,7 @@ If no base is named or the diff is large (>10 kB), the loop asks you to confirm 
 Step 1 each round: branch review mode; staging doc before reporting. Diff scope is committed `BASE...HEAD` only.
 
 ### Consumes `receiving-review` skill
-Step 3 when blocking findings remain: triage and fix; update staging statuses.
+Step 3 when blocking findings remain: triage and fix; update staging statuses. Valid findings not fixed in the run are captured as durable backlog items per its **Backlog capture** rule; the exit report includes the fixed-vs-backlogged tally.
 
 ### Consumes `done` skill
 Step 4 each iteration: learn → docs-branch → commit (authorized per iteration). Syncs gitignored staging via docs-branch.

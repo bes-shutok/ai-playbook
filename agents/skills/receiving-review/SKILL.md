@@ -126,6 +126,19 @@ IF reviewer suggests "implementing properly":
 
 **your human partner's rule:** "You and reviewer both report to me. If we don't need this feature, don't add it."
 
+## Documentation and Comment Findings
+
+When a finding or feedback item targets documentation or comments (outdated doc, verbose or duplicated comment, missing doc), evaluate the artifact itself before editing it. A reviewer asking to "fix the documentation" may be pointing at text that should not survive the fix.
+
+1. **Needed at all?** Keep only documentation that preserves reasons, constraints, conclusions, or requirements not fully clear from the code. A comment or doc section that restates what the code already expresses is a deletion candidate, not a rewording task.
+2. **Duplication.** When the comment duplicates the code, or a second doc duplicates a rule another doc owns, prefer delete or a code refactor (rename, extract) over wording changes. Consolidate to the single owning document.
+3. **Outdated (contradicts current code).** Decide the disposition explicitly:
+   - Remove as obsolete when nothing depends on it.
+   - Move to frozen docs as historical context when it records past decisions worth keeping (Layer 3 history per `doc-hierarchy` for company repos; the docs branch for gitignored agent docs). Leave a pointer when readers may search for it.
+   - Do not rewrite active documentation to describe old behavior as current.
+4. Run the evaluation with the documentation agent's phase 2 gates (`review-agents/documentation.md`); they apply ad hoc to the documents and comments named by the feedback, not only to diff prose.
+5. Reply in the thread with the chosen disposition (kept with reason, removed, or frozen) so the decision is auditable.
+
 ## Implementation Order
 
 ```
@@ -155,6 +168,8 @@ SKIP only when one of these conditions holds:
 Do **not** drop a finding that asks to strengthen `## Validation Commands` solely because the skill or implementation prose already states the obligation. Skill correctness and validation-gate coverage are separate surfaces (see `development_lessons.md` #186).
 
 "Optional" or "Low" severity signals lower priority for the reviewer, not permission to defer action. If the fix is large or opens a new subsystem, say so briefly in the report but proceed unless a push-back condition above triggers. The Triage Decision Rule below still gates design-decision findings (architectural moves, refactors) - those remain ask-first regardless of severity.
+
+Findings excluded under a SKIP condition or deferred by the user remain valid work unless the exclusion reason is invalidity (YAGNI, technically incorrect, false positive); capture those as backlog items per **Backlog capture for valid findings not fixed in scope** below.
 
 ## Triage Decision Rule
 
@@ -299,6 +314,34 @@ When triaging findings from a `doing-code-review` staging doc (execute-plan Phas
 
 This gives downstream analysis a ground-truth signal for which agents produce fix-worthy findings.
 
+## Backlog capture for valid findings not fixed in scope
+
+Review-fix cycles exit on zero unresolved **blocking** findings, not zero findings. Every finding assessed **valid (worth fixing)** that is not fixed in the current work must leave a durable backlog item with all known details before the cycle is reported complete. Gitignored staging docs and chat reports are never the only record.
+
+Capture an item when a valid finding ends triage as:
+
+- `deferred`: any severity, any deferral reason (scope, size, risk, user instruction such as "Medium+ only" or "no Lows")
+- `dropped` for **scope**: wrong branch for the fix, unrelated to the reviewed change, or excluded from the current work (but not drops for invalidity: false positive, YAGNI, technically incorrect)
+
+Partner-declined fixes and softened reverts stay on the soften watchlist; do not duplicate them as backlog items unless the partner asks for a durable record.
+
+Destination, first that applies:
+
+1. `{backlog_dir}` pre-plan file (key from `.ai-playbook/facts.md`; promote via the `plans` skill when scheduled, move to `backlog_completed_dir` on completion per `doc-hierarchy`)
+2. Module high-level tasks doc on module-split repos (per `doing-code-review` Step 5.1)
+3. Project issue tracker via its workflow skill (for example `jira-workflow`) when the project tracks backlog there; external write, so create tickets only on explicit user request or standing pre-authorization
+4. No destination resolves: ask the user where to record; never silently fall back to chat or the staging doc
+
+Required content per item (`{backlog_dir}/YYYY-MM-DD-<slug>.md`; one finding or shared root cause per file; keep the Status/Workflow header lines so `plans`-skill promotion applies):
+
+- Problem statement with evidence: what is wrong and the observed or realistic consequence
+- Exact location: file path with line or anchor, or contract/doc section
+- Suggested fix, or the options considered when the fix is a design choice
+- Severity and source reference: staging doc path, round, finding id
+- Why not fixed now: the scope boundary or decision, and who made it
+
+Record the backlog item path on the finding (Analysis section or triage log) so later rounds and downstream analysis can find it.
+
 ## Agent corpus feedback (accepted human findings)
 
 When accepted external or human-partner review findings reveal a defect shape the active review panel missed:
@@ -327,13 +370,16 @@ This is the sibling rule to **Agent corpus feedback** above: that section genera
 Provider for `{plans_dir}` when saving grouped fix tasks from review feedback. Read path keys from `.ai-playbook/facts.md` (see `using-skills` Step 0).
 
 ### With `review-staging` skill
-Triage updates **Triage outcomes** and finding **Triage** fields; preserves immutable synthesis statistics from the review pass. The triage update ends with a `--hard` validator gate (Step 4.5) before the staging doc is handed back to the orchestrator.
+Triage updates **Triage outcomes** and finding **Triage** fields; preserves immutable synthesis statistics from the review pass. The triage update ends with a `--hard` validator gate (final step of **Staging doc triage outcomes**) before the staging doc is handed back to the orchestrator.
+
+### With `doc-hierarchy` + `plans` skills (backlog lifecycle)
+**Backlog capture** items written under `{backlog_dir}` use the `doc-hierarchy` pre-plan backlog format; promotion to a plan and archival to `backlog_completed_dir` follow those skills, not this one.
 
 ### With `execute-plan` skill
 Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review`. Triage is authoritative for exit: implement valid fixes, mark `drop` or `done`, and leave only validated unresolved issues at `pending`. The orchestrator counts unresolved findings with `blocking: true`, not severity alone. Accepted fixes identify every owning or affected worker for the targeted follow-up.
 
 ### With `doing-code-review` / `review-agents`
-Accepted human findings that the panel missed feed Step 2.5 Guideline Pack awareness and optional catalog/overlay patches (see **Agent corpus feedback** above). Pattern IDs stay abstract; overlays and guidelines carry stack/project detail.
+Accepted human findings that the panel missed feed Step 2.5 Guideline Pack awareness and optional catalog/overlay patches (see **Agent corpus feedback** above). Pattern IDs stay abstract; overlays and guidelines carry stack/project detail. Documentation and comment findings are evaluated with `review-agents/documentation.md` phase 2 gates, including the remove-or-freeze disposition for outdated docs (see **Documentation and Comment Findings** above).
 
 ## The Bottom Line
 

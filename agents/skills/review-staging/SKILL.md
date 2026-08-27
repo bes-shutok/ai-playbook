@@ -60,6 +60,14 @@ Where:
 
 Create `{reviews_dir}` if it does not exist.
 
+## Canonical record and supersession
+
+There is one canonical Markdown record and one matching sidecar for each review pass. Before creating a file, enumerate and read all matching records and sidecars for the PR. Existing focused or partial records are inputs to the current pass and must be merged or updated, not copied into a sibling primary file for another lens.
+
+If more than one matching record already exists, select one canonical record, add `Supersedes` and `Superseded by` metadata links, and mark every non-canonical record `SUPERSEDED`. A superseded record is historical only and is never eligible for posting. The canonical path must be selected before review workers launch and must remain the only path used for synthesis, triage, and posting.
+
+Create a new suffixed record only for an explicitly requested new review round, or when the prior record is final or posted and the current review is genuinely a new round. A worker lens does not by itself justify a new primary record.
+
 ## Orchestrator recording rules
 
 Every review orchestrator (plan, branch, PR, RFC, Confluence) **must** populate `## Review Statistics` while synthesizing findings, not after the fact from memory.

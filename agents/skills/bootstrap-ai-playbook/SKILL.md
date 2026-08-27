@@ -108,6 +108,7 @@ Optional keys (discover when present; omit when not found):
 | `rfcs_dir` | Design RFCs (Layer 3) | `docs/history/feature-notes/` |
 | `caller_catalog` | HTTP/integration samples | Path named in `project_guidelines_rel` |
 | `guidelines_path` | Project guidelines | `project_guidelines_rel` from user facts, then on-disk probe |
+| `team_references_project` | Local project containing team profiles and team/Slack context | User or ownership facts when company-scoped; persist only when the resolved path exists |
 
 ## Path Discovery
 
@@ -126,6 +127,7 @@ Optional keys (discover when present; omit when not found):
 - For each hint, check whether the path exists as a directory (trailing slash normalized).
 - When multiple matches, prefer the **shallowest** path.
 - **Never** write a path key from doc-hierarchy default tables or plan examples unless that exact path exists on disk.
+- For company-scoped repos, when user or ownership facts provide `team_references_project` and the directory exists, persist that optional key in the repo facts. Do not invent the path or copy a concrete team alias into this portable skill.
 - If no home exists, follow `project_guidelines_rel` if documented; else ask the user before creating new top-level `docs/` trees.
 
 ### Exploration commands

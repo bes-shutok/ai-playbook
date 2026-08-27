@@ -109,6 +109,13 @@ After branch setup and before writing the plan content, interview the user to va
 
 **Announce:** "Now I'll validate requirements and key decisions before writing the plan. This ensures we build the right thing with clear boundaries."
 
+**Unclear points, confidence gate (grill or record assumptions):** Throughout Phase 1, whenever a requirement point stays unclear after checking the repo first (code, docs, git history, prior plans, `.ai-playbook/facts.md`), rate confidence in the interpretation the plan is about to build on:
+
+- **Low confidence:** multiple reasonable interpretations exist, the answer materially changes scope, tasks, invariants, or Validation Commands, or repo evidence is missing or contradictory. Do not guess and do not silently pick one. Invoke the `grill-with-docs` skill to resolve the point with the user (one question at a time, inline glossary and ADR capture per that skill) and fold each confirmed answer into the requirements buffer before continuing. Borderline cases count as low confidence (fail closed, same stance as the Checklist inclusion gate).
+- **High confidence:** exactly one interpretation is strongly supported by repo evidence, established convention, or an already-confirmed decision, and a wrong call is cheap to correct during implementation. Do not interrogate the user; record the assumption in the requirements buffer as `- assume <assumption>; basis: <evidence, convention, or confirmed decision>`.
+
+Keep every high-confidence assumption in one running list in the requirements buffer and present that list in the Step 1.4 confirmation block; the user's yes confirms the listed assumptions as a batch. A rejected assumption is either adjusted and reconfirmed, or downgraded to a low-confidence point and resolved via `grill-with-docs` before the plan is written. Carry the final list into the plan's `## Assumptions` section. Never build a plan on silent assumptions.
+
 ### Step 1.1: Discover the real goal
 
 Ask targeted questions to uncover the actual objective, not just the surface request:
@@ -171,6 +178,9 @@ Present the validated requirements and evaluation criteria back to the user in s
 
 **Key invariants:** <what must not break>
 
+**Assumptions (high-confidence, not grilled):**
+- assume <assumption>; basis: <repo evidence, convention, or confirmed decision>
+
 **Evaluation criteria:**
 - <quality dimension>: <specific check or metric>
 - <quality dimension>: <specific check or metric>
@@ -182,9 +192,9 @@ Present the validated requirements and evaluation criteria back to the user in s
 Proceed with writing the plan? (yes/no; if no, tell me what to adjust)
 ```
 
-Wait for explicit confirmation before proceeding to write the plan file. If the user asks to adjust, update the requirements buffer and reconfirm.
+Wait for explicit confirmation before proceeding to write the plan file. If the user asks to adjust, update the requirements buffer and reconfirm. A yes confirms the listed assumptions as-is; for any rejected assumption, adjust and reconfirm it or downgrade it to a low-confidence point and resolve it via `grill-with-docs` (see the Phase 1 confidence gate).
 
-**Hard gate:** Do not write the plan file until requirements are validated and confirmed.
+**Hard gate:** Do not write the plan file until requirements are validated and confirmed, every low-confidence point is resolved, and every high-confidence assumption is listed in the confirmation block.
 
 ## Plan Format
 
@@ -196,6 +206,8 @@ Every plan follows this exact structure; no variations:
 [Optional: one-line reference to RFC/PRD/ticket]
 
 [Optional: ## Terms; required when 3+ project-specific terms; see agent_workflow_guidelines.md §45]
+
+[Optional: ## Assumptions; required when Phase 1 recorded any high-confidence assumption (confidence gate); one bullet per assumption with its basis]
 
 ## Gist & Examples
 
@@ -300,6 +312,7 @@ Examples:
 - Every plan must include a **Review Scope** section (see below).
 - Every plan must include a **Gist & Examples** section (see Universal Patterns).
 - Every plan must include an **Evaluation Criteria** section defining quality dimensions, **Done when**, and **Ship when** (see Phase 1).
+- When Phase 1 recorded high-confidence assumptions (confidence gate), the plan must include an `## Assumptions` section listing each assumption with its basis; a plan that silently builds on an unlisted assumption is a defect.
 - Before finalizing, verify pre-computation bug pattern checks are addressed (see Universal Patterns).
 
 ## Documentation Impact Assessment
@@ -430,6 +443,8 @@ Every plan must include a `## Validation Commands` fenced bash block (see plan t
 16. **Stage-scoped interim validation:** When a plan task runs a subset of the final Validation Commands block at an interim point (for example a mid-plan commit gate before later tasks create their artifacts), scope every path-dependent check to paths that exist at that stage. A search tool's error exit on a missing operand (rg exit 2) makes an `if <tool> …; then fail; fi` branch unreachable, silently disabling the check for the paths that DO exist in the same invocation; either `test -f` pre-check each path or leave the multi-path form to the final task (see `development_lessons.md` #206).
 17. **Fold/migration probe inventory:** When a task deletes an artifact (file, command spec, section) and folds its content into surviving artifacts, derive the probe set from the deleted source, not the destination's new prose: inventory every enforceable obligation in the source before deletion (for example `git show <rev>^:<path>`), give each a dedicated probe that fails when absent (rule 7), and make prose remnant sweeps case-insensitive (`grep -niE` with lowercased alternatives). An obligation named only in plan prose is unpinned (see `development_lessons.md` #207).
 18. **Probe pattern distinctiveness and scope congruence:** A dedicated grep is dedicated only if deleting the guarded sentence breaks it. Quote a distinctive multi-word span verbatim from the normative rule line and verify the span is unique in the file; a single common token that also appears in unrelated prose of the same file aliases to that other text and stays green when the obligation is deleted. Match the probe's region to the obligation's region: when an obligation is scoped to a sub-region (frontmatter, one section), sweep exactly that region rather than the whole file (the term may legitimately appear elsewhere), extract the region with a fail-closed assertion on an anchor line (for example `^name:`) so a broken extractor cannot pass vacuously, and make forbidden-term sweeps of the region case-insensitive (see `development_lessons.md` #187).
+19. **Wrap-tolerant forbidden-phrase sweeps, proven RED today:** a multi-word prose phrase can be line-wrapped in the target document, so a line-based grep can NEVER match it and a "no remaining hits" sweep false-passes forever. Flatten before matching (`tr '\n' ' ' < file | grep -q "<phrase>"`) or sweep a single-line fragment, and at authoring time EXECUTE the sweep against the CURRENT content and record that it fires (the gate must be RED-today, flipping GREEN exactly when the rewrite task lands). A reviewer's "verified empirically" claim is not proof; the next round re-executes it (see user-level lessons #220: a vacuous sweep survived three review rounds plus a false empirical-verification claim).
+20. **Literal-pinning greps must tolerate the prescribed declaration form:** when a Validation Command asserts an exact assignment literal (constant name plus value) and a task prescribes the declaration WITH a type annotation (`NAME: tuple[float, ...] = (...)`), a grep pinning `NAME = value` cannot match the prescribed line and the final validation task fails against a correctly implemented plan. Pin the name loosely and the value exactly (`grep -q "NAME.*= (…)"`), or simulate the grep against the task's own prescribed snippet before finalizing; the positive-presence mirror of rule 19's RED-today proof (a reviewer caught this as a blocking defect only at round 12, after the annotation form had been introduced by an earlier fold).
 
 ## Plan Quality Gate
 
@@ -444,7 +459,8 @@ five-worker panel from review-panel-selection.md. Apply severity-calibration.md,
 loaded lenses, and do not launch nested review agents.
 
 Read the actual source files referenced in the plan to verify assumptions about data types,
-function signatures, pipeline ordering, and return contracts.
+function signatures, pipeline ordering, and return contracts. The plan file itself is
+READ-ONLY for you: record findings only in the review artifact (never edit the plan).
 
 Classify every finding as Critical, High, Medium, or Low, with independent blocking status.
 
@@ -463,7 +479,7 @@ Return in the review Summary:
 **If the sub-agent has not completed within 15 minutes**, proceed with an inline spot-check using the same shared severity and blocking contract. Incorporate the delegated result when it completes.
 
 **After the sub-agent completes**, incorporate findings into the plan from the review artifact; do not re-run plan analysis inline. (These rules govern **plan** reviews only, `source_kind: "plan"`. Code/branch reviews follow `doing-code-review` and `review-loop`, whose post-fix worker selection, every owning or affected worker, is unaffected by the Medium+ narrowing in rule 4.)
-1. Fold every accepted finding with `blocking: true`; fold other material findings by consequence.
+1. Fold every accepted finding with `blocking: true`; fold other material findings by consequence. A fold that changes a contract term must grep the whole plan for the superseded term and re-derive every matching bullet before the next round; sibling bullets written from the old contract are the classic residue (UL #215).
 2. **A fold is a digest change, regardless of severity.** After ANY fold (blocking or non-blocking) that edits the plan artifact, the source digest has changed: recompute it and launch a fresh round before exit is allowed. A non-blocking fold is not exempt: a fold that looks mechanical (test rewrite, grep broadening, scoping tweak, preserve-note) can still break a path, a test, or a validation command. Re-probe because the digest moved, not because the finding was severe.
 3. **Re-probe set after a fold:** launch blind `correctness-completeness` plus every distinct owning or affected worker whose domain the folds touched. The blind `correctness-completeness` probe is mandatory on every post-fold round; it is the regression catcher for folds and must not be dropped.
 4. **Final-round worker selection (when the prior round found zero blocking):** the final round is the blind `correctness-completeness` probe plus only the workers that produced a **Medium or higher** finding in the prior round. Low-only and finding-free workers are not re-launched. If no worker produced Medium+, the final round is the blind `correctness-completeness` probe alone. This is the only round where the Medium+ rule narrows the panel; rounds that follow a fold of a blocking finding still launch every affected worker per rule 3.
@@ -471,6 +487,8 @@ Return in the review Summary:
 6. Exit only when one fresh review on the **post-fold** digest reports zero unresolved blocking findings. "Same digest" in rule 7 means the exact post-fold digest; an exit on a pre-fold digest is never valid.
 7. Do not run a second clean full panel on the same digest.
 8. Reconcile after three non-monotonic rounds. Before a sixth full-panel round, stop for user direction.
+9. **Post-round digest integrity:** after EVERY review round returns, verify the plan artifact was not edited out-of-process: `shasum -a 256 <plan-file>` must equal the round sidecar's recorded `source_digest`. A reviewer editing the plan AFTER its validator ran (e.g. "helpfully" refreshing a header reference line) silently breaks the exit binding; revert to the exact reviewed bytes and re-verify the hash. Sub-agent review prompts must state the plan file is READ-ONLY for the reviewer.
+10. **Review-reference fixed point:** plan headers reference review artifacts by filename PREFIX or glob (e.g. `...-r1.md` …), never an enumerated final round count. The round that reviews the header cannot be counted inside it: an enumerated "through rN" line has no stable fixed point and goes stale every round (witness: a reviewer's post-review header edit had to be reverted under rule 9).
 
 **Ready for execution** means the latest review artifact explicitly states `ready=yes` with zero unresolved blocking findings. Open the artifact and verify its verdict rather than relying on chat summary. The post-fold-digest requirement (rule 6) is enforced by the `--source-plan` mechanical gate in `review-plan` Step 4; a `ready=yes` recorded before a fold fails that gate and does not count.
 
@@ -593,5 +611,8 @@ Consumer of plan format, task order, `## Validation Commands`, `## Review Scope`
 ### With `review-plan` skill
 The `plans` skill provides the Checklist inclusion gate to its consumer, `review-plan`. Plan review verifies that checklist items are repository implementation, and that every release-gate exception has a current bound receipt plus a meaningful `why executable now` and observable `completion evidence`. External prerequisites remain blocking and are never exception-admissible.
 
+### With `grill-with-docs` skill
+The Phase 1 confidence gate invokes `grill-with-docs` for every unclear point rated low-confidence. That skill runs a `grilling` interview with `domain-modeling` active throughout, capturing glossary terms and ADRs inline while each point is resolved; confirmed answers feed the requirements buffer, and the plan references the updated glossary/decision docs instead of duplicating terms. High-confidence points skip the grill and land in the plan's `## Assumptions` section instead.
+
 ### With `grilling` skill
-When Phase 1 requirements discovery hits ambiguous scope or trade-offs, and the user asks to grill a decision, invoke `grilling` for one-question-at-a-time resolution. Do not replace the plans interview structure; grilling deepens specific decisions.
+When the user (not the confidence gate) asks to grill a decision during Phase 1, invoke `grilling` for one-question-at-a-time resolution without doc capture. Do not replace the plans interview structure; grilling deepens specific decisions. Agent-detected low-confidence unclear points route to `grill-with-docs` (see above).

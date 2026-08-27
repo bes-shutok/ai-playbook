@@ -444,6 +444,16 @@ description: Generate technical documentation from code. Use when user mentions 
 - JSON examples must be valid JSON (`[]` placeholders, not `[...]`).
 - Prefer `deduplicate` / `subagent` / `coauthor` over informal verb forms and hyphenated compounds spell-checkers reject.
 
+### 7. Embedded fence strings inside code blocks
+
+**Problem**: A code block contains a literal triple-backtick sequence (for example an awk or grep pattern that matches Markdown fences). Any tool or agent that extracts fenced blocks from the SKILL.md, by regex or by line scanning, terminates the block early and script assembly breaks.
+
+**Solution**: Construct fence-matching strings at runtime instead of embedding them literally:
+```bash
+awk 'BEGIN{F3=sprintf("%c%c%c",96,96,96)} $0 ~ "^"F3"toml"{f=1;next} f && $0 ~ "^"F3{exit} f && /^key/{print; exit}' file.md
+```
+Rule: inside any fenced code block, never write a literal triple backtick; triple backticks appear only on actual fence lines. Verify with a scan that every triple-backtick occurrence in the file sits alone on a fence line.
+
 ## Skill Size Guidelines
 
 Based on analysis of 50+ production skills:

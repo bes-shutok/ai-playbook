@@ -47,7 +47,8 @@ docs_branch_add_shadow_candidate() {
 docs_branch_append_extra_shadow_dirs_from_facts() {
   _facts_file="$1"
   [ -f "$_facts_file" ] || return 0
-  _extra_raw=$(awk '/^```toml/{f=1;next} f&&/^```/{exit} f&&/^extra_shadow_dirs[[:space:]]*=/{sub(/^extra_shadow_dirs[[:space:]]*=[[:space:]]*\[/,""); sub(/\].*$/,""); print; exit}' "$_facts_file")
+  # F3: fence string built via sprintf so this code block contains no literal triple backticks (keeps the block extractable from SKILL.md)
+  _extra_raw=$(awk 'BEGIN{F3=sprintf("%c%c%c",96,96,96)} $0 ~ "^"F3"toml"{f=1;next} f && $0 ~ "^"F3{exit} f && /^extra_shadow_dirs[[:space:]]*=/{sub(/^extra_shadow_dirs[[:space:]]*=[[:space:]]*\[/,""); sub(/\].*$/,""); print; exit}' "$_facts_file")
   if [ -n "$_extra_raw" ]; then
     while IFS= read -r _item; do
       [ -n "$_item" ] || continue
@@ -231,7 +232,7 @@ unset extra_path clean_extra _already_shadowed shadow_path
 # Resolve tmp_dir for execute-plan session preservation (TOML first, then fallback)
 EXEC_TMP=""
 if [ -f .ai-playbook/facts.md ]; then
-  EXEC_TMP=$(awk '/^```toml/{f=1;next} f&&/^```/{exit} f&&/^tmp_dir/{gsub(/^tmp_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
+  EXEC_TMP=$(awk 'BEGIN{F3=sprintf("%c%c%c",96,96,96)} $0 ~ "^"F3"toml"{f=1;next} f && $0 ~ "^"F3{exit} f && /^tmp_dir/{gsub(/^tmp_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
 fi
 EXEC_TMP="${EXEC_TMP:-${TMP_DIR:-docs/tmp/}}"
 EXEC_TMP="${EXEC_TMP%/}"
@@ -291,6 +292,9 @@ for shadow_path in "${SHADOW_PATHS[@]}"; do
   fi
 done
 unset _extra_shadow_root ignored_path
+# Vim swap files are local editor recovery artifacts. Keep any live file in the
+# working tree, but never copy it into the docs backup branch.
+find "$SHADOW_TMP" -type f \( -name '.*.swp' -o -name '.*.swo' -o -name '.*.swn' \) -delete
 [ -e ".gitignore" ] && cp ".gitignore" "${SHADOW_TMP}/.gitignore"
 
 if git for-each-ref --format='%(refname)' 'refs/heads/docs/*' | grep -q .; then
@@ -370,8 +374,8 @@ unset del_path
 # then track both locations forever. Mirror the archive move by removing the
 # stale old-path copy when the working tree no longer has it.
 if [ -f .ai-playbook/facts.md ]; then
-  _plans_dir_cfg=$(awk '/^```toml/{f=1;next} f&&/^```/{exit} f&&/^plans_dir[[:space:]]*=/{gsub(/^plans_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
-  _plans_completed_cfg=$(awk '/^```toml/{f=1;next} f&&/^```/{exit} f&&/^plans_completed_dir[[:space:]]*=/{gsub(/^plans_completed_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
+  _plans_dir_cfg=$(awk 'BEGIN{F3=sprintf("%c%c%c",96,96,96)} $0 ~ "^"F3"toml"{f=1;next} f && $0 ~ "^"F3{exit} f && /^plans_dir[[:space:]]*=/{gsub(/^plans_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
+  _plans_completed_cfg=$(awk 'BEGIN{F3=sprintf("%c%c%c",96,96,96)} $0 ~ "^"F3"toml"{f=1;next} f && $0 ~ "^"F3{exit} f && /^plans_completed_dir[[:space:]]*=/{gsub(/^plans_completed_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
   _plans_dir_cfg="${_plans_dir_cfg%/}"
   _plans_completed_cfg="${_plans_completed_cfg%/}"
   if [ -n "$_plans_dir_cfg" ] && [ -n "$_plans_completed_cfg" ] && \

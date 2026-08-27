@@ -128,6 +128,7 @@ Do not start Phase 1 until execute-plan is chosen (invocation signal or gate opt
 | Overwrite an existing worker log on relaunch | Same path = append Pass N to end; never truncate `review-r<R>-receiving-review.log.md` or other worker logs |
 | Delete `{tmp_dir}/execute-plan/<PLAN_SLUG>/` before success or on failure/interrupt | Tmp logs are removed only in Phase 5 after full successful completion |
 | Repeat a clean full panel on the same digest | Exit after one fresh blocking-clean review |
+| Exit Phase 3 with deferred or scope-dropped valid findings recorded only in the gitignored staging doc | Backlog capture: every valid unfixed finding needs a durable backlog item before exit |
 | Return a final response after a worker checkpoint | A worker final, `done` commit, or review launch is progress only; the parent must pass the terminal-response gate and complete Phase 5 first |
 | Return a final response after answering a status or interruption question | A status/correction question does not pause execution; answer in commentary, then re-read the active manifest and continue unless the user explicitly says pause or abort |
 | Treat post-fix Step 3.1 as "verify prior fixes only" | Causes verification bias; clear rounds must be **fresh adversarial** reviews (promote miss-path after boolean false) |
@@ -540,7 +541,7 @@ Parse the staging doc at the verified path. Count unresolved findings with `bloc
 | Finding | Action |
 |---------|--------|
 | `blocking: true` and unresolved | Launch Step 3.3 (`receiving-review`) |
-| `blocking: false` | Triage by consequence; does not by itself block completion |
+| `blocking: false` | Triage by consequence; does not by itself block completion. Valid ones not fixed on this branch get durable backlog items per `receiving-review` **Backlog capture** |
 
 **Do not use Step 3.2 counts for loop exit.** They only decide whether Step 3.3 runs. Exit criteria are evaluated in Step 3.4 after triage.
 
@@ -553,7 +554,7 @@ If unresolved blocking findings exist from Step 3.2:
 Launch a sub-agent using your agent's sub-agent execution capability.
 Use the **Address Review** template from [subagent-prompts.md](subagent-prompts.md).
 
-The sub-agent runs `receiving-review` against the staging doc (not GitHub threads unless a PR exists). It triages provisional findings: implements valid fixes, marks false positives/out-of-scope as `drop`, marks addressed items `done`, and re-runs validation commands.
+The sub-agent runs `receiving-review` against the staging doc (not GitHub threads unless a PR exists). It triages provisional findings: implements valid fixes, marks false positives/out-of-scope as `drop`, marks addressed items `done`, and re-runs validation commands. Valid findings it does not fix in this run (deferred, scope-dropped, or excluded by user instruction) must leave a durable backlog item per `receiving-review` **Backlog capture for valid findings not fixed in scope** before it returns.
 
 **Address completeness:** Mark a finding `done` only when the **executable/canonical artifact** named in the finding is fixed (script, monolithic bash block, wired call site, or config the runtime actually reads). Updating a non-executable reference snippet while the runnable block or script remains stale does **not** satisfy address-review; leave the finding `pending` or fix the executable artifact.
 
@@ -566,6 +567,7 @@ If Step 3.2 shows no unresolved blocking findings, skip Step 3.3 and go to Step 
 1. Address sub-agent returned `<ADDRESS_LOG_PATH>` and the file is non-empty.
 2. Staging doc statuses updated (`done`, `drop`, or justified `pending`).
 3. Address log remaining-blocking section parsed, or staging re-read for unresolved `blocking: true`.
+4. Every valid finding not fixed in this iteration has a durable backlog item (path recorded on the finding or in the address log).
 
 ### Step 3.4: Evaluate the current digest and launch done
 
@@ -687,7 +689,7 @@ TMP_DIR="{tmp_dir}/execute-plan/<PLAN_SLUG>"
 test ! -e "{tmp_dir}/execute-plan/<PLAN_SLUG>" && echo "tmp cleanup OK"
 ```
 
-Report successful plan completion to the user, including the verified terminal-receipt fields and that session tmp logs and any review diff snapshots under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` were removed. Review staging docs under `{reviews_dir}/` are **not** deleted by this step (separate lifecycle). Only after the terminal receipt was written and re-read may the parent send its final response for the execute-plan request.
+Report successful plan completion to the user, including the verified terminal-receipt fields, the Phase 3 fixed-vs-backlogged findings tally (backlog item paths for valid findings not fixed on the branch), and that session tmp logs and any review diff snapshots under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` were removed. Review staging docs under `{reviews_dir}/` are **not** deleted by this step (separate lifecycle). Only after the terminal receipt was written and re-read may the parent send its final response for the execute-plan request.
 
 ## Sub-Agent Launch Rules
 
@@ -776,7 +778,7 @@ Only `done` performs git commits. Invoked after each implementation task (Step 1
 After all tasks, the execute-plan **parent** runs `doing-code-review` as the review orchestrator and launches lens workers as sub-agents. Staging doc is the handoff artifact. Uses full-branch diff (`<BASE_BRANCH>...HEAD`). Applies two-tier Review Scope: explicit must-fix plus plan-related extension for unlisted paths. Nested "Code Review" sub-agent only as recovery when the parent cannot fan out (see Step 3.1).
 
 ### Consumes `receiving-review` skill (sub-agent)
-Triages provisional findings between rounds. Phase 3 exit depends on unresolved `blocking: true`, not raw severity counts.
+Triages provisional findings between rounds. Phase 3 exit depends on unresolved `blocking: true`, not raw severity counts. Valid findings not fixed in the run must leave durable backlog items per its **Backlog capture** rule; the Step 3.3 verification gate checks the artifact exists.
 
 ### Related: `review-loop` skill (standalone)
 For branch hygiene without a plan, use `review-loop`. Both workflows exit after one fresh blocking-clean review of the current digest.
