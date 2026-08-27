@@ -554,3 +554,12 @@ Stop at the first rung that holds:
 **Tests:** non-trivial logic (branch, loop, parser, money/security path) deserves one runnable check (smallest `test_*` or self-check); trivial one-liners need no test (YAGNI applies to tests too).
 
 **Upstream pattern:** adapted from [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail); deep links in `skill-upstream-catalog.md` **Merged pattern index**. Merged here instead of a persistent session-mode skill. Complexity review tags live in `review-agents/simplification.md`.
+
+## 29. Unbounded Loops and Unbounded Accumulation Are Resource Bugs, Not Style Issues (H)
+
+Language-agnostic form of the 2026-20 GB incident (Python details in `python_guidelines.md` #21):
+
+- Every unbounded loop (pagination drains, cursor/retry loops, polling, event consumption) must have TWO independent exits: a hard ceiling (iteration count or accumulated-size cap) and a no-progress guard (an iteration that yields nothing new stops loudly, logging the potential data loss). "The server terminates the loop for us" is an assumption, not a bound; any refactor that changes the advance/dedup strategy must re-prove termination.
+- Anything that grows per iteration inside a loop (log records, buffers, result lists) inherits the loop's bound. Test frameworks that capture logs or output turn a log-per-iteration infinite loop into unbounded memory growth; the host dies, not the test.
+- Test suites for any language should run under a per-test wall-clock timeout so a runaway test is killed early; treat a timeout as a loop bug, never a flake to suppress.
+- Synthetic test fixtures must model the fields the production code branches on; fixtures skinnier than real input data validate strategies under conditions that cannot occur in production.

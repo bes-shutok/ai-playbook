@@ -7,14 +7,14 @@ Shared JVM rules (Spring, Reactor, SLF4J) live in `~/Projects/.ai-playbook/jvm_g
 Language-agnostic rules live in `~/Projects/.ai-playbook/coding_guidelines.md`.
 Language-agnostic agent workflow lessons live in `~/Projects/.ai-playbook/agent_workflow_guidelines.md`.
 
-## 1. Spring `@ConfigurationProperties` — Constructor vs Setter Injection Validation
+## 1. Spring `@ConfigurationProperties`: Constructor vs Setter Injection Validation
 
 See `jvm_guidelines.md #1`. Java-specific: prefer constructor binding with `@ConstructorBinding`
 or record-style constructors, and use JSR-303 `@Validated` with constraints on parameters.
 
 ## 2. Mockito Stubbing for Reactor / R2DBC Errors
 
-See `jvm_guidelines.md #4`. Mockito-specific: use `thenReturn(Mono.error(...))` — never
+See `jvm_guidelines.md #4`. Mockito-specific: use `thenReturn(Mono.error(...))`, never
 `thenThrow()`.
 
 ## 3. Mockito `timeout()` for Fire-and-Forget Async Assertions
@@ -25,7 +25,7 @@ See `jvm_guidelines.md #5`. Mockito-specific: use `verify(collaborator, timeout(
 
 See `coding_guidelines.md #7`.
 
-## 5. Numbered Enum Slot Reservation — Use an Explicit Entry
+## 5. Numbered Enum Slot Reservation  -  Use an Explicit Entry
 
 See `coding_guidelines.md #8`.
 
@@ -42,11 +42,11 @@ use overloading or `@Nullable`.
 6.3. Prefer `Optional.map()` / `flatMap()` / `filter()` chains over `if (opt.isPresent())`
 imperative blocks. The chain is shorter and makes the empty-case handling explicit.
 
-## 7. Spring `@ConfigurationProperties` — Use `Duration` for Duration Fields
+## 7. Spring `@ConfigurationProperties`  -  Use `Duration` for Duration Fields
 
 See `jvm_guidelines.md #2`.
 
-## 8. Spring Cloud Config — Do Not Bundle `spring.application.name`
+## 8. Spring Cloud Config  -  Do Not Bundle `spring.application.name`
 
 See `jvm_guidelines.md #3`.
 
@@ -77,8 +77,8 @@ and appends `_total` to counter metrics. Always use lowercase names when writing
 ```
 
 Consequences:
-- `rate(instant_virtuals_error_METRICS8002{}[5m])` — **does not match** (uppercase)
-- `rate(instant_virtuals_error_metrics8002_total[5m])` — **correct**
+- `rate(instant_virtuals_error_METRICS8002{}[5m])`  -  **does not match** (uppercase)
+- `rate(instant_virtuals_error_metrics8002_total[5m])`  -  **correct**
 - Gauges do **not** get the `_total` suffix; counters always do.
 - Micrometer also converts camelCase segments to snake_case (e.g. `myCounter` → `my_counter_total`).
 
@@ -88,23 +88,23 @@ logically wrong.
 
 ## 11. Collection Defensive Copy Idioms
 
-**Do not double-wrap unmodifiable copies.** `Set.copyOf()`, `List.copyOf()`, and `Map.copyOf()` already return unmodifiable copies — wrapping them in `Collections.unmodifiable*()` adds no protection and signals misunderstanding.
+**Do not double-wrap unmodifiable copies.** `Set.copyOf()`, `List.copyOf()`, and `Map.copyOf()` already return unmodifiable copies  -  wrapping them in `Collections.unmodifiable*()` adds no protection and signals misunderstanding.
 
 ```java
-// Wrong — redundant wrapper
+// Wrong  -  redundant wrapper
 this.items = Collections.unmodifiableSet(Set.copyOf(items));
 
 // Correct
 this.items = Set.copyOf(items);
 ```
 
-**Let the domain method own the single defensive copy.** When a domain aggregate's mutation method calls `copyOf()` internally, the calling application service must not pre-copy the same collection before passing it in. Passing an already-copied collection wastes an allocation; more importantly, the responsibility for defensive copying should live in one place — the aggregate boundary.
+**Let the domain method own the single defensive copy.** When a domain aggregate's mutation method calls `copyOf()` internally, the calling application service must not pre-copy the same collection before passing it in. Passing an already-copied collection wastes an allocation; more importantly, the responsibility for defensive copying should live in one place  -  the aggregate boundary.
 
 ```java
-// Wrong — pre-copy in application service
+// Wrong  -  pre-copy in application service
 profile.patchIdentities(List.copyOf(identities));
 
-// Correct — aggregate owns the defensive copy
+// Correct  -  aggregate owns the defensive copy
 profile.patchIdentities(identities);  // aggregate calls List.copyOf internally
 ```
 
@@ -123,3 +123,15 @@ when(mapper.findByCustomerId(customerId))
 ```
 
 Do not assign a lambda to the mapper type even when only one method is exercised in the test.
+
+## 13. MyBatis `@Select` Methods Must Not Return `void` Without a Result Handler
+
+An annotated MyBatis `@Select` method executes through the query result-mapping path. Do not
+declare it as `void` merely because the caller wants to ignore the result. Without a
+`ResultHandler`, MyBatis uses the declared return type as the result-map type and can fail while
+trying to materialize a returned row as `void`.
+
+Return a concrete scalar or domain type that matches the query, or use a result handler when
+intentionally consuming rows without returning them. This is especially important for SQL
+functions that perform an action but still produce a result row, such as transaction-scoped
+database lock functions.

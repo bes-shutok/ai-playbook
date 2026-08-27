@@ -44,6 +44,7 @@
 
 
 - All external data string fields (from any upstream data source: CSV/Excel importers, API responses, third-party feeds, etc.) must be wrapped with `safe_cell_value()` before writing to Excel cells. Formula injection vulnerabilities exist if even one field is unprotected.
+- Plain CSV exports are the same sink, not an exemption: any field in a generated CSV that a user will open in a spreadsheet (diff reports, audit extracts) must neutralize a leading `=`, `+`, `-`, or `@` (single-quote prefix is the usual neutralizer), applied uniformly to every column. Injection payloads ride unexpected columns (e.g. an asset code read as `=HYPERLINK(...)`), not only free-text-looking ones.
 - Check consistency: if most fields in a section use `safe_cell_value()`, any unprotected field is likely a bug.
 - Common unprotected fields to watch: free-text `description`, `notes`, customer/account labels, supplier names, user-entered reason text.
 
@@ -4323,7 +4324,7 @@ When the identical command behaves differently in the agent shell versus the use
 
 **Shape trigger:** An implement log, run report, or validation table records exit 0 for a command that should have failed (or the reverse), and the recorded command line ends in a pipe segment.
 
-**Example:** A harness run was expected to exit 3 (validation differences found). The run was piped to `tail` and the code captured with bash `PIPESTATUS` syntax under zsh; the log recorded 0. Re-running with output redirection captured the authoritative 3. The re-run was cheap only because the command was idempotent (artifacts regenerate, appends dedup by signature); that is luck, not a property to rely on.
+**Example:** A harness run was expected to exit 3 (validation differences found). The run was piped to `tail` and the code captured with bash `PIPESTATUS` syntax under zsh; the log recorded 0. Re-running with output redirection captured the authoritative 3. The re-run was cheap only because the command was idempotent (artifacts regenerate, appends dedup by signature); that is luck, not a property to rely on. Repeated 2026-08-22 in the same workflow (`cmd 2>&1 | tail; echo $?` echoed the tail's 0 for an exit-3 run): recalling this lesson did not prevent the reflex, so when the exit code is the deliverable, write the redirect form FIRST, before composing any display filtering.
 
 **See also:** UL#152 (zsh vs bash expansion aborts in skill scripts); UL#191 (validation polarity).
 
@@ -4442,3 +4443,258 @@ When the identical command behaves differently in the agent shell versus the use
 **Witness (same plan, r8, zero blocking):** the input-ownership class held: a fresh panel verified the r7 validator-input enumeration complete and staged no blocking findings, only drift introduced by the r7 wording itself (not residue): the key-set sentence read as an exclusive entry schema, contradicting the ledger fields each entry also records, and the parent entry restated child facts. The fix words the entry as the validator's non-exclusive read-set plus the named ledger fields, and the parent lists child page IDs only. The round's recurring record-lag class (a round record cannot cite corpus output the learn step appends after it) closed mechanically: the record pre-declares the witness paragraph the learn step will append.
 
 **See also:** #182 (gate every producer; the dual direction), #206 (temporal variant), #187 (dedicated probes), #207 (derive obligations from the moved source), coding_guidelines.md #18/#21 (Family A / Family D parents).
+
+## 211. After an Interrupted Sub-Agent, Audit-and-Adopt the Uncommitted Work; the Resuming Pass Owns the Missing Bookkeeping
+
+**Principle:** Family H (verify the real thing, not the abstraction). The real thing is the working-tree diff mapped against the step's deliverables. Both default recovery instincts are abstractions: "trust the tree" (#185's corruption case) and "redo the step" (discards verified work and can conflict with it).
+
+**Trigger:** A workflow step (implement task, address-review round) is relaunched after interruptions (usage-limit/quota, network failure, crash) and `git status` shows substantial uncommitted changes from predecessor launches, while the step's bookkeeping is absent or partial (no step log, no staging-doc status updates).
+
+**Rule:**
+1. Inventory the uncommitted diff first (`git status`, per-file `git diff`) and map every modified file to its intended deliverable (task clause, review finding). Do not reset, stash, or redo from scratch before this mapping exists.
+2. Verify each mapped change against its deliverable's intent (re-read the finding/task text; confirm the change addresses it) and keep correct work. Only unmappable or wrong work is redone.
+3. Run the step's mechanical validation yourself (full test suite, format validators): the predecessor was killed before final validation, so nothing has been verified end-to-end.
+4. Treat bookkeeping as always-missing: interruptions land between substantive edits and record-keeping, so the kill selects for "work present, records absent". The resuming pass writes the step log (including a multi-interruption audit note: which deliverables predecessor work covered vs what this pass completed), the staging-doc statuses, and sidecar triage from scratch.
+5. Name the adopted scope in the log so the orchestrator's commit step stages the right files and later reviewers do not mistake adopted work for this pass's new output.
+
+**Why this happens:** Substantive edits are spread throughout a step; bookkeeping happens at the end. An interruption therefore almost always leaves the former without the latter.
+
+**Shape trigger (when to suspect this family):** relaunching a step whose log is missing or lacks a final status while the tree is dirty; predecessor session context unavailable.
+
+**Distinguishing from #173 and #185:** #173 validates a multi-pass tree against each pass's diff-shape contract (stale-tree); #185 verifies files parse after a kill-mid-refactor (partial corruption). This lesson covers the complementary outcome: substantially complete work with zero bookkeeping, where the correct move is adopt-and-verify rather than validate-then-rebuild.
+
+**Example (an on-chain validation harness plan, address-review round):** The round was relaunched after quota and network interruptions. Predecessors had fixed nearly all staged findings across a double-digit modified-file set but never updated the review doc statuses, the sidecar triage, or any address log, and never ran the suite. The final pass audited every modified file via `git diff`, mapped each to its finding, kept the verified ones, completed the remaining findings, ran the full suite green, and wrote the multi-interruption audit note plus all bookkeeping.
+
+**See also:** #173 (multi-pass resume diff-shape), #185 (kill-mid-refactor parse verification), #134 (probe before assuming a quota block is real), `execute-plan` (preceding-step logs), coding_guidelines.md #25 (Family H parent).
+
+## 212. Route Data-Decidable Choices to the Evidence, Not the User
+
+**Principle:** Family H (verify the real thing, not the abstraction). The real thing is the data evidence within reach; "needs the user's choice" is a process abstraction that can mask a question the evidence already settles.
+
+**Trigger:** A workflow reaches a choice point (add a hardcoded constant, populate a registry, pick a data source, disposition a discrepancy cluster) and the agent prepares to ask the user which option to take, or a plan labels the step "user-owned"/"awaiting user approval".
+
+**Rule:**
+1. Before asking the user to choose, check whether data in reach decides it: local artifacts, public endpoints, cross-source amount comparisons, contract-declared values. If it does, act on the evidence, record the evidence next to the decision, and report.
+2. Escalate only what evidence cannot settle: preference, genuine ambiguity, legal or tax judgment, or a standing invariant the user owns (a frozen design table, a flip gate). Arrive with a recommendation even then.
+3. When a standing rule (for example "flag hardcoded values before adding them") forces a formal ask for something the data already proved, record the relaxation at that rule's home so the formality is not repeated every time.
+
+**Why:** Across one session the user three times rejected deferral of derivable work: a registry population framed as a user-owned manual action (all sources were public and agent-reachable), a ticker-identity alias submitted for approval when per-transaction amounts on both sides already proved the tokens identical, and disposition-by-disposition asks for clusters whose amounts agreed. Formal asks for decidable questions waste the owner's time and stall pipelines; the owner's words: show me only what genuinely needs additional input.
+
+**Shape:** An "awaiting user approval" item whose deciding evidence is one query away.
+
+**Example:** A validation harness needed a ticker alias (a token contract declaring a Unicode-glyph symbol while the baseline source and exchanges use the ASCII spelling; equal per-transaction amounts under both spellings). Framed as needing explicit approval under a no-hardcoded-values rule; the owner pointed out the data proved identity, delegated evidence-decisive decisions generally, and the alias landed with the evidence recorded and a delegation note at the rule's home.
+
+**See also:** coding_guidelines.md #25 (Family H parent); skill-mandated confirmation gates remain binding (those are the owner's hard stops, not data questions); the project's decision-authority delegation record in its validation-harness maintenance doc.
+
+**Distinguishing from #211:** #211 recovers interrupted work from the working tree; this lesson removes artificial decision checkpoints before they interrupt at all.
+
+## 213. Non-Unique Pagination Cursors Silently Drop Boundary-Key Rows
+
+**Principle:** Family G (Data-loss observability). A client-side pagination cursor derived from a sort key that is NOT unique per row (block number, date, group id) turns every page boundary that falls inside a group of rows sharing that key into a silent drop of the group's remaining rows; no error fires because the next page fetch succeeds.
+
+**Trigger:** Cursor/keyset pagination over an API whose sort key can repeat (many rows in one block, timestamp, or group), end-of-stream detected only by a partial page, and the advance computed as max(key of page) + step.
+
+**Rule:**
+1. Before advancing past a full page, count the boundary key's rows in the page (k rows share the page's max key).
+2. If k > 0 the group may continue past the cut: re-query the boundary key alone (key range pinned to that value) and page WITHIN it using the server's own page parameter, slicing the k already-held rows off the first response; only then advance the outer cursor.
+3. Keep the runaway guard (max-rows ceiling) binding inside the drain loop, not only the outer loop.
+4. A partial page inside the drain is the group's end signal; a group whose size is an exact multiple of the page size costs one extra empty request, which is the accepted end-of-stream price.
+
+**Why:** The dropped rows are tail rows of large same-key groups (batch payouts, multi-leg transactions), exactly the rows the consumer cares most about, and the loss is invisible until an independent source disagrees.
+
+**Shape:** An exporter claims to fetch "all rows", but an independent export shows more rows for the same key; per-key counts fall short at page-size multiples.
+
+**Example:** Block-range pagination over a token-transfer API advanced startblock past each full page's max block. A claim-style transaction placed 100+ transfer rows in one block; page boundaries cut inside it and the tail legs vanished (three transactions carried 81/71/69 of their 101 rows, under-reporting payout income). Draining the boundary block recovered every row; two of the three affected records then matched the independent source exactly.
+
+**See also:** the sibling cardinality lesson (compare underlying record cardinality between sources before ruling a side wrong, project corpus); the multiset-diff lesson below (#214) for scoping what a re-fetch changed.
+
+## 214. Scope Dataset-Version Changes by Full-Row Multiset Diff, Not Per-Key Counts
+
+**Principle:** Family H (Verify the real thing, not the abstraction: a per-key row count is an abstraction over row content; count equality can conceal full-row replacement).
+
+**Trigger:** Re-running an ingestion or export (re-fetch, upstream refresh) and scoping "what changed" by comparing the old and new files, typically to attribute downstream divergence to the known change.
+
+**Rule:**
+1. Build row multisets (Counter over full-row tuples) and diff both directions: added = new minus old, removed = old minus new.
+2. Report keys with symmetric add/remove (same counts, different content) as CHANGED; count-equal keys are not unchanged keys.
+3. Never build a causal theory on a count-only comparison; a count-equal diff can hide a whole-dataset relabel.
+
+**Why:** In this incident a count-only pass reported 4 changed keys (+84 rows) and the diagnosis built on it was wrong; the multiset pass showed 34 keys and 313 rows with one field silently relabeled by an upstream metadata refresh, which had flipped 25 downstream records from matched to divergent.
+
+**Shape:** A "only N keys changed" claim built from count diffs preceding a root-cause narrative.
+
+**Example:** After re-fetching a transaction export with a pagination fix, per-transaction row counts showed 4 changed transactions (the recovered rows); the full-tuple multiset diff additionally revealed 313 rows across 34 transactions whose asset label had been renamed upstream (same contract, new ticker), the actual cause of a matched-count drop.
+
+**See also:** #213 (the cursor fix that motivated the re-fetch); the project corpus's two-source cardinality lesson (compare cardinality BEFORE ruling a side wrong).
+
+**Distinguishing from the two-source cardinality lesson:** that one arbitrates a disagreement between two independent sources at one point in time; this one scopes what changed between two versions of the SAME source across time, where counts alone cannot see replacement.
+
+## 215. Sweep the Whole Artifact When Folding a Contract Change
+
+**Principle:** Family H (verify the real thing, not the abstraction: updating every section a finding NAMED is an abstraction of "the fold is complete"; the real thing is every occurrence of the superseded contract term in the artifact)
+
+**Trigger:** A review or feedback round forces a design-contract change in a document with many independent assertion sites (a plan's test bullets, a spec's examples, a migration checklist), and the fold edits the sections the finding explicitly pointed at.
+
+1. Before re-submitting, grep the whole artifact for the superseded contract term (the old value, name, polarity, or shape the finding rejected).
+2. For every match outside the already-edited sections, either update it to the new contract or consciously re-derive why it still holds.
+3. Treat a half-folded artifact as worse than the original: it now states both contracts, and a downstream executor follows whichever bullet it reads.
+
+**Why this happens:** Findings name specific sections, so the fold's attention narrows to those sections. Sibling bullets written earlier from the old contract feel already-covered, but they were never re-read against the new contract.
+
+**Example:** A plan review found that projected rows sharing one event id collapse in correlation-keyed consumers; the fold rewrote the terms, invariants, and the downstream task bullets to a per-row id suffix - but the FIRST test bullet of the FIRST task still expected the shared id. The next review round caught it as blocking; executed as written, the plan would have re-introduced the silent drop the fold existed to prevent. A one-line grep for the old term at fold time catches the residue.
+
+**See also:** #117 (a wording pass clears because the scanned positions are clean; staleness survives at positions the scan never reached).
+
+## 216. Resolve Team Addresses From Local Team References
+
+**Principle:** Family H (verify the real thing, not the abstraction) cross Family D (single source of truth)
+
+**Why this matters:** A Slack draft can use a valid-looking source signature or machine-readable platform markup and still address the wrong audience or fail to behave as intended in the user's client. Local team-reference artifacts are the authoritative source for visible shortcuts and team context.
+
+**Required behavior:** Before drafting a team-addressed message, resolve the local team-reference project from the current company's facts. Inspect the relevant team artifact for the visible shortcut and preserve that visible `@` form in the draft. Never infer the shortcut from a source message's raw markup or hardcode it in a portable skill.
+
+**Shape trigger (when to suspect this family):** A message needs a team or group address, but the visible shortcut, team membership, or local signature is available only through local facts or a team-reference project.
+
+**General form:** Verify the real local audience address from its current source of truth before composing the message; keep environment-specific paths and aliases in facts, not generic instructions.
+
+**Example (Slack review draft):** The first draft copied a platform-specific group mention from the referenced message. The user corrected it to the team's visible shortcut and identified a local team-reference project as the source to consult. The skill was updated to resolve that project through facts while keeping the alias out of the portable skill.
+
+**See also:** `slack-message` skill; coding_guidelines.md #21 and #25.
+
+## 217. Install test spies after helpers that re-patch the same global
+
+**Principle:** Family H (verify the real thing, not the abstraction: an installed spy is an abstraction over the module's current patch state)
+
+**Why this matters:** A test helper that sets up a fake environment often re-patches a module-level constant (loader, client, clock) that the test also needs to spy on. A spy installed before the helper's patch is silently replaced, so the spy records nothing and the assertion degrades to an empty-record comparison that reads like a wiring bug rather than an ordering bug.
+
+**Required behavior:** When both a fixture/helper and a manual monkeypatch target the same module global, install the spy after the helper runs. Prefer asserting a non-empty interaction record (`seen == [expected]`, not `expected in seen`) so a mis-ordered spy fails loudly at the assertion with an empty list, pointing at installation order.
+
+**Shape trigger (when to suspect this family):** A spy or recorder test unexpectedly observes zero interactions even though the production path provably calls the target, and a shared helper in the same test touches the patched symbol.
+
+**General form:** The module's live patch state is the real thing; installation order decides which patch wins. Order installations bottom-up (environment fakes first, observation spies last) and make the assertion distinguish "not called" from "replaced".
+
+**Example:** A wiring test monkeypatched a registry-loader spy to record the fiscal year passed by the production fetch path, but the fake-HTTP fixture helper re-patched the same loader constant afterwards; the first run failed with an empty recorded-years list. Moving the spy install after the fixture produced the expected single-entry record.
+
+**See also:** Lesson #44 (test-side attribution must mirror production); python_guidelines.md monkeypatch guidance.
+
+## 218. Durable code must not cite ephemeral review artifacts
+
+**Principle:** Family D (single source of truth: a durable artifact cites durable sources) cross Family H (the referenced rationale is an abstraction if the reference target is not durably readable)
+
+**Why this matters:** Review staging docs and round-numbered review reports are often gitignored or archived short-lived. When production docstrings and inline comments cite them ("per review r3 finding F2"), future readers hit dead references, and the citation implies the invariant lives in a place it does not. The invariant prose itself is the durable content; the round tag is process metadata.
+
+**Required behavior:** Write review-driven docstring and comment changes as self-contained invariant prose with no round tags or staging-doc references. Review-round provenance belongs only in the review/staging docs and plan history, never in production source or durable maintenance docs (except dated amendment sections that intentionally record history).
+
+**Shape trigger (when to suspect this family):** A grep of production sources for review-round tokens (`review r[0-9]`, `finding F[0-9]`, staging filenames) returns hits, or a docstring's justification resolves only to a gitignored file.
+
+**General form:** Every citation in a durable artifact must resolve for a reader with only the repository checkout; if the reasoning matters, inline the rule, and leave the audit trail in the history layer.
+
+**Example:** A fifth-round review flagged roughly 70 production docstrings across ten modules that cited gitignored round-tagged staging docs. The fix kept the invariant prose and stripped only the round references; later modules were written without round tags from the start.
+
+**See also:** coding_guidelines.md #5 (data-loss observability analogue: silent dead references); doc-hierarchy Layer 3 history placement.
+
+## 219. Fix rounds can drop the guards they replace; fix notes can overclaim
+
+**Principle:** Family D (fix-implementation discipline: verify the replacement covers everything the replaced code checked, and record only verifiably-present artifacts).
+
+**Trigger:** a review/fix round rewrites an existing guard, helper, or validation; or a fix note/staging doc records "test added", "guard restored", or similar artifact claims.
+
+**Rule:** Before landing a rewrite of an existing guard: enumerate every check the OLD implementation performed and verify each survives in the new one (a dropped check is a regression the next review round catches expensively). Before writing any artifact claim in a fix note: grep/read the file and confirm the artifact exists at that moment; claims about future edits do not count.
+
+**Why:** In one review loop, a round-2 rewrite of an injectivity guard silently dropped the base-map length check the replaced code had (caught as a blocking regression in round 3); the same loop's round-3 fix note claimed a collision test that had not been written (caught by round 4's blind panel). Both forced extra full-panel rounds.
+
+**Shape:** you are mid-loop replacing "old mechanism X" with "cleaner mechanism Y" and the fix note is written from intent rather than from the diff; the omitted case is the one the old code handled implicitly.
+
+**Example:** Replacing a length-check guard with a builder that loops only over overrides kept override-collision detection but lost base-collision detection; the note said "guard + test restored" while only the guard existed.
+
+**See also:** receiving-review "verify before implementing"; review-loop anti-patterns (same-round verdicts).
+
+## 220. Forbidden-phrase doc sweeps must be wrap-tolerant and proven RED today
+
+**Principle:** Family H (Verify the real thing, not the abstraction) applied to validation commands: a grep that forbids a multi-word prose phrase is an abstraction of a check; until it is executed against the CURRENT document and observed to fire, it proves nothing.
+
+**Trigger:** you are authoring a fail-closed "no stale prose remains" sweep (a grep for a sentence a rewrite task will delete), or you are reviewing/verifying someone else's.
+
+**Rule:** (1) A multi-word phrase can be line-wrapped in the target document, so a line-based grep can NEVER match it and the sweep false-passes forever; flatten first (`tr '\n' ' ' < file | grep -q "<phrase>"`) or sweep a fragment that fits on one line. (2) Prove the gate RED-today at authoring time: execute the sweep against current content, observe it fire, and leave the command re-executable in the artifact. (3) Treat a reviewer's "verified empirically" claim as untrusted; the next round re-executes it.
+
+**Why:** In one planning session, two independently authored fail-closed doc sweeps quoted their target sentences verbatim; both sentences were line-wrapped in the docs, both greps were structurally unable to fire, and one survived three review rounds plus a false empirical-verification claim before a re-run caught it.
+
+**Shape:** the sweep's pass condition is "no remaining hits" and its pattern is a natural-language sentence; nothing in the validation block shows the command's actual output against today's file.
+
+## 221. Probe parallel-session liveness before shared-tree commits
+
+**Principle:** Family H (verify the real thing, not the abstraction: a git-status snapshot is not a liveness signal for a foreign modification).
+
+**Trigger:** commit-time `git status` shows a tracked-file modification this session did not make, in a repo where parallel agent sessions run.
+
+**Rule:** Before staging or running stash/snapshot-based ceremonies (docs-branch, worktree ops), establish whether the foreign writer is LIVE or FINISHED. (1) List the sibling artifacts that writer produces (review rounds, stats sidecars) by mtime and compare the newest to the clock: seconds-old means live; quiet across several observed inter-round gaps means likely finished. (2) Where the foreign work has a review loop, hash the modified file and compare to the newest review sidecar's source digest: unbound plus fresh mtime means mid-loop; a clean verdict plus a bound digest means the loop completed and is merely uncommitted. (3) Check the done lock: free means no concurrent done, not that no session is working. Then scope the commit to session-owned paths only (never `git add -A`), leave the foreign modification untouched, and defer stash/snapshot ceremonies while a loop is live.
+
+**Why:** The done lock serializes done runs, not in-flight review loops. A stash-based sync can race a live writer mid-artifact; a broad stage sweeps half-finished foreign work into the wrong commit. The status snapshot is the abstraction; mtimes, sidecar digests, and lock state are the real thing.
+
+**Shape:** a foreign ` M` on a sibling plan; that sibling's newest review artifact written during this session; its newest round missing a sidecar or its digest unbound.
+
+**Example:** A plan-amendment session found a sibling plan modified in the working tree. Artifact forensics showed the sibling's newest review round written seconds ago with no stats sidecar and an unbound digest: a live parallel loop. The session committed only its own files, deferred the stash-based docs sync, and ran it after the sibling closed on a clean, digest-bound round.
+
+**Distinguishing:** leaked-revert lessons (verify the tree matches HEAD after sub-agent git ops) cover self-inflicted index damage; this covers a live peer writer in a shared tree.
+
+## 222. Ladder fail-loud contracts: automated recovery before refusal
+
+**Principle:** Family B (error-policy selection: the raise-vs-degrade decision must weigh in-run recoverability, not only data-loss risk).
+
+**Trigger:** designing or reviewing a fail-loud refusal (raise/abort) for a condition whose missing or stale data has an in-run recovery path (retry, refetch, recompute) reachable from the same execution.
+
+**Rule:** (1) Before refusing, attempt the recovery automatically inside the run: bounded retries with backoff through the already-injected seam; refuse only on exhaustion or when the seam is absent (recovery impossible). (2) A successful recovery must self-heal the stale state through the normal write path; no new cleanup path. (3) Enumerate every outcome shape of the recovery call (exception, success-with-write, sentinel/None return) and define handling for each; a sentinel return is not a success. (4) Backoff sleeps go through a patchable seam; tests never really wait.
+
+**Why:** A user first accepted a hard-refusal contract for stale input data, then overturned it: "breaking the flow and forcing the user to investigate" must be the last resort, taken only when there is not enough data and no possibility of re-obtaining it automatically. The refusal became the final rung of an exponential-backoff refetch ladder; most stale runs then self-heal with one INFO line.
+
+**Shape:** a raise on stale/missing external data sits next to an already-injected fetch or recompute callable that could refresh it in the same run.
+
+## 223. Log substring assertions can false-match tokens from the pytest tmp_path directory name
+
+**Principle:** Family H (verify the real thing, not the abstraction) - the matched token must originate in the code under test, not the test environment.
+
+**Trigger:** writing or debugging a test that pins log output by case-insensitive substring match or exact message count at a level (e.g. "exactly one INFO containing 'recover'", "exactly two WARNINGs").
+
+**Rule:** (1) A substring assertion matches not only the code's own wording but ANY token interpolated into another message at the same level, including filesystem paths. (2) pytest `tmp_path` directory names derive from the test name (`test_retry_ladder_recovers_...` -> a directory containing "recovers"), so any sibling message that interpolates the path can satisfy a "contains 'recover'" assertion case-insensitively. (3) Before pinning exact counts/substrings: enumerate every other message the code emits at that level in the same path, check whether tmp_path-derived tokens could alias the needle, and either drop path interpolation from non-essential messages, assert on the record's logger/message fields directly, or use a needle that cannot appear in a path.
+
+**Why:** during a retry-ladder GREEN flip, a recovery test pinned exactly one INFO matching "recover" (case-insensitive); pytest's tmp_path contained "recovers", so an unrelated INFO interpolating the CSV path false-matched, forcing log-message rewording to satisfy a count assertion - the test constrained the code's log wording through an environment artifact, not the behavior under test.
+
+**Shape:** a log count/substring assertion passes or fails depending on the tmp_path directory name; the matched message interpolates a path; the needle is a word that also appears in the test's own name.
+
+## 224. Environment Variants Need an Authoritative Identifier Map
+
+**Principle:** Family D (single source of truth) cross with Family H (verify the real thing, not the abstraction)
+
+**Why this matters:** An environment-specific artifact can remain syntactically valid after being copied from another environment while still pointing at the wrong external resource. Import success or parser validation does not prove target-environment correctness.
+
+**Required behavior:**
+1. Maintain an explicit mapping from each environment to the external identifiers used by every artifact family.
+2. When creating a variant, resolve identifiers from the target environment's authoritative source; never infer them by copying an adjacent variant.
+3. Add a validator that scans every variant and rejects identifiers outside the target environment's mapping. Validate each supported representation of the field.
+
+**Shape trigger (when to suspect this family):** An environment-specific artifact is created by cloning a neighboring environment and contains opaque external identifiers that the receiving system accepts without checking their environment.
+
+**General form:** Environment-specific dependencies are configuration, not portable artifact content. Keep their mapping explicit and validate the complete variant set against it.
+
+**Example:** A UAT monitoring dashboard was created by copying a staging export. The copied datasource identifier was accepted by Grafana but selected the staging Prometheus source. Checking the actual UAT datasource exposed the mismatch; documenting the mapping and validating all environment files prevented the same copy error in sibling dashboards.
+
+**See also:** `coding_guidelines.md` #21 (single source of truth) and #25 (verify the real thing, not the abstraction).
+
+## 225. Check Repository Policy Before Adding Support Tooling
+
+**Principle:** Family D (single source of truth) cross with Family H (verify the real thing, not the abstraction)
+
+**Why this matters:** A helper can be technically useful yet still violate repository policy, add an unsupported maintenance surface, or leave stale documentation when it is removed later.
+
+**Required behavior:**
+1. Before adding a helper script or new artifact, inspect the repository policy and existing automation patterns.
+2. Confirm that the artifact location and mechanism are allowed; prefer approved tooling that already exists.
+3. If policy is silent and the addition would establish a new pattern, ask before coding or keep the check ephemeral and outside the repository.
+
+**Shape trigger (when to suspect this family):** A task proposes adding a one-off helper or validation artifact to a repository that may prescribe where tooling belongs or which mechanisms are supported.
+
+**General form:** Verify both the requested behavior and the repository conventions before introducing support code.
+
+**Example:** While correcting environment-specific dashboard datasource references, a standalone validator was added to two service repositories. The user later identified that the script was outside repository policy, so it was removed together with its documentation references.
+
+**See also:** `coding_guidelines.md` #21 (single source of truth) and #25 (verify the real thing, not the abstraction).

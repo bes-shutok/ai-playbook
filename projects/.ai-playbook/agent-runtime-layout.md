@@ -43,7 +43,7 @@ Use it when:
 ### Productivity and domain skills (vendored from [mattpocock/skills](https://github.com/mattpocock/skills))
 - **License:** copy [upstream LICENSE](https://github.com/mattpocock/skills/blob/main/LICENSE) verbatim into each skill's `LICENSE.txt` (`Copyright (c) 2026 Matt Pocock`). Do not use the first-party `plans/LICENSE.txt` copyright for vendored copies.
 - `grilling`: one-question-at-a-time decision interview before acting; complements `premortem` (failure modes) and `plans` Phase 1.
-- `grill-with-docs`: user-invoked combo of `grilling` + inline `domain-modeling` (glossary and ADRs during the interview).
+- `grill-with-docs`: combo of `grilling` + inline `domain-modeling` (glossary and ADRs during the interview); user-invoked, and invoked by the `plans` Phase 1 confidence gate for low-confidence unclear points.
 - `domain-modeling`: active ubiquitous-language and ADR discipline; paths aligned with doc-hierarchy (`docs/maintenance/glossary.md`, `docs/maintenance/project-decisions.md`, `docs/architecture/domain-model.md`); legacy `CONTEXT.md` / `docs/adr/` read-only fallback only.
 - `handoff`: user-invoked session handoff doc for fresh agents; output under `{tmp_dir}/handoff/` when repo facts exist; aligned with `agents-best-practices` compaction handoff format.
 - **Skill design vocabulary** (formerly `writing-great-skills`): merged into `how-to-write-skills/references/skill-design-principles.md` and `skill-design-vocabulary.md`; do not re-vendor as a separate skill.

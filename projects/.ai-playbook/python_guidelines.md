@@ -613,3 +613,24 @@ Decimal, not the rendered cell.
 **Trigger shape:** an f-string interpolating a raw `Decimal` into any
 user-facing string, most often a tolerance or rate with more than six decimal
 places.
+
+## 21. Every Unbounded Python Loop Needs a Hard Ceiling; Every Test Run Needs a Timeout
+
+An unbounded `while True` in batch/pagination code is a machine-killer waiting for the refactor that removes its implicit bound. Real incident (2026-08, tax-reporting, lesson #138): switching a pagination drain from positional slicing to identity-based dedup silently removed the `max_rows` termination guarantee; test fixtures whose rows lacked identity fields collapsed every row to one key, the drain looped forever, and each iteration emitted a `WARNING` that pytest's log capture accumulated until the process exceeded 20 GB and the host rebooted. Updating the Python version would not have helped; the failure was algorithmic.
+
+Rules:
+
+- Production: every `while True` / cursor-based loop must carry an explicit hard ceiling (max iterations or max accumulated items) AND a no-progress guard (zero new items on an iteration -> log at warning+ naming the potential data loss and stop). A refactor that changes the loop's dedup/advance strategy must re-verify the termination proof, not just the happy path (the old bound often does not carry over).
+- Tests: enable a per-test wall-clock timeout (`pytest-timeout`, `timeout = <generous multiple of suite runtime>` in `pyproject.toml`) so a runaway test dies in seconds instead of eating the host. A timeout failure is a bug in the loop, never something to raise, disable, or override.
+- Fixtures: synthetic rows standing in for external API/report data must carry the fields the production code branches on (identity fields, status/error flags, pagination keys), not just the fields the test asserts on; skinny fixtures make "safe" strategies collapse exactly when tested.
+- On macOS, `ulimit -v` is not enforced, so there is no shell-level memory cap; the timeout plus the loop ceilings ARE the memory guard. (Optional extra belt: a watchdog wrapper that polls the test process RSS and SIGKILLs above a cap.)
+
+## 22. Monkeypatched module attributes are invisible to from-import consumers
+
+When a test monkeypatches a module-level object (`monkeypatch.setattr(module, "NAME", replacement)`),
+only code that reads the attribute THROUGH the module (`import module; module.NAME`) sees the patch.
+A consumer that imported the name at load time (`from module import NAME`) keeps the original
+object bound in its own namespace. This bites dict/vocabulary seams: a builder iterating a patched
+vocabulary dict must read it via the owning module, and tests that inject colliding fixtures must
+patch the OWNING module (patching the consumer's from-import has no effect). Symptom: a test
+monkeypatch "works" in one consumer and silently no-ops in another.
