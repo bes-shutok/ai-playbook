@@ -53,6 +53,17 @@ When building or reviewing a mutator / failure-mode matrix (or equivalent covera
 4. Both success and error paths tested
 5. Edge cases and boundary conditions covered
 
+### Evidence requirement (every test-quality finding)
+
+A finding about test quality must state all four parts:
+
+1. **Behavior under test**: the observable behavior the suite claims to cover.
+2. **Distinct expected outcome**: what a correct implementation produces for that behavior, distinct from what a broken one would produce.
+3. **Failing assertion**: the specific assertion in the test (or the missing assertion the finding proposes) that would fail if the behavior disappeared. If no assertion would fail, the finding is a fake test (`testing#always-passes` or equivalent), not a coverage nuance.
+4. **Harness layer**: the layer the test runs at (unit, wiring, full-context harness) when the claim depends on that layer; cite **Harness Fidelity** rules for request-boundary components.
+
+Weak or missing tests stay owned by this lens even when the first observer was another worker (`review-panel-selection.md` tiered ownership).
+
 ## Fake Test Detection
 
 Watch for tests that do not actually verify code:

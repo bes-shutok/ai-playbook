@@ -111,7 +111,7 @@ Group findings in this exact order: `Critical`, `High`, `Medium`, `Low`.
 
 Within each group, order by **ascending finding ID** (discovery / assignment order). Do not sort by blocking, blast radius, reachability, or confidence in the staging doc or sidecar. Those fields stay on each finding for prioritization and calibration; they must not reshuffle presentation.
 
-**Triage presentation freeze:** when severity changes, move the finding into the matching severity section and keep ascending ID order inside that section. Do not renumber findings. Do not rewrite the whole Findings list to apply old tie-break sorts during triage. This is the canonical home of the rule; consumer docs (`review-staging`, `doing-code-review`) cite it by name and may add doc-specific operational detail (e.g. the sidecar array-order clause), but must not contradict it or re-derive a different label/enumeration.
+**Triage presentation freeze:** when severity changes, move the finding into the matching severity section and keep ascending ID order inside that section. Do not renumber findings. Do not rewrite the whole Findings list to apply old tie-break sorts during triage. This is the canonical home of the rule; consumer docs (`review-staging`, `doing-code-review`, `receiving-review`) cite it by name and may add doc-specific operational detail (e.g. the sidecar array-order clause), but must not contradict it or re-derive a different label/enumeration.
 
 ## Finding budget
 

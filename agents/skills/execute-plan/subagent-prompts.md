@@ -339,7 +339,7 @@ Fix findings on **explicit must-fix** paths when valid. For unlisted paths, fix 
 
 <VALIDATION_COMMANDS>
 
-7. Update the review doc: set addressed findings to `done`, false positives/out-of-scope to `drop` with a one-line reason; leave only validated unresolved items at `pending`. For every valid finding you are not fixing in this run (deferred, scope-dropped, or excluded by user instruction), create a durable backlog item per `receiving-review` **Backlog capture** and record its path on the finding or in the execution log.
+7. Update the review doc: set addressed findings to `done`, false positives/out-of-scope to `drop` with a one-line reason; leave only validated unresolved items at `pending`. For every valid finding you are not fixing in this run (deferred, scope-dropped, or excluded by user instruction), create a durable backlog item per `receiving-review` **Backlog capture** and record its path on the finding or in the execution log (a finding held `pending` for the fix-risk user decision per **Fix-risk triage when fixes regenerate findings** is the exception: record it as returned-for-ask, not backlogged).
 8. **Update execution log** at `<ADDRESS_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). On Step 3.3 relaunch within the same round R, Pass 2+ **must** be appended to `review-r<R>-receiving-review.log.md` without erasing Pass 1. Include triage decisions, pushback rationale, and full return payload.
 9. Do NOT commit; the orchestrator launches Done, then either exits on a fresh blocking-clean digest or starts the targeted follow-up.
 

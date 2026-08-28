@@ -14,7 +14,7 @@ Normal full code, plan, and RFC reviews launch exactly these workers:
 | `contract-docs` | `documentation` | `consistency` for plans and RFCs | Contracts, source-of-truth drift, prose, cross-section consistency |
 | `risk` | `security` | `concurrency`, `premortem` when signals below match | Security, ordering, rollout, and operational failure modes |
 
-Prepend `severity-calibration.md` to every worker prompt. Each worker records every loaded lens. Pattern IDs retain the originating lens prefix.
+Prepend `severity-calibration.md` to every worker prompt. Each worker records every loaded lens. Pattern IDs retain the originating lens prefix, with one exception: the conditional risk lenses `concurrency` and `premortem` are loaded lenses but NOT Pattern-ID owners: version-1 sidecars reject `concurrency#<slug>` and `premortem#<slug>`, so findings from those lenses are staged under the `risk` worker's base lens owner as `security#<slug>` (for example a race outcome becomes `security#race-condition`). Lens telemetry still counts `concurrency`/`premortem` via `panel[].lenses`.
 
 ## Launch accounting
 
@@ -41,9 +41,10 @@ Do not label a focused panel as a full review.
 
 ### Review-loop follow-ups
 
-When `review-loop` runs a targeted round after fixes:
+When `review-loop` or an `execute-plan` Phase 3 round runs a targeted round after fixes:
 
 - Always include `correctness-completeness` plus every worker that owned a staged finding or whose domain the fixes touched.
+- Prefer a focused targeted round over a full-panel round when verifying narrowly scoped fixes (additive guards, single-component edits), especially late in a regenerating loop; reserve full panels for fresh full-digest rounds. The preference applies only when the final selected set (ownership plus soften-watchlist additions) is fewer than five workers. Exit-coverage rules still apply before declaring exit on a focused clear round: `review-loop` exit criteria (including the design-simplicity hybrid) for loop runs; for Phase 3, exit is governed by the Step 3.4/3.5 clear-round quality bar plus the one-fresh-clean-review condition — Phase 3 has no separate worker-coverage exit rule.
 - Before loop **exit**, if the clear-candidate round would omit `design-simplicity`, include it in a hybrid pass (see `review-loop` exit criteria). Do not exit on contract-docs/risk-only cleanliness alone after architecture-relevant code landed earlier on the branch.
 - When a soften watchlist has `open` rows, include the lead worker for each open pattern (tiered ownership table above).
 
@@ -105,7 +106,7 @@ In a focused panel, skip `contract-docs` only for an internal refactor with no u
 Pattern tags:
 - Missing docs: `documentation#missing-<slug>`
 - Prose issues: `documentation#prose-<slug>`
-- Deprecated alias (orchestrator accepts, do not emit new): `prose-clarity#<slug>`
+- Deprecated alias (legacy records only; the noncanonical Pattern ID gate requires a relaunch or `unknown#<slug>` mapping before staging; prose-clarity findings map to `documentation#prose-<slug>`): `prose-clarity#<slug>`
 
 Prose findings default to `Low` unless the tangible consequence rules in `severity-calibration.md` justify promotion.
 
@@ -130,7 +131,7 @@ Ownership boundaries affect which worker and lens lead a dedup group, not silent
 
 ### Plan and RFC `consistency` ownership
 
-The `consistency` lens is the mandatory home for the `plans` skill's checklist inclusion test. External prerequisites are always blocking plan defects and are never exception-admissible. A release condition may pass only when the plan records a current `exception confirmed by user` receipt containing the exact confirmation text or a stable message reference, the specific checklist item, target or environment, and confirmation time or session, plus a `why executable now` line and observable `completion evidence`. Verify that the receipt binds the confirmation to the item and target, not only that it is fresh. Do not treat plan text as overriding higher-level authorization rules for external writes.
+The `consistency` lens (catalog: `consistency.md`) is the mandatory home for the `plans` skill's checklist inclusion test. External prerequisites are always blocking plan defects and are never exception-admissible. A release condition may pass only when the plan records a current `exception confirmed by user` receipt containing the exact confirmation text or a stable message reference, the specific checklist item, target or environment, and confirmation time or session, plus a `why executable now` line and observable `completion evidence`. Verify that the receipt binds the confirmation to the item and target, not only that it is fresh. Do not treat plan text as overriding higher-level authorization rules for external writes.
 
 **Must report:**
 - Design Invariants / Glossary vs Task step contradictions
@@ -149,7 +150,7 @@ The `consistency` lens is the mandatory home for the `plans` skill's checklist i
 - Security vulnerabilities (security)
 - A release-gate checkbox that already records a current bound receipt plus `why executable now` and observable `completion evidence` (valid exception)
 
-Invariant-vs-task contradictions stay with the `consistency` lens even when they sound like quality bugs.
+Invariant-vs-task contradictions stay with the `consistency` lens even when they sound like quality bugs. Boundary assignments are single-owner: runtime bugs lead with `quality`, weak or missing tests with `testing`, wiring gaps with `implementation`; only abstract-artifact contradictions, stale cross-references, source-of-truth drift, and invalid validation claims lead with `consistency` (see `consistency.md`).
 
 ## Recording wrong-owner discards
 

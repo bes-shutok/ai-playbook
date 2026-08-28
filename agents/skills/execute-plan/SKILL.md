@@ -567,7 +567,7 @@ If Step 3.2 shows no unresolved blocking findings, skip Step 3.3 and go to Step 
 1. Address sub-agent returned `<ADDRESS_LOG_PATH>` and the file is non-empty.
 2. Staging doc statuses updated (`done`, `drop`, or justified `pending`).
 3. Address log remaining-blocking section parsed, or staging re-read for unresolved `blocking: true`.
-4. Every valid finding not fixed in this iteration has a durable backlog item (path recorded on the finding or in the address log).
+4. Every valid finding not fixed in this iteration has a durable backlog item (path recorded on the finding or in the address log); a finding held `pending` for the fix-risk user decision (Hard Gate 23) is recorded as returned-for-ask, not backlogged.
 
 ### Step 3.4: Evaluate the current digest and launch done
 
@@ -621,6 +621,7 @@ Update `manifest.md` with `review_round`, `full_panel_rounds`, `escalation_count
 |-----------|--------|
 | Current digest has a fresh clean review | Proceed to Phase 4 |
 | A sixth full panel or second escalation is required | Stop; report unresolved blocking findings and ask the user |
+| Fix-risk stop conditions met (must-stay-blocking finding with no additive path or user; Hard Gate 23) | Stop; ask the user for direction per `receiving-review` **Fix-risk triage when fixes regenerate findings** |
 | Otherwise | Increment `review_round` and return to Step 3.1 with the targeted worker set |
 
 ## Phase 4: Archive Plan
@@ -727,12 +728,13 @@ Report successful plan completion to the user, including the verified terminal-r
 14. **One task's checkboxes per Step 1.3**; no bulk `- [ ]` → `- [x]` across the plan file.
 15. **Phase 3 required for success**; archive only after Phase 3 exit condition or documented user abort after Phase 2.
 16. **Review diff artifacts in session tmp only**; never write `*.patch` diff snapshots to repo root or outside `{tmp_dir}/execute-plan/<PLAN_SLUG>/`; use `diff-r<R>.patch` / `src-diff-r<R>.patch` naming per `doing-code-review` **Diff access**.
-17. **No per-step continuation prompts**; after Task N `done`, Phase 2 pass, or review-round `done`, auto-start the next defined step. Ask the user only on failure, timeout, max review rounds, user interrupt, or explicit abort. An inclusion pause is not by itself a mandatory ask; ask only when the selected Inclusion Hard Gate outcome is interactive exception confirmation.
+17. **No per-step continuation prompts**; after Task N `done`, Phase 2 pass, or review-round `done`, auto-start the next defined step. Ask the user only on failure, timeout, max review rounds, user interrupt, or explicit abort. Sanctioned mid-loop asks besides these: the interactive fix-risk backlog presentation under Hard Gate 23 (`receiving-review` **Fix-risk triage when fixes regenerate findings**), and the fix-risk stop for user direction when a must-stay-blocking finding has neither a minimal additive path nor a user in a non-interactive run (same section). An inclusion pause is not by itself a mandatory ask; ask only when the selected Inclusion Hard Gate outcome is interactive exception confirmation.
 18. **Fresh review framing on every Step 3.1**; never prompt clear-streak rounds as verification-only; prior findings are context, not a filter.
 19. **Premortem when concurrency in scope**; do not skip premortem on quiet clear-streak rounds if the plan Review Scope / Domains include concurrency, transactional mutators, or race ITs (user `skip premortem` overrides).
 20. **Skill-gate marker before plan-file edits**; before any plan Markdown edit (Step 1.3, Step 0.4b path rewrites, Recovery checkbox marking, or any other plan-content edit), apply **Plan-file edits (skill-gate)**. Do not bypass or weaken skill-gate. Phase 4 `git mv` alone does not need a marker refresh. In Recovery, mark that task's checkboxes before launching `done`.
 21. **Inclusion Hard Gate before implementation**; Phase 1: classify every unchecked item before Step 1.2. Recovery: classify every checklist item including already `[x]`. While ownership, target, or evidence source is unclear, do **not** open interactive exception; use only Move to Ship when or Stop. On other `inclusion-check failure` outcomes: move explicit prose to **Ship when** after creating the heading or renaming narrative `Release gates` content; admit a **release gate** (never an external prerequisite) only via ask-then-write of a current bound exception receipt plus **why executable now** and `completion evidence`; or stop with a recorded hard-gate reason. Forbid delete-without-Ship-when and silent skip-`[x]`.
 22. **Parent-orchestrated Phase 3 panel**; the execute-plan parent runs `doing-code-review` and launches lens workers directly. Do not nest a "Code Review" sub-agent that re-orchestrates the panel when the parent can fan out. Write the review heartbeat log before waiting. Enforce the 20-minute Step 3.1 artifact timeout.
+23. **Fix-risk triage before more folding**; when fixes keep regenerating findings across rounds, apply `receiving-review` **Fix-risk triage when fixes regenerate findings** before folding further, and verify scoped fixes with the focused targeted round composed per `review-panel-selection.md` (Review-loop follow-ups).
 
 ## User Interruption
 
@@ -778,7 +780,7 @@ Only `done` performs git commits. Invoked after each implementation task (Step 1
 After all tasks, the execute-plan **parent** runs `doing-code-review` as the review orchestrator and launches lens workers as sub-agents. Staging doc is the handoff artifact. Uses full-branch diff (`<BASE_BRANCH>...HEAD`). Applies two-tier Review Scope: explicit must-fix plus plan-related extension for unlisted paths. Nested "Code Review" sub-agent only as recovery when the parent cannot fan out (see Step 3.1).
 
 ### Consumes `receiving-review` skill (sub-agent)
-Triages provisional findings between rounds. Phase 3 exit depends on unresolved `blocking: true`, not raw severity counts. Valid findings not fixed in the run must leave durable backlog items per its **Backlog capture** rule; the Step 3.3 verification gate checks the artifact exists.
+Triages provisional findings between rounds. Phase 3 exit depends on unresolved `blocking: true`, not raw severity counts. Valid findings not fixed in the run must leave durable backlog items per its **Backlog capture** rule; the Step 3.3 verification gate checks the artifact exists. Hard Gate 23 applies its **Fix-risk triage when fixes regenerate findings** section when a regenerating loop would otherwise keep folding.
 
 ### Related: `review-loop` skill (standalone)
 For branch hygiene without a plan, use `review-loop`. Both workflows exit after one fresh blocking-clean review of the current digest.

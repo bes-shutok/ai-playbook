@@ -140,10 +140,11 @@ Never use commit subjects like `Close review loop` or `Review complete` until ex
 1. **Continuous iterations:** after `done` succeeds, increment `review_round` and return to step 1 unless exit criteria or `max_rounds` hit.
 2. **Sub-agents:** launch `doing-code-review` with the panel from `review-panel-selection.md`; do not replace with inline grep.
 3. **Targeted revisions:** after fixes, launch blind `correctness-completeness` plus every distinct worker that owned a finding or whose domain the fixes affected. If all five are selected, count a full-panel round. When the soften watchlist has `open` items, also launch the worker that owns each open pattern (see `review-panel-selection.md` tiered ownership).
-4. **Exit hybrid:** before accepting a focused clear round as loop exit, ensure `design-simplicity` ran on the current tip digest (see Exit criteria item 4). Do not exit on contract-docs/risk-only cleanliness alone after architecture-relevant code landed earlier in the branch.
-5. **Commits:** only `done` commits; one iteration -> one commit when fixes ran.
-6. **Push:** requires explicit user instruction.
-7. **PR mode:** if user gave a PR URL, still write staging docs; optional post to PR via `doing-code-review` Direct mode.
+4. **Fix-risk triage before more folding:** when consecutive rounds' fixes keep regenerating new findings, apply the `receiving-review` **Fix-risk triage when fixes regenerate findings** section before folding further, and verify scoped fixes with the focused targeted round composed per `review-panel-selection.md` (Review-loop follow-ups; orchestration rule 3 selects the set). A fix-risk stop for user direction ends iterations until the user answers, like the max-rounds stop.
+5. **Exit hybrid:** before accepting a focused clear round as loop exit, ensure `design-simplicity` ran on the current tip digest (see Exit criteria item 4). Do not exit on contract-docs/risk-only cleanliness alone after architecture-relevant code landed earlier in the branch.
+6. **Commits:** only `done` commits; one iteration -> one commit when fixes ran.
+7. **Push:** requires explicit user instruction.
+8. **PR mode:** if user gave a PR URL, still write staging docs; optional post to PR via `doing-code-review` Direct mode.
 
 ## Anti-patterns
 
@@ -154,6 +155,7 @@ Never use commit subjects like `Close review loop` or `Review complete` until ex
 - Reviewing `git diff` working tree to claim round N is clean while fixes are uncommitted
 - Batching multiple iterations into one commit
 - Reopening a clear round because of late non-blocking noise
+- **Folding every finding mechanically while fixes keep regenerating findings**; audit fix-risk per `receiving-review` **Fix-risk triage when fixes regenerate findings** first
 - Exiting while soften-watchlist items remain `open` or unexamined
 - Reporting loop exit with deferred or scope-dropped valid findings recorded only in the gitignored staging doc
 - Declaring exit after a focused panel that never re-ran `design-simplicity` on the tip when earlier rounds only fixed docs/schema
@@ -172,7 +174,7 @@ If no base is named or the diff is large (>10 kB), the loop asks you to confirm 
 Step 1 each round: branch review mode; staging doc before reporting. Diff scope is committed `BASE...HEAD` only.
 
 ### Consumes `receiving-review` skill
-Step 3 when blocking findings remain: triage and fix; update staging statuses. Valid findings not fixed in the run are captured as durable backlog items per its **Backlog capture** rule; the exit report includes the fixed-vs-backlogged tally.
+Step 3 when blocking findings remain: triage and fix; update staging statuses. Valid findings not fixed in the run are captured as durable backlog items per its **Backlog capture** rule; the exit report includes the fixed-vs-backlogged tally. Orchestration rule 4 applies its **Fix-risk triage when fixes regenerate findings** section before further folding in a regenerating loop.
 
 ### Consumes `done` skill
 Step 4 each iteration: learn → docs-branch → commit (authorized per iteration). Syncs gitignored staging via docs-branch.

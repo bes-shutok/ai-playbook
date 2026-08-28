@@ -1,6 +1,6 @@
 ---
 name: review-agents
-description: "Shared sub-agent pattern catalog used by doing-code-review, review-plan, review-confluence-doc, and rfc-design. Not meant to be invoked directly. Contains quality, implementation, architecture, testing, simplification, documentation (missing docs + prose), security, concurrency, premortem, and review-panel-selection."
+description: "Shared sub-agent pattern catalog used by doing-code-review, review-plan, review-confluence-doc, and rfc-design. Not meant to be invoked directly. Contains quality, implementation, architecture, testing, simplification, documentation (missing docs + prose), security, concurrency, premortem, consistency (plan/RFC contradictions and cross-reference drift), and review-panel-selection."
 ---
 
 # Review Agents (Shared Pool)
@@ -34,6 +34,7 @@ This skill is a shared library of review sub-agent pattern catalogs.
 | `testing.md` | Test coverage, quality, fake tests, independence, hermeticity (ambient inputs) |
 | `simplification.md` | Over-engineering, excessive abstraction, premature generalization; tagged output (`delete:`, `stdlib:`, `native:`, `yagni:`, `shrink:`) |
 | `documentation.md` | Missing docs for user-visible changes; prose clarity (merged from legacy `prose-clarity.md`); minimum-docs reduction and remove-or-freeze disposition for outdated docs |
+| `consistency.md` | Plan/RFC internal contradictions, stale cross-references, source-of-truth drift, invalid validation claims (abstract artifacts only; runtime bugs stay with quality, test gaps with testing, wiring gaps with implementation) |
 | `review-panel-selection.md` | Default panels, conditional launch rules, tiered ownership (orchestrator reference; not a sub-agent) |
 | `security.md` | Injection, secrets, input validation, data leakage, auth |
 | `concurrency.md` | Race conditions, transactional scope, isolation, locking gaps |

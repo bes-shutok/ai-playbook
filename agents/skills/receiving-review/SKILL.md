@@ -154,7 +154,7 @@ FOR multi-item feedback:
 
 ## Default: address all findings regardless of severity
 
-Address every review finding by default, including Low and optional ones, whether the file is in the active change set or a cross-cutting/new subsystem path. Do not ask for confirmation before implementing Low findings; just verify, implement, test, and report.
+Address every review finding by default, including Low and optional ones, whether the file is in the active change set or a cross-cutting/new subsystem path. Do not ask for confirmation before implementing Low findings; just verify, implement, test, and report. In a regenerating review-fix loop this default is bounded by **Fix-risk triage when fixes regenerate findings** below.
 
 ```
 DEFAULT: address every finding (Critical/High/Medium/Low, in-scope or cross-cutting).
@@ -186,7 +186,7 @@ The only findings that may be silently skipped without asking are:
 - Findings already confirmed as `done` by prior code inspection
 - Findings the user explicitly declined in an earlier question in the same session
 
-All others, regardless of your assessment of their complexity or risk, must be presented to the user.
+All others, regardless of your assessment of their complexity or risk, must be presented to the user. In a regenerating loop this rule is bounded by **Fix-risk triage when fixes regenerate findings** below.
 
 ## When To Push Back
 
@@ -305,8 +305,9 @@ When triaging findings from a `doing-code-review` staging doc (execute-plan Phas
 1. Update each finding **Status** (`done`, `drop`, `pending`, `deferred`) and matching **Triage** field per `review-staging` (`fixed`, `dropped`, `pending`, `deferred`).
 2. Recompute `## Review Statistics` → **Triage outcomes** per agent (Staged, Fixed, Dropped, Deferred, Pending). Do not rewrite synthesis tables (Panel, Discarded, Severity calibration).
 3. Update the matching `.stats.json` sidecar when present (required artifact per `review-staging`).
-4. When a soften/revert applies, update `### Soften watchlist` in the same pass (status `open` until a later review reaffirms or restages).
-5. **Mechanical gate (after the triage update):** re-run the review-staging validator on the staging path so a malformed triage update (broken Triage outcomes, drifted sidecar) cannot be handed back to the orchestrator:
+4. When an authorizing rule directs a Blocking re-evaluation (see **Fix-risk triage when fixes regenerate findings**), rewrite the finding's **Blocking** bullet in place, record the rationale on its Analysis section, and mirror the flip in the sidecar `findings[].blocking` per review-staging **Severity and ordering** (Triage presentation freeze).
+5. When a soften/revert applies, update `### Soften watchlist` in the same pass (status `open` until a later review reaffirms or restages).
+6. **Mechanical gate (after the triage update):** re-run the review-staging validator on the staging path so a malformed triage update (broken Triage outcomes, drifted sidecar) cannot be handed back to the orchestrator:
    ```bash
    VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"
    python3 "$VALIDATOR" --hard "$STAGING_PATH"
@@ -316,7 +317,7 @@ This gives downstream analysis a ground-truth signal for which agents produce fi
 
 ## Backlog capture for valid findings not fixed in scope
 
-Review-fix cycles exit on zero unresolved **blocking** findings, not zero findings. Every finding assessed **valid (worth fixing)** that is not fixed in the current work must leave a durable backlog item with all known details before the cycle is reported complete. Gitignored staging docs and chat reports are never the only record.
+Review-fix cycles exit on zero unresolved **blocking** findings, not zero findings. Every finding assessed **valid (worth fixing)** that is not fixed in the current work must leave a durable backlog item with all known details before the cycle is reported complete. Gitignored staging docs and chat reports are never the only record. Exception: a must-stay-blocking finding held for the fix-risk user decision (**Fix-risk triage when fixes regenerate findings**) stays `pending` and is recorded as returned-for-ask, not backlogged; once the user decides, apply this section to it (backlog if deferred, fix if directed).
 
 Capture an item when a valid finding ends triage as:
 
@@ -364,6 +365,27 @@ After a finding is accepted **and** its fix lands (staging triage or ad-hoc part
 
 This is the sibling rule to **Agent corpus feedback** above: that section generalizes findings the panel missed; this step applies the same abstraction to every accepted fix. Do not duplicate its corpus-update placement steps here.
 
+## Fix-risk triage when fixes regenerate findings
+
+When a review-fix cycle keeps regenerating findings, stop folding mechanically and audit the findings before the next fix pass. The trigger is operational: two consecutive rounds in which at least one new finding lands on files modified by the prior round's fixes. Record the per-family regression chain on the affected findings' Analysis sections so a rule 2 refusal stays auditable. This bounds the **Default: address all findings** rule (which back-references this section): an unbounded fold loop can damage more than the findings it resolves.
+
+Classify each remaining finding and record the class next to it:
+
+- **Live-reproduced**: the defect reproduces against current code (command, test, or executed path). These stay fix material.
+- **Code-traced**: traced by reading code but not reproduced. Reproduce where cheap; otherwise weigh fix risk before touching the code.
+- **Test-gap-only**: the observation is real but the behavior is correct; the gap is missing coverage. Prefer adding the test over changing working code.
+
+Then decide fix vs backlog per finding:
+
+1. **Prefer additive fail-closed fixes.** A guard that rejects previously mishandled input has a near-zero regression surface. A structural rework of the same site has a larger one; do not choose it late in a regenerating loop.
+2. **Refuse further surgery on a regressing component family.** Once fixes to one component family have themselves regressed in consecutive rounds, do not attempt another structural change there in this run. Fix a live blocking defect only with the minimal additive change; backlog the rest with the regression chain recorded.
+3. **Fail-closed defects on rule-violating input are backlog material**, not fix material: when a validator or tool correctly rejects input that violates its documented contract, the residual defect is hardening, not a live bug.
+4. **Flag the fix scope for the orchestrator's focused targeted review**: record which findings were fixed and which workers' domains the fixes touched, so the orchestrator can compose the focused round per `review-panel-selection.md` (Review-loop follow-ups); the triage agent does not launch review rounds.
+
+Report the classification and the fix-vs-backlog decision per finding. Findings backlogged under rules 2-3 are valid unfixed work and get durable backlog items per **Backlog capture**.
+
+This section also bounds the **Triage Decision Rule**: a Critical, High, or Medium finding moved to backlog under rules 2-3 is presented to the user when the session is interactive; in a non-interactive run, record the fix-risk rationale on the affected findings' Analysis sections and surface the backlog path in the loop exit report. When the executing agent lacks direct user access, it does not perform the ask itself: it returns the presentation or stop-for-direction question to its orchestrator — or, when it is the top-level loop agent of a non-interactive run, it applies the stop below; until answered, the finding stays `pending`. A finding with `blocking: true` that triage moves to backlog under rules 2-3 has blocking re-evaluated per review-staging **Severity and ordering** (Triage presentation freeze): apply the severity-calibration **Blocking decision procedure** to the current digest, and flip to `blocking: false` only when leaving the finding unresolved no longer creates concrete risk; a finding that still meets a blocking condition must stay blocking and takes the path below. The Triage outcomes counts change only through the finding's disposition (deferred when backlogged), never through the blocking flag itself. A blocking finding that must stay blocking — including a rule-3 hardening defect — is fix material via the minimal additive change or a user decision, never silent backlog; with neither path available in a non-interactive run, the loop stops for user direction rather than exiting or silently backlogging.
+
 ## Integration Points
 
 ### With `bootstrap-ai-playbook` skill
@@ -376,7 +398,10 @@ Triage updates **Triage outcomes** and finding **Triage** fields; preserves immu
 **Backlog capture** items written under `{backlog_dir}` use the `doc-hierarchy` pre-plan backlog format; promotion to a plan and archival to `backlog_completed_dir` follow those skills, not this one.
 
 ### With `execute-plan` skill
-Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review`. Triage is authoritative for exit: implement valid fixes, mark `drop` or `done`, and leave only validated unresolved issues at `pending`. The orchestrator counts unresolved findings with `blocking: true`, not severity alone. Accepted fixes identify every owning or affected worker for the targeted follow-up.
+Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review`. Triage is authoritative for exit: implement valid fixes, mark `drop` or `done`, and leave only validated unresolved issues at `pending`. The orchestrator counts unresolved findings with `blocking: true`, not severity alone. Accepted fixes identify every owning or affected worker for the targeted follow-up. Phase 3 Hard Gate 23 applies **Fix-risk triage when fixes regenerate findings** before further folding; the focused verification round's worker composition follows `review-panel-selection.md`.
+
+### With `review-loop` skill
+Orchestration rule 4 applies **Fix-risk triage when fixes regenerate findings** in a regenerating loop; the triage classes and fix-vs-backlog decisions feed its exit report and **Backlog capture** tally.
 
 ### With `doing-code-review` / `review-agents`
 Accepted human findings that the panel missed feed Step 2.5 Guideline Pack awareness and optional catalog/overlay patches (see **Agent corpus feedback** above). Pattern IDs stay abstract; overlays and guidelines carry stack/project detail. Documentation and comment findings are evaluated with `review-agents/documentation.md` phase 2 gates, including the remove-or-freeze disposition for outdated docs (see **Documentation and Comment Findings** above).

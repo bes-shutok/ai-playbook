@@ -62,9 +62,10 @@ import validate_review_staging as vrs  # noqa: E402  (delegate classification)
 # Constants.
 # --------------------------------------------------------------------------- #
 
-# The canonical five-worker panel identity set. A discovered sidecar is
-# ``growth`` iff it is not in the baseline snapshot AND its panel identities
-# satisfy this set (Design Invariant 10).
+# Historical (pre-versioning) panel identity namespace: the lens-era agent
+# names recorded by the Phase 1 cutover marker. Kept frozen so historical
+# sidecar classification is never re-derived from today's contract (Design
+# Invariant: versionless sidecars remain legacy compatibility inputs).
 FIVE_WORKER_PANEL_IDS = {
     "quality",
     "implementation",
@@ -76,6 +77,18 @@ FIVE_WORKER_PANEL_IDS = {
     "concurrency",
     "premortem",
 }
+
+# The worker-ID namespace, taken from the validator's full-panel contract
+# (validate_review_staging.DEFAULT_PANEL_WORKERS). Five-worker growth
+# eligibility is expressed by these WORKER IDs; lens telemetry is derived
+# separately from each panel row's ``lenses`` array and is never compared to
+# worker IDs (worker identity and lens identity are distinct namespaces).
+WORKER_PANEL_IDS = frozenset(vrs.DEFAULT_PANEL_WORKERS)
+
+# Growth-eligible panel identities: the version-1 worker IDs plus the frozen
+# historical namespace above (legacy history stays eligible; it is never
+# re-classified by age).
+GROWTH_ELIGIBLE_PANEL_IDS = FIVE_WORKER_PANEL_IDS | set(WORKER_PANEL_IDS)
 
 # Conservation ledger classes. Every discovered sidecar belongs to EXACTLY one.
 # ``unreadable`` collapses the former malformed and unsupported classes.
@@ -448,17 +461,22 @@ def panel_identity_set(payload: dict) -> set[str]:
     return names
 
 
-def satisfies_five_worker_set(payload: dict) -> bool:
+def satisfies_five_worker_set(payload: dict, eligible: frozenset[str]) -> bool:
     """True iff the sidecar's panel identities satisfy the five-worker set.
 
     "Satisfy" means the panel identity set is non-empty and is a subset of the
-    canonical five-worker identity set (a sidecar that launched only workers
-    from the canonical set qualifies).
+    caller-supplied eligible identity family. The family is REQUIRED (r3 F8:
+    a default union was a production-dead widening path; a future caller
+    omitting it would silently apply the legacy union to version-1 records).
+    ``classify_for_conservation`` passes its label-scoped set — version-1
+    records must satisfy ``WORKER_PANEL_IDS`` only; the frozen growth-eligible
+    union applies to versionless legacy records. Lens telemetry is never
+    consulted here; worker IDs and lens IDs are distinct namespaces.
     """
     names = panel_identity_set(payload)
     if not names:
         return False
-    return names.issubset(FIVE_WORKER_PANEL_IDS)
+    return names.issubset(eligible)
 
 
 def parse_payload(buffer: bytes) -> tuple[dict | None, str]:
@@ -551,13 +569,26 @@ def classify_for_conservation(
     parse_reason: str,
     baseline: dict,
     seen_digests: dict[str, Path],
+    digest: str = "",
 ) -> tuple[str, list[str]]:
     """Classify one discovered sidecar into exactly one ledger class.
+
+    ``digest`` is the sidecar's content digest computed ONCE by the
+    conservation run over the already-read immutable byte buffer (Design
+    Invariant 9) and shared with the caller's dedup ledger (r5 F6: one
+    derivation site for both classification and dedup, so the two can never
+    desynchronize). The file is NEVER read here (r4 F2): re-reading opened a
+    mixed-version window where the payload was parsed from the old bytes
+    while the digest came from new bytes, misclassifying baseline members as
+    same-shape replacements and skewing duplicate detection.
 
     Returns ``(class, audit_signals)``. The classification order:
 
     1. ``unreadable`` if the buffer did not parse (collapsed malformed +
-       unsupported).
+       unsupported). An explicit-but-unsupported ``schema_version`` also
+       ledgers ``unreadable`` with a named signal; this disposition is
+       checked BEFORE duplicate (step 2), so an unsupported-version sidecar
+       can never ledger as ``duplicate`` or ``audit-anomaly``.
     2. ``duplicate`` if the sidecar's digest already appeared under another
        real path (dedup by content digest).
     3. ``audit-anomaly`` if a baseline member's path matches but its digest,
@@ -576,12 +607,41 @@ def classify_for_conservation(
     flagged in audit (never re-classified).
     """
     signals: list[str] = []
-    digest = sha256_hex(read_byte_buffer(sidecar)) if sidecar.is_file() else ""
+    # r5 F7: the schema label is classified ONCE and held for both the
+    # unsupported-version hoist below and the growth-shape derivation in
+    # steps 5-7 (pre-fix the classifier ran twice on the unchanged payload).
+    # r4 F2: the digest arrives precomputed from the held immutable buffer
+    # (single derivation, r5 F6); the file is never re-read here.
+    schema_label = vrs.classify_sidecar_schema(payload)
 
     # 1. unreadable
     if payload is None:
         cls = "unreadable"
         return cls, signals
+
+    # 1.5 unsupported schema_version (F7): an explicit-but-unsupported
+    # ``schema_version`` is rejected by the validator outright; it is never
+    # legacy compatibility input. This disposition is UNCONDITIONAL, so it
+    # runs before the duplicate / same-path-digest / panel / schema mismatch
+    # branches: such a sidecar always ledgers ``unreadable`` with the named
+    # signal (never ``duplicate`` or ``audit-anomaly``).
+    #
+    # Documented ledger consequence of the hoist (r3 F9): an unchanged
+    # baseline snapshot member that carries an unsupported ``schema_version``
+    # migrates from ``baseline`` to ``unreadable`` (the snapshot comparison in
+    # steps 3-4 never runs for it), silently shrinking the baseline side of
+    # cohorts and potentially flipping an evaluable cohort to inconclusive.
+    # This erosion is accepted deliberately: an unsupported version is never
+    # compatibility input, and treating it as unreadable surfaces it in the
+    # audit signal instead of keeping a contract-violating record in the
+    # baseline cohort. Re-pin the baseline after resolving any unsupported
+    # sidecar so cohort counts recover.
+    if schema_label == "unsupported":
+        signals.append(
+            f"unsupported schema_version {payload.get('schema_version')!r}; "
+            "rejected by the validator contract"
+        )
+        return "unreadable", signals
 
     # 2. duplicate (by content digest)
     if digest and digest in seen_digests:
@@ -606,12 +666,13 @@ def classify_for_conservation(
             return "audit-anomaly", signals
     else:
         # Not in snapshot. Panel-identity disagreement: the sidecar carries a
-        # panel identity NOT in the marker's canonical five-worker set. A growth
-        # sidecar launching a strict subset of the canonical set does NOT
-        # disagree; only an out-of-family identity is an anomaly.
+        # panel identity NOT in the marker's family (the recorded cutover
+        # identities plus the validator-contract worker IDs). A growth sidecar
+        # launching a strict subset of the family does NOT disagree; only an
+        # out-of-family identity is an anomaly.
         declared_panel = panel_identity_set(payload)
         marker_panel = set(marker.get("panel_identities", []))
-        extra = declared_panel - marker_panel
+        extra = declared_panel - (marker_panel | WORKER_PANEL_IDS)
         if extra:
             panel_mismatch = True
             signals.append(
@@ -629,15 +690,33 @@ def classify_for_conservation(
     if snap is not None and snap.get("sha256") == digest:
         return "baseline", signals
 
-    # 5/6/7. not in snapshot: classify by shape. Route the shape decision
-    # through ``adapter_is_current`` (the validator-matching predicate) so the
-    # conservation ledger and the aggregation adapter can NEVER disagree on a
-    # sidecar's current/legacy shape (F1: ``classify_sidecar_shape`` diverged
-    # from the adapter on ``counts.workers_launched``-only and ``workers``-map
-    # shapes, silently mislabelling sidecars between the growth ledger and the
-    # aggregation schema).
-    shape = "current" if adapter_is_current(payload) else "legacy"
-    if shape == "current" and satisfies_five_worker_set(payload):
+    # 5/6/7. not in snapshot: classify by shape. The growth-branch shape comes
+    # from the validator's exported CURRENT-shape label FAMILY
+    # (``vrs.CURRENT_SHAPE_LABELS``), which deliberately includes
+    # ``legacy-worker-shaped`` (r3 F1: deriving it from the aggregation
+    # adapter's shape made the growth branch unreachable for versionless
+    # worker-shaped sidecars, silently re-classifying them from growth to
+    # legacy). The aggregation adapter keeps its own routing carve-out for
+    # ``legacy-worker-shaped`` records; the growth ledger's shape authority is
+    # the schema label family, so versionless worker-shaped history stays
+    # growth-eligible while its aggregation still routes through the
+    # compatibility adapter. The label itself is the one hoisted near the top
+    # of this function (r5 F7: single classification call).
+    # An explicit-but-unsupported schema_version was already ledgered
+    # ``unreadable`` with a named signal above (unconditional disposition).
+    growth_shaped = schema_label in vrs.CURRENT_SHAPE_LABELS
+    # Growth eligibility is scoped by schema label (Design Invariant: current
+    # records compare WORKER IDs only). Version-1 records must satisfy the
+    # worker-ID set; versionless legacy records keep the frozen union (history
+    # stays eligible, never re-derived from today's contract). The scoped rule
+    # is evaluated by the SAME exported helper the selftest asserts (no inline
+    # duplicate predicate).
+    eligible_ids = (
+        WORKER_PANEL_IDS
+        if schema_label == "current-v1"
+        else GROWTH_ELIGIBLE_PANEL_IDS
+    )
+    if growth_shaped and satisfies_five_worker_set(payload, eligible_ids):
         # A growth review with a pre-cutover timestamp stays growth and is
         # flagged in audit.
         recorded = marker.get("recorded_at")
@@ -691,13 +770,16 @@ def run_conservation(
     for sidecar in sorted(sidecars):
         buf = buffers.get(sidecar, b"")
         payload, reason = parse_payload(buf)
+        # r5 F6: the content digest is computed ONCE per sidecar and shared
+        # with the classifier (classification, duplicate detection, and the
+        # seen-digests ledger all use one derivation over the same buffer).
+        digest = sha256_hex(buf) if buf else ""
         cls, signals = classify_for_conservation(
-            sidecar, payload, reason, baseline, seen_digests
+            sidecar, payload, reason, baseline, seen_digests, digest=digest
         )
         ledger[cls].append(sidecar)
         if signals:
             audit[str(sidecar)] = signals
-        digest = sha256_hex(buf) if buf else ""
         if digest and cls != "duplicate":
             seen_digests[digest] = sidecar
 
@@ -802,49 +884,40 @@ def _coerce_int(value, default: int = 0) -> int:
     return default
 
 
+# Versionless worker-shaped compatibility records keep their worker, lens,
+# finding, and triage metrics through the compatibility aggregation adapter.
+LEGACY_WORKER_SHAPE_LABEL = "legacy-worker-shaped"
+
+# Schema-classification labels that aggregate through the current (per-worker
+# panel) adapter: explicit version-1 records plus the pre-version records that
+# already carried the current shape (``legacy-panel-mode``). Derived from the
+# validator's exported label set minus the one documented carve-out
+# (``legacy-worker-shaped`` routes through the compatibility adapter), so the
+# summarizer never hand-copies the label set (F5).
+CURRENT_SHAPE_SCHEMA_LABELS = vrs.CURRENT_SHAPE_LABELS - {
+    LEGACY_WORKER_SHAPE_LABEL
+}
+
+
 def adapter_is_current(payload: dict) -> bool:
-    """Classify a sidecar payload as current vs legacy, matching the validator.
-
-    Delegates to ``validate_review_staging``'s current/legacy predicate so a
-    future schema change to the validator does not silently desync the
-    summarizer. The validator's predicate (see ``validate_stats_sidecar``) is:
-    a sidecar is current iff it carries ``panel_mode``, or
-    ``counts.workers_launched``, or a panel row with a ``worker`` key.
-    """
-    if "panel_mode" in payload:
-        return True
-    counts = payload.get("counts")
-    if isinstance(counts, dict) and "workers_launched" in counts:
-        return True
-    panel = payload.get("panel")
-    if isinstance(panel, list):
-        for row in panel:
-            if isinstance(row, dict) and "worker" in row:
-                return True
-    return False
+    """Classify a sidecar payload as current-shaped vs legacy for AGGREGATION
+    routing, delegating to the validator's exported schema classifier
+    (``validate_review_staging.classify_sidecar_schema``). The summarizer
+    never re-derives the predicate; structural agreement with the validator's
+    exported label family is pinned by the legacy_adapters selftest (one
+    fixture per schema label plus a set-derivation assertion)."""
+    return vrs.classify_sidecar_schema(payload) in CURRENT_SHAPE_SCHEMA_LABELS
 
 
-def _adapter_matches_validator(payload: dict) -> bool:
-    """Drift canary: the summarizer's adapter selector agrees with the
-    validator's current/legacy predicate for ``payload``.
-
-    Returns True when both classify ``payload`` the same way. Used by the
-    legacy_adapters selftest to guard against drift.
-    """
-    summarizer_says = adapter_is_current(payload)
-    # The validator's predicate is inlined in validate_stats_sidecar; it is not
-    # exported as a standalone function, so we replicate its exact three tests
-    # here from the SAME imported module source (validate_review_staging). The
-    # equality check below is the drift canary.
-    validator_says = (
-        "panel_mode" in payload
-        or (isinstance(payload.get("counts"), dict) and "workers_launched" in payload["counts"])
-        or any(
-            isinstance(row, dict) and "worker" in row
-            for row in (payload.get("panel") or [])
-        )
-    )
-    return summarizer_says == validator_says
+def _len_container(value) -> int:
+    """len() for the len-derived container counts (discard / calibration /
+    overflow). Absent, explicit JSON null, and mistyped values (including
+    strings — a string is a mistyped container here, not a countable one) all
+    yield 0 instead of a TypeError crash (r4 F1): one bad historical sidecar
+    must never abort the whole strict-audit report (partial-failure design).
+    The validator's type gates reject mistyped containers on current shapes;
+    this helper keeps aggregation crash-safe for whatever still reaches it."""
+    return len(value) if isinstance(value, (list, dict)) else 0
 
 
 def aggregate_current(payload: dict) -> dict:
@@ -889,9 +962,9 @@ def aggregate_current(payload: dict) -> dict:
         "raw_findings": raw_findings,
         "staged_findings": _coerce_int(counts.get("staged_findings"), default=len(findings)),
         "dedup_count": _coerce_int(counts.get("deduplicated")),
-        "discard_count": len(payload.get("discarded") or []),
-        "calibration_count": len(payload.get("severity_calibration") or []),
-        "overflow_count": len(payload.get("overflow") or []),
+        "discard_count": _len_container(payload.get("discarded")),
+        "calibration_count": _len_container(payload.get("severity_calibration")),
+        "overflow_count": _len_container(payload.get("overflow")),
         "triage": _triage_from_findings(findings),
         "severity": _severity_from_findings(findings),
     }
@@ -922,20 +995,42 @@ def aggregate_legacy(payload: dict) -> dict:
         "raw_findings": raw_findings,
         "staged_findings": staged,
         "dedup_count": _coerce_int(counts.get("deduplicated")),
-        "discard_count": len(payload.get("discarded") or []),
-        "calibration_count": len(payload.get("severity_calibration") or []),
-        "overflow_count": len(payload.get("overflow") or []),
+        "discard_count": _len_container(payload.get("discarded")),
+        "calibration_count": _len_container(payload.get("severity_calibration")),
+        "overflow_count": _len_container(payload.get("overflow")),
         "triage": _triage_from_findings(findings),
         "severity": _severity_from_findings(findings),
     }
 
 
-def aggregate_sidecar(payload: dict) -> dict:
-    """Classify and normalize a sidecar payload via the validator-matching
-    adapter selector. Current payloads use ``aggregate_current``; legacy
-    payloads use ``aggregate_legacy``.
+def aggregate_legacy_worker_compat(payload: dict) -> dict:
+    """Compatibility adapter for versionless worker-shaped legacy records.
+
+    These records predate ``schema_version`` but still carry per-worker panel
+    rows with lens arrays. They classify legacy (the version-1 contract never
+    applies), yet their worker, lens, finding, and triage metrics are
+    preserved by reusing the current adapter's panel-aware aggregation while
+    reporting the legacy contract in ``schema``.
     """
-    if adapter_is_current(payload):
+    norm = aggregate_current(payload)
+    norm["schema"] = "legacy"
+    return norm
+
+
+def aggregate_sidecar(payload: dict) -> dict:
+    """Classify and normalize a sidecar payload via the validator's exported
+    schema classifier (the single classification authority; classified ONCE)
+    and choose the aggregation adapter from the returned label:
+
+    - ``current-v1`` / ``legacy-panel-mode`` -> ``aggregate_current``
+    - ``legacy-worker-shaped`` -> compatibility adapter (worker/lens metrics
+      preserved, legacy contract reported)
+    - any other legacy label -> generic legacy normalization
+    """
+    label = vrs.classify_sidecar_schema(payload)
+    if label == LEGACY_WORKER_SHAPE_LABEL:
+        return aggregate_legacy_worker_compat(payload)
+    if label in CURRENT_SHAPE_SCHEMA_LABELS:
         return aggregate_current(payload)
     return aggregate_legacy(payload)
 
@@ -1277,15 +1372,34 @@ def evaluate_cohort(
     # (b) accepted change within 20% guardrail (growth accepted vs baseline raw
     # yield). Baseline contributes raw yield; here we use baseline accepted as
     # the reference yield. Accepted must NOT fall by >20%.
+    # r4 F5: a ZERO baseline accepted yield (the typical raw-only legacy
+    # baseline whose findings carry no triage values) is an unmeasurable
+    # floor, not a failed guardrail: growth-positive vs zero-baseline is an
+    # improvement, and auto-failing it systematically verdict-ed every
+    # improved cohort over a legacy baseline as "review needed". The guardrail
+    # passes with an explicit unmeasurable note instead; both-zero stays
+    # no-change.
+    accepted_unmeasurable_reason: str | None = None
     if baseline_accepted is not None and growth_accepted is not None:
         if baseline_accepted > 0:
             accepted_change = (growth_accepted - baseline_accepted) / baseline_accepted
+        elif growth_accepted == 0:
+            accepted_change = 0.0
         else:
-            accepted_change = 0.0 if growth_accepted == 0 else None
+            accepted_change = None
+            accepted_unmeasurable_reason = (
+                "baseline accepted yield is zero (raw-only baseline); "
+                "accepted-change guardrail not measurable"
+            )
     else:
         accepted_change = None
     checks["accepted_change"] = accepted_change
-    accepted_ok = accepted_change is not None and accepted_change >= -ACCEPTED_CHANGE_GUARDRAIL
+    accepted_ok = (
+        True
+        if accepted_unmeasurable_reason is not None
+        else accepted_change is not None
+        and accepted_change >= -ACCEPTED_CHANGE_GUARDRAIL
+    )
 
     # (c) growth drop-rate change within 10pp.
     drop_change = growth_drop_rate - baseline_drop_rate
@@ -1308,6 +1422,11 @@ def evaluate_cohort(
             "launch_reduction_ok": launch_ok,
             "accepted_change_ok": accepted_ok,
             "drop_rate_change_ok": drop_ok,
+            # None except when the accepted-change guardrail was unmeasurable
+            # (zero-baseline raw-only history, r4 F5): carries the explicit
+            # reason so the pass-with-note cannot be mistaken for a measured
+            # pass.
+            "accepted_change_unmeasurable_reason": accepted_unmeasurable_reason,
         },
         **availability,
     }
@@ -2087,21 +2206,25 @@ def _t_facts_roots(check) -> None:
             roots[0] is not None and roots[1] is not None,
             str(roots),
         )
-        # Roots are never embedded in tracked output: build_baseline is the only
-        # place path data is recorded, and it goes to the private manifest. The
-        # aggregate (strict-audit markdown) must not contain the root string.
-        sidecars: list[Path] = []
-        buffers: dict[Path, bytes] = {}
-        manifest = build_baseline(sidecars, buffers, make_cutover_marker(set()))
-        leaked = any(
-            "Projects" in v for v in json.dumps(manifest).split()
-        )
-        check("facts_roots: no root embedded in empty baseline", not leaked)
-        # Public markdown never contains a root path.
-        public_md = "# Review effectiveness report\n"
+        # Roots are never embedded in tracked output. Build a REAL report from
+        # a current-shaped fixture and assert the production output (public
+        # markdown + canonical JSON) contains no resolved root string. The
+        # markdown-content check proves the fixture actually produced report
+        # output, so the privacy assertion cannot pass vacuously.
+        fixture = _make_current_payload(["quality"])
+        report = build_effectiveness_report([("growth", fixture)])
+        md_out = serialize_effectiveness_markdown(report).decode("utf-8")
+        json_out = serialize_effectiveness_json(report).decode("utf-8")
         check(
-            "facts_roots: root string absent from public markdown",
-            str(roots[0]) not in public_md if roots[0] else True,
+            "facts_roots: report markdown produced from the fixture",
+            "# Review effectiveness report" in md_out
+            and report["availability"]["cohorts"] >= 1,
+            md_out[:120],
+        )
+        root_strings = [str(r) for r in roots if r is not None]
+        check(
+            "facts_roots: no resolved root embedded in public report output",
+            all(r not in md_out and r not in json_out for r in root_strings),
         )
 
 
@@ -2299,20 +2422,24 @@ def _t_audit_anomaly(check) -> None:
 # ---- conservation_shape_drift_canary (F1) ----
 @_test("summarize_review_stats#conservation_shape_drift")
 def _t_conservation_shape_drift(check) -> None:
-    """The conservation ledger's current/legacy shape decision must NOT diverge
-    from the aggregation adapter's current/legacy predicate. Two invariants:
+    """The conservation ledger's growth/legacy shape decision must NOT diverge
+    from the validator's exported current-shape label family. Two invariants:
 
-    1. Drift canary: for every sidecar whose panel identity SATISFIES the
+    1. Shape agreement: for every sidecar whose panel identity SATISFIES the
        five-worker set (so the shape decision is the SOLE growth-vs-legacy
-       discriminator), the conservation ``growth``/``legacy`` outcome must agree
-       with ``adapter_is_current`` (the validator-matching predicate). The
-       summarizer owns ONE current/legacy authority, not two. Sidecars that fail
-       the five-worker gate land in ``legacy`` regardless of shape, so they are
-       out of scope for this agreement.
+       discriminator), the conservation ``growth``/``legacy`` outcome must
+       agree with ``vrs.is_current_shape`` (the validator's exported label
+       family). Sidecars that fail the five-worker gate land in ``legacy``
+       regardless of shape, so they are out of scope for this agreement.
+       (r3 F1: the growth-branch shape now comes from the label family, which
+       includes ``legacy-worker-shaped``, NOT from the aggregation adapter's
+       carved-out routing set.)
     2. Growth-aggregation consistency: any sidecar that reaches the ``growth``
-       ledger MUST aggregate as ``current``. A sidecar the conservation path
-       calls current but the aggregation adapter calls legacy (or vice versa) is
-       exactly the silent exclusion F1 guards against."""
+       ledger MUST aggregate through a panel-aware adapter (the current
+       adapter, or the worker-shaped compatibility adapter that preserves
+       worker/lens launch totals). A growth sidecar routed to the generic
+       legacy adapter (no per-worker metrics) is exactly the silent exclusion
+       this test guards against."""
     import tempfile
 
     # Shape fixtures that all SATISFY the five-worker set, so the conservation
@@ -2346,33 +2473,63 @@ def _t_conservation_shape_drift(check) -> None:
             # Unreadable/duplicate/audit-anomaly/baseline: not a shape decision.
             return None
 
-    # Invariant 1: drift canary across five-worker-satisfying shapes. The
-    # conservation outcome (growth=current, legacy=legacy) must equal the
-    # adapter's current/legacy verdict.
+    # Invariant 1: shape agreement across five-worker-satisfying shapes. The
+    # conservation outcome (growth=current family, legacy=legacy) must equal
+    # the validator's exported current-shape predicate.
     for name, payload in (
         ("panel_row_shape", panel_row_shape),
         ("workers_map_only", workers_map_only),
+        ("worker_shaped", {
+            "date": "2026-08-28",
+            "panel": [
+                {"worker": w, "lenses": [w], "status": "complete", "raw": 0}
+                for w in ("quality", "implementation", "testing")
+            ],
+        }),
     ):
         cons_shape = shape_via_conservation(payload)
-        adapter_shape = "current" if adapter_is_current(payload) else "legacy"
+        validator_shape = "current" if vrs.is_current_shape(payload) else "legacy"
         check(
-            f"shape_drift: conservation agrees with adapter for {name}",
-            cons_shape == adapter_shape,
-            f"conservation={cons_shape} adapter={adapter_shape}",
+            f"shape_drift: conservation agrees with validator family for {name}",
+            cons_shape == validator_shape,
+            f"conservation={cons_shape} validator={validator_shape}",
         )
 
-    # Invariant 2: a sidecar that reaches growth must aggregate as current.
+    # Invariant 2: a sidecar that reaches growth must aggregate through a
+    # panel-aware adapter (current schema, or the worker-shaped compat adapter
+    # with per-worker launch metrics preserved).
     with tempfile.TemporaryDirectory() as td:
         sc = Path(td) / "growth.stats.json"
         _write_private_sidecar(sc, panel_row_shape)
         buf = {sc: read_byte_buffer(sc)}
         ledger, _ = run_conservation([sc], buf, empty_baseline)
         reaches_growth = sc in ledger["growth"]
-        agg_schema = aggregate_sidecar(panel_row_shape)["schema"]
+        norm = aggregate_sidecar(panel_row_shape)
         check(
             "shape_drift: growth sidecar aggregates as current",
-            (not reaches_growth) or agg_schema == "current",
-            f"reaches_growth={reaches_growth} agg_schema={agg_schema}",
+            (not reaches_growth) or norm["schema"] == "current",
+            f"reaches_growth={reaches_growth} schema={norm['schema']}",
+        )
+    with tempfile.TemporaryDirectory() as td:
+        worker_shaped_growth = {
+            "date": "2026-08-28",
+            "panel": [
+                {"worker": w, "lenses": [w], "status": "complete", "raw": 0}
+                for w in ("quality", "implementation", "testing")
+            ],
+        }
+        sc = Path(td) / "growth-ws.stats.json"
+        _write_private_sidecar(sc, worker_shaped_growth)
+        buf = {sc: read_byte_buffer(sc)}
+        ledger, _ = run_conservation([sc], buf, empty_baseline)
+        reaches_growth = sc in ledger["growth"]
+        norm = aggregate_sidecar(worker_shaped_growth)
+        check(
+            "shape_drift: worker-shaped growth sidecar aggregates panel-aware",
+            (not reaches_growth)
+            or (norm["schema"] == "legacy" and norm["worker_launches"] == 3),
+            f"reaches_growth={reaches_growth} schema={norm['schema']} "
+            f"worker_launches={norm['worker_launches']}",
         )
 
 
@@ -2717,14 +2874,35 @@ def _t_current_adapter(check) -> None:
         "tokens" not in norm and "usage" not in norm and "total_tokens" not in norm,
     )
 
+    # r4 F1: a truthy mistyped container (e.g. severity_calibration=5) must
+    # aggregate to 0 instead of raising TypeError and aborting the whole
+    # strict-audit report (partial-failure design).
+    bad = json.loads(json.dumps(payload))
+    bad["severity_calibration"] = 5
+    bad["discarded"] = "not-a-list"
+    bad["overflow"] = 7
+    try:
+        bad_norm = aggregate_current(bad)
+        crash = False
+    except TypeError:
+        bad_norm = None
+        crash = True
+    check(
+        "current_adapter: mistyped containers do not crash len-derived counts (r4 F1)",
+        not crash
+        and bad_norm["calibration_count"] == 0
+        and bad_norm["discard_count"] == 0
+        and bad_norm["overflow_count"] == 0,
+    )
+
 
 # ---- legacy_adapters ----
 @_test("summarize_review_stats#legacy_adapters")
 def _t_legacy_adapters(check) -> None:
     """Legacy code/plan/rfc/document sidecars (agents_launched, raw_findings,
     agent-keyed panels) produce COMPATIBLE normalized totals without rewriting
-    the fixture. The legacy-vs-current decision matches the validator's
-    classifier for a shared fixture (drift canary)."""
+    the fixture. Adapter routing is pinned structurally against the
+    validator's exported label family (one fixture per schema label)."""
     legacy_code = {
         "review_type": "branch review",
         "date": "2024-01-01",
@@ -2759,19 +2937,283 @@ def _t_legacy_adapters(check) -> None:
         set(norm.keys()) == set(aggregate_current(_make_current_payload(["quality"])).keys()),
     )
 
-    # Drift canary: the legacy-vs-current decision must match the validator's
-    # classifier for a SHARED fixture. We classify the same payload with the
-    # summarizer's adapter selector and the validator's current/legacy
-    # predicate, and they must agree (both current or both legacy).
-    shared_current = _make_current_payload(["quality"])
-    check(
-        "legacy_adapters: drift canary current agrees with validator",
-        _adapter_matches_validator(shared_current),
+    # Drift guard (r3 F6 replaced the old same-source equality canary; r4 F9
+    # removed its replacement too because re-deriving the constant's
+    # definition inside the test is tautological and cannot fail while the
+    # definition stands). The sole drift guard is the fixture-per-label
+    # routing loop below: it pins classifier labels AND adapter routing
+    # behaviorally, one fixture per schema label.
+    worker_shaped = {
+        "date": "2026-08-28",
+        "counts": {"staged_findings": 1},
+        "panel": [
+            {"worker": "quality", "lenses": ["quality"], "status": "complete", "raw": 1},
+            {
+                "worker": "implementation",
+                "lenses": ["implementation"],
+                "status": "complete",
+                "raw": 0,
+            },
+            {"worker": "testing", "lenses": ["testing"], "status": "complete", "raw": 0},
+        ],
+        "findings": [{"id": 1, "severity": "Low", "triage": "pending"}],
+    }
+    label_fixtures = (
+        ("current-v1", {"schema_version": 1}),
+        ("legacy-panel-mode", {"panel_mode": "full"}),
+        ("legacy-worker-shaped", worker_shaped),
+        ("legacy", legacy_code),
     )
-    shared_legacy = legacy_code
+    for expected_label, fixture in label_fixtures:
+        label = vrs.classify_sidecar_schema(fixture)
+        check(
+            f"legacy_adapters: fixture classifies as {expected_label}",
+            label == expected_label,
+            f"label={label}",
+        )
+        expected_route = label in vrs.CURRENT_SHAPE_LABELS and label != LEGACY_WORKER_SHAPE_LABEL
+        check(
+            f"legacy_adapters: adapter routing agrees with label for {expected_label}",
+            adapter_is_current(fixture) == expected_route,
+            f"label={label} adapter_is_current={adapter_is_current(fixture)}",
+        )
+
+
+# ---- schema_contract_adapters (versioned sidecar contract, RED-first) ----
+@_test("summarize_review_stats#legacy_adapter_compat")
+def _t_legacy_adapter_compat(check) -> None:
+    """Versionless worker-shaped payload: the exported validator schema
+    classifier routes it to the legacy contract, and the compatibility
+    aggregation adapter preserves its worker, lens, finding, and triage totals
+    (equal to the pre-version compatibility shape)."""
+    legacy_worker_shaped = {
+        "review_type": "branch review",
+        "date": "2024-03-01",
+        "round": "r1",
+        "counts": {"raw_findings": 6, "staged_findings": 3, "deduplicated": 1},
+        "panel": [
+            {"worker": "quality", "lenses": ["quality"], "status": "complete", "raw": 2},
+            {
+                "worker": "implementation",
+                "lenses": ["implementation"],
+                "status": "complete",
+                "raw": 2,
+            },
+            {"worker": "testing", "lenses": ["testing"], "status": "complete", "raw": 2},
+        ],
+        "discarded": [{"reason": "duplicate"}],
+        "findings": [
+            {"id": 1, "severity": "High", "triage": "fixed"},
+            {"id": 2, "severity": "Medium", "triage": "dropped"},
+            {"id": 3, "severity": "Low", "triage": "pending"},
+        ],
+    }
     check(
-        "legacy_adapters: drift canary legacy agrees with validator",
-        _adapter_matches_validator(shared_legacy),
+        "legacy_adapter_compat: validator schema classifier is exported",
+        callable(vrs.classify_sidecar_schema),
+        "vrs.classify_sidecar_schema not implemented yet",
+    )
+    label = str(vrs.classify_sidecar_schema(legacy_worker_shaped))
+    check(
+        "legacy_adapter_compat: versionless worker-shaped payload classifies legacy",
+        "legacy" in label,
+        label,
+    )
+    norm = aggregate_sidecar(legacy_worker_shaped)
+    check(
+        "legacy_adapter_compat: versionless worker-shaped payload aggregates via the legacy contract",
+        norm["schema"] == "legacy",
+        f"schema={norm['schema']}",
+    )
+    # Totals must equal the pre-version compatibility shape.
+    check(
+        "legacy_adapter_compat: worker launch total preserved",
+        norm["worker_launches"] == 3,
+        str(norm["worker_launches"]),
+    )
+    check(
+        "legacy_adapter_compat: lens launch total preserved",
+        norm["lens_launches"] == 3,
+        str(norm["lens_launches"]),
+    )
+    check(
+        "legacy_adapter_compat: staged finding total preserved",
+        norm["staged_findings"] == 3,
+        str(norm["staged_findings"]),
+    )
+    check(
+        "legacy_adapter_compat: raw finding total preserved",
+        norm["raw_findings"] == 6,
+        str(norm["raw_findings"]),
+    )
+    check(
+        "legacy_adapter_compat: discard total preserved",
+        norm["discard_count"] == 1,
+        str(norm["discard_count"]),
+    )
+    check(
+        "legacy_adapter_compat: triage totals preserved",
+        norm["triage"]["fixed"] == 1
+        and norm["triage"]["dropped"] == 1
+        and norm["triage"]["pending"] == 1,
+        str(norm["triage"]),
+    )
+
+
+@_test("summarize_review_stats#current_adapter_v1")
+def _t_current_adapter_v1(check) -> None:
+    """Realistic version-1 five-worker panel with worker IDs and their assigned
+    lens arrays: current aggregation, growth-ledger eligibility by worker
+    identity, lens telemetry from ``panel[].lenses``, and no conflation of
+    worker and lens identity. The fixture reuses the validator's
+    ``_version1_payload`` builder so both scripts' selftests share ONE
+    canonical five-worker shape."""
+    worker_lenses = [
+        (worker, sorted(vrs.REQUIRED_PANEL_LENSES[worker]))
+        for worker in vrs.DEFAULT_PANEL_WORKERS
+    ]
+    payload = vrs._version1_payload()
+    payload["date"] = "2099-01-01"
+    payload["counts"] = {"workers_launched": 5, "raw_findings": 6, "staged_findings": 3}
+    payload["findings"] = [
+        {"id": 1, "severity": "High", "triage": "fixed"},
+        {"id": 2, "severity": "Medium", "triage": "deferred"},
+        {"id": 3, "severity": "Low", "triage": "pending"},
+    ]
+    check(
+        "current_adapter_v1: validator schema classifier is exported",
+        callable(vrs.classify_sidecar_schema),
+        "vrs.classify_sidecar_schema not implemented yet",
+    )
+    label = str(vrs.classify_sidecar_schema(payload))
+    check(
+        "current_adapter_v1: version-1 payload classifies current",
+        "current" in label,
+        label,
+    )
+    norm = aggregate_sidecar(payload)
+    check(
+        "current_adapter_v1: aggregates via the current contract",
+        norm["schema"] == "current",
+        f"schema={norm['schema']}",
+    )
+    check(
+        "current_adapter_v1: five worker launches by worker ID",
+        norm["worker_launches"] == 5,
+        str(norm["worker_launches"]),
+    )
+    # 2 + 1 + 2 + 1 + 1 = 7 lens launches, derived only from panel[].lenses.
+    check(
+        "current_adapter_v1: lens launches derived from panel lenses only",
+        norm["lens_launches"] == 7,
+        str(norm["lens_launches"]),
+    )
+    check(
+        "current_adapter_v1: staged and raw finding totals",
+        norm["staged_findings"] == 3 and norm["raw_findings"] == 6,
+        f"staged={norm['staged_findings']} raw={norm['raw_findings']}",
+    )
+    check(
+        "current_adapter_v1: triage totals preserved",
+        norm["triage"]["fixed"] == 1
+        and norm["triage"]["deferred"] == 1
+        and norm["triage"]["pending"] == 1,
+        str(norm["triage"]),
+    )
+    check(
+        "current_adapter_v1: growth-ledger eligible by worker identity",
+        satisfies_five_worker_set(payload, WORKER_PANEL_IDS),
+        "five-worker identity set does not include the version-1 worker IDs",
+    )
+    check(
+        "current_adapter_v1: worker identity is not lens identity",
+        panel_identity_set(payload) == {w for w, _ in worker_lenses},
+        str(sorted(panel_identity_set(payload))),
+    )
+
+    # F3: growth eligibility is scoped by schema label. A version-1 sidecar
+    # whose panel rows carry legacy LENS names as worker IDs violates the
+    # worker-ID contract and must NOT enter the growth ledger.
+    # F7: an explicit-but-unsupported schema_version is never legacy
+    # compatibility input; it ledgers as unreadable with a named signal.
+    import tempfile
+
+    marker = make_cutover_marker(set(FIVE_WORKER_PANEL_IDS))
+    empty_baseline = build_baseline([], {}, marker)
+
+    def ledger_class(p: dict) -> tuple[str, list[str]]:
+        with tempfile.TemporaryDirectory() as td:
+            sc = Path(td) / "x.stats.json"
+            _write_private_sidecar(sc, p)
+            ledger, audit = run_conservation(
+                [sc], {sc: read_byte_buffer(sc)}, empty_baseline
+            )
+            for cls, members in ledger.items():
+                if sc in members:
+                    return cls, audit.get(str(sc), [])
+        return "none", []
+
+    lens_named = json.loads(json.dumps(payload))
+    lens_named["panel"] = [
+        {"worker": w, "lenses": [w], "status": "complete", "raw": 0}
+        for w in ("quality", "implementation", "testing", "simplification", "documentation")
+    ]
+    cls, _ = ledger_class(lens_named)
+    check(
+        "current_adapter_v1: version-1 sidecar with legacy lens-named worker IDs ledgers legacy, not growth",
+        cls == "legacy",
+        f"class={cls}",
+    )
+
+    # r3 F1: a versionless worker-shaped FIVE-agent payload (the frozen
+    # lens-era identity namespace) that is NOT in the baseline must ledger
+    # growth. Pre-fix the growth branch derived its shape from the aggregation
+    # adapter (which carves out legacy-worker-shaped), making growth
+    # unreachable for this compatibility class and silently re-classifying
+    # history from growth to legacy.
+    worker_shaped_five = {
+        "review_type": "Branch Review",
+        "date": "2026-08-28",
+        "counts": {"raw_findings": 5, "staged_findings": 2},
+        "panel": [
+            {"worker": w, "lenses": [w], "status": "complete", "raw": 1}
+            for w in (
+                "quality",
+                "implementation",
+                "testing",
+                "simplification",
+                "documentation",
+            )
+        ],
+        "findings": [
+            {"id": 1, "severity": "Medium", "triage": "pending"},
+            {"id": 2, "severity": "Low", "triage": "pending"},
+        ],
+    }
+    cls, _ = ledger_class(worker_shaped_five)
+    check(
+        "current_adapter_v1: versionless worker-shaped five-agent payload ledgers growth",
+        cls == "growth",
+        f"class={cls}",
+    )
+
+    # Positive growth path through the production classifier (F4): a valid
+    # version-1 sidecar with the canonical five worker IDs ledgers growth.
+    cls, _ = ledger_class(json.loads(json.dumps(payload)))
+    check(
+        "current_adapter_v1: valid version-1 sidecar ledgers growth",
+        cls == "growth",
+        f"class={cls}",
+    )
+
+    unsupported = json.loads(json.dumps(payload))
+    unsupported["schema_version"] = 2
+    cls, signals = ledger_class(unsupported)
+    check(
+        "current_adapter_v1: unsupported schema_version ledgers unreadable, not legacy",
+        cls == "unreadable"
+        and any("unsupported schema_version" in s for s in signals),
+        f"class={cls} signals={signals}",
     )
 
 
@@ -3103,6 +3545,29 @@ def _t_retain_policy(check) -> None:
     )
     check("retain_policy: overall retain", rep["overall_verdict"] == "retain")
 
+    # r4 F5: a ZERO baseline accepted yield (raw-only legacy baseline with no
+    # triage data) is an unmeasurable floor, not a failed guardrail. The
+    # baseline carries the same RAW volume (4 pending, untriaged findings —
+    # raw-only history) so both sides share the cohort size bucket; growth
+    # improves (4 accepted vs baseline 0) with the same launch reduction and
+    # drop rates as the retain case: the cohort must retain with an explicit
+    # unmeasurable note, not verdict "review needed".
+    zero_base = make("baseline", launches=8, accepted=0, dropped=0, pending=4,
+                     panel_mode="targeted", n=11)
+    rep_zero = build_effectiveness_report(zero_base + growth)
+    only_zero = rep_zero["cohorts"][0]
+    check(
+        "retain_policy: zero-baseline accepted yield does not fail the guardrail (r4 F5)",
+        only_zero["verdict"] == "retain",
+        str(only_zero.get("checks")),
+    )
+    check(
+        "retain_policy: zero-baseline accepted pass carries the unmeasurable note",
+        only_zero["checks"]["accepted_change_ok"] is True
+        and "not measurable"
+        in only_zero["checks"]["accepted_change_unmeasurable_reason"],
+    )
+
 
 # ---- review_needed ----
 @_test("summarize_review_stats#review_needed")
@@ -3176,6 +3641,50 @@ def _t_review_needed(check) -> None:
         "review_needed: mixed cohorts -> overall review needed",
         rep2["overall_verdict"] == "review needed" and verdicts == {"retain", "review needed"},
         str(verdicts),
+    )
+
+    # r5 F2: negative coverage for the two guardrail FAILURE arms. Pre-fix no
+    # evaluable cohort failed either guardrail, so hardcoding either check to
+    # True kept the suite green. Each fixture keeps the OTHER two checks
+    # passing so exactly one guard fails per case.
+
+    # Accepted-change fall: baseline accepts 15 per review, growth accepts 6
+    # (a 60% fall, far past the 20% guardrail); both sides stay in the same
+    # size bucket (6-15), launches still halve (8 -> 4) and nothing is
+    # dropped, so only accepted_ok is False.
+    fall_base = make("baseline", launches=8, accepted=15, dropped=0,
+                     panel_mode="targeted", n=11)
+    fall_growth = make("growth", launches=4, accepted=6, dropped=0,
+                       panel_mode="full", n=11)
+    rep_fall = build_effectiveness_report(fall_base + fall_growth)
+    only_fall = rep_fall["cohorts"][0]
+    check(
+        "review_needed: accepted fall >20% -> review needed with accepted_change_ok False (r5 F2)",
+        only_fall["verdict"] == "review needed"
+        and only_fall["checks"]["accepted_change_ok"] is False
+        and only_fall["checks"]["launch_reduction_ok"] is True
+        and only_fall["checks"]["drop_rate_change_ok"] is True,
+        str(only_fall.get("checks")),
+    )
+
+    # Drop-rate rise: both sides accept 8 per review; baseline drops nothing
+    # (8 findings, bucket 6-15), growth drops 7 of its 15 staged findings
+    # (same 6-15 bucket, drop rate 0.467 vs 0, far past the 10pp guardrail);
+    # launches still halve and accepted counts match, so only drop_ok is
+    # False.
+    drop_base = make("baseline", launches=8, accepted=8, dropped=0,
+                     panel_mode="targeted", n=11, rt="plan review")
+    drop_growth = make("growth", launches=4, accepted=8, dropped=7,
+                       panel_mode="full", n=11, rt="plan review")
+    rep_drop = build_effectiveness_report(drop_base + drop_growth)
+    only_drop = rep_drop["cohorts"][0]
+    check(
+        "review_needed: drop-rate rise >10pp -> review needed with drop_rate_change_ok False (r5 F2)",
+        only_drop["verdict"] == "review needed"
+        and only_drop["checks"]["drop_rate_change_ok"] is False
+        and only_drop["checks"]["launch_reduction_ok"] is True
+        and only_drop["checks"]["accepted_change_ok"] is True,
+        str(only_drop.get("checks")),
     )
 
 
@@ -3610,6 +4119,8 @@ _SUBSET_OF: dict[str, str] = {
     "summarize_review_stats#snapshot_races": "permissions",
     "summarize_review_stats#current_adapter": "aggregation",
     "summarize_review_stats#legacy_adapters": "aggregation",
+    "summarize_review_stats#legacy_adapter_compat": "aggregation",
+    "summarize_review_stats#current_adapter_v1": "aggregation",
     "summarize_review_stats#accepted_unique": "aggregation",
     "summarize_review_stats#cohort_key_derivation": "report",
     "summarize_review_stats#comparable_cohorts": "report",

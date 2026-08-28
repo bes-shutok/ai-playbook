@@ -60,6 +60,46 @@ REQUIRED_PANEL_LENSES = {
     "contract-docs": frozenset({"documentation"}),
     "risk": frozenset({"security"}),
 }
+# Canonical Pattern ID contract for version-1 sidecars: `lens#kebab-slug`.
+# Owners are the declared shared review lenses (the per-worker required lens
+# set) plus `consistency` (assigned ownership for plan/RFC contradictions)
+# and the explicit `unknown` owner. The historical `prose-clarity` owner
+# stays readable for legacy records only and is rejected from version-1
+# sidecars.
+SHARED_PATTERN_OWNERS = frozenset(
+    {lens for lenses in REQUIRED_PANEL_LENSES.values() for lens in lenses}
+    | {"consistency", "unknown"}
+)
+CANONICAL_PATTERN_RE = re.compile(
+    r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*#[a-z0-9]+(?:-[a-z0-9]+)*$"
+)
+# Version-1 top-level sidecar contract. Required fields must all be present;
+# optional fields are permitted in their documented type (``depth`` string,
+# ``domains`` list, ``extensions`` object). Any other top-level field is
+# rejected; future extensions belong inside the object-valued ``extensions``.
+V1_REQUIRED_TOP_LEVEL_FIELDS = (
+    "schema_version",
+    "review_type",
+    "date",
+    "artifact_slug",
+    "round",
+    "panel_mode",
+    "selection_reason",
+    "source_kind",
+    "source_digest",
+    "escalation_reason",
+    "counts",
+    "panel",
+    "deduplication_groups",
+    "discarded",
+    "severity_calibration",
+    "triage_outcomes",
+    "findings",
+    "overflow",
+    "soften_watchlist",
+)
+V1_OPTIONAL_TOP_LEVEL_FIELDS = ("depth", "domains", "extensions")
+SUPPORTED_SIDECAR_SCHEMA_VERSIONS = (1,)
 # Worker statuses that count as a launch toward the six-worker ceiling but
 # NEVER as completed coverage for full-panel completion.
 INCOMPLETE_WORKER_STATUSES = frozenset({"failed", "timed-out"})
@@ -255,12 +295,61 @@ def split_finding_blocks(content: str) -> list[str]:
     findings_section = re.split(r"\n## ", findings_section, maxsplit=1)[0]
     # Legacy findings use "### 1." or "### F1". Current grouped findings use
     # severity headings plus "#### F1." entries.
-    current_parts = re.split(r"\n(?=#### F\d+\.)", findings_section)
-    if len(current_parts) > 1:
-        return [part.strip() for part in current_parts[1:] if part.strip()]
-    parts = re.split(r"\n(?=### )", findings_section)
+    # r5 F8: the current-format split is fence-aware. A ``#### F<N>.`` line
+    # inside a properly fenced code example is quoted content, not a finding
+    # header; splitting on it produced a phantom finding block that then
+    # failed the Comment/Analysis gate with errors naming the phantom instead
+    # of the real defect. Fence tracking uses the same close-on-equal-or-longer
+    # rule as ``parse_markdown_findings``.
+    lines = findings_section.splitlines(keepends=True)
+    fence_re = re.compile(r"^\s*(`{3,}|~{3,})")
+    header_re = re.compile(r"^####\s+F\d+\.")
+
+    def scan_boundaries(reset_at_headings: bool) -> tuple[list[int], bool]:
+        """Boundary line indices for finding headers OUTSIDE fences.
+
+        With ``reset_at_headings`` False, a header inside an open fence is
+        quoted content (r5 F8). Returns ``(boundaries, fence_open_at_end)``;
+        the caller re-scans with heading resets when a fence never closed
+        (r4 F3 unclosed-fence containment, mirroring
+        ``parse_markdown_findings``).
+        """
+        in_fence = False
+        fence_len = 0
+        bounds: list[int] = []
+        for i, line in enumerate(lines):
+            fence_match = fence_re.match(line)
+            if fence_match:
+                if in_fence:
+                    if len(fence_match.group(1)) >= fence_len:
+                        in_fence = False
+                        fence_len = 0
+                else:
+                    in_fence = True
+                    fence_len = len(fence_match.group(1))
+                continue
+            if header_re.match(line):
+                if in_fence and not reset_at_headings:
+                    continue
+                in_fence = False
+                fence_len = 0
+                bounds.append(i)
+        return bounds, in_fence
+
+    boundaries, fence_left_open = scan_boundaries(reset_at_headings=False)
+    if fence_left_open:
+        boundaries, _ = scan_boundaries(reset_at_headings=True)
+    if boundaries:
+        parts: list[str] = []
+        starts = boundaries + [len(lines)]
+        for bi in range(len(boundaries)):
+            chunk = "".join(lines[starts[bi]:starts[bi + 1]]).strip()
+            if chunk:
+                parts.append(chunk)
+        return parts
+    parts_legacy = re.split(r"\n(?=### )", findings_section)
     blocks: list[str] = []
-    for part in parts:
+    for part in parts_legacy:
         stripped = part.strip()
         if not stripped.startswith("### "):
             continue
@@ -272,15 +361,20 @@ def split_finding_blocks(content: str) -> list[str]:
 
 def parse_markdown_findings(content: str) -> list[dict]:
     """Parse current-format Markdown findings into ``{id, severity, blocking,
-    triage}`` dicts, one per ``#### F<N>.`` block.
+    triage, pattern}`` dicts, one per ``#### F<N>.`` block.
 
     Severity is read from the enclosing ``### <Severity>`` group heading;
     blocking from either the canonical ``- **Blocking**: true | false`` bullet
     documented in ``review-staging/SKILL.md`` (the primary, human-facing
     template every producer skill emits) or the legacy bare ``- **blocking**``
     / ``- **non-blocking**`` bullet (older staging docs); triage from a
-    ``**Triage**: <value>`` bullet. Used by the Markdown/sidecar conservation
-    cross-check.
+    ``**Triage**: <value>`` bullet; pattern from a ``**Pattern**: <id>`` bullet
+    when present (used by the version-1 Markdown/sidecar pattern conservation
+    cross-check). Metadata bullets are read ONLY between the finding header
+    and the first level-four sub-heading of any name (Comment and Analysis
+    are the common ones), and fenced code blocks are skipped, so quoted or
+    example bullets in body prose cannot overwrite the parsed fields. Used by
+    the Markdown/sidecar conservation cross-check.
     """
     findings_match = re.search(r"^## Findings\s*$", content, re.MULTILINE)
     if not findings_match:
@@ -290,38 +384,121 @@ def parse_markdown_findings(content: str) -> list[dict]:
     parsed: list[dict] = []
     current_severity: str | None = None
     current: dict | None = None
-    for line in findings_section.splitlines():
-        sev_match = re.match(r"^###\s+(Critical|High|Medium|Low)\b", line)
-        if sev_match:
-            current_severity = sev_match.group(1)
-            continue
-        block_match = re.match(r"^####\s+F(\d+)\.", line)
-        if block_match:
-            if current is not None:
-                parsed.append(current)
-            current = {
-                "id": int(block_match.group(1)),
-                "severity": current_severity,
-                "blocking": None,
-                "triage": None,
-            }
-            continue
-        if current is None:
-            continue
-        labeled_blocking = re.search(
-            r"-\s*\*\*[Bb]locking\*\*\s*:\s*(true|false)\b", line
-        )
-        if labeled_blocking:
-            current["blocking"] = labeled_blocking.group(1) == "true"
-        elif re.search(r"-\s*\*\*blocking\*\*(?!\s*:)", line):
-            current["blocking"] = True
-        elif re.search(r"-\s*\*\*non-blocking\*\*(?!\s*:)", line):
-            current["blocking"] = False
-        triage = re.search(r"\*\*Triage\*\*:\s*(\S+)", line)
-        if triage:
-            current["triage"] = triage.group(1).rstrip(".")
-    if current is not None:
-        parsed.append(current)
+    # r3 F2: metadata bullets are read ONLY between the finding header and the
+    # first level-four sub-heading of any name (Comment and Analysis are the
+    # common ones), and fenced code blocks are skipped.
+    # Previously every line after the header was scanned last-match-wins, so
+    # an illustrative bullet quoted in a Comment/Analysis body (or inside a
+    # fenced example) silently overwrote the finding's real parsed pattern,
+    # blocking, or triage.
+    #
+    # r4 F3: the fence tracker is fence-length aware (a fence closes only on a
+    # delimiter of equal or greater length, so a longer opener cannot be
+    # closed by a shorter delimiter line) and an UNCLOSED fence cannot
+    # swallow the rest of the Findings section: when the section ends with a
+    # fence still open, the scan re-runs with structural headings resetting
+    # the fence state (which cannot leak across findings, silently hiding
+    # later blocking findings from readiness). r5 F8: heading-like lines
+    # inside a properly CLOSED fence are content, so a fenced example quoting
+    # the staging format cannot inject a phantom finding.
+    def scan(headings_reset_fence: bool) -> tuple[list[dict], bool]:
+        """One linear scan of the Findings section.
+
+        Returns ``(parsed_findings, fence_open_at_end)``. With
+        ``headings_reset_fence`` False, a structural heading inside an open
+        fence is treated as fenced CONTENT (r5 F8: a properly fenced example
+        quoting the staging format must not inject a phantom finding); with
+        True, headings reset the fence state (the r4 F3 corruption-containment
+        behavior for UNCLOSED fences). The caller runs the content-preserving
+        scan first and falls back to the reset scan only when a fence was
+        still open at the end of the section (i.e. the fence was never
+        legitimately closed, so its heading-like lines cannot be content).
+        """
+        scanned: list[dict] = []
+        cur: dict | None = None
+        cur_severity = current_severity
+        metadata_open = False
+        in_fence = False
+        fence_len = 0
+        for line in findings_section.splitlines():
+            sev_match = re.match(r"^###\s+(Critical|High|Medium|Low)\b", line)
+            if sev_match:
+                if in_fence and not headings_reset_fence:
+                    # Severity-like line inside a legitimately closed fence:
+                    # content, never a severity change (r5 F8).
+                    continue
+                cur_severity = sev_match.group(1)
+                if in_fence:
+                    # Fence state cannot leak across a severity heading
+                    # (r4 F3, unclosed-fence containment).
+                    in_fence = False
+                    fence_len = 0
+                continue
+            block_match = re.match(r"^####\s+F(\d+)\.", line)
+            if block_match:
+                if in_fence and not headings_reset_fence:
+                    # Heading-like line inside a legitimately closed fence:
+                    # content, not a new finding (r5 F8).
+                    continue
+                if in_fence:
+                    in_fence = False
+                    fence_len = 0
+                if cur is not None:
+                    scanned.append(cur)
+                cur = {
+                    "id": int(block_match.group(1)),
+                    "severity": cur_severity,
+                    "blocking": None,
+                    "triage": None,
+                }
+                metadata_open = True
+                continue
+            fence_match = re.match(r"^\s*(`{3,}|~{3,})", line)
+            if fence_match:
+                if in_fence:
+                    if len(fence_match.group(1)) >= fence_len:
+                        in_fence = False
+                        fence_len = 0
+                else:
+                    in_fence = True
+                    fence_len = len(fence_match.group(1))
+                continue
+            if in_fence:
+                continue
+            if cur is None:
+                continue
+            if re.match(r"^####\s+", line):
+                # Comment/Analysis sub-heading: the finding's metadata region
+                # ends here; body prose is never parsed as metadata.
+                metadata_open = False
+                continue
+            if not metadata_open:
+                continue
+            labeled_blocking = re.search(
+                r"-\s*\*\*[Bb]locking\*\*\s*:\s*(true|false)\b", line
+            )
+            if labeled_blocking:
+                cur["blocking"] = labeled_blocking.group(1) == "true"
+            elif re.search(r"-\s*\*\*blocking\*\*(?!\s*:)", line):
+                cur["blocking"] = True
+            elif re.search(r"-\s*\*\*non-blocking\*\*(?!\s*:)", line):
+                cur["blocking"] = False
+            triage = re.search(r"\*\*Triage\*\*:\s*(\S+)", line)
+            if triage:
+                cur["triage"] = triage.group(1).rstrip(".")
+            pattern = re.search(r"-\s*\*\*[Pp]attern\*\*\s*:\s*(\S+)", line)
+            if pattern:
+                cur["pattern"] = pattern.group(1).rstrip(".")
+        if cur is not None:
+            scanned.append(cur)
+        return scanned, in_fence
+
+    parsed, fence_left_open = scan(headings_reset_fence=False)
+    if fence_left_open:
+        # The section contains a fence that was never legitimately closed:
+        # re-scan with the r4 F3 heading-reset containment so the unclosed
+        # fence cannot swallow later findings.
+        parsed, _ = scan(headings_reset_fence=True)
     return parsed
 
 
@@ -393,6 +570,274 @@ def validate_discarded_findings(content: str, result: ValidationResult) -> None:
             )
 
 
+def _payload_has_worker_rows(payload: dict) -> bool:
+    panel = payload.get("panel")
+    if not isinstance(panel, list):
+        return False
+    return any(isinstance(row, dict) and "worker" in row for row in panel)
+
+
+def classify_sidecar_schema(payload: object) -> str:
+    """Classify a stats sidecar payload into one schema contract label.
+
+    This is the ONE exported source of truth for schema classification; the
+    summarizer routes its aggregation adapters from this label.
+
+    Returns:
+
+    - ``"current-v1"``: an explicit ``schema_version: 1`` record (the current
+      versioned contract).
+    - ``"legacy-worker-shaped"``: a versionless compatibility record whose
+      panel rows still carry per-worker ``worker`` identity (pre-version
+      worker-shaped history; aggregation keeps its worker/lens metrics).
+    - ``"legacy-panel-mode"``: a versionless record that already carried the
+      pre-version current shape (``panel_mode`` or
+      ``counts.workers_launched``). Still legacy: no explicit version means
+      the version-1 contract never applies.
+    - ``"legacy"``: any other versionless historical record.
+    - ``"unsupported"``: an explicit but unsupported schema version (the
+      validator rejects these outright).
+
+    A missing ``schema_version`` is never an error: versionless sidecars are
+    legacy compatibility inputs by contract. An explicit ``null`` (or any
+    non-int) ``schema_version`` IS an error: it is an explicit version value
+    and classifies ``unsupported``.
+    """
+    if not isinstance(payload, dict):
+        return "legacy"
+    # Presence check first: an explicit ``"schema_version": null`` is an
+    # explicit-but-unsupported version value, not a versionless legacy record
+    # (``payload.get`` would conflate the two).
+    if "schema_version" in payload:
+        version = payload["schema_version"]
+        if isinstance(version, bool) or not isinstance(version, int):
+            return "unsupported"
+        return "current-v1" if version in SUPPORTED_SIDECAR_SCHEMA_VERSIONS else "unsupported"
+    counts = payload.get("counts")
+    if "panel_mode" in payload or (
+        isinstance(counts, dict) and "workers_launched" in counts
+    ):
+        return "legacy-panel-mode"
+    if _payload_has_worker_rows(payload):
+        return "legacy-worker-shaped"
+    return "legacy"
+
+
+# Schema labels whose payload carries the "current shape" (the pre-version
+# current markers or an explicit version-1 record) and therefore routes
+# through ``validate_current_payload``. Exported as ``is_current_shape`` so the
+# validator's inline routing, the summarizer's adapter selector, and the drift
+# canary all share ONE definition of current-versus-legacy shape. The set
+# itself is also exported (``CURRENT_SHAPE_LABELS``) so the summarizer derives
+# its adapter-routing label set from this single definition instead of
+# hand-copying it.
+CURRENT_SHAPE_LABELS = frozenset(
+    {"current-v1", "legacy-panel-mode", "legacy-worker-shaped"}
+)
+
+
+def is_current_shape(payload: object) -> bool:
+    """True iff the classifier labels ``payload`` as carrying the current
+    per-worker panel shape (version-1, legacy-panel-mode, or the versionless
+    worker-shaped compatibility records). One exported predicate; no call site
+    re-derives the tests."""
+    return classify_sidecar_schema(payload) in CURRENT_SHAPE_LABELS
+
+
+def validate_canonical_pattern(pattern: object, where: str, result: ValidationResult) -> None:
+    """Require a canonical ``lens#kebab-slug`` Pattern ID for ``where``.
+
+    The owner must be a declared shared lens owner (plus ``consistency`` and
+    ``unknown``); the historical ``prose-clarity`` owner is rejected here and
+    stays readable only in legacy data. Colon body tags such as ``shrink:``
+    are presentation text, never Pattern IDs.
+    """
+    if not isinstance(pattern, str) or not CANONICAL_PATTERN_RE.match(pattern):
+        result.add_error(
+            f"{where}: {pattern!r} is not a canonical Pattern ID "
+            f"(expected lens#kebab-slug)"
+        )
+        return
+    owner = pattern.split("#", 1)[0]
+    if owner not in SHARED_PATTERN_OWNERS:
+        result.add_error(
+            f"{where}: pattern owner {owner!r} is not a declared shared lens "
+            f"owner (allowed: {sorted(SHARED_PATTERN_OWNERS)}); legacy-only "
+            f"owners such as 'prose-clarity' are invalid in version-1 sidecars"
+        )
+
+
+def _require_array(
+    payload: dict,
+    field_name: str,
+    result: ValidationResult,
+    schema_label: str,
+) -> list:
+    """Shared mistyped-container guard for array-typed sidecar fields (r4 F10
+    collapses the seven near-identical guard sites into one helper per kind).
+
+    Returns the field value when it is a usable list, else an empty list
+    substitute (callers never iterate the substitute). Absent and explicit
+    JSON ``null`` are both treated as absent (r4 F14): empty substitute, no
+    error. A present-but-mistyped value gets ONE targeted error keyed on the
+    schema label: the version-1 field-gate message for ``current-v1`` records,
+    the current-shape message for versionless current shapes, and no error
+    for pure legacy records (compatibility input).
+    """
+    value = payload.get(field_name)
+    if isinstance(value, list):
+        return value
+    if value is not None:
+        if schema_label == "current-v1":
+            result.add_error(
+                f"version-1 sidecar field {field_name!r} must be an array"
+            )
+        elif schema_label in CURRENT_SHAPE_LABELS:
+            result.add_error(
+                f"current sidecar {field_name!r} must be an array when present"
+            )
+    return []
+
+
+def _require_object(
+    payload: dict,
+    field_name: str,
+    result: ValidationResult,
+    schema_label: str,
+) -> dict:
+    """Object-typed twin of ``_require_array`` (same contract, dict kind)."""
+    value = payload.get(field_name)
+    if isinstance(value, dict):
+        return value
+    if value is not None:
+        if schema_label == "current-v1":
+            result.add_error(
+                f"version-1 sidecar field {field_name!r} must be an object"
+            )
+        elif schema_label in CURRENT_SHAPE_LABELS:
+            result.add_error(
+                f"current sidecar {field_name!r} must be an object when present"
+            )
+    return {}
+
+
+def validate_version1_payload(
+    payload: dict, content: str, result: ValidationResult
+) -> None:
+    """Enforce the version-1 top-level contract and canonical Pattern IDs.
+
+    Applies ONLY to records classified ``current-v1``: versionless sidecars
+    keep their legacy compatibility treatment. Covers the complete top-level
+    allowlist (unknown fields rejected; ``extensions`` must be an object when
+    present), canonical patterns for findings, overflow items, and discarded
+    rows that carry a pattern, and Markdown/sidecar pattern conservation.
+    """
+    for field_name in V1_REQUIRED_TOP_LEVEL_FIELDS:
+        if field_name not in payload:
+            result.add_error(
+                f"version-1 sidecar missing required top-level field "
+                f"{field_name!r}"
+            )
+        elif payload[field_name] is None and field_name not in (
+            "selection_reason",
+            "escalation_reason",
+        ):
+            # r5 F1: an explicit JSON null for a version-1 required field is
+            # NOT absent (except the two documented null-when-not-applicable
+            # enum fields). The shared ``_require_array`` /
+            # ``_require_object`` helpers treat null as absent (the r4 F14
+            # null-as-absent compatibility pinned for VERSIONLESS current
+            # shapes), so without this gate a null required container
+            # bypassed both the required-field gate and the
+            # mistyped-container gate, silently skipping the pattern and
+            # conservation checks for that field. The null-as-absent
+            # compatibility applies only to versionless records, never to
+            # version-1 required container fields. An explicit null
+            # ``schema_version`` is separately rejected as unsupported by
+            # ``classify_sidecar_schema``.
+            result.add_error(
+                f"version-1 sidecar required top-level field {field_name!r} "
+                "must not be JSON null; null-as-absent compatibility applies "
+                "only to versionless records"
+            )
+    allowed = set(V1_REQUIRED_TOP_LEVEL_FIELDS) | set(V1_OPTIONAL_TOP_LEVEL_FIELDS)
+    for key in payload:
+        if key not in allowed:
+            result.add_error(
+                f"version-1 sidecar rejects unknown top-level field {key!r}; "
+                f"future extensions belong in the object-valued 'extensions'"
+            )
+    if "extensions" in payload and not isinstance(payload["extensions"], dict):
+        result.add_error(
+            "version-1 sidecar 'extensions' must be an object when present"
+        )
+    # Array/object-typed required fields: the targeted mistyped-container
+    # errors are emitted by the shared ``_require_array`` / ``_require_object``
+    # guards inside ``validate_current_payload`` (r4 F10 collapse), which runs
+    # for every current shape including version-1 records. A mistyped
+    # container (dict, string, int) gets a targeted hard error there instead
+    # of a silent skip or an AttributeError/TypeError traceback; missing
+    # required fields are reported by the required-field loop above.
+
+    v1_findings = payload.get("findings")
+    if not isinstance(v1_findings, list):
+        v1_findings = []  # type gate already reported; never iterate
+    for finding in v1_findings:
+        if not isinstance(finding, dict):
+            continue
+        fid = finding.get("id")
+        if "pattern" not in finding:
+            result.add_error(
+                f"version-1 finding {fid} missing canonical pattern"
+            )
+        else:
+            validate_canonical_pattern(
+                finding["pattern"], f"version-1 finding {fid}", result
+            )
+    v1_overflow = payload.get("overflow")
+    if not isinstance(v1_overflow, list):
+        v1_overflow = []
+    for item in v1_overflow:
+        if isinstance(item, dict) and "pattern" in item:
+            validate_canonical_pattern(
+                item["pattern"], "version-1 overflow item", result
+            )
+    v1_discarded = payload.get("discarded")
+    if not isinstance(v1_discarded, list):
+        v1_discarded = []
+    for row in v1_discarded:
+        if isinstance(row, dict) and "pattern" in row:
+            validate_canonical_pattern(
+                row["pattern"], "version-1 discarded finding", result
+            )
+
+    # Markdown/sidecar pattern conservation: a version-1 finding cannot omit
+    # its Pattern in the human record or present a different canonical pattern
+    # than its sidecar entry.
+    md_by_id = {
+        f["id"]: f
+        for f in parse_markdown_findings(content)
+        if isinstance(f.get("id"), int)
+    }
+    for finding in v1_findings:
+        if not isinstance(finding, dict):
+            continue
+        fid = finding.get("id")
+        if not isinstance(fid, int) or fid not in md_by_id:
+            continue  # id reconciliation is the generic conservation check
+        md_pattern = md_by_id[fid].get("pattern")
+        if not md_pattern:
+            result.add_error(
+                f"finding conservation: finding {fid} Markdown record is "
+                f"missing its Pattern"
+            )
+        elif md_pattern != finding.get("pattern"):
+            result.add_error(
+                f"finding conservation: finding {fid} pattern disagrees "
+                f"(Markdown {md_pattern!r}, sidecar {finding.get('pattern')!r})"
+            )
+
+
 def validate_stats_sidecar(
     staging_path: Path,
     content: str,
@@ -428,11 +873,16 @@ def validate_stats_sidecar(
     for key in ("panel", "counts"):
         if key not in payload:
             result.add_warning(f"stats sidecar missing '{key}'")
-    is_current = (
-        "panel_mode" in payload
-        or "workers_launched" in (payload.get("counts") or {})
-        or any(isinstance(row, dict) and "worker" in row for row in (payload.get("panel") or []))
-    )
+    schema_class = classify_sidecar_schema(payload)
+    if schema_class == "unsupported":
+        result.add_error(
+            f"unsupported stats sidecar schema_version "
+            f"{payload.get('schema_version')!r}; supported versions: "
+            f"{list(SUPPORTED_SIDECAR_SCHEMA_VERSIONS)}"
+        )
+    elif schema_class == "current-v1":
+        validate_version1_payload(payload, content, result)
+    is_current = is_current_shape(payload)
     if is_current:
         validate_current_payload(
             payload,
@@ -441,7 +891,9 @@ def validate_stats_sidecar(
             expected_digest=expected_digest,
             source_kind=source_kind,
         )
-    discarded = payload.get("discarded") or []
+    discarded = _require_array(
+        payload, "discarded", result, schema_class
+    )
     for row in discarded:
         if not isinstance(row, dict):
             continue
@@ -524,6 +976,16 @@ def validate_current_payload(
     source_kind: str | None = None,
 ) -> None:
     panel_mode = payload.get("panel_mode")
+    # The schema label is computed ONCE and fed to the shared _require_array /
+    # _require_object guards below (r4 F10): the targeted mistyped-container
+    # error is keyed on the label, so version-1 records, versionless current
+    # shapes, and pure legacy records all get their documented disposition
+    # from one place. Versionless current shapes never reach the version-1
+    # field gates, but they ARE actively validated here: a present-but-mistyped
+    # container gets a targeted error instead of a silent empty substitution,
+    # which would skip the counts/consistency gates below (r3 F3 false
+    # accept). Pure legacy shapes are skipped (compatibility input).
+    schema_label = classify_sidecar_schema(payload)
     if panel_mode not in {"full", "focused"}:
         result.add_error("current sidecar panel_mode must be full or focused")
     if panel_mode == "focused" and not payload.get("selection_reason"):
@@ -566,7 +1028,7 @@ def validate_current_payload(
                 f"reviewed artifact may have changed"
             )
 
-    panel = payload.get("panel") or []
+    panel = _require_array(payload, "panel", result, schema_label)
     launched = [
         row
         for row in panel
@@ -605,11 +1067,11 @@ def validate_current_payload(
                 f"descendant launch {descendant!r} is not flattened into panel"
             )
 
-    counts = payload.get("counts") or {}
+    counts = _require_object(payload, "counts", result, schema_label)
     if "workers_launched" in counts and counts["workers_launched"] != len(launched):
         result.add_error("counts.workers_launched does not match panel launches")
 
-    findings = payload.get("findings") or []
+    findings = _require_array(payload, "findings", result, schema_label)
     for finding in findings:
         if not isinstance(finding, dict):
             result.add_error("current finding must be an object")
@@ -658,12 +1120,22 @@ def validate_current_payload(
     validate_finding_order(findings, result)
     validate_finding_budget(findings, result)
 
-    for item in payload.get("overflow") or []:
+    overflow = _require_array(payload, "overflow", result, schema_label)
+    for item in overflow:
         if not isinstance(item, dict):
             result.add_error("overflow item must be an object")
             continue
         if item.get("severity") == "Critical" or item.get("blocking") is True:
             result.add_error("Critical or blocking finding cannot be in overflow")
+
+    # r4 F1: the versionless current-shape type gates now also cover
+    # severity_calibration (and the remaining version-1 array fields), so a
+    # truthy mistyped value (e.g. the integer 5) can never reach the
+    # summarizer's len-derived counts and crash the strict audit. Absent and
+    # JSON null stay absent (r4 F14).
+    _require_array(payload, "severity_calibration", result, schema_label)
+    _require_array(payload, "deduplication_groups", result, schema_label)
+    _require_array(payload, "soften_watchlist", result, schema_label)
 
     validate_markdown_severity_groups(content, result)
     validate_finding_conservation(content, payload, result)
@@ -683,7 +1155,11 @@ def validate_finding_order(findings: list, result: ValidationResult) -> None:
             row.get("id", 0),
         )
 
-    if findings != sorted(findings, key=key):
+    # r6 F2: a non-dict entry already produced the targeted
+    # finding-must-be-an-object error upstream; it must not also crash this
+    # sort. Compare only dict rows.
+    dict_rows = [row for row in findings if isinstance(row, dict)]
+    if dict_rows != sorted(dict_rows, key=key):
         result.add_error(
             "findings are not ordered by severity then ascending finding ID"
         )
@@ -802,6 +1278,16 @@ def validate_finding_conservation(
             result.add_error(
                 f"finding conservation: finding {sid} blocking disagrees "
                 f"(Markdown {md['blocking']!r}, sidecar {sc.get('blocking')!r})"
+            )
+        # r6 F1: a sidecar blocking true must never pair with a Markdown
+        # record whose Blocking value is unparseable (omitted bullet, or the
+        # bullet fenced inside the metadata region). Without this arm the
+        # readiness predicate and the hard gate both fail open on exactly the
+        # findings they exist to hold.
+        elif sc.get("blocking") is True and md.get("blocking") is None:
+            result.add_error(
+                f"finding conservation: finding {sid} sidecar blocking is true "
+                f"but the Markdown record has no parseable Blocking value"
             )
         if (
             md.get("triage") is not None
@@ -1812,7 +2298,7 @@ def _selftest_typed_current_schema(root: Path, check) -> None:
     str_bool_res = validate_staging_file(str_bool_path, hard=True)
     check(
         "string 'false' blocking value fails (must be real bool)",
-        any("blocking" in e for e in str_bool_res.errors),
+        any("must be a boolean" in e for e in str_bool_res.errors),
     )
 
     # Integer blocking must fail.
@@ -1824,7 +2310,7 @@ def _selftest_typed_current_schema(root: Path, check) -> None:
     int_bool_res = validate_staging_file(int_bool_path, hard=True)
     check(
         "int blocking value fails (must be real bool)",
-        any("blocking" in e for e in int_bool_res.errors),
+        any("must be a boolean" in e and "got int" in e for e in int_bool_res.errors),
     )
 
     # Invalid blast_radius enum must fail.
@@ -1914,7 +2400,7 @@ def _selftest_finding_budget(root: Path, check) -> None:
     check(
         "sixth non-blocking High/Medium for one worker exceeds budget",
         any(
-            "budget" in e or "findings" in e
+            "finding budget exceeded" in e
             for e in validate_staging_file(over_hm_path, hard=True).errors
         ),
     )
@@ -1927,7 +2413,7 @@ def _selftest_finding_budget(root: Path, check) -> None:
     check(
         "third non-blocking Low for one worker exceeds budget",
         any(
-            "budget" in e or "findings" in e
+            "finding budget exceeded" in e
             for e in validate_staging_file(over_low_path, hard=True).errors
         ),
     )
@@ -2059,6 +2545,27 @@ def _selftest_finding_conservation(root: Path, check) -> None:
         any(
             "conservation" in e or "blocking" in e.lower()
             for e in validate_staging_file(blk_path, hard=True).errors
+        ),
+    )
+
+    # Negative: triage disagreement (Markdown dropped vs sidecar pending).
+    # Fixtures are built as data (via the markdown builder) so a triage word
+    # appearing in prose can never satisfy the assertion by accident.
+    tri_md = _current_findings_markdown(
+        [_current_finding(id=1, severity="Medium", blocking=False)]
+    ).replace("- **Triage**: pending", "- **Triage**: dropped", 1)
+    tri_payload = _payload_with_findings(
+        [_current_finding(id=1, severity="Medium", blocking=False)]
+    )
+    tri_payload["findings"][0]["triage"] = "pending"
+    tri_path = _write_staging(
+        root, "2026-07-17-branch-review-cons-tri-r1.md", tri_md, tri_payload
+    )
+    check(
+        "triage disagreement between Markdown and sidecar fails conservation",
+        any(
+            "triage disagrees" in e
+            for e in validate_staging_file(tri_path, hard=True).errors
         ),
     )
 
@@ -2463,6 +2970,19 @@ def _selftest_source_plan_cli(root: Path, check) -> None:
     )
     check("--source-plan missing file exits 1", rc_missing == 1)
 
+    # r5 F9: an empty --source-plan value must fail LOUDLY (argparse error,
+    # exit 2), never silently skip the stale-digest gate. Pre-fix the
+    # truthiness routing treated "" as not-supplied and exited 0.
+    try:
+        main(["--hard", str(staging), "--source-plan", ""])
+        empty_rc: object = None
+    except SystemExit as exc:
+        empty_rc = exc.code
+    check(
+        "--source-plan empty value exits loudly (does not silently skip the digest gate, r5 F9)",
+        empty_rc == 2,
+    )
+
 
 def _selftest_source_rfc_cli(root: Path, check) -> None:
     """The --source-rfc CLI flag must recompute the RFC digest and reach the
@@ -2548,6 +3068,114 @@ def _selftest_source_rfc_cli(root: Path, check) -> None:
     check(
         "--source-rfc rejects a sidecar declaring source_kind=plan",
         rc_kind_mismatch == 1 and "source_kind mismatch" in buf2.getvalue(),
+    )
+
+
+def _selftest_source_doc_cli(root: Path, check) -> None:
+    """The --source-doc CLI flag (r4 F4) must recompute the document digest
+    and reach the stale-digest comparison, with the sidecar's source_kind
+    type-checked as 'document'. Mirrors _selftest_source_plan_cli. Each case
+    must be DISCRIMINATING: pre-fix (no --source-doc flag) this whole test
+    could not pass because argparse rejected the unknown flag."""
+    import io
+
+    doc_path = root / "doc.md"
+    doc_bytes = b"# Doc\n## Steps\n1. do foo\n"
+    doc_path.write_bytes(doc_bytes)
+    doc_digest = compute_source_digest("document", doc_bytes)
+
+    other_path = root / "other-doc.md"
+    other_path.write_bytes(b"# Not the doc\n")
+
+    payload = json.loads(json.dumps(_current_clear_payload()))
+    payload["source_digest"] = doc_digest
+    payload["source_kind"] = "document"
+    staging = _write_staging(
+        root, "2026-07-17-confluence-review-cli-r1.md",
+        _current_clear_markdown("cli"), payload,
+    )
+
+    # Case A: point --source-doc at the CORRECT document -> exit 0.
+    rc_fresh = main(["--hard", str(staging), "--source-doc", str(doc_path)])
+    check("--source-doc fresh (correct document) exits 0", rc_fresh == 0)
+
+    # Case A': point --source-doc at a DIFFERENT file -> exit 1 (wiring live).
+    rc_wrong_file = main(["--hard", str(staging), "--source-doc", str(other_path)])
+    check(
+        "--source-doc against a different file exits 1 (wiring is live)",
+        rc_wrong_file == 1,
+    )
+
+    # Case B: stale post-edit document -> exit 1 with stale error and hint.
+    doc_path.write_bytes(doc_bytes + b"\nupdated section\n")
+    buf = io.StringIO()
+    real_stderr = sys.stderr
+    sys.stderr = buf
+    try:
+        rc_stale = main(["--hard", str(staging), "--source-doc", str(doc_path)])
+    finally:
+        sys.stderr = real_stderr
+    stale_text = buf.getvalue()
+    check(
+        "--source-doc stale digest exits 1 with stale error",
+        rc_stale == 1 and "stale" in stale_text and "source_digest" in stale_text,
+    )
+    check(
+        "stale-digest error names --source-doc and the hashed source-path",
+        "--source-doc" in stale_text and str(doc_path) in stale_text,
+    )
+
+    # Case C: missing --source-doc file -> exit 1.
+    rc_missing = main(
+        ["--hard", str(staging), "--source-doc", str(root / "nope.md")]
+    )
+    check("--source-doc missing file exits 1", rc_missing == 1)
+
+    # Case D: source_kind mismatch — sidecar says 'plan' but flag is
+    # --source-doc -> exit 1 with a mismatch error (the flag type-checks the
+    # sidecar's declared kind; the pre-fix workaround of passing a
+    # document-kind digest via --source-plan hard-failed the same way).
+    payload_plan = json.loads(json.dumps(_current_clear_payload()))
+    payload_plan["source_digest"] = doc_digest
+    payload_plan["source_kind"] = "plan"
+    staging_plan = _write_staging(
+        root, "2026-07-17-confluence-review-cli-r1-plan.md",
+        _current_clear_markdown("cli"), payload_plan,
+    )
+    buf2 = io.StringIO()
+    real_stderr2 = sys.stderr
+    sys.stderr = buf2
+    try:
+        rc_kind_mismatch = main(
+            ["--hard", str(staging_plan), "--source-doc", str(doc_path)]
+        )
+    finally:
+        sys.stderr = real_stderr2
+    check(
+        "--source-doc rejects a sidecar declaring source_kind=plan",
+        rc_kind_mismatch == 1 and "source_kind mismatch" in buf2.getvalue(),
+    )
+
+    # Case E: the three source flags are mutually exclusive.
+    buf3 = io.StringIO()
+    real_stderr3 = sys.stderr
+    sys.stderr = buf3
+    try:
+        main(
+            [
+                "--hard", str(staging),
+                "--source-doc", str(doc_path),
+                "--source-plan", str(doc_path),
+            ]
+        )
+        rc_both = 2  # argparse SystemExit(2) is raised before main returns
+    except SystemExit as exc:
+        rc_both = int(exc.code)
+    finally:
+        sys.stderr = real_stderr3
+    check(
+        "--source-doc and --source-plan are mutually exclusive",
+        rc_both == 2 and "mutually exclusive" in buf3.getvalue(),
     )
 
 
@@ -2646,6 +3274,708 @@ def _selftest_discarded_header_skip(root: Path, check) -> None:
     )
 
 
+# Version-1 sidecar contract (review-artifact-contracts plan). The selftests
+# below reuse the production constants (V1_REQUIRED_TOP_LEVEL_FIELDS /
+# V1_OPTIONAL_TOP_LEVEL_FIELDS) directly: no test-local copies, so the
+# enforced contract and its test coverage cannot drift apart.
+# ``schema_version`` is deliberately NOT in the selftest missing-field loop:
+# a payload without ``schema_version`` is by definition legacy (legacy
+# classification check), not a version-1 schema error.
+
+
+def _version1_payload(*, pattern: str = "testing#weak-assertion") -> dict:
+    """Build a complete version-1 sidecar payload with one canonical finding.
+
+    Carries every required top-level field plus each optional field in its
+    permitted type (``depth`` string, ``domains`` list, ``extensions`` object).
+    """
+    payload = _payload_with_findings([_current_finding(pattern=pattern)])
+    payload.update(
+        {
+            "schema_version": 1,
+            "review_type": "code",
+            "date": "2026-08-28",
+            "artifact_slug": "sample-branch",
+            "round": 1,
+            "selection_reason": None,
+            "source_kind": "code",
+            "source_digest": "0" * 64,
+            "escalation_reason": None,
+            "deduplication_groups": [],
+            "discarded": [],
+            "severity_calibration": [],
+            "triage_outcomes": {},
+            "soften_watchlist": [],
+            "depth": "standard",
+            "domains": ["docs"],
+            "extensions": {"example": True},
+        }
+    )
+    return payload
+
+
+def _version1_markdown(*, pattern: str = "testing#weak-assertion") -> str:
+    """Current-format findings Markdown whose finding carries a matching
+    ``- **Pattern``: <canonical pattern>`` bullet for the conservation check."""
+    md = _current_findings_markdown([_current_finding()], title="versioned")
+    return md.replace(
+        "- **Blocking**: false",
+        f"- **Blocking**: false\n- **Pattern**: {pattern}",
+        1,
+    )
+
+
+def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
+    """Family: versioned (``schema_version: 1``) sidecar contract and canonical
+    ``lens#kebab-slug`` pattern IDs (review-artifact-contracts plan).
+
+    RED-first family: the negative checks fail until the versioned schema and
+    pattern contract is implemented (Task 2 of the plan)."""
+    import json as _json
+
+    def stage(name: str, payload: dict, md: str) -> Path:
+        return _write_staging(
+            root, f"2026-07-17-branch-review-v1-{name}-r1.md", md, payload
+        )
+
+    base_md = _version1_markdown()
+    base_payload = _version1_payload()
+
+    # Positive: a complete version-1 sidecar with a canonical
+    # testing#weak-assertion finding (and valid extensions object) passes hard.
+    ok_path = stage("ok", base_payload, base_md)
+    check(
+        "v1 contract: complete version-1 sidecar with canonical pattern passes hard",
+        validate_staging_file(ok_path, hard=True).ok,
+    )
+
+    # Negative: invalid sidecar patterns must fail hard with a targeted error.
+    pattern_cases = {
+        "missing pattern": None,
+        "malformed pattern": "testingweakassertion",
+        "slash-delimited pattern": "testing/weak-assertion",
+        "unknown owner": "mystery#weak-assertion",
+        "legacy prose-clarity owner": "prose-clarity#run-on",
+    }
+    for name, bad_pattern in pattern_cases.items():
+        payload = _version1_payload()
+        if bad_pattern is None:
+            del payload["findings"][0]["pattern"]
+        else:
+            payload["findings"][0]["pattern"] = bad_pattern
+        result = validate_staging_file(
+            stage(f"pat-{name.replace(' ', '-')}", payload, base_md), hard=True
+        )
+        check(
+            f"v1 contract: version-1 {name} fails hard with a pattern error",
+            not result.ok and any("pattern" in e.lower() for e in result.errors),
+        )
+
+    # r3 F4: the five cases above are also satisfied by the Markdown/sidecar
+    # conservation error alone (each mutates only the sidecar pattern), so
+    # they do not discriminate the canonical pattern gate itself. These
+    # agreeing-bad-pattern cases carry the SAME noncanonical pattern in both
+    # the Markdown record and the sidecar, so conservation stays quiet and
+    # only validate_canonical_pattern can fail the check — each asserting the
+    # gate's specific message.
+    agreeing_cases = (
+        (
+            "legacy prose-clarity owner",
+            "prose-clarity#run-on",
+            "is not a declared shared lens",
+        ),
+        (
+            "slash-delimited pattern",
+            "testing/weak-assertion",
+            "is not a canonical Pattern ID",
+        ),
+    )
+    for name, bad_pattern, gate_message in agreeing_cases:
+        payload = _version1_payload(pattern=bad_pattern)
+        md = _version1_markdown(pattern=bad_pattern)
+        result = validate_staging_file(
+            stage(f"agree-{name.replace(' ', '-')}", payload, md), hard=True
+        )
+        check(
+            f"v1 contract: agreeing {name} in Markdown and sidecar fails on the canonical gate",
+            not result.ok and any(gate_message in e for e in result.errors),
+        )
+
+    # r4 F7: the canonical-pattern gates for overflow items and discarded rows
+    # had zero negative coverage (the loops above mutated findings only), so
+    # deleting either container gate kept the suite green. Inject each bad
+    # pattern value into both containers and assert the targeted hard failure.
+    for container_name, gate_label in (
+        ("overflow", "version-1 overflow item"),
+        ("discarded", "version-1 discarded finding"),
+    ):
+        for name, bad_pattern in pattern_cases.items():
+            if bad_pattern is None:
+                # "missing pattern" applies to findings only: overflow and
+                # discarded rows may legitimately omit a pattern.
+                continue
+            payload = _version1_payload()
+            if container_name == "overflow":
+                payload["overflow"] = [
+                    {"severity": "Low", "blocking": False, "pattern": bad_pattern}
+                ]
+            else:
+                payload["discarded"] = [
+                    {"pattern": bad_pattern, "reason": "duplicate"}
+                ]
+            result = validate_staging_file(
+                stage(
+                    f"pat-{container_name}-{name.replace(' ', '-')}",
+                    payload,
+                    base_md,
+                ),
+                hard=True,
+            )
+            check(
+                f"v1 contract: {name} in a {container_name} row fails hard "
+                "with the container pattern gate",
+                not result.ok and any(gate_label in e for e in result.errors),
+            )
+    # Positive twin: canonical patterns on BOTH containers validate hard.
+    canonical_containers = _version1_payload()
+    canonical_containers["overflow"] = [
+        {"severity": "Low", "blocking": False, "pattern": "testing#spill-case"}
+    ]
+    canonical_containers["discarded"] = [
+        {
+            "worker": "testing",
+            "worker_severity": "Low",
+            "pattern": "testing#duplicate-case",
+            "theme": "Same root cause as F1",
+            "reason": "duplicate",
+        }
+    ]
+    check(
+        "v1 contract: canonical patterns on overflow and discarded rows pass hard",
+        validate_staging_file(
+            stage("pat-containers-ok", canonical_containers, base_md), hard=True
+        ).ok,
+    )
+
+    # Markdown/sidecar pattern conservation: the Markdown finding must carry
+    # the same canonical pattern as the sidecar.
+    no_pattern_md = _current_findings_markdown([_current_finding()], title="versioned")
+    result = validate_staging_file(
+        stage("md-nopattern", base_payload, no_pattern_md), hard=True
+    )
+    check(
+        "v1 contract: Markdown finding missing a Pattern fails hard",
+        not result.ok and any("pattern" in e.lower() for e in result.errors),
+    )
+    diff_md = _version1_markdown(pattern="quality#other-case")
+    result = validate_staging_file(
+        stage("md-diffpattern", base_payload, diff_md), hard=True
+    )
+    check(
+        "v1 contract: Markdown Pattern differing from sidecar Pattern fails hard",
+        not result.ok and any("pattern" in e.lower() for e in result.errors),
+    )
+
+    # Extensions: object-valued passes (covered by the ok case); non-object
+    # fails; an arbitrary undocumented top-level field fails.
+    ext_payload = _version1_payload()
+    ext_payload["extensions"] = "not-an-object"
+    result = validate_staging_file(stage("ext-bad", ext_payload, base_md), hard=True)
+    check(
+        "v1 contract: non-object extensions fails hard",
+        not result.ok and any("extensions" in e.lower() for e in result.errors),
+    )
+    extra_payload = _version1_payload()
+    extra_payload["custom_future_field"] = True
+    result = validate_staging_file(stage("extra-field", extra_payload, base_md), hard=True)
+    check(
+        "v1 contract: arbitrary undocumented top-level field fails hard",
+        not result.ok
+        and any("custom_future_field" in e or "top-level" in e.lower() for e in result.errors),
+    )
+
+    # Non-list container fields (F2/F6): a targeted hard error naming the
+    # field, not a silent version-1 pass or an AttributeError/TypeError
+    # traceback. All seven array-gated fields are covered so removing one from
+    # the gate tuple cannot pass silently.
+    for field_name, bad_value in (
+        ("findings", {"a": 1}),
+        ("discarded", 5),
+        ("panel", {"worker": 1}),
+        ("overflow", "not-a-list"),
+        ("deduplication_groups", 7),
+        ("severity_calibration", "oops"),
+        ("soften_watchlist", {"x": 1}),
+    ):
+        bad_container = _json.loads(_json.dumps(base_payload))
+        bad_container[field_name] = bad_value
+        result = validate_staging_file(
+            stage(f"bad-container-{field_name}", bad_container, base_md), hard=True
+        )
+        check(
+            f"v1 contract: non-array {field_name!r} fails hard with a type error",
+            not result.ok
+            and any(
+                f"{field_name!r} must be an array" in e for e in result.errors
+            ),
+        )
+
+    # Non-dict counts (F1): targeted type error, never a TypeError traceback
+    # in the counts comparison.
+    bad_counts = _json.loads(_json.dumps(base_payload))
+    bad_counts["counts"] = 5
+    result = validate_staging_file(
+        stage("bad-container-counts", bad_counts, base_md), hard=True
+    )
+    check(
+        "v1 contract: non-object 'counts' fails hard with a type error",
+        not result.ok
+        and any("'counts' must be an object" in e for e in result.errors),
+    )
+
+    # Versionless current-shaped payloads: a present-but-non-list findings
+    # container must fail hard (not silently pass with findings=[]), keeping
+    # the pre-branch hard failure and the conservation check meaningful.
+    legacy_bad_findings = _json.loads(_json.dumps(base_payload))
+    del legacy_bad_findings["schema_version"]
+    legacy_bad_findings["findings"] = {"1": dict(legacy_bad_findings["findings"][0])}
+    result = validate_staging_file(
+        stage("bad-findings-versionless", legacy_bad_findings, base_md), hard=True
+    )
+    check(
+        "v1 contract: non-array findings on a versionless current-shaped sidecar fails hard",
+        not result.ok
+        and any("'findings' must be an array" in e for e in result.errors),
+    )
+
+    # r3 F3: the versionless current-shape guard covers the OTHER containers
+    # too (counts / panel / overflow / discarded): a present-but-mistyped
+    # container must fail hard with a targeted error instead of being silently
+    # substituted with an empty value, which would skip the counts and
+    # consistency gates (false accept).
+    for field_name, bad_value, message in (
+        ("counts", 5, "'counts' must be an object"),
+        ("panel", {"worker": 1}, "'panel' must be an array"),
+        ("overflow", "not-a-list", "'overflow' must be an array"),
+        ("discarded", 7, "'discarded' must be an array"),
+    ):
+        legacy_bad = _json.loads(_json.dumps(base_payload))
+        del legacy_bad["schema_version"]
+        legacy_bad[field_name] = bad_value
+        result = validate_staging_file(
+            stage(
+                f"bad-{field_name.replace('_', '-')}-versionless",
+                legacy_bad,
+                base_md,
+            ),
+            hard=True,
+        )
+        check(
+            f"v1 contract: mistyped {field_name!r} on a versionless "
+            "current-shaped sidecar fails hard",
+            not result.ok and any(message in e for e in result.errors),
+        )
+
+    # r4 F1: severity_calibration joins the versionless current-shape type
+    # gates. A truthy mistyped value (e.g. the integer 5) previously passed
+    # the validator and then crashed the summarizer's len-derived calibration
+    # count (TypeError: object of type 'int' has no len()).
+    legacy_bad_calib = _json.loads(_json.dumps(base_payload))
+    del legacy_bad_calib["schema_version"]
+    legacy_bad_calib["severity_calibration"] = 5
+    result = validate_staging_file(
+        stage("bad-severity-calibration-versionless", legacy_bad_calib, base_md),
+        hard=True,
+    )
+    check(
+        "v1 contract: mistyped severity_calibration on a versionless "
+        "current-shaped sidecar fails hard",
+        not result.ok
+        and any("'severity_calibration' must be an array" in e for e in result.errors),
+    )
+
+    # r4 F14: explicit JSON null containers on versionless current shapes are
+    # treated as ABSENT (pinning the compatibility choice): a legacy record
+    # that encodes an omitted container as null still validates instead of
+    # hitting the mistyped-container gate. Only non-null mistyped values
+    # (string, int, object-for-array) are rejected.
+    null_containers = _json.loads(_json.dumps(base_payload))
+    del null_containers["schema_version"]
+    for field_name in (
+        "counts",
+        "overflow",
+        "discarded",
+        "severity_calibration",
+        "deduplication_groups",
+        "soften_watchlist",
+    ):
+        null_containers[field_name] = None
+    check(
+        "v1 contract: explicit JSON null containers on a versionless "
+        "current-shaped sidecar validate as absent",
+        validate_staging_file(
+            stage("null-containers-versionless", null_containers, base_md), hard=True
+        ).ok,
+    )
+
+    # r5 F1: the null-as-absent compatibility does NOT extend to version-1
+    # records. An explicit JSON null for a version-1 REQUIRED container field
+    # must fail hard with the targeted null error (pre-fix it bypassed both
+    # the required-field gate and the shared null-as-absent helpers, so
+    # `"findings": null` validated clean and skipped the pattern and
+    # conservation checks).
+    for field_name in ("findings", "counts"):
+        null_required = _json.loads(_json.dumps(base_payload))
+        null_required[field_name] = None
+        null_result = validate_staging_file(
+            stage(
+                f"null-required-{field_name.replace('_', '-')}-v1",
+                null_required,
+                base_md,
+            ),
+            hard=True,
+        )
+        check(
+            f"v1 contract: explicit JSON null required field {field_name!r} "
+            "fails hard (r5 F1; null-as-absent is versionless-only)",
+            not null_result.ok
+            and any(
+                "must not be JSON null" in e and f"{field_name!r}" in e
+                for e in null_result.errors
+            ),
+        )
+
+    # r3 F2: example bullets in Comment/Analysis bodies (prose or fenced)
+    # must NOT overwrite the finding's real parsed metadata. Pre-fix the
+    # parser scanned the whole finding block last-match-wins, so an
+    # illustrative Pattern bullet in the Comment body replaced the real one
+    # and produced a false pattern-disagreement hard error.
+    quoted_md = _version1_markdown()
+    quoted_md = quoted_md.replace(
+        "#### Comment",
+        (
+            "#### Comment\n"
+            "An illustrative fenced example (must be ignored by the parser):\n"
+            "```markdown\n"
+            "- **Pattern**: quality#illustrative-example\n"
+            "- **Blocking**: true\n"
+            "```\n"
+            "Prose quote of a triage bullet also lives here: its Triage bullet "
+            "staged pending, and this sentence must not affect parsing.\n"
+            "- **Triage**: dropped\n"
+        ),
+        1,
+    )
+    check(
+        "v1 contract: quoted-bullet fixture injected after Comment heading",
+        "quality#illustrative-example" in quoted_md
+        and "- **Triage**: dropped" in quoted_md,
+    )
+    result = validate_staging_file(
+        stage("quoted-bullets", base_payload, quoted_md), hard=True
+    )
+    check(
+        "v1 contract: fenced and post-Comment example bullets do not overwrite parsed metadata",
+        result.ok,
+    )
+    # r4 F8: assert the parser OUTPUT directly, not just overall validation
+    # success: a legal triage value quoted post-Comment would keep validation
+    # green even if the parser wrongly resumed metadata parsing after the
+    # sub-heading. The readiness predicate consumes exactly these parsed
+    # fields, so pin them: triage keeps the metadata-region value (pending,
+    # not the post-Comment quoted "dropped"), blocking stays false, pattern
+    # keeps the metadata-region value.
+    parsed_quoted = parse_markdown_findings(quoted_md)
+    check(
+        "v1 contract: post-Comment prose bullet leaves parsed triage at its "
+        "metadata-region value and blocking false (parser output, not just "
+        "result.ok)",
+        len(parsed_quoted) == 1
+        and parsed_quoted[0].get("triage") == "pending"
+        and parsed_quoted[0].get("blocking") is False
+        and parsed_quoted[0].get("pattern") == "testing#weak-assertion",
+    )
+    # r4 F3: an unclosed fence opener inside one finding's Comment body must
+    # not swallow the remaining findings (pre-fix the naive parity toggle
+    # stayed on for the rest of the section, hiding a later blocking pending
+    # finding from readiness). The High-severity finding comes first in the
+    # Markdown, so its unclosed fence precedes the Medium finding's header.
+    fence_f1 = _current_finding(id=1)
+    fence_f2 = _current_finding(id=2, severity="High", blocking=True)
+    unclosed_md = _current_findings_markdown([fence_f1, fence_f2]).replace(
+        "#### Comment",
+        "#### Comment\nAn unclosed fence example follows:\n```python\nx = 1\n",
+        1,
+    )
+    parsed_unclosed = parse_markdown_findings(unclosed_md)
+    check(
+        "fence fix: unclosed fence before a later finding still parses both findings",
+        sorted(f["id"] for f in parsed_unclosed) == [1, 2],
+    )
+    check(
+        "fence fix: unclosed fence cannot hide a blocking pending finding from readiness",
+        is_review_ready(unclosed_md) is False,
+    )
+    unclosed_payload = _payload_with_findings([fence_f2, fence_f1])
+    check(
+        "fence fix: staging doc with an unclosed fence validates (conservation sees both findings)",
+        validate_staging_file(
+            stage("unclosed-fence", unclosed_payload, unclosed_md), hard=True
+        ).ok,
+    )
+    # r5 F5: the fence-length comparison pinned directly. A four-backtick
+    # opener containing an embedded three-backtick line plus a trailing
+    # illustrative bullet stays open until the four-backtick close: the
+    # shorter delimiter must NOT close the fence, and the in-fence bullet
+    # must not overwrite the parsed metadata fields. Reverting the
+    # length-aware close (length-blind parity) fails this check.
+    fence_len_md = _version1_markdown().replace(
+        "#### Comment",
+        (
+            "#### Comment\n"
+            "A longer fence with an embedded shorter delimiter:\n"
+            "````markdown\n"
+            "```\n"
+            "- **Pattern**: quality#fenced-overwrite\n"
+            "- **Blocking**: true\n"
+            "- **Triage**: dropped\n"
+            "````\n"
+        ),
+        1,
+    )
+    parsed_len = parse_markdown_findings(fence_len_md)
+    check(
+        "fence fix: shorter embedded delimiter does not close a longer fence "
+        "(parsed fields keep metadata-region values, r5 F5)",
+        len(parsed_len) == 1
+        and parsed_len[0].get("pattern") == "testing#weak-assertion"
+        and parsed_len[0].get("blocking") is False
+        and parsed_len[0].get("triage") == "pending",
+    )
+    check(
+        "fence fix: longer-fence fixture validates hard",
+        validate_staging_file(
+            stage("fence-length", base_payload, fence_len_md), hard=True
+        ).ok,
+    )
+    # r5 F8: a properly fenced example quoting the staging format (a
+    # severity heading and a finding header inside the fence) must not inject
+    # a phantom finding into the parse, split a phantom finding block, or
+    # shift the enclosing severity. Pre-fix the structural-heading reset ran
+    # before the fence check, so the fenced header-like lines created a
+    # phantom finding whose block then failed the Comment/Analysis gate.
+    fenced_heading_md = _version1_markdown().replace(
+        "#### Comment",
+        (
+            "#### Comment\n"
+            "The staging format quoted verbatim as an example:\n"
+            "````markdown\n"
+            "### Low\n"
+            "\n"
+            "#### F9. Example finding quoted inside a fenced example\n"
+            "- **Pattern**: quality#fenced-example\n"
+            "- **Blocking**: true\n"
+            "````\n"
+        ),
+        1,
+    )
+    parsed_fh = parse_markdown_findings(fenced_heading_md)
+    check(
+        "fence fix: heading-like lines inside a closed fence inject no phantom finding (r5 F8)",
+        [f.get("id") for f in parsed_fh] == [1]
+        and parsed_fh[0].get("pattern") == "testing#weak-assertion",
+    )
+    check(
+        "fence fix: fenced severity-like line does not shift the enclosing severity (r5 F8)",
+        parsed_fh[0].get("severity") == "Medium",
+    )
+    check(
+        "fence fix: fenced heading-like lines do not split a phantom finding block (r5 F8)",
+        len(split_finding_blocks(fenced_heading_md)) == 1,
+    )
+    check(
+        "fence fix: fenced-example staging doc validates hard (r5 F8)",
+        validate_staging_file(
+            stage("fenced-heading-example", base_payload, fenced_heading_md), hard=True
+        ).ok,
+    )
+    # Negative twin: the same dashed illustrative bullets placed BETWEEN the
+    # finding header and the first Comment sub-heading are real metadata
+    # region and DO overwrite (pinning the parser's scoping boundary).
+    metadata_region_md = _version1_markdown().replace(
+        "- **Blocking**: false\n- **Pattern**: testing#weak-assertion",
+        (
+            "- **Blocking**: false\n"
+            "- **Pattern**: testing#weak-assertion\n"
+            "- **Pattern**: quality#illustrative-example\n"
+            "- **Triage**: dropped"
+        ),
+        1,
+    )
+    check(
+        "v1 contract: metadata-region fixture injected",
+        "quality#illustrative-example" in metadata_region_md,
+    )
+    result = validate_staging_file(
+        stage("metadata-region-overwrite", base_payload, metadata_region_md), hard=True
+    )
+    check(
+        "v1 contract: a dashed bullet inside the metadata region still overwrites parsed fields",
+        not result.ok,
+    )
+
+    # Simplification: canonical simplification#shrink passes while the
+    # colon-delimited body tag stays presentation prose (never the Pattern ID).
+    sim_md = _version1_markdown(pattern="simplification#shrink").replace(
+        "#### Comment",
+        "shrink: presentation body tag stays prose.\n#### Comment",
+        1,
+    )
+    sim_payload = _version1_payload(pattern="simplification#shrink")
+    result = validate_staging_file(stage("simplification", sim_payload, sim_md), hard=True)
+    check(
+        "v1 contract: canonical simplification#shrink passes; colon body tag stays prose",
+        result.ok,
+    )
+    colon_payload = _version1_payload(pattern="shrink:")
+    result = validate_staging_file(
+        stage("simplification-colon", colon_payload, sim_md), hard=True
+    )
+    check(
+        "v1 contract: colon-delimited shrink: tag is not a valid sidecar Pattern ID",
+        not result.ok and any("pattern" in e.lower() for e in result.errors),
+    )
+
+    # Schema classification: versionless payloads are legacy and must not be
+    # held to the version-1 contract.
+    check(
+        "v1 contract: schema classifier classify_sidecar_schema is exported",
+        callable(classify_sidecar_schema),
+    )
+    legacy_payload = _json.loads(_json.dumps(base_payload))
+    del legacy_payload["schema_version"]
+    check(
+        "v1 contract: versionless payload (schema_version absent) still passes hard",
+        validate_staging_file(stage("unversioned", legacy_payload, base_md), hard=True).ok,
+    )
+    legacy_minimal = _json.loads(_json.dumps(legacy_payload))
+    for field_name in V1_OPTIONAL_TOP_LEVEL_FIELDS + (
+        "triage_outcomes",
+        "soften_watchlist",
+        "artifact_slug",
+    ):
+        legacy_minimal.pop(field_name, None)
+    check(
+        "v1 contract: versionless payload is not required to carry version-1 fields",
+        validate_staging_file(stage("unversioned-minimal", legacy_minimal, base_md), hard=True).ok,
+    )
+    check(
+        "v1 contract: classifier labels version-1 payload current",
+        "current" in str(classify_sidecar_schema(base_payload)),
+    )
+    check(
+        "v1 contract: classifier labels versionless payload legacy",
+        "legacy" in str(classify_sidecar_schema(legacy_payload)),
+    )
+
+    # Explicit unsupported versions (F1/F7): an explicit ``null`` (presence,
+    # not value) and an explicit future version (2) are both ``unsupported``,
+    # never legacy compatibility input, and fail hard with a targeted error.
+    for name, bad_version in (("null", None), ("two", 2)):
+        unsupported = _json.loads(_json.dumps(base_payload))
+        unsupported["schema_version"] = bad_version
+        result = validate_staging_file(
+            stage(f"unsupported-{name}", unsupported, base_md), hard=True
+        )
+        check(
+            f"v1 contract: explicit schema_version {bad_version!r} classifies "
+            "unsupported and fails hard",
+            not result.ok
+            and classify_sidecar_schema(unsupported) == "unsupported"
+            and any("unsupported" in e for e in result.errors),
+        )
+
+    # Required-field enforcement: every documented required field present
+    # passes (the ok case); any missing required field fails hard with a
+    # targeted error naming the field. schema_version is excluded (its absence
+    # means legacy, not a version-1 error; see the legacy checks above).
+    for field_name in V1_REQUIRED_TOP_LEVEL_FIELDS:
+        if field_name == "schema_version":
+            continue
+        variant = _json.loads(_json.dumps(base_payload))
+        del variant[field_name]
+        result = validate_staging_file(
+            stage(f"missing-{field_name}", variant, base_md), hard=True
+        )
+        check(
+            f"v1 contract: missing required field {field_name} fails hard",
+            not result.ok and any(field_name in e for e in result.errors),
+        )
+
+    # r6 F1: sidecar blocking true paired with an unparseable Markdown
+    # Blocking value (bullet omitted, or fenced inside the metadata region)
+    # must fail hard — pre-fix both the hard gate and is_review_ready failed
+    # open on exactly the unresolved blocking finding they exist to hold.
+    blocking_payload = _json.loads(_json.dumps(base_payload))
+    blocking_payload["findings"][0]["blocking"] = True
+    blocking_payload["findings"][0]["triage"] = "pending"
+    for name, mutated_md in (
+        (
+            "omitted",
+            _version1_markdown().replace("- **Blocking**: false\n", "", 1),
+        ),
+        (
+            "fenced",
+            _version1_markdown().replace(
+                "- **Blocking**: false",
+                "```\n- **Blocking**: false\n```",
+                1,
+            ),
+        ),
+    ):
+        result = validate_staging_file(
+            stage(f"r6-f1-blocking-{name}", blocking_payload, mutated_md),
+            hard=True,
+        )
+        check(
+            f"v1 contract: sidecar blocking true with {name} Markdown Blocking "
+            "bullet fails hard (r6 F1)",
+            not result.ok
+            and any(
+                "no parseable Blocking value" in e for e in result.errors
+            ),
+        )
+    # Positive twin: the same doc with the Blocking bullet present and
+    # matching (blocking true on both sides) still passes hard.
+    matching_md = _version1_markdown().replace(
+        "- **Blocking**: false", "- **Blocking**: true", 1
+    )
+    check(
+        "v1 contract: sidecar blocking true with a matching Markdown Blocking "
+        "bullet passes hard (r6 F1 positive twin)",
+        validate_staging_file(
+            stage("r6-f1-blocking-matching", blocking_payload, matching_md),
+            hard=True,
+        ).ok,
+    )
+
+    # r6 F2: a non-dict findings entry must produce the targeted
+    # finding-must-be-an-object error with no AttributeError traceback from
+    # the order check's sort (assert via the returned result, which a crash
+    # would prevent).
+    nondict_payload = _json.loads(_json.dumps(base_payload))
+    nondict_payload["findings"].append("not-an-object")
+    result = validate_staging_file(
+        stage("r6-f2-nondict-finding", nondict_payload, base_md), hard=True
+    )
+    check(
+        "v1 contract: string findings entry yields the targeted object error, "
+        "not an order-check crash (r6 F2)",
+        not result.ok
+        and any(e == "current finding must be an object" for e in result.errors),
+    )
+
+
 def run_selftest() -> int:
     import tempfile
 
@@ -2666,7 +3996,9 @@ def run_selftest() -> int:
             ("producer_artifacts", _selftest_producer_artifacts),
             ("source_plan_cli", _selftest_source_plan_cli),
             ("source_rfc_cli", _selftest_source_rfc_cli),
+            ("source_doc_cli", _selftest_source_doc_cli),
             ("discarded_header_skip", _selftest_discarded_header_skip),
+            ("versioned_schema_and_patterns", _selftest_versioned_schema_and_patterns),
         ):
             fn(root, check)
 
@@ -2721,13 +4053,37 @@ def main(argv: list[str] | None = None) -> int:
             "sidecar.source_digest; fail hard on mismatch (stale review after "
             "a fold). RFC reviews only (source_kind=rfc). The digest recipe is "
             "byte-identical to --source-plan; this flag exists so the sidecar's "
-            "source_kind is type-checked rather than asserted in prose. For "
-            "generic document reviews use source_kind=document in the sidecar "
-            "and pass the digest via --source-plan until a --source-doc flag is "
-            "added."
+            "source_kind is type-checked rather than asserted in prose."
+        ),
+    )
+    parser.add_argument(
+        "--source-doc",
+        metavar="PATH",
+        help=(
+            "Reviewed generic document file (source_kind=document; e.g. "
+            "Confluence/document reviews). Recompute its SHA-256 digest and "
+            "compare to sidecar.source_digest; fail hard on mismatch (stale "
+            "review after a fold). The digest recipe is byte-identical to "
+            "--source-plan; this flag exists so the sidecar's source_kind is "
+            "type-checked rather than asserted in prose."
         ),
     )
     args = parser.parse_args(argv)
+
+    # r5 F9: an empty-string source-flag value must fail LOUDLY. The routing
+    # below uses truthiness, so an empty expansion (e.g. a shell wrapper
+    # invoking the flag with an unset variable) was silently treated as "flag
+    # not supplied", disabling the stale-digest freshness gate with exit 0.
+    for flag_name, flag_value in (
+        ("--source-plan", args.source_plan),
+        ("--source-rfc", args.source_rfc),
+        ("--source-doc", args.source_doc),
+    ):
+        if flag_value is not None and not flag_value.strip():
+            parser.error(
+                f"{flag_name} value must not be empty; an empty value would "
+                "silently skip the stale-digest gate (unset shell variable?)"
+            )
 
     if args.selftest:
         return run_selftest()
@@ -2753,8 +4109,16 @@ def main(argv: list[str] | None = None) -> int:
     expected_digest: str | None = None
     source_kind: str | None = None
     source_flag_name: str | None = None  # for the stale-digest error hint
-    if args.source_plan and args.source_rfc:
-        parser.error("--source-plan and --source-rfc are mutually exclusive")
+    supplied_source_flags = [
+        flag
+        for flag in (args.source_plan, args.source_rfc, args.source_doc)
+        if flag
+    ]
+    if len(supplied_source_flags) > 1:
+        parser.error(
+            "--source-plan, --source-rfc, and --source-doc are mutually "
+            "exclusive"
+        )
     if args.source_plan:
         source_kind = "plan"
         source_path = Path(args.source_plan).expanduser().resolve()
@@ -2766,6 +4130,13 @@ def main(argv: list[str] | None = None) -> int:
         source_kind = "rfc"
         source_path = Path(args.source_rfc).expanduser().resolve()
         source_flag_name = "--source-rfc"
+    elif args.source_doc:
+        # --source-doc (r4 F4): generic document reviews. Same recipe and
+        # rationale as --source-rfc; without this flag a document-kind sidecar
+        # could never receive a digest freshness check via the CLI.
+        source_kind = "document"
+        source_path = Path(args.source_doc).expanduser().resolve()
+        source_flag_name = "--source-doc"
 
     if source_kind is not None:
         if not source_path.is_file():

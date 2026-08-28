@@ -24,6 +24,20 @@ Use exactly one primary tag per finding. Map checklist items below to these tags
 | `yagni:` | Abstraction with one implementation, config nobody sets, layer with one caller | Inline or defer until second use |
 | `shrink:` | Same behavior, fewer lines | Show the shorter form |
 
+### Canonical Pattern IDs (sidecar)
+
+The `tag:` prefixes above are presentation text in finding bodies, never Pattern IDs. Map each finding's body tag to its canonical sidecar Pattern ID (and Markdown `- **Pattern**:` bullet):
+
+| Body tag | Canonical Pattern ID |
+|----------|----------------------|
+| `delete:` | `simplification#delete` |
+| `stdlib:` | `simplification#stdlib` |
+| `native:` | `simplification#native` |
+| `yagni:` | `simplification#yagni` |
+| `shrink:` | `simplification#shrink` |
+
+For a named sub-pattern with its own slug, keep the owner `simplification` and use the specific slug (for example `simplification#shrink-fqcn-import` above). A bare `shrink:` value in a `pattern` field is invalid.
+
 ## Output
 
 Return `{path, line, side, body, severity}` JSON per the orchestrating skill.

@@ -31,6 +31,17 @@ When the diff adds or renames DB tables/indexes, or documents a constrained conf
 - Is the operator/local verify inventory updated in the same change set (for example `docker/verify-local-schema.sh` expected tables/indexes)?
 - Does the earliest startup gate (`EnvironmentPostProcessor`, `@PostConstruct` on `@ConfigurationProperties`, or fail-fast binder) enforce documented formats (ISO alpha-2, enum set, regex), or can a bad value pass trim/uppercase and fail later with a vague error?
 
+## Runtime wiring trace (evidence requirement)
+
+When a finding claims a wiring gap in runtime wiring (a component that exists but is never reached, or a config key nothing reads), the finding body must trace the full path:
+
+1. **Definition**: where the component, handler, route, or config key is defined.
+2. **Registration or configuration**: where the runtime is told about it (bean definition, route table, middleware chain, config file entry).
+3. **Runtime discovery**: the mechanism the running system uses to find it at startup or request time, and why that mechanism does or does not reach it.
+4. **Live-path evidence**: the test or other evidence that proves the component executes on the live path. A hand-built unit test that constructs the component outside the application container is not live-path evidence (see `testing.md` Harness Fidelity); cite a full-context harness proof or state that none exists.
+
+Weak or missing tests for wired code stay owned by the `testing` lens (`review-panel-selection.md` tiered ownership): report the wiring trace here and stage the test gap as a `testing` finding.
+
 ## Missing Error Handling
 
 1. What happens when inputs are None, empty, or malformed?

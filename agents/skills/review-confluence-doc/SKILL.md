@@ -161,7 +161,7 @@ Tag implementation findings `[Code]`. If no implementation logic is present, ski
 
 While merging Step 4, 4.5, and 4.6 returns, populate `## Review Statistics` per `review-staging` before writing the staging file:
 
-1. **Panel:** one row per actual worker launch with loaded lenses, parent worker, Solo/Echo, and descendant declarations. Write the required `.stats.json` sidecar alongside staging.
+1. **Panel:** one row per actual worker launch with loaded lenses, parent worker, Solo/Echo, and descendant declarations. Write the required `.stats.json` sidecar alongside staging as a version-1 record (`schema_version: 1`) with `source_kind: "document"` and `source_digest` computed over the exact fetched page bytes this round reviewed (never copied from a prior round or a placeholder).
 2. **Raw counts:** count every finding each source returned before dedup (orchestrator dimensions count as one combined Raw total).
 3. **Deduplication groups:** list all contributing workers and the staged finding kept.
 4. **Discarded findings:** record worker, lens pattern, severity, reason, and lead ownership.
@@ -180,11 +180,14 @@ Output the feedback to a staging Markdown file per `review-staging`, and print a
    - Read `{reviews_dir}` from `.ai-playbook/facts.md` TOML at skill start.
 2. Create the directory if it does not exist.
 3. The file uses the universal staging hierarchy: `## Metadata`, `## Review Statistics`, `## Findings` (each finding with **Agents**, **Anchor**, **Source**, `#### Comment`, `#### Analysis`).
-4. **Mechanical gate (before reporting the review):** write the matching `.stats.json` sidecar (required artifact per `review-staging`) and run the validator on the staging path; do not report the review complete until both pass:
+4. **Mechanical gate (before reporting the review):** write the fetched page bytes (the exact content this round reviewed, per Step 2) to a scratch file under `{tmp_dir}` (for example `{tmp_dir}/confluence-review-<page-title-kebab>-page.md`), write the matching `.stats.json` sidecar (required artifact per `review-staging`; a version-1 record with `source_kind: "document"` and `source_digest` computed over those exact fetched page bytes), and run the validator on the staging path with the document-source flag pointing at the scratch file; do not report the review complete until both pass:
    ```bash
    VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"
-   python3 "$VALIDATOR" --hard "$STAGING_PATH"
+   STAGING_PATH="{reviews_dir}/YYYY-MM-DD-confluence-review-<page-title-kebab>.md"
+   PAGE_BYTES_PATH="{tmp_dir}/confluence-review-<page-title-kebab>-page.md"
+   python3 "$VALIDATOR" --hard "$STAGING_PATH" --source-doc "$PAGE_BYTES_PATH"
    ```
+   `--source-doc` recomputes the page's SHA-256 and fails hard if it differs from the sidecar's `source_digest`, and type-checks the sidecar's `source_kind` is `document`, so an omitted, placeholder, stale, or fabricated digest cannot pass this gate (findings cannot be misattributed to page bytes that were never reviewed).
 
 **Console output:**
 - Print the file path.
@@ -247,7 +250,7 @@ Pending triage.
 - **Blast radius**: global | multi-service | single-service | local
 - **Confidence**: verified | strong-evidence | hypothesis
 - **Worker severity**: Medium *(omit when equal to Severity)*
-- **Pattern**: premortem#rollback-gap
+- **Pattern**: security#rollback-gap
 - **Workers**: risk
 - **Triage**: pending
 - **Anchor**: §3.2 Upstream timeout handling
@@ -285,7 +288,7 @@ Rules:
 - Be constructive: suggest what to add/change, not just what's wrong.
 - Apply the shared finding budget. Do not produce exhaustive nitpick lists.
 - If the document is well-written, say so. Do not invent issues.
-- Tag premortem findings with `[Premortem]` and the originating persona.
+- Tag premortem findings with `[Premortem]` and the originating persona. The `[Premortem]` source tag stays, but the Pattern ID must use a canonical shared-lens owner (per the review-panel-selection mapping, e.g. `security#rollback-gap`); `premortem#<slug>` is a loaded lens, not a Pattern-ID owner, and the version-1 sidecar contract rejects it.
 - Tag code review findings with `[Code]`.
 - Tag documentation prose findings with `[Prose]`.
 - **Never cite local or internal files** (e.g. `jvm_guidelines.md`, `CLAUDE.md`, internal playbooks) anywhere in the review output: not in the file, not on console, not in Confluence comments. The document author has no access to these files. State the principle and the reason it matters inline instead.
@@ -357,7 +360,7 @@ Applied in Step 4.6 only when implementation logic is present in the document (c
 SQL, pseudocode, config-as-logic). Selects matching workers without using the PR workflow. Findings are tagged `[Code]`.
 
 ### With `review-staging` skill (mandatory)
-All reviews write to `{reviews_dir}/` with full `## Review Statistics` per `review-staging` (Solo/Echo, Pattern, Severity calibration, Triage outcomes). Step 5 ends with a `--hard` validator gate over the staging path and its `.stats.json` sidecar before the review is reported. Step 6 Confluence comments post from each finding's `#### Comment` block.
+All reviews write to `{reviews_dir}/` with full `## Review Statistics` per `review-staging` (Solo/Echo, Pattern, Severity calibration, Triage outcomes). Step 5 ends with a `--hard` validator gate over the staging path, its `.stats.json` sidecar, and the fetched page bytes via `--source-doc` before the review is reported. Step 6 Confluence comments post from each finding's `#### Comment` block.
 
 ### With `confluence-page-sync` skill (redirect)
 Publishing, page updates, and diagram-integrity checks are owned by `confluence-page-sync`. When the user asks to push a local RFC/TDD to Confluence, refresh a page from its repository source, or verify diagram rendering on a stored page, redirect the request to `confluence-page-sync` instead of executing it here; this skill remains read + comment only.

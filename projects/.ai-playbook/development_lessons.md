@@ -4698,3 +4698,35 @@ When the identical command behaves differently in the agent shell versus the use
 **Example:** While correcting environment-specific dashboard datasource references, a standalone validator was added to two service repositories. The user later identified that the script was outside repository policy, so it was removed together with its documentation references.
 
 **See also:** `coding_guidelines.md` #21 (single source of truth) and #25 (verify the real thing, not the abstraction).
+
+## 226. Dual-source agreement checks must treat an absent value as disagreement
+
+**Principle:** Family D (consistency / no drift: when two paired sources must agree, absence in either source is a mismatch, not a pass).
+
+**Trigger:** a validator cross-checks two representations of the same facts (document plus machine sidecar, config plus generated file) and looks for conflicting values.
+
+**Rule:** When validating agreement between paired sources, a missing or unparseable value in one source paired with a decisive value in the other must emit an error, not skip the pair. Only explicit agreement passes. Enumerate the "absent" equivalence classes (value omitted, value present but unreadable due to formatting quirks) as first-class negative tests alongside the positive twin.
+
+**Why:** A review-readiness validator checked sidecar `blocking` flags against document Blocking bullets, but skipped pairs where the document side had no parseable value. A document whose blocking bullet was fenced or omitted passed hard validation while its sidecar recorded `blocking: true`, letting a blocking finding through the readiness gate.
+
+**Shape:** the check loops over pairs and `continue`s on None from one side; the producer's own rules forbid the malformed input, so no test ever stages it.
+
+**Example:** Add one elif arm treating sidecar-true plus document-None as disagreement, with selftests covering omitted, malformed, and matching-positive twins.
+
+**See also:** #219 (fix rounds can drop the guards they replace); guards that fail closed when a dependency is absent.
+
+## 227. Halt fix-fix cycles when one component family regresses in consecutive rounds
+
+**Principle:** Family D (fix-cycle discipline: the fix scope is the whole class the finding instantiates, and the class can be the rework strategy itself).
+
+**Trigger:** a review/fix loop where each round's fixes for the same component or code family introduce a new regression in that family.
+
+**Rule:** When the same component family regresses in three or more consecutive fix rounds, stop spot-fixing it. Fix only findings that are small, additive, and fail-closed; record every other valid finding as durable backlog items grouped by theme with the deferral reason; schedule the problem family for one deliberate consolidated rework instead of another local patch. Continue the loop only with a fresh review, and treat recurring-family findings as evidence the strategy, not the code, needs changing.
+
+**Why:** A validation script's fence scanners regressed four rounds in a row (scope narrowing, parity corruption, phantom fix, fallback regression), each fix producing the next round's finding. The user-directed scoped-fix policy (fix two small fail-closed guards, backlog twelve findings into five themed items) closed the loop without a fifth fence regression.
+
+**Shape:** round-over-round findings keep naming the same file or subsystem; each fix note says "minimal patch" and the next review finds a new defect in the adjacent arm.
+
+**Example:** One consolidated backlog item records the full regression history and the constraint that any rework must be a single deliberate change, not another spot fix.
+
+**See also:** #219 (fix rounds can drop the guards they replace); review-loop same-round verdict anti-pattern.

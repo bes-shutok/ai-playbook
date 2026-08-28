@@ -23,7 +23,7 @@ Caller must provide:
    - `blast_radius`: `global` | `multi-service` | `single-service` | `local`
    - `confidence`: `verified` | `strong-evidence` | `hypothesis`
    - `worker_severity`: severity the worker returned when it differs from staged (omit when equal)
-   - `pattern`: catalog pattern id in form `<agent>#<kebab-slug>` (for example `quality#null-handling`, `documentation#prose-verbose-comment`, `concurrency#transaction-scope`); use `unknown` when the agent did not tag one. Legacy `prose-clarity#<slug>` remains valid in historical reviews; new findings use `documentation#prose-<slug>` or `documentation#missing-<slug>`
+   - `pattern`: canonical Pattern ID in form `<lens>#<kebab-slug>` (for example `quality#null-handling`, `documentation#prose-verbose-comment`, `consistency#stale-cross-reference`); see **Pattern id format** for the allowed owner set. Use `unknown#<slug>` when the agent did not tag one. Legacy `prose-clarity#<slug>` (and other legacy-only owners such as `concurrency#<slug>`) remain readable in historical reviews only; new findings use `documentation#prose-<slug>` or `documentation#missing-<slug>`, and findings from the conditional risk lenses (`concurrency`, `premortem`) are staged under the `risk` worker's base lens owner as `security#<slug>`
    - `workers`: one or more worker ids that reported the issue
    - `source_tag`: `[Prose]` | `[Premortem]` | `[Code]` (omit when not applicable)
    - `comment` (posted text) and `analysis` (not posted)
@@ -80,7 +80,7 @@ Every review orchestrator (plan, branch, PR, RFC, Confluence) **must** populate 
 6. **Zero-finding rounds:** still write the full `## Review Statistics` section (Panel + Counts + explicit `None` rows where applicable).
 7. **Synthesis stats are immutable:** Panel, Deduplication groups, Discarded findings, Severity calibration, and Counts describe the review pass only; do not rewrite them during triage.
 8. **Triage outcomes:** roll up per worker and lens. Map `done` to `fixed`, `drop` to `dropped`, and retain pending/deferred.
-9. **Pattern:** workers return a lens-prefixed pattern; use `unknown` only when the catalog cannot be identified.
+9. **Pattern:** workers return a lens-prefixed Pattern ID (`lens#kebab-slug`); use `unknown#<slug>` only when the catalog cannot be identified (a bare `unknown` value fails the canonical-pattern gate).
 10. **Budget:** fully expand every Critical, every blocking finding, up to five additional non-blocking High/Medium findings per worker, and up to two additional non-blocking Low findings per worker.
 11. **Overflow:** additional credible non-blocking candidates go under `### Overflow manifest` with Worker, Pattern, Anchor, Severity, Confidence, and one-line Consequence.
 12. **Soften watchlist:** when the review is part of a `review-loop` (or any multi-round branch review), include `### Soften watchlist` under `## Review Statistics`. Carry forward open rows from the previous round; update statuses after workers reaffirm or restage. Use `None.` when the run has no softened findings yet.
@@ -110,7 +110,11 @@ When using `wrong-owner`, the orchestrator keeps the lead agent's finding (or me
 
 ### Pattern id format
 
-`<agent-id>#<kebab-slug>` where `<agent-id>` matches the agent file name (without `.md`) and `<kebab-slug>` names the pattern family (for example `quality#edge-case-empty-input`, `security#injection`, `concurrency#race-condition`). Sub-agents should pick the closest pattern from their catalog; orchestrator may normalize spelling.
+Canonical form: `<lens>#<kebab-slug>`. The owner must be a declared shared review lens: `quality`, `implementation`, `testing`, `architecture`, `simplification`, `documentation`, `security`; or the assigned abstract-review lens `consistency`; or the explicit `unknown` owner when the catalog cannot be identified. The slug names the pattern family (for example `quality#edge-case-empty-input`, `security#injection`, `consistency#invariant-task-contradiction`).
+
+Historical compatibility: legacy owners such as `prose-clarity` and `concurrency` stay readable in historical (versionless/legacy) records but are rejected in version-1 sidecars. Colon-prefixed body tags such as `shrink:` are presentation text in finding bodies, never Pattern IDs; their canonical sidecar mapping is defined in the originating catalog (for example `simplification.md`).
+
+Sub-agents should pick the closest pattern from their catalog; the orchestrator may normalize spelling but must keep the ID canonical. Markdown `- **Pattern**:` bullets and sidecar `pattern` values must carry the same canonical ID for the same finding (conservation).
 
 ## Staged Markdown hierarchy (required)
 
@@ -240,11 +244,13 @@ Caller must ensure each finding's:
 
 **Snippet format in finding bodies:** prefer inline backtick spans for short snippets; keep any fenced snippet free of heading-like lines (lines starting with `#`). The `--hard` validator walks headings line-by-line without fence tracking, so a fenced block whose content contains a severity-heading-like (`### Medium`) or finding-heading-like (`#### F9.`) line corrupts block splitting and fails the gate.
 
+**Quoted field bullets in Comment/Analysis prose:** when quoting another finding's field bullet inside a `#### Comment` or `#### Analysis` body, describe the quoted field in words (for example "its Pattern bullet stages ..."). The conservation parser reads metadata bullets only between the finding header and the first level-four sub-heading of any name (Comment and Analysis are the common ones) and skips fenced code blocks, so reworded prose and fenced examples are safe; all field bullets must sit between the finding header and the first sub-heading regardless of its title, and the parser overwrites the finding's parsed field when a dashed bold field marker appears in that metadata region, so never place an illustrative `- **Field**:` bullet between the finding header and the first sub-heading.
+
 ## Severity and ordering
 
 All callers use `review-agents/severity-calibration.md`. Findings appear under `### Critical`, `### High`, `### Medium`, and `### Low` in that exact order. Within a group, order by **ascending finding ID** only (stable discovery order). Do not reorder by blocking, blast radius, reachability, or confidence.
 
-**Triage presentation freeze** (see `review-agents/severity-calibration.md` § Ordering): update Status / Triage / Comment / Analysis / Severity in place. If severity changes, move that finding into the correct section and keep ID order there. Do not reshuffle siblings. Sidecar `findings` array must use the same order as the markdown (severity sections, then ascending id).
+**Triage presentation freeze** (see `review-agents/severity-calibration.md` § Ordering): update Status / Triage / Comment / Analysis / Severity in place. If severity changes, move that finding into the correct section and keep ID order there. Do not reshuffle siblings. Sidecar `findings` array must use the same order as the markdown (severity sections, then ascending id). Triage may also re-evaluate a finding's **Blocking** value when an authorizing rule directs it (for example `receiving-review` **Fix-risk triage when fixes regenerate findings**): rewrite the Blocking bullet in place, record the rationale on the finding's Analysis section, and mirror the flip in the sidecar `findings[].blocking`; synthesis tables stay immutable.
 
 A review is clean only when no unresolved finding has `blocking: true`.
 
@@ -268,6 +274,7 @@ Minimum schema:
 
 ```json
 {
+  "schema_version": 1,
   "review_type": "Branch Review",
   "date": "2026-07-13",
   "artifact_slug": "feature-x",
@@ -277,7 +284,7 @@ Minimum schema:
   "panel_mode": "full",
   "selection_reason": null,
   "source_kind": "code",
-  "source_digest": "<sha256>",
+  "source_digest": "<lowercase 64-char hex SHA-256 of the exact reviewed bytes - compute a real digest; placeholder values like this one fail the validator, and the all-zero or empty-bytes digests are syntactically valid but hash nothing>",
   "escalation_reason": null,
   "counts": {
     "workers_launched": 5,
@@ -314,7 +321,43 @@ Minimum schema:
 
 Use `"soften_watchlist": []` when the run has no softened findings. Multi-round / review-loop orchestrators must carry `open` rows forward.
 
-`source_kind` declares what `source_digest` hashes: `"code"` (the stored diff bytes), `"plan"` / `"rfc"` / `"document"` (the reviewed document's UTF-8 bytes). Producers SHOULD set it; `review-plan` (and other document reviewers) MUST set it. When `source_kind` is declared, `source_digest` must be a lowercase 64-char hex SHA-256 (placeholders like `"<sha256>"` fail the validator). The `--source-plan` flag on `validate_review_staging.py` recomputes the plan's digest and fails hard on a mismatch, so a digest recorded before a fold of the reviewed artifact is rejected as stale. In multi-round loops, re-derive the digest from the current round's reviewed artifact for every round; never copy a digest from a prior round's staging doc (the copy misattributes findings to a stale tree, and only a recompute flag can catch it).
+The `panel` array in the minimum-schema example above is truncated for readability (one row shown); a real full-panel run carries one row per launched worker, so `counts.workers_launched` matches the non-skipped panel rows. Do not copy the example's counts/panel pairing verbatim, and do not copy its `source_digest` value either: the example digest is an explicit placeholder (a copyable valid hex digest would pass the syntax gate while hashing nothing, so only a hand-computed real digest keeps the placeholder tripwire a tripwire).
+
+### Version-1 sidecar contract
+
+A sidecar that declares `"schema_version": 1` is a version-1 record and must satisfy the complete top-level contract below. Every active producer emits version-1 sidecars.
+
+Required top-level fields (all must be present; enum-typed fields use `null` when not applicable):
+
+| Field | Type / behavior |
+|-------|-----------------|
+| `schema_version` | integer `1` |
+| `review_type` | string |
+| `date` | string `YYYY-MM-DD` |
+| `artifact_slug` | string |
+| `round` | round identifier: string (for example `"r1"`) or integer; producers pick one form per review and stay consistent |
+| `panel_mode` | `"full"` \| `"focused"` |
+| `selection_reason` | string or `null`; required non-null when `panel_mode` is `focused` |
+| `source_kind` | `"plan"` \| `"rfc"` \| `"document"` \| `"code"` |
+| `source_digest` | lowercase 64-char hex SHA-256 of the exact reviewed bytes |
+| `escalation_reason` | string or `null`; required non-null when a sixth worker launched |
+| `counts` | object; `workers_launched` must match non-skipped panel rows, `staged_findings` must match `findings` length |
+| `panel` | array of worker rows (`worker`, `lenses`, `parent_worker`, `descendant_launches`, `status`, counts) |
+| `deduplication_groups` | array (may be empty) |
+| `discarded` | array (may be empty); `wrong-owner` rows carry `lead_worker` + `lead_lens` (or `lead_agent`) |
+| `severity_calibration` | array (may be empty) |
+| `triage_outcomes` | per-worker/lens rollup: array of rows (as in the minimum-schema example) or an object rollup; the validator checks presence, not shape |
+| `findings` | array; each row carries `id` (integer), `severity`, `blocking` (real boolean), `consequence`, `reachability`, `blast_radius`, `confidence`, and a canonical `pattern` |
+| `overflow` | array; never contains a Critical or blocking finding |
+| `soften_watchlist` | array; `[]` when none |
+
+Optional top-level fields: `depth` (string), `domains` (list), `extensions` (object). Any other top-level field is rejected; future extensions belong inside the object-valued `extensions` (a non-object `extensions` value is rejected).
+
+Canonical Pattern IDs (version-1): findings, overflow items, and discarded rows that carry a pattern must use `<lens>#<kebab-slug>` with an owner from the declared set in **Pattern id format**. A version-1 finding must also carry the same canonical `pattern` in its Markdown `- **Pattern**:` bullet; a missing or differing Markdown Pattern is a conservation error.
+
+Historical compatibility (schema classification): a sidecar without `schema_version` is never a version-1 schema error; it is legacy compatibility input, classified by shape: `legacy-worker-shaped` (versionless with per-worker `worker` rows), `legacy-panel-mode` (versionless with `panel_mode` or `counts.workers_launched`), or `legacy` (any other versionless record). When several shape markers are present on the same versionless record, the classifier checks the panel-mode markers FIRST, so a record carrying both per-worker rows and `panel_mode`/`counts.workers_launched` classifies `legacy-panel-mode`, not `legacy-worker-shaped`; derive adapter routing from the exported classifier (`classify_sidecar_schema`), never from the listing order here. Legacy classification does not exempt a record from re-validation: a versionless worker-shaped or panel-mode record run through the `--hard` validator is still held to the current payload gates (panel shape, source digest, descendant flattening), so expect current-contract errors on bare historical records. A sidecar with an explicit unsupported `schema_version` is rejected outright.
+
+`source_kind` declares what `source_digest` hashes: `"code"` (the stored diff bytes), `"plan"` / `"rfc"` / `"document"` (the reviewed document's UTF-8 bytes). Producers SHOULD set it; `review-plan` (and other document reviewers) MUST set it. When `source_kind` is declared, `source_digest` must be a lowercase 64-char hex SHA-256 (placeholders like `"<sha256>"` fail the validator). The `--source-plan` flag on `validate_review_staging.py` recomputes the plan's digest and fails hard on a mismatch (the sibling `--source-rfc` and `--source-doc` flags do the same for RFC and generic document reviews, type-checking the sidecar's `source_kind`), so a digest recorded before a fold of the reviewed artifact is rejected as stale. In multi-round loops, re-derive the digest from the current round's reviewed artifact for every round; never copy a digest from a prior round's staging doc (the copy misattributes findings to a stale tree, and only a recompute flag can catch it).
 
 Legacy sidecars keep `agent`, `agents`, and caller-specific severity labels. New sidecars use worker rows and the four shared severities.
 
@@ -327,7 +370,7 @@ Provider skill for staged review hierarchy and statistics. Consumers **must** fo
 | `review-plan` | `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` | Shared severities and blocking-aware plan actions; inlines sidecar schema (Step 3) and runs `--hard` validator gate before reporting round complete |
 | `doing-code-review` | `{reviews_dir}/YYYY-MM-DD-PR-*`, `YYYY-MM-DD-branch-review-*`, or execute-plan `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Code severities; optional `Status` per finding for PR triage |
 | `review-loop` | Same as `doing-code-review` branch / execute-plan patterns with `-r<N>` | Requires statistics every round, including clear rounds |
-| `receiving-review` | Updates existing staging under `{reviews_dir}/` | Triage Status→Triage map, Triage outcomes table, and matching `.stats.json` sidecar |
+| `receiving-review` | Updates existing staging under `{reviews_dir}/` | Triage Status→Triage map, Triage outcomes table, matching `.stats.json` sidecar, and authorized Blocking re-evaluation (see Triage presentation freeze) |
 | `rfc-design` | `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` | Shared severities; statistics section required |
 | `review-confluence-doc` | `{reviews_dir}/YYYY-MM-DD-confluence-review-<slug>.md` | Tag `[Prose]` / `[Premortem]` / `[Code]` in Source field |
 | `execute-plan` Phase 3 | `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Not `-plan-review-r`; review logs reference staging path with statistics |

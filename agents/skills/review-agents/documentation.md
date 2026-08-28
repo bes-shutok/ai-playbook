@@ -6,6 +6,7 @@ Two-phase agent: **(1) missing documentation**, **(2) prose clarity**. Run phase
 
 **Boundary with sibling agents:**
 - `simplification.md`: over-engineered code structure (not prose, not missing docs).
+- `consistency.md`: plan/RFC internal contradictions, stale cross-references, and source-of-truth drift between normative statements (abstract artifacts). Prose disposition (delete, rewrite, remove-or-freeze) stays here; contradictions between statements stay with `consistency`.
 - `quality.md`: runtime correctness and structural clarity (naming, cognitive complexity). Comment/doc **prose** lives here in phase 2, not in quality.
 - Phase 1 only: missing docs for user-visible or architectural changes.
 - Phase 2 only: existing prose that is redundant, unclear, verbose, a duplicate source of truth, or violates comment/doc conventions.
