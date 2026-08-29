@@ -1,13 +1,13 @@
 # Review-doc wording fixes: Confluence scratch-file child-page scope, stale fence-blindness claim
 
-Status: open
+Status: open (F11 fixed 2026-08-29 by docs/plans/2026-08-28-fence-scanner-consolidation.md; F6 remains open)
 Workflow: backlog
 Source: docs/reviews/2026-08-28-review-artifact-contracts-code-review-r6.md, round r6, findings F6 + F11 (validated as wording/contract ambiguities; deliberately deferred)
 
 ## Problem
 
 1. **F6 (`consistency#producer-contract-scope-gap`, Medium)**: the r5-added scratch-file recipe in `agents/skills/review-confluence-doc/SKILL.md` names one scratch file per page title and hashes only that file, while "reviewed content" is defined as the parent page plus child pages. On multi-page documents both producer readings (parent-only vs parent+children) pass the digest gate, so the documented no-misattribution guarantee over-claims (~line 183).
-2. **F11 (`documentation#stale-validator-claim`, Low)**: the snippet-format rule in `agents/skills/review-staging/SKILL.md` still says the hard validator walks headings line-by-line without fence tracking; after the r5 fence-aware two-pass scan that claim is stale for block splitting and finding parsing (the severity-group heading scan is still fence-blind) (~line 245).
+2. **F11 (`documentation#stale-validator-claim`, Low)**: the snippet-format rule in `agents/skills/review-staging/SKILL.md` still says the hard validator walks headings line-by-line without fence tracking; after the r5 fence-aware two-pass scan that claim is stale for block splitting and finding parsing (the severity-group heading scan is still fence-blind) (~line 245). FIXED 2026-08-29 by docs/plans/2026-08-28-fence-scanner-consolidation.md (Task 4): paragraph reworded to fence-aware splitting/parsing with the partial unclosed-fence fallback caveat and the severity-group heading-scan caveat.
 
 ## Location
 

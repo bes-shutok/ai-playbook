@@ -112,8 +112,11 @@ import json
 from graphify.detect import detect
 from pathlib import Path
 result = detect(Path('INPUT_PATH'))
-print(json.dumps(result, ensure_ascii=False))
-" > graphify-out/.graphify_detect.json
+# Write the sidecar from Python, not a shell redirect, so the same block renders
+# on PowerShell hosts without console-encoding drift (#2528).
+Path('graphify-out/.graphify_detect.json').write_text(json.dumps(result, ensure_ascii=False), encoding=\"utf-8\")
+print(f'Detected {result[\"total_files\"]} files')
+"
 ```
 
 Replace INPUT_PATH with the actual path the user provided. Do NOT cat or print the JSON - read it silently and present a clean summary instead:
@@ -156,15 +159,7 @@ This step has two parts: **structural extraction** (deterministic, free) and **s
 **Before semantic extraction:** check whether `GEMINI_API_KEY` or `GOOGLE_API_KEY` is set. If neither is set, print this one-liner to the user:
 > Tip: set `GEMINI_API_KEY` or `GOOGLE_API_KEY` to use Gemini for semantic extraction (`pip install 'graphifyy[gemini]'`).
 
-**Optional extras (SQL / video / gemini) install into graphify's interpreter, not Homebrew `python3`.** When Step 1 resolved graphify via `uv tool`, optional parsers such as `tree_sitter_sql` live in that tool env. Installing with system `pip` / a different Python leaves AST warnings like "tree_sitter_sql not installed" even though the user thinks the package is present. Fix with:
-```bash
-uv tool install --upgrade 'graphifyy[sql]'
-# then verify:
-$(cat graphify-out/.graphify_python) -c "import tree_sitter_sql; print('ok')"
-```
-Re-run extract / a full rebuild after install so `.sql` migrations produce nodes. There is no separate PyPI package named `tree-sitter-postgresql` required by graphify; `graphifyy[sql]` is enough for SQL AST.
-
-Print the Gemini tip once when applicable, then continue — do not wait for the user to supply a key. If `GEMINI_API_KEY` or `GOOGLE_API_KEY` IS set, use `graphify.llm.extract_corpus_parallel(files, backend="gemini")` for semantic extraction instead of dispatching subagents. The default Gemini model is `gemini-3-flash-preview`; set `GRAPHIFY_GEMINI_MODEL` or pass `--model` in headless CLI flows to override it.
+Print it once, then continue — do not wait for the user to supply a key. If `GEMINI_API_KEY` or `GOOGLE_API_KEY` IS set, use `graphify.llm.extract_corpus_parallel(files, backend="gemini")` for semantic extraction instead of dispatching subagents. The default Gemini model is `gemini-3-flash-preview`; set `GRAPHIFY_GEMINI_MODEL` or pass `--model` in headless CLI flows to override it.
 
 > **No other API keys are read.** When `GEMINI_API_KEY`/`GOOGLE_API_KEY` are unset, semantic extraction falls to the host agent itself — the running session is the LLM. On a host that dispatches subagents (e.g. Claude Code), dispatch them as written in Part B. On a host that runs the CLI directly in a terminal and cannot dispatch subagents, do not stall: a code-only corpus has no semantic work, so write the empty semantic file (Part B "Fast path") and continue to Part C; for a corpus with docs/papers/images, either set a Gemini key or extract those inline yourself, but in no case prompt for `ANTHROPIC_API_KEY` — that prompt is a misread of this skill.
 
@@ -497,6 +492,7 @@ from graphify.build import build_from_json
 from graphify.cluster import score_all
 from graphify.analyze import god_nodes, surprising_connections, suggest_questions
 from graphify.report import generate
+from graphify.export import to_json
 from pathlib import Path
 
 extraction = json.loads(Path('graphify-out/.graphify_extract.json').read_text(encoding=\"utf-8\"))
@@ -518,6 +514,13 @@ questions = suggest_questions(G, communities, labels)
 report = generate(G, communities, cohesion, labels, analysis['gods'], analysis['surprises'], detection, tokens, 'INPUT_PATH', suggested_questions=questions)
 Path('graphify-out/GRAPH_REPORT.md').write_text(report, encoding=\"utf-8\")
 Path('graphify-out/.graphify_labels.json').write_text(json.dumps({str(k): v for k, v in labels.items()}, ensure_ascii=False), encoding=\"utf-8\")
+# Re-export so graph.json nodes carry the curated community_name (#2490).
+# Same extraction as Step 4, so the #479 shrink-guard passes on node count;
+# if it still refuses, surface the guard message - do not force past it.
+wrote = to_json(G, communities, 'graphify-out/graph.json', community_labels=labels)
+if not wrote:
+    print('ERROR: refused to shrink graphify-out/graph.json (existing graph has more nodes; #479).')
+    print('If this shrink is intentional (you deleted files), re-run a full build with --force.')
 print('Report updated with community labels')
 "
 ```

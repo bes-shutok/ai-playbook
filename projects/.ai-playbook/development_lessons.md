@@ -4324,7 +4324,7 @@ When the identical command behaves differently in the agent shell versus the use
 
 **Shape trigger:** An implement log, run report, or validation table records exit 0 for a command that should have failed (or the reverse), and the recorded command line ends in a pipe segment.
 
-**Example:** A harness run was expected to exit 3 (validation differences found). The run was piped to `tail` and the code captured with bash `PIPESTATUS` syntax under zsh; the log recorded 0. Re-running with output redirection captured the authoritative 3. The re-run was cheap only because the command was idempotent (artifacts regenerate, appends dedup by signature); that is luck, not a property to rely on. Repeated 2026-08-22 in the same workflow (`cmd 2>&1 | tail; echo $?` echoed the tail's 0 for an exit-3 run): recalling this lesson did not prevent the reflex, so when the exit code is the deliverable, write the redirect form FIRST, before composing any display filtering.
+**Example:** A harness run was expected to exit 3 (validation differences found). The run was piped to `tail` and the code captured with bash `PIPESTATUS` syntax under zsh; the log recorded 0. Re-running with output redirection captured the authoritative 3. The re-run was cheap only because the command was idempotent (artifacts regenerate, appends dedup by signature); that is luck, not a property to rely on. Repeated 2026-08-22 in the same workflow (`cmd 2>&1 | tail; echo $?` echoed the tail's 0 for an exit-3 run): recalling this lesson did not prevent the reflex, so when the exit code is the deliverable, write the redirect form FIRST, before composing any display filtering. Recurred 2026-08-29 with a sharper failure mode: `${PIPESTATUS[0]:-$?}` under zsh did not just expand empty - the `:-` fallback substituted the pipe's last segment's 0 and printed it as a plausible EXIT=0; a default-value fallback on an exit-capture variable converts an empty expansion into a confident wrong answer, so never attach `:-` defaults to capture variables whose value is the evidence.
 
 **See also:** UL#152 (zsh vs bash expansion aborts in skill scripts); UL#191 (validation polarity).
 
@@ -4661,6 +4661,8 @@ When the identical command behaves differently in the agent shell versus the use
 
 **Shape:** a log count/substring assertion passes or fails depending on the tmp_path directory name; the matched message interpolates a path; the needle is a word that also appears in the test's own name.
 
+**Extension (negative substring assertions, same family):** a NEGATIVE substring assertion (`not any(needle in item)`) is unsatisfiable whenever the needle legitimately remains inside a larger unit the suite pins elsewhere (for example, a fenced code example whose header text must stay inside the enclosing block). Do not weaken the pinned content; assert the structural invariant instead (no item STARTS at the boundary, e.g. `startswith`). Witness: a RED fixture asserting no parsed block contains a fenced example header had to be corrected to assert no block starts at that header, because the fenced example itself legitimately contains the substring.
+
 ## 224. Environment Variants Need an Authoritative Identifier Map
 
 **Principle:** Family D (single source of truth) cross with Family H (verify the real thing, not the abstraction)
@@ -4730,3 +4732,88 @@ When the identical command behaves differently in the agent shell versus the use
 **Example:** One consolidated backlog item records the full regression history and the constraint that any rework must be a single deliberate change, not another spot fix.
 
 **See also:** #219 (fix rounds can drop the guards they replace); review-loop same-round verdict anti-pattern.
+
+## 228. Sweep a rule's consumer surfaces in the same change
+
+**Principle:** Family D (consistency / no drift: a normative rule and the surfaces that enforce, route, or verify it are one contract; landing the rule without its consumers lands two contracts).
+
+**Trigger:** a change adds or modifies a workflow rule - an exception, a stop state, an actor assignment, a new state value - that gates, templates, checklists, control-flow tables, or integration-point entries already touch.
+
+**Rule:** Before landing the rule, enumerate its consumer surfaces mechanically (grep for the verbs and dispositions the old contract used) and update every member in the same change: verification gates that demand the old outcome, sub-agent templates that restate the procedure, control-flow tables that lack a row for the new state, checklists that enumerate permitted writes, and integration-point entries in both directions. Delegating surfaces inherit a root-rule fix for free; non-delegating restatements must be edited or deleted.
+
+**Why:** Adding a "never silently backlog" stop path to a review policy left four downstream surfaces teaching the old contract: a verification gate still required a backlog item for every valid unfixed finding, a sub-agent template restated that demand, the loop's continue/stop table had no row for the new stop, and the sanctioned-ask whitelist omitted it. Five of eight review rounds existed only because consumers lagged the rule; the class-exhaustive sweep (root exception plus every non-delegating site, one pass) was the change that finally verified clean.
+
+**Shape:** the rule text is self-consistent, but a workflow following it hits an unresolvable contradiction or a false pass at a gate, template, or table the rule never names; reviewers keep finding stale-consumer defects after the rule itself is correct.
+
+**See also:** #227 (halt fix-fix cycles when one family regresses), #219 (fix rounds can drop the guards they replace), #226 (absent value is disagreement). Skill home: receiving-review Fix-risk triage; the cross-cutting skill migration rule in the repo guidelines.
+
+## 229. Mechanical gates are not a review for normative changes
+
+**Principle:** Family D (consistency / no drift: gates verify mechanics; only an adversarial review checks that a new rule coheres with the rules around it).
+
+**Trigger:** a change adds or edits normative workflow text - skill steps, gates, policy sections - and passes its mechanical gates (validators, selftests, hygiene scans).
+
+**Rule:** Treat validator, selftest, and hygiene green as necessary, not sufficient, for normative changes: run the applicable review workflow, or at minimum a focused panel over the owning domains, before reporting the change complete, and say explicitly when no review ran. Prose rules fail by contradiction with neighboring rules, not by assertion, so input-checking gates cannot reach their defect class.
+
+**Why:** A policy change landed after its validator selftests and hygiene scan passed; the user asked whether a review loop had run for the change. The subsequent eight-round review found three blocking rule contradictions plus stale-consumer defects, none reachable by the mechanical gates.
+
+**Shape:** the diff is mostly prose that other rules reference; every gate is green; the touched files exist to constrain future behavior.
+
+**See also:** #228 (sweep consumer surfaces in the same change).
+
+## 230. Wrong-project tool output means stop, not retry
+
+**Principle:** Family excluded (agent tooling workflow).
+
+**Trigger:** a shell command runs in a different working directory than intended - the harness resets cwd between tool calls - and the output clearly belongs to another project (different test-suite size, file paths, or linter findings).
+
+**Rule:** When tool output names files, suites, or errors from a repo you are not working on, treat it as "executed in the wrong cwd" and re-issue with an explicit `cd <path> &&` prefix or cwd-independent flags (`uv --directory`, `git -C`). Never re-send a command verbatim to "retry"; and if the `cd` prefix keeps being dropped from the emitted command, stop repeating and switch to flags that do not depend on shell state at all.
+
+**Why:** While scaffolding a new sibling project, pytest/ruff invocations kept landing in the adjacent repo (its 2476-test suite and its lint findings) because the `cd` prefix was omitted; the identical command was re-sent several times before switching to `uv --directory` / `git -C`, which worked first try.
+
+**Shape:** green "all passed" output that nonetheless disagrees with the project you are editing - passing counts or findings that match the neighbor, not the target.
+
+**See also:** #226 (absent value is disagreement - mismatched output is a signal, not noise).
+
+
+## 231. Assert fixture preconditions after fallible string mutation
+
+**Principle:** Family H (Verify the real thing, not the abstraction).
+
+**Trigger:** a test fixture is built by mutating a template string (`.replace`, regex substitution, concatenation) to inject the pathological condition under test, and the mutation can silently no-op (pattern absent from the template, injected marker already balanced).
+
+**Rule:** Immediately after the mutation chain, assert the injected condition's observable signature (e.g. `md.count("```") % 2 == 1` proves an unclosed fence opener exists). A replace that matches nothing leaves the fixture testing the unmutated baseline, so the test passes vacuously even though the code path it names was never exercised.
+
+**Why:** a validator selftest's three fence-fallback fixtures were flagged in review as potentially defanged: their `.replace` chains could silently fail to inject the unclosed delimiter, letting fallback-path tests pass without exercising the fallback. Fix: precondition asserts placed directly after the replace chain, each delimiter matching the fixture's construction.
+
+**Shape:** fixture assembled from a template via replace; the test name promises a pathological input; nothing in the test asserts the pathology is present.
+
+**See also:** #80 (restore/undo sibling: assert the intermediate mutation, not the restored final state), #88 (boundary filler: fixture content violates an orthogonal invariant).
+
+## 232. Diagnose the credential path when push says repository not found
+
+**Principle:** Family H (Verify the real thing, not the abstraction).
+
+**Trigger:** `git push` fails with "Repository not found" or "access rights" even though the repo verifiably exists and is accessible (e.g. via the API or web UI).
+
+**Rule:** Before touching the remote URL, audit the credential path end to end: (1) `ssh -T git@<host>` reveals which account the active SSH key authenticates as; (2) `git config --global --get-regexp 'url\..*\.insteadof'` reveals silent URL rewrites that convert an HTTPS remote into SSH (or vice versa) after you set it; (3) per-account keys need an SSH `Host` alias in `~/.ssh/config`, with the remote pointing at `git@<alias>:<owner>/<repo>.git`. "Repo exists but push not found" almost always means the wrong identity, not the wrong URL.
+
+**Why:** After setting an HTTPS remote and pushing, the push failed as "repository not found": a global `url.git@host:.insteadof https://host/` rewrite silently converted the remote back to SSH, where the active key belonged to the work account with no access to the personal-account repo. The user's SSH config already had a dedicated host alias for personal repos; pointing the remote at the alias fixed it immediately.
+
+**Shape:** the fix keeps getting undone - the remote URL visibly reverts to another protocol, or two accounts coexist and the error mentions the repo you can see in the browser.
+
+**See also:** #230 (wrong-project tool output means stop, not retry - both are "the tool acted as a different identity than assumed").
+
+## 233. Verify a squash merge by union math, not tree identity
+
+**Principle:** Family H (Verify the real thing, not the abstraction).
+
+**Trigger:** a squash merge of a feature branch into a default branch that has moved since the branch forked, and a post-merge verification step expects the new commit's tree to be byte-identical to the branch tip.
+
+**Rule:** Expect a union, not identity: the squash result equals branch changes merged onto current main, so files main touched after the fork differ from the branch tip even though the branch never edited them. Verify with two checks instead of one: the branch-side diff of any differing file must be empty (`git diff main...branch -- <file>` is empty proves the branch did not touch it, so keeping main's version is correct), and a file the branch did touch must match the branch's content.
+
+**Why:** a squash-merge verification flagged TREE_MISMATCH against the branch tip; the delta was exactly four files carrying the default branch's em-dash fixes that predated the fork. Treating identity as the pass condition would have mislabeled a correct merge as broken, or tempted a reset that silently reverted the default-branch fixes.
+
+**Shape:** tree-hash comparison used as the only merge acceptance check; delta files exist; the branch-side diff of those files is empty.
+
+**See also:** the branch-continuity lesson under Family D (verify which branch owns a commit before moving anything).

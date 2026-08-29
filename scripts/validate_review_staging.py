@@ -287,6 +287,100 @@ def extract_staged_count(content: str) -> int:
     return extract_medium_plus_count(content)
 
 
+FENCE_LINE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+HEADING_LINE_RE = re.compile(r"^#{1,6}\s")
+
+
+def classify_fence_lines(
+    lines: list[str],
+    reset_at_headings: bool = False,
+    is_reset_heading=None,
+) -> tuple[list[tuple[str, object]], int | None]:
+    """Fence-aware line classifier shared by every Markdown scanner here.
+
+    The single owner of the fence state machine (r1 F3): a fence opens on a
+    line matching ``FENCE_LINE_RE`` and closes only on an equal-or-longer
+    delimiter line (r5 F5; the delimiter character is not compared, so an
+    equal-or-longer run of either fence character closes the fence). Emits
+    one event per input line, drawn from the specified vocabulary:
+
+    - ``("fence_opener", delimiter_length)``: this line opens a fence;
+    - ``("fence_close", None)``: this line closes the currently open fence;
+    - ``("in_fence_content", None)``: this line is content inside an open
+      fence (never a heading, boundary, or metadata candidate);
+    - ``("heading", raw_text)``: a heading line the consumer maps to its own
+      semantics (severity-group ``### <Severity>`` vs finding header
+      ``#### F<N>.`` vs other ``####``); the classifier does NOT classify
+      heading sub-kinds (r2 F4);
+    - ``("ordinary", raw_text)``: any other line outside a fence.
+
+    Reset policy: with ``reset_at_headings`` False (content-preserving), a
+    heading inside an open fence is ``in_fence_content`` (r5 F8 fenced-example
+    purity). With True (heading-reset, the r4 F3 containment mode for fences
+    that never close; requires ``is_reset_heading`` — a ``ValueError`` is
+    raised on ``reset_at_headings=True`` without it, so the silent
+    reset-on-every-heading default cannot recur), a heading inside an open
+    fence resets the fence state iff ``is_reset_heading(raw_text)`` is truthy
+    (each consumer pins its own reset heading set); otherwise it stays fenced
+    content.
+
+    Returns ``(events, unclosed_opener_index)`` where
+    ``unclosed_opener_index`` is the line index of the fence opener that never
+    closed, or None when every fence closed (consumers use it to apply the
+    partial fallback: keep pre-opener first-pass results, re-classify only
+    from the opener onward).
+    """
+    if reset_at_headings and is_reset_heading is None:
+        raise ValueError(
+            "reset_at_headings=True requires is_reset_heading "
+            "(each consumer pins its own reset heading set)"
+        )
+    events: list[tuple[str, object]] = []
+    in_fence = False
+    fence_len = 0
+    opener_index: int | None = None
+    for i, line in enumerate(lines):
+        fence_match = FENCE_LINE_RE.match(line)
+        if fence_match:
+            if in_fence:
+                if len(fence_match.group(1)) >= fence_len:
+                    in_fence = False
+                    fence_len = 0
+                    opener_index = None
+                    events.append(("fence_close", None))
+                else:
+                    events.append(("in_fence_content", None))
+            else:
+                in_fence = True
+                fence_len = len(fence_match.group(1))
+                opener_index = i
+                events.append(("fence_opener", fence_len))
+            continue
+        if HEADING_LINE_RE.match(line):
+            if in_fence and not reset_at_headings:
+                events.append(("in_fence_content", None))
+                continue
+            if (
+                in_fence
+                and reset_at_headings
+                and is_reset_heading is not None
+                and not is_reset_heading(line)
+            ):
+                events.append(("in_fence_content", None))
+                continue
+            if in_fence:
+                in_fence = False
+                fence_len = 0
+                opener_index = None
+            events.append(("heading", line))
+            continue
+        if in_fence:
+            events.append(("in_fence_content", None))
+            continue
+        events.append(("ordinary", line))
+    return events, (opener_index if in_fence else None)
+
+
 def split_finding_blocks(content: str) -> list[str]:
     findings_match = re.search(r"^## Findings\s*$", content, re.MULTILINE)
     if not findings_match:
@@ -299,46 +393,39 @@ def split_finding_blocks(content: str) -> list[str]:
     # inside a properly fenced code example is quoted content, not a finding
     # header; splitting on it produced a phantom finding block that then
     # failed the Comment/Analysis gate with errors naming the phantom instead
-    # of the real defect. Fence tracking uses the same close-on-equal-or-longer
-    # rule as ``parse_markdown_findings``.
+    # of the real defect. Fence tracking is owned by the shared
+    # ``classify_fence_lines`` classifier (single fence state machine).
     lines = findings_section.splitlines(keepends=True)
-    fence_re = re.compile(r"^\s*(`{3,}|~{3,})")
     header_re = re.compile(r"^####\s+F\d+\.")
 
-    def scan_boundaries(reset_at_headings: bool) -> tuple[list[int], bool]:
-        """Boundary line indices for finding headers OUTSIDE fences.
+    def is_finding_header(line: str) -> bool:
+        return header_re.match(line) is not None
 
-        With ``reset_at_headings`` False, a header inside an open fence is
-        quoted content (r5 F8). Returns ``(boundaries, fence_open_at_end)``;
-        the caller re-scans with heading resets when a fence never closed
-        (r4 F3 unclosed-fence containment, mirroring
-        ``parse_markdown_findings``).
-        """
-        in_fence = False
-        fence_len = 0
-        bounds: list[int] = []
-        for i, line in enumerate(lines):
-            fence_match = fence_re.match(line)
-            if fence_match:
-                if in_fence:
-                    if len(fence_match.group(1)) >= fence_len:
-                        in_fence = False
-                        fence_len = 0
-                else:
-                    in_fence = True
-                    fence_len = len(fence_match.group(1))
-                continue
-            if header_re.match(line):
-                if in_fence and not reset_at_headings:
-                    continue
-                in_fence = False
-                fence_len = 0
-                bounds.append(i)
-        return bounds, in_fence
+    def boundary_indices(events: list[tuple[str, object]]) -> list[int]:
+        return [
+            i
+            for i, (kind, value) in enumerate(events)
+            if kind == "heading" and is_finding_header(value)
+        ]
 
-    boundaries, fence_left_open = scan_boundaries(reset_at_headings=False)
-    if fence_left_open:
-        boundaries, _ = scan_boundaries(reset_at_headings=True)
+    events, unclosed_opener = classify_fence_lines(lines)
+    boundaries = boundary_indices(events)
+    if unclosed_opener is not None:
+        # Partial fallback (r6 F3): a fence never closed, so the
+        # content-preserving first pass is trustworthy only up to the opener.
+        # Keep those boundaries and re-classify from the opener onward with
+        # heading resets restricted to finding-header lines (the splitter's
+        # reset heading set), so the unclosed fence cannot swallow later
+        # findings (r4 F3) and pre-opener fenced examples stay content.
+        boundaries = [i for i in boundaries if i < unclosed_opener]
+        reset_events, _ = classify_fence_lines(
+            lines[unclosed_opener:],
+            reset_at_headings=True,
+            is_reset_heading=is_finding_header,
+        )
+        boundaries += [
+            unclosed_opener + i for i in boundary_indices(reset_events)
+        ]
     if boundaries:
         parts: list[str] = []
         starts = boundaries + [len(lines)]
@@ -396,81 +483,65 @@ def parse_markdown_findings(content: str) -> list[dict]:
     # delimiter of equal or greater length, so a longer opener cannot be
     # closed by a shorter delimiter line) and an UNCLOSED fence cannot
     # swallow the rest of the Findings section: when the section ends with a
-    # fence still open, the scan re-runs with structural headings resetting
-    # the fence state (which cannot leak across findings, silently hiding
-    # later blocking findings from readiness). r5 F8: heading-like lines
+    # fence still open, the region from the unclosed opener onward is
+    # re-classified with severity-group and finding-header lines resetting
+    # the fence state, while the pre-opener first-pass classification is
+    # preserved (partial fallback, r6 F3), so the unclosed fence cannot hide
+    # later blocking findings from readiness. r5 F8: heading-like lines
     # inside a properly CLOSED fence are content, so a fenced example quoting
     # the staging format cannot inject a phantom finding.
-    def scan(headings_reset_fence: bool) -> tuple[list[dict], bool]:
-        """One linear scan of the Findings section.
+    severity_re = re.compile(r"^###\s+(Critical|High|Medium|Low)\b")
+    finding_header_re = re.compile(r"^####\s+F(\d+)\.")
 
-        Returns ``(parsed_findings, fence_open_at_end)``. With
-        ``headings_reset_fence`` False, a structural heading inside an open
-        fence is treated as fenced CONTENT (r5 F8: a properly fenced example
-        quoting the staging format must not inject a phantom finding); with
-        True, headings reset the fence state (the r4 F3 corruption-containment
-        behavior for UNCLOSED fences). The caller runs the content-preserving
-        scan first and falls back to the reset scan only when a fence was
-        still open at the end of the section (i.e. the fence was never
-        legitimately closed, so its heading-like lines cannot be content).
+    def is_reset_heading(line: str) -> bool:
+        # The parser's reset heading set: severity-group headings and finding
+        # headers, NOT generic ``####`` sub-headings (r3 F2).
+        return bool(severity_re.match(line) or finding_header_re.match(line))
+
+    def apply_events(
+        events: list[tuple[str, object]],
+        scanned: list[dict],
+        cur: dict | None,
+        cur_severity: str | None,
+        metadata_open: bool,
+    ) -> tuple[dict | None, str | None, bool]:
+        """Interpret classifier events; the parser keeps only this mapping.
+
+        ``heading(raw_text)`` maps to the parser's own semantics
+        (severity-group label, finding header, other ``####`` closing the
+        metadata region); ``ordinary(raw_text)`` lines are metadata
+        candidates inside the open finding's metadata region. Fence events
+        and ``in_fence_content`` carry no finding/metadata meaning here.
         """
-        scanned: list[dict] = []
-        cur: dict | None = None
-        cur_severity = current_severity
-        metadata_open = False
-        in_fence = False
-        fence_len = 0
-        for line in findings_section.splitlines():
-            sev_match = re.match(r"^###\s+(Critical|High|Medium|Low)\b", line)
-            if sev_match:
-                if in_fence and not headings_reset_fence:
-                    # Severity-like line inside a legitimately closed fence:
-                    # content, never a severity change (r5 F8).
+        for kind, value in events:
+            if kind == "heading":
+                line = value
+                sev_match = severity_re.match(line)
+                if sev_match:
+                    cur_severity = sev_match.group(1)
                     continue
-                cur_severity = sev_match.group(1)
-                if in_fence:
-                    # Fence state cannot leak across a severity heading
-                    # (r4 F3, unclosed-fence containment).
-                    in_fence = False
-                    fence_len = 0
-                continue
-            block_match = re.match(r"^####\s+F(\d+)\.", line)
-            if block_match:
-                if in_fence and not headings_reset_fence:
-                    # Heading-like line inside a legitimately closed fence:
-                    # content, not a new finding (r5 F8).
+                block_match = finding_header_re.match(line)
+                if block_match:
+                    if cur is not None:
+                        scanned.append(cur)
+                    cur = {
+                        "id": int(block_match.group(1)),
+                        "severity": cur_severity,
+                        "blocking": None,
+                        "triage": None,
+                    }
+                    metadata_open = True
                     continue
-                if in_fence:
-                    in_fence = False
-                    fence_len = 0
-                if cur is not None:
-                    scanned.append(cur)
-                cur = {
-                    "id": int(block_match.group(1)),
-                    "severity": cur_severity,
-                    "blocking": None,
-                    "triage": None,
-                }
-                metadata_open = True
+                if re.match(r"^####\s+", line):
+                    # Comment/Analysis sub-heading: the finding's metadata
+                    # region ends here; body prose is never parsed as
+                    # metadata.
+                    metadata_open = False
                 continue
-            fence_match = re.match(r"^\s*(`{3,}|~{3,})", line)
-            if fence_match:
-                if in_fence:
-                    if len(fence_match.group(1)) >= fence_len:
-                        in_fence = False
-                        fence_len = 0
-                else:
-                    in_fence = True
-                    fence_len = len(fence_match.group(1))
+            if kind != "ordinary":
                 continue
-            if in_fence:
-                continue
+            line = value
             if cur is None:
-                continue
-            if re.match(r"^####\s+", line):
-                # Comment/Analysis sub-heading: the finding's metadata region
-                # ends here; body prose is never parsed as metadata.
-                metadata_open = False
                 continue
             if not metadata_open:
                 continue
@@ -489,17 +560,42 @@ def parse_markdown_findings(content: str) -> list[dict]:
             pattern = re.search(r"-\s*\*\*[Pp]attern\*\*\s*:\s*(\S+)", line)
             if pattern:
                 cur["pattern"] = pattern.group(1).rstrip(".")
+        return cur, cur_severity, metadata_open
+
+    lines = findings_section.splitlines()
+    events, unclosed_opener = classify_fence_lines(lines)
+    scanned: list[dict] = []
+    if unclosed_opener is None:
+        cur, _, _ = apply_events(
+            events, scanned, None, current_severity, False
+        )
+    else:
+        # Partial fallback (r6 F3): the content-preserving first pass is
+        # trustworthy only up to the opener. Re-derive the state at the
+        # opener from the pre-opener prefix (identical to the prefix of the
+        # first-pass events), flush the finding open at the opener with its
+        # PRE-opener bullets (no double-append), and re-scan from the opener
+        # with heading resets seeded with that state (severity label,
+        # metadata-region flag) so same-group later findings parse with their
+        # true severity (r4 F3 containment; post-opener bullets are inside
+        # the unclosed fence and are not recovered, same as the old
+        # full-discard behavior).
+        cur, cur_severity, metadata_open = apply_events(
+            events[:unclosed_opener], scanned, None, current_severity, False
+        )
         if cur is not None:
             scanned.append(cur)
-        return scanned, in_fence
-
-    parsed, fence_left_open = scan(headings_reset_fence=False)
-    if fence_left_open:
-        # The section contains a fence that was never legitimately closed:
-        # re-scan with the r4 F3 heading-reset containment so the unclosed
-        # fence cannot swallow later findings.
-        parsed, _ = scan(headings_reset_fence=True)
-    return parsed
+        reset_events, _ = classify_fence_lines(
+            lines[unclosed_opener:],
+            reset_at_headings=True,
+            is_reset_heading=is_reset_heading,
+        )
+        cur, _, _ = apply_events(
+            reset_events, scanned, None, cur_severity, metadata_open
+        )
+    if cur is not None:
+        scanned.append(cur)
+    return scanned
 
 
 def is_review_ready(content: str) -> bool:
@@ -3707,6 +3803,9 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
         "#### Comment\nAn unclosed fence example follows:\n```python\nx = 1\n",
         1,
     )
+    assert unclosed_md.count("```") % 2 == 1, (
+        "unclosed opener not injected; fixture defanged"
+    )
     parsed_unclosed = parse_markdown_findings(unclosed_md)
     check(
         "fence fix: unclosed fence before a later finding still parses both findings",
@@ -3799,6 +3898,269 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
             stage("fenced-heading-example", base_payload, fenced_heading_md), hard=True
         ).ok,
     )
+    # tilde-closed-example: a properly CLOSED tilde fence (~~~) quoting the
+    # staging format (a finding header with a fake pattern inside the fence)
+    # is treated as fenced content, not structure: no phantom finding is
+    # injected and only the real finding counts. Tilde support exists today
+    # but was pinned by no fixture (rg -c '~~~' was 0 before this task).
+    tilde_closed_md = _current_findings_markdown([_current_finding(id=1)]).replace(
+        "#### Comment",
+        (
+            "#### Comment\n"
+            "The staging format quoted verbatim inside a tilde fence:\n"
+            "~~~markdown\n"
+            "#### F99. fake#y\n"
+            "- **Pattern**: quality#tilde-example\n"
+            "- **Blocking**: true\n"
+            "~~~\n"
+        ),
+        1,
+    )
+    assert tilde_closed_md.count("~~~") == 2, (
+        "tilde example not injected; fixture defanged"
+    )
+    parsed_tilde_closed = parse_markdown_findings(tilde_closed_md)
+    check(
+        "fence fix: closed tilde fence example injects no phantom finding "
+        "(# tilde-closed-example)",
+        [f.get("id") for f in parsed_tilde_closed] == [1],
+    )
+    check(
+        "fence fix: staging doc with a closed tilde-fenced example validates hard "
+        "(# tilde-closed-example)",
+        validate_staging_file(
+            stage("tilde-closed-example", _payload_with_findings([_current_finding(id=1)]), tilde_closed_md),
+            hard=True,
+        ).ok,
+    )
+    # tilde-unclosed-containment: an unclosed tilde fence opener inside one
+    # finding's Comment must not swallow the remaining findings (tilde analog
+    # of the r4 F3 containment arm above). The High-severity finding comes
+    # first in the Markdown, so its unclosed tilde fence precedes the Medium
+    # finding's header.
+    tilde_f1 = _current_finding(id=1)
+    tilde_f2 = _current_finding(id=2, severity="High", blocking=True)
+    tilde_unclosed_md = _current_findings_markdown([tilde_f1, tilde_f2]).replace(
+        "#### Comment",
+        "#### Comment\nAn unclosed tilde fence example follows:\n~~~python\nx = 1\n",
+        1,
+    )
+    assert tilde_unclosed_md.count("~~~") % 2 == 1, (
+        "unclosed tilde opener not injected; fixture defanged"
+    )
+    _, tilde_unclosed_opener = classify_fence_lines(tilde_unclosed_md.splitlines())
+    assert tilde_unclosed_opener is not None, (
+        "tilde opener not tracked as a fence; fixture defanged"
+    )
+    parsed_tilde_unclosed = parse_markdown_findings(tilde_unclosed_md)
+    check(
+        "fence fix: unclosed tilde fence before a later finding still parses both "
+        "findings (# tilde-unclosed-containment)",
+        sorted(f["id"] for f in parsed_tilde_unclosed) == [1, 2],
+    )
+    check(
+        "fence fix: unclosed tilde fence cannot hide a blocking pending finding from "
+        "readiness (# tilde-unclosed-containment)",
+        is_review_ready(tilde_unclosed_md) is False,
+    )
+    check(
+        "fence fix: staging doc with an unclosed tilde fence validates (conservation "
+        "sees both findings) (# tilde-unclosed-containment)",
+        validate_staging_file(
+            stage("tilde-unclosed-containment", _payload_with_findings([tilde_f2, tilde_f1]), tilde_unclosed_md),
+            hard=True,
+        ).ok,
+    )
+    # classifier-guard (r2 F1): the half-configured reset mode must fail loud.
+    try:
+        classify_fence_lines(["~~~"], reset_at_headings=True)
+        guard_raised = False
+    except ValueError:
+        guard_raised = True
+    check(
+        "fence fix: reset mode without a reset predicate raises ValueError "
+        "(# classifier-guard)",
+        guard_raised,
+    )
+
+    # fallback-preserves-fenced-example (r6 F3): a properly fenced
+    # staging-format example (#### F99. inside the fence) in one finding's
+    # Comment, FOLLOWED by a stray unclosed fence opener inside a LATER real
+    # finding's Comment body (opener placement pinned: in-Comment, not top
+    # level, r4 F3) and a subsequent real finding. The content-preserving
+    # first pass classifies all of this correctly, but the fence never closes,
+    # so the pre-fix full-discard fallback re-scanned the WHOLE section with
+    # heading resets and the example's #### F99. line became a phantom finding
+    # (a conservation error about content the first pass correctly ignored).
+    # The partial fallback keeps the pre-opener first-pass results so F99
+    # never surfaces.
+    fb_f1 = _current_finding(id=1, severity="High", blocking=True)
+    fb_f2 = _current_finding(id=2)
+    fb_f3 = _current_finding(id=3, severity="Low")
+    fallback_md = _current_findings_markdown([fb_f1, fb_f2, fb_f3])
+    fallback_md = fallback_md.replace(
+        "#### Comment",
+        (
+            "#### Comment\n"
+            "The staging format quoted verbatim as an example:\n"
+            "```markdown\n"
+            "#### F99. fake#y\n"
+            "- **Pattern**: quality#fenced-example\n"
+            "- **Blocking**: true\n"
+            "```\n"
+        ),
+        1,
+    ).replace(
+        "#### Comment\nConcrete claim for finding 2:",
+        (
+            "#### Comment\n"
+            "An unclosed fence opener follows:\n"
+            "```python\n"
+            "x = 1\n"
+            "Concrete claim for finding 2:"
+        ),
+        1,
+    )
+    assert fallback_md.count("```") % 2 == 1, (
+        "unclosed opener not injected; fixture defanged"
+    )
+    assert "#### F99." in fallback_md, (
+        "fenced example not injected; fixture defanged"
+    )
+    parsed_fallback = parse_markdown_findings(fallback_md)
+    check(
+        "fence fix: fallback keeps the fenced example as content; no phantom "
+        "F99 finding, exactly the real findings parse "
+        "(# fallback-preserves-fenced-example)",
+        [f.get("id") for f in parsed_fallback] == [1, 2, 3],
+    )
+    fallback_blocks = split_finding_blocks(fallback_md)
+    check(
+        "fence fix: fallback block split returns exactly the real finding "
+        "blocks, none starting at the F99 example header "
+        "(# fallback-preserves-fenced-example)",
+        len(fallback_blocks) == 3
+        and not any(block.startswith("#### F99.") for block in fallback_blocks),
+    )
+    check(
+        "fence fix: staging doc with a fenced example plus a later unclosed "
+        "fence validates hard with no phantom-finding conservation error "
+        "(# fallback-preserves-fenced-example)",
+        validate_staging_file(
+            stage(
+                "fallback-preserves-fenced-example",
+                _payload_with_findings([fb_f1, fb_f2, fb_f3]),
+                fallback_md,
+            ),
+            hard=True,
+        ).ok,
+    )
+
+    # fallback-same-severity-group (r6 F3): the fenced example, the stray
+    # unclosed fence opener (in a real finding's Comment, AFTER that finding's
+    # Blocking bullet), and a later real finding, all inside the SAME severity
+    # group (### Medium). A stray-fence-only same-group layout is GREEN today
+    # (the heading-reset re-scan re-reads the ### Medium label before the
+    # later finding), so the fenced example is load-bearing: under the
+    # full-discard fallback its #### F99. line leaks in as a phantom
+    # finding/block. The partial fallback must seed the reset region with the
+    # first pass's state at the opener, so the straddling finding keeps its
+    # pre-opener Blocking bullet (flushed once, not lost) and the later
+    # finding parses with its true severity (not severity: None). The
+    # example keeps only the header line so the straddling-block assertion
+    # cannot be satisfied by the phantom block's content. The block checks
+    # pin "no block STARTS at the F99 header": substring containment is
+    # unsatisfiable because the fenced example text legitimately remains
+    # inside the enclosing finding's block (r5 F8 keeps fenced examples in
+    # the block they quote).
+    sg_f1 = _current_finding(id=1)
+    sg_f2 = _current_finding(id=2, blocking=True)
+    sg_f3 = _current_finding(id=3)
+    same_group_md = _current_findings_markdown([sg_f1, sg_f2, sg_f3])
+    same_group_md = same_group_md.replace(
+        "#### Comment",
+        (
+            "#### Comment\n"
+            "The staging format quoted verbatim as an example:\n"
+            "```markdown\n"
+            "#### F99. fake#y\n"
+            "```\n"
+        ),
+        1,
+    ).replace(
+        "#### Comment\nConcrete claim for finding 2:",
+        (
+            "#### Comment\n"
+            "An unclosed fence opener follows (after this finding's Blocking "
+            "bullet above):\n```python\nx = 1\nConcrete claim for finding 2:"
+        ),
+        1,
+    )
+    # Post-opener poison (r2 F4): this assert pins that post-opener lines
+    # classify as in_fence_content (skipped) until the next reset heading, so
+    # the poison bullet never lands in parsed metadata. The seeded
+    # metadata-region flag is carried into the reset scan only for invariant
+    # fidelity; no reachable path reads it for this assertion, because an
+    # ordinary line in the reset region is read only after a finding header
+    # (which re-derives the flag as True), a generic #### sub-heading (which
+    # sets it False), or a fence-close (cur stays None, so lines skip). The
+    # live seed is cur_severity, pinned by the separate severity-label assert
+    # below.
+    same_group_md = same_group_md.replace(
+        "Concrete claim for finding 2:",
+        "- **Pattern**: wrong#post-opener\nConcrete claim for finding 2:",
+        1,
+    )
+    assert same_group_md.count("```") % 2 == 1, (
+        "unclosed opener not injected; fixture defanged"
+    )
+    assert "#### F99." in same_group_md, (
+        "fenced example not injected; fixture defanged"
+    )
+    parsed_same_group = parse_markdown_findings(same_group_md)
+    check(
+        "fence fix: same-group fallback parse yields exactly the real "
+        "findings, no phantom F99 (# fallback-same-severity-group)",
+        [f.get("id") for f in parsed_same_group] == [1, 2, 3],
+    )
+    sg_by_id = {f.get("id"): f for f in parsed_same_group}
+    check(
+        "fence fix: straddling finding keeps its pre-opener Blocking bullet "
+        "(flushed once, not lost, not double-appended) and the later "
+        "same-group finding parses with its true severity label, not None "
+        "(# fallback-same-severity-group)",
+        sg_by_id.get(2, {}).get("blocking") is True
+        and sum(1 for f in parsed_same_group if f.get("id") == 2) == 1
+        and sg_by_id.get(3, {}).get("severity") == "Medium",
+    )
+    check(
+        "fence fix: post-opener poisoned Pattern bullet is not recovered into "
+        "the straddling finding (# fallback-same-severity-group)",
+        sg_by_id.get(2, {}).get("pattern") != "wrong#post-opener",
+    )
+    sg_blocks = split_finding_blocks(same_group_md)
+    check(
+        "fence fix: same-group block split keeps the straddling finding's "
+        "pre-opener metadata bullet and the later finding as its own block, "
+        "with no phantom F99 block (# fallback-same-severity-group)",
+        len(sg_blocks) == 3
+        and not any(block.startswith("#### F99.") for block in sg_blocks)
+        and f"- **Blocking**: {'true' if sg_f2['blocking'] else 'false'}"
+        in sg_blocks[1],
+    )
+    check(
+        "fence fix: same-group staging doc validates hard with no "
+        "conservation error (# fallback-same-severity-group)",
+        validate_staging_file(
+            stage(
+                "fallback-same-severity-group",
+                _payload_with_findings([sg_f1, sg_f2, sg_f3]),
+                same_group_md,
+            ),
+            hard=True,
+        ).ok,
+    )
+
     # Negative twin: the same dashed illustrative bullets placed BETWEEN the
     # finding header and the first Comment sub-heading are real metadata
     # region and DO overwrite (pinning the parser's scoping boundary).

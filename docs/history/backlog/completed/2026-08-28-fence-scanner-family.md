@@ -1,6 +1,6 @@
 # Fence-scanner family: two-pass fallback phantom findings, duplicated state machine, tilde-fence test gap
 
-Status: open
+Status: closed 2026-08-29 (fixed by docs/plans/2026-08-28-fence-scanner-consolidation.md: F3 partial fallback, F7 shared fence classifier, tilde fixtures)
 Workflow: backlog
 Source: docs/reviews/2026-08-28-review-artifact-contracts-code-review-r6.md, round r6, findings F3 + F7 and the overflow-row `testing#tilde-fence-arm-untested` (validated as real defects; deliberately deferred)
 
