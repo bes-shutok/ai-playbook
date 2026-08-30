@@ -60,6 +60,10 @@ Parallel agent sessions on the **same git repository** must not run `learn`, `do
      exit 2
    fi
    eval "$LOCK_EXPORTS"
+   # Print the exports: Step 6 release runs in a LATER shell call whose env is
+   # fresh, and release-repo refuses to source the session fence file, so the
+   # token must survive here in chat context to be re-exported there.
+   printf '%s\n' "$LOCK_EXPORTS"
    if [[ -z "${DONE_LOCK_DIR:-}" || -z "${DONE_LOCK_TOKEN:-}" ]]; then
      echo "done-lock: acquire succeeded without lock exports" >&2
      exit 1

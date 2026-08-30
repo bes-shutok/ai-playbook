@@ -46,7 +46,7 @@ Skills can be used in two ways:
 - Claude Code uses `~/.claude/skills` (symlink → `~/.agents/skills`); mirrored as `claude/skills → ../agents/skills`.
 - Codex manages its own skills in `~/.codex/skills` autonomously and they are not vendored here.
 - OpenCode uses `~/.opencode/command` for registered command copies.
-- Copilot currently exposes local config/session state under `~/.copilot/`, not a reusable command or skill library.
+- Copilot loads skills from `~/.copilot/skills` as plain copies (no shared symlink); global instructions via `~/.copilot/copilot-instructions.md` symlink chain.
 - Gemini CLI discovers skills from `~/.agents/skills` (no separate `~/.gemini/skills` symlink needed). Antigravity global skills live under `~/.gemini/config/skills/` (symlink to the shared registry). Global instructions via `~/.gemini/GEMINI.md` (`@` import of `docs/AGENTS.md`).
 - See [projects/.ai-playbook/agent-runtime-layout.md](projects/.ai-playbook/agent-runtime-layout.md) for the full verified mapping and mirror rules.
 
@@ -75,6 +75,7 @@ Skills can be used in two ways:
 | `domain-modeling` | `agents/skills/domain-modeling/SKILL.md` | Active ubiquitous-language and ADR discipline. | Glossary and `project-decisions.md` paths aligned with doc-hierarchy; pairs with `grilling` via `grill-with-docs`. |
 | `handoff` | `agents/skills/handoff/SKILL.md` | Compact the session into a handoff doc for a fresh agent. | Output under `{tmp_dir}/handoff/` when repo facts exist; format aligned with `agents-best-practices` compaction handoff. |
 | `i-have-adhd` | `agents/skills/i-have-adhd/SKILL.md` | ADHD-friendly output style: lead with the next action, number steps, no preamble/closers. | Opt-in via `/i-have-adhd`; off with "stop adhd mode". Vendored from [ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd); see `agent-runtime-layout.md`. |
+| `agterm` | `agents/skills/agterm/SKILL.md` | Drive the agterm macOS terminal app programmatically via `agtermctl` (sessions, workspaces, windows, splits, overlays, HUD, pick, events, agent status). | Runtime-agnostic core plus `agent-runtimes.md` per agent CLI (Claude Code, Codex, Cursor, Copilot, ZCode, OpenCode, Pi): launch/resume lines, `session restore` reattach, status-hook wiring, skill install locations; bundled `scripts/show-image.sh` renders an image inline via an overlay. |
 
 Other vendored skills (`done`, `github-pr-workflow`, `receiving-review`, `doing-code-review`, `review-plan`, `tdd-guide`, etc.) live under [`agents/skills/`](agents/skills/). Browse that directory for the full set; register or invoke by skill path the same way as the table entries above.
 

@@ -4903,3 +4903,39 @@ When the identical command behaves differently in the agent shell versus the use
 
 **See also:** #187 (gate each obligation with its own check).
 
+## 242. Shell test harnesses: assert unconditionally, export stub state
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a harness assertion that cannot fail records a pass it did not earn, so green output certifies nothing.
+
+**Trigger:** writing or reviewing a bash test suite that uses stub binaries, recorded-argv logs, or scanner checks.
+
+**Rule:** (1) Assert unconditionally on the collected value; a precondition guard joined to its assert in one `&&` chain (`[ -n "$line" ] && assert_contains ...`) silently records neither pass nor fail when the guard is false. (2) Export every variable a spawned stub or wrapper reads (`VAR=x cmd` per call, not an unexported shell variable); shell variables do not cross process boundaries, so an unexported log path makes the stub write nowhere. (3) Give the suite a first-run probe that asserts the stub actually recorded something before asserting on the recording's content. (4) A checker that greps for a literal pattern must not contain that pattern in its own source: build it from parts (`"/$(printf 'Users')"`) or exclude the checker file, since the scanner flags its own source and the check degrades to self-exclusion.
+
+**Why:** a bash suite reported 28 passes while its stub had logged nothing: the log-path variable was not exported, and every dependent assert was guarded, so nothing failed. In the same session, the repo hygiene scan failed on the test script's own pattern literal.
+
+**See also:** #7 (test real behavior, not implementation details), #239 (reset the indicator to baseline before attributing change).
+
+## 243. Sweep transform boundary artifacts after scripted text rewrites
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a replacement count is not a result check; the damage of a scripted text transform concentrates at boundaries the replacement pattern does not cover.
+
+**Trigger:** running a scripted punctuation, whitespace, or token replacement across prose files (docs, tables, wrapped lines).
+
+**Rule:** (1) After the bulk replace, grep the specific boundary shapes the pattern could not handle: empty table cells that held the replaced token, continuation lines beginning with the replacement character, doubled punctuation, and fence or heading lines. (2) Fix boundary hits contextually, not with a second blind replace; a lone dash inside a table cell means "none", not a clause separator. (3) Re-run the repo's prose gates and one downstream consumer (a test that extracts or parses the text) before committing.
+
+**Why:** a 462-replacement em-dash cleanup left a table row reading `|, |, |`, eight continuation lines beginning " , ", and comma-spliced sentences; the replacement count looked clean and the residue was found only by the next review round.
+
+**See also:** #242 (shell harness asserts must be unconditional), #206 (interim validation references only existing artifacts).
+
+## 244. Scripted replacements must assert their applied count
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a content replacement that matches nothing is a silent no-op, and the surrounding record will then assert a state the artifact never reached.
+
+**Trigger:** writing a scripted text edit (Python `str.replace`, `sed`, codemod) against hand-written target text, especially multiline targets whose wrapping may differ from what is on screen.
+
+**Rule:** (1) Count matches before replacing and fail loud unless the count equals the expected one (`count = s.count(old); assert count == 1`). (2) Take the target string from the file itself (grep first, paste second), never from memory of what the text should look like. (3) After the batch, verify each intended site against the artifact (grep the new text) before any record claims the edit done.
+
+**Why:** a review-fix script silently replaced nothing because the multiline target text had different line wrapping than the editor view it was copied from; the round record then claimed a repair that three later review workers had to re-find on the tip.
+
+**See also:** #242 (shell harness asserts must be unconditional), #243 (sweep transform boundary artifacts).
+

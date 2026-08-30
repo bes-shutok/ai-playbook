@@ -80,6 +80,7 @@ Use it when:
 
 ### Copilot
 - Runtime source (global instructions): `~/.copilot/copilot-instructions.md` (symlink → `~/.codex/AGENTS.md` → `docs/AGENTS.md` in `instructions_repo`; see `~/.ai-playbook/facts.md`)
+- Runtime source (skills): `~/.copilot/skills/<skill>/` — a real directory of plain copies (no shared symlink); deploy per skill (observed: `graphify`, `agterm`).
 - Observed local folder: `~/.copilot/`
 - Notes: config, logs, and session state live here; reusable global instructions use the symlink chain above, not a separate prose copy.
 
