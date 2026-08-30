@@ -4879,6 +4879,18 @@ When the identical command behaves differently in the agent shell versus the use
 
 **See also:** #237 (raw stdlib raises escaping typed error contracts), #235 (crash-contained RED fixtures).
 
+## 239. Reset an indicator to a known baseline before attributing its change to a new trigger
+
+**Principle:** Family H (verify the real thing, not the abstraction).
+
+**Trigger:** wiring a new hook or automation to an external status indicator (session status, badge, metric) and then reading the indicator's value after firing the trigger.
+
+**Rule:** (1) Set the indicator to a neutral baseline (idle/cleared) before the first trigger and observe that baseline. (2) Fire the trigger once and observe the transition; if the indicator never moves, the trigger did not run. Do not credit a pre-existing value to the new wiring. (3) If a short-lived effect is expected, sample at intervals shorter than the effect's duration so a transition back to baseline is not mistaken for "no effect" or for a still-active state.
+
+**Why:** a live integration test appeared to show new hooks firing because the indicator read active, but that value had been set manually minutes earlier and the hooks had never executed. Only after resetting to idle and re-running did the absence of any transition expose the dead wiring.
+
+**See also:** #25 (verify the real thing, not the abstraction).
+
 ## 240. Sync every gate that enumerates a contract's key set in the same pass
 
 **Principle:** Family D (single source of truth) - two gates that each enumerate the same contract's key set are two authoritative copies and drift silently when one side grows.
@@ -4939,3 +4951,14 @@ When the identical command behaves differently in the agent shell versus the use
 
 **See also:** #242 (shell harness asserts must be unconditional), #243 (sweep transform boundary artifacts).
 
+## 245. Code and its committed fake agree; the real interface diverges
+
+**Principle:** Family H (Verify the real thing, not the abstraction).
+
+**Shape trigger:** a plan or adapter pins an external tool's output shape while a hand-written fake in the same repo emits that same shape, and the whole hermetic suite is green.
+
+**Rule:** before pinning an external interface's contract, in plan prose, in a committed fake, or in an adapter, capture it from the REAL system with one live probe (or a captured transcript fixture), and cite the probe date beside the claim. Hermetic green proves code ≡ fake, never code ≡ reality; reviewers who verify code-vs-fake consistency will find nothing because everything they can see agrees. Re-probe after any real-tool version bump the contract depends on.
+
+**Example:** a workspace/session tree envelope was pinned flat (`result.workspaces`) by the production client, the committed fake, and a rewritten plan's assumptions; nine plan-review rounds and four code-review rounds passed because every worker checked internal consistency. A reviewer's single live probe during the next plan's review found the real shape nested one level deeper (`result.tree.workspaces`), which would have made every attach fail loudly on the real machine.
+
+**See also:** #197 (hermetic by launch mechanism, not prompt discipline), #242 (shell harness asserts unconditionally).
