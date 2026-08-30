@@ -31,7 +31,7 @@ This skill is automatically triggered by the SessionStart hook, dynamically scan
 
 Before path-dependent skill work in a target repository:
 
-1. **Read** `.ai-playbook/facts.md` when it exists; parse only the **opening** fenced TOML block for path keys (`plans_dir`, `reviews_dir`, `tmp_dir`, `facts_path`, `bootstrap_version`, and optional keys).
+1. **Read** `.ai-playbook/facts.md` when it exists; parse only the **opening** fenced TOML block for path keys (`plans_dir`, `reviews_dir`, `tmp_dir`, `backlog_dir`, `backlog_completed_dir`, `facts_path`, `bootstrap_version`, and optional keys).
 2. **Check Terms triggers** from the `bootstrap-ai-playbook` skill: missing file, invalid TOML, incomplete required keys, `.ai-playbook/` or `.ai-playbook/facts.md` not gitignored, or cached path keys pointing at directories that no longer exist on disk.
 3. **Invoke `bootstrap-ai-playbook` only when at least one trigger fires**; at most **once per session**, except a **recovery rerun** when post-write validation fails or a required path key cannot be resolved after a bootstrap run in the same session (see `bootstrap-ai-playbook`). When the file is fresh (valid TOML, required keys present, paths exist, gitignore passes), bootstrap is a **no-op**; use cached TOML values.
 4. Other skills **read** TOML keys from `.ai-playbook/facts.md`; they do **not** invoke bootstrap each task.

@@ -18,7 +18,7 @@ description: >
 
 **First step every turn:** Run [Invocation detection](#invocation-detection-run-first) before the plan-path gate or any Phase 0 work. If detection returns `invoked`, proceed immediately; never show the three-way gate.
 
-**Documentation paths:** At Phase 0, read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Use `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for session logs. Substitute resolved paths everywhere below that shows `{...}` or legacy `docs/plans/` examples. After doc-hierarchy migration, `{plans_dir}` is often `docs/history/plans/`; treat that path the same as `docs/plans/`.
+**Documentation paths:** At Phase 0, read `{plans_dir}`, `{plans_completed_dir}`, `{backlog_dir}`, `{backlog_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Use `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for session logs. Substitute resolved paths everywhere below that shows `{...}` or legacy `docs/plans/` examples. After doc-hierarchy migration, `{plans_dir}` is often `docs/history/plans/`; treat that path the same as `docs/plans/`.
 
 **Announce at start:** "I'm using the execute-plan skill to implement `<plan-path>`."
 
@@ -643,6 +643,8 @@ git ls-files -- {plans_dir}/<filename>.md   # must print nothing after staging t
 If `git ls-files` still lists the active path, the archive is incomplete (destination added without source deleted). Fix with a true rename or an explicit delete of the active path before Phase 5. Do not treat "completed/ file exists" as sufficient while the old path remains tracked. (UL#193)
 
 Include the plan move in a commit immediately after the last Step 3.4 `done` (same `done` sub-agent scope if uncommitted, or a follow-up `done` if needed).
+
+**Promoted backlog item (when applicable):** when the completed plan promoted a `{backlog_dir}` item (the plan header references a backlog file per `plans` **Backlog origin**), `git mv` that item to `{backlog_completed_dir}/` in the same archive commit and mark it `Status: done` in the same edit, per `plans` **Plan Lifecycle**. Skip when the plan has no backlog origin.
 
 ### Step 4.1: Update parent rollout tracker (when applicable)
 

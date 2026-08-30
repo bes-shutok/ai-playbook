@@ -4878,3 +4878,28 @@ When the identical command behaves differently in the agent shell versus the use
 **Example:** `finding["blast_radius"] in frozenset({"global", "repo"})` crashed on `"blast_radius": ["global"]`; prefixing `isinstance(value, str)` yields the `invalid blast_radius` message instead.
 
 **See also:** #237 (raw stdlib raises escaping typed error contracts), #235 (crash-contained RED fixtures).
+
+## 240. Sync every gate that enumerates a contract's key set in the same pass
+
+**Principle:** Family D (single source of truth) - two gates that each enumerate the same contract's key set are two authoritative copies and drift silently when one side grows.
+
+**Trigger:** adding or removing a required key, field, or section in a contract (facts file, config schema, payload) when another validator, fixture, scaffold template, or doc table elsewhere also enumerates that set.
+
+**Rule:** (1) Before finalizing a key-set change, find every other enumeration of the same set (search for one existing key across validators, fixtures, templates, tables) and update all of them in the same pass. (2) Probe both directions: a fixture carrying the OLD set must FAIL the tightened gate, and a fixture carrying the NEW set must PASS; a scaffold fixture the gate itself validates is part of the contract surface, so self-test suites must grow the keys too.
+
+**Why:** a facts-contract hardening added two required keys to the bootstrap skill but left the migration verify script's key loop at the old five, so the migration-complete signal certified facts files the bootstrap skill flags as incomplete every session. The script's scaffold fixtures and key tables had to grow the keys in the same pass or the gate would fail its own self-test.
+
+**See also:** #187 (dedicated greps per structural obligation), #206 (interim validation references only existing artifacts).
+
+## 241. Author the non-interactive route whenever you author an ask-gate
+
+**Principle:** Family B (error-policy propagation) - a fail-closed ask is a fallible op whose "no user available" policy must be written at the ask site, not left for the executor to invent.
+
+**Trigger:** writing or reviewing a workflow step that ends in "stop and ask the user" (missing config, ambiguous triage, irreversible action) in a workflow that also runs autonomously (sub-agents, scheduled runs, CI).
+
+**Rule:** (1) Every ask-gate carries both routes: the interactive ask and the non-interactive one (return the ask to the orchestrator, or stop for user direction when already top-level). (2) Reuse the workflow's existing routing pattern instead of a local variant; if the same file already defines one, reference it. (3) When the ask sits inside an ordered list of alternatives, state the no-fall-through rule in a lead sentence; a parenthetical inside item one competes with the list header and invites silent fall-through.
+
+**Why:** a backlog-capture destination list put "stop and ask the user" inside a parenthetical while the list header invited fall-through to the next destination, and neither ask said what an autonomous agent should do; the incident being hardened was itself an agent inventing a destination because it could not ask. Fixed by promoting the fail-closed rule to a lead sentence and adding the return-to-orchestrator route.
+
+**See also:** #187 (gate each obligation with its own check).
+

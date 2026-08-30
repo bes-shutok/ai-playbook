@@ -23,7 +23,7 @@ All invocation artifacts live under the target repo's `.ai-playbook/` only. Do n
 
 - **Repo agent runtime dir**: `<repo>/.ai-playbook/`; whole directory must be gitignored before any write.
 - **Repo agent facts**: `<repo>/.ai-playbook/facts.md`; fenced TOML path keys plus prose below (Jira ledger, scoping notes).
-- **Required TOML keys**: `plans_dir`, `reviews_dir`, `tmp_dir`, `facts_path`, `bootstrap_version`; absence means keys incomplete; refresh discovery.
+- **Required TOML keys**: `plans_dir`, `reviews_dir`, `tmp_dir`, `backlog_dir`, `backlog_completed_dir`, `facts_path`, `bootstrap_version`; absence means keys incomplete; refresh discovery.
 - **On-disk discovery first**: Prefer the shallowest existing directory matching hints. Never seed path values from plan text, doc-hierarchy literals, or skill defaults without verifying the path exists on disk.
 - **Re-read-before-write**: Re-read `.ai-playbook/facts.md` immediately before persisting; merge TOML keys without clobbering prose below the opening fence.
 
@@ -39,7 +39,7 @@ Invoke when **Terms triggers** fire (at most once per session, except **recovery
 
 When the file exists, TOML is valid, required keys are present, paths exist on disk, and gitignore passes; **no-op**; return cached values.
 
-**Recovery rerun (same session):** If bootstrap already ran this session but post-write validation fails (missing required key, directory absent, unparsable opening fence), or a consumer cannot resolve a required path key after reading `.ai-playbook/facts.md`, run bootstrap again once for recovery. Do not cap recovery reruns when validation still fails after the first write.
+**Recovery rerun (same session):** If bootstrap already ran this session but post-write validation fails (missing required key, directory absent, unparsable opening fence), or a consumer cannot resolve a required path key after reading `.ai-playbook/facts.md`, run bootstrap again once for recovery. Do not cap recovery reruns when validation still fails after the first write. Exception: a `{backlog_dir}` / `{backlog_completed_dir}` ask awaiting the user is not a validation failure; re-ask once per session instead of rerunning bootstrap.
 
 Other skills **read** TOML keys from `.ai-playbook/facts.md`; they do not invoke this skill every task unless a trigger fires (see `using-skills` Step 0).
 
@@ -88,6 +88,8 @@ Example (values must come from **on-disk discovery** on the target repo, not cop
 plans_dir = "docs/plans/"
 reviews_dir = "docs/reviews/"
 tmp_dir = "docs/tmp/"
+backlog_dir = "docs/history/backlog/"
+backlog_completed_dir = "docs/history/backlog/completed/"
 facts_path = ".ai-playbook/facts.md"
 bootstrap_version = "1"
 # tmp_dir is for DOCUMENTS only (.md logs, .patch diff snapshots) - synced to the orphan docs branch.
@@ -118,7 +120,7 @@ Optional keys (discover when present; omit when not found):
 2. **`user_facts_path`**; `project_guidelines_rel`, `repo_facts_rel` (`.ai-playbook/facts.md` only; never `docs/facts.md`).
 3. **Repo `AGENTS.md` / `CLAUDE.md`**; Documentation Hierarchy subsection if present.
 4. **`project_guidelines_rel` on disk**; plan/review/tmp path notes (probe `docs/maintenance/project-guidelines.md`, then legacy `docs/project-guidelines.md` when user-facts path missing).
-5. **On-disk exploration**; list/glob under `docs/` for existing `plans/`, `reviews/`, `tmp/`, `completed/`, `proposals/`, wire-catalog markdown.
+5. **On-disk exploration**; list/glob under `docs/` for existing `plans/`, `reviews/`, `tmp/`, `completed/`, `backlog/`, `proposals/`, wire-catalog markdown.
 
 **Partial migration:** When `docs/maintenance/` or `docs/architecture/` exists but doc-hierarchy migration-complete signal is false, continue exploration with legacy paths allowed; do not apply post-migration defaults without verification.
 
@@ -127,6 +129,7 @@ Optional keys (discover when present; omit when not found):
 - For each hint, check whether the path exists as a directory (trailing slash normalized).
 - When multiple matches, prefer the **shallowest** path.
 - **Never** write a path key from doc-hierarchy default tables or plan examples unless that exact path exists on disk.
+- `backlog_dir` / `backlog_completed_dir`: discover `docs/history/backlog/` and `docs/history/backlog/completed/` (Layer 3 backlog per `doc-hierarchy`). When `docs/history/` exists but `backlog/` does not, create `docs/history/backlog/completed/` and persist both keys. When `docs/history/` is absent, ask the user (or return the ask to the orchestrator in a non-interactive run) for the backlog home and persist the confirmed path; do not invent one (`docs/maintenance/` is Layer 2 living ops and `docs/tmp/` is ephemeral; neither is a backlog home).
 - For company-scoped repos, when user or ownership facts provide `team_references_project` and the directory exists, persist that optional key in the repo facts. Do not invent the path or copy a concrete team alias into this portable skill.
 - If no home exists, follow `project_guidelines_rel` if documented; else ask the user before creating new top-level `docs/` trees.
 
@@ -134,7 +137,7 @@ Optional keys (discover when present; omit when not found):
 
 ```bash
 ls -la docs/ 2>/dev/null
-find docs -type d \( -name plans -o -name reviews -o -name tmp -o -name completed \) 2>/dev/null | head -20
+find docs -type d \( -name plans -o -name reviews -o -name tmp -o -name completed -o -name backlog \) 2>/dev/null | head -20
 git check-ignore -v .ai-playbook/ .ai-playbook/facts.md 2>/dev/null || true
 ```
 
@@ -165,7 +168,7 @@ For each key the caller needs:
 3. Rewrite the opening TOML block with merged keys (required + any optional keys discovered).
 4. Create `.ai-playbook/` if needed; write only under `.ai-playbook/`.
 5. **Atomic replace:** write to a temp file in the same directory (for example `.ai-playbook/facts.md.refresh.$$`), then `mv` over the target. Match the pattern in `verify-doc-hierarchy.sh` `refresh_opening_toml_preserve_prose` so concurrent sessions do not clobber each other's prose with a stale read snapshot.
-6. **Post-write validation:** confirm required keys and that `plans_dir`, `reviews_dir`, and `tmp_dir` directories exist. On failure, treat as a recovery rerun trigger (see **Recovery rerun** above).
+6. **Post-write validation:** confirm required keys and that `plans_dir`, `reviews_dir`, and `tmp_dir` directories exist; when `backlog_dir` / `backlog_completed_dir` are persisted, confirm those directories exist too. On failure, treat as a recovery rerun trigger (see **Recovery rerun** above).
 
 ### Step 5: Return resolved paths
 
@@ -185,6 +188,7 @@ Return each resolved path to the caller. Substitute `{plans_dir}`, `{reviews_dir
 | `using-skills` | Step 0 reads `.ai-playbook/facts.md`; invokes this skill only when Terms triggers fire |
 | `doc-hierarchy`, `doc-hierarchy-migrate`, `doc-hierarchy-upkeep` | Migration-complete signal and Step 5b for legacy committed facts |
 | `plans`, `execute-plan`, `doing-code-review`, `review-plan`, `learn`, `done`, `docs-branch` | Read TOML keys from `.ai-playbook/facts.md` |
+| `receiving-review` | Backlog capture reads `{backlog_dir}` / `{backlog_completed_dir}`; the recovery rerun resolves or creates the backlog home when the keys are missing |
 | `review-confluence-doc`, `rfc-design` | Read `{reviews_dir}` and `{tmp_dir}` from repo agent facts; primary review staging under `{reviews_dir}/` per `review-staging` (`rfc-design` never uses `{tmp_dir}/rfc-review/`) |
 | `confluence-page-sync` | Reads `{tmp_dir}` from repo agent facts for page-fetch and HTML scratch |
 | `tdd-design` | Reads `{rfcs_dir}` / `{proposals_dir}` from repo agent facts; finished TDDs are Layer 3 history files like RFCs; drafts under `{proposals_dir}` when present |

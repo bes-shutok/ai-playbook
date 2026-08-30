@@ -5,7 +5,7 @@ description: "Full plan lifecycle; create, edit, and complete implementation pla
 
 # Plans
 
-**Documentation paths:** Read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}`, and `{rfcs_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Do not hardcode `docs/plans/` unless TOML keys are missing and on-disk exploration shows that layout.
+**Documentation paths:** Read `{plans_dir}`, `{plans_completed_dir}`, `{backlog_dir}`, `{backlog_completed_dir}`, `{reviews_dir}`, `{tmp_dir}`, and `{rfcs_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Do not hardcode `docs/plans/` unless TOML keys are missing and on-disk exploration shows that layout.
 
 **Announce at start (create):** "I'm using the plans skill to create the implementation plan."
 
@@ -27,6 +27,8 @@ description: "Full plan lifecycle; create, edit, and complete implementation pla
 
 **RFCs:** When the project uses RFCs, resolve `{rfcs_dir}` and reference the RFC in the plan header when applicable.
 When an RFC phase already has its own implementation Jira task, use that phase task key in the plan filename and title instead of the parent RFC/story key; keep the RFC reference line in the header for traceability.
+
+**Backlog origin:** When a plan promotes a `{backlog_dir}` item (captured per `receiving-review` **Backlog capture**), reference the backlog file path in the plan header next to any RFC/ticket reference. Keep the backlog item in place under `{backlog_dir}` while the plan is open; the completion step in **Plan Lifecycle** moves it to `{backlog_completed_dir}`.
 
 ## Phase 0: Branch Setup (Run Once at Plan Creation Start)
 
@@ -549,6 +551,7 @@ When a plan modifies domain types (value objects, entities, enums) that live in 
 ## Plan Lifecycle
 
 - When all items are `[x]`, move the file to `{plans_completed_dir}/`.
+- When the plan promoted a `{backlog_dir}` item, move that item to `{backlog_completed_dir}/` in the same completion pass, marking it `Status: done` in the same edit (same lifecycle as the plan archive per `doc-hierarchy`).
 - When superseded, delete rather than leaving stale `[ ]` items.
 
 ## Universal Patterns
@@ -623,3 +626,6 @@ The Phase 1 confidence gate invokes `grill-with-docs` for every unclear point ra
 
 ### With `grilling` skill
 When the user (not the confidence gate) asks to grill a decision during Phase 1, invoke `grilling` for one-question-at-a-time resolution without doc capture. Do not replace the plans interview structure; grilling deepens specific decisions. Agent-detected low-confidence unclear points route to `grill-with-docs` (see above).
+
+### With `receiving-review` skill
+Provider of the backlog lifecycle that **Backlog capture** points at: captured items live under `{backlog_dir}` with `Status` / `Workflow: backlog` header lines. This skill promotes an item by referencing it from a plan header (**Backlog origin**) and archives it to `{backlog_completed_dir}` when the implementing plan completes (**Plan Lifecycle**).

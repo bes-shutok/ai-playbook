@@ -560,7 +560,7 @@ When a finding fits, update the module high-level tasks doc in the review sessio
 | Module A | `docs/<module>/<service>-high-level-tasks.md` | path named in project guidelines |
 | Module B | `docs/<module>/<service>-high-level-tasks.md` | path named in project guidelines |
 
-Record **tech debt** (document limitation, MVP doc fix, defer code) or **implementation fix** (named target task, tests expected). Do not rely on gitignored `{reviews_dir}/` as the only backlog.
+Record **tech debt** (document limitation, MVP doc fix, defer code) or **implementation fix** (named target task, tests expected). Do not rely on gitignored `{reviews_dir}/` as the only backlog. Update only an existing high-level tasks doc named by project guidelines; never create a new doc as a backlog inbox; durable backlog items live under `{backlog_dir}` per `receiving-review` **Backlog capture**.
 
 Cross-repo: same pattern when a repo maintains module high-level tasks docs (path from project guidelines).
 

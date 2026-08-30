@@ -87,6 +87,7 @@ gate_step2() {
   shopt -u nullglob
   test ! -d docs/plans || fail "docs/plans still at root"
   test -d docs/history/plans || warn "docs/history/plans/ missing (plans_dir target)"
+  test -d docs/history/backlog || warn "docs/history/backlog/ missing (backlog_dir target)"
   test ! -d docs/context || fail "docs/context still at root"
   test ! -d docs/history/investigations/context || fail "docs/history/investigations/context present (use docs/history/context/)"
   test ! -d docs/proposals || fail "docs/proposals still at root"
@@ -162,11 +163,11 @@ validate_opening_toml_facts() {
   local file="$1"
   local key dir
   head -20 "$file" | grep -q '^```toml' || fail ".ai-playbook/facts.md missing opening TOML fence"
-  for key in plans_dir reviews_dir tmp_dir facts_path bootstrap_version; do
+  for key in plans_dir reviews_dir tmp_dir backlog_dir backlog_completed_dir facts_path bootstrap_version; do
     toml_value_for_key "$file" "$key" | grep -q . \
       || fail ".ai-playbook/facts.md missing required TOML key: $key"
   done
-  for key in plans_dir reviews_dir tmp_dir; do
+  for key in plans_dir reviews_dir tmp_dir backlog_dir backlog_completed_dir; do
     dir=$(toml_value_for_key "$file" "$key")
     dir="${dir%/}/"
     if [ -d "$dir" ]; then
@@ -312,7 +313,7 @@ bootstrap_fixture_expected_mini() {
 - **Historical context:** `docs/history/` (Layer 3) — reference only; active plans under `docs/history/plans/`, archives under `docs/history/plans/completed/`.
 - **LLM-only:** `docs/tmp/` at root; gitignored `docs/history/reviews/` — not canonical human Layer 2.
 - **Wire catalogs (Layer 2):** `docs/maintenance/api-reference.md` when the service exposes HTTP APIs; other wire contracts under `docs/maintenance/` (BFF, sync, admin FE shapes). Do not recreate a separate examples tree or per-endpoint files under `maintenance/`; use `maintenance/api-reference.md` for caller samples.
-- **Doc path resolution:** Other skills resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{proposals_dir}`, `{rfcs_dir}`, `{caller_catalog}` from `.ai-playbook/facts.md` TOML (via `using-skills` Step 0) and project guidelines — not from hardcoded skill defaults.
+- **Doc path resolution:** Other skills resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{backlog_dir}`, `{proposals_dir}`, `{rfcs_dir}`, `{caller_catalog}` from `.ai-playbook/facts.md` TOML (via `using-skills` Step 0) and project guidelines, not from hardcoded skill defaults.
 - Use `doc-hierarchy-migrate` to relocate flat or module-split docs; use `doc-hierarchy-upkeep` for Layer 1/2 after migration; merge durable knowledge into topic-based `architecture/`, not `docs/<module>/` trees.
 EOF
   cat > "$root/.ai-playbook/facts.md" <<'EOF'
@@ -320,6 +321,8 @@ EOF
 plans_dir = "docs/history/plans/"
 reviews_dir = "docs/history/reviews/"
 tmp_dir = "docs/tmp/"
+backlog_dir = "docs/history/backlog/"
+backlog_completed_dir = "docs/history/backlog/completed/"
 facts_path = ".ai-playbook/facts.md"
 bootstrap_version = "1"
 ```
@@ -374,6 +377,8 @@ Follow the company service layout under `docs/`. Resolved paths for other skills
 |-----|------|
 | plans_dir | docs/history/plans/ |
 | plans_completed_dir | docs/history/plans/completed/ |
+| backlog_dir | docs/history/backlog/ |
+| backlog_completed_dir | docs/history/backlog/completed/ |
 | reviews_dir | docs/history/reviews/ |
 | tmp_dir | docs/tmp/ |
 | proposals_dir | docs/history/feature-notes/proposals/ |
@@ -404,6 +409,7 @@ prepare_self_test_worktree() {
     *) fail "unknown self-test kind: $kind"; return 1 ;;
   esac
   mkdir -p "$dst/docs/history/plans" \
+           "$dst/docs/history/backlog/completed" \
            "$dst/docs/history/context" \
            "$dst/docs/history/investigations" \
            "$dst/docs/history/migrations" \
@@ -518,6 +524,8 @@ EOF
   expected_toml='plans_dir = "docs/history/plans/"
 reviews_dir = "docs/history/reviews/"
 tmp_dir = "docs/tmp/"
+backlog_dir = "docs/history/backlog/"
+backlog_completed_dir = "docs/history/backlog/completed/"
 facts_path = ".ai-playbook/facts.md"
 bootstrap_version = "1"
 '
@@ -620,7 +628,9 @@ gate_self_test() {
         "$optional_history_work/docs/history/migrations" \
         "$optional_history_work/docs/history/reviews" \
         "$optional_history_work/docs/history/plans" \
-        "$optional_history_work/docs/history/feature-notes"
+        "$optional_history_work/docs/history/feature-notes" \
+        "$optional_history_work/docs/history/backlog/completed" \
+        "$optional_history_work/docs/history/backlog"
   if ! out=$(REPO_ROOT="$optional_history_work" "$script_dir/verify-doc-hierarchy.sh" full 2>&1); then
     fail "missing optional history folders should pass full but failed: $out"
   else

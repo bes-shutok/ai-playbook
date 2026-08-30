@@ -66,7 +66,8 @@ docs/
 ├── history/                    # Layer 3 high-level tree (required)
 │   ├── context/                # optional product/domain context (from legacy docs/context/)
 │   ├── plans/completed/        # optional plans archive
-│   ├── backlog/completed/      # optional future-work ideas (pre-plan); move to completed/ archive when the implementing plan completes
+│   ├── backlog/                # durable pre-plan backlog items (YYYY-MM-DD-<slug>.md); promote via plans
+│   │   └── completed/          # archived when the implementing plan completes
 │   ├── investigations/         # optional investigation notes (flat files)
 │   ├── migrations/             # optional service/data migration notes
 │   ├── reviews/                # optional ephemeral, gitignored staging
@@ -74,6 +75,8 @@ docs/
 ```
 
 **Scripts vs documents split:** `docs/tmp/` is for **documents** only (`.md` logs, `.patch` diff snapshots - synced to the orphan `docs` branch). Throwaway **scripts and scratch data** (`.py` shadow/verification scripts, `.csv`/`.txt` baseline counts, `__pycache__/`) go in repo-root `tmp/` (gitignored, NOT synced to the `docs` branch). See `agent_workflow_guidelines.md` §50.3.1.
+
+**Backlog (`history/backlog/`):** durable pre-plan work items; valid review findings deferred out of scope are captured here per `receiving-review` **Backlog capture**, one `YYYY-MM-DD-<slug>.md` per item with `Status` / `Workflow: backlog` header lines so `plans`-skill promotion applies. `Status: open` while unpromoted; the implementing plan's completion pass sets `Status: done` in the same edit that moves the item to `backlog/completed/`. Promotion to `{plans_dir}` and archival to `backlog/completed/` follow the `plans` skill. `docs/maintenance/` (Layer 2 living ops) and `docs/tmp/` (ephemeral) are never backlog destinations; when `{backlog_dir}` is unresolved, `bootstrap-ai-playbook` resolves or creates the home, else ask the user.
 
 Full filename list and move tables: [migration-map.md](migration-map.md).
 
@@ -102,10 +105,11 @@ Templates: [instruction-templates.md](instruction-templates.md).
 
 | Consumer | Integration |
 |----------|-------------|
-| `bootstrap-ai-playbook` | Resolution order and default path map; links here for migration-complete signal |
+| `bootstrap-ai-playbook` | Resolution order and default path map; links here for migration-complete signal; creates `history/backlog/` under an existing Layer 3 root for `{backlog_dir}` |
 | `doc-hierarchy-migrate` | Applies schema; writes canonical paths into repo instructions |
 | `doc-hierarchy-upkeep` | Layer 1/2 updates when migration-complete signal is true |
-| `plans`, `execute-plan` | Read `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}` from `.ai-playbook/facts.md` |
+| `plans`, `execute-plan` | Read `{plans_dir}`, `{backlog_dir}`, `{backlog_completed_dir}`, `{reviews_dir}`, `{tmp_dir}` from `.ai-playbook/facts.md` |
+| `receiving-review` | Backlog capture writes pre-plan items under `{backlog_dir}` (`history/backlog/`); promotion and archival follow `plans` |
 | `learn` | Placement rules; no new `docs/examples/` or `docs/<module>/` after migration |
 | `done`, `docs-branch` | PR checklist; gitignored doc paths via resolved `{reviews_dir}` |
 | `doing-code-review`, `review-plan` | Staging docs under resolved `{reviews_dir}` |

@@ -326,12 +326,14 @@ Capture an item when a valid finding ends triage as:
 
 Partner-declined fixes and softened reverts stay on the soften watchlist; do not duplicate them as backlog items unless the partner asks for a durable record.
 
-Destination, first that applies:
+Resolve destination 1 before consulting any later destination; a failed resolution never falls through. A missing `{backlog_dir}` key or missing directory is a bootstrap trigger: run a `bootstrap-ai-playbook` recovery pass to resolve or create the backlog home, and if it still does not resolve, stop and ask the user before recording anywhere else. In a non-interactive run, return that ask to the orchestrator per **Fix-risk triage when fixes regenerate findings**; do not resolve it by choosing a later destination.
 
-1. `{backlog_dir}` pre-plan file (key from `.ai-playbook/facts.md`; promote via the `plans` skill when scheduled, move to `backlog_completed_dir` on completion per `doc-hierarchy`)
-2. Module high-level tasks doc on module-split repos (per `doing-code-review` Step 5.1)
+Destination, in order:
+
+1. `{backlog_dir}` pre-plan file (key from `.ai-playbook/facts.md`; promote via the `plans` skill when scheduled, move to `backlog_completed_dir` on completion per `doc-hierarchy` and `plans`)
+2. Module high-level tasks doc on module-split repos (per `doing-code-review` Step 5.1), only when project guidelines name an existing doc for that module; never create a new doc to hold backlog items.
 3. Project issue tracker via its workflow skill (for example `jira-workflow`) when the project tracks backlog there; external write, so create tickets only on explicit user request or standing pre-authorization
-4. No destination resolves: ask the user where to record; never silently fall back to chat or the staging doc
+4. No destination resolves: ask the user where to record; never silently fall back to chat, the staging doc, `docs/tmp/` (ephemeral), or a newly invented location such as `docs/maintenance/` (Layer 2 living ops, not a backlog inbox).
 
 Required content per item (`{backlog_dir}/YYYY-MM-DD-<slug>.md`; one finding or shared root cause per file; keep the Status/Workflow header lines so `plans`-skill promotion applies):
 
@@ -389,7 +391,7 @@ This section also bounds the **Triage Decision Rule**: a Critical, High, or Medi
 ## Integration Points
 
 ### With `bootstrap-ai-playbook` skill
-Provider for `{plans_dir}` when saving grouped fix tasks from review feedback. Read path keys from `.ai-playbook/facts.md` (see `using-skills` Step 0).
+Provider for `{plans_dir}` when saving grouped fix tasks and for `{backlog_dir}` / `{backlog_completed_dir}` during **Backlog capture**; the recovery rerun resolves or creates the backlog home when the keys are missing. Read path keys from `.ai-playbook/facts.md` (see `using-skills` Step 0).
 
 ### With `review-staging` skill
 Triage updates **Triage outcomes** and finding **Triage** fields; preserves immutable synthesis statistics from the review pass. The triage update ends with a `--hard` validator gate (final step of **Staging doc triage outcomes**) before the staging doc is handed back to the orchestrator.
