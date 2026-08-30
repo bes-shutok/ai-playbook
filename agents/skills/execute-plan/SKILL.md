@@ -619,6 +619,7 @@ Update `manifest.md` with `review_round`, `full_panel_rounds`, `escalation_count
 
 | Condition | Action |
 |-----------|--------|
+| Recurring root, contradictory review artifacts, or configured non-monotonic-cycle cap is reached | Invoke `review-reconciliation`; after any change, return to Step 3.1 through the normal parent-orchestrated panel |
 | Current digest has a fresh clean review | Proceed to Phase 4 |
 | A sixth full panel or second escalation is required | Stop; report unresolved blocking findings and ask the user |
 | Fix-risk stop conditions met (must-stay-blocking finding with no additive path or user; Hard Gate 23) | Stop; ask the user for direction per `receiving-review` **Fix-risk triage when fixes regenerate findings** |
@@ -735,6 +736,7 @@ Report successful plan completion to the user, including the verified terminal-r
 21. **Inclusion Hard Gate before implementation**; Phase 1: classify every unchecked item before Step 1.2. Recovery: classify every checklist item including already `[x]`. While ownership, target, or evidence source is unclear, do **not** open interactive exception; use only Move to Ship when or Stop. On other `inclusion-check failure` outcomes: move explicit prose to **Ship when** after creating the heading or renaming narrative `Release gates` content; admit a **release gate** (never an external prerequisite) only via ask-then-write of a current bound exception receipt plus **why executable now** and `completion evidence`; or stop with a recorded hard-gate reason. Forbid delete-without-Ship-when and silent skip-`[x]`.
 22. **Parent-orchestrated Phase 3 panel**; the execute-plan parent runs `doing-code-review` and launches lens workers directly. Do not nest a "Code Review" sub-agent that re-orchestrates the panel when the parent can fan out. Write the review heartbeat log before waiting. Enforce the 20-minute Step 3.1 artifact timeout.
 23. **Fix-risk triage before more folding**; when fixes keep regenerating findings across rounds, apply `receiving-review` **Fix-risk triage when fixes regenerate findings** before folding further, and verify scoped fixes with the focused targeted round composed per `review-panel-selection.md` (Review-loop follow-ups).
+24. **Reconciliation before continued churn**; when the Phase 3 recurrence, contradiction, or configured non-monotonic-cycle trigger fires, invoke `review-reconciliation` before another panel or fold. The execute-plan parent remains the original orchestrator and must run the fresh normal panel after any reconciliation change.
 
 ## User Interruption
 
@@ -781,6 +783,9 @@ After all tasks, the execute-plan **parent** runs `doing-code-review` as the rev
 
 ### Consumes `receiving-review` skill (sub-agent)
 Triages provisional findings between rounds. Phase 3 exit depends on unresolved `blocking: true`, not raw severity counts. Valid findings not fixed in the run must leave durable backlog items per its **Backlog capture** rule; the Step 3.3 verification gate checks the artifact exists. Hard Gate 23 applies its **Fix-risk triage when fixes regenerate findings** section when a regenerating loop would otherwise keep folding.
+
+### Consumes `review-reconciliation` skill
+Phase 3 invokes reconciliation at the Step 3.5 recurrence or contradiction trigger. It receives the review history and mutation scope, but the execute-plan parent owns the subsequent fresh panel and digest gate.
 
 ### Related: `review-loop` skill (standalone)
 For branch hygiene without a plan, use `review-loop`. Both workflows exit after one fresh blocking-clean review of the current digest.

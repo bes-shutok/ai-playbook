@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Reconciliation"
+  short_description: "Reconcile recurring review findings before another review round"
+  default_prompt: "Analyze recurring or contradictory review artifacts, identify the root cause and owner, and return a closure ledger for the original review orchestrator."

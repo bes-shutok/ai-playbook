@@ -18,6 +18,10 @@ Do not use for:
 - Creating or editing plans (use `plans`)
 - General premortem stress-testing of ideas (use `premortem`)
 
+## Plan-review boundary
+
+This skill establishes implementation readiness, not implementation completeness. Block only when the plan leaves public behavior contradictory, an invariant without an owner or state path, duplicated security-sensitive ownership, an observable behavior without an acceptance witness, or an unsafe fallback or unbounded resource path. Record fixture and report mechanics, generated-source details after schema behavior is fixed, CI-helper hardening, and rollout evidence as implementation or activation follow-ups unless they reveal one of those blockers. Use three stages: plan review, implementation/code review, and activation review. Stop plan iterations once the current plan satisfies these blocker criteria and hand off to implementation.
+
 ## When to Run
 
 - After creating or significantly updating a plan
@@ -249,7 +253,7 @@ Report to user:
 When the user asks to run reviews until clean (e.g. "no medium problems", "until ready", "keep review loop until gates are met", "don't ask anymore"):
 
 0. **No mid-loop re-prompt:** once the user directs continuous review, fold accepted blocking findings, write staging, and continue until the exit or reconciliation gate.
-1. **Exit condition:** one fresh review of the current source digest with zero unresolved blocking findings.
+1. **Exit condition:** one fresh review of the current source digest with zero unresolved blocking findings and no unresolved reconciliation trigger.
 2. **Severity alignment:** all workers use the shared four-tier calibration and independent blocking field.
 3. **Treat a clean review as data, not proof of catalog completeness.** Run the self-audit before stopping.
 4. **Run a brief self-audit alongside the agent review.** Before declaring iteration complete, scan the change types introduced by the latest plan revision (new domain types, decomposed methods, replaced classes, modified existing methods, restructured tasks) and verify the catalog has an active pattern for each. If a change type has no corresponding pattern in your review-agent prompts (often under `~/.agents/skills/review-agents/*.md`, and sometimes vendored under `agents/skills/review-agents/`), the agents cannot detect defects of that class. **Also list every "inherited/validated/tested/unchanged" claim in the plan and confirm the panel re-probed each by measurement** (see Signal-to-Noise: Inherited/validated claims are claims, not proof). A clean round that did not re-probe the plan's "settled" mechanisms is not evidence those mechanisms are correct.
@@ -257,20 +261,11 @@ When the user asks to run reviews until clean (e.g. "no medium problems", "until
 6. **Stop when both conditions hold**: the latest fresh review has zero unresolved blocking findings and a self-audit finds no material catalog gap.
 7. **Record self-audit gaps as catalog improvements**, not as one-off plan patches. When the self-audit found something the catalog missed, the fix is two-part: patch the plan AND update the agent file or `SKILL.md`. The catalog improvement is the persistent gain; the plan patch is local.
 
-## Three-Cycle Reconciliation Gate
+## Reconciliation gate
 
-Count one review-fix cycle only after a complete staged review has been triaged and every accepted blocking finding has been amended into the plan. Do not run an unbounded loop.
+Count one review-fix cycle only after a complete staged review has been triaged and every accepted blocking finding has been amended into the plan. Do not run an unbounded loop. When the same root issue recurs, fixes regenerate findings, review evidence contradicts itself, or the configured cycle cap is reached, invoke `review-reconciliation` before launching another panel. Pass the chronological staging artifacts and sidecars, plan digest, triage history, cycle counter, and the permitted mutation scope.
 
-After three consecutive non-monotonic cycles, stop automatic review launches and run a plan reconciliation before continuing:
-
-1. Read the five staged review artifacts and their JSON sidecars.
-2. Cluster findings by root cause, including findings fixed in earlier cycles, rather than treating each wording variation as a new issue.
-3. Distinguish an omitted local safeguard from an intrinsic plan weakness such as an unclear state machine, split source of truth, incomplete ordering protocol, overloaded migration, or boundary ambiguity.
-4. Update the plan's Terms, Gist, Design Invariants, task decomposition, and tests when the correction is within the approved architecture. Update the relevant review-agent catalog when the five-cycle record exposes a detection gap.
-5. If reconciliation requires a material architectural, scope, or rollout decision, stop and present the concrete options to the user. Do not assume permission to redesign the plan.
-6. Record the reconciliation result in the next staging artifact or linked note, reset the counter, and resume with the targeted worker set.
-
-A user may set a smaller cycle cap. When they do, run the same reconciliation at that cap.
+The reconciliation result is recorded in the next staging artifact or linked note. If it changes the plan, review catalog, or review rules, `review-plan` remains the original orchestrator and must run a fresh review of the changed plan with its normal worker selection and source-digest gate. It resets the recurrence counter only after that fresh review completes. A material architectural, scope, or rollout decision remains a user decision.
 
 ## Signal-to-Noise Rules
 
@@ -315,3 +310,6 @@ Writes `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` and the matching `.
 
 ### With `plans` skill
 The `plans` skill provides the Checklist inclusion rule and required exception shape to its consumer, `review-plan`. Plan review uses `consistency` as the mandatory review home for that rule. External prerequisites are always blocking and never exception-admissible. A release condition may pass only with a current bound `exception confirmed by user` receipt plus `why executable now` and observable `completion evidence`.
+
+### With `review-reconciliation` skill
+When the reconciliation gate fires, this skill owns the chronological recurrence analysis and closure ledger. `review-plan` owns the follow-up review and cannot accept reconciliation's own refactor as proof of closure.

@@ -304,6 +304,7 @@ User may request **Full** explicitly; do not default to Full without a signal.
 - Allow one relaunch per failed worker; keep the failed and replacement launches visible in statistics.
 - The hard ceiling is six actual launches **per round**, including descendants and escalation.
 - At most three verification rounds (Step 2.5). If blocking findings remain after the third, stop and report the residuals to the user instead of folding again.
+- Before stopping at that cap, or whenever the same root issue recurs or a fold regenerates findings, invoke `review-reconciliation` with the staged history and RFC digest. After any reconciliation change, `rfc-design` runs a fresh Step 2.5 review with its normal worker selection; reconciliation cannot certify its own change.
 - Apply the shared finding budget after deduplication.
 
 ### Orchestrator boundary
@@ -573,6 +574,9 @@ Publishing or synchronizing an RFC/TDD to Confluence: hand off to `confluence-pa
 
 ### With `review-plan` skill
 Implementation plans derived from an RFC use `review-plan` at execution time. This skill's Step 2 reviews the RFC design artifact, not the downstream plan.
+
+### With `review-reconciliation` skill
+Use reconciliation for non-converging verification rounds, recurring root issues, and contradictory staging or digest evidence. `rfc-design` remains the original orchestrator and owns the fresh post-refactor review and finalization gate.
 
 ### With `plans` skill (handoff)
 After Step 3, when the user wants implementation work, offer the `plans` skill. Reference the saved RFC file path (under resolved `{rfcs_dir}`) in the plan header.

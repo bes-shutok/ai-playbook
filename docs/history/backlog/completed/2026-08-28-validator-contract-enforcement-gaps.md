@@ -1,6 +1,6 @@
 # Validator contract-enforcement gaps: integer finding ids, scalar/optional type gates, triple classification
 
-Status: open
+Status: closed 2026-08-29 (fixed by docs/plans/2026-08-29-validator-contract-gates.md: F5 integer id type gate, F8 scalar/optional type gates, F13 single classification threading)
 Workflow: backlog
 Source: docs/reviews/2026-08-28-review-artifact-contracts-code-review-r6.md, round r6, findings F5 + F8 + F13 (validated as real gaps; deliberately deferred)
 

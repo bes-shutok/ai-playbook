@@ -4817,3 +4817,64 @@ When the identical command behaves differently in the agent shell versus the use
 **Shape:** tree-hash comparison used as the only merge acceptance check; delta files exist; the branch-side diff of those files is empty.
 
 **See also:** the branch-continuity lesson under Family D (verify which branch owns a commit before moving anything).
+
+## 234. A reporting gate must also remove rejected entries from downstream unchecked consumers
+
+**Principle:** Family D (consistency / no drift: reporting a defect and containing it are one gate contract).
+
+**Trigger:** a plan adds per-entry validation errors inside a loop over a collection, and that same collection later flows unchecked into a consumer that assumes homogeneous entries (a sort key, an aggregator, a len-derived count).
+
+**Rule:** When a gate rejects an entry, exclude that entry from every downstream consumer that would crash or misbehave on it: filter at the call site (pass only gate-passing rows to the sort or aggregator). An error report alone does not contain the defect, and adding defensive branching inside a frozen consumer is the wrong layer when an upstream filter suffices.
+
+**Why:** a plan-review round caught that a new id-type gate reported each bad finding yet still handed the unfiltered list to an order-check sort keyed on the raw id, so mixed string/integer ids kept raising TypeError inside the sort - the exact crash the gate existed to prevent. Error-only gating is fail-open for crash safety; containment must move the data, not just record a verdict.
+
+**See also:** #70 (per-row loop: fallible resolution must raise before shared-state mutation).
+
+## 235. RED fixtures must be constructible, crash-contained, and collision-pinned
+
+**Principle:** Family H (Verify the real thing, not the abstraction).
+
+**Trigger:** writing RED-phase fixtures that mutate a base payload from an existing selftest family before the new gate exists.
+
+**Rule:** Build from a base that actually contains the mutated shape - construct rows through the family's payload helpers, never index into a possibly-empty list. Wrap probes expected to crash today (mixed-type sort keys, malformed input reaching an unchecked consumer) in try/except so the harness records a FAIL for that check instead of aborting the run and silencing every later family. Assert a gate-unique phrase pinned to the planned error message, not a generic any-error or a substring a pre-existing error already emits, so a RED check cannot be secretly green.
+
+**Why:** three consecutive review rounds caught one instance of each: fixtures indexing the first row of a base payload whose findings list shipped empty (IndexError instead of RED); a string-id fixture that was secretly mixed-type and aborted the selftest with an uncaught TypeError; and a missing-id assertion satisfiable by an unrelated pre-existing conservation error.
+
+**See also:** #231 (assert fixture preconditions after fallible mutation), #223 (substring assertions false-matching environmental tokens).
+
+## 236. Validation regexes must be truly anchored and digit-class explicit
+
+**Principle:** Family H (Verify the real thing, not the abstraction).
+
+**Trigger:** a format-validation regex is paired with `re.match` (or `search`) to accept or reject input strings, e.g. a date `YYYY-MM-DD` gate.
+
+**Rule:** End-anchor validation patterns with `\Z` (or use `re.fullmatch`), never `$` - `$` also matches just before a trailing newline, so `"2026-08-29\n"` passes the gate. Prefer an explicit ASCII class like `[0-9]` over `\d`, which in Python matches all Unicode digits (e.g. Eastern Arabic numerals) that downstream ASCII-only consumers reject. Prove the gate with RED fixtures for trailing newline and trailing garbage, not only positive cases.
+
+**Why:** a review round caught a date gate `[0-9]{4}-[0-9]{2}-[0-9]{2}$` under `.match()` accepting both a trailing-newline date and `"2099-12-31X"`-style trailing garbage - the validation failed open while its selftest stayed green, because no fixture exercised the boundary.
+
+**See also:** #235 (RED fixtures must be constructible and collision-pinned).
+## 237. Parse config through the app's typed error contract, not raw stdlib raises
+
+**Principle:** Family B (error-policy propagation).
+
+**Trigger:** a Python app reads INI config with `configparser` and exposes a typed config-error path (custom exception, friendly exit code).
+
+**Rule:** (1) Construct the parser with `interpolation=None` unless interpolation is a feature; otherwise a literal `%` in a value raises `InterpolationSyntaxError` at read time, outside the app's contract. (2) Never call `getint`/`getfloat` bare: a non-numeric value raises `ValueError` that escapes the typed error path as a traceback. Wrap conversions in a helper that raises the app's config exception naming the offending key. (3) Pin both failure modes with tests (`%` verbatim, non-numeric int).
+
+**Why:** a review round caught raw tracebacks (`InterpolationSyntaxError`, `ValueError`) escaping a CLI's exit-2 `ConfigurationError` contract, because only the happy path and missing-key cases were tested.
+
+**See also:** #19 (centralized fallible ops carry call-site policy).
+
+## 238. Type-gate enum membership checks or unhashable input crashes the validator
+
+**Principle:** Family B (error-policy propagation) - a membership test is a hidden stdlib raise site that must not bypass the typed error contract.
+
+**Trigger:** validating a field against an allowed-value `frozenset`/`set` when input comes from untrusted structured data (parsed JSON/YAML) where a list or dict value is representable.
+
+**Rule:** (1) Before `value in _ALLOWED`, gate on `isinstance(value, str)` (or the expected scalar type) and emit the validator's targeted invalid-enum error for non-scalars; a list/dict operand otherwise raises `TypeError: unhashable type` as a traceback that escapes the error contract. (2) Pin with a RED fixture that feeds an unhashable value through the real validation entry point and asserts the targeted error. (3) When copying an enum-check pattern, copy the gate with it.
+
+**Why:** one validator was hit twice in consecutive review rounds: first the severity field crashed, and three enum fields added later (blast radius, reachability, confidence) repeated the crash because the membership pattern was copied without the gate. Each fix was additive; a type gate on the class prevents the next copy.
+
+**Example:** `finding["blast_radius"] in frozenset({"global", "repo"})` crashed on `"blast_radius": ["global"]`; prefixing `isinstance(value, str)` yields the `invalid blast_radius` message instead.
+
+**See also:** #237 (raw stdlib raises escaping typed error contracts), #235 (crash-contained RED fixtures).

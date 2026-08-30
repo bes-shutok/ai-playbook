@@ -115,6 +115,7 @@ Stop only when **all** of the following hold on a fresh review of committed `HEA
 2. No fixes were applied in that iteration
 3. Every soften-watchlist item is `reaffirmed` or `restaged` (then fixed or explicitly dropped with partner confirmation) in that same fresh round or an earlier round of this run whose tip digest for the watchlist anchors is unchanged
 4. **Design-simplicity coverage before exit:** if the clear-candidate round used `panel_mode: focused` and omitted `design-simplicity`, run one more pass that includes `design-simplicity` (hybrid is enough: correctness + design-simplicity + any other owners still needed). Skip this extra pass only when the immediately preceding round in this run was a **full** panel that already completed `design-simplicity` on the same tip digest.
+5. No unresolved reconciliation trigger remains. If recurring history, contradictory artifacts, or an untrusted closure witness remains, run `review-reconciliation` before reporting exit.
 
 | Signal | Valid exit? |
 |--------|-------------|
@@ -130,7 +131,7 @@ Stop only when **all** of the following hold on a fresh review of committed `HEA
 
 | Limit | Default | On exceed |
 |-------|---------|-----------|
-| `max_full_panel_rounds` | **5** | Stop; list unresolved blocking findings; ask user before a sixth |
+| `max_full_panel_rounds` | **5** | Run `review-reconciliation` before any sixth panel; ask the user when reconciliation needs a decision or the cap still blocks progress |
 | `max_escalations` | **1 per active run** | Prohibit a second escalation in the same run |
 
 Never use commit subjects like `Close review loop` or `Review complete` until exit criteria are met.
@@ -141,10 +142,11 @@ Never use commit subjects like `Close review loop` or `Review complete` until ex
 2. **Sub-agents:** launch `doing-code-review` with the panel from `review-panel-selection.md`; do not replace with inline grep.
 3. **Targeted revisions:** after fixes, launch blind `correctness-completeness` plus every distinct worker that owned a finding or whose domain the fixes affected. If all five are selected, count a full-panel round. When the soften watchlist has `open` items, also launch the worker that owns each open pattern (see `review-panel-selection.md` tiered ownership).
 4. **Fix-risk triage before more folding:** when consecutive rounds' fixes keep regenerating new findings, apply the `receiving-review` **Fix-risk triage when fixes regenerate findings** section before folding further, and verify scoped fixes with the focused targeted round composed per `review-panel-selection.md` (Review-loop follow-ups; orchestration rule 3 selects the set). A fix-risk stop for user direction ends iterations until the user answers, like the max-rounds stop.
-5. **Exit hybrid:** before accepting a focused clear round as loop exit, ensure `design-simplicity` ran on the current tip digest (see Exit criteria item 4). Do not exit on contract-docs/risk-only cleanliness alone after architecture-relevant code landed earlier in the branch.
-6. **Commits:** only `done` commits; one iteration -> one commit when fixes ran.
-7. **Push:** requires explicit user instruction.
-8. **PR mode:** if user gave a PR URL, still write staging docs; optional post to PR via `doing-code-review` Direct mode.
+5. **Reconciliation before continued churn:** when the same root issue recurs, fixes regenerate findings across consecutive rounds, review artifacts or digests disagree, or `max_full_panel_rounds` is reached, invoke `review-reconciliation` before another review or fix pass. Pass the chronological staging artifacts, triage and fix history, current digest, counter, and mutation scope.
+6. **Exit hybrid:** before accepting a focused clear round as loop exit, ensure `design-simplicity` ran on the current tip digest (see Exit criteria item 4). Do not exit on contract-docs/risk-only cleanliness alone after architecture-relevant code landed earlier in the branch.
+7. **Commits:** only `done` commits; one iteration -> one commit when fixes ran.
+8. **Push:** requires explicit user instruction.
+9. **PR mode:** if user gave a PR URL, still write staging docs; optional post to PR via `doing-code-review` Direct mode.
 
 ## Anti-patterns
 
@@ -181,6 +183,9 @@ Step 4 each iteration: learn → docs-branch → commit (authorized per iteratio
 
 ### Consumes `review-staging` skill
 Every round writes a full staging doc (Metadata, Review Statistics, Findings with Comment/Analysis). Clear rounds still require statistics. Run the review-staging validator before reporting the round verdict.
+
+### Consumes `review-reconciliation` skill
+Use it at orchestration rule 5's trigger. `review-loop` remains the original orchestrator: after any reconciliation refactor, it launches the next normal fresh review of the current digest and does not treat the reconciliation result as a clear round.
 
 ### Boundary vs `execute-plan` skill
 Use this skill for standalone branch hygiene until one fresh blocking-clean review. Use `execute-plan` Phase 3 for plan-scoped loops.

@@ -367,7 +367,7 @@ This is the sibling rule to **Agent corpus feedback** above: that section genera
 
 ## Fix-risk triage when fixes regenerate findings
 
-When a review-fix cycle keeps regenerating findings, stop folding mechanically and audit the findings before the next fix pass. The trigger is operational: two consecutive rounds in which at least one new finding lands on files modified by the prior round's fixes. Record the per-family regression chain on the affected findings' Analysis sections so a rule 2 refusal stays auditable. This bounds the **Default: address all findings** rule (which back-references this section): an unbounded fold loop can damage more than the findings it resolves.
+When a review-fix cycle keeps regenerating findings, stop folding mechanically and audit the findings before the next fix pass. The trigger is operational: two consecutive rounds in which at least one new finding lands on files modified by the prior round's fixes. Before applying the classifications below, invoke `review-reconciliation` when the recurrence, ownership, or evidence cannot be explained from the current round alone. Pass the chronological review artifacts and sidecars, triage and fix history, current source digest, and permitted mutation scope. Record the per-family regression chain on the affected findings' Analysis sections so a rule 2 refusal stays auditable. This bounds the **Default: address all findings** rule (which back-references this section): an unbounded fold loop can damage more than the findings it resolves.
 
 Classify each remaining finding and record the class next to it:
 
@@ -402,6 +402,9 @@ Invoked as a sub-agent between review rounds. Input is the staging doc from `doi
 
 ### With `review-loop` skill
 Orchestration rule 4 applies **Fix-risk triage when fixes regenerate findings** in a regenerating loop; the triage classes and fix-vs-backlog decisions feed its exit report and **Backlog capture** tally.
+
+### With `review-reconciliation` skill
+Use reconciliation for recurring-root, contradictory-artifact, or evidence-ownership analysis. This skill retains fix-vs-backlog triage and does not treat reconciliation's artifact changes as independently reviewed; the original review orchestrator must run the next fresh round.
 
 ### With `doing-code-review` / `review-agents`
 Accepted human findings that the panel missed feed Step 2.5 Guideline Pack awareness and optional catalog/overlay patches (see **Agent corpus feedback** above). Pattern IDs stay abstract; overlays and guidelines carry stack/project detail. Documentation and comment findings are evaluated with `review-agents/documentation.md` phase 2 gates, including the remove-or-freeze disposition for outdated docs (see **Documentation and Comment Findings** above).

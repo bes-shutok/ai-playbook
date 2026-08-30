@@ -108,6 +108,16 @@ profile.patchIdentities(List.copyOf(identities));
 profile.patchIdentities(identities);  // aggregate calls List.copyOf internally
 ```
 
+**Do not assert reference inequality after `copyOf` on an already-unmodifiable collection.** `List.copyOf` / `Set.copyOf` / `Map.copyOf` may return the same instance when the input is already an unmodifiable collection of that type (for example `List.copyOf(List.of(...))`). An AssertJ `isNotSameAs` (or JUnit `assertNotSame`) against that expression can fail even when content and order are correct. Prefer content/order assertions, or feed a mutable input when the production contract truly requires a distinct instance.
+
+```java
+// Fragile  -  copyOf(List.of(...)) often returns the List.of instance
+assertThat(result).isNotSameAs(List.copyOf(List.of(a, b)));
+
+// Prefer content/order
+assertThat(result).containsExactly(a, b);
+```
+
 ## 12. Mockito Stubs for Multi-Method Mapper Interfaces
 
 MyBatis `@Mapper` interfaces declare multiple methods and are **not** functional interfaces. A lambda

@@ -99,6 +99,11 @@ V1_REQUIRED_TOP_LEVEL_FIELDS = (
     "soften_watchlist",
 )
 V1_OPTIONAL_TOP_LEVEL_FIELDS = ("depth", "domains", "extensions")
+# r6 F8: version-1 ``date`` is a shape-checked string (calendar validity is
+# out of scope; the documented contract is the format). ``\Z`` (not ``$``)
+# so a trailing newline cannot slip through, ASCII-only ``[0-9]`` so
+# Unicode decimal digits cannot pass (r1 F1).
+V1_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 SUPPORTED_SIDECAR_SCHEMA_VERSIONS = (1,)
 # Worker statuses that count as a launch toward the six-worker ceiling but
 # NEVER as completed coverage for full-panel completion.
@@ -721,12 +726,13 @@ def classify_sidecar_schema(payload: object) -> str:
 
 # Schema labels whose payload carries the "current shape" (the pre-version
 # current markers or an explicit version-1 record) and therefore routes
-# through ``validate_current_payload``. Exported as ``is_current_shape`` so the
-# validator's inline routing, the summarizer's adapter selector, and the drift
-# canary all share ONE definition of current-versus-legacy shape. The set
-# itself is also exported (``CURRENT_SHAPE_LABELS``) so the summarizer derives
-# its adapter-routing label set from this single definition instead of
-# hand-copying it.
+# through ``validate_current_payload``. Exported as ``is_current_shape`` so
+# the summarizer's adapter selector and the drift canary share ONE
+# definition of current-versus-legacy shape; the validator itself routes on
+# ``CURRENT_SHAPE_LABELS`` applied to its single per-run classification
+# (r6 F13). The set itself is also exported (``CURRENT_SHAPE_LABELS``) so
+# the summarizer derives its adapter-routing label set from this single
+# definition instead of hand-copying it.
 CURRENT_SHAPE_LABELS = frozenset(
     {"current-v1", "legacy-panel-mode", "legacy-worker-shaped"}
 )
@@ -856,6 +862,35 @@ def validate_version1_payload(
                 "must not be JSON null; null-as-absent compatibility applies "
                 "only to versionless records"
             )
+    # r6 F8: scalar and optional-field type gates, placed beside (not woven
+    # into) the r5 F1 null gate above. Required scalar fields skip ``None`` so
+    # the r5 F1 gate stays the single reporter for explicit-null required
+    # fields; optional fields fire on any PRESENT value including explicit
+    # null (null is not the absent form for optional version-1 fields).
+    for field_name in ("review_type", "artifact_slug", "date"):
+        value = payload.get(field_name)
+        if value is None:
+            continue  # required-field null is reported by the r5 F1 gate
+        if not isinstance(value, str):
+            result.add_error(
+                f"version-1 sidecar field {field_name!r} must be a string"
+            )
+            continue
+        if field_name == "date" and not V1_DATE_RE.match(value):
+            result.add_error(
+                "version-1 sidecar field 'date' must be a string in YYYY-MM-DD "
+                "format"
+            )
+    for field_name, field_type, type_name in (
+        ("depth", str, "a string"),
+        ("domains", list, "a list"),
+    ):
+        if field_name in payload and not isinstance(
+            payload[field_name], field_type
+        ):
+            result.add_error(
+                f"version-1 sidecar field {field_name!r} must be {type_name}"
+            )
     allowed = set(V1_REQUIRED_TOP_LEVEL_FIELDS) | set(V1_OPTIONAL_TOP_LEVEL_FIELDS)
     for key in payload:
         if key not in allowed:
@@ -978,7 +1013,7 @@ def validate_stats_sidecar(
         )
     elif schema_class == "current-v1":
         validate_version1_payload(payload, content, result)
-    is_current = is_current_shape(payload)
+    is_current = schema_class in CURRENT_SHAPE_LABELS
     if is_current:
         validate_current_payload(
             payload,
@@ -986,6 +1021,7 @@ def validate_stats_sidecar(
             result,
             expected_digest=expected_digest,
             source_kind=source_kind,
+            schema_label=schema_class,
         )
     discarded = _require_array(
         payload, "discarded", result, schema_class
@@ -1070,10 +1106,14 @@ def validate_current_payload(
     *,
     expected_digest: str | None = None,
     source_kind: str | None = None,
+    schema_label: str | None = None,
 ) -> None:
     panel_mode = payload.get("panel_mode")
-    # The schema label is computed ONCE and fed to the shared _require_array /
-    # _require_object guards below (r4 F10): the targeted mistyped-container
+    # The schema label is computed ONCE per validation run, in
+    # ``validate_stats_sidecar``, and threaded in via ``schema_label``; the
+    # internal classification below (r4 F10) exists only for direct callers
+    # that do not supply a label. The label is fed to the shared
+    # _require_array / _require_object guards: the targeted mistyped-container
     # error is keyed on the label, so version-1 records, versionless current
     # shapes, and pure legacy records all get their documented disposition
     # from one place. Versionless current shapes never reach the version-1
@@ -1081,7 +1121,8 @@ def validate_current_payload(
     # container gets a targeted error instead of a silent empty substitution,
     # which would skip the counts/consistency gates below (r3 F3 false
     # accept). Pure legacy shapes are skipped (compatibility input).
-    schema_label = classify_sidecar_schema(payload)
+    if schema_label is None:
+        schema_label = classify_sidecar_schema(payload)
     if panel_mode not in {"full", "focused"}:
         result.add_error("current sidecar panel_mode must be full or focused")
     if panel_mode == "focused" and not payload.get("selection_reason"):
@@ -1168,52 +1209,113 @@ def validate_current_payload(
         result.add_error("counts.workers_launched does not match panel launches")
 
     findings = _require_array(payload, "findings", result, schema_label)
-    for finding in findings:
+    # r6 F5: every finding row carries an integer id. Absence silently
+    # sorts as 0 in the order check and homogeneous string ids compare
+    # fine as strings, while mixed-type ids crash the order-check sort
+    # with a TypeError traceback. Gate the id here (bool is rejected
+    # alongside non-int: bool is an int subclass) and keep gating the
+    # remaining fields so one run reports all finding-level defects.
+    # r6 F5 / r1 F4 / r3 F2: ``id_ok`` is the single id predicate, gating
+    # the targeted id errors, the append decision, and the display label
+    # below. Rows reaching the append must pass the id gate AND carry a
+    # string severity (r3 F1: unhashable severities must stay out of the
+    # order-check sort); the append lives in the severity branch below.
+    valid_rows: list = []
+    for i, finding in enumerate(findings):
         if not isinstance(finding, dict):
             result.add_error("current finding must be an object")
             continue
         fid = finding.get("id")
+        id_ok = (
+            "id" in finding
+            and isinstance(fid, int)
+            and not isinstance(fid, bool)
+        )
+        if not id_ok:
+            if "id" not in finding:
+                result.add_error(f"current finding at index {i} missing id")
+            else:
+                result.add_error(
+                    f"current finding {fid!r} id must be an integer"
+                )
+        elif isinstance(finding.get("severity"), str):
+            # r3 F1: an unhashable severity (e.g. a list) would crash the
+            # frozen order-check sort key with a TypeError; keeping such
+            # rows out of ``valid_rows`` leaves the targeted
+            # invalid-severity error below as the single reporter.
+            valid_rows.append(finding)
+        # r2 F2/F3: one display label per row keeps the sibling errors
+        # below attributable when the id gate failed (an id-less row would
+        # otherwise render every sibling error as `current finding None
+        # ...`). r3 F4: only valid integer ids are rendered via repr into
+        # the label; any malformed id (string, bool, missing) falls back
+        # to the `at index {i!r}` label, so a malformed id value can
+        # never forge or garble collected error output.
+        if id_ok:
+            display = repr(fid)
+        else:
+            display = f"at index {i!r}"
         if finding.get("severity") not in SEVERITY_ORDER:
             result.add_error(
-                f"current finding {fid} has invalid severity "
+                f"current finding {display} has invalid severity "
                 f"(expected one of {list(SEVERITY_ORDER)})"
             )
         # blocking must be a real Python bool, not a string/int coercion.
         if "blocking" in finding and not isinstance(finding["blocking"], bool):
             result.add_error(
-                f"current finding {fid} blocking must be a boolean, "
+                f"current finding {display} blocking must be a boolean, "
                 f"got {type(finding['blocking']).__name__}"
             )
+        # r4 F1: membership against a frozenset crashes with an uncaught
+        # TypeError when the operand is unhashable (e.g. a list), aborting
+        # the run before any targeted error is recorded. Mirror the r3 F1
+        # severity pattern: gate each enum check on isinstance(value, str)
+        # so odd-typed values get the existing targeted invalid-* error.
         if (
             "blast_radius" in finding
-            and finding["blast_radius"] not in VALID_BLAST_RADIUS
+            and (
+                not isinstance(finding["blast_radius"], str)
+                or finding["blast_radius"] not in VALID_BLAST_RADIUS
+            )
         ):
             result.add_error(
-                f"current finding {fid} has invalid blast_radius "
+                f"current finding {display} has invalid blast_radius "
                 f"(expected one of {sorted(VALID_BLAST_RADIUS)})"
             )
         if (
             "reachability" in finding
-            and finding["reachability"] not in VALID_REACHABILITY
+            and (
+                not isinstance(finding["reachability"], str)
+                or finding["reachability"] not in VALID_REACHABILITY
+            )
         ):
             result.add_error(
-                f"current finding {fid} has invalid reachability "
+                f"current finding {display} has invalid reachability "
                 f"(expected one of {sorted(VALID_REACHABILITY)})"
             )
         if (
             "confidence" in finding
-            and finding["confidence"] not in VALID_CONFIDENCE
+            and (
+                not isinstance(finding["confidence"], str)
+                or finding["confidence"] not in VALID_CONFIDENCE
+            )
         ):
             result.add_error(
-                f"current finding {fid} has invalid confidence "
+                f"current finding {display} has invalid confidence "
                 f"(expected one of {sorted(VALID_CONFIDENCE)})"
             )
         for field_name in REQUIRED_CURRENT_FINDING_FIELDS:
             if field_name not in finding:
                 result.add_error(
-                    f"current finding {fid} missing {field_name}"
+                    f"current finding {display} missing {field_name}"
                 )
-    validate_finding_order(findings, result)
+    # r6 F5: only rows appended inside the findings loop — dict rows that
+    # passed the id gate and carry a string severity (r3 F1) — are passed
+    # to the order check, so mixed-type ids and unhashable severities can
+    # never reach the sort (the errored rows already carry their targeted
+    # errors above). validate_finding_order deliberately retains its own
+    # defensive dict-rows filter for direct callers.
+    validate_finding_order(valid_rows, result)
     validate_finding_budget(findings, result)
 
     overflow = _require_array(payload, "overflow", result, schema_label)
@@ -2247,6 +2349,197 @@ def _selftest_current_contract(root: Path, check) -> None:
         order_result,
     )
     check("severity order is enforced", not order_result.ok)
+
+    # r6 F5 finding-id gates. RED fixtures: each check must fail until the
+    # findings-loop gate exists (missing id / integer id). Recipe: render the
+    # markdown from the unmutated two-finding list first, then mutate the
+    # sidecar payload, so failures stay attributable to the gate under test
+    # instead of garbled-header conservation noise.
+    # _payload_with_findings does not deep-copy the finding dicts, so each
+    # fixture builds its own fresh two-finding list to stay isolated.
+    # r1 F6: the shared recipe lives in one local runner; each fixture is a
+    # slug/title/mutation/assertion tuple. A TypeError escaping the
+    # validation run is caught (result None) so the RED phase records FAIL
+    # instead of aborting the whole selftest suite.
+    def _run_id_fixture(
+        slug: str, title: str, mutate, errors_ok, label: str
+    ) -> None:
+        two = [_current_finding(id=1), _current_finding(id=2)]
+        md = _current_findings_markdown(two, title=title)
+        fixture_payload = _payload_with_findings(two)
+        mutate(fixture_payload)
+        fixture_path = _write_staging(
+            root,
+            f"2026-07-17-branch-review-id-{slug}-r1.md",
+            md,
+            fixture_payload,
+        )
+        try:
+            fixture_result = validate_staging_file(fixture_path, hard=True)
+        except TypeError:
+            fixture_result = None
+        check(
+            label,
+            fixture_result is not None and errors_ok(fixture_result.errors),
+        )
+
+    def _mutate_missing_id(p: dict) -> None:
+        del p["findings"][1]["id"]
+
+    _run_id_fixture(
+        "missing",
+        "id-missing",
+        _mutate_missing_id,
+        lambda errors: any("missing id" in e for e in errors),
+        "finding id missing rejected",
+    )
+
+    # r4 F4: pin the display-label index fallback. The same id-less row also
+    # carries a sibling defect (invalid severity); its sibling error must be
+    # attributed via the `at index` label, not a repr'd id.
+    def _mutate_missing_id_and_bad_severity(p: dict) -> None:
+        del p["findings"][1]["id"]
+        p["findings"][1]["severity"] = "Blocker"
+
+    _run_id_fixture(
+        "missing-sibling",
+        "id-missing-sibling",
+        _mutate_missing_id_and_bad_severity,
+        lambda errors: any("missing id" in e for e in errors)
+        and any(
+            "at index" in e and "invalid severity" in e for e in errors
+        ),
+        "missing id row keeps sibling errors attributed via index label",
+    )
+
+    # Homogeneous string ids keep every sort key tuple same-kind, so neither
+    # the gate phase nor the order check may crash the sort (silent-pass shape).
+    def _mutate_str_ids(p: dict) -> None:
+        p["findings"][0]["id"] = "F1"
+        p["findings"][1]["id"] = "F2"
+
+    _run_id_fixture(
+        "string",
+        "id-string",
+        _mutate_str_ids,
+        lambda errors: sum("must be an integer" in e for e in errors) >= 2,
+        "finding id string rejected",
+    )
+
+    # bool is an int subclass in Python; it must not pass the integer gate.
+    # Sibling id pinned at 2 keeps sort keys deterministic by construction.
+    def _mutate_bool_id(p: dict) -> None:
+        p["findings"][0]["id"] = True
+
+    _run_id_fixture(
+        "bool",
+        "id-bool",
+        _mutate_bool_id,
+        lambda errors: sum("must be an integer" in e for e in errors) == 1
+        and any("True" in e for e in errors),
+        "finding id bool rejected",
+    )
+
+    # Mixed-type ids crash sorted() today; the runner's TypeError catch
+    # records the crash so the check can assert it never happens.
+    def _mutate_mixed_id(p: dict) -> None:
+        p["findings"][0]["id"] = "F1"
+
+    _run_id_fixture(
+        "mixed",
+        "id-mixed",
+        _mutate_mixed_id,
+        lambda errors: any("must be an integer" in e for e in errors),
+        "finding id mixed types never crash the sort",
+    )
+
+    # r3 F1 RED fixture: a list severity is unhashable, so the frozen
+    # order-check sort key would crash with a TypeError; the targeted
+    # invalid-severity error must be the single reporter and the run must
+    # not crash (the runner's TypeError catch above records a FAIL).
+    def _mutate_list_severity(p: dict) -> None:
+        p["findings"][0]["severity"] = ["High"]
+
+    _run_id_fixture(
+        "severity-list",
+        "id-severity-list",
+        _mutate_list_severity,
+        lambda errors: any("invalid severity" in e for e in errors),
+        "finding severity unhashable never crashes the sort",
+    )
+
+    # r4 F1 RED fixture: a list blast_radius is unhashable, so the
+    # frozenset membership check would crash with a TypeError before any
+    # targeted error is recorded; the targeted invalid-blast_radius error
+    # must be the single reporter and the run must not crash (the runner's
+    # TypeError catch above records a FAIL).
+    def _mutate_list_blast_radius(p: dict) -> None:
+        p["findings"][0]["blast_radius"] = ["global"]
+
+    _run_id_fixture(
+        "blast-radius-list",
+        "id-blast-radius-list",
+        _mutate_list_blast_radius,
+        lambda errors: any("invalid blast_radius" in e for e in errors),
+        "finding blast_radius unhashable never crashes the membership check",
+    )
+
+    # F13 RED probe: one validation run must classify the sidecar payload
+    # exactly once. Rebind the module-global classify_sidecar_schema with a
+    # counting wrapper that delegates to the original; the ONE production
+    # classification on the validate_staging_file path is the call in
+    # validate_stats_sidecar (is_current_shape is exported for the
+    # summarizer and is no longer called on this path;
+    # validate_current_payload receives the threaded schema_label and
+    # classifies only when schema_label is None, which never happens in the
+    # run below), and it resolves the global at call time, so the wrapper
+    # intercepts it. Restore the original in finally so the rebinding never
+    # leaks into other checks.
+    probe_path = _write_staging(
+        root,
+        "2026-07-17-branch-review-classify-probe-r1.md",
+        _current_clear_markdown("classify-probe"),
+        _current_clear_payload(),
+    )
+    original_classify = classify_sidecar_schema
+    classify_calls = [0]
+
+    def _counting_classify(payload: object) -> str:
+        classify_calls[0] += 1
+        return original_classify(payload)
+
+    globals()["classify_sidecar_schema"] = _counting_classify
+    try:
+        validate_staging_file(probe_path, hard=True)
+    finally:
+        globals()["classify_sidecar_schema"] = original_classify
+    check(
+        "sidecar payload classified exactly once per run",
+        classify_calls[0] == 1,
+    )
+
+    # r2 F5: the plan-mandated schema_label=None backward-compat surface
+    # (internal classification for direct callers) needs a driving fixture:
+    # a direct call WITHOUT schema_label on a current-shape payload with a
+    # mistyped container must produce the classified-label error, not the
+    # pure-legacy silent skip. That message is only emitted when the
+    # internal classification landed on a current-shape label.
+    labelless_payload = json.loads(json.dumps(_current_clear_payload()))
+    labelless_payload["panel"] = 5
+    labelless_result = ValidationResult(path=Path("labelless"))
+    validate_current_payload(
+        labelless_payload,
+        _current_clear_markdown("labelless"),
+        labelless_result,
+    )
+    check(
+        "direct call without schema_label classifies internally "
+        "(mistyped container gets the current-shape error)",
+        any(
+            "current sidecar 'panel' must be an array when present" in e
+            for e in labelless_result.errors
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3714,13 +4007,21 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
         ).ok,
     )
 
-    # r5 F1: the null-as-absent compatibility does NOT extend to version-1
-    # records. An explicit JSON null for a version-1 REQUIRED container field
-    # must fail hard with the targeted null error (pre-fix it bypassed both
-    # the required-field gate and the shared null-as-absent helpers, so
-    # `"findings": null` validated clean and skipped the pattern and
-    # conservation checks).
-    for field_name in ("findings", "counts"):
+    # r5 F1 / r1 F3: the null-as-absent compatibility does NOT extend to
+    # version-1 records. An explicit JSON null for a version-1 REQUIRED field
+    # (container or scalar) must fail hard with the targeted null error
+    # (pre-fix it bypassed both the required-field gate and the shared
+    # null-as-absent helpers, so `"findings": null` validated clean and
+    # skipped the pattern and conservation checks). The scalar fields are
+    # covered too, pinning the r6 F8 delegation: if someone later adds a
+    # scalar to the null-allowed exception list, these fixtures turn RED.
+    for field_name in (
+        "findings",
+        "counts",
+        "date",
+        "review_type",
+        "artifact_slug",
+    ):
         null_required = _json.loads(_json.dumps(base_payload))
         null_required[field_name] = None
         null_result = validate_staging_file(
@@ -3738,7 +4039,94 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
             and any(
                 "must not be JSON null" in e and f"{field_name!r}" in e
                 for e in null_result.errors
+            )
+            # r4 F5: the r5 F1 null gate must stay the single reporter for
+            # explicit-null required fields; the F8 type gates must not
+            # double-report (the None skip delegation stays pinned).
+            and not any(
+                f"{field_name!r} must be a string" in e
+                for e in null_result.errors
             ),
+        )
+
+    # r6 F8 (RED): scalar and optional-field type gates for version-1
+    # records. The negative fixtures below FAIL (error-absent) until the
+    # Task 4 production gates exist; the two over-gating guards (absent
+    # optional fields stay valid, round dual typing) must keep passing both
+    # before and after those gates land.
+
+    def _v1_copy() -> dict:
+        return _json.loads(_json.dumps(base_payload))
+
+    # Scalar required-field type gates.
+    for field_name, bad_value, message in (
+        ("date", 20260829, "must be a string"),
+        ("date", "2026-8-9", "YYYY-MM-DD"),
+        # r1 F1 RED fixture: `$` also matches before a trailing newline, so
+        # this one string passed the old anchored regex (the only listed
+        # case it accepted). The trailing-garbage case also pins the end
+        # anchor (distinct value so the filename tag cannot collide).
+        ("date", "2026-08-29\n", "YYYY-MM-DD"),
+        ("date", "2099-12-31X", "YYYY-MM-DD"),
+        # r3 F5 fixture: leading garbage pins the start anchor (the rows
+        # above pin the end anchor); the derived filename tag "X2026082"
+        # stays distinct from every sibling fixture.
+        ("date", "X2026-08-29", "YYYY-MM-DD"),
+        # r2 F4 RED fixture: fullwidth digits pin the ASCII-only [0-9]
+        # class; the old `\d` class accepted Unicode decimal digits. The
+        # derived filename tag stays distinct from every sibling fixture.
+        ("date", "２０２６-08-29", "YYYY-MM-DD"),
+        ("review_type", 7, "must be a string"),
+        ("artifact_slug", [], "must be a string"),
+        # Optional version-1 fields: a PRESENT but mistyped value must fail;
+        # explicit null is not the absent form for optional version-1 fields
+        # (r5 F1 pinned required fields only — this is the optional gap).
+        ("depth", [], "must be a string"),
+        ("depth", None, "must be a string"),
+        ("domains", "api", "must be a list"),
+        ("domains", None, "must be a list"),
+    ):
+        mistyped = _v1_copy()
+        mistyped[field_name] = bad_value
+        if bad_value is None:
+            value_tag = "null"
+        elif isinstance(bad_value, str):
+            value_tag = bad_value.replace("-", "")[:8] or "string"
+        else:
+            value_tag = type(bad_value).__name__
+        result = validate_staging_file(
+            stage(f"type-{field_name}-{value_tag}-v1", mistyped, base_md),
+            hard=True,
+        )
+        check(
+            f"v1 contract: mistyped {field_name!r} "
+            f"({'JSON null' if bad_value is None else repr(bad_value)}) "
+            "fails hard with a targeted type error",
+            not result.ok
+            and any(f"{field_name!r}" in e and message in e for e in result.errors),
+        )
+
+    # Over-gating guard: absent optional fields stay valid.
+    for field_name in ("depth", "domains"):
+        absent = _v1_copy()
+        del absent[field_name]
+        check(
+            f"v1 contract: absent optional {field_name!r} stays valid (over-gating guard)",
+            validate_staging_file(
+                stage(f"absent-{field_name}-v1", absent, base_md), hard=True
+            ).ok,
+        )
+
+    # Over-gating guard: round keeps its dual int/string typing.
+    for round_value in (3, "r3"):
+        dual = _v1_copy()
+        dual["round"] = round_value
+        check(
+            f"v1 contract: round = {round_value!r} stays valid (dual-typing guard)",
+            validate_staging_file(
+                stage(f"round-{type(round_value).__name__}-v1", dual, base_md),
+                hard=True,
+            ).ok,
         )
 
     # r3 F2: example bullets in Comment/Analysis bodies (prose or fenced)

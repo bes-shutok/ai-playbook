@@ -130,6 +130,8 @@ Bias the user toward **small, compartmentalized specs**:
 - If the plan mixes refactoring with new behavior, suggest separating them
 - If the plan touches multiple layers (UI, business logic, data), ask which layer is the primary goal
 
+**Third-party AI-conversation sources:** when the requirement comes from a pasted AI chat or share link, treat its concrete architecture (pipelines, model choices, code) as one candidate design, not as the requirement. Restate the goal in the user's own words and confirm scope boundaries (Step 1.2) before adopting anything the conversation demonstrates; the transcript's final example is often an exploration artifact, not the user's intent. (Witness: a plan created from a shared AI conversation adopted its demo local-model pipeline wholesale; the user's actual goal was only a quota-window restart manager, and the plan had to be reshaped after Phase 1 answers were already collected.)
+
 ### Step 1.2: Verify key decisions explicitly
 
 Before proceeding, explicitly confirm each critical decision with the user. When the decision involves a trade-off with multiple reasonable paths, present structured options to the user:
@@ -467,9 +469,11 @@ Classify every finding as Critical, High, Medium, or Low, with independent block
 Write the review output to: `{reviews_dir}/YYYY-MM-DD-plan-review-<feature-name>-r<N>.md`
 (use `-r1`, `-r2`, … for each loop iteration)
 
-Return in the review Summary:
-- counts: Critical | High | Medium | Low
-- ready=yes only when no unresolved finding has blocking=true
+The review artifact itself MUST contain a `## Summary` section recording the counts
+(Critical | High | Medium | Low), every blocking finding by id, and the explicit
+`ready=yes`/`ready=no` verdict (the exit gate verifies the artifact, not the chat reply;
+witness: a round returned ready=yes in chat while the artifact ended at the overflow
+manifest, and the orchestrator had to send it back).
 
 <plan content here>
 ```
@@ -532,6 +536,8 @@ Never place implementation tasks before their corresponding test tasks. Group re
 When a phase plan contains multiple code changes, order tasks so earlier tasks establish prerequisites for later ones within that same phase (for example retry semantics before activating new traffic paths).
 
 **Pure-refactoring tasks (no new behavior):** use concise `- [ ]` action items instead of RED→GREEN cycles. However, when the refactor risks breaking unstated invariants (ordering, error attribution, mutable side effects, pre-condition checks), add characterization test items in `given/expects` format. These run GREEN before the refactor and must remain GREEN after. Write them as `- [ ] Run → expect GREEN (characterization: captures existing behaviour before refactor)`, not RED→GREEN. Reference existing tests by class and method name where they cover the invariant; add a new test only for invariants with no existing coverage.
+
+**RED fixture validity:** every RED fixture must be constructible against the real base shape (build rows through the family's payload helpers, never index into a possibly-empty list), exception-contained when the probe is expected to crash today (wrap it so the harness records a FAIL instead of aborting the run), and pinned to a gate-unique assertion phrase so a pre-existing error cannot satisfy it (see user-level lessons #235).
 
 ## DDD Extraction
 
