@@ -19,7 +19,7 @@ Run `/learn` to capture lessons from this session, then commit all uncommitted c
 - **Do not** delegate this workflow to a Task/subagent that tries to exec a skill path.
 - **Do** read each skill file (`~/.agents/skills/<name>/SKILL.md`) and execute its steps in **this** agent session using normal tools (shell for scripts, Read/Write for skill logic).
 
-**Workflow continuity:** This skill executes as a continuous sequence of steps (0 → 1 → 2.65 → 2.64 → 2.63 → 2 → 2.5 → 2.6 → 2.7 → 2.75 → 2.76 → 2.8 → 3 → 4 → 5 → 6 → 7). After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification. **Exception:** Step 0 uses a short agent wait (`DONE_LOCK_AGENT_MAX_WAIT_SECS`, default 90s); on timeout return `blocked` with lock `status` instead of polling for hours. **An empty project working tree is not a stop condition:** still run Steps 2.65, 2.64, 2.63, 2, and 6 and finish with Step 7.
+**Workflow continuity:** This skill executes as a continuous sequence of steps (0 → 1 → 2.65 → 2.64 → 2.63 → 2.62 → 2 → 2.5 → 2.6 → 2.7 → 2.75 → 2.76 → 2.8 → 3 → 4 → 5 → 6 → 7). After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification. **Exception:** Step 0 uses a short agent wait (`DONE_LOCK_AGENT_MAX_WAIT_SECS`, default 90s); on timeout return `blocked` with lock `status` instead of polling for hours. **An empty project working tree is not a stop condition:** still run Steps 2.65, 2.64, 2.63, 2.62, 2, and 6 and finish with Step 7.
 
 ## Configuration (from facts document)
 
@@ -182,7 +182,23 @@ Remove only verified stale Vim swap files before `docs-branch` snapshots ignored
 
 4. Do not remove other untracked, ignored, backup, lock, or temporary files automatically. This cleanup is deliberately limited to verified stale Vim swaps.
 
-**After Step 2.63 completes, immediately continue to Step 2.**
+**After Step 2.63 completes, immediately continue to Step 2.62.**
+
+## Step 2.62: docs/tmp plan-lifetime sweep
+
+`{tmp_dir}/` (resolve from `.ai-playbook/facts.md` via `using-skills` Step 0) is scratch with plan lifetime, not an archive: durable findings graduate into lessons, completed plans, or Layer 2 docs, and the rest dies with its owner. Sweep what outlived its owner before `docs-branch` snapshots it:
+
+1. For each entry directly under `{tmp_dir}/`, classify and remove when its owner is finished:
+   - `execute-plan/<slug>/` whose plan file is no longer under `{plans_dir}/` (it archived to `{plans_completed_dir}/`): remove the whole session dir.
+   - `plan-requirements-<slug>.md` whose plan is in `{plans_completed_dir}/`: remove.
+   - `review-loop*`, `code-review/`, `handoff/` scratch: leave in place. A plan-less review loop has no liveness witness (the plan check cannot see it), and `done` runs inside review-loop's own fix cycles, so removing these here can delete an ACTIVE loop's unsynced staging. Their owning skills (review-loop, doing-code-review, handoff) remove them when their staging is final.
+   - One-off scripts and log notes (`.py`, `*.log.md`, dated one-off `.md`) with no pointer from a tracked doc and not from the current session: remove.
+   - Anything else (unclear ownership, active work): leave in place and report it.
+2. Never remove an ACTIVE `execute-plan` session: its dir contains `manifest.md` and its plan still sits under `{plans_dir}/`.
+3. Sweep without prompting; removals stay recoverable from the `docs` branch history (the sweep deletion's parent commit) **only when a prior sync captured them** — a never-synced file's removal is permanent, so when presence on `refs/heads/docs` is uncertain, skip the file and report it instead. Report the removed list in the step summary.
+4. Deletion propagation is the `docs-branch` sync's job (its `{tmp_dir}` sweep-eligible root drops branch copies in the same Step 2 run); do not hand-edit the docs branch here.
+
+**After Step 2.62 completes, immediately continue to Step 2.**
 
 ## Step 2: Preserve Gitignored Docs and Instructions
 
@@ -498,6 +514,9 @@ Each execute-plan `done` sub-agent still runs Step 0 and Step 6. Sequential task
 
 ### With `review-staging` skill
 Step 2.64 validates session-touched staging docs under `{reviews_dir}/` before docs-branch sync. Include `*review*.md`, PR staging (`*-PR-*` / `PR-<n>-...`), and any path accepted by `is_staging_review_path` (not only `*review*.md` or `*-r*.md`). Complete Metadata, Review Statistics, and Findings with Comment/Analysis before continuing; do not sync stub staging docs.
+
+### With `plans` and `docs-branch` skills (docs/tmp sweep)
+Step 2.62 sweeps `{tmp_dir}` entries whose owning plan archived (plans Plan Lifecycle cleanup) or that are one-off ownerless scratch; `review-loop*`/`code-review/`/`handoff/` scratch is never swept here (no liveness witness; their owning skills clean up). The `docs-branch` sync then drops branch-tracked `{tmp_dir}` paths absent on disk (`{tmp_dir}` is its one sweep-eligible root), so branch copies propagate without hand-editing the docs branch.
 
 ## Rules
 

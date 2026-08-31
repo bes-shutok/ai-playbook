@@ -1,8 +1,9 @@
 # Backlog: findings-loop message precision (missing severity) and duplicate-finding-id gate
 
-Status: open
+Status: done
 Workflow: backlog
 Source: docs/reviews/2026-08-29-2026-08-29-validator-contract-gates-code-review-r4.md, round r4, findings F2/F3 (Low, non-blocking; deferred by fix-risk triage: new scope beyond the plan's enumerated gates)
+Completed: 2026-08-31 by docs/plans/completed/2026-08-30-v1-gate-trio.md (Tasks 3-4: RED fixtures + seen_ids duplicate gate and missing-severity branch in the findings loop)
 
 ## Problem
 

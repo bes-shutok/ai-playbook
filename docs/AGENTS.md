@@ -77,6 +77,8 @@ At task start: read **`user_facts_path`**, then ownership/repo facts when scoped
 - **Confluence ownership:** never update Confluence pages created by someone else unless the user specifically asks for that page to be changed. For any such page, request explicit user approval for each individual change before editing.
 - **Personal projects:** local git only unless user asks to push/open PR (`personal_projects_root` in facts).
 - **Compaction:** run `learn` before allowing context compaction.
+- **Test assumptions proactively:** before relying on an assumption about the environment, a tool's behavior, or an API contract, verify it with a real command or check; when the assumption guards behavior worth keeping, pin it with a test following the repo's test conventions. Never present an unverified assumption as fact.
+- **Offer dependency installs proactively:** when a task needs libraries, CLIs, or services that are missing or outdated on this machine, say so and offer to install them locally (brew, uv, pip, …) before working around the gap; do not silently substitute degraded tooling when the real dependency can be installed.
 
 ## Coding execution discipline (always-on)
 

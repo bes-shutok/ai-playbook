@@ -4962,3 +4962,101 @@ When the identical command behaves differently in the agent shell versus the use
 **Example:** a workspace/session tree envelope was pinned flat (`result.workspaces`) by the production client, the committed fake, and a rewritten plan's assumptions; nine plan-review rounds and four code-review rounds passed because every worker checked internal consistency. A reviewer's single live probe during the next plan's review found the real shape nested one level deeper (`result.tree.workspaces`), which would have made every attach fail loudly on the real machine.
 
 **See also:** #197 (hermetic by launch mechanism, not prompt discipline), #242 (shell harness asserts unconditionally).
+
+## 246. Inventory a field's existing gate owners before adding a new validation gate
+
+**Principle:** Family D (single source of truth) - one failure mode, one owning gate.
+
+**Shape trigger:** a plan or fix adds a validation gate (type, range, format) for a field because "no gate of that kind exists", while the field is already consumed by other gates elsewhere in the validation path.
+
+**Rule:** (1) Before writing the new gate, enumerate how each failure mode of the field is already rejected (presence, type, membership, format gates anywhere the payload travels, including gates that run after the schema-class gate). A mode with an existing owner needs no second gate: the parallel gate double-reports the same defect. (2) Fixtures exercising that field must satisfy the existing owner's constraints (pass a hashable value when a membership gate owns the enum mode) or the fixture crashes the owner and aborts the harness family. (3) Absence-grepping for the new gate's error string is not an ownership inventory; trace the field's actual rejection paths.
+
+**Why:** a plan inherited a backlog claim that a field "passes hard validation" and added a type gate plus a list-valued fixture. Hashable mistypes already failed the field's membership gate downstream (the new gate would double-report), and the list fixture crashed that gate's `in` test, aborting the selftest family; r1 review blocked on both.
+
+**Example:** `source_kind` in the version-1 sidecar validator: no type gate existed, but the source-kind membership gate already rejected wrong scalar values and crashed on unhashable ones; the fix excluded the field from the new gate set and backlogged the membership gate's missing isinstance guard instead.
+
+**See also:** #238 (gate membership before `in`), #234 (remove rejected rows from downstream consumers), #56 (verify plan-time behavior claims against source).
+
+## 247. Mine the provider's disclosure documents before querying the counterparty
+
+**Principle:** Family H (verify the real thing, not the abstraction) - published product documents outrank a human's partial answers; forward only what no document can answer.
+
+**Shape trigger:** an outgoing "questions for the vendor" list grows past a handful of items, and any item asks the vendor to describe their own product's terms; or search APIs are quota-blocked and search engines CAPTCHA scripted fetchers, making web research look impossible.
+
+**Rule:** (1) Before sending questions to a seller, dealer, or support human, classify each question: answerable from public documents, or genuinely counterparty-only (their specific contract state, pricing decisions, intentions). Forward only the second class. (2) For regulated financial offers, the provider's own site links the mandatory disclosure documents (e.g. EU IPIDs) from one price-lists page; fetch that page, download the PDFs (curl + pdftotext), and self-answer the first class. (3) Search engines frequently CAPTCHA scripted fetchers; navigate the official domain directly (offers page, price lists, FAQ) instead of iterating engine queries or guessed URLs.
+
+**Why:** a 7-item questions-for-the-dealer email asked the seller to explain products whose terms are legally published elsewhere; the provider's tariff page answered most items in one pass (product identity, coverage set, contract duration), and the user pushed back: "too many questions, look some up online."
+
+**Example:** a purchase-financing proposal listed several unexplained monthly add-ons in its insurance column; the lender's official tariff-page IPIDs identified each one (a deductible-refund policy that dies with the credit, a replacement-car days schedule, the all-risks coverage list), trimming the email to 4 counterparty-only questions before sending.
+
+**See also:** #56 (verify claims against source before acting), #134 (probe quota resets before treating a limit as a hard block).
+
+## 248. Identify a process by start time and parentage before killing it
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a name match is not an identity.
+
+**Shape trigger:** about to kill a process located by grep/pgrep on a name while several same-name processes exist (desktop-app helpers, daemons, prior runs of the same tool).
+
+**Rule:** before killing, verify the pid against at least one identity attribute the name cannot provide: start time (compare against the launch moment of the thing being stopped), parent process, working directory, or the exact full command line. A name-matched pid whose start time predates the target is not the target. Prefer stopping the target through its own foreground surface (the shell that launched it) when one exists.
+
+**Why:** a pid matched on the name alone was another app's long-running helper, not the headless run being cleaned up; killing it interrupted the agent's own in-flight tool call while the target kept running, so the whole step had to be redone under time pressure.
+
+**Example:** during a supervised-run relaunch, three same-name processes matched; the killed one had started hours before the target launch, was the desktop app's CLI helper, and respawned within seconds.
+
+**See also:** #244 (assert the applied effect of a scripted action), #245 (code and its committed fake agree; the real interface diverges).
+
+## 249. Map investigated risks to concrete follow-up actions
+
+**Principle:** Family H (verify the real thing, not the abstraction).
+
+**Shape trigger:** A retrospective broadens its scope after an investigation while the original actions are already accepted, but the draft describes only a generic instruction to update or create follow-up tasks.
+
+**Rule:** Preserve the accepted actions. For each new finding, decide whether it extends a specific existing action or requires a distinct task. Record extensions and new tasks in the same action schema with evidence, priority, owner, status, target, and a testable completion check. Keep unresolved runtime checks as explicit evidence-gap work, not generic recommendations. Do not create duplicate tasks when one shared control covers several workflows.
+
+**Why:** An initial retrospective update converted a completed code and configuration investigation into a generic clause. The user had to request a concrete mapping to existing actions and a separate list of new controls, each with scope and completion criteria.
+
+**Example:** A broader review found unsafe non-production provider defaults across several outbound channels. The useful update preserved the original push actions, extended deployment validation, credential review, and load-test checklist, then added separate fail-closed, queue-isolation, and provider-monitoring tasks.
+
+**See also:** `rootly-retrospective/SKILL.md` Step 7 and Step 8 (broader-risk findings must map to specific extensions and distinct new actions).
+
+## 250. Recovery steps must scope their side effects to what they actually changed
+
+**Principle:** Family A (mechanical invariants over prompt advice) - a restore or cleanup step may only write and only undo the exact items it touched, never blanket its whole input domain.
+
+**Shape trigger:** writing a script step that "restores missing files" or "cleans up state" over a broad root (a directory tree, an index area), and normalizing afterwards with a bulk undo (a pathspec-wide reset, a sweep delete).
+
+**Rule:** (1) collect the concrete items the step actually wrote into a list as it goes; (2) scope every undo (reset, delete, revert) to exactly that list, and skip the undo entirely when the list is empty; (3) before treating an item as lost and restoring it, check whether its absence is intentional user state: a staged deletion or staged rename is a move, never a restore target. A blanket undo converts the recovery step itself into the data-loss event.
+
+**Why:** a docs-preservation script's add-only restore was followed by an unconditional pathspec reset over every shadow root; it unstaged a plan executor's own staged git mv deletions, forcing a re-stage and amend, and the restore also resurrected a staged-deleted file through a shadow-root escape in its tracked-ancestor check.
+
+**Example:** the fixed step appends each restored path to a temp list (the restore loop runs in a pipeline subshell), resets only those paths, and consults the staged-deletion list (`git diff --cached --diff-filter=D`) before restoring anything.
+
+**See also:** #244 (assert the applied effect of a scripted action), #248 (verify process identity before killing it).
+
+## 251. Pin rename detection when asserting staged deletions in git
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a green assertion must measure the state it claims to measure.
+
+**Shape trigger:** a script or test asserts "path X is staged for deletion" via `git diff --cached --diff-filter=D` while staged renames may be in play.
+
+**Rule:** git applies rename detection by default, so a staged rename's source is reported as R, not D, and a --diff-filter=D assertion silently misses it. When the intent is "these paths are staged-gone", add --no-renames so rename sources report as D; when the intent is rename integrity, assert the R entry by name. Decide which semantics the assertion means; the default answers a different question.
+
+**Why:** a witness harness asserted the staged rename source via --diff-filter=D and failed against a WORKING fix: the intact rename was reported as R100, so the fixed state looked identical to the bug until the filter was pinned.
+
+**Example:** `git diff --cached --name-only --no-renames --diff-filter=D` lists both true deletions and rename sources; `git diff --cached --name-status | grep -E "^R[0-9]+\s+<source>$"` asserts rename integrity.
+
+**See also:** #244 (assert the applied effect of a scripted action), #250 (recovery steps scope their side effects).
+
+## 252. Place resource cleanup after its last consumer, or at trap registration
+
+**Principle:** Family A (mechanical invariants over prompt advice) - a cleanup step is a consumer too; ordering it by "where the related block ends" instead of "where the resource is last read" silently disables the feature the resource feeds.
+
+**Shape trigger:** adding cleanup (rm, close, reset) for a temporary file or handle in a script that already had a leak, without grepping for every later read of that resource.
+
+**Rule:** before adding a cleanup line, grep all consumers of the resource and place the removal after the last one; when a trap exists, prefer removing the resource only in the trap rather than inline, so early exits and late consumers are both covered. Verify the fixed path end to end (the guarded block must actually see the resource), not just that the leak is gone.
+
+**Why:** a review fix for a leaked mktemp file mirrored the sibling files' inline cleanup placement, but this file had two consumers later in the script; the rm turned the whole sweep feature into dead code, found only two review rounds later as a blocking regression.
+
+**Example:** inline removals kept for files consumed immediately after the loop; the late-consumed sweep file is removed only in the EXIT/INT/TERM trap registered for the script.
+
+**See also:** #250 (recovery steps scope their side effects), #244 (assert the applied effect of a scripted action).

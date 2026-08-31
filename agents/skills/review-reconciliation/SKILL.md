@@ -64,6 +64,8 @@ Classify each recurring group as exactly one primary disposition, with secondary
 
 Do not downgrade a real residual to a verification gap merely because a test is missing. Do not change product behavior to make a review artifact easier to close.
 
+**Design-reflection gate (third recurrence of one root, mandatory):** when the recurrence map shows the same root group in three or more consecutive rounds where each round's fix was correctly implemented against the prior round's spec, the reconciliation MUST evaluate at least one alternative representation of the mechanism (different data model, ownership, or source of truth) and either adopt it as the prescribed change or record concretely why the current representation beats it. Refining the failing mechanism's specification (tighter invariants, more witnesses, better ledgers) does not satisfy this gate: a third recurrence is evidence the invariant's representation is wrong, not that its specification is thin. The gate fires on the recurrence map alone; the caller cannot waive it without a recorded user decision.
+
 ### 3. Refactor only the authoritative layer
 
 When mutation is authorized, make the smallest coherent change at the owning layer:

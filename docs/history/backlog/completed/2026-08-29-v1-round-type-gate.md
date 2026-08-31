@@ -1,8 +1,9 @@
 # Backlog: version-1 `round` string-or-integer type gate (bool/float rejection)
 
-Status: open
+Status: done
 Workflow: backlog
 Source: docs/reviews/2026-08-29-2026-08-29-validator-contract-gates-code-review-r2.md, round r2, finding F1 (Medium, non-blocking; kept out of branch by the plan's round invariant)
+Completed: 2026-08-31 by docs/plans/completed/2026-08-30-v1-gate-trio.md (Tasks 1-2: RED fixtures + dual-typed round gate in `validate_version1_payload`)
 
 ## Problem
 

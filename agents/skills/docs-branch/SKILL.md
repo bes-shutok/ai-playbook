@@ -15,7 +15,7 @@ description: >
 - **Snapshot backup**: A plain temp-directory copy of shadow paths, taken before syncing. Never use `git stash push --all` for ignored shadow files because it removes them from disk.
 - **`docs` orphan branch**: A single permanent local branch with no code history that stores the full history of all gitignored doc changes across all feature branches. Never pushed to remote.
 - **Single-branch invariant**: The shadow history for gitignored docs must live on one branch named exactly `docs`. Branches such as `docs/master` or `docs/<feature>` are incorrect and must be consolidated back into `docs`, not reused.
-- **Add-only sync invariant**: The `docs` branch sync never treats a missing on-disk file as a deletion. Sync adds or updates paths present on disk only. Paths tracked on `refs/heads/docs` but absent from disk are restored from that branch before sync (unless the path was explicitly deleted in the latest `docs` commit). Review directories (`{reviews_dir}` and fallbacks such as `docs/reviews/`, `docs/history/reviews/`) always follow this rule.
+- **Add-only sync invariant**: The `docs` branch sync never treats a missing on-disk file as a deletion. Sync adds or updates paths present on disk only. Paths tracked on `refs/heads/docs` but absent from disk are restored from that branch before sync (unless the path was explicitly deleted in the latest `docs` commit). Review directories (`{reviews_dir}` and fallbacks such as `docs/reviews/`, `docs/history/reviews/`) always follow this rule. **tmp sweep exception:** `{tmp_dir}` (fallback `docs/tmp/`) is the ONE sweep-eligible root: a path under it that is tracked on the branch, absent on disk, not explicitly deleted, not staged for deletion or rename in the live index, and still gitignored (committed tmp paths are restored like any other branch-tracked content) is DROPPED from the branch (staged as a deletion) instead of restored, because `{tmp_dir}` is scratch with plan lifetime (see `done` Step 2.62 and `plans` **Plan Lifecycle** docs/tmp cleanup). Every other root, review directories above all, stays strictly add-only.
 - **Temporary docs worktree**: A separate `git worktree` used for all `docs` branch operations. The live project checkout stays on the user's working branch and is only read from.
 
 ## Documentation paths
@@ -185,28 +185,70 @@ docs_branch_is_explicit_delete() {
 # missing on disk BEFORE sync. Without this, a file lost earlier (e.g. by a manual
 # branch switch) would stay gone and never be re-synced. Reviews and all other
 # shadow roots follow this rule. Fill-only; never overwrite existing on-disk data.
+# A path the user has STAGED for deletion or rename is an intentional move, not
+# data loss: it is never restored. Afterwards only the paths actually restored
+# are unstaged; the reset must NEVER blanket the shadow roots (that unstaged the
+# user's own staged git mv work; witnessed 2026-08-31).
+DOCS_STAGED_DELETES_FILE=""
+RESTORED_PATHS_FILE=""
+DOCS_TMP_SWEEP_FILE=""
 if git show-ref --verify --quiet "refs/heads/${DOCS_BRANCH}"; then
+  DOCS_STAGED_DELETES_FILE=$(mktemp)
+  RESTORED_PATHS_FILE=$(mktemp)
+  DOCS_TMP_SWEEP_FILE=$(mktemp)
+  git diff --cached --name-only --no-renames --diff-filter=D 2>/dev/null > "$DOCS_STAGED_DELETES_FILE" || true
+  docs_branch_is_staged_delete() {
+    _target="$1"
+    [ -s "$DOCS_STAGED_DELETES_FILE" ] || return 1
+    grep -qxF -- "$_target" "$DOCS_STAGED_DELETES_FILE"
+  }
   for shadow_root in "${SHADOW_CANDIDATES[@]}"; do
     clean_root="${shadow_root%/}"
+    tmp_root="${TMP_DIR:-docs/tmp}"
+    tmp_root="${tmp_root%/}"
     git ls-tree -r --name-only "refs/heads/${DOCS_BRANCH}" -- "$clean_root" 2>/dev/null \
       | while IFS= read -r tracked; do
           [ -n "$tracked" ] || continue
           [ -e "$tracked" ] && continue
           docs_branch_is_explicit_delete "$tracked" && continue
+          docs_branch_is_staged_delete "$tracked" && continue
           git check-ignore -q "$tracked" || continue
+          case "$tracked" in
+            "${tmp_root}"/*)
+              # tmp sweep: {tmp_dir} is scratch with plan lifetime (done Step 2.62,
+              # plans Plan Lifecycle cleanup). Absent on disk means the owner
+              # cleaned it up: drop from the branch instead of restoring. This is
+              # the one non-add-only root; do NOT widen it to other roots.
+              # Sits after the check-ignore gate so only genuinely gitignored
+              # scratch is sweep-eligible (committed tmp paths are restored
+              # like any other branch-tracked content).
+              printf '%s\n' "$tracked" >> "$DOCS_TMP_SWEEP_FILE"
+              continue
+              ;;
+          esac
           docs_branch_under_tracked_subtree "$tracked" "$clean_root" && continue
           mkdir -p "$(dirname "$tracked")"
           git cat-file -p "refs/heads/${DOCS_BRANCH}:${tracked}" > "$tracked" 2>/dev/null || true
+          printf '%s\n' "$tracked" >> "$RESTORED_PATHS_FILE"
           echo "docs-branch: restored missing ${tracked} from refs/heads/${DOCS_BRANCH}" >&2
         done
   done
-  _restore_unstage=()
-  for _candidate in "${SHADOW_CANDIDATES[@]}"; do
-    _restore_unstage+=("${_candidate%/}")
-  done
-  git reset -q -- "${_restore_unstage[@]}" 2>/dev/null || true
-  unset shadow_root clean_root tracked _restore_unstage _candidate
+  # Unstage ONLY the files this restore wrote (the redirect write never touches
+  # the index; the reset is defensive for paths whose ignore state drifted).
+  # The restore loop runs inside a pipeline subshell, hence the temp file.
+  if [ -s "$RESTORED_PATHS_FILE" ]; then
+    sort -u "$RESTORED_PATHS_FILE" | while IFS= read -r _restored; do
+      [ -n "$_restored" ] || continue
+      git reset -q -- "$_restored" 2>/dev/null || true
+    done
+  fi
+  unset shadow_root clean_root tracked _restored
 fi
+[ -n "${DOCS_STAGED_DELETES_FILE:-}" ] && [ -f "$DOCS_STAGED_DELETES_FILE" ] && rm -f "$DOCS_STAGED_DELETES_FILE"
+[ -n "${RESTORED_PATHS_FILE:-}" ] && [ -f "$RESTORED_PATHS_FILE" ] && rm -f "$RESTORED_PATHS_FILE"
+# DOCS_TMP_SWEEP_FILE is intentionally NOT removed here: it is consumed later
+# (worktree sweep drop and staged deletion); the docs_branch_cleanup trap
+# removes it, including on early exits.
 
 SHADOW_PATHS=()
 for candidate in "${SHADOW_CANDIDATES[@]}"; do
@@ -265,6 +307,9 @@ docs_branch_cleanup() {
   [ -n "${DOCS_WORKTREE_PARENT:-}" ] && rm -rf "$DOCS_WORKTREE_PARENT"
   [ -n "${SHADOW_TMP:-}" ] && rm -rf "$SHADOW_TMP"
   [ -n "${EXECUTE_PLAN_BACKUP:-}" ] && rm -rf "$EXECUTE_PLAN_BACKUP"
+  [ -n "${DOCS_STAGED_DELETES_FILE:-}" ] && rm -f "$DOCS_STAGED_DELETES_FILE"
+  [ -n "${RESTORED_PATHS_FILE:-}" ] && rm -f "$RESTORED_PATHS_FILE"
+  [ -n "${DOCS_TMP_SWEEP_FILE:-}" ] && rm -f "$DOCS_TMP_SWEEP_FILE"
   exit "$rc"
 }
 trap docs_branch_cleanup EXIT INT TERM
@@ -366,6 +411,18 @@ for del_path in "${DOCS_EXPLICIT_DELETES[@]+"${DOCS_EXPLICIT_DELETES[@]}"}"; do
   rm -rf -- "${DOCS_WORKTREE:?}/${del_path:?}" 2>/dev/null || true
 done
 unset del_path
+
+# tmp sweep removals: drop swept {tmp_dir} paths from the docs worktree so the
+# branch tip stops tracking them. Content stays recoverable from the
+# pre-sweep history of this branch.
+if [ -s "$DOCS_TMP_SWEEP_FILE" ]; then
+  sort -u "$DOCS_TMP_SWEEP_FILE" | while IFS= read -r _swept; do
+    [ -n "$_swept" ] || continue
+    rm -rf -- "${DOCS_WORKTREE:?}/${_swept:?}" 2>/dev/null || true
+    echo "docs-branch: tmp sweep dropped ${_swept}" >&2
+  done
+fi
+unset _swept
 
 # Plan-archive move detection: when a plan was archived on the working branch
 # (moved from plans_dir to plans_completed_dir via ``git mv``), the add-only
@@ -471,6 +528,12 @@ find "$DOCS_WORKTREE" -mindepth 2 -name '.git' -type d | while read -r d; do rm 
   for del_path in "${DOCS_EXPLICIT_DELETES[@]+"${DOCS_EXPLICIT_DELETES[@]}"}"; do
     git add -f "$del_path" 2>/dev/null || true
   done
+  if [ -s "$DOCS_TMP_SWEEP_FILE" ]; then
+    sort -u "$DOCS_TMP_SWEEP_FILE" | while IFS= read -r _swept; do
+      [ -n "$_swept" ] || continue
+      git add -f "$_swept" 2>/dev/null || true
+    done
+  fi
 
   # Commit only if there are staged changes; include source branch for traceability.
   if ! git diff --cached --quiet; then
@@ -524,9 +587,9 @@ This only works when an old `git stash push --all` run happened after the files 
 - Create the `docs` branch as an **orphan** when it does not yet exist.
 - **Never** include `.claude/` (or similar local config dirs) in `SHADOW_PATHS`: they stay local-only and are not synced to the branch.
 - Build `extra_shadow_dirs` from the union of live `.ai-playbook/facts.md` and `refs/heads/docs:.ai-playbook/facts.md`. A stale live facts file must not remove already-configured shadow paths.
-- **Add-only sync:** never treat a missing on-disk shadow file as a deletion on the `docs` branch. Restore fill-only from `refs/heads/docs` for every shadow root (including reviews) before sync. Only paths explicitly deleted in the latest `docs` commit may be removed from the worktree and staged as deletions.
+- **Add-only sync:** never treat a missing on-disk shadow file as a deletion on the `docs` branch. Restore fill-only from `refs/heads/docs` for every shadow root (including reviews) before sync. Only paths explicitly deleted in the latest `docs` commit may be removed from the worktree and staged as deletions. **Single exception — `{tmp_dir}`:** a path under `{tmp_dir}` (fallback `docs/tmp/`) that is tracked on the branch, absent on disk, not staged for deletion or rename in the live index, and still gitignored in the live repo is swept from the branch instead of restored, because `{tmp_dir}` is scratch with plan lifetime (`done` Step 2.62 sweep, `plans` **Plan Lifecycle** cleanup). Never widen this exception to `{reviews_dir}` or any other root.
 - **Ephemeral tmp prune:** after the add-only overlay, remove stale `docs/tmp/*-cf-out.md` and `docs/tmp/**/__pycache__/**` from the temporary docs worktree when they are absent from the live checkout (`confluence-mirror-hygiene.sh docs-worktree-prune`). `done` Step 2.65 runs `audit-cf-out` first; cf-out is deleted only when hierarchy promotion is complete or the snapshot is STALE.
-- Before syncing, restore any ignored shadow file that exists on the `docs` branch but is missing on disk (fill-only, never overwrite). This recovers content lost by an earlier manual branch switch and prevents the sync from dropping it from the `docs` backup.
+- Before syncing, restore any ignored shadow file that exists on the `docs` branch but is missing on disk (fill-only, never overwrite). This recovers content lost by an earlier manual branch switch and prevents the sync from dropping it from the `docs` backup. Paths staged for deletion or rename in the live index are intentional moves and are never restore targets; the follow-up unstage resets only the paths actually restored, never a blanket reset over the shadow roots (a blanket reset unstages the user's own staged work).
 - Before staging on the `docs` branch, always strip LLM artifact gitignore rules and rules matching `extra_shadow_dirs` from `.gitignore` so the branch can track its own files. For a container root such as `resources/source/`, copy only ignored descendants that are not inside a tracked subtree; skip tracked or unignored children such as committed examples. Use `git add -f` when staging to also bypass any `.git/info/exclude` rules that may block adding gitignored paths.
 - The live project checkout is read-only for shadow paths during sync. Copy shadow content to temp storage, then into the temporary docs worktree.
 - **Never use `git stash push --all` or `git stash apply` for gitignored shadow files**: stash operations can remove ignored content from disk or restore only empty directories.
@@ -536,3 +599,8 @@ This only works when an old `git stash push --all` run happened after the files 
 - **Snapshot path correctness is data-loss critical**: `cp -Rp docs/foo SHADOW_TMP/` creates `SHADOW_TMP/foo/` (just the basename), NOT `SHADOW_TMP/docs/foo/`. Use the parent-preserving pattern everywhere: `parent=$(dirname "$src"); mkdir -p "${SHADOW_TMP}/${parent}"; cp -Rp "$src" "${SHADOW_TMP}/${parent}/"`. If the snapshot path doesn't match the worktree copy path, the sync silently omits content from the docs branch.
 - **Never run whole-repo `git clean`** during docs-branch sync. The worktree implementation does not need it.
 - **Preserve active execute-plan session logs** (`{tmp_dir}/execute-plan/<plan-slug>/` with `manifest.md`): the live checkout must remain untouched while the temporary docs worktree is updated.
+
+## Integration Points
+
+### With `done` and `plans` skills (docs/tmp sweep)
+The `{tmp_dir}` sweep-eligible-root exception (Add-only sync invariant) exists to propagate `done` Step 2.62 (ownerless scratch sweep; it never touches `review-loop*`/`code-review/`/`handoff/` scratch) and `plans` **Plan Lifecycle** (plan-completion docs/tmp cleanup) deletions to the branch. Never widen the exception for other consumers.

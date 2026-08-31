@@ -867,10 +867,23 @@ def validate_version1_payload(
     # the r5 F1 gate stays the single reporter for explicit-null required
     # fields; optional fields fire on any PRESENT value including explicit
     # null (null is not the absent form for optional version-1 fields).
-    for field_name in ("review_type", "artifact_slug", "date"):
+    # v1-gate-trio: the tuple widens with the enum-reason pair
+    # (``selection_reason`` / ``escalation_reason``). For that pair the None
+    # skip is correctness, not just delegation: null is the documented
+    # not-applicable form (r5 F1 carve-out), so only present non-strings are
+    # reported here. ``source_kind`` stays out of the tuple: its membership
+    # gate in ``validate_current_payload`` already rejects hashable mistyped
+    # values and a second gate would double-report them.
+    for field_name in (
+        "review_type",
+        "artifact_slug",
+        "date",
+        "selection_reason",
+        "escalation_reason",
+    ):
         value = payload.get(field_name)
         if value is None:
-            continue  # required-field null is reported by the r5 F1 gate
+            continue  # null: reported by the r5 F1 gate for the three required scalars; legal not-applicable form for the enum-reason pair (see block comment above)
         if not isinstance(value, str):
             result.add_error(
                 f"version-1 sidecar field {field_name!r} must be a string"
@@ -881,6 +894,17 @@ def validate_version1_payload(
                 "version-1 sidecar field 'date' must be a string in YYYY-MM-DD "
                 "format"
             )
+    # v1-gate-trio: ``round`` is dual-typed by contract (string or integer;
+    # review-staging SKILL.md contract table). bool is excluded explicitly
+    # because True is an int subclass in Python; the None skip keeps the r5 F1
+    # gate the single reporter for an explicit-null required round.
+    round_value = payload.get("round")
+    if round_value is not None and (
+        isinstance(round_value, bool) or not isinstance(round_value, (str, int))
+    ):
+        result.add_error(
+            "version-1 sidecar field 'round' must be a string or integer"
+        )
     for field_name, field_type, type_name in (
         ("depth", str, "a string"),
         ("domains", list, "a list"),
@@ -1221,6 +1245,11 @@ def validate_current_payload(
     # string severity (r3 F1: unhashable severities must stay out of the
     # order-check sort); the append lives in the severity branch below.
     valid_rows: list = []
+    # v1-gate-trio: ids already seen among valid-id rows. The duplicate gate
+    # is additive error reporting only: the duplicate row keeps its
+    # ``valid_rows`` membership (equal ids at one severity are sort-safe for
+    # the frozen order-check sort key), so no membership logic changes.
+    seen_ids: set = set()
     for i, finding in enumerate(findings):
         if not isinstance(finding, dict):
             result.add_error("current finding must be an object")
@@ -1253,9 +1282,25 @@ def validate_current_payload(
         # never forge or garble collected error output.
         if id_ok:
             display = repr(fid)
+            # v1-gate-trio: duplicate ids are rejected here, after the
+            # display-label computation so {display} is defined. Only
+            # valid-id rows participate (a malformed id keeps its own
+            # targeted error). Both statements depend on exactly id_ok,
+            # which nothing between them invalidates.
+            if fid in seen_ids:
+                result.add_error(
+                    f"current finding {display} duplicate id"
+                )
+            else:
+                seen_ids.add(fid)
         else:
             display = f"at index {i!r}"
-        if finding.get("severity") not in SEVERITY_ORDER:
+        # v1-gate-trio: an omitted severity key gets its own message so an
+        # author can distinguish it from a typo'd value; the invalid-severity
+        # gate below becomes the present-but-wrong-value reporter only.
+        if "severity" not in finding:
+            result.add_error(f"current finding {display} missing severity")
+        elif finding.get("severity") not in SEVERITY_ORDER:
             result.add_error(
                 f"current finding {display} has invalid severity "
                 f"(expected one of {list(SEVERITY_ORDER)})"
@@ -2482,6 +2527,82 @@ def _selftest_current_contract(root: Path, check) -> None:
         _mutate_list_blast_radius,
         lambda errors: any("invalid blast_radius" in e for e in errors),
         "finding blast_radius unhashable never crashes the membership check",
+    )
+
+    # v1-gate-trio fixture: duplicate ids. Two rows sharing an id used to
+    # validate clean — conservation reconciled both rows against their
+    # Markdown blocks and the sort key (severity_rank, id) tolerates equal
+    # ids — so triage references like "F1" became ambiguous. The findings-
+    # loop duplicate gate must report the repeat row exactly once.
+    def _mutate_duplicate_id(p: dict) -> None:
+        p["findings"][1]["id"] = 1
+
+    _run_id_fixture(
+        "duplicate-id",
+        "id-duplicate",
+        _mutate_duplicate_id,
+        lambda errors: sum("duplicate id" in e for e in errors) == 1,
+        "duplicate finding ids rejected (exactly one report)",
+    )
+
+    # v1-gate-trio follow-up: pin the duplicate gate's additive-only
+    # contract. The sidecar AND the markdown agree on ids [1, 1], so the
+    # duplicate error must be the single report and the duplicate rows must
+    # stay in conservation reconciliation and the order check (a refactor
+    # evicting them from valid_rows must turn this RED).
+    two_dup = [_current_finding(id=1), _current_finding(id=1)]
+    md_dup = _current_findings_markdown(two_dup, title="id-duplicate-agreeing")
+    dup_agreeing_path = _write_staging(
+        root,
+        "2026-07-17-branch-review-id-duplicate-agreeing-r1.md",
+        md_dup,
+        _payload_with_findings(two_dup),
+    )
+    try:
+        dup_agreeing_result = validate_staging_file(dup_agreeing_path, hard=True)
+    except TypeError:
+        dup_agreeing_result = None
+    check(
+        "duplicate ids keep rows in conservation and order checks (single additive report)",
+        dup_agreeing_result is not None
+        and sum("duplicate id" in e for e in dup_agreeing_result.errors) == 1
+        and not any(
+            "conservation" in e or "order" in e
+            for e in dup_agreeing_result.errors
+        ),
+    )
+
+    # v1-gate-trio RED fixture: a row with no severity key is today
+    # misreported as "has invalid severity (expected one of ...)", hiding
+    # the omitted-key vs typo'd-value distinction. The dedicated message
+    # must appear and the invalid-severity misreport must disappear for the
+    # severity-less row (both directions pinned in one assertion).
+    def _mutate_missing_severity(p: dict) -> None:
+        del p["findings"][1]["severity"]
+
+    _run_id_fixture(
+        "missing-severity",
+        "id-missing-severity",
+        _mutate_missing_severity,
+        lambda errors: any("missing severity" in e for e in errors)
+        and not any("invalid severity" in e for e in errors),
+        "missing severity gets a dedicated message (no invalid-severity misreport)",
+    )
+
+    # v1-gate-trio follow-up: a present explicit-null severity must hit the
+    # invalid-severity arm; null is not the absent form here (unlike the
+    # version-1 enum-reason carve-out). Guards a refactor that treats null
+    # as omitted, which would silently accept severity-less rows.
+    def _mutate_null_severity(p: dict) -> None:
+        p["findings"][1]["severity"] = None
+
+    _run_id_fixture(
+        "severity-null",
+        "id-severity-null",
+        _mutate_null_severity,
+        lambda errors: any("invalid severity" in e for e in errors)
+        and not any("missing severity" in e for e in errors),
+        "explicit-null severity reported as invalid, not missing",
     )
 
     # F13 RED probe: one validation run must classify the sidecar payload
@@ -4021,6 +4142,7 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
         "date",
         "review_type",
         "artifact_slug",
+        "round",
     ):
         null_required = _json.loads(_json.dumps(base_payload))
         null_required[field_name] = None
@@ -4078,6 +4200,12 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
         ("date", "２０２６-08-29", "YYYY-MM-DD"),
         ("review_type", 7, "must be a string"),
         ("artifact_slug", [], "must be a string"),
+        # v1-gate-trio fixtures: the enum-reason pair is covered by the F8
+        # scalar type-gate family (the loop tuple widened); these mistyped
+        # shapes must fail hard.
+        ("selection_reason", 5, "must be a string"),
+        ("selection_reason", [], "must be a string"),
+        ("escalation_reason", 7, "must be a string"),
         # Optional version-1 fields: a PRESENT but mistyped value must fail;
         # explicit null is not the absent form for optional version-1 fields
         # (r5 F1 pinned required fields only — this is the optional gap).
@@ -4106,6 +4234,26 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
             and any(f"{field_name!r}" in e and message in e for e in result.errors),
         )
 
+    # v1-gate-trio: `round` is documented dual-typed (string or integer;
+    # SKILL.md contract table). Bool and float shapes must fail hard; bool
+    # needs the explicit exclusion because True is an int subclass in Python.
+    for bad_round in (True, 3.5):
+        round_bad = _v1_copy()
+        round_bad["round"] = bad_round
+        round_result = validate_staging_file(
+            stage(f"round-{type(bad_round).__name__}-v1", round_bad, base_md),
+            hard=True,
+        )
+        check(
+            f"v1 contract: round = {bad_round!r} fails hard "
+            "(must be a string or integer)",
+            not round_result.ok
+            and any(
+                "'round'" in e and "must be a string or integer" in e
+                for e in round_result.errors
+            ),
+        )
+
     # Over-gating guard: absent optional fields stay valid.
     for field_name in ("depth", "domains"):
         absent = _v1_copy()
@@ -4125,6 +4273,33 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
             f"v1 contract: round = {round_value!r} stays valid (dual-typing guard)",
             validate_staging_file(
                 stage(f"round-{type(round_value).__name__}-v1", dual, base_md),
+                hard=True,
+            ).ok,
+        )
+
+    # v1-gate-trio keep-valid guards beside the over-gating guards above:
+    # the r5 F1 carve-out keeps null selection_reason/escalation_reason legal
+    # even after the F8 loop widens to the pair (the None skip makes the null
+    # gate the single reporter), and non-null enum strings pin the widened
+    # type gate against over-gating legal values. These pass before and
+    # after any gate changes; they pin legal forms, not gates.
+    for field_name, keep_value, value_form in (
+        ("selection_reason", None, "null"),
+        ("escalation_reason", None, "null"),
+        ("selection_reason", "focused-panel", "string"),
+        ("escalation_reason", "user-escalated", "string"),
+    ):
+        keep_valid = _v1_copy()
+        keep_valid[field_name] = keep_value
+        check(
+            f"v1 contract: {field_name} = {keep_value!r} stays valid "
+            "(enum-reason keep-valid guard)",
+            validate_staging_file(
+                stage(
+                    f"keep-valid-{field_name}-{value_form}-v1",
+                    keep_valid,
+                    base_md,
+                ),
                 hard=True,
             ).ok,
         )

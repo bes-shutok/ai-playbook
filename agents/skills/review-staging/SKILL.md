@@ -347,7 +347,7 @@ Required top-level fields (all must be present; enum-typed fields use `null` whe
 | `discarded` | array (may be empty); `wrong-owner` rows carry `lead_worker` + `lead_lens` (or `lead_agent`) |
 | `severity_calibration` | array (may be empty) |
 | `triage_outcomes` | per-worker/lens rollup: array of rows (as in the minimum-schema example) or an object rollup; the validator checks presence, not shape |
-| `findings` | array; each row carries `id` (integer), `severity`, `blocking` (real boolean), `consequence`, `reachability`, `blast_radius`, `confidence`, and a canonical `pattern` |
+| `findings` | array; each row carries `id` (unique integer; uniqueness is enforced for all current-format records, versionless and version-1 alike), `severity`, `blocking` (real boolean), `consequence`, `reachability`, `blast_radius`, `confidence`, and a canonical `pattern` |
 | `overflow` | array; never contains a Critical or blocking finding |
 | `soften_watchlist` | array; `[]` when none |
 
