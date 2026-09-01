@@ -1,6 +1,6 @@
 # Fence scanner consolidation follow-ups: cross-character close, dead reset-mode cell, duplicated fallback driver
 
-Status: open
+Status: done
 Workflow: backlog
 Source: docs/reviews/2026-08-29-fence-scanner-consolidation-code-review-r1.md, round r1, findings F1 (backlog half), F5, F6 (validated as real; deliberately deferred to keep the branch aligned with the reviewed plan scope); item 4 added from the r5 round (quality#fence-close-info-string, verified repro, pre-existing debt)
 
@@ -31,3 +31,7 @@ Low (all four). Items 2 and 3 are simplification-only (no behavior change); item
 ## Why not fixed now
 
 Scope decision by the orchestrator (execute-plan Phase 3 r1 address pass, 2026-08-29): the r5 F5 contract and plan Task 3 wording pin the current length-only close and the two-parameter API shape, so changing them on this branch would drift from the reviewed spec; the fallback-driver dedup is a structural rework late in a review loop (fix-risk rule 2). Recorded here so the dead mode and the duplication are not silently relied upon.
+
+## Closure note
+
+Done 2026-09-01 by docs/plans/2026-08-31-fence-close-rules.md. Items 1 and 4 are fixed by the new close rule requiring a character match, equal-or-longer length, and a bare closing delimiter line (the plan's char+length+bare rule), pinned by the verified silent-misparse and phantom repros. Items 2 and 3 are fixed by collapsing to the predicate-only `is_reset_heading` axis and driving both consumers from the shared fallback driver. Residual follow-ups split out to docs/history/backlog/2026-08-31-fence-scanner-round-2.md.

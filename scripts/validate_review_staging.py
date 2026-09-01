@@ -298,18 +298,24 @@ HEADING_LINE_RE = re.compile(r"^#{1,6}\s")
 
 def classify_fence_lines(
     lines: list[str],
-    reset_at_headings: bool = False,
+    *,
     is_reset_heading=None,
 ) -> tuple[list[tuple[str, object]], int | None]:
     """Fence-aware line classifier shared by every Markdown scanner here.
 
     The single owner of the fence state machine (r1 F3): a fence opens on a
-    line matching ``FENCE_LINE_RE`` and closes only on an equal-or-longer
-    delimiter line (r5 F5; the delimiter character is not compared, so an
-    equal-or-longer run of either fence character closes the fence). Emits
+    line matching ``FENCE_LINE_RE`` — openers keep prefix-match semantics
+    (either delimiter character, run of 3+, info strings allowed). A fence
+    closes ONLY on a bare, equal-or-longer run of the same delimiter
+    character as the opener (leading/trailing whitespace on the close line
+    is allowed; any other suffix — info string or mixed characters — keeps
+    the line fenced content, and a run of the other delimiter character
+    never closes however long it is). This same-char + equal-or-longer +
+    bare close rule supersedes the consolidation plan's length-only pin
+    (r5 F5's "the delimiter character is not compared" is retired). Emits
     one event per input line, drawn from the specified vocabulary:
 
-    - ``("fence_opener", delimiter_length)``: this line opens a fence;
+    - ``("fence_opener", None)``: this line opens a fence;
     - ``("fence_close", None)``: this line closes the currently open fence;
     - ``("in_fence_content", None)``: this line is content inside an open
       fence (never a heading, boundary, or metadata candidate);
@@ -319,15 +325,15 @@ def classify_fence_lines(
       heading sub-kinds (r2 F4);
     - ``("ordinary", raw_text)``: any other line outside a fence.
 
-    Reset policy: with ``reset_at_headings`` False (content-preserving), a
-    heading inside an open fence is ``in_fence_content`` (r5 F8 fenced-example
-    purity). With True (heading-reset, the r4 F3 containment mode for fences
-    that never close; requires ``is_reset_heading`` — a ``ValueError`` is
-    raised on ``reset_at_headings=True`` without it, so the silent
-    reset-on-every-heading default cannot recur), a heading inside an open
-    fence resets the fence state iff ``is_reset_heading(raw_text)`` is truthy
-    (each consumer pins its own reset heading set); otherwise it stays fenced
-    content.
+    Reset policy: with no ``is_reset_heading`` predicate (the default,
+    content-preserving), a heading inside an open fence is
+    ``in_fence_content`` (r5 F8 fenced-example purity). Passing a
+    callable selects heading-reset mode (the r4 F3 containment mode for
+    fences that never close, keyword-only so a half-configured mode is
+    structurally unrepresentable rather than conventionally): a heading
+    inside an open fence resets the fence state iff
+    ``is_reset_heading(raw_text)`` is truthy (each consumer pins its own
+    reset heading set); otherwise it stays fenced content.
 
     Returns ``(events, unclosed_opener_index)`` where
     ``unclosed_opener_index`` is the line index of the fence opener that never
@@ -335,22 +341,23 @@ def classify_fence_lines(
     partial fallback: keep pre-opener first-pass results, re-classify only
     from the opener onward).
     """
-    if reset_at_headings and is_reset_heading is None:
-        raise ValueError(
-            "reset_at_headings=True requires is_reset_heading "
-            "(each consumer pins its own reset heading set)"
-        )
     events: list[tuple[str, object]] = []
     in_fence = False
     fence_len = 0
+    fence_char = ""
     opener_index: int | None = None
     for i, line in enumerate(lines):
         fence_match = FENCE_LINE_RE.match(line)
         if fence_match:
             if in_fence:
-                if len(fence_match.group(1)) >= fence_len:
+                stripped = line.strip()
+                if (
+                    stripped == fence_char * len(stripped)
+                    and len(stripped) >= fence_len
+                ):
                     in_fence = False
                     fence_len = 0
+                    fence_char = ""
                     opener_index = None
                     events.append(("fence_close", None))
                 else:
@@ -358,24 +365,18 @@ def classify_fence_lines(
             else:
                 in_fence = True
                 fence_len = len(fence_match.group(1))
+                fence_char = fence_match.group(1)[0]
                 opener_index = i
-                events.append(("fence_opener", fence_len))
+                events.append(("fence_opener", None))
             continue
         if HEADING_LINE_RE.match(line):
-            if in_fence and not reset_at_headings:
-                events.append(("in_fence_content", None))
-                continue
-            if (
-                in_fence
-                and reset_at_headings
-                and is_reset_heading is not None
-                and not is_reset_heading(line)
-            ):
+            if in_fence and (is_reset_heading is None or not is_reset_heading(line)):
                 events.append(("in_fence_content", None))
                 continue
             if in_fence:
                 in_fence = False
                 fence_len = 0
+                fence_char = ""
                 opener_index = None
             events.append(("heading", line))
             continue
@@ -384,6 +385,47 @@ def classify_fence_lines(
             continue
         events.append(("ordinary", line))
     return events, (opener_index if in_fence else None)
+
+
+def classify_with_fallback(
+    lines: list[str],
+    is_reset_heading,
+) -> tuple[
+    list[tuple[str, object]], int | None, list[tuple[str, object]] | None
+]:
+    """Two-pass classification with the r6 F3 partial fallback.
+
+    Contract (r6 F3 partial fallback): the first pass is the default
+    content-preserving ``classify_fence_lines`` run over ALL lines. When every
+    fence closed, ``reset_events`` is ``None`` and ``unclosed_opener`` is
+    ``None``. When a fence never closed, the first pass is trustworthy only up
+    to its opener: the suffix ``lines[unclosed_opener:]`` is re-classified with
+    ``is_reset_heading`` (heading-reset mode) and returned as
+    ``reset_events``; consumers keep the pre-opener first-pass results and
+    interpret the suffix from the re-classified events (index-based consumers
+    remap suffix indices with ``unclosed_opener + i``; order-based consumers
+    apply the events directly). The helper owns only this two-pass
+    orchestration — it REUSES ``classify_fence_lines`` and never re-implements
+    fence tracking.
+
+    ``is_reset_heading`` is a required positional argument, unlike the
+    classifier's keyword-only optional predicate. The classifier runs both
+    modes, so its predicate must be optional to express content-preserving
+    mode. This helper only ever runs the reset mode (it invokes it solely on
+    the unclosed suffix), and reset mode must never run without its explicit
+    predicate — an optional predicate here would recreate the half-configured
+    mode the classifier's keyword-only design makes structurally
+    unrepresentable (the Task 3 collapse). Both consumers always have a
+    predicate of their own.
+    """
+    events, unclosed_opener = classify_fence_lines(lines)
+    if unclosed_opener is None:
+        return events, None, None
+    reset_events, _ = classify_fence_lines(
+        lines[unclosed_opener:],
+        is_reset_heading=is_reset_heading,
+    )
+    return events, unclosed_opener, reset_events
 
 
 def split_finding_blocks(content: str) -> list[str]:
@@ -413,9 +455,11 @@ def split_finding_blocks(content: str) -> list[str]:
             if kind == "heading" and is_finding_header(value)
         ]
 
-    events, unclosed_opener = classify_fence_lines(lines)
+    events, unclosed_opener, reset_events = classify_with_fallback(
+        lines, is_finding_header
+    )
     boundaries = boundary_indices(events)
-    if unclosed_opener is not None:
+    if reset_events is not None:
         # Partial fallback (r6 F3): a fence never closed, so the
         # content-preserving first pass is trustworthy only up to the opener.
         # Keep those boundaries and re-classify from the opener onward with
@@ -423,11 +467,6 @@ def split_finding_blocks(content: str) -> list[str]:
         # reset heading set), so the unclosed fence cannot swallow later
         # findings (r4 F3) and pre-opener fenced examples stay content.
         boundaries = [i for i in boundaries if i < unclosed_opener]
-        reset_events, _ = classify_fence_lines(
-            lines[unclosed_opener:],
-            reset_at_headings=True,
-            is_reset_heading=is_finding_header,
-        )
         boundaries += [
             unclosed_opener + i for i in boundary_indices(reset_events)
         ]
@@ -484,9 +523,10 @@ def parse_markdown_findings(content: str) -> list[dict]:
     # fenced example) silently overwrote the finding's real parsed pattern,
     # blocking, or triage.
     #
-    # r4 F3: the fence tracker is fence-length aware (a fence closes only on a
-    # delimiter of equal or greater length, so a longer opener cannot be
-    # closed by a shorter delimiter line) and an UNCLOSED fence cannot
+    # r4 F3: the fence tracker is close-rule aware (a fence closes only on a
+    # bare, equal-or-longer run of the same delimiter character as its
+    # opener — see the ``classify_fence_lines`` docstring for the full rule)
+    # and an UNCLOSED fence cannot
     # swallow the rest of the Findings section: when the section ends with a
     # fence still open, the region from the unclosed opener onward is
     # re-classified with severity-group and finding-header lines resetting
@@ -568,33 +608,30 @@ def parse_markdown_findings(content: str) -> list[dict]:
         return cur, cur_severity, metadata_open
 
     lines = findings_section.splitlines()
-    events, unclosed_opener = classify_fence_lines(lines)
+    events, unclosed_opener, reset_events = classify_with_fallback(
+        lines, is_reset_heading
+    )
     scanned: list[dict] = []
-    if unclosed_opener is None:
+    if reset_events is None:
         cur, _, _ = apply_events(
             events, scanned, None, current_severity, False
         )
     else:
         # Partial fallback (r6 F3): the content-preserving first pass is
-        # trustworthy only up to the opener. Re-derive the state at the
-        # opener from the pre-opener prefix (identical to the prefix of the
-        # first-pass events), flush the finding open at the opener with its
-        # PRE-opener bullets (no double-append), and re-scan from the opener
-        # with heading resets seeded with that state (severity label,
-        # metadata-region flag) so same-group later findings parse with their
-        # true severity (r4 F3 containment; post-opener bullets are inside
-        # the unclosed fence and are not recovered, same as the old
-        # full-discard behavior).
+        # trustworthy only up to the opener, so apply ONLY the pre-opener
+        # prefix of its events (never the full list). Re-derive the state at
+        # the opener from that prefix, flush the finding open at the opener
+        # with its PRE-opener bullets (no double-append), and re-scan from
+        # the opener with heading resets seeded with that state (severity
+        # label, metadata-region flag) so same-group later findings parse
+        # with their true severity (r4 F3 containment; post-opener bullets
+        # are inside the unclosed fence and are not recovered, same as the
+        # old full-discard behavior).
         cur, cur_severity, metadata_open = apply_events(
             events[:unclosed_opener], scanned, None, current_severity, False
         )
         if cur is not None:
             scanned.append(cur)
-        reset_events, _ = classify_fence_lines(
-            lines[unclosed_opener:],
-            reset_at_headings=True,
-            is_reset_heading=is_reset_heading,
-        )
         cur, _, _ = apply_events(
             reset_events, scanned, None, cur_severity, metadata_open
         )
@@ -4534,16 +4571,276 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
             hard=True,
         ).ok,
     )
-    # classifier-guard (r2 F1): the half-configured reset mode must fail loud.
-    try:
-        classify_fence_lines(["~~~"], reset_at_headings=True)
-        guard_raised = False
-    except ValueError:
-        guard_raised = True
+    # reset-axis-contract: the reset axis is selected solely by the
+    # keyword-only predicate — no half-configured mode exists, and a
+    # positional second argument is rejected at call time.
+    rac1_events, rac1_unclosed = classify_fence_lines(["~~~", "### High", "x"])
     check(
-        "fence fix: reset mode without a reset predicate raises ValueError "
-        "(# classifier-guard)",
-        guard_raised,
+        "fence fix: no predicate keeps fenced headings as content and the "
+        "opener unclosed (# reset-axis-contract)",
+        rac1_events
+        == [("fence_opener", None), ("in_fence_content", None), ("in_fence_content", None)]
+        and rac1_unclosed == 0,
+    )
+    rac2_events, rac2_unclosed = classify_fence_lines(
+        ["~~~", "#### F2.", "y"],
+        is_reset_heading=lambda line: re.match(r"^####\s+F\d+\.", line) is not None,
+    )
+    check(
+        "fence fix: a predicate alone activates heading reset (# reset-axis-contract)",
+        rac2_events == [("fence_opener", None), ("heading", "#### F2."), ("ordinary", "y")]
+        and rac2_unclosed is None,
+    )
+    try:
+        classify_fence_lines(["~~~"], lambda line: True)
+        rac_positional_rejected = False
+    except TypeError:
+        rac_positional_rejected = True
+    check(
+        "fence fix: positional second argument is rejected (# reset-axis-contract)",
+        rac_positional_rejected,
+    )
+    # close-rule-in-reset-mode: the char+bare close rule also holds inside
+    # the heading-reset pass (the same classifier serves both modes), and the
+    # heading reset clears the fence state so a later fence line can reopen.
+    # Characterization: GREEN today; pins that a future split of the reset
+    # pass onto a different close path (or loss of the reset state clear)
+    # fails an assertion instead of silently changing phantom promotion.
+    crrm_events, crrm_unclosed = classify_fence_lines(
+        ["```", "~~~", "#### F2.", "```", "x"],
+        is_reset_heading=lambda line: re.match(r"^####\s+F\d+\.", line) is not None,
+    )
+    check(
+        "fence fix: same-char bare close rule holds in heading-reset mode and a "
+        "reset heading lets a later fence line reopen "
+        "(# close-rule-in-reset-mode)",
+        [e[0] for e in crrm_events]
+        == [
+            "fence_opener",
+            "in_fence_content",
+            "heading",
+            "fence_opener",
+            "in_fence_content",
+        ]
+        and crrm_unclosed == 3,
+    )
+
+    # cross-char-close: a fence must close only on a run of the SAME
+    # delimiter character as the opener. RED under today's char-blind
+    # length-only close rule; GREEN after the char-match + bare close rule
+    # lands. Behavioral fixtures compare event KINDS plus unclosed_opener
+    # only (payload-agnostic); full-tuple comparison is reserved for the
+    # reset-axis-contract checks after the payload drop.
+    cc1_events, cc1_unclosed = classify_fence_lines(
+        ["```", "x = 1", "~~~", "- **Blocking**: true", "```"]
+    )
+    cc2_events, cc2_unclosed = classify_fence_lines(
+        ["~~~", "```", "text", "~~~"]
+    )
+    cc3_events, cc3_unclosed = classify_fence_lines(
+        ["```", "```~~~", "```"]
+    )
+    check(
+        "fence fix: a bare run of the wrong delimiter character never closes "
+        "a fence, whatever its length (cc1) (# cross-char-close)",
+        [e[0] for e in cc1_events]
+        == [
+            "fence_opener",
+            "in_fence_content",
+            "in_fence_content",
+            "in_fence_content",
+            "fence_close",
+        ]
+        and cc1_unclosed is None,
+    )
+    check(
+        "fence fix: a backtick run never closes a tilde fence (cc2) "
+        "(# cross-char-close)",
+        [e[0] for e in cc2_events]
+        == ["fence_opener", "in_fence_content", "in_fence_content", "fence_close"]
+        and cc2_unclosed is None,
+    )
+    check(
+        "fence fix: a mixed-character line never closes a fence (cc3) "
+        "(# cross-char-close)",
+        [e[0] for e in cc3_events]
+        == ["fence_opener", "in_fence_content", "fence_close"]
+        and cc3_unclosed is None,
+    )
+    # bare-close-info-string: a fence closes only on a BARE delimiter run;
+    # info strings and other non-bare suffixes keep the line fenced content.
+    # RED today on all three arms.
+    bc1_events, bc1_unclosed = classify_fence_lines(
+        ["```", "intro", "```python", "- **Blocking**: true", "```"]
+    )
+    bc2_events, bc2_unclosed = classify_fence_lines(["```", "~~~x", "```"])
+    bc3_events, bc3_unclosed = classify_fence_lines(["~~~", "~~~x", "~~~"])
+    check(
+        "fence fix: an info-string delimiter line stays fence content until "
+        "the final bare close (bc1) (# bare-close-info-string)",
+        [e[0] for e in bc1_events]
+        == [
+            "fence_opener",
+            "in_fence_content",
+            "in_fence_content",
+            "in_fence_content",
+            "fence_close",
+        ]
+        and bc1_unclosed is None,
+    )
+    check(
+        "fence fix: a wrong-character run with an info-string suffix never "
+        "closes a backtick fence (bc2) (# bare-close-info-string)",
+        [e[0] for e in bc2_events]
+        == ["fence_opener", "in_fence_content", "fence_close"]
+        and bc2_unclosed is None,
+    )
+    check(
+        "fence fix: a non-bare run never closes a tilde fence (bc3) "
+        "(# bare-close-info-string)",
+        [e[0] for e in bc3_events]
+        == ["fence_opener", "in_fence_content", "fence_close"]
+        and bc3_unclosed is None,
+    )
+    # bare-close-keep-valid: the close rules that stay legal before and
+    # after the tightening. GREEN today; one check per arm (shared slug, the
+    # cluster's multi-check-per-slug idiom) so a failing arm is named by its
+    # own FAIL line.
+    kv1_events, kv1_unclosed = classify_fence_lines(
+        ["~~~~", "x", "```", "y", "~~~~~~"]
+    )
+    check(
+        "fence fix: a bare equal-or-longer run of the same character closes "
+        "(# bare-close-keep-valid)",
+        [e[0] for e in kv1_events]
+        == [
+            "fence_opener",
+            "in_fence_content",
+            "in_fence_content",
+            "in_fence_content",
+            "fence_close",
+        ]
+        and kv1_unclosed is None,
+    )
+    kv2_events, kv2_unclosed = classify_fence_lines(["~~~~", "~~~"])
+    check(
+        "fence fix: a shorter bare same-character run stays fence content "
+        "(length rule kept) (# bare-close-keep-valid)",
+        [e[0] for e in kv2_events] == ["fence_opener", "in_fence_content"]
+        and kv2_unclosed == 0,
+    )
+    kv3_events, kv3_unclosed = classify_fence_lines(["~~~", "~~~ "])
+    check(
+        "fence fix: trailing whitespace on a bare close line still closes "
+        "(# bare-close-keep-valid)",
+        [e[0] for e in kv3_events] == ["fence_opener", "fence_close"]
+        and kv3_unclosed is None,
+    )
+    kv4_events, kv4_unclosed = classify_fence_lines(["~~~", "x", "  ~~~"])
+    check(
+        "fence fix: leading whitespace on a bare close line still closes "
+        "(# bare-close-keep-valid)",
+        [e[0] for e in kv4_events]
+        == ["fence_opener", "in_fence_content", "fence_close"]
+        and kv4_unclosed is None,
+    )
+    kv5_events, kv5_unclosed = classify_fence_lines(["```python"])
+    check(
+        "fence fix: a top-level info-string delimiter line still opens a "
+        "fence (# bare-close-keep-valid)",
+        [e[0] for e in kv5_events] == ["fence_opener"]
+        and kv5_unclosed == 0,
+    )
+    # silent-misparse-metadata-region: a fenced example in the metadata
+    # region whose in-example Blocking bullet sits after a bare ~~~ line.
+    # Today the bare ~~~ closes the backtick fence (cross-char, length-only)
+    # and the true bullet overwrites F1's real blocking=false, silently
+    # flipping readiness. After the fix the whole example stays fenced
+    # content. RED today.
+    sm_f1 = _current_finding(id=1, severity="High", blocking=False)
+    silent_md = _current_findings_markdown([sm_f1]).replace(
+        "#### Comment",
+        (
+            "```\n"
+            "text\n"
+            "~~~\n"
+            "- **Blocking**: true\n"
+            "```\n"
+            "#### Comment"
+        ),
+        1,
+    )
+    assert "~~~" in silent_md and "- **Blocking**: true" in silent_md, (
+        "fenced example not injected; fixture defanged"
+    )
+    parsed_silent = parse_markdown_findings(silent_md)
+    check(
+        "fence fix: in-example bullet after a bare cross-character closer "
+        "cannot overwrite the real blocking value or flip readiness "
+        "(# silent-misparse-metadata-region)",
+        len(parsed_silent) == 1
+        and parsed_silent[0].get("blocking") is False
+        and is_review_ready(silent_md) is True,
+    )
+    # Unclosed arm of the same residual: the same injected example WITHOUT
+    # its terminating bare ``` line. The fallback must NOT recover the
+    # in-example Blocking bullet (documented fail-open direction), so the
+    # doc keeps F1's real pre-opener blocking=false (the post-opener true
+    # bullet stays unrecovered) and reads as ready. Pins the residual
+    # so a future fallback change that recovers fenced bullets fails here
+    # instead of silently flipping readiness.
+    silent_unclosed_md = silent_md.replace(
+        "- **Blocking**: true\n```\n",
+        "- **Blocking**: true\n",
+        1,
+    )
+    assert "```" in silent_unclosed_md, "fixture defanged: no fence left"
+    _, silent_unclosed_opener = classify_fence_lines(
+        silent_unclosed_md.splitlines()
+    )
+    assert silent_unclosed_opener is not None, (
+        "fixture defanged: the injected example still closes its fence"
+    )
+    parsed_silent_unclosed = parse_markdown_findings(silent_unclosed_md)
+    check(
+        "fence fix: an unclosed example fence leaves the in-example bullet "
+        "unrecovered (fail-open residual pinned): blocking stays false and "
+        "readiness stays true (# silent-misparse-metadata-region)",
+        len(parsed_silent_unclosed) == 1
+        and parsed_silent_unclosed[0].get("blocking") is False
+        and is_review_ready(silent_unclosed_md) is True,
+    )
+    # phantom-f99-info-string: a properly closed fenced example in the
+    # Comment body quoting an inner ```python line and a quoted #### F99.
+    # header with field bullets. Today the inner ```python line closes the
+    # outer fence, the quoted header becomes a live finding (ids [1, 99],
+    # 2 blocks). After the fix the snippet stays fenced content. Presence
+    # asserts only: fence-marker parity can never hold for this shape (the
+    # fixture contributes exactly three fence-pattern lines). RED today.
+    ph_f1 = _current_finding(id=1, severity="High", blocking=True)
+    phantom_md = _current_findings_markdown([ph_f1]).replace(
+        "#### Comment",
+        (
+            "#### Comment\n"
+            "The staging format quoted verbatim inside a code fence:\n"
+            "```\n"
+            "```python\n"
+            "#### F99. fake#y\n"
+            "- **Pattern**: quality#phantom-example\n"
+            "- **Blocking**: true\n"
+            "```\n"
+        ),
+        1,
+    )
+    assert "```python" in phantom_md and "#### F99." in phantom_md, (
+        "fenced example not injected; fixture defanged"
+    )
+    check(
+        "fence fix: an inner info-string line in a properly closed example "
+        "stays fence content; no phantom F99 finding or block "
+        "(# phantom-f99-info-string)",
+        [f.get("id") for f in parse_markdown_findings(phantom_md)] == [1]
+        and len(split_finding_blocks(phantom_md)) == 1,
     )
 
     # fallback-preserves-fenced-example (r6 F3): a properly fenced
@@ -4617,6 +4914,57 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
             ),
             hard=True,
         ).ok,
+    )
+
+    # phantom-unclosed-fallback (GREEN today, must stay green): an UNCLOSED
+    # outer fence in a finding's Comment body quoting the staging format (a
+    # ``### Low`` severity-group heading, a ``#### F7.`` finding header, and
+    # field bullets). Under the r4 F3 / r6 F3 partial fallback the unclosed
+    # suffix is re-classified with the parser's reset predicate, so the quoted
+    # ``### Low`` and ``#### F7.`` lines reset the fence and F7 is PROMOTED to
+    # a parsed finding carrying the quoted Low severity label — the documented
+    # fallback promotion residual. Pin it: ids == [1, 7] with F7's severity
+    # exactly "Low" (not the enclosing group's, not None).
+    pu_f1 = _current_finding(id=1)
+    phantom_unclosed_md = _current_findings_markdown([pu_f1]).replace(
+        "#### Comment",
+        (
+            "#### Comment\n"
+            "The staging format quoted verbatim as an example:\n"
+            "```markdown\n"
+            "### Low\n"
+            "\n"
+            "#### F7. Example finding quoted inside an unclosed fence\n"
+            "- **Pattern**: quality#phantom-unclosed\n"
+            "- **Blocking**: true\n"
+        ),
+        1,
+    )
+    _, phantom_unclosed_opener = classify_fence_lines(
+        phantom_unclosed_md.splitlines()
+    )
+    assert phantom_unclosed_opener is not None, (
+        "unclosed outer fence not injected; fixture defanged"
+    )
+    assert "#### F7." in phantom_unclosed_md and "### Low" in phantom_unclosed_md, (
+        "quoted staging-format example not injected; fixture defanged"
+    )
+    parsed_phantom_unclosed = parse_markdown_findings(phantom_unclosed_md)
+    check(
+        "fence fix: unclosed fence quoting a staging example promotes the "
+        "quoted F7 to a parsed finding with the quoted Low severity (r4 F3 / "
+        "r6 F3 fallback promotion residual, ids [1, 7]) "
+        "(# phantom-unclosed-fallback)",
+        [f.get("id") for f in parsed_phantom_unclosed] == [1, 7]
+        and next(
+            (
+                f.get("severity")
+                for f in parsed_phantom_unclosed
+                if f.get("id") == 7
+            ),
+            None,
+        )
+        == "Low",
     )
 
     # fallback-same-severity-group (r6 F3): the fenced example, the stray

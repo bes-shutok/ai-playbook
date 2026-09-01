@@ -4987,7 +4987,7 @@ When the identical command behaves differently in the agent shell versus the use
 
 **Why:** a 7-item questions-for-the-dealer email asked the seller to explain products whose terms are legally published elsewhere; the provider's tariff page answered most items in one pass (product identity, coverage set, contract duration), and the user pushed back: "too many questions, look some up online."
 
-**Example:** a purchase-financing proposal listed several unexplained monthly add-ons in its insurance column; the lender's official tariff-page IPIDs identified each one (a deductible-refund policy that dies with the credit, a replacement-car days schedule, the all-risks coverage list), trimming the email to 4 counterparty-only questions before sending.
+**Example:** a purchase-financing proposal listed several unexplained monthly add-ons in its insurance column; the lender's official tariff-page IPIDs identified each one (a deductible-refund policy that dies with the credit, a replacement-car days schedule, the all-risks coverage list), trimming the email to 4 counterparty-only questions before sending. Same deal, second pass: a drafted follow-up still asked whether two small premiums were inside the quoted installment; the user rejected it because the proposal's own side-by-side columns already itemized them - classify against documents already in hand, not only public ones.
 
 **See also:** #56 (verify claims against source before acting), #134 (probe quota resets before treating a limit as a hard block).
 
@@ -5060,3 +5060,37 @@ When the identical command behaves differently in the agent shell versus the use
 **Example:** inline removals kept for files consumed immediately after the loop; the late-consumed sweep file is removed only in the EXIT/INT/TERM trap registered for the script.
 
 **See also:** #250 (recovery steps scope their side effects), #244 (assert the applied effect of a scripted action).
+
+## 253. Derive a behavior-change fixture's expected post-state by executing the rule
+
+**Principle:** Family H (Verify the real thing, not the abstraction) - a fixture's expected outcome is a claim about the prescribed change, and a mental edit of today's transcript is an abstraction over that change.
+
+**Shape trigger:** authoring a RED fixture for a behavior CHANGE, with today's observed output in front of the author.
+
+**Rule:** produce every expected value by execution, never by hand-editing today's output. Run today's code on the fixture input for the RED transcript, then run the prescribed new rule (a monkeypatch simulation suffices) on the same input for the GREEN expectation - a hand-patched expectation silently mixes today's tail with the new rule's middle. Auxiliary asserts (defang counts, parity, injection-present) are expectations too: execute the real fixture build once and assert what it actually produces, not what parity arithmetic suggests.
+
+**Why:** two consecutive plan-review rounds each caught a blocking instance: an expected event tail copied from today's premature re-open while the new rule closes that line, so the check could never go green; and a parity defang asserting an even marker count on a fixture contributing exactly three.
+
+**See also:** #235 (RED fixture input validity), #140 (verify counts from the production reader, not mental arithmetic), #246 (probe claims, not absence-greps).
+
+## 254. After a yes verdict, audit your own folds before buying another round
+
+**Principle:** Family H (Verify the real thing, not the abstraction) - after a review gate reports converged, the real thing is the dependency graph your own edits created; another blind probe is an abstraction of verification.
+
+**Shape trigger:** an iterative review loop (plan review, code review, reconciliation) reports zero blocking findings, then post-fix rounds keep flipping the verdict with new instances of the same defect class (ordering slips, stale references, capability timing).
+
+**Rule:** treat the first clean verdict as the loop's exit by default. If later rounds re-open it, stop launching probes: build the moved-symbols table yourself (every symbol, fixture capability, or field: created-in, removed-at, required-by task), fix every violation in ONE comprehensive pass, and re-certify once. Do not count rounds by panel shape, and do not let a mechanical re-probe rule push more detector runs when the detector keeps finding your own output.
+
+**Why:** a plan review loop ran ready=yes at round 5, then rounds 6-8 each found exactly one more cross-task ordering slip introduced by the previous round's fold, at roughly a million subagent tokens per round; the operator cancelled round 9. A hand-built dependency table found the last residual in minutes.
+
+**See also:** #253 (execute the rule to derive expectations), review-reconciliation trigger (non-monotonic rounds).
+
+## 255. Read time-varying environment values at the moment of use
+
+**Principle:** Family H (Verify the real thing, not the abstraction) - a spot check samples the environment once; the value at use time is the real thing.
+
+**Rule:** for any environment value that varies over time or place (timezone offset, DST state, clock, working directory, hostname resolution), read it at the instant the code or artifact uses it (`astimezone()`, runtime lookups), and store absolute instants or raw values instead of derived local forms. Fixed constants are reserved for genuinely fixed external conventions (a server's display timezone); label them as such. Never render or schedule from an offset captured during an earlier session or planning step.
+
+**Why:** a scheduling plan captured the machine's UTC+1 offset during a chat, then baked local-clock arithmetic into examples; the user corrected that the offset is not fixed (DST and travel change it), and the fix was to render via the system zone read at cycle time, keeping only the server-side +08 decode as a named constant.
+
+**See also:** #72 (verify plan-time claims before writing tasks), #246 (probe claims, not absence-greps).
