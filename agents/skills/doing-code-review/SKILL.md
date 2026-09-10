@@ -149,10 +149,13 @@ Do **not** bulk-paste entire guideline files into every worker prompt.
 
 For Java/Spring reviews, the Guideline Pack is incomplete unless it includes
 the shared `java_guidelines.md`, `jvm_guidelines.md`, and
-`coding_guidelines.md` paths. Add rule hints for Java rules #16 through #20
+`coding_guidelines.md` paths. Add rule hints for Java rules #16 through #25
 when the diff contains Java, Maven, Spring configuration, generated request
-models, outbound HTTP clients, downstream error mapping, or changed
-dependency coordinates. Workers must open the relevant hinted sections during
+models, outbound HTTP clients, downstream error mapping, changed dependency
+coordinates, shared helpers reused across callers,
+feature-flag and configuration wiring,
+timeout or scheduled-executor boundaries, or
+living-documentation status claims. Workers must open the relevant hinted sections during
 their lens pass, and staging metadata must record the applied Java rule hints.
 Do not treat a path-only listing as evidence that the guidance was applied.
 

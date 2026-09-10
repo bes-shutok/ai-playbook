@@ -216,3 +216,119 @@ binding time when the service contract requires encryption. A local loopback
 exception must be explicit and limited to local or test use. Infrastructure
 TLS does not replace validation when the application can otherwise be pointed
 at plaintext transport.
+
+## 21. Preserve the Raise-versus-Degrade Policy of Every Caller in Shared Helpers
+
+Trace every shared conversion, mapping, or persistence helper to every caller in the changed branch. Each caller keeps its own raise-versus-degrade policy: infrastructure failures stay top-level failures, and only explicitly row-local problems may degrade to per-item results. When a helper is reused by a new caller, verify the reuse does not silently change an existing caller outcome from raise to degrade or the reverse. Add or verify a test per caller that proves a malformed infrastructure input fails the whole request where the caller raises, and only the offending item where the caller degrades.
+
+```java
+// Generic example for rule 21: one shared helper, two callers, different policies.
+class OrderImportJob {
+  // Single-item route: raises; the whole request fails on infrastructure errors.
+  void importOne(Row row) {
+    persist(mapRow(row));
+  }
+
+  // Batch route: degrades; only the offending item is recorded as skipped.
+  BatchResult importBatch(List<Row> rows) {
+    BatchResult result = new BatchResult();
+    for (Row row : rows) {
+      try {
+        result.add(mapRow(row));
+      } catch (RowLocalException e) {
+        result.skipped(row, e);
+      }
+    }
+    return result;
+  }
+
+  MappedRow mapRow(Row row) { /* shared conversion helper */ }
+}
+```
+
+## 22. Exercise the Feature-Flag and Configuration Matrix for Independent Readiness
+
+When a change touches a rollout flag or its configuration, review the complete flag and configuration matrix, not only the default deployment mode. Enumerate the flag values and configuration profiles the changed scope can combine, and require a discriminating assertion per combination that matters for readiness. An independent capability must not become ready or unavailable through an unrelated flag.
+
+```java
+// Generic example for rule 22: an unrelated flag combination flips capability readiness.
+// Readiness check couples two independent flags:
+boolean isExportReady() {
+  return exportFlag.isEnabled() && importFlag.isEnabled();  // export readiness must not depend on importFlag
+}
+
+// Review finding: with exportFlag enabled and importFlag disabled, isExportReady()
+// returns false even though export has all its own dependencies in place.
+// Required matrix assertions (one per combination that matters for readiness):
+//   exportFlag=on,  importFlag=on  -> isExportReady() == true
+//   exportFlag=on,  importFlag=off -> isExportReady() == true  (fails before the fix)
+//   exportFlag=off, importFlag=on  -> isExportReady() == false
+```
+
+## 23. Enforce Time Budgets at the Last Transport Boundary and Audit Timeout Resource Lifecycles
+
+Verify time-budget enforcement at the last transport boundary: a budget can expire after the controller returns but before the serialized response is emitted, so the check must cover the final write to the client, not only the handler method (directly when the application owns serialization, or at the outermost application-owned boundary per the framework case below). Inspect scheduled executors, callbacks, and cleanup paths for per-request resources that outlive the request after a timeout, and require evidence they are released or bounded. When the application owns serialization or streaming, the budget check must cover the final write. When the framework performs serialization, require evidence that budget enforcement sits at the outermost application-owned boundary, such as a filter or interceptor, and record the framework-owned final write as an accepted residual with its rationale in the review's durable record, such as the staging doc's Release-gate ledger or a backlog item with an owner.
+
+```java
+// Generic example for rule 23: the budget expires between handler return and serialization.
+ResponseEntity<Report> getReport(Request req) {
+  Deadline budget = Deadline.from(req);           // 5s budget for the whole request
+  Report report = reportService.build(req, budget);
+  return ResponseEntity.ok(report);               // handler returns within budget
+}
+
+// The serializer runs after the handler returns; the budget is not checked there:
+void writeResponse(ResponseEntity<Report> response, OutputStream out) {
+  byte[] body = serialize(response.getBody());    // slow serialization, budget already expired
+  out.write(body);                                // final write to the client is unbounded
+}
+
+// Review finding: budget.remaining() must be checked before the final client write, and any
+// per-request executor or callback scheduled by reportService must be cancelled or bounded
+// when the budget expires, not left running past the request lifetime.
+```
+
+## 24. Add an Executable Compatibility Witness for Changed Direct API Usage
+
+For every value shape that a changed direct call to a dependency API relies on, add a small executable compatibility witness: a test or scratch check that invokes the changed call against the upgraded dependency version. Compilation is not compatibility: a dependency can compile cleanly while rejecting a value at runtime because of reserved names, added validation, or changed default behavior. The witness must exercise the value shapes the change relies on and record the observed behavior. The witness must run hermetically: no live services and no paid APIs. When a dependency API cannot be exercised without real infrastructure, record a static compatibility analysis of the changed call, such as the upgraded artifact's source or changelog and rejection-path reading, as the evidence and note the residual runtime risk in the review's durable record, such as the Release-gate ledger or a backlog item with an owner. When a coordinate change alters many direct call sites, prioritize the value shapes the change relies on rather than every call site. See also #19 for the advisory audit.
+
+```java
+// Generic example for rule 24: a reserved name accepted at compile time, rejected at runtime.
+// Upgraded dependency declares a name validator; this compiles cleanly:
+registry.register("order", handler);          // fine
+registry.register("new", otherHandler);       // compiles, but "new" is reserved in v2
+
+// Executable compatibility witness (a test against the upgraded version):
+@Test
+void witnessReservedNameRejection() {
+  Registry registry = new Registry();
+  registry.register("order", handler);        // passes: value shape the change relies on
+  assertThatThrownBy(() -> registry.register("new", otherHandler))
+      .isInstanceOf(ReservedNameException.class)
+      .hasMessageContaining("reserved");      // observed behavior recorded in the test
+}
+```
+
+## 25. Reconcile Living-Documentation Status Claims with Implementation Evidence
+
+Reconcile every changed living-documentation status claim with implementation evidence: an integration described as active needs an executable consumer or producer, configuration, or an integration witness in the changed branch. When a status claim cannot be evidenced because scope is intentionally deferred, require a durable backlog item with an explicit owner and handoff instead of leaving the deferral only in review notes.
+
+```
+Generic example for rule 25: an active claim without an executable consumer.
+
+Living doc (changed paragraph):
+  "The notification integration is active and consumes events from the order stream."
+
+Reconciliation in the changed branch:
+  - Consumer class: none found (no listener annotation, no scheduler, no inbound adapter).
+  - Configuration: notification.consumer.* keys exist but no code reads them.
+  - Test witness: no test starts a consumer or asserts a consumed event.
+
+Review finding: the claim cannot stay "active". Either restore an executable consumer
+or correct the claim, and because the consumer is intentionally deferred this quarter,
+record a durable backlog item:
+
+  Backlog item: "Restore notification stream consumer"
+  Owner: feature team lead (named in the ticket, not in review notes)
+  Handoff: configuration keys documented as dormant; revisit before the next release note.
+```

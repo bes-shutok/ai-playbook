@@ -5831,3 +5831,15 @@ When the identical command behaves differently in the agent shell versus the use
 **Why:** a review round found a rename fix half-implemented: the split was bounded to the rename letter but the second-separator rejection clause of the prescribed fix was missing, leaving both a bypass and a false-block direction.
 
 **See also:** #295 (machine-mode parsing), #313 (classify on the raw line), #286 (derive the grammar from the live emitted corpus).
+
+## 315. Probe Interface Surfaces Live Before Declaring Runtime State Inaccessible
+
+**Principle:** Family H (verify the real thing, not the abstraction) - absence of a capability in the most visible surface is not evidence of absence; a feasibility verdict requires enumerating and live-probing every interface class.
+
+**Trigger:** researching whether an agent runtime, CLI, or provider exposes programmatic access to internal state (quota, budget, sessions, usage) and the first passive surfaces checked (response headers, UI display, chat text) come up empty.
+
+**Rule:** (1) Enumerate all interface classes before concluding infeasibility: provider monitoring/usage endpoints authenticated with the same credential the client already holds, client-side telemetry the CLI writes to disk (session rollouts, logs), hook/machine-interface payload fields (for example a transcript path), and the passive surfaces. (2) Live-probe the most promising surface with real (read-only) credentials before writing any verdict; one recorded JSON response outranks an inference from absence. (3) Record the verified shapes (endpoint, auth header form, field names) in the durable capture so the next session does not re-derive them.
+
+**Why:** a quota-introspection feasibility check first grepped logged response headers, found no rate-limit data, and was one step from a false "not possible" verdict; a community-tool reference then revealed a provider monitoring endpoint that returned live window percentages and an exact reset epoch on the first probe, and the second runtime's session telemetry files carried the equivalent data.
+
+**See also:** #134 (rate-limit reset timestamps: probe the real block before acting on it), coding_guidelines.md #25 (Family H parent).

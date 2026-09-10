@@ -157,6 +157,15 @@ for n in 21 22 23 24 25; do
   sed -n "/^## $n\./,/^## /p" "$JG" | grep -q "Generic example for rule $n" || fail "rule $n has no generic worked example"
 done
 
+# Normative rule bodies are pinned (a rewritten or truncated body must fail)
+expect 'only explicitly row-local problems may degrade' "$JG" 'rule 21 normative body'
+expect 'must not become ready or unavailable through an unrelated flag' "$JG" 'rule 22 normative body'
+expect 'must cover the final write to the client' "$JG" 'rule 23 normative body'
+expect 'Compilation is not compatibility' "$JG" 'rule 24 normative body'
+expect 'durable backlog item with an explicit owner and handoff' "$JG" 'rule 25 normative body'
+expect 'accepted residual with its rationale' "$JG" 'rule 23 framework boundary qualifier'
+expect 'must run hermetically' "$JG" 'rule 24 witness hermeticity'
+
 # Overlay: Review-wide Java checks list extended, one bullet per new rule
 expect '#21: raise-versus-degrade' "$OV" 'overlay rule 21 bullet'
 expect '#22: flag and configuration matrix' "$OV" 'overlay rule 22 bullet'
@@ -173,8 +182,8 @@ expect 'apply #22 to the flag and configuration matrix' "$OV" 'trigger section: 
 expect 'apply #23 at the last serialization and transport boundary' "$OV" 'trigger section: timeout boundary'
 expect 'apply #24 alongside #19' "$OV" 'trigger section: witness'
 expect 'apply #25 and reconcile with an executable consumer' "$OV" 'trigger section: living docs'
-# The trigger section must follow the Review-wide Java checks section (ownership sentence inside it)
-awk 'index($0,"raise-versus-degrade tracing belongs to quality"){own=NR} index($0,"## Rollout, timeout, and shared-helper triggers (Spring)"){sec=NR} END{exit !(own>0 && sec>own)}' "$OV" || fail 'trigger section must follow the Review-wide Java checks section'
+# The trigger section must follow the Review-wide Java checks section (ownership sentence inside it) and precede Message-driven handlers
+awk 'index($0,"raise-versus-degrade tracing belongs to quality"){own=NR} index($0,"## Rollout, timeout, and shared-helper triggers (Spring)"){sec=NR} index($0,"## Message-driven handlers"){msg=NR} END{exit !(own>0 && sec>own && msg>sec)}' "$OV" || fail 'trigger section must follow the Review-wide Java checks section and precede Message-driven handlers'
 
 # Simplification catalog: census evidence requirement
 expect 'declaration census and report the reference-search' "$SIM" 'census evidence requirement'
@@ -202,6 +211,9 @@ expect 'feature-flag and configuration matrix coverage' "$EP" 'quality bar: flag
 expect 'scheduled timeout resource lifecycles' "$EP" 'quality bar: timeout lifecycle'
 expect 'executable compatibility witnesses for changed direct API usage' "$EP" 'quality bar: witness'
 expect 'living-documentation status reconciliation' "$EP" 'quality bar: living docs'
+# Negative probes: the retired #16 through #20 range must not survive anywhere in either orchestrator
+grep -qF '#16 through #20' "$DCR" && fail 'stale #16 through #20 range in doing-code-review'
+grep -qF '#16 through #20' "$EP" && fail 'stale #16 through #20 range in execute-plan'
 
 # Repository scans (the block already anchored itself to the repo root)
 bash scripts/check-no-em-dash.sh file "$JG" "$OV" "$SIM" "$RPS" "$DCR" "$EP" || fail 'em dash found in changed files'
@@ -215,39 +227,39 @@ echo 'VALIDATION PASS: jvm review coverage wiring complete'
 Files:
 - `projects/.ai-playbook/java_guidelines.md`
 
-- [ ] Append `## 21. Preserve the Raise-versus-Degrade Policy of Every Caller in Shared Helpers` with this normative text: "Trace every shared conversion, mapping, or persistence helper to every caller in the changed branch. Each caller keeps its own raise-versus-degrade policy: infrastructure failures stay top-level failures, and only explicitly row-local problems may degrade to per-item results. When a helper is reused by a new caller, verify the reuse does not silently change an existing caller outcome from raise to degrade or the reverse. Add or verify a test per caller that proves a malformed infrastructure input fails the whole request where the caller raises, and only the offending item where the caller degrades."
-- [ ] Append `## 22. Exercise the Feature-Flag and Configuration Matrix for Independent Readiness` with this normative text: "When a change touches a rollout flag or its configuration, review the complete flag and configuration matrix, not only the default deployment mode. Enumerate the flag values and configuration profiles the changed scope can combine, and require a discriminating assertion per combination that matters for readiness. An independent capability must not become ready or unavailable through an unrelated flag."
-- [ ] Append `## 23. Enforce Time Budgets at the Last Transport Boundary and Audit Timeout Resource Lifecycles` with this normative text: "Verify time-budget enforcement at the last transport boundary: a budget can expire after the controller returns but before the serialized response is emitted, so the check must cover the final write to the client, not only the handler method. Inspect scheduled executors, callbacks, and cleanup paths for per-request resources that outlive the request after a timeout, and require evidence they are released or bounded."
-- [ ] Append `## 24. Add an Executable Compatibility Witness for Changed Direct API Usage` with this normative text: "For every changed direct usage of a dependency API, add a small executable compatibility witness: a test or scratch check that invokes the changed call against the upgraded dependency version. Compilation is not compatibility: a dependency can compile cleanly while rejecting a value at runtime because of reserved names, added validation, or changed default behavior. The witness must exercise the value shapes the change relies on and record the observed behavior. See also #19 for the advisory audit."
-- [ ] Append `## 25. Reconcile Living-Documentation Status Claims with Implementation Evidence` with this normative text: "Reconcile every changed living-documentation status claim with implementation evidence: an integration described as active needs an executable consumer or producer, configuration, or an integration witness in the changed branch. When a status claim cannot be evidenced because scope is intentionally deferred, require a durable backlog item with an explicit owner and handoff instead of leaving the deferral only in review notes."
-- [ ] Each of the five rules embeds one generic worked example in a fenced block, using only generic names (for example `OrderImportJob`, `Row`, `BatchResult`), and each example block begins with the marker line `Generic example for rule 2N:` where 2N is the rule number (for example `Generic example for rule 21:` inside the fence); rule #21 uses the worked example from Gist & Examples; rule #22 shows a flag/profile combination flipping an unrelated capability; rule #23 shows a budget expiring between handler return and response serialization; rule #24 shows a reserved name accepted at compile time and rejected at runtime; rule #25 shows an active claim reconciled against an absent executable consumer with the deferral recorded as a durable handoff.
-- [ ] Commit: `docs: add java guidelines rules 21-25 for jvm review coverage`
+- [x] Append `## 21. Preserve the Raise-versus-Degrade Policy of Every Caller in Shared Helpers` with this normative text: "Trace every shared conversion, mapping, or persistence helper to every caller in the changed branch. Each caller keeps its own raise-versus-degrade policy: infrastructure failures stay top-level failures, and only explicitly row-local problems may degrade to per-item results. When a helper is reused by a new caller, verify the reuse does not silently change an existing caller outcome from raise to degrade or the reverse. Add or verify a test per caller that proves a malformed infrastructure input fails the whole request where the caller raises, and only the offending item where the caller degrades."
+- [x] Append `## 22. Exercise the Feature-Flag and Configuration Matrix for Independent Readiness` with this normative text: "When a change touches a rollout flag or its configuration, review the complete flag and configuration matrix, not only the default deployment mode. Enumerate the flag values and configuration profiles the changed scope can combine, and require a discriminating assertion per combination that matters for readiness. An independent capability must not become ready or unavailable through an unrelated flag."
+- [x] Append `## 23. Enforce Time Budgets at the Last Transport Boundary and Audit Timeout Resource Lifecycles` with this normative text: "Verify time-budget enforcement at the last transport boundary: a budget can expire after the controller returns but before the serialized response is emitted, so the check must cover the final write to the client, not only the handler method (directly when the application owns serialization, or at the outermost application-owned boundary per the framework case below). Inspect scheduled executors, callbacks, and cleanup paths for per-request resources that outlive the request after a timeout, and require evidence they are released or bounded. When the application owns serialization or streaming, the budget check must cover the final write. When the framework performs serialization, require evidence that budget enforcement sits at the outermost application-owned boundary, such as a filter or interceptor, and record the framework-owned final write as an accepted residual with its rationale in the review's durable record, such as the staging doc's Release-gate ledger or a backlog item with an owner."
+- [x] Append `## 24. Add an Executable Compatibility Witness for Changed Direct API Usage` with this normative text: "For every value shape that a changed direct call to a dependency API relies on, add a small executable compatibility witness: a test or scratch check that invokes the changed call against the upgraded dependency version. Compilation is not compatibility: a dependency can compile cleanly while rejecting a value at runtime because of reserved names, added validation, or changed default behavior. The witness must exercise the value shapes the change relies on and record the observed behavior. The witness must run hermetically: no live services and no paid APIs. When a dependency API cannot be exercised without real infrastructure, record a static compatibility analysis of the changed call, such as the upgraded artifact's source or changelog and rejection-path reading, as the evidence and note the residual runtime risk in the review's durable record, such as the Release-gate ledger or a backlog item with an owner. When a coordinate change alters many direct call sites, prioritize the value shapes the change relies on rather than every call site. See also #19 for the advisory audit."
+- [x] Append `## 25. Reconcile Living-Documentation Status Claims with Implementation Evidence` with this normative text: "Reconcile every changed living-documentation status claim with implementation evidence: an integration described as active needs an executable consumer or producer, configuration, or an integration witness in the changed branch. When a status claim cannot be evidenced because scope is intentionally deferred, require a durable backlog item with an explicit owner and handoff instead of leaving the deferral only in review notes."
+- [x] Each of the five rules embeds one generic worked example in a fenced block, using only generic names (for example `OrderImportJob`, `Row`, `BatchResult`), and each example block begins with the marker line `Generic example for rule 2N:` where 2N is the rule number (for example `Generic example for rule 21:` inside the fence); rule #21 uses the worked example from Gist & Examples; rule #22 shows a flag/profile combination flipping an unrelated capability; rule #23 shows a budget expiring between handler return and response serialization; rule #24 shows a reserved name accepted at compile time and rejected at runtime; rule #25 shows an active claim reconciled against an absent executable consumer with the deferral recorded as a durable handoff.
+- [x] Commit: `docs: add java guidelines rules 21-25 for jvm review coverage`
 
 ### Task 2: Trigger the new rules in the Java/Spring overlay
 
 Files:
 - `agents/skills/doing-code-review/java-spring.md`
 
-- [ ] Extend the Review-wide Java checks list with five bullets after the existing `#20` bullet, in this exact form: `- \`java_guidelines.md\` #21: raise-versus-degrade policy of every caller at shared conversion and persistence helpers.` / `- \`java_guidelines.md\` #22: flag and configuration matrix coverage for independent capability readiness.` / `- \`java_guidelines.md\` #23: time budgets at the last transport boundary and scheduled timeout resource lifecycles.` / `- \`java_guidelines.md\` #24: executable compatibility witness for changed direct API usage.` / `- \`java_guidelines.md\` #25: living-documentation status claims reconciled with implementation evidence.`
-- [ ] Extend the ownership sentence at the end of the Review-wide Java checks section by appending: `Shared-helper raise-versus-degrade tracing belongs to quality; the flag and configuration matrix and timeout lifecycle to risk; the compatibility witness to implementation; living-documentation reconciliation to documentation.`
-- [ ] Add a new section `## Rollout, timeout, and shared-helper triggers (Spring)` immediately after the `## Review-wide Java checks` section (before `## Message-driven handlers (Spring Kafka)`), with Spring-specific triggers: shared `@Component` converters, mappers, or persistence helpers reused by a new caller (apply #21 to every caller); rollout flags, `@ConditionalOnProperty` wiring, or profile-specific configuration (apply #22 to the flag and configuration matrix); per-request time budgets, resilience timeout annotations, or `@Scheduled` cleanup (apply #23 at the last serialization and transport boundary and to scheduled resource lifecycles); changed direct dependency API usage after a coordinate change (apply #24 alongside #19); changed living docs claiming an integration is active (apply #25 and reconcile with an executable consumer, producer, or witness).
-- [ ] Commit: `skills: trigger jvm coverage rules 21-25 in the java spring overlay`
+- [x] Extend the Review-wide Java checks list with five bullets after the existing `#20` bullet, in this exact form: `- \`java_guidelines.md\` #21: raise-versus-degrade policy of every caller at shared conversion and persistence helpers.` / `- \`java_guidelines.md\` #22: flag and configuration matrix coverage for independent capability readiness.` / `- \`java_guidelines.md\` #23: time budgets at the last transport boundary and scheduled timeout resource lifecycles.` / `- \`java_guidelines.md\` #24: executable compatibility witness for changed direct API usage.` / `- \`java_guidelines.md\` #25: living-documentation status claims reconciled with implementation evidence.`
+- [x] Extend the ownership sentence at the end of the Review-wide Java checks section by appending: `Shared-helper raise-versus-degrade tracing belongs to quality; the flag and configuration matrix and timeout lifecycle to risk; the compatibility witness to implementation; living-documentation reconciliation to documentation.`
+- [x] Add a new section `## Rollout, timeout, and shared-helper triggers (Spring)` immediately after the `## Review-wide Java checks` section (before `## Message-driven handlers (Spring Kafka)`), with Spring-specific triggers: shared `@Component` converters, mappers, or persistence helpers reused by a new caller (apply #21 to every caller); rollout flags, `@ConditionalOnProperty` wiring, or profile-specific configuration (apply #22 to the flag and configuration matrix); per-request time budgets, resilience timeout annotations, or `@Scheduled` cleanup (apply #23 at the last serialization and transport boundary and to scheduled resource lifecycles); changed direct dependency API usage, especially after a coordinate change (apply #24 alongside #19); changed living docs claiming an integration is active (apply #25 and reconcile with an executable consumer, producer, or witness).
+- [x] Commit: `skills: trigger jvm coverage rules 21-25 in the java spring overlay`
 
 ### Task 3: Require census evidence in the simplification catalog
 
 Files:
 - `agents/skills/review-agents/simplification.md`
 
-- [ ] Extend the unused-changed-declarations bullet in the `delete:` checklist so it reads, after the existing sentence about the branch-wide reference search: "Run a complete changed-source declaration census and report the reference-search or static-analysis evidence with the finding; compiler success is not proof of use."
-- [ ] Commit: `skills: require census evidence for unused declaration findings`
+- [x] Extend the unused-changed-declarations bullet in the `delete:` checklist so it reads, after the existing sentence about the branch-wide reference search: "Run a complete changed-source declaration census and report the reference-search or static-analysis evidence with the finding; compiler success is not proof of use."
+- [x] Commit: `skills: require census evidence for unused declaration findings`
 
 ### Task 4: Extend the risk-signal floor
 
 Files:
 - `agents/skills/review-agents/review-panel-selection.md`
 
-- [ ] Rewrite the first sentence of the risk-signal floor Java paragraph to exactly: `Treat changed dependency coordinates, outbound service URL configuration, downstream error-response mapping, shared conversion or persistence helpers reused across callers, feature-flag and configuration wiring that gates capability readiness, and time-budget or timeout boundaries as risk signals even when the diff is small.` Leave the paragraph's following sentence about the `risk` worker and the Java/Spring guideline checks unchanged.
-- [ ] Commit: `skills: treat shared helpers flag wiring and timeout boundaries as risk signals`
+- [x] Rewrite the first sentence of the risk-signal floor Java paragraph to exactly: `Treat changed dependency coordinates, outbound service URL configuration, downstream error-response mapping, shared conversion or persistence helpers reused across callers, feature-flag and configuration wiring that gates capability readiness, and time-budget or timeout boundaries as risk signals even when the diff is small.` Leave the paragraph's following sentence about the `risk` worker and the Java/Spring guideline checks unchanged.
+- [x] Commit: `skills: treat shared helpers flag wiring and timeout boundaries as risk signals`
 
 ### Task 5: Wire the new evidence classes into both orchestrators
 
@@ -255,15 +267,15 @@ Files:
 - `agents/skills/doing-code-review/SKILL.md`
 - `agents/skills/execute-plan/SKILL.md`
 
-- [ ] `doing-code-review` Step 2.5 Java paragraph: change the hinted range to `#16 through #25` and extend the trigger list so it ends: changed dependency coordinates, shared helpers reused across callers, feature-flag and configuration wiring, timeout or scheduled-executor boundaries, or living-documentation status claims.
-- [ ] `execute-plan` Step 3.1 item 2 Java bullet: change the applied range to `#16 through #25` and extend the changed-scope trigger list with the same four surfaces (shared helpers reused across callers, feature-flag and configuration wiring, timeout or scheduled-executor boundaries, living-documentation status claims).
-- [ ] `execute-plan` Step 3.4 quality bar item 4: extend the evidence list so it reads: changed declarations, nullable boundary states, downstream error payload sinks, changed dependency coordinates, outbound URL transport configuration, shared-helper raise-versus-degrade tracing, feature-flag and configuration matrix coverage, timeout transport boundaries and scheduled timeout resource lifecycles, executable compatibility witnesses for changed direct API usage, and living-documentation status reconciliation, when those surfaces are present.
-- [ ] Both orchestrator edits land in the same commit so the two trigger lists cannot drift.
-- [ ] Commit: `skills: require jvm coverage evidence at the clear-round quality bar`
+- [x] `doing-code-review` Step 2.5 Java paragraph: change the hinted range to `#16 through #25` and extend the trigger list so it ends: changed dependency coordinates, shared helpers reused across callers, feature-flag and configuration wiring, timeout or scheduled-executor boundaries, or living-documentation status claims.
+- [x] `execute-plan` Step 3.1 item 2 Java bullet: change the applied range to `#16 through #25` and extend the changed-scope trigger list with the same four surfaces (shared helpers reused across callers, feature-flag and configuration wiring, timeout or scheduled-executor boundaries, living-documentation status claims).
+- [x] `execute-plan` Step 3.4 quality bar item 4: extend the evidence list so it reads: changed declarations, nullable boundary states, downstream error payload sinks, changed dependency coordinates, outbound URL transport configuration, shared-helper raise-versus-degrade tracing, feature-flag and configuration matrix coverage, timeout transport boundaries and scheduled timeout resource lifecycles, executable compatibility witnesses for changed direct API usage (or the guideline #24 static-analysis fallback with its durable-record residual), and living-documentation status reconciliation, when those surfaces are present.
+- [x] Both orchestrator edits land in the same commit so the two trigger lists cannot drift.
+- [x] Commit: `skills: require jvm coverage evidence at the clear-round quality bar`
 
 ### Task 6: Final validation sweep
 
 Files: none (verification only).
 
-- [ ] Run the Validation Commands block from the repo root; expect exit 0 with `VALIDATION PASS: jvm review coverage wiring complete`.
-- [ ] No commit; verification only.
+- [x] Run the Validation Commands block from the repo root; expect exit 0 with `VALIDATION PASS: jvm review coverage wiring complete`.
+- [x] No commit; verification only.

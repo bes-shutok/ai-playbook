@@ -97,10 +97,38 @@ the complete branch diff, not only to the highlighted line:
   dependency coordinates.
 - `java_guidelines.md` #20: required outbound TLS validation at configuration
   binding, with only an explicit loopback exception.
+- `java_guidelines.md` #21: raise-versus-degrade policy of every caller at
+  shared conversion and persistence helpers.
+- `java_guidelines.md` #22: flag and configuration matrix coverage for
+  independent capability readiness.
+- `java_guidelines.md` #23: time budgets at the last transport boundary and
+  scheduled timeout resource lifecycles.
+- `java_guidelines.md` #24: executable compatibility witness for changed
+  direct API usage.
+- `java_guidelines.md` #25: living-documentation status claims reconciled
+  with implementation evidence.
 
 Assign findings to the normal owners: unused surface to simplification,
 boundary behavior to quality or testing, error leakage and transport security
 to risk, and dependency wiring or compatibility to implementation or risk.
+Shared-helper raise-versus-degrade tracing belongs to quality;
+the flag and configuration matrix and timeout lifecycle to risk;
+the compatibility witness to implementation;
+living-documentation reconciliation to documentation.
+
+## Rollout, timeout, and shared-helper triggers (Spring)
+
+- Shared `@Component` converters, mappers, or persistence helpers reused by a
+  new caller: apply #21 to every caller.
+- Rollout flags, `@ConditionalOnProperty` wiring, or profile-specific
+  configuration: apply #22 to the flag and configuration matrix.
+- Per-request time budgets, resilience timeout annotations, or `@Scheduled`
+  cleanup: apply #23 at the last serialization and transport boundary and to
+  scheduled resource lifecycles.
+- Changed direct dependency API usage, especially after a coordinate change:
+  apply #24 alongside #19.
+- Changed living docs claiming an integration is active:
+  apply #25 and reconcile with an executable consumer, producer, or witness.
 
 ## Message-driven handlers (Spring Kafka)
 

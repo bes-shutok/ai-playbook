@@ -1,7 +1,16 @@
 # Backlog: strengthen JVM review-cycle coverage
 
-Status: open
+Status: done
 Workflow: backlog
+
+Completion note (2026-09-10): coverage verified. Classes 1-4 plus the
+staging-gate class landed as policy via commit 9ede3c1 before this plan;
+classes 5-9 landed as java_guidelines rules #21-#25 with overlay, risk-floor,
+and orchestrator wiring by this plan's execution (commits 1308b1e..b31967c on
+2026-09-10). Broader executable self-test and static-analysis support remains
+scoped to a dedicated future change per this item's own "Why not fixed now"
+note. Six residual review findings are tracked in
+docs/history/backlog/2026-09-10-jvm-review-coverage-r1-residuals.md.
 Source: anonymized external review follow-up from an execute-plan Phase 3 Java/Spring cycle
 Severity: Medium overall; individual findings range from Low to High by reachability and data impact
 Class: review-cycle coverage hardening

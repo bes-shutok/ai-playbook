@@ -590,9 +590,13 @@ Every Step 3.1 launched after an accepted fix is labeled in the staging Metadata
    - When concurrency signals exist: load premortem and concurrency inside `risk`; do not launch persona children.
    - For Java/Spring plans, require the Guideline Pack to include the shared
      `java_guidelines.md`, `jvm_guidelines.md`, and `coding_guidelines.md` paths.
-     Require the panel to apply Java rules #16 through #20 when the changed
+     Require the panel to apply Java rules #16 through #25 when the changed
      scope includes Java declarations, nullable generated models, downstream
-     error mapping, outbound service URLs, or dependency coordinates. Record
+     error mapping, outbound service URLs, dependency coordinates,
+     shared helpers reused across callers,
+     feature-flag and configuration wiring,
+     timeout or scheduled-executor boundaries, or
+     living-documentation status claims. Record
      `Java guideline checks: #<rules>` in staging Metadata; a path-only listing
      without applied rule hints is not sufficient for a clear round.
 3. Launch **lens worker** sub-agents in parallel using the **Review lens worker** template from [subagent-prompts.md](subagent-prompts.md). Workers analyze; the parent synthesizes the staging doc (orchestrator / sub-agent boundary).
@@ -689,8 +693,13 @@ Backlog items, manifest updates, and disposition notes are bookkeeping, not dige
 4. For Java/Spring plans, the staging Metadata records the required shared
    Java/JVM/coding guideline paths and applied rule hints. The review evidence
    covers changed declarations, nullable boundary states, downstream error
-   payload sinks, changed dependency coordinates, and outbound URL transport
-   configuration when those surfaces are present.
+   payload sinks, changed dependency coordinates, outbound URL transport
+   configuration, shared-helper raise-versus-degrade tracing,
+   feature-flag and configuration matrix coverage, timeout transport
+   boundaries and scheduled timeout resource lifecycles,
+   executable compatibility witnesses for changed direct API usage (or the
+   guideline #24 static-analysis fallback with its durable-record residual), and
+   living-documentation status reconciliation, when those surfaces are present.
 5. **Last-fix ordering:** the clean round's reviewed head includes the last accepted-fix commit as ancestor-or-self (`git merge-base --is-ancestor <last_fix_commit> <clean-round-head>`; in the canonical loop the post-fix review runs at HEAD equal to the fix commit, which satisfies ancestor-or-self). The manifest records `last_fix_commit` when any address pass accepted fixes, and the orchestrator runs that check before treating the round as clean.
 6. **Release-gate ledger complete (per `review-staging`):** when the plan explicitly assigns a boundary to later work, the staging doc's `## Release-gate ledger` records every required field for each deferred boundary (missing capability and owner, unsafe current path and configuration, permitted deployment mode, shippability condition, classification); an incomplete ledger is not clean. The ledger is a handoff artifact only and never authorizes expanding the plan's scope.
 
