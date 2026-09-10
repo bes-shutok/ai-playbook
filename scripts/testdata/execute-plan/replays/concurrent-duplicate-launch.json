@@ -1,0 +1,14 @@
+{
+  "name": "concurrent-duplicate-launch",
+  "trace": ["two owners attempted to claim the same pending task"],
+  "events": [{"type": "concurrent-duplicate-launch"}],
+  "expected": {
+    "status": "blocked",
+    "reason_code": "stale-claim",
+    "retry_count": 0,
+    "claim_state": "claimed",
+    "manifest_state": "active",
+    "action_scope": "repository-task",
+    "mutation_expectation": "none"
+  }
+}

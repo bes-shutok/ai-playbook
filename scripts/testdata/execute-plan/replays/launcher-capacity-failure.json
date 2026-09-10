@@ -1,0 +1,14 @@
+{
+  "name": "launcher-capacity-failure",
+  "trace": ["host launcher reported no available worker capacity"],
+  "events": [{"type": "launcher-capacity-failure"}],
+  "expected": {
+    "status": "blocked",
+    "reason_code": "runtime-policy-unavailable",
+    "retry_count": 0,
+    "claim_state": "blocked",
+    "manifest_state": "active",
+    "action_scope": "repository-task",
+    "mutation_expectation": "none"
+  }
+}

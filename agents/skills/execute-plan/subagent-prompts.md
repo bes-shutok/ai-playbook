@@ -2,6 +2,28 @@
 
 Copy the relevant template, fill placeholders, and launch via your agent's sub-agent execution capability.
 
+## Shared worker and result contract
+
+The runtime driver supplies the task scope, allowed paths, validation commands,
+evidence requirements, claim generation, and policy token. An execute-plan
+invocation already authorizes repository-scoped edits, tests, safe local
+recovery, and the per-task commit handoff. The worker must not ask
+conversational permission or call a user-question facility for those actions.
+Push, deploy, merge, external communication, access changes, and network
+operations remain gated.
+
+Use the driver's normalized result contract for every return: `success` needs
+evidence, `blocked` names a genuine hard gate and safe next action, `aborted`
+records an explicit stop, `error` records a runtime or tool failure, and
+`contract-violation` records the violated rule, recovery action, and evidence.
+Natural-language hesitation is not an approval state. Unknown or malformed
+results fail closed and must never be reported as degraded success.
+
+The driver owns task selection, atomic claiming, checkpointing, reload, resume,
+and terminal-state transitions. The worker owns implementation and evidence;
+the done workflow owns the commit operation. Do not reproduce driver state
+transitions or host protocol details in a worker or done prompt.
+
 **Orchestrator:** after implement → verify → mark checkboxes → `done` for a task, **launch the next task immediately**. Do not ask the user for permission between tasks, between review rounds, or before Phase 3. See SKILL.md "Continuous execution" and Step 1.5.
 
 Placeholders:
@@ -53,12 +75,13 @@ Task: ### Task <TASK_NUM>: <TASK_TITLE>
 ## Rules
 
 1. Implement ONLY this task's admissible clauses. Complete every `- [ ]` that is repository implementation, or a release-gate exception that already records a current bound receipt plus **why executable now** and a `completion evidence` criterion. Refuse and return `blocked` for external prerequisites or release-gate items missing that receipt shape; do not implement unauthorized work.
-2. Follow RED → GREEN when the task specifies it; run tests and show fresh output.
-3. Touch only files listed under this task's `Files:` (plus imports/wiring required for compile).
-4. Fix ALL test failures before returning; including failures that seem unrelated.
-5. Do NOT commit; the orchestrator launches `done` after verification.
-6. Do NOT edit the plan file; the orchestrator marks checkboxes.
-7. **Update execution log** at `<IMPLEMENT_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). Include commands run, decisions, errors, and full return payload.
+2. Treat the policy token and task path list as the complete authorization boundary. Do not invoke raw unmediated commands, network actions, external communication, push, deploy, merge, or access changes.
+3. Follow RED → GREEN when the task specifies it; run tests and show fresh output.
+4. Touch only files listed under this task's `Files:` (plus imports/wiring required for compile).
+5. Fix ALL test failures before returning; including failures that seem unrelated.
+6. Do NOT commit; the orchestrator launches `done` after verification.
+7. Do NOT edit the plan file; the orchestrator marks checkboxes.
+8. **Update execution log** at `<IMPLEMENT_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). Include commands run, decisions, errors, and full return payload.
 
 ## Return format
 
@@ -98,6 +121,11 @@ Context:
 - Suggested commit subject: <COMMIT_HINT>
 - Manifest: <MANIFEST_PATH>
 
+The execute-plan invocation authorizes the repository-scoped commit for this
+task. Run the done workflow without asking conversational permission. Push,
+deploy, merge, external communication, and access changes remain gated and are
+outside this prompt.
+
 ## Preceding-step log: read before learn (required)
 
 Step 1.4 follows Step 1.2 implement. Read in full before invoking `learn`:
@@ -132,6 +160,11 @@ Context:
 - Review doc: <REVIEW_DOC_PATH>
 - Address-review ran: yes | no (no = Step 3.3 skipped; still run learn + commit if anything is uncommitted)
 - Manifest: <MANIFEST_PATH>
+
+The execute-plan invocation authorizes only the repository-scoped review-fix
+commit for this iteration. Do not ask conversational permission for that
+commit. Push, deploy, merge, external communication, and access changes remain
+gated.
 
 ## Preceding-step logs: read before learn (required)
 

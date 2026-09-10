@@ -1,0 +1,306 @@
+# Authoritative runtime identity and capability registry for execute-plan.
+# Capability values belong here only. Runtime prose and probes are validated views.
+
+[inventory]
+schema_version = 1
+contract_version = "1.0"
+capability_owner = "registry"
+registry_path = "projects/.ai-playbook/execute-plan-runtime-inventory.toml"
+canonical_ids = ["claude", "codex", "cursor", "zcode", "opencode", "copilot", "gemini", "antigravity"]
+deferred_ids = ["pi"]
+
+[runtimes.claude]
+id = "claude"
+display_name = "Claude Code"
+aliases = ["claude", "claude code"]
+source_catalogs = ["runtime-layout", "agterm", "hooks-probe"]
+eligibility = "eligible"
+adapter_entrypoint = "runtime-adapter:claude"
+launch_operation = "launch-worker"
+wait_operation = "wait-for-result"
+resume_operation = "resume-session"
+fallback = "Use a bounded parent handoff when final-response enforcement is unavailable."
+adapter_version = "1.0"
+approval_policy = "adapter-enforced-default-deny"
+retry_budget = 2
+
+[runtimes.claude.capabilities]
+launch = "unsupported"
+wait = "unsupported"
+resume = "unsupported"
+checkpoint = "full"
+approval = "full"
+parent_continuation = "full"
+final_response = "degraded"
+
+[runtimes.codex]
+id = "codex"
+display_name = "Codex"
+aliases = ["codex"]
+source_catalogs = ["runtime-layout", "agterm", "hooks-probe"]
+eligibility = "eligible"
+adapter_entrypoint = "runtime-adapter:codex"
+launch_operation = "launch-worker"
+wait_operation = "wait-for-result"
+resume_operation = "resume-session"
+fallback = "Return a durable receipt when the host cannot enforce terminal finalization."
+adapter_version = "1.0"
+approval_policy = "adapter-enforced-default-deny"
+retry_budget = 2
+
+[runtimes.codex.capabilities]
+launch = "full"
+wait = "full"
+resume = "full"
+checkpoint = "full"
+approval = "full"
+parent_continuation = "full"
+final_response = "degraded"
+
+[runtimes.cursor]
+id = "cursor"
+display_name = "Cursor"
+aliases = ["cursor", "cursor agent", "cursor agent cli"]
+source_catalogs = ["runtime-layout", "agterm", "hooks-probe"]
+eligibility = "eligible"
+adapter_entrypoint = "runtime-adapter:cursor"
+launch_operation = "launch-worker"
+wait_operation = "wait-for-result"
+resume_operation = "resume-session"
+fallback = "Use the file-backed manifest and a parent receipt when the host hook is degraded."
+adapter_version = "1.0"
+approval_policy = "adapter-enforced-default-deny"
+retry_budget = 2
+
+[runtimes.cursor.capabilities]
+launch = "unsupported"
+wait = "unsupported"
+resume = "unsupported"
+checkpoint = "full"
+approval = "full"
+parent_continuation = "full"
+final_response = "degraded"
+
+[runtimes.zcode]
+id = "zcode"
+display_name = "ZCode"
+aliases = ["zcode"]
+source_catalogs = ["agterm"]
+eligibility = "eligible"
+adapter_entrypoint = "runtime-adapter:zcode"
+launch_operation = "launch-worker"
+wait_operation = "wait-for-result"
+resume_operation = "resume-session"
+fallback = "Use an explicit operator resume when the runtime session cannot be recovered."
+adapter_version = "1.0"
+approval_policy = "adapter-enforced-default-deny"
+retry_budget = 2
+
+[runtimes.zcode.capabilities]
+launch = "unsupported"
+wait = "unsupported"
+resume = "unsupported"
+checkpoint = "full"
+approval = "degraded"
+parent_continuation = "full"
+final_response = "degraded"
+
+[runtimes.opencode]
+id = "opencode"
+display_name = "OpenCode"
+aliases = ["opencode", "open code"]
+source_catalogs = ["runtime-layout", "agterm"]
+eligibility = "eligible"
+adapter_entrypoint = "runtime-adapter:opencode"
+launch_operation = "launch-worker"
+wait_operation = "wait-for-result"
+resume_operation = "resume-session"
+fallback = "Preserve the checkpoint and require an explicit operator resume if session lookup fails."
+adapter_version = "1.0"
+approval_policy = "adapter-enforced-default-deny"
+retry_budget = 2
+
+[runtimes.opencode.capabilities]
+launch = "unsupported"
+wait = "unsupported"
+resume = "unsupported"
+checkpoint = "full"
+approval = "degraded"
+parent_continuation = "full"
+final_response = "degraded"
+
+[runtimes.copilot]
+id = "copilot"
+display_name = "Copilot"
+aliases = ["copilot", "copilot cli"]
+source_catalogs = ["runtime-layout", "agterm"]
+eligibility = "eligible"
+adapter_entrypoint = "runtime-adapter:copilot"
+launch_operation = "launch-worker"
+wait_operation = "wait-for-result"
+resume_operation = "resume-session"
+fallback = "Use a preserved checkpoint and operator resume when approval or finalization is degraded."
+adapter_version = "1.0"
+approval_policy = "adapter-enforced-default-deny"
+retry_budget = 2
+
+[runtimes.copilot.capabilities]
+launch = "unsupported"
+wait = "unsupported"
+resume = "unsupported"
+checkpoint = "full"
+approval = "degraded"
+parent_continuation = "full"
+final_response = "degraded"
+
+[runtimes.gemini]
+id = "gemini"
+display_name = "Gemini CLI"
+aliases = ["gemini", "gemini cli"]
+source_catalogs = ["runtime-layout"]
+eligibility = "eligible"
+adapter_entrypoint = "runtime-adapter:gemini"
+launch_operation = "launch-worker"
+wait_operation = "wait-for-result"
+resume_operation = "resume-session"
+fallback = "Use a file-backed checkpoint and explicit operator recovery when continuation is degraded."
+adapter_version = "1.0"
+approval_policy = "adapter-enforced-default-deny"
+retry_budget = 2
+
+[runtimes.gemini.capabilities]
+launch = "unsupported"
+wait = "unsupported"
+resume = "unsupported"
+checkpoint = "full"
+approval = "degraded"
+parent_continuation = "degraded"
+final_response = "degraded"
+
+[runtimes.antigravity]
+id = "antigravity"
+display_name = "Antigravity"
+aliases = ["antigravity", "agy"]
+source_catalogs = ["runtime-layout", "hooks-probe"]
+eligibility = "eligible"
+adapter_entrypoint = "runtime-adapter:antigravity"
+launch_operation = "launch-worker"
+wait_operation = "wait-for-result"
+resume_operation = "resume-session"
+fallback = "Use durable receipts and operator recovery when session identity or approval hooks are unavailable."
+adapter_version = "1.0"
+approval_policy = "adapter-enforced-default-deny"
+retry_budget = 2
+
+[runtimes.antigravity.capabilities]
+launch = "unsupported"
+wait = "unsupported"
+resume = "unsupported"
+checkpoint = "full"
+approval = "degraded"
+parent_continuation = "degraded"
+final_response = "degraded"
+
+[deferrals.pi]
+id = "pi"
+display_name = "Pi"
+aliases = ["pi"]
+source_catalogs = ["agterm"]
+eligibility = "deferred"
+reason = "Execute-plan resume behavior is not documented or verified for Pi."
+
+[[hook_profiles]]
+agent = "Claude"
+hook = "lessons-recall"
+expected = "FULL"
+runtime_id = "claude"
+adapter = "~/.claude/hooks/lessons-recall.sh"
+event = "SessionStart"
+
+[[hook_profiles]]
+agent = "Claude"
+hook = "skill-gate"
+expected = "FULL"
+runtime_id = "claude"
+adapter = "~/.claude/hooks/skill-gate.sh"
+event = "PreToolUse"
+
+[[hook_profiles]]
+agent = "Codex"
+hook = "lessons-recall"
+expected = "DEGRADED"
+runtime_id = "codex"
+adapter = "~/.codex/hooks/lessons-recall.sh"
+event = "SessionStart"
+
+[[hook_profiles]]
+agent = "Codex"
+hook = "skill-gate"
+expected = "DEGRADED"
+runtime_id = "codex"
+adapter = "~/.codex/hooks/skill-gate.sh"
+event = "PreToolUse"
+
+[[hook_profiles]]
+agent = "agy"
+hook = "lessons-recall"
+expected = "DEGRADED"
+runtime_id = "antigravity"
+adapter = "~/.gemini/antigravity-cli/hooks/lessons-recall.sh"
+event = "PreInvocation"
+
+[[hook_profiles]]
+agent = "agy"
+hook = "skill-gate"
+expected = "FULL"
+runtime_id = "antigravity"
+adapter = "~/.gemini/antigravity-cli/hooks/skill-gate.sh"
+event = "PreInvocation"
+
+[[hook_profiles]]
+agent = "Cursor"
+hook = "lessons-recall"
+expected = "DEGRADED"
+runtime_id = "cursor"
+adapter = "~/.cursor/hooks/lessons-recall.sh"
+event = "sessionStart"
+
+[[hook_profiles]]
+agent = "Cursor"
+hook = "skill-gate"
+expected = "FULL"
+runtime_id = "cursor"
+adapter = "~/.cursor/hooks/skill-gate.sh"
+event = "preToolUse"
+
+[[hook_profiles]]
+agent = "Claude"
+hook = "plan-readiness"
+expected = "UNSUPPORTED"
+runtime_id = "claude"
+adapter = "~/.claude/hooks/plan-readiness.sh"
+event = "Stop"
+
+[[hook_profiles]]
+agent = "Codex"
+hook = "plan-readiness"
+expected = "UNSUPPORTED"
+runtime_id = "codex"
+adapter = "~/.codex/hooks/plan-readiness.sh"
+event = "final-response"
+
+[[hook_profiles]]
+agent = "agy"
+hook = "plan-readiness"
+expected = "UNSUPPORTED"
+runtime_id = "antigravity"
+adapter = "~/.gemini/antigravity-cli/hooks/plan-readiness.sh"
+event = "stop"
+
+[[hook_profiles]]
+agent = "Cursor"
+hook = "plan-readiness"
+expected = "UNSUPPORTED"
+runtime_id = "cursor"
+adapter = "~/.cursor/hooks/plan-readiness.sh"
+event = "stop"

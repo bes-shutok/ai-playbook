@@ -750,7 +750,7 @@ produces incomplete output that fails downstream quality checks.
 
 48.4. **Before skill commits:** run the hygiene scan; personal contact email is allowed only in `LICENSE.txt` copyright lines.
 
-48.5. **Done lock agent wait:** Agent `/done` Step 0 must call `wait-acquire --max-wait "${DONE_LOCK_AGENT_MAX_WAIT_SECS:-90}"`, not the script default 7200s. On timeout, return `blocked` with `done-lock.sh status` (holder `label`, `holder_pid`, `holder_alive`). `done-lock.sh` records `holder_pid` at acquire; auto-steal only when abandoned (dead PID and no matching session fence) or stale without a session fence. Session-fenced locks are never auto-stolen; operator `stale-clean` may remove a fenced lock that is also stale. Step 6 must release with `DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` from this chat's Step 0 acquire exports (`release` or `release-repo`); both refuse to load the shared `<repo>/.ai-playbook/done-lock.session` file (fence/status only; avoids confused-deputy after peer acquire). Re-export those two values from Step 0 stdout across Shell tool calls. Step 7 must always report outcome (commits or clean tree, lock free); never stop after Step 0 checks only.
+48.5. **Done lock agent wait:** Agent `/done` Step 0 must call `wait-acquire --max-wait "${DONE_LOCK_AGENT_MAX_WAIT_SECS:-90}"`, not the script default 7200s. On timeout, return `blocked` with `done-lock.sh status` (holder `label`, `holder_pid`, `holder_alive`). `done-lock.sh` records a unique generation, holder PID, and holder process identity at acquire. Auto-steal requires independent proof that the holder is dead, the `DONE_LOCK_DEAD_HOLDER_GRACE_SECS` grace period has elapsed, and no matching session fence exists; a live or ambiguously identified holder is never auto-stolen. Session-fenced generations are non-expiring for automatic recovery; operator `stale-clean` may remove a fenced lock that is also stale. Step 6 must release with `DONE_LOCK_DIR`, `DONE_LOCK_TOKEN`, and `DONE_LOCK_GENERATION` from this chat's Step 0 acquire exports (`release` or `release-repo`); both refuse to load the shared `<repo>/.ai-playbook/done-lock.session` file (fence/status only; avoids confused-deputy after peer acquire). Re-export all three values from Step 0 stdout across Shell tool calls. Step 7 must always report outcome (commits or clean tree, lock free); never stop after Step 0 checks only.
 
 48.6. **Portable skills stay system-agnostic:** when promoting a product-incident fix into a shared skill, encode the verification rule (for example "every diagram hop must be traceable to architecture inputs"), never one product's topology as universal truth. Product-specific routing, service names, and edge placement belong in that product's RFC or Layer 2 docs, not in `agents/skills/`.
 
@@ -1020,3 +1020,16 @@ When verification needs private registry or cloud credentials (for example AWS S
 ## 62. Implementation Plan Checklists Contain Executable Tasks Only
 
 Implementation-plan checklists contain executable plan tasks only. Keep deployed, cross-team, and human-owned conditions under **Ship when** as narrative prose. Checklist exceptions and optional Jira tracking require user confirmation; follow the `plans`, `review-plan`, and `execute-plan` skills for the authoring, review, and execution procedures. Completed history remains immutable under `docs/maintenance/project-decisions.md` ADR-0001.
+
+## 63. Agent-agnostic execute-plan runtime boundary
+
+The shared execute-plan workflow is edited once under
+`agents/skills/execute-plan/`. Runtime selection comes from the canonical
+registry at `projects/.ai-playbook/execute-plan-runtime-inventory.toml`, using
+the canonical ID or a normalized alias. A host-specific adapter may translate
+launch, wait, resume, and event envelopes, but it may not change authorization,
+retry, checkpoint, approval, or commit-boundary policy. Missing or degraded
+host capabilities must preserve a durable receipt and fail closed for gated
+actions. The runtime contract and capability probe are the normative references;
+this guideline records the boundary and points to them rather than duplicating
+their schemas.

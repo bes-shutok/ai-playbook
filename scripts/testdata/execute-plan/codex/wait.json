@@ -1,0 +1,1 @@
+{"type":"turn.completed","status":"success","reason_code":"completed","evidence":["wait-checkpoint"],"action_scope":"repository-task","checkpoint_identity":"task-4:worker-1","generation":1}

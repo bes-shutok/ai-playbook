@@ -20,44 +20,40 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+try:
+    import runtime_capabilities as capabilities
+except ModuleNotFoundError:
+    # A deployed hook probe may be invoked through a symlink whose directory
+    # does not contain sibling scripts. Resolve the canonical repository path;
+    # if the registry module is absent, fail closed instead of using defaults.
+    _SCRIPT_DIR = Path(__file__).resolve().parent
+    if str(_SCRIPT_DIR) not in sys.path:
+        sys.path.insert(0, str(_SCRIPT_DIR))
+    import runtime_capabilities as capabilities
+
 Status = Literal["PASS", "DEGRADED", "UNSUPPORTED", "FAIL"]
 Wiring = Literal["NONE", "DEGRADED", "FULL"]
 ExpectedTier = Literal["FULL", "DEGRADED", "UNSUPPORTED"]
 
-#: Frozen steady-state tiers (plan Gist table). Selftest ``frozen_agents_listed``
-#: pins these values. Invariant: an UNSUPPORTED ``plan-readiness`` tier asserts
-#: "no adapter implemented (unwired by scope)" — while a row stays UNSUPPORTED,
-#: no adapter for that agent may exist on disk. The probe itself cannot detect
-#: a wired-but-unflipped adapter (the UNSUPPORTED early return is by design);
-#: keeping rows truthful when adapters are wired is process discipline carried
-#: by the wiring recipe in agents/hooks/plan-readiness/README.md, not a probe
-#: property.
-PROBE_MATRIX: list[tuple[str, str, ExpectedTier]] = [
-    ("Claude", "lessons-recall", "FULL"),
-    ("Claude", "skill-gate", "FULL"),
-    ("Codex", "lessons-recall", "DEGRADED"),
-    ("Codex", "skill-gate", "DEGRADED"),
-    ("agy", "lessons-recall", "DEGRADED"),
-    ("agy", "skill-gate", "FULL"),
-    ("Cursor", "lessons-recall", "DEGRADED"),
-    ("Cursor", "skill-gate", "FULL"),
-    ("Claude", "plan-readiness", "UNSUPPORTED"),
-    ("Codex", "plan-readiness", "UNSUPPORTED"),
-    ("agy", "plan-readiness", "UNSUPPORTED"),
-    ("Cursor", "plan-readiness", "UNSUPPORTED"),
-]
+def probe_matrix(home: Path | None = None) -> list[tuple[str, str, ExpectedTier]]:
+    """Read hook rows and expected tiers from the runtime registry."""
 
-#: Adapter symlink paths per (agent, hook).
-_ADAPTER_SYMLINKS: dict[tuple[str, str], str] = {
-    ("Claude", "lessons-recall"): "~/.claude/hooks/lessons-recall.sh",
-    ("Claude", "skill-gate"): "~/.claude/hooks/skill-gate.sh",
-    ("Codex", "lessons-recall"): "~/.codex/hooks/lessons-recall.sh",
-    ("Codex", "skill-gate"): "~/.codex/hooks/skill-gate.sh",
-    ("Cursor", "lessons-recall"): "~/.cursor/hooks/lessons-recall.sh",
-    ("Cursor", "skill-gate"): "~/.cursor/hooks/skill-gate.sh",
-    ("agy", "lessons-recall"): "~/.gemini/antigravity-cli/hooks/lessons-recall.sh",
-    ("agy", "skill-gate"): "~/.gemini/antigravity-cli/hooks/skill-gate.sh",
-}
+    inventory = capabilities.load_inventory()
+    rows = inventory.get("hook_profiles")
+    if not isinstance(rows, list):
+        raise ValueError("registry hook_profiles are required")
+    return [(str(row["agent"]), str(row["hook"]), _tier(str(row["expected"]))) for row in rows]
+
+
+def _hook_profile(agent: str, hook: str) -> dict:
+    for row in capabilities.load_inventory().get("hook_profiles", []):
+        if row.get("agent") == agent and row.get("hook") == hook:
+            return row
+    raise KeyError(f"missing registry hook profile: {agent}/{hook}")
+
+
+def _adapter_raw(agent: str, hook: str) -> str:
+    return str(_hook_profile(agent, hook)["adapter"])
 
 _CURSOR_BRIDGE_SYMLINK = "~/.cursor/hooks/cursor-session-bridge.sh"
 
@@ -73,6 +69,148 @@ class ProbeResult:
     status: Status
     detail: str
     expected: ExpectedTier
+    runtime_id: str = ""
+    capability: str = ""
+
+
+_RUNTIME_CAPABILITY = "final_response"
+
+
+def _tier(value: str) -> ExpectedTier:
+    tiers: dict[str, ExpectedTier] = {
+        "full": "FULL",
+        "degraded": "DEGRADED",
+        "unsupported": "UNSUPPORTED",
+    }
+    try:
+        return tiers[value.lower()]
+    except KeyError as exc:
+        raise ValueError(f"invalid registry capability tier: {value!r}") from exc
+
+
+def profile_expected_tier(inventory: dict, runtime_id: str) -> ExpectedTier:
+    """Return a profile capability tier without duplicating registry values."""
+
+    if runtime_id in inventory.get("runtimes", {}):
+        profile = inventory["runtimes"][runtime_id]
+        capability = profile.get("capabilities", {}).get(_RUNTIME_CAPABILITY)
+        if not isinstance(capability, str):
+            raise ValueError(f"profile {runtime_id} has no {_RUNTIME_CAPABILITY} tier")
+        return _tier(capability)
+    if runtime_id in inventory.get("deferrals", {}):
+        return "UNSUPPORTED"
+    raise KeyError(f"runtime {runtime_id!r} is absent from the registry")
+
+
+def _profile_data(inventory: dict, runtime_id: str) -> dict:
+    if runtime_id in inventory.get("runtimes", {}):
+        return inventory["runtimes"][runtime_id]
+    if runtime_id in inventory.get("deferrals", {}):
+        return inventory["deferrals"][runtime_id]
+    raise KeyError(f"runtime {runtime_id!r} is absent from the registry")
+
+
+def _profile_runtime_ids(inventory: dict) -> list[str]:
+    root = inventory.get("inventory", {})
+    return list(root.get("canonical_ids", ())) + list(root.get("deferred_ids", ()))
+
+
+def _profile_probe(runtime_id: str, inventory: dict, home: Path | None = None) -> ProbeResult:
+    profile = _profile_data(inventory, runtime_id)
+    expected = profile_expected_tier(inventory, runtime_id)
+    display_name = str(profile.get("display_name", runtime_id))
+    fallback = profile.get("fallback")
+    if not isinstance(fallback, str) or not fallback.strip():
+        fallback = "registry fallback is missing"
+
+    if runtime_id in inventory.get("deferrals", {}):
+        return ProbeResult(
+            display_name,
+            _RUNTIME_CAPABILITY,
+            "UNSUPPORTED",
+            f"unsupported runtime: {profile.get('reason', 'deferred by registry')}",
+            expected,
+            runtime_id,
+            _RUNTIME_CAPABILITY,
+        )
+
+    profile_row = next((row for row in capabilities.load_inventory().get("hook_profiles", []) if row.get("runtime_id") == runtime_id and row.get("hook") == "plan-readiness"), None)
+    if profile_row is None:
+        return ProbeResult(display_name, _RUNTIME_CAPABILITY, "DEGRADED" if expected == "DEGRADED" else "FAIL", f"missing adapter; degraded fallback: {fallback}", expected, runtime_id, _RUNTIME_CAPABILITY)
+    adapter_raw = profile_row.get("adapter")
+    if adapter_raw is None:
+        return ProbeResult(
+            display_name,
+            _RUNTIME_CAPABILITY,
+            "DEGRADED" if expected == "DEGRADED" else "FAIL",
+            f"missing adapter; degraded fallback: {fallback}",
+            expected,
+            runtime_id,
+            _RUNTIME_CAPABILITY,
+        )
+
+    adapter_path = _expand(adapter_raw, home)
+    sym, sym_detail = _symlink_state(adapter_path)
+    if sym != "ok" or not adapter_path.is_file():
+        detail = "malformed adapter" if sym == "ok" else "missing adapter"
+        return ProbeResult(
+            display_name,
+            _RUNTIME_CAPABILITY,
+            "FAIL" if expected == "FULL" else "DEGRADED",
+            f"{detail}: {sym_detail}; degraded fallback: {fallback}",
+            expected,
+            runtime_id,
+            _RUNTIME_CAPABILITY,
+        )
+
+    host = str(profile_row["agent"])
+    commands = _agent_commands(host, home or Path.home())
+    if not _commands_reference(commands, "plan-readiness"):
+        return ProbeResult(
+            display_name,
+            _RUNTIME_CAPABILITY,
+            "FAIL" if expected == "FULL" else "DEGRADED",
+            f"missing registration; degraded fallback: {fallback}",
+            expected,
+            runtime_id,
+            _RUNTIME_CAPABILITY,
+        )
+    if profile_row.get("event") == "final-response":
+        return ProbeResult(
+            display_name,
+            _RUNTIME_CAPABILITY,
+            "DEGRADED",
+                f"unsupported event: {profile_row['event']}; degraded fallback: {fallback}",
+            expected,
+            runtime_id,
+            _RUNTIME_CAPABILITY,
+        )
+    if expected == "FULL":
+        return ProbeResult(
+            display_name,
+            _RUNTIME_CAPABILITY,
+            "PASS",
+            sym_detail,
+            expected,
+            runtime_id,
+            _RUNTIME_CAPABILITY,
+        )
+    return ProbeResult(
+        display_name,
+        _RUNTIME_CAPABILITY,
+        "DEGRADED",
+        f"degraded fallback: {fallback}",
+        expected,
+        runtime_id,
+        _RUNTIME_CAPABILITY,
+    )
+
+
+def runtime_profile_rows(home: Path | None = None) -> list[ProbeResult]:
+    """Probe every canonical and deferred runtime from the registry."""
+
+    inventory = capabilities.load_inventory()
+    return [_profile_probe(runtime_id, inventory, home) for runtime_id in _profile_runtime_ids(inventory)]
 
 
 def _expand(path: str, home: Path | None = None) -> Path:
@@ -122,8 +260,8 @@ def _read_toml_text(path: Path) -> str:
         return ""
 
 
-def _commands_reference(commands: list[str], needle: str) -> bool:
-    return any(needle in cmd for cmd in commands)
+def _commands_reference(commands: list[str], needle: str, adapter: str | None = None) -> bool:
+    return any(needle in cmd and (adapter is None or adapter in cmd) for cmd in commands)
 
 
 def _claude_commands(home: Path) -> list[str]:
@@ -218,26 +356,44 @@ def _agent_commands(agent: str, home: Path) -> list[str]:
     return []
 
 
+def _event_commands(agent: str, event: str, home: Path) -> list[str]:
+    """Read commands only from the registry-declared host event."""
+
+    paths = {
+        "Claude": home / ".claude" / "settings.json",
+        "Codex": home / ".codex" / "hooks.json",
+        "Cursor": home / ".cursor" / "hooks.json",
+        "agy": home / ".gemini" / "antigravity-cli" / "hooks.json",
+    }
+    doc = _read_json(paths.get(agent, Path("/dev/null")))
+    if not isinstance(doc, dict):
+        return []
+    hooks = doc.get("hooks", doc)
+    if not isinstance(hooks, dict):
+        return []
+    return _ordered_commands_from_hook_array(hooks.get(event, []))
+
+
 def _codex_has_blocking_pre_tool_use(home: Path) -> bool:
-    toml = _read_toml_text(home / ".codex" / "config.toml").lower()
-    hooks_json = _read_json(home / ".codex" / "hooks.json")
-    blob = toml
-    if isinstance(hooks_json, dict):
-        blob += json.dumps(hooks_json).lower()
-    return "pre_tool_use" in blob or "pretooluse" in blob
+    commands = _event_commands("Codex", "PreToolUse", home)
+    return _commands_reference(commands, _SKILL_GATE_NEEDLE, _adapter_raw("Codex", "skill-gate"))
 
 
 def _assess_wiring(agent: str, hook: str, home: Path) -> Wiring:
-    cmds = _agent_commands(agent, home)
+    profile = _hook_profile(agent, hook)
+    cmds = _event_commands(agent, str(profile["event"]), home)
+    adapter = str(profile["adapter"])
     if hook == "lessons-recall":
-        if not _commands_reference(cmds, _LESSONS_RECALL_NEEDLE):
+        if not _commands_reference(cmds, _LESSONS_RECALL_NEEDLE, adapter):
+            if agent == "Cursor" and _commands_reference(cmds, _CURSOR_BRIDGE_NEEDLE, _CURSOR_BRIDGE_SYMLINK):
+                return "DEGRADED"
             return "NONE"
         if agent == "Claude":
             return "FULL"
         # Codex SessionStart, Cursor sessionStart, agy PreInvocation: degraded.
         return "DEGRADED"
     # skill-gate
-    if not _commands_reference(cmds, _SKILL_GATE_NEEDLE):
+    if not _commands_reference(cmds, _SKILL_GATE_NEEDLE, adapter):
         return "NONE"
     if agent == "Codex":
         return "FULL" if _codex_has_blocking_pre_tool_use(home) else "NONE"
@@ -275,18 +431,20 @@ def _probe_one(
             agent, hook, "UNSUPPORTED", "no adapter implemented (unwired by scope)", expected
         )
 
-    symlink_raw = _ADAPTER_SYMLINKS[(agent, hook)]
+    symlink_raw = _adapter_raw(agent, hook)
     symlink_path = _expand(symlink_raw, home)
     sym, sym_detail = _symlink_state(symlink_path)
 
     if sym == "dangling":
-        return ProbeResult(agent, hook, "FAIL", sym_detail, expected)
+        return ProbeResult(agent, hook, "FAIL", f"missing adapter: {sym_detail}", expected)
+    if sym == "ok" and not symlink_path.is_file():
+        return ProbeResult(agent, hook, "FAIL", "malformed adapter: target is not a file", expected)
     if sym in ("missing", "regular"):
         return ProbeResult(
             agent,
             hook,
             "FAIL",
-            sym_detail if sym == "regular" else "adapter symlink missing",
+            f"malformed adapter: {sym_detail}" if sym == "regular" else "missing adapter",
             expected,
         )
 
@@ -294,7 +452,7 @@ def _probe_one(
     ceiling = _product_ceiling(agent, hook)
 
     if _codex_skill_gate_symlink_only(agent, hook, wiring, sym):
-        detail = "adapter present; blocking pre_tool_use unwired (steady state)"
+        detail = "unsupported event: pre_tool_use is not blocking; adapter present"
         return ProbeResult(agent, hook, "DEGRADED", detail, expected)
 
     if wiring == "NONE":
@@ -332,7 +490,8 @@ def _probe_one(
 
 
 def probe_all(home: Path | None = None) -> list[ProbeResult]:
-    return [_probe_one(agent, hook, expected, home) for agent, hook, expected in PROBE_MATRIX]
+    hook_rows = [_probe_one(agent, hook, expected, home) for agent, hook, expected in probe_matrix(home)]
+    return hook_rows + runtime_profile_rows(home)
 
 
 def _format_table(results: list[ProbeResult]) -> str:
@@ -379,13 +538,14 @@ def selftest(argv: list[str] | None = None) -> int:
     # ------------------------------------------------------------------ #
     # frozen_agents_listed: PROBE_MATRIX rows and expected tiers.
     # ------------------------------------------------------------------ #
-    agents = {row[0] for row in PROBE_MATRIX}
+    matrix = probe_matrix()
+    agents = {row[0] for row in matrix}
     check(
         "frozen_agents_listed: Claude/Codex/agy/Cursor rows present",
         agents == {"Claude", "Codex", "agy", "Cursor"},
         repr(sorted(agents)),
     )
-    expected_by_key = {(a, h): tier for a, h, tier in PROBE_MATRIX}
+    expected_by_key = {(a, h): tier for a, h, tier in matrix}
     check(
         "frozen_agents_listed: Claude lessons-recall expected FULL",
         expected_by_key.get(("Claude", "lessons-recall")) == "FULL",
@@ -412,7 +572,7 @@ def selftest(argv: list[str] | None = None) -> int:
         repr(expected_by_key.get(("Cursor", "skill-gate"))),
     )
     plan_readiness_tiers = {
-        a: tier for a, h, tier in PROBE_MATRIX if h == "plan-readiness"
+        a: tier for a, h, tier in matrix if h == "plan-readiness"
     }
     # Derived from the single ``agents`` literal checked above (no re-hardcoded
     # four-agent copy): plan-readiness must cover the SAME agent set as the
@@ -425,8 +585,8 @@ def selftest(argv: list[str] | None = None) -> int:
     )
     check(
         "frozen_agents_listed: twelve (agent, hook) cells",
-        len(PROBE_MATRIX) == 12,
-        str(len(PROBE_MATRIX)),
+        len(matrix) == 12,
+        str(len(matrix)),
     )
 
     # ------------------------------------------------------------------ #
@@ -471,7 +631,7 @@ def selftest(argv: list[str] | None = None) -> int:
             agent: str, hook: str, *, home_dir: Path | None = None
         ) -> Path:
             install_home = home if home_dir is None else home_dir
-            raw = _ADAPTER_SYMLINKS[(agent, hook)]
+            raw = _adapter_raw(agent, hook)
             path = _expand(raw, install_home)
             path.parent.mkdir(parents=True, exist_ok=True)
             target = install_home / f"adapter-{agent}-{hook.replace('-', '_')}.sh"
@@ -482,10 +642,10 @@ def selftest(argv: list[str] | None = None) -> int:
             return path
 
         def write_claude_settings(commands: list[str]) -> None:
-            hooks: dict[str, list] = {"UserPromptSubmit": [], "PreToolUse": []}
+            hooks: dict[str, list] = {"SessionStart": [], "PreToolUse": []}
             for cmd in commands:
                 if "lessons-recall" in cmd:
-                    hooks["UserPromptSubmit"] = [
+                    hooks["SessionStart"] = [
                         {"hooks": [{"type": "command", "command": cmd}]}
                     ]
                 if "skill-gate" in cmd:
@@ -526,7 +686,8 @@ def selftest(argv: list[str] | None = None) -> int:
         codex_sg = _probe_one("Codex", "skill-gate", "DEGRADED", home=home)
         check(
             "wiring_codex_skill_gate: symlink only -> DEGRADED",
-            codex_sg.status == "DEGRADED",
+            codex_sg.status == "DEGRADED"
+            and "unsupported event" in codex_sg.detail,
             f"{codex_sg.status} {codex_sg.detail}",
         )
 
@@ -684,6 +845,63 @@ def selftest(argv: list[str] | None = None) -> int:
             bad_order.status == "DEGRADED"
             and "bridge present but not first" in bad_order.detail,
             f"{bad_order.status} {bad_order.detail!r}",
+        )
+
+    # ------------------------------------------------------------------ #
+    # registry_parity: every eligible and deferred runtime is represented by
+    # a registry-derived capability row, and missing host wiring is never a
+    # successful PASS result.
+    # ------------------------------------------------------------------ #
+    registry = capabilities.load_inventory()
+    documented_ids = set(registry["inventory"]["canonical_ids"]) | set(
+        registry["inventory"]["deferred_ids"]
+    )
+    profile_rows = runtime_profile_rows()
+    check(
+        "registry_parity: every documented runtime has one final-response row",
+        {row.runtime_id for row in profile_rows} == documented_ids,
+        repr(sorted(row.runtime_id for row in profile_rows)),
+    )
+    check(
+        "registry_parity: profile rows use registry expected tiers",
+        all(
+            row.expected
+            == profile_expected_tier(registry, row.runtime_id)
+            for row in profile_rows
+        ),
+        repr([(row.runtime_id, row.expected) for row in profile_rows]),
+    )
+    check(
+        "registry_parity: missing adapter or registration never PASSes",
+        all(
+            row.status != "PASS"
+            for row in profile_rows
+            if any(token in row.detail for token in ("missing adapter", "missing registration"))
+        ),
+    )
+    check(
+        "registry_parity: deferred runtime fails closed as UNSUPPORTED",
+        all(
+            row.status == "UNSUPPORTED"
+            for row in profile_rows
+            if row.runtime_id in registry["inventory"]["deferred_ids"]
+        ),
+    )
+
+    # ------------------------------------------------------------------ #
+    # diagnostic_classes: malformed adapter data, missing registration, and
+    # unsupported host events remain distinct diagnostics.
+    # ------------------------------------------------------------------ #
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td)
+        adapter = _expand(_adapter_raw("Codex", "skill-gate"), home)
+        adapter.parent.mkdir(parents=True, exist_ok=True)
+        adapter.write_text("not a symlink", encoding="utf-8")
+        malformed = _probe_one("Codex", "skill-gate", "DEGRADED", home=home)
+        check(
+            "diagnostic_classes: malformed adapter is distinct and fail-closed",
+            malformed.status == "FAIL" and "malformed adapter" in malformed.detail,
+            f"{malformed.status} {malformed.detail!r}",
         )
 
     return 0 if all_ok else 1

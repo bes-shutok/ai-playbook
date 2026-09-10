@@ -1,0 +1,2 @@
+{"type":"thread.started","thread_id":"session-task-4"}
+{"type":"turn.completed","status":"success","reason_code":"completed","evidence":["launch-checkpoint"],"action_scope":"repository-task","checkpoint_identity":"task-4:worker-1","generation":1}

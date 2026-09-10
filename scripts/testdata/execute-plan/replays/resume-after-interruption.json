@@ -1,0 +1,14 @@
+{
+  "name": "resume-after-interruption",
+  "trace": ["checkpoint replayed after interruption", "done receipt replayed idempotently"],
+  "events": [{"type": "claim"}, {"type": "checkpoint"}, {"type": "duplicate-checkpoint"}, {"type": "done"}],
+  "expected": {
+    "status": "success",
+    "reason_code": "completed",
+    "retry_count": 0,
+    "claim_state": "claimed",
+    "manifest_state": "active",
+    "action_scope": "done-handoff",
+    "mutation_expectation": "repository-local"
+  }
+}

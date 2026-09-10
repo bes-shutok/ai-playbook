@@ -118,6 +118,35 @@ Workers that own a log path **update it before returning** (create or append per
 
 Include enough detail for `learn` to extract friction and corrections; not just a one-line status.
 
+## Machine state and receipt ownership
+
+The structured machine manifest at
+`{tmp_dir}/execute-plan/<PLAN_SLUG>/runtime_state.json` is the sole source of
+truth for task selection, claims, checkpoints, reload, resume, normalized
+outcomes, and terminal state. The runtime driver owns its schema, atomic
+locking, generation fencing, reload validation, and transitions. The parent
+must call the driver after every checkpoint and must resume from the first
+incomplete step.
+
+`manifest.md` is an orchestrator-maintained human audit receipt for the session.
+The orchestrator synchronizes it from driver reads and counters; the runtime
+driver does not write it, and it cannot authorize a transition. `agent-logs.md` is
+append-only telemetry and evidence for the immediately following `done` step;
+workers append a new pass rather than replacing an existing file. The parent
+records synchronization evidence after driver reloads, including the machine
+manifest generation and current workflow state.
+
+Before a worker action, the driver persists `started` and the claim token. When
+the commit-before-checkpoint window is possible, it persists
+`commit-pending` and reconciles the task identity, telemetry, and exact
+repository commit on reload. A proven commit records a completed checkpoint
+without relaunch. An ambiguous or live claim remains blocked and fenced.
+
+Terminal state belongs to the driver. A final-response mechanism may be
+degraded, but an active machine manifest always suppresses terminal finalization.
+The parent must not send a terminal response until the driver reports terminal
+state and the orchestrator receipt records the Phase 5 checklist.
+
 ## Manifest (orchestrator maintains)
 
 **Bootstrap:** When the user chooses execute-plan, create `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` immediately (before Phase 0 and before plan-scoped production/test edits). Manual and read-only runs do not create this directory.

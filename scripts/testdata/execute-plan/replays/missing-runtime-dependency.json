@@ -1,0 +1,14 @@
+{
+  "name": "missing-runtime-dependency",
+  "trace": ["no runtime adapter was available at launch"],
+  "events": [{"type": "missing-runtime-dependency"}],
+  "expected": {
+    "status": "blocked",
+    "reason_code": "runtime-policy-unavailable",
+    "retry_count": 0,
+    "claim_state": "blocked",
+    "manifest_state": "active",
+    "action_scope": "repository-task",
+    "mutation_expectation": "none"
+  }
+}

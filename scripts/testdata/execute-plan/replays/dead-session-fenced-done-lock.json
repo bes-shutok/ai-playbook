@@ -1,0 +1,14 @@
+{
+  "name": "dead-session-fenced-done-lock",
+  "trace": ["replacement owner attempted an old generation checkpoint"],
+  "events": [{"type": "dead-session-fenced-done-lock"}],
+  "expected": {
+    "status": "blocked",
+    "reason_code": "owner-mismatch",
+    "retry_count": 0,
+    "claim_state": "claimed",
+    "manifest_state": "active",
+    "action_scope": "repository-task",
+    "mutation_expectation": "none"
+  }
+}

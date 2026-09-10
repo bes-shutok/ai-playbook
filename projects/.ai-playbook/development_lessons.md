@@ -5604,7 +5604,7 @@ When the identical command behaves differently in the agent shell versus the use
 
 **Why:** an execution's archive step marked a backlog origin done even though the plan's assumptions explicitly scoped that origin's two items out to an in-flight owner; the item closed with its findings unfixed until a post-archive re-read caught it, and the rename commit then needed a corrective reopen.
 
-**See also:** #294 (unvetted content entering a plan's assumptions list - sibling header/assumptions trust failure), `execute-plan` Phase 4 promoted-backlog rule.
+**See also:** #294 (unvetted content entering a plan's assumptions list - sibling header/assumptions trust failure), `execute-plan` Phase 4 promoted-backlog rule, #309 (the same step's move half: marker and move land together).
 
 ## 298. A shell syntax check does not validate the embedded DSL program
 
@@ -5737,3 +5737,71 @@ When the identical command behaves differently in the agent shell versus the use
 **Example:** Replace "agent died -> rerun the round" with: `test -f <mandated-artifact> && <validator> --hard <artifact>` first; relaunch only on missing or invalid output, and on convergence treat the earlier record as the single canonical one.
 
 **See also:** #134 (probe quota resets before treating a limit as a hard block), #173 (multi-pass resume diff-shape), #185 (kill-mid-refactor parse verification).
+
+## 308. Normalize Nullable Input Before Null-Hostile Operations
+
+**Principle:** Family C (Representation: sentinel vs None vs exception)
+
+**Trigger:** nullable external input reaches a collection or API that rejects null instead of treating absence as a normal value.
+
+**Rule:** Convert the absent input to the layer's explicit empty or absent result before calling the null-hostile operation. Add a test for the null equivalence class.
+
+**Why:** Passing absence through unchanged turns a validation path into an unexpected exception, often changing a client error into a server error.
+
+**Example:** A classifier called `Set.of(...).contains(null)` for an update operation whose key was absent. The null-safe predicate returned `false`, allowing downstream operation validation to handle the missing key.
+
+**See also:** `coding_guidelines.md` #20 (representation boundaries).
+
+## 309. An archive step lands its status marker and its move in one change
+
+**Principle:** Family H (verify the real thing, not the abstraction) - archival completion is a location change, not prose; a status marker without the companion move leaves the item in the active queue.
+
+**Trigger:** closing any tracked queue item (backlog origin, plan, ticket) whose lifecycle ends in a completed or archive directory, especially in a run's closing bookkeeping when the substantive fixes are already landed.
+
+**Rule:** (1) Treat the done-style status marker and the move into the completed home as one archival unit: perform both in the same commit, or neither. (2) Verify closure by location, not by marker text: the closed item's path must resolve under the completed home before the run reports done. (3) Do not count on the inbox-location gate to catch a stranded done item; it is filename-shape-only by design (targets are never read), so a done marker sitting in the open queue passes every mechanical check.
+
+**Why:** an execution's archive step wrote done markers into two backlog items at the open queue root but never moved them; the items sat double-counted (closed by marker, open by location) until a scheduled direct-fix batch rediscovered them as already-done work and a later done run performed the missing moves. No gate flagged them, and the open-work count was overstated the whole time.
+
+**See also:** #297 (same archive step, content half: complete an origin only for findings the plan actually folded).
+
+## 310. A Stable Idempotency Key Written Before The Outcome Is Known Poisons Retries
+
+**Principle:** Family C (Representation: sentinel vs None vs exception) - a record keyed by the stable identity of an operation conflates "was attempted" with "succeeded", and the conflated record then answers the dedup check on every retry.
+
+**Trigger:** a checkpoint/idempotency store where the write happens under a stable operation identity, a retryable failure path can also write that record, and a later retry consults "record exists under this key" as an early-return duplicate check.
+
+**Rule:** (1) Write failure/non-terminal records under an attempt-scoped identity (e.g. `<identity>#attempt-<n>`), never under the stable key. (2) A duplicate-check early-return on the stable key is valid only after verifying the prior record's status is the terminal success; any other recorded status must fall through to the retry/transition path. (3) Pin both halves with a regression test where an identical-identity retry after a failed attempt reaches the terminal state.
+
+**Why:** a workflow runtime recorded failed retryable attempts under the stable checkpoint identity, and the duplicate early-return then wedged the task: every retry saw "checkpoint exists", skipped execution, and the task could never complete. The replay fixture encoded the wedged behavior, so tests passed while production paths deadlocked.
+
+**Example:** a checkpoint store's success path writes `<task>@<identity>` with `status=success`; the failure path must write `<task>@<identity>#attempt-<n>` instead, and the guard `if existing := load(identity): return` becomes `if existing and existing.status == "success": return`.
+
+**See also:** #292 (fall back when a preferred field is absent; the poisoned record is the inverse failure: a present field answering for the wrong state), Family H production-path verification (the companion fix in the same round: gate production operations on a receipt emitted by the real construction path, and witness out-of-scope-change assertions with a real baseline git diff, not replay containment).
+
+## 311. A Diff-Based Scope Witness Is Blind to Untracked Files; Union With Git Status
+
+**Principle:** Family H (verify the real thing, not the abstraction) - `git diff <baseline>` is a witness over tracked changes only; a guard built on it silently passes for every path git is not yet tracking.
+
+**Trigger:** a scope, violation, or completeness guard whose file set is computed from diff output alone (`git diff --name-only <baseline>`, staged-diff listings) and compared against an allow-list or expectation.
+
+**Rule:** (1) Compute the witness as the union of diff output and `git status --porcelain --untracked-files=all`. (2) Resolve realpaths before comparing, so a symlink at an in-scope path pointing outside the tree counts as a violation. (3) Run git with `-c core.quotePath=false` so non-ASCII paths compare literally. (4) Pin with a test that creates an out-of-scope untracked file (and a symlink escape) and expects the guard to reject.
+
+**Why:** a worktree scope witness was diff-only, so an untracked file outside the allowed paths bypassed it entirely; symlink escapes and quoted-path mismatches extended the same blindness. Tests stayed green because fixtures only ever created tracked changes.
+
+**Example:** `witness = set(diff_names) | set(untracked_porcelain_paths)`, each path realpath-resolved before the allow-list comparison.
+
+**See also:** #27 (staged diff vs working tree discrepancy; same untracked blindness surfacing at review time), #310 companion fix (assert out-of-scope changes with a real baseline git diff - this lesson extends it: the real diff alone is still blind to untracked paths).
+
+## 312. Clamp Worker-Supplied Retry Budgets to the Owner's Policy
+
+**Principle:** Family D (single source of truth) - loop-control budgets (retry counts) belong to the orchestrator's policy, never to the result envelope the retried worker fills in.
+
+**Trigger:** a driver recursing on a result envelope that carries retry parameters (`retry_policy`, `attempts_remaining`), where that envelope is produced by the worker or adapter being retried.
+
+**Rule:** (1) At the trust boundary, clamp any externally supplied retry policy to the profile-owned budget (max_attempts and attempts_remaining; contract-violating envelopes cap at one attempt). (2) On each retry the driver overwrites the envelope's retry field with its own decremented budget instead of reading it back. (3) Pin with a hostile-envelope test that re-supplies a huge attempt count every round and asserts termination within the profile budget.
+
+**Why:** a hostile or buggy worker re-supplying a huge retry policy each round drove unbounded driver recursion; the driver trusted the envelope's field as its own budget and tests never exercised a lying envelope.
+
+**Example:** the normalizer clamps `retry_policy` to the profile budget on ingest, and the driver sets `retry_raw["retry_policy"] = retry` from its own decremented counter before recursing.
+
+**See also:** #310 (retry poisoning from recorded state; here the poisoned input is a control parameter, not a dedup key).

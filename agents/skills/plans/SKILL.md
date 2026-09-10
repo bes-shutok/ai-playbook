@@ -23,7 +23,7 @@ description: "Full plan lifecycle; create, edit, and complete implementation pla
 
 **Save plans to:** `{plans_dir}/<STORY-KEY>-<feature-name>.md` (story key prefix) or `{plans_dir}/YYYY-MM-DD-<feature-name>.md` (date prefix when no story key applies).
 
-**CRITICAL:** Plans go in the resolved `{plans_dir}` in the project repository; never in tool-default locations (`.claude/plans/`, `.opencode/plans/`, `.codex/`, `.cursor/`, etc.). When a tool suggests its own default path, override it with `{plans_dir}`.
+**CRITICAL:** Plans go in the resolved `{plans_dir}` in the project repository; never in tool-managed default locations outside the repository. When a tool suggests its own default path, override it with `{plans_dir}`.
 
 **RFCs:** When the project uses RFCs, resolve `{rfcs_dir}` and reference the RFC in the plan header when applicable.
 When an RFC phase already has its own implementation Jira task, use that phase task key in the plan filename and title instead of the parent RFC/story key; keep the RFC reference line in the header for traceability.
@@ -517,6 +517,8 @@ Every plan must include a `## Validation Commands` fenced bash block (see plan t
 
 31. **Never pin volatile working-tree state in task gates:** an invariant that asserts another session's mutable tree state (specific files still dirty or uncommitted, a peer's in-flight doc) is stale on arrival when parallel sessions share the branch; peers legitimately commit and rework their own files mid-execution and mid-review. Anchor scope-integrity checks to a base sha recorded before the first task commit and verify `git log --name-only <base>..HEAD` against this plan's own declared file lists instead (see user-level lesson #305).
 
+32. **List-set diffs must match namespace and collation on BOTH sides, proven by execution:** when a Validation Command compares a generated name set (grep over runner output) against an expected literal list, each side must carry the same naming form (strip the family prefix with `sed` or include it in the literals; a `grep -oE 'family/...'` capture keeps the prefix) and the same collation (a `sort -u`-built file emits lexical order, so pipe the literal side through `sort` too). Pin-vs-prescription audits alone do not catch this: EXECUTE the diff once at authoring time against a simulated post-change set (today's real output plus the declared additions) and record that it passes and that stripping one declared addition flips it (witnesses, one session: a preservation diff failed on ordering alone, then on full-prefixed-vs-bare names after the ordering fix).
+
 ## Plan Quality Gate
 
 Before finalizing a new or updated plan, run the `review-plan` skill as a sub-agent:
@@ -667,6 +669,14 @@ Core plan quality principles applicable across all projects and languages:
 Projects with detailed plan quality guidelines should document them in `{guidelines_path}` or a named architecture/maintenance doc; not `docs/domain/` or `docs/<module>/` on migration-complete company services. The generic skill provides only the universal patterns above.
 
 ## Execution Handoff
+
+### Runtime-neutral handoff contract
+
+The normative runtime contract, result schema, policy boundary, manifest
+ownership, and continuation transitions live in
+`agents/skills/execute-plan/runtime-contract.md`. This skill adds only the
+plan-authoring obligation to state required evidence and validation commands;
+the continuation driver performs the runtime transitions.
 
 After saving, offer:
 

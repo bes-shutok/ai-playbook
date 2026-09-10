@@ -425,6 +425,20 @@ The three runtime paths are DISPOSABLE (safe to delete):
 - `~/.ai-playbook/runtime/lessons-recall/` (dedup state, owned by Task 3)
 - `~/.ai-playbook/logs/hooks.log` (one JSON line per consultation)
 
+## Capability boundary and registry parity
+
+The shared gate core does not know which agent invoked it. The adapter is the
+only place that translates the host payload and block envelope. A host hook
+cannot enforce this policy when its event cannot block the write or cannot carry
+the path and session payload required by the core. Runtime identity, capability
+tiers, fallbacks, and lifecycle result fields are defined by the registry and
+the shared execute-plan runtime contract; this document keeps only the
+skill-gate-specific adapter and probe behavior.
+
+Probe diagnostics are deliberately distinct: missing adapter, missing
+registration, unsupported event, malformed adapter, and degraded fallback. A
+missing registration or malformed adapter is never reported as `PASS`.
+
 ## Capability probe (steady state)
 
 Run `python3 scripts/hooks_probe.py --all` from the instructions repo (or

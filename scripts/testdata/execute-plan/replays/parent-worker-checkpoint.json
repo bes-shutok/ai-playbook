@@ -1,0 +1,14 @@
+{
+  "name": "parent-worker-checkpoint",
+  "trace": ["worker checkpoint persisted", "parent reloaded before done boundary"],
+  "events": [{"type": "parent-worker-checkpoint"}],
+  "expected": {
+    "status": "success",
+    "reason_code": "completed",
+    "retry_count": 0,
+    "claim_state": "claimed",
+    "manifest_state": "active",
+    "action_scope": "done-handoff",
+    "mutation_expectation": "repository-local"
+  }
+}

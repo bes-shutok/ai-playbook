@@ -1,0 +1,34 @@
+{
+  "loaded_skill_path": "loaded/execute-plan/SKILL.md",
+  "expected_runtime_ids": "scripts/testdata/execute-plan/expected-runtime-ids.json",
+  "roles": {
+    "skill": {
+      "source": "agents/skills/execute-plan/SKILL.md",
+      "loaded": "loaded/execute-plan/SKILL.md"
+    },
+    "driver": {
+      "source": "scripts/execute_plan_runtime.py",
+      "loaded": "loaded/execute-plan/runtime/execute_plan_runtime.py"
+    },
+    "registry": {
+      "source": "projects/.ai-playbook/execute-plan-runtime-inventory.toml",
+      "loaded": "loaded/execute-plan/registry.toml"
+    },
+    "adapter": {
+      "source": "scripts/execute_plan_runtime_codex.py",
+      "loaded": "loaded/execute-plan/runtime/execute_plan_runtime_codex.py"
+    }
+  },
+  "help_probes": [
+    {
+      "name": "loaded-skill-help",
+      "argv": ["__PYTHON__", "help_probe.py", "skill", "${LOADED_SKILL_PATH}"],
+      "expected": "skill-help-ok"
+    },
+    {
+      "name": "driver-help",
+      "argv": ["__PYTHON__", "help_probe.py", "driver", "${LOADED_DRIVER_PATH}"],
+      "expected": "driver-help-ok"
+    }
+  ]
+}

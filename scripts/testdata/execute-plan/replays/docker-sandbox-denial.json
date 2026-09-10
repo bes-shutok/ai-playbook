@@ -1,0 +1,14 @@
+{
+  "name": "docker-sandbox-denial",
+  "trace": ["sandbox denied a gated container operation"],
+  "events": [{"type": "docker-sandbox-denial"}],
+  "expected": {
+    "status": "blocked",
+    "reason_code": "approval-required",
+    "retry_count": 0,
+    "claim_state": "blocked",
+    "manifest_state": "active",
+    "action_scope": "docker:sandbox",
+    "mutation_expectation": "none"
+  }
+}

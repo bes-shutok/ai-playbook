@@ -1,0 +1,26 @@
+# Executable package boundary for the provider-neutral execute-plan runtime.
+
+[package]
+name = "execute-plan-runtime"
+version = "1.0"
+contract = "runtime-contract.md"
+
+[driver]
+entrypoint = "scripts/execute_plan_runtime.py:RuntimeDriver"
+manifest_filename = "runtime_state.json"
+telemetry_manifest = "manifest.md"
+commit_owner = "existing done workflow"
+
+[adapters.codex]
+entrypoint = "scripts/execute_plan_runtime_codex.py:CodexAdapter"
+adapter_version = "1.0"
+launch_deadline_seconds = 30
+wait_deadline_seconds = 300
+approval_mode = "verified-host-policy-only"
+launch_command = ["codex", "exec", "--json", "-C", "<repo-root>"]
+resume_command = ["codex", "exec", "resume", "<session-id>", "--json"]
+dangerous_flags = []
+
+[fixtures]
+runtime_state = "scripts/testdata/execute-plan/runtime_state.json"
+codex_envelopes = "scripts/testdata/execute-plan/codex/"

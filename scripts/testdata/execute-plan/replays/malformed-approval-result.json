@@ -1,0 +1,14 @@
+{
+  "name": "malformed-approval-result",
+  "trace": ["approval envelope omitted required evidence"],
+  "events": [{"type": "malformed-approval-result"}],
+  "expected": {
+    "status": "blocked",
+    "reason_code": "approval-required",
+    "retry_count": 0,
+    "claim_state": "blocked",
+    "manifest_state": "active",
+    "action_scope": "external-write",
+    "mutation_expectation": "none"
+  }
+}

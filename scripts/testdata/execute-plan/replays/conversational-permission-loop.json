@@ -1,0 +1,14 @@
+{
+  "name": "conversational-permission-loop",
+  "trace": ["worker requested conversational permission for authorized repository work"],
+  "events": [{"type": "conversational-permission-loop"}],
+  "expected": {
+    "status": "blocked",
+    "reason_code": "stale-claim",
+    "retry_count": 1,
+    "claim_state": "launched",
+    "manifest_state": "active",
+    "action_scope": "parent-continuation",
+    "mutation_expectation": "none"
+  }
+}

@@ -82,6 +82,9 @@ Other vendored skills (`done`, `github-pr-workflow`, `receiving-review`, `doing-
 ## Scripts
 | Script | What It Does |
 |---|---|
+| `agents/skills/execute-plan/runtime-contract.md` | Provider-neutral execute-plan runtime contract: profiles, normalized results, durable transitions, and adapter boundary. |
+| `scripts/execute_plan_runtime.py` | File-backed continuation driver for claims, checkpoints, approval gates, reload, and commit reconciliation. |
+| `scripts/runtime_capabilities.py` | Registry-backed capability loader, result normalizer, activation verifier, and fail-closed diagnostics. |
 | `scripts/facts_paths.py` | Facts-file key resolution and repo-anchor/project-key derivation (stdlib leaf). |
 | `scripts/validate_review_staging.py` | Review staging doc and stats-sidecar validator; sidecar/conservation authority. |
 | `scripts/check_backlog_inbox_location.py` | Rejects files matching backlog-inbox filename shapes outside the backlog home (tracked tree plus untracked files in named hot dirs). Rule-1 hot dirs come from the optional `backlog_hot_dirs` facts key (whitespace/comma-separated repo-relative string that replaces the built-in defaults; a blank key or an empty effective set warns and falls back to the defaults, while invalid or absent entries warn and are dropped with surviving entries staying active). Run `python3 scripts/check_backlog_inbox_location.py --selftest` for the built-in selftest. |

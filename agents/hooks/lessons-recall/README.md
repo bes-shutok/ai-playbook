@@ -269,6 +269,21 @@ The runtime paths (`~/.ai-playbook/runtime/lessons-recall/`,
 
 ## Capability probe (steady state)
 
+The probe has two related views. The legacy hook rows below validate each
+installed hook adapter and its host registration. It also emits one
+registry-derived `final_response` row for every canonical runtime and every
+explicitly deferred runtime in
+`projects/.ai-playbook/execute-plan-runtime-inventory.toml`. The registry owns
+the expected tier and fallback. Lifecycle states and result fields are defined
+once in `agents/skills/execute-plan/runtime-contract.md`; this document keeps
+only the hook-specific probe behavior.
+
+For every view, the diagnostics remain separate: `missing adapter`, `missing
+registration`, `unsupported event`, `malformed adapter`, and `degraded
+fallback`. A host hook cannot enforce a policy when its event cannot block or
+cannot carry the required payload. Missing registration and malformed adapter
+data fail closed and never produce `PASS`.
+
 Run `python3 scripts/hooks_probe.py --all` from the instructions repo (or
 `python3 ~/.ai-playbook/scripts/hooks_probe.py --all` after the core symlink
 exists). Exit 0 when no cell is FAIL; DEGRADED is honest steady state for

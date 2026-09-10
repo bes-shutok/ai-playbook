@@ -70,17 +70,27 @@ Parallel agent sessions on the **same git repository** must not run `learn`, `do
    # fresh, and release-repo refuses to source the session fence file, so the
    # token must survive here in chat context to be re-exported there.
    printf '%s\n' "$LOCK_EXPORTS"
-   if [[ -z "${DONE_LOCK_DIR:-}" || -z "${DONE_LOCK_TOKEN:-}" ]]; then
+   if [[ -z "${DONE_LOCK_DIR:-}" || -z "${DONE_LOCK_TOKEN:-}" || -z "${DONE_LOCK_GENERATION:-}" ]]; then
      echo "done-lock: acquire succeeded without lock exports" >&2
      exit 1
    fi
    ```
 
-3. Keep `DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` in scope when the same shell session runs multiple steps. **Across separate Shell tool calls**, re-export those two values from your Step 0 acquire stdout (chat context). The file `<repo>/.ai-playbook/done-lock.session` is a **fence/status** signal only; Step 6 `release-repo` requires env vars and will **not** source that file (confused-deputy guard after stale-clean / peer acquire).
+   Install a trap in the controlling shell immediately after the successful
+   acquire so an interrupted same-shell run attempts generation-fenced release:
+
+   ```bash
+   trap 'status=$?; if [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" && -n "${DONE_LOCK_GENERATION:-}" ]]; then DONE_LOCK_DIR="$DONE_LOCK_DIR" DONE_LOCK_TOKEN="$DONE_LOCK_TOKEN" DONE_LOCK_GENERATION="$DONE_LOCK_GENERATION" "$LOCK_SCRIPT" release-repo || true; fi; exit "$status"' EXIT INT TERM
+   ```
+
+   The trap is a safety net, not a substitute for the explicit Step 6 release.
+
+3. Keep `DONE_LOCK_DIR`, `DONE_LOCK_TOKEN`, and `DONE_LOCK_GENERATION` in scope when the same shell session runs multiple steps. **Across separate Shell tool calls**, re-export all three values from your Step 0 acquire stdout (chat context). The file `<repo>/.ai-playbook/done-lock.session` is a **fence/status** signal only; Step 6 `release-repo` requires env vars and will **not** source that file (confused-deputy guard after stale-clean / peer acquire).
 4. If **wait-acquire** times out, run `status`, report the holder (`label`, `age_secs`, `holder_pid`, `holder_alive`, `stealable` / `abandoned`), return `blocked`, and **do not** commit. Do not bypass an active lock. Do **not** run `stale-clean` unless `status` shows the lock is stale/abandoned **and** you intend to take over; after `stale-clean`, only the chat that successfully re-acquires may release (using that acquire's token).
 5. **Stealable locks** (auto-stolen on the next `acquire` / `wait-acquire` poll):
-   - **Stale:** age ≥ `DONE_LOCK_STALE_SECS` (default 1800 = 30m) **and** no matching session fence.
-   - **Abandoned:** lock metadata records `holder_pid` and that process is not running **and** there is no matching `<repo>/.ai-playbook/done-lock.session` for the lock token.
+   - **Stale:** age ≥ `DONE_LOCK_STALE_SECS` (default 1800 = 30m) permits explicit `stale-clean`; age alone does not authorize automatic takeover.
+   - **Abandoned:** lock metadata records a holder PID and process identity, independent process-table verification says that holder is dead, the `DONE_LOCK_DEAD_HOLDER_GRACE_SECS` grace period has elapsed, and there is no matching `<repo>/.ai-playbook/done-lock.session` for the lock generation.
+   - **Blocked recovery:** a live holder with a missing or invalid fence, a reused PID, or an ambiguous holder identity is never auto-stolen.
    - **Session fence:** a dead `holder_pid` with a live matching session file is **not** auto-stealable, even after stale TTL (normal after one-shot Shell tool exits). Operator escape: `stale-clean` may remove a fenced lock when it is also stale. Step 6 releases only with the env token from **your** acquire.
 6. Optional: pass a richer `--label` (plan slug, task id, review round) when the orchestrator provides context.
 
@@ -544,17 +554,17 @@ Do not push. These are local-only docs repositories.
 
 **Always run Step 6 before Step 7**, including when Steps 1–5 failed or returned early. This lets a waiting parallel `done` resume.
 
-From the project git root, release with **`DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` from your Step 0 acquire** (re-export from that tool output if the shell lost env). `release-repo` requires those env vars and refuses to load the shared session file:
+From the project git root, release with **`DONE_LOCK_DIR`, `DONE_LOCK_TOKEN`, and `DONE_LOCK_GENERATION` from your Step 0 acquire** (re-export from that tool output if the shell lost env). `release-repo` requires those env vars and refuses to load the shared session file:
 
 ```bash
-DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" \
+DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" DONE_LOCK_GENERATION="${DONE_LOCK_GENERATION:?}" \
   "${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}" release-repo
 ```
 
 Equivalent:
 
 ```bash
-DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" \
+DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" DONE_LOCK_GENERATION="${DONE_LOCK_GENERATION:?}" \
   "${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}" release
 ```
 

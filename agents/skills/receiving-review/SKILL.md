@@ -59,7 +59,7 @@ When a plan is needed, save grouped tasks to `{plans_dir}/<BRANCH-KEY>-<short-ti
 ## Forbidden Responses
 
 **NEVER:**
-- "You're absolutely right!" (explicit CLAUDE.md violation)
+- "You're absolutely right!" (explicit instruction-file violation)
 - "Great point!" / "Excellent feedback!" (performative)
 - "Let me implement that now" (before verification)
 

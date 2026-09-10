@@ -7,6 +7,7 @@ LOCK_ROOT="${DONE_LOCK_ROOT:-${HOME}/.ai-playbook/locks/done}"
 POLL_SECS="${DONE_LOCK_POLL_SECS:-30}"
 STALE_SECS="${DONE_LOCK_STALE_SECS:-1800}"
 INCOMPLETE_SECS="${DONE_LOCK_INCOMPLETE_SECS:-5}"
+DEAD_HOLDER_GRACE_SECS="${DONE_LOCK_DEAD_HOLDER_GRACE_SECS:-5}"
 META_FILE="meta.env"
 
 usage() {
@@ -29,11 +30,14 @@ Environment:
   DONE_LOCK_ROOT             Lock parent directory (default: ~/.ai-playbook/locks/done)
   DONE_LOCK_POLL_SECS        Poll interval for wait-acquire (default: 30)
   DONE_LOCK_STALE_SECS       Age before stale-clean may remove a fenced lock (default: 1800)
+  DONE_LOCK_DEAD_HOLDER_GRACE_SECS
+                             Minimum age before a verified dead holder may be auto-recovered (default: 5)
   DONE_LOCK_INCOMPLETE_SECS  Age before meta-less lock_dir is treated as crash leftover (default: 5)
   DONE_LOCK_HOLDER_PID       Long-lived holder PID (default: PPID of the acquire process).
                              Callers that `eval "$(done-lock.sh acquire)"` should leave this unset
                              so PPID is the eval'ing shell. Do not use the acquire script PID.
-  DONE_LOCK_DIR / DONE_LOCK_TOKEN   Required in env for release / release-repo. Session file is
+  DONE_LOCK_DIR / DONE_LOCK_TOKEN / DONE_LOCK_GENERATION
+                             Required in env for release / release-repo. Session file is
                              fence/status only; release-repo will not source it.
 
 Exit codes:
@@ -86,37 +90,72 @@ meta_field() {
 load_lock_meta() {
   local meta="${lock_dir}/${META_FILE}"
   lock_meta_label=""
-  lock_meta_started_epoch=0
+  lock_meta_started_epoch=""
   lock_meta_started_at=""
   lock_meta_hostname=""
   lock_meta_holder_pid=""
+  lock_meta_holder_identity=""
   lock_meta_token=""
+  lock_meta_generation=""
   [[ -f "$meta" ]] || return 1
   lock_meta_label="$(meta_field "$meta" label)"
   lock_meta_started_epoch="$(meta_field "$meta" started_epoch)"
-  lock_meta_started_epoch="${lock_meta_started_epoch:-0}"
   lock_meta_started_at="$(meta_field "$meta" started_at)"
   lock_meta_hostname="$(meta_field "$meta" hostname)"
   lock_meta_holder_pid="$(meta_field "$meta" holder_pid)"
+  lock_meta_holder_identity="$(meta_field "$meta" holder_identity)"
   lock_meta_token="$(meta_field "$meta" lock_token)"
+  lock_meta_generation="$(meta_field "$meta" generation)"
   return 0
 }
 
 lock_age_secs() {
+  # Fail closed: a truncated/partial meta with unset or non-numeric
+  # started_epoch has an unknown age, never an infinitely-old one.
   load_lock_meta || true
-  echo $(( $(now_epoch) - lock_meta_started_epoch ))
+  if [[ "$lock_meta_started_epoch" =~ ^[0-9]+$ ]]; then
+    echo $(( $(now_epoch) - lock_meta_started_epoch ))
+  else
+    echo unknown
+  fi
 }
 
 holder_pid_alive() {
   local pid="${1:-}"
-  [[ -n "$pid" ]] || return 1
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
   kill -0 "$pid" 2>/dev/null
+}
+
+process_identity() {
+  local pid="${1:-}"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  ps -p "$pid" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//' | head -n1
+}
+
+holder_state() {
+  # A reused PID or missing identity witness is ambiguous and never
+  # auto-stealable. A dead PID is independently verified by the process table.
+  local current_identity
+  [[ "$lock_meta_holder_pid" =~ ^[1-9][0-9]*$ ]] || { echo unknown; return; }
+  current_identity="$(process_identity "$lock_meta_holder_pid" || true)"
+  [[ -n "$current_identity" ]] || { echo dead; return; }
+  [[ -n "$lock_meta_holder_identity" ]] || { echo unknown; return; }
+  if [[ "$current_identity" == "$lock_meta_holder_identity" ]]; then
+    echo alive
+  else
+    echo ambiguous
+  fi
 }
 
 is_stale_lock() {
   [[ -d "$lock_dir" ]] || return 1
+  # Staleness requires a parsed token and a known numeric age; a truncated
+  # meta without both is age-unknown and never stale.
+  load_lock_meta || return 1
+  [[ -n "$lock_meta_token" ]] || return 1
   local age
   age="$(lock_age_secs)"
+  [[ "$age" =~ ^[0-9]+$ ]] || return 1
   [[ "$age" -ge "$STALE_SECS" ]]
 }
 
@@ -124,7 +163,11 @@ is_dead_holder_lock() {
   [[ -d "$lock_dir" ]] || return 1
   load_lock_meta || return 1
   [[ -n "$lock_meta_holder_pid" ]] || return 1
-  holder_pid_alive "$lock_meta_holder_pid" && return 1
+  [[ "$(holder_state)" == "dead" ]] || return 1
+  local grace_age
+  grace_age="$(lock_age_secs)"
+  [[ "$grace_age" =~ ^[0-9]+$ ]] || return 1
+  [[ "$grace_age" -ge "$DEAD_HOLDER_GRACE_SECS" ]] || return 1
   # PID dead: do not auto-steal while a matching session fence still exists.
   # Agent Shell tool calls exit after acquire; the session file is the live hold signal.
   if session_fence_matches_lock; then
@@ -134,14 +177,17 @@ is_dead_holder_lock() {
 }
 
 session_fence_matches_lock() {
-  local session_file s_dir s_token
+  local session_file s_dir s_token s_generation
   session_file="$(lock_session_file)"
   [[ -f "$session_file" ]] || return 1
   s_dir="$(grep -E '^DONE_LOCK_DIR=' "$session_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
   s_token="$(grep -E '^DONE_LOCK_TOKEN=' "$session_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
-  [[ -n "$s_dir" && -n "$s_token" ]] || return 1
+  s_generation="$(grep -E '^DONE_LOCK_GENERATION=' "$session_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
+  [[ -n "$s_dir" && -n "$s_token" && -n "$s_generation" ]] || return 1
   load_lock_meta || return 1
-  [[ "$s_dir" == "$lock_dir" && "$s_token" == "$lock_meta_token" ]]
+  [[ "$s_dir" == "$lock_dir" && "$s_token" == "$lock_meta_token" \
+    && "$s_generation" == "$lock_meta_generation" \
+    && "$lock_meta_generation" == "$lock_meta_token" ]]
 }
 
 is_stealable_lock() {
@@ -150,7 +196,6 @@ is_stealable_lock() {
   if session_fence_matches_lock; then
     return 1
   fi
-  is_stale_lock && return 0
   is_dead_holder_lock && return 0
   return 1
 }
@@ -211,17 +256,25 @@ steal_remove_if_unchanged() {
 write_meta() {
   local lock_token="$1"
   local label="$2"
-  local started holder meta
+  local started holder meta tmp
+  # A newline or carriage return in the label could forge later identity
+  # fields (meta_field reads first match); reject instead of escaping.
+  if [[ "$label" == *$'\n'* || "$label" == *$'\r'* ]]; then
+    echo "done-lock: --label must not contain newline or carriage return" >&2
+    return 1
+  fi
   started="$(now_epoch)"
   holder="$(resolve_holder_pid)"
+  local holder_identity="$(process_identity "$holder" || true)"
   meta="${lock_dir}/${META_FILE}"
-  # noclobber: refuse to overwrite a peer's meta if they claimed the dir first.
+  # Refuse to overwrite a peer's meta if they claimed the dir first.
   if [[ -f "$meta" ]]; then
     return 1
   fi
-  set +o noclobber 2>/dev/null || true
-  set -C
-  if ! cat >"${meta}" <<EOF
+  # Write atomically (temp file + mv -n) so a crash mid-write can never
+  # expose a truncated meta.env to a concurrent reader.
+  tmp="${meta}.tmp.$$.$RANDOM"
+  if ! cat >"${tmp}" <<EOF
 lock_token=${lock_token}
 repo_root=${repo_root}
 label=${label}
@@ -229,12 +282,17 @@ started_epoch=${started}
 started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 hostname=$(hostname -s 2>/dev/null || hostname)
 holder_pid=${holder}
+holder_identity=${holder_identity}
+generation=${lock_token}
 EOF
   then
-    set +C
+    rm -f "$tmp"
     return 1
   fi
-  set +C
+  if ! mv -n "$tmp" "$meta" 2>/dev/null || [[ "$(meta_field "$meta" lock_token)" != "$lock_token" ]]; then
+    rm -f "$tmp"
+    return 1
+  fi
   return 0
 }
 
@@ -242,6 +300,7 @@ print_exports() {
   local token="$1"
   printf 'export DONE_LOCK_DIR=%q\n' "$lock_dir"
   printf 'export DONE_LOCK_TOKEN=%q\n' "$token"
+  printf 'export DONE_LOCK_GENERATION=%q\n' "$token"
 }
 
 lock_session_file() {
@@ -279,12 +338,21 @@ write_lock_session() {
   local session_file tmp
   session_file="$(lock_session_file)"
   mkdir -p "$(dirname "$session_file")"
+  [[ ! -d "$session_file" ]] || return 1
   tmp="${session_file}.tmp.$$.$RANDOM"
-  cat >"${tmp}" <<EOF
+  if ! cat >"${tmp}" <<EOF
 DONE_LOCK_DIR=${lock_dir}
 DONE_LOCK_TOKEN=${token}
+DONE_LOCK_GENERATION=${token}
 EOF
-  mv "${tmp}" "${session_file}"
+  then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! mv "${tmp}" "${session_file}"; then
+    rm -f "$tmp"
+    return 1
+  fi
 }
 
 clear_lock_session() {
@@ -321,7 +389,16 @@ remove_incomplete_lock_dir() {
   if [[ "$age" -lt "$INCOMPLETE_SECS" ]]; then
     return 1
   fi
-  force_remove_lock "incomplete"
+  local tomb="${lock_dir}.incomplete-removing.$$.$RANDOM"
+  if ! mv "$lock_dir" "$tomb" 2>/dev/null; then
+    return 1
+  fi
+  if [[ -f "${tomb}/${META_FILE}" ]]; then
+    mv "$tomb" "$lock_dir" 2>/dev/null || mv "$tomb" "${lock_dir}.conflict.$$" 2>/dev/null || rm -rf "$tomb"
+    return 1
+  fi
+  rm -rf "$tomb"
+  echo "done-lock: removed incomplete lock at ${lock_dir}" >&2
   return 0
 }
 
@@ -335,7 +412,11 @@ try_acquire() {
       # Peer claimed meta first, or dir was recycled under us; do not export a false hold.
       return 1
     fi
-    write_lock_session "$token"
+    if ! write_lock_session "$token"; then
+      load_lock_meta || true
+      steal_remove_if_unchanged "$token" "$lock_meta_started_epoch" "fence-write-failed" || true
+      return 1
+    fi
     # Re-read: abort if meta no longer matches our token (lost race after write).
     load_lock_meta || return 1
     if [[ "$lock_meta_token" != "$token" ]]; then
@@ -361,7 +442,11 @@ try_acquire() {
         if ! write_meta "$token" "$label"; then
           return 1
         fi
-        write_lock_session "$token"
+        if ! write_lock_session "$token"; then
+          load_lock_meta || true
+          steal_remove_if_unchanged "$token" "$lock_meta_started_epoch" "fence-write-failed" || true
+          return 1
+        fi
         load_lock_meta || return 1
         if [[ "$lock_meta_token" != "$token" ]]; then
           return 1
@@ -439,9 +524,10 @@ cmd_wait_acquire() {
 cmd_release() {
   local dir="${DONE_LOCK_DIR:-}"
   local token="${DONE_LOCK_TOKEN:-}"
+  local generation="${DONE_LOCK_GENERATION:-}"
   # Same confused-deputy guard as release-repo: never adopt the shared session file.
-  if [[ -z "$dir" || -z "$token" ]]; then
-    echo "done-lock: release requires DONE_LOCK_DIR and DONE_LOCK_TOKEN in env" >&2
+  if [[ -z "$dir" || -z "$token" || -z "$generation" ]]; then
+    echo "done-lock: release requires DONE_LOCK_DIR, DONE_LOCK_TOKEN, and DONE_LOCK_GENERATION in env" >&2
     echo "done-lock: re-export them from your acquire Step 0 output; refusing shared session load" >&2
     exit 1
   fi
@@ -455,11 +541,12 @@ cmd_release() {
     echo "done-lock: lock directory missing metadata; refusing unsafe release" >&2
     exit 1
   fi
-  local meta_token meta_epoch released_for
+  local meta_token meta_generation meta_epoch released_for
   meta_token="$(meta_field "$meta" lock_token)"
+  meta_generation="$(meta_field "$meta" generation)"
   meta_epoch="$(meta_field "$meta" started_epoch)"
-  if [[ "$token" != "$meta_token" ]]; then
-    echo "done-lock: token mismatch; not releasing ${dir}" >&2
+  if [[ "$token" != "$meta_token" || "$generation" != "$meta_generation" ]]; then
+    echo "done-lock: token or generation mismatch; not releasing ${dir}" >&2
     exit 1
   fi
   released_for="$(meta_field "$meta" repo_root)"
@@ -513,10 +600,10 @@ cmd_status() {
   echo "  hostname: ${lock_meta_hostname:-unknown}"
   if [[ -n "${lock_meta_holder_pid:-}" ]]; then
     echo "  holder_pid: ${lock_meta_holder_pid}"
-    if holder_pid_alive "$lock_meta_holder_pid"; then
-      echo "  holder_alive: yes"
-    else
-      echo "  holder_alive: no"
+    local state
+    state="$(holder_state)"
+    echo "  holder_alive: ${state}"
+    if [[ "$state" == "dead" ]]; then
       if session_fence_matches_lock; then
         echo "  session_fence: yes (PID dead but matching done-lock.session; not auto-stealable)"
       fi
@@ -542,17 +629,24 @@ cmd_status() {
 cmd_stale_clean() {
   require_git_repo
   if [[ -d "$lock_dir" ]] && [[ ! -f "${lock_dir}/${META_FILE}" ]]; then
-    force_remove_lock "incomplete"
-    clear_lock_session || true
+    if ! remove_incomplete_lock_dir; then
+      echo "done-lock: incomplete lock is too new; refusing unsafe cleanup" >&2
+      exit 2
+    fi
+    clear_lock_session_if_token "${lock_meta_token:-}" || true
     echo "done-lock: free (${repo_root})"
     return 0
   fi
   # Operator escape: allow removing a fenced lock only when it is also stale.
   local allow_fenced_stale=0
+  local allow_operator_stale=0
   if session_fence_matches_lock && is_stale_lock; then
     allow_fenced_stale=1
   fi
-  if [[ -d "$lock_dir" ]] && { is_stealable_lock || [[ "$allow_fenced_stale" -eq 1 ]]; }; then
+  if [[ -d "$lock_dir" ]] && is_stale_lock && ! session_fence_matches_lock; then
+    allow_operator_stale=1
+  fi
+  if [[ -d "$lock_dir" ]] && { is_stealable_lock || [[ "$allow_fenced_stale" -eq 1 ]] || [[ "$allow_operator_stale" -eq 1 ]]; }; then
     local reason="stale"
     local expected_token expected_epoch
     load_lock_meta || exit 1
@@ -560,6 +654,8 @@ cmd_stale_clean() {
     expected_epoch="${lock_meta_started_epoch}"
     if [[ "$allow_fenced_stale" -eq 1 ]]; then
       reason="stale-fenced"
+    elif [[ "$allow_operator_stale" -eq 1 && "$(holder_state)" != "dead" ]]; then
+      reason="operator-stale"
     elif is_dead_holder_lock; then
       reason="abandoned"
     fi
@@ -598,8 +694,11 @@ cmd_selftest() {
   run() {
     DONE_LOCK_ROOT="$lock_root" \
       DONE_LOCK_STALE_SECS="${DONE_LOCK_STALE_SECS:-1800}" \
+      DONE_LOCK_DEAD_HOLDER_GRACE_SECS="${DONE_LOCK_DEAD_HOLDER_GRACE_SECS:-5}" \
+      DONE_LOCK_HOLDER_PID="${DONE_LOCK_HOLDER_PID-}" \
       DONE_LOCK_DIR="${DONE_LOCK_DIR-}" \
       DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN-}" \
+      DONE_LOCK_GENERATION="${DONE_LOCK_GENERATION-}" \
       bash "$script_path" "$@"
   }
 
@@ -709,7 +808,7 @@ cmd_selftest() {
   rm -f "$root/.ai-playbook/done-lock.session"
   if ! (
     cd "$root"
-    eval "$(run acquire --label abandon-steal)"
+    eval "$(DONE_LOCK_DEAD_HOLDER_GRACE_SECS=0 run acquire --label abandon-steal)"
     run release-repo
   ); then
     echo "selftest FAIL: abandoned steal (no session) should succeed" >&2
@@ -734,6 +833,143 @@ cmd_selftest() {
     eval "$(grep -E '^DONE_LOCK_' .ai-playbook/done-lock.session | sed 's/^/export /')"
     run release-repo
   ) || true
+
+  repo_id="$(printf '%s' "$(cd "$root" && git rev-parse --show-toplevel)" | shasum -a 256 | cut -c1-16)"
+  test_lock_dir="${lock_root}/${repo_id}"
+  set_meta_field() {
+    local key="$1"
+    local value="$2"
+    local meta="${test_lock_dir}/${META_FILE}"
+    sed -i.bak -e "s/^${key}=.*/${key}=${value}/" "$meta"
+    rm -f "${meta}.bak"
+  }
+
+  # 8) A stale live holder without a fence is blocked; only an explicit
+  # stale-clean may remove it.
+  if ! (
+    cd "$root"
+    sleep 120 &
+    holder_pid=$!
+    trap 'kill "$holder_pid" 2>/dev/null || true' EXIT
+    eval "$(DONE_LOCK_HOLDER_PID="$holder_pid" run acquire --label live-stale)"
+    rm -f .ai-playbook/done-lock.session
+    set_meta_field started_epoch 1
+    if DONE_LOCK_STALE_SECS=0 run acquire --label must-block-live 2>/dev/null; then
+      echo "selftest FAIL: stale live holder was auto-stolen" >&2
+      exit 1
+    fi
+    DONE_LOCK_STALE_SECS=0 run stale-clean
+  ); then
+    echo "selftest FAIL: live-holder stale recovery rule" >&2
+    fail=1
+  else
+    echo "selftest OK: live holder blocks auto-steal; stale-clean is explicit"
+  fi
+
+  # 9) A dead holder is blocked until the grace period passes, then can be
+  # recovered without a session fence.
+  if ! (
+    cd "$root"
+    eval "$(DONE_LOCK_HOLDER_PID=999999 DONE_LOCK_DEAD_HOLDER_GRACE_SECS=60 run acquire --label dead-grace)"
+    rm -f .ai-playbook/done-lock.session
+    if DONE_LOCK_DEAD_HOLDER_GRACE_SECS=60 run acquire --label before-grace 2>/dev/null; then
+      echo "selftest FAIL: dead holder bypassed grace period" >&2
+      exit 1
+    fi
+    set_meta_field started_epoch 1
+    eval "$(DONE_LOCK_DEAD_HOLDER_GRACE_SECS=60 run acquire --label after-grace)"
+    run release-repo
+  ); then
+    echo "selftest FAIL: dead-holder grace rule" >&2
+    fail=1
+  else
+    echo "selftest OK: dead-holder recovery waits for grace"
+  fi
+
+  # 10) Ambiguous PID identity is non-stealable, and an old generation cannot
+  # release the replacement generation after takeover.
+  if ! (
+    cd "$root"
+    sleep 120 &
+    holder_pid=$!
+    trap 'kill "$holder_pid" 2>/dev/null || true' EXIT
+    eval "$(DONE_LOCK_HOLDER_PID="$holder_pid" run acquire --label ambiguous)"
+    old_dir="$DONE_LOCK_DIR"
+    old_token="$DONE_LOCK_TOKEN"
+    rm -f .ai-playbook/done-lock.session
+    set_meta_field holder_identity definitely-not-the-live-process
+    set_meta_field started_epoch 1
+    if run acquire --label ambiguous-takeover 2>/dev/null; then
+      echo "selftest FAIL: ambiguous holder identity was stolen" >&2
+      exit 1
+    fi
+    DONE_LOCK_DIR="$old_dir" DONE_LOCK_TOKEN="$old_token" run release 2>/dev/null || true
+    rm -f .ai-playbook/done-lock.session
+    eval "$(DONE_LOCK_HOLDER_PID=999999 run acquire --label generation-old)"
+    old_dir="$DONE_LOCK_DIR"
+    old_token="$DONE_LOCK_TOKEN"
+    rm -f .ai-playbook/done-lock.session
+    set_meta_field started_epoch 1
+    eval "$(run acquire --label generation-new)"
+    new_token="$DONE_LOCK_TOKEN"
+    if [[ "$old_token" == "$new_token" ]]; then
+      echo "selftest FAIL: takeover reused lock generation" >&2
+      exit 1
+    fi
+    if DONE_LOCK_DIR="$old_dir" DONE_LOCK_TOKEN="$old_token" run release 2>/dev/null; then
+      echo "selftest FAIL: old holder mutated replacement generation" >&2
+      exit 1
+    fi
+    run release-repo
+  ); then
+    echo "selftest FAIL: generation and identity race witnesses" >&2
+    fail=1
+  else
+    echo "selftest OK: ambiguous identity and old-generation mutation blocked"
+  fi
+
+  # 11) A fence write failure never leaves an apparently held lock behind.
+  if ! (
+    cd "$root"
+    mkdir -p .ai-playbook/done-lock.session
+    if run acquire --label fence-write-failure 2>/dev/null; then
+      echo "selftest FAIL: fence-write failure reported success" >&2
+      exit 1
+    fi
+    [[ ! -d "$test_lock_dir" ]]
+    rmdir .ai-playbook/done-lock.session
+  ); then
+    echo "selftest FAIL: fence-write failure cleanup" >&2
+    fail=1
+  else
+    echo "selftest OK: fence-write failure cleans the generation"
+  fi
+
+  # 12) A truncated meta.env (crash mid-write) is age-unknown: stale-clean
+  # must refuse even with STALE_SECS=0 rather than remove a possibly-live lock.
+  (
+    cd "$root"
+    rm -f .ai-playbook/done-lock.session
+    mkdir -p "$test_lock_dir"
+    printf 'lock_token=truncated\nlabel=partial' > "${test_lock_dir}/${META_FILE}"
+    if DONE_LOCK_STALE_SECS=0 run stale-clean 2>/dev/null; then
+      echo "selftest FAIL: stale-clean removed a truncated-meta lock" >&2
+      exit 1
+    fi
+    [[ -d "$test_lock_dir" ]] || { echo "selftest FAIL: truncated-meta lock was deleted" >&2; exit 1; }
+    rm -rf "$test_lock_dir"
+  ) || fail=1
+  if [[ "$fail" -eq 0 ]]; then
+    echo "selftest OK: truncated meta refuses stale-clean"
+  fi
+
+  # 13) A newline in --label cannot forge meta.env identity fields.
+  if (cd "$root" && run acquire --label "$(printf 'inj\nholder_pid=999999')" 2>/dev/null); then
+    echo "selftest FAIL: newline label was accepted" >&2
+    fail=1
+  else
+    echo "selftest OK: newline label rejected"
+  fi
 
   rm -rf "$tmp"
   if [[ "$fail" -ne 0 ]]; then

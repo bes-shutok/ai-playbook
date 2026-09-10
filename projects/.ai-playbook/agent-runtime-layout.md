@@ -14,6 +14,36 @@ Use it when:
 - mirroring local agent assets into this repository,
 - documenting how Claude Code, Codex, Copilot, Gemini CLI, or OpenCode load reusable instructions.
 
+## Execute-plan runtime profiles
+
+The execute-plan skill has one shared source: `agents/skills/execute-plan/` in
+this repository, exposed through the host's configured skill registry or
+loader. Select a runtime by canonical ID or normalized alias from
+`projects/.ai-playbook/execute-plan-runtime-inventory.toml`; do not infer a
+profile from a display name or duplicate the capability matrix in a probe.
+Shared workflow policy owns authorization, durable state, retry budgets,
+continuation, and commit boundaries. A host adapter owns only its local launch,
+wait, resume, and event translation protocol.
+
+The registry currently defines eight eligible profiles. The paths and command
+families below are verified against the current repository inventory and the
+runtime catalog under `agents/skills/agterm/agent-runtimes.md`:
+
+| ID | Display name | Adapter boundary | Eligibility |
+| --- | --- | --- | --- |
+| `claude` | Claude Code | `runtime-adapter:claude` | eligible |
+| `codex` | Codex | `runtime-adapter:codex` | eligible |
+| `cursor` | Cursor | `runtime-adapter:cursor` | eligible |
+| `zcode` | ZCode | `runtime-adapter:zcode` | eligible |
+| `opencode` | OpenCode | `runtime-adapter:opencode` | eligible |
+| `copilot` | Copilot | `runtime-adapter:copilot` | eligible |
+| `gemini` | Gemini CLI | `runtime-adapter:gemini` | eligible |
+| `antigravity` | Antigravity | `runtime-adapter:antigravity` | eligible |
+
+Pi is explicitly deferred. Its `pi` runtime entry remains in the registry's
+deferred set until a verified resume contract and repeatable session identity
+are available; it is not silently treated as an eligible profile.
+
 ## Verified Runtime Sources
 ### Shared Agent Skill Registry
 - Runtime source: `~/.agents/skills`
