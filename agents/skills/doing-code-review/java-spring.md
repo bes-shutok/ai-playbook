@@ -74,9 +74,33 @@ Maps abstract `testing#harness-fidelity-gap` / `testing#coverage-claim-unchecked
 
 ## Build and Dependency
 
-- Dependency versions: check for known CVEs in newly added dependencies.
+- Dependency coordinates: apply `java_guidelines.md` #19 to every added or
+  version-changed dependency, including managed versions. Check current
+  advisories and compile/test direct API usages after the change.
 - Maven/Gradle plugin versions: verify compatibility with Java version.
 - Test scope: test utilities must use `test` scope, not `compile`.
+
+## Review-wide Java checks
+
+For every Java/Spring review, the orchestrator must include the shared
+`java_guidelines.md` and `jvm_guidelines.md` in the Guideline Pack and record
+the applied rule hints in staging metadata. Workers must apply these checks to
+the complete branch diff, not only to the highlighted line:
+
+- `java_guidelines.md` #16: unused imports and unused declarations, including
+  fields, methods, parameters, enum constants, and helpers.
+- `java_guidelines.md` #17: omitted, explicit-null, empty, and present input
+  states at generated-model and mapper boundaries.
+- `java_guidelines.md` #18: downstream error messages and details treated as
+  untrusted before response or log mapping.
+- `java_guidelines.md` #19: advisory and API-compatibility checks for changed
+  dependency coordinates.
+- `java_guidelines.md` #20: required outbound TLS validation at configuration
+  binding, with only an explicit loopback exception.
+
+Assign findings to the normal owners: unused surface to simplification,
+boundary behavior to quality or testing, error leakage and transport security
+to risk, and dependency wiring or compatibility to implementation or risk.
 
 ## Message-driven handlers (Spring Kafka)
 

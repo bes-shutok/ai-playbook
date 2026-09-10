@@ -138,6 +138,7 @@ When a finding or feedback item targets documentation or comments (outdated doc,
 3. **Outdated (contradicts current code).** Decide the disposition explicitly:
    - Remove as obsolete when nothing depends on it.
    - Move to frozen docs as historical context when it records past decisions worth keeping (Layer 3 history per `doc-hierarchy` for company repos; the docs branch for gitignored agent docs). Leave a pointer when readers may search for it.
+   - Immutable context: when the finding is located in a Completed history artifact (post-freeze document; vocabulary per `doc-hierarchy` "Document states"), the artifact is immutable context, never fix material. Do not edit the artifact body; land the fix in the Living SOT as a pointer or successor entry, or as a successor (`superseded_by`) registry row in the ownership registry. The corruption override (ADR-0001 procedure per `doc-hierarchy` "Document states") remains the sole exception.
    - Do not rewrite active documentation to describe old behavior as current.
 4. Run the evaluation with the documentation agent's phase 2 gates (`review-agents/documentation.md`); they apply ad hoc to the documents and comments named by the feedback, not only to diff prose.
 5. Reply in the thread with the chosen disposition (kept with reason, removed, or frozen) so the decision is auditable.

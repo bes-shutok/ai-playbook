@@ -5805,3 +5805,29 @@ When the identical command behaves differently in the agent shell versus the use
 **Example:** the normalizer clamps `retry_policy` to the profile budget on ingest, and the driver sets `retry_raw["retry_policy"] = retry` from its own decremented counter before recursing.
 
 **See also:** #310 (retry poisoning from recorded state; here the poisoned input is a control parameter, not a dedup key).
+
+## 313. Classify Positional Formats On The Raw Line; Strip Only The Newline
+
+**Principle:** Family H (verify the real thing, not the abstraction) - leading whitespace can be payload in positional formats, so defensive whole-string trimming before parsing silently corrupts classification.
+
+**Trigger:** a parser of fixed-column or positional lines (porcelain status XY codes, fixed-width records, indentation-significant formats) that calls `.strip()` or similar normalization on the input line before classifying it.
+
+**Rule:** (1) Classify on the raw line with at most the trailing newline removed; never strip leading characters before column-based parsing. (2) Reject ambiguous lines as usage errors (fail closed) instead of falling back to a guessed parse. (3) Add a fixture whose significant payload begins with a space (for example a worktree-only status line), and pin both the classification and the exit tier.
+
+**Why:** a registry write gate parsed porcelain lines after trimming; a legitimate leading-space worktree line (` M path`) lost its blank staged column, was misclassified as staged, and the blank-column semantics that other rules depended on became unreachable, so renames and worktree edits gated on the wrong side. The dead fallback branch also masked the misparse instead of failing.
+
+**Example:** classify a line of length >= 3 as porcelain only when its first two characters form a valid XY pair (at most one blank) and column 3 is a space; the path is everything after column 3. Tab-form lines from feeders that never emit them raise a parse error rather than being silently accepted.
+
+**See also:** #295 (parse git machine output in machine mode; this is the same family at the pre-normalization layer), #286 (derive the acceptance grammar from the live emitted corpus, including leading-space shapes).
+
+## 314. Bound Payload-Separator Semantics To The Status Letter That Licenses Them
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a separator token inside a positional payload is ambiguous data unless the leading status letters license it as structure.
+
+**Trigger:** a parser of positional status/diff lines that splits on a separator sequence (for example ` -> ` in `git status --porcelain` rename lines) to derive two fields from one.
+
+**Rule:** (1) Interpret the separator as structure only when the status letters license it (rename semantics only under an `R` code); under any other status, the same byte sequence is filename data and the whole remainder is one literal path. (2) After the licensed single split, reject any side still containing the separator (exit as a usage error, not a policy violation). (3) Pin both directions with fixtures: the data-direction (literal path containing the separator is gated as one full path) and the structure-direction (a licensed split with a second separator raises).
+
+**Why:** a review round found a rename fix half-implemented: the split was bounded to the rename letter but the second-separator rejection clause of the prescribed fix was missing, leaving both a bypass and a false-block direction.
+
+**See also:** #295 (machine-mode parsing), #313 (classify on the raw line), #286 (derive the grammar from the live emitted corpus).

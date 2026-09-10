@@ -84,6 +84,9 @@ If nothing to cut: `Lean already. Ship.` (report zero simplification findings; d
 ### `delete:` dead weight and future-proofing excess
 
 - Unused extension points: hooks, callbacks, plugins with no callers
+- Unused changed declarations: imports, fields, methods, parameters, enum
+  constants, and helpers with no references in the complete branch diff. The
+  compiler often does not report these; use a branch-wide reference search.
 - Versioned internal APIs: v1/v2 when only one version used
 - Feature flags for permanent decisions: flags always on/off
 - Dual implementations: old + new logic when old has no callers

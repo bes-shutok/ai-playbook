@@ -163,3 +163,56 @@ Named-module `permits` across packages remains valid when the project actually u
 ## 15. Prefer imports over fully qualified type names
 
 See `jvm_guidelines.md` #12 (Java and Kotlin).
+
+## 16. Review Every Changed Java Declaration for Unused Surface
+
+When reviewing a Java change, inspect every added or modified declaration for
+unused imports, fields, methods, parameters, enum constants, and helper
+objects. The Java compiler does not generally report unused members, and a
+public or private declaration can remain dead while the tests stay green.
+
+Use the complete branch diff and a branch-wide reference search, not only the
+changed hunk. A declaration with no caller should be removed unless the code
+or an authoritative design document records a current extension point.
+
+## 17. Preserve Nullable Boundary States
+
+At request and response boundaries, distinguish omitted, explicit `null`,
+empty, and present values whenever the contract gives them different meaning.
+For generated request models, inspect the actual nullable wrapper behavior and
+test each state through the converter or mapper that production uses.
+
+Guard nullable map keys, property names, and collection elements before lookup,
+dereference, or validation. A null-safe test must prove the resulting public
+outcome and must fail when the guard is removed.
+
+## 18. Treat Downstream Error Payloads as Untrusted Input
+
+An HTTP client must not pass a downstream error message or arbitrary details
+directly to an external response or log. Map status and error codes through a
+bounded vocabulary, keep only explicitly safe structured fields, and replace
+free-form text with a service-owned message.
+
+Add a test with a unique marker in both message and details and assert that the
+marker cannot reach the response or logs. Apply the same rule to single-item
+and batch converters.
+
+## 19. Audit Changed Dependency Coordinates
+
+When a Maven or Gradle dependency is added or its version changes, check the
+coordinate against a current vulnerability source and verify compatibility with
+the Java and framework versions in use. Do not limit the audit to newly added
+artifacts; a version change can expose a new advisory or API incompatibility.
+
+Run the relevant compile, unit, and integration checks for direct API usages.
+When a dependency reserves a name or changes serialization behavior, update
+fixtures through the dependency's supported API and add a regression test.
+
+## 20. Enforce Required TLS at the Outbound Configuration Boundary
+
+When the application directly creates outbound HTTP clients and accepts a
+service URL from configuration, validate the URL scheme at configuration
+binding time when the service contract requires encryption. A local loopback
+exception must be explicit and limited to local or test use. Infrastructure
+TLS does not replace validation when the application can otherwise be pointed
+at plaintext transport.

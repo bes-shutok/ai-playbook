@@ -543,6 +543,18 @@ Verification rounds use `-r<N>` in the staging filename (`...-<mode>-r2.md`, `-r
 
 ---
 
+## Step 4 – Closure (Freeze Transition)
+
+When the user declares an RFC **superseded** or **accepted**, prompt the freeze transition per `doc-hierarchy` "Document states":
+
+1. **Stable capability identity:** the closure row keys on a stable kebab-case capability identity, independent of ticket, branch, or file path; ticket ids are provenance only, never the identity. Current create mode does not yet emit a capability identity in the Header, so the filename-derived scheme (filename minus leading date prefix, per the ownership-registry comment header) is the live default; at closure, derive the identity that way and confirm it with the user before freezing (if the file was renamed before closure, derive from the original creation-time filename, e.g. via git log --follow on the RFC path, and say so when proposing the identity; never silently derive from the current path, which the rename changed). Emitting the identity in the Header at RFC creation is tracked in the backlog item `docs/history/backlog/2026-09-10-rfc-design-create-mode-identity-header-wiring.md`.
+2. **Prompt, do not infer:** freeze is agent-prompted and user-confirmed. When the user declares the outcome, propose the registry row; never freeze based on file age or staleness.
+3. **Accepted RFC:** the accepting document (implementation plan, architecture topic, or code docs) becomes the SOT owner. In the RFC's registry row, set `state: completed`; the `successor` column carries the accepting document identity (accepted-SOT relation); column order and required cells defer to the `doc-hierarchy` ownership registry spec.
+4. **Superseded RFC:** the successor column carries the superseding document identity; `state: superseded`; archive move per `doc-hierarchy` where applicable.
+5. **Body preserved:** the RFC body is a Completed history artifact after freeze. No body edits; corrections go to the successor. The only override is the corruption override (`audit` note) per the ADR-0001 procedure in the `doc-hierarchy` registry spec.
+
+Registry row columns and semantics: see the `doc-hierarchy` skill ownership registry spec.
+
 ## Final Output Contract
 
 - Output Markdown only.
@@ -584,8 +596,8 @@ After Step 3, when the user wants implementation work, offer the `plans` skill. 
 ### With `grilling` skill
 Use before drafting or after a first RFC draft when design choices need explicit user sign-off. Grilling resolves decisions one at a time; do not duplicate RFC body content in chat. Reference the saved RFC path once it exists.
 
-### With `doc-hierarchy` skill (placement)
-RFCs are **Layer 3** history (`{rfcs_dir}`, typically `docs/history/feature-notes/` flat). Do not file them under Layer 2 `docs/architecture/` or legacy `docs/rfcs/`. Read `doc-hierarchy` for layout rules; run **doc-hierarchy-upkeep** when the RFC changes user-visible behavior documented in Layer 1/2.
+### With `doc-hierarchy` skill (placement and closure)
+RFCs are **Layer 3** history (`{rfcs_dir}`, typically `docs/history/feature-notes/` flat). Do not file them under Layer 2 `docs/architecture/` or legacy `docs/rfcs/`. Read `doc-hierarchy` for layout rules; run **doc-hierarchy-upkeep** when the RFC changes user-visible behavior documented in Layer 1/2. Closure (Step 4) consumes the `doc-hierarchy` ownership registry spec (states, freeze transition, row columns) for accepted and superseded RFCs.
 
 ### With `agents-best-practices` skill (reference)
 For harness-level questions (approval gates, tool permissions, eval strategy for RFC quality), read `agents-best-practices/references/evals.md` and `security-observability.md`. Regression cases for this harness live in `references/eval-cases.md`. This skill owns the RFC document contract; that skill owns general agent harness design.

@@ -61,6 +61,11 @@ Precedence: when the floor is triggered, it overrides both the focused-round pre
 
 Boundary: a changed normative documentation example alone (docs-only or docs-plus-scripts diffs with no code-mutation signal) escalates `contract-docs` plus `correctness-completeness` coverage but does not trigger the `risk-signal floor`, so docs-only focused panels stay valid. Within execute-plan Step 3.1 item 5, doc/skill-only plans keep grep/hygiene commands as the `testing` worker's primary evidence.
 
+Treat changed dependency coordinates, outbound service URL configuration, and
+downstream error-response mapping as risk signals even when the diff is small.
+They require the `risk` worker and the Java/Spring guideline checks when the
+changed files are Java or Spring configuration.
+
 Record the detected signals in the staging Metadata `Changed-risk signals` field (comma list or `none`).
 
 ## Manual overrides

@@ -1,6 +1,6 @@
 # Backlog: document ownership and immutable archive lifecycle
 
-Status: open
+Status: done
 Workflow: backlog
 Origin: User feedback during implementation-plan authoring on 2026-09-08
 Severity: High
@@ -25,10 +25,10 @@ Define one project-agnostic document lifecycle that makes ownership and mutabili
 
 ## Terms
 
-Vocabulary is harmonized with the repository glossary (`docs/maintenance/glossary.md`) per the 2026-09-08 grill — this document's original "historical artifact" and "frozen context" wording folds into existing terms:
+Vocabulary is harmonized with the repository glossary (`docs/maintenance/glossary.md`) per the 2026-09-08 grill; this document's original "historical artifact" and "frozen context" wording folds into existing terms:
 
 - **Living SOT:** the one document or wire/schema source that owns the current normative rule for an idea (glossary term).
-- **Completed history artifact:** the glossary term covering what this item originally called "historical artifact" and "frozen context" — a completed plan, investigation, proposal, RFC, or non-mirror context file recording what was known or decided at a point in time. "Frozen context" is simply a completed history artifact under `docs/history/context/`, not a separate state.
+- **Completed history artifact:** the glossary term covering what this item originally called "historical artifact" and "frozen context"; a completed plan, investigation, proposal, RFC, or non-mirror context file recording what was known or decided at a point in time. "Frozen context" is simply a completed history artifact under `docs/history/context/`, not a separate state.
 - **Pointer:** a short link or index entry that names the current SOT without copying its normative prose.
 - **Document identity:** a stable capability or concept identifier, independent of a temporary ticket, branch, or implementation task (glossary term).
 - **Ownership registry:** the central registry defined in the glossary; one Layer 2 file mapping document identity to the living SOT, completed history artifacts, and aliases.
@@ -118,12 +118,12 @@ This is a cross-skill documentation lifecycle change. It should be implemented a
 Resolved in a grill-with-docs session; glossary and `project-decisions.md` (ADR-0003) updated inline. These decisions bind the implementing plan.
 
 1. **Scope (ADR-0003):** the lifecycle is part of the doc-hierarchy schema, binding service repos automatically once migration-complete; the ai-playbook instruction repo adopts it by convention for its own `docs/` tree without requiring the migration-complete signal. No third scope class.
-2. **Registry form:** one central registry file (no per-doc frontmatter mechanism). Archival stays a pure `git mv` plus a registry row; the frozen artifact's bytes never change. Registry updates ride existing lifecycle transitions (plan completion, backlog archival, RFC closure) — never a separate ritual. Alias/redirect stub files remain banned (verify script already deletes them); aliases live only in the registry.
-3. **Validator:** a new standalone script in the repo scripts layer (sibling of `confluence-mirror-hygiene.sh`), wired into `done` as a numbered step near the mirror-hygiene step. Do not extend `verify-doc-hierarchy.sh` (migration-scoped; fatals on the instructions repo). Two-tier verdict — hard-fail: duplicate identity/SOT declarations, writes under completed-history paths without an explicit override, successor cycles; warn-only: stale aliases and missing registry entries for legacy files (pre-registry repos fail open; the migration command backfills).
+2. **Registry form:** one central registry file (no per-doc frontmatter mechanism). Archival stays a pure `git mv` plus a registry row; the frozen artifact's bytes never change. Registry updates ride existing lifecycle transitions (plan completion, backlog archival, RFC closure); never a separate ritual. Alias/redirect stub files remain banned (verify script already deletes them); aliases live only in the registry.
+3. **Validator:** a new standalone script in the repo scripts layer (sibling of `confluence-mirror-hygiene.sh`), wired into `done` as a numbered step near the mirror-hygiene step. Do not extend `verify-doc-hierarchy.sh` (migration-scoped; fatals on the instructions repo). Two-tier verdict; hard-fail: duplicate identity/SOT declarations, writes under completed-history paths without an explicit override, successor cycles; warn-only: stale aliases and missing registry entries for legacy files (pre-registry repos fail open; the migration command backfills).
 4. **Freeze trigger:** explicit, agent-prompted, never time-inferred. Plans freeze deterministically at completion. Investigations, RFCs, and proposals freeze when the owner/user declares it, prompted at natural moments (`rfc-design` on supersession/acceptance, `execute-plan` completion when the doc fed the plan, `doc-hierarchy-upkeep` when a Layer 3 file is still cited as current truth). The validator may nag about living-cited Layer 3 files; it never auto-reclassifies.
 5. **Vocabulary:** reuse the glossary ("Completed history artifact" widened; "Living SOT" added; no separate "frozen context" state).
 6. **Registry location:** `docs/maintenance/document-registry.md` by default, overridable via an optional facts key (e.g. `doc_registry_rel`), created lazily by the migration command.
-7. **Corruption override:** ADR-0001 semantics exactly — explicit user confirmation, minimal corrective edit, plus an audit note (date, reason, approver) in the registry row. No new approval machinery.
+7. **Corruption override:** ADR-0001 semantics exactly; explicit user confirmation, minimal corrective edit, plus an audit note (date, reason, approver) in the registry row. No new approval machinery.
 8. **Confluence mirrors:** existing sync/mirror-hygiene workflow stands unchanged; `confluence-page-sync` gains an explicit line that sync never licenses edits to local non-mirror history.
 9. **Ephemera out of scope:** `docs/history/reviews/` and `docs/tmp/` (gitignored) get no registry entries and no immutability rules.
 10. **Superseded documents stop being deleted:** `plans` currently deletes superseded plans; this reverses to archive + `superseded_by` registry entry. Superseded backlog items get `Status: superseded` in `backlog/completed/` instead of deletion.

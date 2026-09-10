@@ -94,6 +94,35 @@ A company service repo is **migration-complete** when **all** are true:
 
 Until the signal is true, other skills read `.ai-playbook/facts.md` and may explore legacy paths on disk when keys are missing. After true, project spec wins; `learn` must not create new `docs/examples/` or `docs/<module>/` trees.
 
+## Document states
+
+Every document is in exactly one of two states:
+
+- **Living SOT**: the one document (or wire/schema source) that owns the current normative rule for an idea; editable while its work is active.
+- **Completed history artifact**: a completed plan, investigation, proposal, RFC, or non-mirror context file recording what was known or decided at a point in time; immutable after its freeze transition.
+
+**Freeze transition**: the explicit lifecycle action that closes a document: archive move (where applicable), registry row with date and reason, no body edits. Freeze is always **agent-prompted and user-confirmed**; never inferred from file age, last-touch time, or staleness heuristics. Superseded documents are archived, not deleted. Definitions live in `docs/maintenance/glossary.md`; binding decision in ADR-0003 (`docs/maintenance/project-decisions.md`).
+
+**Ownership registry**: one Layer 2 Markdown table, one row per **document identity** (stable kebab-case concept identifier, independent of ticket, branch, or path). Registry location comes from the `doc_registry_rel` facts key (default `docs/maintenance/document-registry.md`). Row shape, matching `scripts/doc_registry_validator.py`:
+
+| Column | Meaning |
+|--------|---------|
+| `identity` | stable kebab-case concept identifier (required) |
+| `sot` | `yes` when this row declares living-SOT ownership, else `no` |
+| `state` | `living` / `completed` / `superseded` (required) |
+| `archived` | freeze date `YYYY-MM-DD`; empty for living rows |
+| `reason` | why the freeze happened (free text) |
+| `src` | repo-relative path of the registered artifact |
+| `successor` | identity of the superseding document (`superseded_by`); for an accepted RFC freeze it carries the accepting document identity instead (accepted-SOT relation, per `rfc-design` Step 4) |
+| `aliases` | comma-separated repo-relative paths that historically pointed at this identity |
+| `audit` | optional free-text note; non-empty on a completed-history row is the explicit override licensing an otherwise immutable write. The note must begin with the dated confirmation token `user-approved YYYY-MM-DD:` (what the user confirmed) with a real, non-future calendar date (one-day clock skew tolerated); both `validate` and `check-writes` hard-fail a malformed or ill-dated note, and a self-minted note licenses nothing |
+
+**Corruption override (ADR-0001):** the `audit` note is the sole override licensing an edit to a frozen body, and only after explicit user confirmation of a minimal edit (just the corrupt content); the note begins with the dated confirmation token `user-approved YYYY-MM-DD:` and records what changed and why, and is removed after the licensed write lands so the guard does not stay disarmed. **Identity derivation** for backfilled rows and RFC closure (the live default until RFC creation emits the identity in the Header, per `rfc-design` Step 4 and the backlog item `docs/history/backlog/2026-09-10-rfc-design-create-mode-identity-header-wiring.md`): filename minus the leading `YYYY-MM-DD-` date prefix and `.md` extension, kebab-case; collision handling is documented in the registry file's comment header.
+
+The **registry validator** (`scripts/doc_registry_validator.py`) validates registry integrity, gates writes to immutable completed-history paths (`check-writes`), and inventories completed-history files lacking a registry row. It reports; it never auto-reclassifies. The registered-src exemption in `check-writes` is bounded to the transition, not the artifact's life: the `src` of a `completed`/`superseded` row is a licensed lifecycle write only when the change type is an add or rename (`A`/`R`, the one-time freeze move); the same src written with a modify/delete change type, and every write without an `audit`-noted override otherwise, stays a hard gate failure.
+
+**Scope:** company service repos bind this lifecycle via the **migration-complete signal** above (schema binding); this instructions repo adopts it **by convention** for its own `docs/` tree without the signal (ADR-0003). The validator works on any repo with resolved facts paths.
+
 ## Agent-agnostic instructions
 
 - **Canonical:** repo root `AGENTS.md` (`# Instructions`).
@@ -108,14 +137,14 @@ Templates: [instruction-templates.md](instruction-templates.md).
 | `bootstrap-ai-playbook` | Resolution order and default path map; links here for migration-complete signal; creates `history/backlog/` under an existing Layer 3 root for `{backlog_dir}` |
 | `doc-hierarchy-migrate` | Applies schema; writes canonical paths into repo instructions |
 | `doc-hierarchy-upkeep` | Layer 1/2 updates when migration-complete signal is true |
-| `plans`, `execute-plan` | Read `{plans_dir}`, `{backlog_dir}`, `{backlog_completed_dir}`, `{reviews_dir}`, `{tmp_dir}` from `.ai-playbook/facts.md` |
+| `plans`, `execute-plan` | Read `{plans_dir}`, `{backlog_dir}`, `{backlog_completed_dir}`, `{reviews_dir}`, `{tmp_dir}` from `.ai-playbook/facts.md`; `plans` completion transition writes the registry row (freeze) for the completed plan and promoted backlog items |
 | `receiving-review` | Backlog capture writes pre-plan items under `{backlog_dir}` (`history/backlog/`); promotion and archival follow `plans` |
 | `learn` | Placement rules; no new `docs/examples/` or `docs/<module>/` after migration |
-| `done`, `docs-branch` | PR checklist; gitignored doc paths via resolved `{reviews_dir}` |
+| `done`, `docs-branch` | PR checklist; gitignored doc paths via resolved `{reviews_dir}`; `done` Step 2.648 runs the registry validator (`validate` plus `check-writes`) |
 | `doing-code-review`, `review-plan` | Staging docs under resolved `{reviews_dir}` |
 | `github-pr-workflow` | Doc migration PR description rules from `company-decisions.md` |
 | `review-confluence-doc` | Reads `{reviews_dir}` (and `{tmp_dir}` for scratch only) from `.ai-playbook/facts.md`; review staging under `{reviews_dir}/` per `review-staging` |
-| `rfc-design` | Reads `{reviews_dir}`, `{rfcs_dir}`, `{proposals_dir}`, `{tmp_dir}` from `.ai-playbook/facts.md`; saves RFCs under `{rfcs_dir}` (Layer 3 `history/feature-notes/`); review staging under `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` (never `{tmp_dir}/rfc-review/`) |
+| `rfc-design` | Reads `{reviews_dir}`, `{rfcs_dir}`, `{proposals_dir}`, `{tmp_dir}` from `.ai-playbook/facts.md`; saves RFCs under `{rfcs_dir}` (Layer 3 `history/feature-notes/`); review staging under `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` (never `{tmp_dir}/rfc-review/`); closure transition applies the freeze (registry row with date, reason, successor) instead of body edits |
 | `tdd-design` | Reads `{rfcs_dir}`, `{proposals_dir}` from `.ai-playbook/facts.md`; finished TDDs are Layer 3 history files under `{rfcs_dir}` like `rfc-design`; drafts under `{proposals_dir}` when present |
 | `confluence-page-sync` | Reads `{tmp_dir}` (page-fetch and HTML scratch) from `.ai-playbook/facts.md`; writes the sync manifest under `docs/maintenance/`; writes or refreshes page mirrors under `docs/history/context/confluence/` and the README page-id index for the pages it publishes (Step 4) per `confluence-mirror-hygiene.sh` |
 | `how-to-write-skills` | Bidirectional Integration Points requirement for skill family consumers |

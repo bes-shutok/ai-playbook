@@ -32,6 +32,15 @@ If the signal is false, stop and run **doc-hierarchy-migrate** (or repair via `R
 7. Copy [PR checklist](../doc-hierarchy/company-decisions.md#pr-checklist-team-proposal-accepted) into the PR when docs changed; follow [PR description rules](../doc-hierarchy/company-decisions.md#pr-description-rules).
 8. Grafana dashboard exports belong under `docs/maintenance/dashboards/` (indexed from `architecture/operational-guides.md`), not `docs/dashboards/` at repo root.
 
+## Completed history artifacts (refusal rule)
+
+**Do not edit Completed history artifacts** (completed plans, investigations, proposals, RFCs, non-mirror context; see [doc-hierarchy Document states](../doc-hierarchy/SKILL.md#document-states)) during routine upkeep. Rules:
+
+1. **New or changed truth lands in the Living SOT.** Update the owning Layer 1/2 file; if a Completed history artifact states outdated facts, leave its body untouched and add at most a minimal pointer from the Living SOT (or its registry row) to where current truth lives.
+2. **Broken historical links are alias/registry work, never body edits.** When a Completed history artifact references a moved or renamed path, fix the mapping in the ownership registry (`doc_registry_rel` facts key, default `docs/maintenance/document-registry.md`): update `aliases` or `successor` on the row, not the artifact body.
+3. **Corruption override** (factual corruption such as leaked secrets or broken paths) follows the ADR-0001 procedure owned by `doc-hierarchy` "Document states" (explicit user confirmation, minimal edit, `audit` note cleared after the licensed write); absent those conditions, refuse the edit.
+4. **Freeze-prompt duty:** when a Layer 3 file is still cited as current truth from Layer 1/2 or code comments, nag the user that the citation should point at the Living SOT and prompt a freeze transition for the cited file. **Never auto-reclassify** a document's state; freeze is agent-prompted and user-confirmed only.
+
 ## Repo agent facts and Jira ledger
 
 Update **`.ai-playbook/facts.md`** (not committed `docs/maintenance/facts.md`) when repo-scoping FACT stubs or Jira ledger entries change:
@@ -61,7 +70,7 @@ Update **`.ai-playbook/facts.md`** (not committed `docs/maintenance/facts.md`) w
 
 | Consumer / provider | Integration |
 |---------------------|-------------|
-| `doc-hierarchy` | Requires migration-complete signal before upkeep runs |
+| `doc-hierarchy` (schema + registry spec) | Requires migration-complete signal before upkeep runs; Document states section supplies the refusal vocabulary (Living SOT, Completed history artifact, ownership registry). Upkeep refusal rule: changes land in the Living SOT with a minimal pointer; broken historical links are fixed via registry `aliases`/`successor`, never body edits; freeze-prompt duty nags when a Layer 3 file is still cited as current truth, never auto-reclassifies |
 | `doc-hierarchy-migrate` | Provides verify script and repair workflow when signal is false |
 | `bootstrap-ai-playbook` | Writes `.ai-playbook/facts.md`; upkeep and consumers read path keys from that file |
 | `learn`, `plans`, `done`, `execute-plan` | Layer 2 edits in same PR/session as code changes |

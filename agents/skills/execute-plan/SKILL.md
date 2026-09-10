@@ -588,6 +588,13 @@ Every Step 3.1 launched after an accepted fix is labeled in the staging Metadata
    - After fixes: blind `correctness-completeness` plus every distinct worker that owned an accepted finding or whose domain the fixes affected.
    - Derive risk signals from the plan's explicit must-fix paths and the current diff, then apply the `risk-signal floor` from `review-panel-selection.md`; record the detected signals in the staging Metadata `Changed-risk signals` field.
    - When concurrency signals exist: load premortem and concurrency inside `risk`; do not launch persona children.
+   - For Java/Spring plans, require the Guideline Pack to include the shared
+     `java_guidelines.md`, `jvm_guidelines.md`, and `coding_guidelines.md` paths.
+     Require the panel to apply Java rules #16 through #20 when the changed
+     scope includes Java declarations, nullable generated models, downstream
+     error mapping, outbound service URLs, or dependency coordinates. Record
+     `Java guideline checks: #<rules>` in staging Metadata; a path-only listing
+     without applied rule hints is not sufficient for a clear round.
 3. Launch **lens worker** sub-agents in parallel using the **Review lens worker** template from [subagent-prompts.md](subagent-prompts.md). Workers analyze; the parent synthesizes the staging doc (orchestrator / sub-agent boundary).
 4. Diff scope is **`git diff <BASE_BRANCH>...HEAD`** (all commits on the feature branch for this plan); not the latest commit alone. Apply the plan's **two-tier Review Scope**: findings on **explicit must-fix** paths are always in scope; for unlisted paths, keep findings only when **plan-related** (causally tied to a plan task, explicit change, or contract the plan altered); drop unrelated findings with a one-line reason.
 5. **Doc/skill-only plans:** when explicit must-fix paths are Markdown/skills/guidelines and `## Validation Commands` are grep/hygiene (no production mutators), the `testing` worker treats those commands as the primary evidence. Do **not** invent mutation trees, scratch validators, or throwaway harnesses under `{tmp_dir}/execute-plan/<PLAN_SLUG>/`.
@@ -679,8 +686,13 @@ Backlog items, manifest updates, and disposition notes are bookkeeping, not dige
 1. **Mutator failure-mode matrix** present and complete (Step 3.1 gate #4); every mutator row has IT evidence, a staged finding, or `checked: yes` with a concrete pointer.
 2. **Not a discard-only quiet round without adversarial depth:** If raw findings were non-zero and **all** were discarded as `noise` / `already-mitigated` / `prior-review`, the review log or staging Analysis must still show the failure-mode matrix was filled from code/IT evidence (not left empty). An empty matrix plus "no findings" after a fix round is **unclear**; relaunch Step 3.1 with fresh-review framing.
 3. Required conditional risk lenses were loaded.
-4. **Last-fix ordering:** the clean round's reviewed head includes the last accepted-fix commit as ancestor-or-self (`git merge-base --is-ancestor <last_fix_commit> <clean-round-head>`; in the canonical loop the post-fix review runs at HEAD equal to the fix commit, which satisfies ancestor-or-self). The manifest records `last_fix_commit` when any address pass accepted fixes, and the orchestrator runs that check before treating the round as clean.
-5. **Release-gate ledger complete (per `review-staging`):** when the plan explicitly assigns a boundary to later work, the staging doc's `## Release-gate ledger` records every required field for each deferred boundary (missing capability and owner, unsafe current path and configuration, permitted deployment mode, shippability condition, classification); an incomplete ledger is not clean. The ledger is a handoff artifact only and never authorizes expanding the plan's scope.
+4. For Java/Spring plans, the staging Metadata records the required shared
+   Java/JVM/coding guideline paths and applied rule hints. The review evidence
+   covers changed declarations, nullable boundary states, downstream error
+   payload sinks, changed dependency coordinates, and outbound URL transport
+   configuration when those surfaces are present.
+5. **Last-fix ordering:** the clean round's reviewed head includes the last accepted-fix commit as ancestor-or-self (`git merge-base --is-ancestor <last_fix_commit> <clean-round-head>`; in the canonical loop the post-fix review runs at HEAD equal to the fix commit, which satisfies ancestor-or-self). The manifest records `last_fix_commit` when any address pass accepted fixes, and the orchestrator runs that check before treating the round as clean.
+6. **Release-gate ledger complete (per `review-staging`):** when the plan explicitly assigns a boundary to later work, the staging doc's `## Release-gate ledger` records every required field for each deferred boundary (missing capability and owner, unsafe current path and configuration, permitted deployment mode, shippability condition, classification); an incomplete ledger is not clean. The ledger is a handoff artifact only and never authorizes expanding the plan's scope.
 
 Record the current source digest and panel counters in `manifest.md`.
 

@@ -122,5 +122,6 @@ The sync manifest lives under `docs/maintenance/` and page mirrors under `docs/h
 
 - This skill writes to Confluence by design. Never accept a review-only request here; route page reviews and feedback to `review-confluence-doc`.
 - Publication rule 1 applies to every update: no stub-page connectivity tests.
+- Mirror sync never licenses edits to local historical artifacts (Completed history artifacts per `doc-hierarchy` "Document states") or to non-mirror context: a page being refreshed never authorizes changing its frozen local source. Confluence mirrors keep their existing refresh workflow (manifest plus mirror files); mirrors are out of the doc registry validator's scope.
 - Ask the user before creating a new top-level page or moving child pages under a different parent.
 - Report each sync result with the page title, page ID, resulting `version.number`, and sync status.

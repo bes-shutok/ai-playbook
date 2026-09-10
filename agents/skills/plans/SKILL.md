@@ -633,9 +633,9 @@ When a plan modifies domain types (value objects, entities, enums) that live in 
 
 ## Plan Lifecycle
 
-- When all items are `[x]`, move the file to `{plans_completed_dir}/`.
-- When the plan promoted a `{backlog_dir}` item, move that item to `{backlog_completed_dir}/` in the same completion pass, marking it `Status: done` in the same edit (same lifecycle as the plan archive per `doc-hierarchy`).
-- When superseded, delete rather than leaving stale `[ ]` items.
+- When all items are `[x]`, move the file to `{plans_completed_dir}/` and, in the same pass, append exactly one ownership-registry row for it (row shape per `doc-hierarchy`; at minimum fill the cells `identity`, `sot: no`, `state: completed`, `archived: YYYY-MM-DD`, and `src` in registry column order); completion is this archive move plus that single row append, and the archived plan's body is not edited.
+- When the plan promoted a `{backlog_dir}` item, move that item to `{backlog_completed_dir}/` in the same completion pass, marking it `Status: done` in the same edit, and append one registry row per promoted backlog item in the same pass (same cell shape as the plan row; same lifecycle as the plan archive per `doc-hierarchy`).
+- When superseded, archive the plan instead of deleting it: move it to `{plans_completed_dir}/` and append a registry row with `state: superseded` and the superseding plan's identity in the `successor` column (`superseded_by`). Move superseded `{backlog_dir}` items to `{backlog_completed_dir}/` marked `Status: superseded` in the same pass instead of deleting them.
 - **docs/tmp cleanup (same completion pass, after the archive):** delete the finished plan's `{tmp_dir}` scratch so it cannot accumulate: `{tmp_dir}/plan-requirements-<slug>.md` and `{tmp_dir}/execute-plan/<plan-slug>/` (session logs of a successfully completed plan), plus `{tmp_dir}/review-loop*` / `{tmp_dir}/code-review/` staging that this plan's own review rounds created, but only when that loop's staging is final (the loop reported a clean round); an ACTIVE loop's unsynced staging is never deleted here (same liveness caveat as `done` Step 2.62). When ownership is unclear, leave it in place. Archive first, then clean. Propagation is the `docs-branch` sync's job: `{tmp_dir}` is its one sweep-eligible root, so the branch copies drop in the next sync (usually the same session's `done`).
 
 ## Universal Patterns

@@ -252,6 +252,7 @@ After writing the review document:
 4. Add a reference line to the plan header: `Plan review: {reviews_dir}/<latest-rN>.md (latest, ready) · …`
 5. Add verification commands for each folded behavioral finding.
 6. Update finding triage and Review Statistics. Historical artifacts with older vocabularies remain valid legacy input.
+7. Classify findings located in Completed history artifacts (vocabulary per `doc-hierarchy` "Document states") as immutable context pointing at the current Living SOT: the recommended fix is a pointer, successor, or a successor (`superseded_by`) ownership-registry row recorded from the Living SOT, never an edit to the historical artifact body.
 
 Report to user:
 > "Plan review r<N> complete: C critical, H high, M medium, L low.

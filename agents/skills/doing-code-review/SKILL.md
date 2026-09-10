@@ -147,6 +147,15 @@ Do **not** bulk-paste entire guideline files into every worker prompt.
 2. Add **section / rule hints** by worker lens and Domains. Prefer each file's own index when present (company numbered rules; project "Testing patterns" / rule-number tables). Examples for the testing worker: company test naming; project MockMvc / integration-runner / harness rules.
 3. Instruct workers: open only the hinted sections on demand; apply abstract patterns from the lens catalog; for concrete harness names, class suffixes, and runner commands, read **company and project guidelines together** plus sibling tests in this repo. Do not invent a convention that contradicts either file.
 
+For Java/Spring reviews, the Guideline Pack is incomplete unless it includes
+the shared `java_guidelines.md`, `jvm_guidelines.md`, and
+`coding_guidelines.md` paths. Add rule hints for Java rules #16 through #20
+when the diff contains Java, Maven, Spring configuration, generated request
+models, outbound HTTP clients, downstream error mapping, or changed
+dependency coordinates. Workers must open the relevant hinted sections during
+their lens pass, and staging metadata must record the applied Java rule hints.
+Do not treat a path-only listing as evidence that the guidance was applied.
+
 Record in staging Metadata under the `Guideline pack:` field (the field name `review-staging` requires; do not use a snake_case key) with overlay id and the guideline paths actually attached (not the full file bodies), including whether company and project were both present.
 
 ## Diff access (orchestrator and sub-agents)
