@@ -248,7 +248,7 @@ Each worker returns a JSON array plus `descendant_launches`. Fully expanded find
 ]
 ```
 
-**Stats sidecar:** write `{reviews_dir}/<same-basename>.stats.json` per `review-staging` in the same pass as the staging doc. Version-1 sidecars dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; the enum values, field types, clean-verdict rules, and the `EXTENDED_SIDECAR_MIN_DATE` constant's value live in `review-staging`. On an `undocumented top-level field` validator error mentioning the freshness fields, refresh the installed validator copy from `scripts/validate_review_staging.py` in the skills repo before retrying.
+**Stats sidecar:** write `{reviews_dir}/<same-basename>.stats.json` per `review-staging` in the same pass as the staging doc. Version-1 sidecars dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; the enum values, field types, clean-verdict rules, the min-date fence (`EXTENDED_SIDECAR_MIN_DATE`), and the validator-copy refresh recovery live in `review-staging`.
 
 **Conditional lenses:** load premortem and concurrency inside `risk` per `review-panel-selection.md`.
 

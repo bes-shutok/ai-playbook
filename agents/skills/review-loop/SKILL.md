@@ -80,7 +80,7 @@ Each doc **must** include (full `review-staging` hierarchy; **no stub or verdict
 
 Sync gitignored staging to `docs` branch via `done` → `docs-branch` (same as other reviews).
 
-**Mechanical gate (before reporting round verdict):** run the review-staging validator on the staging path and confirm the `.stats.json` sidecar exists; do not report the round complete until both pass. The written sidecar is a version-1 record; one dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; the enum values, field types, clean-verdict rules, and the `EXTENDED_SIDECAR_MIN_DATE` constant's value live in `review-staging`. On an `undocumented top-level field` validator error mentioning the freshness fields, refresh the installed validator copy from `scripts/validate_review_staging.py` in the skills repo before retrying:
+**Mechanical gate (before reporting round verdict):** run the review-staging validator on the staging path and confirm the `.stats.json` sidecar exists; do not report the round complete until both pass. The written sidecar is a version-1 record; one dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; the enum values, field types, clean-verdict rules, the min-date fence (`EXTENDED_SIDECAR_MIN_DATE`), and the validator-copy refresh recovery live in `review-staging`:
 
 ```bash
 VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"

@@ -5843,3 +5843,17 @@ When the identical command behaves differently in the agent shell versus the use
 **Why:** a quota-introspection feasibility check first grepped logged response headers, found no rate-limit data, and was one step from a false "not possible" verdict; a community-tool reference then revealed a provider monitoring endpoint that returned live window percentages and an exact reset epoch on the first probe, and the second runtime's session telemetry files carried the equivalent data.
 
 **See also:** #134 (rate-limit reset timestamps: probe the real block before acting on it), coding_guidelines.md #25 (Family H parent).
+
+## 316. A Plan Digest Binds Bytes To Review, Not To The World
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a certified artifact's freshness guarantee binds its bytes to its last review, not to the current state of the world; inherited premises are claims to re-verify, not evidence.
+
+**Trigger:** Any task that folds new work into, amends, or executes an existing plan that was certified some time ago and left unexecuted. The certification is still valid, so every gate stays green while the plan's premises rot underneath it.
+
+**Rule:** Before adding work to (or executing) a previously certified plan, re-derive its load-bearing premises against the current tree: does each named target still exist at the named path, does each named mechanism or interface still exist, do the probe bases behind its assumptions still hold? Treat the plan's own certified text as claims to verify, not as evidence. Where a premise has collapsed (target archived, channel removed, mechanism superseded by the shipped implementation), pivot the plan's mechanism in the same edit that adds the new work; never extend a void mechanism.
+
+**Why:** The readiness gate verifies digest-bytes-review binding; it has no notion of bytes-versus-world. A plan sitting open while parallel work executes its target or removes its named interfaces stays "certified" while becoming unexecutable. Reviews of new work folded into it then surface the rot one blocking finding per round unless the whole premise is re-derived in a single pass.
+
+**Example:** A rider fold was directed into an existing unexecuted plan whose mechanism was "amend plan X's Task 1 before X executes; the script does not exist yet." While the plan sat open, X executed and archived (its target path vanished from the plans dir) and a CLI channel the plan's fixture spec named was removed at execution. Extending the certified text would have shipped an unexecutable plan with a fixture naming a retired interface; the fold pivoted to the shipped component instead, re-deriving every pin against live probes.
+
+**Distinguishing from #116:** #116 catches a test whose premise goes stale when a later task in the SAME plan changes a contract; this lesson catches the whole plan's premise going stale from OUTSIDE the plan while it sits open. **See also:** the plans skill's plan-update guidance (compare against current code shape and git history before editing).

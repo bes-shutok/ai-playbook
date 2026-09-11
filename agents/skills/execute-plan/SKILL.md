@@ -241,7 +241,7 @@ Continue on this branch for plan execution? (yes/no)
 
 When on a default branch or when the user declined Step 0.1b, announce: "Before executing the plan, I'll set up a dedicated branch. This ensures clean history and allows safe review/rollback."
 
-**Automatic path from clean trunk (fail-closed):** before asking, check the auto-branch conditions (same truth table as the `plans` skill Phase 0 Step 0.1). When the current branch is exactly `master` or `main` (not detached HEAD), both `git status --porcelain` and `git status --porcelain --ignored` are empty (non-empty ignored content keeps the confirmation), the branch name is computed from the plan slug via the naming convention above, and the destination branch does not already exist, proceed directly to Step 0.2 branch creation without the ask and report what was created. `develop` and every other non-`master`/`main` default keeps the explicit ask below, and every other case (dirty tracked content, existing destination, or any other condition in the plans truth table) keeps the explicit confirmation.
+**Automatic path from clean trunk (fail-closed):** before asking, check the auto-branch conditions (same truth table as the `plans` skill Phase 0 Step 0.1). When the current branch is exactly `master` or `main`, both `git status --porcelain` and `git status --porcelain --ignored` are empty, and the remaining truth-table conditions hold, proceed directly to Step 0.2 branch creation without the ask and report what was created. Every other condition in the plans truth table keeps the explicit confirmation ask.
 
 Ask the user:
 

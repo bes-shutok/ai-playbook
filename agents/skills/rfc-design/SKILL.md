@@ -388,6 +388,12 @@ Minimum `## Review Statistics` content per `review-staging`: Panel (Solo/Echo co
 - Round: r1
 - Prior: `{reviews_dir}/<prior-rN>.md` *(omit on the first round)*
 - Source digest: <sha256 of the exact RFC bytes this round reviewed>
+- Review mode: fresh-adversarial | targeted | verification-only
+- Changed-risk signals: <comma list or none>
+- Prior findings supplied as filter: no
+- Last fix commit: <sha or none>
+- Witness ledger: <populated | N/A (no public mutators)>
+- Release-gate ledger: <rows or none>
 - Findings: <staged count>
 - Status: STAGED
 

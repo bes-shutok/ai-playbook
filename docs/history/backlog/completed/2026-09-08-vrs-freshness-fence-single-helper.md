@@ -1,6 +1,7 @@
 # Backlog: consolidate the review-staging freshness grandfathering fence into one helper
 
-Status: open
+Status: done
+Completed: 2026-09-11 via execute-plan run of docs/plans/completed/2026-09-09-vrs-freshness-prose-dedup.md (review r1-r5, clean exit r5)
 Workflow: backlog
 Origin: execute-plan fresh-review coverage gaps plan, review round 3 overflow item O15 (design-simplicity), 2026-09-08
 Severity: Low

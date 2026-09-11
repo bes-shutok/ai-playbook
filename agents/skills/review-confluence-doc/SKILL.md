@@ -218,6 +218,12 @@ Output the feedback to a staging Markdown file per `review-staging`, and print a
 - Type: Confluence Review (<RFC | TDD | Other>)
 - Date: YYYY-MM-DD
 - URL or Artifact: <page URL>
+- Review mode: fresh-adversarial | targeted | verification-only
+- Changed-risk signals: <comma list or none>
+- Prior findings supplied as filter: no
+- Last fix commit: <sha or none>
+- Witness ledger: <populated | N/A (no public mutators)>
+- Release-gate ledger: <rows or none>
 - Findings: <staged count>
 - Status: STAGED
 

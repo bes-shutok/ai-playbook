@@ -1,6 +1,6 @@
 # Plan: learn company-wide lesson scope detection
 
-Backlog: `docs/history/backlog/2026-09-09-learn-company-scope-placement.md` (scope of record). No RFC/ticket.
+Backlog: `docs/history/backlog/2026-09-09-learn-company-scope-placement.md` (scope of record) plus rider `docs/history/backlog/2026-09-10-learn-company-vs-project-placement-gate.md` (company-versus-project placement gate, same learn/generalize/done skill surface; folded scope of record). No RFC/ticket.
 Follow `python_guidelines.md` (shared docs) for the validator script and its tests.
 
 ## Terms
@@ -12,6 +12,8 @@ Follow `python_guidelines.md` (shared docs) for the validator script and its tes
 - Placement receipt: temporary `learn`-run output stating the selected scope and why each broader scope was rejected (`learn` Step 1.2 item 5c).
 - Scope audit: `done` Step 3 item 4a pre-commit check that a newly created or substantially edited project lesson is not a company-wide rule stored only at project level.
 - Duplicate full rule: near-verbatim rule body present in both the project lessons corpus and the company guidelines master.
+- Residual dependency: the material dependency on the service domain, module contract, repository architecture, or project-only operational behavior that keeps a rule project-specific (fork 4); every fork (4) placement receipt must state it.
+- Blocking placement question: a `learn` stop-and-ask raised when a rule's scope is broader than the project but no canonical destination resolves (company-scope rule with no `company_guidelines_master`); the full lesson is never silently written to the project corpus instead.
 
 ## Assumptions
 
@@ -21,6 +23,11 @@ Follow `python_guidelines.md` (shared docs) for the validator script and its tes
 - assume runtime deployment of the validator (a per-file symlink under `~/.ai-playbook/scripts/`, per the registry model verified 2026-09-09) is machine-local work outside this plan; `done`'s audit warns and continues when the script is absent, matching the cold-start pattern of `learn` Step 6.6.
 - assume a `done` scope-audit stop rides `done`'s existing blocked semantics (release the lock, report blocked with reason); basis: `done` Step 1 learn-block propagation precedent.
 - assume tests run via `python3 -m unittest discover -s scripts -p 'test_*.py'`; basis: `scripts/test_execute_plan_runtime.py` convention and the agent-agnostic execute-plan plan.
+- assume the rider's residual-dependency statement rides the existing placement receipt (`learn` Step 1.2 item 5c) rather than a new persisted artifact; basis: rider suggested fix "Require the placement record to state the residual dependency" and the receipt-temporary assumption above.
+- assume the rider's missing-canonical-destination stop rides `learn`'s existing placement-question semantics (stop and ask the user; `done` propagates the block per its Step 1 precedent) rather than a new error channel; basis: rider suggested fix "report the missing canonical destination as a blocking placement question" and the done blocked-semantics assumption above.
+- assume the rider acceptance "a self-test or dry-run reports the selected tier and the evidence used for the decision" is delivered by the placement receipt in the `learn` run output plus this plan's validator tests and Validation probes, with no new dry-run mode; basis: the receipt is by contract the run-output record of the selected scope and why each broader scope was rejected, and `done` already consumes it as evidence.
+- assume the rider acceptance "the implementation remains project-agnostic and contains no real identifiers" is delivered by `learn` Step 1.7 redaction plus this plan's em-dash and public-hygiene gates; basis: the existing Done-when hygiene items.
+- assume the rider's fixture-phrased routing acceptances (a team or infrastructure ownership rule routes to the company guideline; a service-only domain invariant stays project-specific and records the residual dependency; a cross-project incident that is not company policy routes to the user-level corpus) are delivered as text-obligation probes because `learn` is a prose skill with no executable routing surface; the only executable artifact this plan adds is the duplicate validator, whose fixtures cover the duplicate-detection slice; basis: rounds r1 through r9 accepted the identical acceptance phrasing for the host backlog's equivalent items, and `done`'s pre-commit audit (Task 3) backstops routing at commit time.
 
 Decision points requiring a grill: none remain.
 
@@ -34,9 +41,13 @@ Decision points requiring a grill: none remain.
 
 `done` gains a matching pre-commit audit (Step 3 item 4a) when the session touched the project lessons corpus: it runs `scripts/check_lesson_scope.py` (a small duplicate-rule validator) and checks the placement receipt.
 
+**Rider fold (backlog 2026-09-10, company-versus-project placement gate):** the rider sharpens the same decision ladder with three additions. First, the placement receipt for a fork (4) placement must state the residual dependency that keeps the rule project-specific; with no residual dependency the full lesson is not written to the project corpus, and the candidate re-routes to fork (2b) or fork (3). Second, a company-scope rule whose `company_guidelines_master` does not resolve (personal repo) raises a blocking placement question instead of silently becoming a full project lesson. Third, the 4c gate names ownership boundaries explicitly: a rule about which team owns which tickets, components, or delivery stages binds sibling repos with the same responsibility, so it is company scope. Example of the first: a rule that survives the portability gates only because of this repo's batch-row accumulation semantics stays in fork (4), and its receipt records that exact dependency. Example of the third: an infrastructure-team-versus-application-team ownership boundary captured in one service repo routes to fork (2b) (full rule in the master, witness pointer in the repo), never a full project lesson.
+
 **Validator example:** project corpus block `## 12. Keep rollout PR titles in sync with scope` whose body matches company master block `## 51. Keep rollout PR titles in sync with scope` near-verbatim (case, whitespace, or numbering differ) produces exit 1 and names both blocks; `done` stops before commit and asks for classification instead of silently committing the narrower placement. A one-line project witness ("see company-guidelines #51") is under the minimum block length and stays clean (exit 0).
 
 **Edge cases that shaped the design:** a temporary session-note-style block sharing topic words with a company rule must not trip keyword matching (the validator compares normalized full-rule bodies, not keywords); a rule duplicated only against a language guidelines file is out of the comparison set (ecosystem tier, not company); an absent company master (personal repo) and an absent corpus are clean cold starts with a warning, matching the `learn` Step 6.6 pattern.
+
+**Rider acceptance coverage map:** company-convention branch before the project-specific branch: Task 2 fork (2b) insert plus the 4c gate, ordered before fork (4). Team or infrastructure ownership rule routes to the company guideline without a full project lesson: Task 2 4c ownership-boundary sentence plus the 2b sibling search of the master. Service-only domain invariant stays project-specific and records the residual dependency: Task 2 5c residual-dependency receipt contract, mirrored in generalize entry 4, audited by `done` (Task 3 placement-evidence check). Cross-project incident that is not company policy routes to the user-level corpus with the family tag: existing fork (3) strict `**Principle:** Family X` tagging plus the 4c negative branch. Witness preserved through a pointer without duplicating the canonical rule: Task 2 item 4a and the validator's short-block floor (Task 1 `test_witness_pointer_clean`, `test_short_identical_body_stays_clean`). Self-test or dry-run reports the selected tier and its evidence: Task 2 item 5c receipt plus the dedicated Validation probes. Project-agnostic implementation with no real identifiers: `learn` Step 1.7 redaction plus the Task 4 em-dash and public-hygiene gates.
 
 ## Design Invariants (CR Guard)
 
@@ -44,6 +55,8 @@ Decision points requiring a grill: none remain.
 - The validator performs mechanical duplicate detection only; semantic scope judgment stays with the `learn` workflow (backlog done-change 2).
 - `done` never moves, rewrites, or duplicates lessons automatically; an unresolved placement stops before commit and asks (backlog done-change 4 and acceptance criteria).
 - The learn placement receipt is temporary run output, not a canonical artifact (backlog learn-change 5).
+- A fork (4) placement records its residual dependency in the placement receipt; with no residual dependency the full lesson is not written to the project corpus (rider acceptance: service-only invariant keeps its dependency on record).
+- A company-scope rule with no resolvable `company_guidelines_master` is a blocking placement question, never a silent full project lesson (rider suggested fix).
 
 ## Evaluation Criteria
 
@@ -52,10 +65,11 @@ Decision points requiring a grill: none remain.
 - test coverage: fixtures cover company-wide, project-specific, ecosystem-specific, and temporary-lesson examples plus duplicate detection, per the backlog acceptance criteria
 - maintainability: stdlib-only script; thresholds are named constants in the script; hermetic tests build fixtures in temp dirs
 - consistency: `generalize`'s routing-fork mirror claim and the UL corpus lesson 177 See also line are updated in the same change set as the `learn` fork (learn Step 1.2 item 5b); no stale "four-way fork" claim remains in any living file
+- rider coverage: each rider acceptance lands in a named task and Validation probe per the coverage map in Gist & Examples; the residual-dependency, blocking-question, and ownership-boundary obligations each have a dedicated probe
 
 **Done when:**
 - `python3 -m unittest discover -s scripts -p 'test_check_lesson_scope.py'` exits 0
-- every obligation probe in Validation Commands exits 0 (learn fork, receipt, witness separation; done audit, stop-before-commit, commit boundary; generalize mirror)
+- every obligation probe in Validation Commands exits 0 (learn fork, receipt, witness separation, residual dependency, blocking placement question, ownership boundary; done audit, stop-before-commit, no-residual stop, commit boundary; generalize mirror incl. its residual-dependency record)
 - the stale-claim sweep over `learn`, `generalize`, and the UL corpus finds zero "four-way fork" hits
 - em-dash scan and public-hygiene scan exit 0 over the changed files
 
@@ -79,7 +93,7 @@ Decision points requiring a grill: none remain.
 **Plan-related extension**; implementation and review may change files not listed above. Treat a finding as in scope when it is **causally related to this plan**: it implements or completes a plan task, fixes a regression introduced by plan work, closes wiring or docs implied by an explicit must-fix change, or contradicts a contract the plan changed. If the link to the plan is weak or speculative, drop as out of scope with a one-line reason.
 
 **Out of scope; reject unless plan-related:**
-- `docs/history/backlog/2026-09-09-learn-company-scope-placement.md`; scope of record, stays under the backlog dir until plan completion per the plans Plan Lifecycle
+- `docs/history/backlog/2026-09-09-learn-company-scope-placement.md` and rider `docs/history/backlog/2026-09-10-learn-company-vs-project-placement-gate.md`; scope of record, stays under the backlog dir until plan completion per the plans Plan Lifecycle
 - `~/.ai-playbook/scripts/*` runtime deployment; machine-local, not repository content
 - `.ai-playbook/facts.md`; no path-key changes in either facts file; the `company_guidelines_master` key resolves from the user-level facts file (`~/.ai-playbook/facts.md`), not this repo file
 - any other skill's `SKILL.md`; a repo-wide grep on 2026-09-09 found living fork mirror claims only in `learn`, `generalize`, and the lesson 177 See also line of the UL corpus (mentions under docs/plans, docs/reviews, and docs/history are frozen records, not living claims)
@@ -112,11 +126,18 @@ expect_line "Would this rule guide another repository in the same organization" 
 expect_line "Placement receipt (required in the learn run output)" agents/skills/learn/SKILL.md
 expect_line "fork 1, 2, or 2b" agents/skills/learn/SKILL.md
 expect_line "company-portability gate (Step 1.2 item 4c)" agents/skills/learn/SKILL.md
+expect_line "A team or infrastructure ownership boundary" agents/skills/learn/SKILL.md
+expect_line "must also state the residual dependency" agents/skills/learn/SKILL.md
+expect_line "do not write the full lesson to the project corpus" agents/skills/learn/SKILL.md
+expect_line "blocking placement question" agents/skills/learn/SKILL.md
+expect_line "item 5c conditions the write, it does not follow it" agents/skills/learn/SKILL.md
+expect_line "If no, continue down the ladder" agents/skills/learn/SKILL.md
 
 # 3. generalize routing-fork mirror (learn Step 1.2 item 5b fan-out, same change set)
 expect_line "five-branch fork" agents/skills/generalize/SKILL.md
 expect_line "2b. **Company-wide convention**" agents/skills/generalize/SKILL.md
 expect_line "company-portability gate" agents/skills/generalize/SKILL.md
+expect_line "records its residual dependency" agents/skills/generalize/SKILL.md
 expect_line "company-wide conventions are fork 2b" projects/.ai-playbook/development_lessons.md
 
 # 4. done Step 3 audit obligations
@@ -127,6 +148,7 @@ expect_line "is a tool failure, not a clean pass" agents/skills/done/SKILL.md
 expect_line "must not move or duplicate lessons to reconcile placements" agents/skills/done/SKILL.md
 expect_line "Never commit a new or substantially edited project lesson whose scope audit" agents/skills/done/SKILL.md
 expect_line "or the Step 3 item 4a lesson scope audit" agents/skills/done/SKILL.md
+expect_line "fork (4) receipt with no residual dependency stops before commit" agents/skills/done/SKILL.md
 
 # 5. Stale mirror-claim sweep; zero matches expected (forbidden pattern, case-insensitive)
 expect_absent "four-way fork" agents/skills/learn/SKILL.md agents/skills/generalize/SKILL.md projects/.ai-playbook/development_lessons.md
@@ -138,7 +160,7 @@ CHECK_NO_EM_DASH_ALL=1 bash scripts/check-no-em-dash.sh file docs/plans/2026-09-
 bash scripts/scan-public-hygiene.sh || fail "public hygiene scan"
 ```
 
-Authoring-time RED state (recorded 2026-09-09, pre-execution): command 1 fails (test module absent), every probe in blocks 2 through 4 fails (obligations not yet inserted), and the block 5 sweep fires (all four living "four-way" sites still present: learn line 89 twice, learn line 90 once, generalize line 239 once, and the lesson 177 See also line of `projects/.ai-playbook/development_lessons.md` once). The block flips green exactly when Tasks 1 through 3 land.
+Authoring-time RED state (recorded 2026-09-09, pre-execution; rider-fold probes added 2026-09-11): command 1 fails (test module absent), every probe in blocks 2 through 4 fails (obligations not yet inserted, including the rider-fold probes for the residual dependency, blocking placement question, ownership boundary, write-ordering condition, negative-branch ladder, generalize residual record, and done no-residual stop), and the block 5 sweep fires (all four living "four-way" sites still present: learn line 89 twice, learn line 90 once, generalize line 239 once, and the lesson 177 See also line of `projects/.ai-playbook/development_lessons.md` once). The block flips green exactly when Tasks 1 through 3 land. The rider-fold probes were executed against the pre-execution tree at fold time and confirmed RED (zero hits today).
 
 ### Task 1: Lesson scope duplicate validator (RED then GREEN)
 
@@ -200,20 +222,20 @@ Files:
 - [ ] Insert new item after item 4b:
 
 ```markdown
-4c. **Company-portability gate (required before fork (4) full project lesson).** Ask: "Would this rule guide another repository in the same organization that performs the same kind of work, even if its product domain differs?" If **yes**, you are in fork **(2b)**: write the full rule to `company_guidelines_master` first, keep only a concise project witness and pointer in the project corpus, and sync repo mirrors. If you almost chose fork (4) because the incident happened in one company repo, re-run this gate after the 4b stack-portability gate. Anti-pattern: storing a company-wide integration convention as a full project lesson because "it is not universal across every possible project" (that is fork (2b), not fork (4)).
+4c. **Company-portability gate (required before fork (4) full project lesson).** Ask: "Would this rule guide another repository in the same organization that performs the same kind of work, even if its product domain differs?" If **yes**, you are in fork **(2b)**: write the full rule to `company_guidelines_master` first, keep only a concise project witness and pointer in the project corpus, and sync repo mirrors. If you almost chose fork (4) because the incident happened in one company repo, re-run this gate after the 4b stack-portability gate. Anti-pattern: storing a company-wide integration convention as a full project lesson because "it is not universal across every possible project" (that is fork (2b), not fork (4)). A team or infrastructure ownership boundary (which team owns which tickets, components, or delivery stages) binds sibling repos with the same responsibility, so it is company scope, not project scope. If no, continue down the ladder: fork (3) when the witness is the reusable value, fork (4) only with a stated residual dependency.
 ```
 
 - [ ] In Step 1.2 item 5, change `(fork 1 or 2)` to `(fork 1, 2, or 2b)` keeping the rest of the sentence unchanged
 - [ ] Insert new item after item 5b:
 
 ```markdown
-5c. **Placement receipt (required in the learn run output).** For every placed lesson, state the selected scope and why each broader scope was rejected (one line per lesson; for example "fork (2b): company-wide convention; not universal (org-specific), not fork (4) (guides sibling repos with the same responsibility)"). The receipt is temporary run output; it need not become part of the canonical lesson, but `done`'s pre-commit scope audit uses it as placement evidence.
+5c. **Placement receipt (required in the learn run output).** For every placed lesson, state the selected scope and why each broader scope was rejected (one line per lesson; for example "fork (2b): company-wide convention; not universal (org-specific), not fork (4) (guides sibling repos with the same responsibility)"). Evaluate the residual dependency and the canonical-destination resolution BEFORE executing item 5's corpus write: item 5c conditions the write, it does not follow it. For a fork (4) placement the receipt must also state the residual dependency that keeps the rule project-specific (a material dependency on the service domain, module contract, repository architecture, or project-only operational behavior). If no residual dependency remains, do not write the full lesson to the project corpus: re-route to fork (2b) or fork (3). When the rule is company-scope but `company_guidelines_master` does not resolve (personal repo), report the missing canonical destination as a blocking placement question instead of writing a full project lesson. The receipt is temporary run output; it need not become part of the canonical lesson, but `done`'s pre-commit scope audit uses it as placement evidence.
 ```
 
 - [ ] In the Completion Checklist, insert a new bullet directly after the bullet beginning `incident-repo == cwd-repo verified`:
 
 ```markdown
-- company-portability gate (Step 1.2 item 4c) ran before every project-specific placement, and the sibling search of `company_guidelines_master` ran before every full project lesson; a placement receipt (item 5c) was emitted for every placed lesson
+- company-portability gate (Step 1.2 item 4c) ran before every project-specific placement, and the sibling search of `company_guidelines_master` ran before every full project lesson; a placement receipt (item 5c), stating the residual dependency for every fork (4) placement, was emitted for every placed lesson
 ```
 
 - [ ] In `agents/skills/generalize/SKILL.md` "With learn" section, replace the routing fork intro `(mirrors \`learn\` Step 1.2 item 4 four-way fork + 4b)` with `(mirrors \`learn\` Step 1.2 item 4 five-branch fork + 4b/4c)`
@@ -223,7 +245,7 @@ Files:
 2b. **Company-wide convention** -> `company_guidelines_master` (facts key): a do/do-not rule shared by repositories of the same company or organization because they perform the same kind of work, even when product domains differ and the rule is not universal. Full rule in the company master; incident repos keep at most a concise witness pointer. Require the sibling search and company-portability gate (`learn` 4c) before choosing this over fork (4).
 ```
 
-- [ ] In the same section entry 4, extend the sentence beginning `Require a residual-domain pass` so its gate list reads `... the stack-portability gate (`learn` 4b) and the company-portability gate (`learn` 4c) before choosing this over fork (2)`; the sentence is wrapped across two source lines in the file, so locate it by content, not by line
+- [ ] In the same section entry 4, extend the sentence beginning `Require a residual-domain pass` so its gate list reads `... the stack-portability gate (`learn` 4b) and the company-portability gate (`learn` 4c) before choosing this over fork (2)`, and append the follow-on sentence: `a fork (4) placement records its residual dependency in the placement receipt (`learn` Step 1.2 item 5c).`; the sentence is wrapped across two source lines in the file, so locate it by content, not by line
 - [ ] In `projects/.ai-playbook/development_lessons.md` lesson #177, update its See also line (the one citing `learn` SKILL Step 1.2 item 4): replace `the four-way fork` with `the five-branch fork`, and insert `company-wide conventions are fork 2b, ` immediately before `stack-portable precepts are fork 2`, keeping the rest of the line unchanged
 - [ ] Verification: `grep -oi "five-branch fork" agents/skills/learn/SKILL.md | wc -l` reports at least 3 and `grep -ci "four-way" agents/skills/learn/SKILL.md agents/skills/generalize/SKILL.md projects/.ai-playbook/development_lessons.md` reports 0 for all three files
 - [ ] Commit: `skills: add company-wide branch to learn scope fork with mirror fan-out`
@@ -242,7 +264,7 @@ Files:
    python3 "${LESSON_SCOPE_SCRIPT:-${HOME}/.ai-playbook/scripts/check_lesson_scope.py}" "$PROJECT_CORPUS" "$COMPANY_MASTER"
    ```
    Exit 0 = clean; exit 1 = a full rule is duplicated across the project corpus and the company master. Exit 2 (usage or IO error) is a tool failure, not a clean pass: stop, report the validator error, release the lock per Step 6, and return blocked; do not stage the corpus. When the script is absent, print a one-line warning and continue with the placement-evidence check (cold-start; do not block the session on a missing optional validator). When the company master does not resolve (personal repo), the mechanical check passes trivially.
-   2. **Placement-evidence check.** Confirm the learn run's placement receipt (`learn` Step 1.2 item 5c) covers every new or substantially edited lesson. If a lesson has no receipt and the scope cannot be established from the receipt, stop before commit and request classification from the user; do NOT silently commit the narrower placement.
+   2. **Placement-evidence check.** Confirm the learn run's placement receipt (`learn` Step 1.2 item 5c) covers every new or substantially edited lesson. If a lesson has no receipt and the scope cannot be established from the receipt, stop before commit and request classification from the user; do NOT silently commit the narrower placement. For a fork (4) lesson, the receipt must state the residual dependency; a fork (4) receipt with no residual dependency stops before commit for reclassification, exactly like a missing receipt.
    3. **On exit 1 (duplicate full rule):** stop before commit, release the lock per Step 6, and return blocked with the validator output; ask the user to classify the lesson (company master vs project corpus). Never move, rewrite, or duplicate lessons automatically.
    4. **Commit boundary:** the project witness and the company guidelines change are committed in the same pass ONLY when both were intentionally produced by the same workflow (`learn` placed them deliberately). done must not move or duplicate lessons to reconcile placements.
 ````

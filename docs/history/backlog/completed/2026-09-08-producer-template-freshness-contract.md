@@ -1,6 +1,7 @@
 # Backlog: producer-template freshness contract residuals (round-5 residual family)
 
-Status: open
+Status: done
+Completed: 2026-09-11 via execute-plan run of docs/plans/completed/2026-09-09-vrs-freshness-prose-dedup.md (review r1-r5, clean exit r5)
 Origin: execute-plan fresh-review-coverage-gaps Phase 3 review round 5 (fresh adversarial full panel over digest d9143e94; findings deferred at the five-round cap per the backlog-deferral default)
 
 ## Items

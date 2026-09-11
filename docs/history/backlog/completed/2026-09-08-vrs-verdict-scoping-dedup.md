@@ -1,6 +1,7 @@
 # Backlog: consolidate verdict-section scoping and the clean-round pattern
 
-Status: open
+Status: done
+Completed: 2026-09-11 via execute-plan run of docs/plans/completed/2026-09-09-vrs-freshness-prose-dedup.md (review r1-r5, clean exit r5)
 Origin: Phase 3 code review r1 (F14, Low, deferred) of the execute-plan fresh-review coverage gaps run, 2026-09-08
 Source finding: docs/reviews/2026-09-08-execute-plan-fresh-review-coverage-gaps-code-review-r1.md (F14)
 
