@@ -117,18 +117,18 @@ expect_no_match() {
   if [ "$rc" -ge 2 ]; then echo "grep error rc=$rc for: $pattern" >&2; exit 1; fi
 }
 
-# F1: sharpened keying present at all five sites, over-broad claim gone.
-expect_match 'repo-hash, plan-slug, and a short digest of the resolved manifest path' "$PLAN"
-expect_match '<plan-slug>-<manifest-hash>/policy-anchor.json' "$PLAN"
-expect_match 'the SAME plan slug on different manifest paths' "$PLAN"
-expect_match 'so two sessions running the same plan slug on different manifests resolve distinct anchor files' "$PLAN"
-expect_match 'repo-hash, plan-slug, manifest-path digest' "$PLAN"
+# F1: sharpened keying probes removed 2026-09-11 - the anchor mechanism itself was
+# deferred by the threat-model decision (guidelines section 64; fold target Task 2 now
+# carries the launch-record snapshot instead), so the F1 span pins no longer apply.
+# The two forbidden-span sweeps below are kept: both old forms stay absent.
 expect_no_match 'so parallel sessions never share an anchor' "$PLAN"
 expect_no_match '<plan-slug>/policy-anchor.json' "$PLAN"
 
-# F2: witness count aligned on eight everywhere in Task 3.
-expect_match 'with the eight new witnesses' "$PLAN"
-expect_no_match 'seven new witnesses' "$PLAN"
+# F2: witness count probe updated 2026-09-11 - the threat-model shrink removed the
+# missing-baseline witness from Task 3, so the aligned count is now seven (five new
+# behaviors plus two characterization pins).
+expect_match 'with the seven new witnesses' "$PLAN"
+expect_no_match 'eight new witnesses' "$PLAN"
 
 # F3: expected-ids update scoped to the full compared shape.
 expect_match 'keep `aliases` for all nine runtimes' "$PLAN"
@@ -168,31 +168,31 @@ Notes: every presence probe is RED at authoring (each required span is absent fr
 Files:
 - `docs/plans/2026-09-10-execute-plan-runtime-residuals.md`
 
-- [ ] F2 (r8 F2, Task 3 GREEN bullet): replace `passes with the seven new witnesses` with `passes with the eight new witnesses`. The RED bullet ("the eight behaviors") and the implement bullet ("the eight fixes") already say eight and stay untouched.
-- [ ] F3 (r8 F3, Task 5 implement bullet tail): replace `update \`scripts/testdata/execute-plan/expected-runtime-ids.json\` in the same commit so the canonical-id expectation matches the shrunken eligible set (the catalog test reads it from the repo root).` with `update \`scripts/testdata/execute-plan/expected-runtime-ids.json\` in the same commit to the full compared shape, not only the canonical-id list: shrink \`profiles\` to the single codex row carrying the new import-path entrypoint and the three receipt capabilities (\`parent_continuation\`, \`final_response\`, \`resume\`), keep \`aliases\` for all nine runtimes (the catalog test iterates them for every runtime including \`pi\`), and grow \`deferred_ids\` from the current \`pi\`-only list to the eight-entry deferral set (the seven newly deferred runtimes plus \`pi\`), because \`verify_activation\` compares \`canonical_ids\`, \`deferred_ids\`, and every \`profiles\` row's \`adapter_entrypoint\`, \`capabilities\`, and \`retry_budget\` fields (the catalog test reads the file from the repo root).`
-- [ ] F4 (r8 F4, Task 4 implement bullet): replace `skip the receipt write when no profile was supplied, and pass the loaded manifest through the authorization path.` with `skip the receipt write when no profile was supplied while the locked owner initialization still persists \`manifest["owner"]\` (the receipt refresh is the only owner-persistence site today, so the literal skip must not drop owner persistence for profile-less CLI runs and \`test_cli_two_processes_share_derived_owner_without_flag\` keeps passing), and pass the loaded manifest through the authorization path.`
-- [ ] F5 (r8 F5, Task 9 first bullet): append one sentence after `and the selftest covers release under the new shape.` reading: `Migration note: session files written by the current shape already carry \`DONE_LOCK_TOKEN\` (the generation name is written beside it as a tautological alias of the same value), so the token-only release path reads old-shape locks unchanged; any residue the new path cannot consume stays covered by the existing \`stale-clean\` operator path (age-bounded by \`DONE_LOCK_STALE_SECS\`), so no mid-session upgrade step is required.`
-- [ ] Overflow (r8 overflow row, Validation Commands): directly after the line `expect_no_match 'runtime-adapter:codex' scripts/runtime_capabilities.py` add the line `expect_no_match 'runtime-adapter:codex' projects/.ai-playbook/execute-plan-runtime-inventory.toml`; and append one sentence at the end of the Validation Notes paragraph reading: `The inventory \`runtime-adapter:codex\` sweep line (r8 overflow fold) was RED at this fold's own authoring and flips GREEN with Task 5 together with the module sweep.`
-- [ ] Run `bash -n` over the fold target's Validation Commands block (the overflow fold edits that block); expect clean.
-- [ ] Run → expect GREEN: the eight fold probes for F2, F3, F4, F5, and the overflow line (the `expect_match`/`expect_no_match` probe lines in the Validation Commands block above, excluding the seven F1 probes, the re-cert probes, and the completion probes), run scoped against the fold target.
-- [ ] Run → expect still RED at this task point: the seven F1 probes (Task 2 has not landed), the re-cert probes, and the completion probes.
-- [ ] Commit: `docs: fold r8 low residuals into execute-plan runtime residuals plan`
+- [x] F2 (r8 F2, Task 3 GREEN bullet): replace `passes with the seven new witnesses` with `passes with the eight new witnesses`. The RED bullet ("the eight behaviors") and the implement bullet ("the eight fixes") already say eight and stay untouched.
+- [x] F3 (r8 F3, Task 5 implement bullet tail): replace `update \`scripts/testdata/execute-plan/expected-runtime-ids.json\` in the same commit so the canonical-id expectation matches the shrunken eligible set (the catalog test reads it from the repo root).` with `update \`scripts/testdata/execute-plan/expected-runtime-ids.json\` in the same commit to the full compared shape, not only the canonical-id list: shrink \`profiles\` to the single codex row carrying the new import-path entrypoint and the three receipt capabilities (\`parent_continuation\`, \`final_response\`, \`resume\`), keep \`aliases\` for all nine runtimes (the catalog test iterates them for every runtime including \`pi\`), and grow \`deferred_ids\` from the current \`pi\`-only list to the eight-entry deferral set (the seven newly deferred runtimes plus \`pi\`), because \`verify_activation\` compares \`canonical_ids\`, \`deferred_ids\`, and every \`profiles\` row's \`adapter_entrypoint\`, \`capabilities\`, and \`retry_budget\` fields (the catalog test reads the file from the repo root).`
+- [x] F4 (r8 F4, Task 4 implement bullet): replace `skip the receipt write when no profile was supplied, and pass the loaded manifest through the authorization path.` with `skip the receipt write when no profile was supplied while the locked owner initialization still persists \`manifest["owner"]\` (the receipt refresh is the only owner-persistence site today, so the literal skip must not drop owner persistence for profile-less CLI runs and \`test_cli_two_processes_share_derived_owner_without_flag\` keeps passing), and pass the loaded manifest through the authorization path.`
+- [x] F5 (r8 F5, Task 9 first bullet): append one sentence after `and the selftest covers release under the new shape.` reading: `Migration note: session files written by the current shape already carry \`DONE_LOCK_TOKEN\` (the generation name is written beside it as a tautological alias of the same value), so the token-only release path reads old-shape locks unchanged; any residue the new path cannot consume stays covered by the existing \`stale-clean\` operator path (age-bounded by \`DONE_LOCK_STALE_SECS\`), so no mid-session upgrade step is required.`
+- [x] Overflow (r8 overflow row, Validation Commands): directly after the line `expect_no_match 'runtime-adapter:codex' scripts/runtime_capabilities.py` add the line `expect_no_match 'runtime-adapter:codex' projects/.ai-playbook/execute-plan-runtime-inventory.toml`; and append one sentence at the end of the Validation Notes paragraph reading: `The inventory \`runtime-adapter:codex\` sweep line (r8 overflow fold) was RED at this fold's own authoring and flips GREEN with Task 5 together with the module sweep.`
+- [x] Run `bash -n` over the fold target's Validation Commands block (the overflow fold edits that block); expect clean.
+- [x] Run → expect GREEN: the eight fold probes for F2, F3, F4, F5, and the overflow line (the `expect_match`/`expect_no_match` probe lines in the Validation Commands block above, excluding the seven F1 probes, the re-cert probes, and the completion probes), run scoped against the fold target.
+- [x] Run → expect still RED at this task point: the seven F1 probes (Task 2 has not landed), the re-cert probes, and the completion probes.
+- [x] Commit: `docs: fold r8 low residuals into execute-plan runtime residuals plan`
 
-### Task 2: Fold F1, the anchor-keying sharpening (r8 F1)
+### Task 2: Fold F1, the anchor-keying sharpening (r8 F1) — SUPERSEDED 2026-09-11: the anchor mechanism this fold sharpened was deferred by the threat-model decision (guidelines section 64); the fold work landed (51fac72) and was then removed from the fold target by the deferral shrink; its Validation probes were removed accordingly
 
 Files:
 - `docs/plans/2026-09-10-execute-plan-runtime-residuals.md`
 
-- [ ] Gist & Examples, "After (this plan)" sentence: replace `a 0600 file under \`~/.execute-plan/<repo-hash>/<plan-slug>/\` holding` with `a 0600 file under \`~/.execute-plan/<repo-hash>/<plan-slug>-<manifest-hash>/\` (the per-run key adds a short digest of the resolved manifest path, so two sessions running the same plan slug on different manifests resolve distinct anchor files) holding`
-- [ ] `test_policy_anchor_written_at_claim` bullet: replace `<home>/.execute-plan/<repo-hash>/<plan-slug>/policy-anchor.json` with `<home>/.execute-plan/<repo-hash>/<plan-slug>-<manifest-hash>/policy-anchor.json`, and replace `<repo-hash>\` is a short sha256 of the resolved repo root;` with `<repo-hash>\` is a short sha256 of the resolved repo root; \`<manifest-hash>\` is a short sha256 of the resolved manifest path (same truncation as \`<repo-hash>\`);`
-- [ ] `test_anchor_scoped_per_run_no_cross_talk` bullet: replace `given two concurrent run identities (different plan slugs) in the same repo with different policy fields, expects each run's witnesses to verify against its own anchor file and neither` with `given two concurrent run identities in the same repo with different policy fields, one pair with different plan slugs and one pair with the SAME plan slug on different manifest paths, expects each run's witnesses to verify against its own anchor file (the manifest-path component discriminates same-slug runs) and neither`
-- [ ] Task 2 implement bullet: replace `(repo-hash plus plan-slug, so parallel sessions never share an anchor)` with `(repo-hash, plan-slug, and a short digest of the resolved manifest path, so same-slug sessions on different manifests resolve distinct anchors and the claim's witnesses verify against the anchor derived from that claim's own manifest path)`
-- [ ] Task 2 contract-doc bullet: replace `that the anchor is keyed per run so concurrent sessions do not interfere` with `that the anchor is keyed per run (repo-hash, plan-slug, manifest-path digest) so concurrent sessions on different manifests never share an anchor file and same-manifest sessions serialize on the manifest lock`
-- [ ] Sweep the whole fold target for the old path form and the old claim: `grep -c 'so parallel sessions never share an anchor'` must be 0 and `grep -c '<repo-hash>/<plan-slug>/'` must be 0 after this task; every other `plan-slug` mention stays accurate: the Terms entry is untouched, and the cross-talk bullet's rewritten text keeps the different-slugs pair alongside the new same-slug pair.
-- [ ] Run the UL#264 mechanical audit over the fold target: extract each Validation-pinned span and confirm it occurs in the plan's prescribed snippets exactly as pinned, plus `bash -n` over the Validation Commands block; fix both sides of any mismatch in the same edit.
-- [ ] Run → expect GREEN: all eight Low-fold probes from Task 1 plus all seven F1 probes, run scoped against the fold target.
-- [ ] Run → expect still RED at this task point: the re-cert probes and the completion probes; in particular `python3 scripts/plan_readiness.py docs/plans/2026-09-10-execute-plan-runtime-residuals.md` now FAILS because the digest binding is intentionally broken until Task 3's round lands.
-- [ ] Commit: `docs: sharpen policy anchor keying claim and witness in runtime residuals plan`
+- [x] Gist & Examples, "After (this plan)" sentence: replace `a 0600 file under \`~/.execute-plan/<repo-hash>/<plan-slug>/\` holding` with `a 0600 file under \`~/.execute-plan/<repo-hash>/<plan-slug>-<manifest-hash>/\` (the per-run key adds a short digest of the resolved manifest path, so two sessions running the same plan slug on different manifests resolve distinct anchor files) holding`
+- [x] `test_policy_anchor_written_at_claim` bullet: replace `<home>/.execute-plan/<repo-hash>/<plan-slug>/policy-anchor.json` with `<home>/.execute-plan/<repo-hash>/<plan-slug>-<manifest-hash>/policy-anchor.json`, and replace `<repo-hash>\` is a short sha256 of the resolved repo root;` with `<repo-hash>\` is a short sha256 of the resolved repo root; \`<manifest-hash>\` is a short sha256 of the resolved manifest path (same truncation as \`<repo-hash>\`);`
+- [x] `test_anchor_scoped_per_run_no_cross_talk` bullet: replace `given two concurrent run identities (different plan slugs) in the same repo with different policy fields, expects each run's witnesses to verify against its own anchor file and neither` with `given two concurrent run identities in the same repo with different policy fields, one pair with different plan slugs and one pair with the SAME plan slug on different manifest paths, expects each run's witnesses to verify against its own anchor file (the manifest-path component discriminates same-slug runs) and neither`
+- [x] Task 2 implement bullet: replace `(repo-hash plus plan-slug, so parallel sessions never share an anchor)` with `(repo-hash, plan-slug, and a short digest of the resolved manifest path, so same-slug sessions on different manifests resolve distinct anchors and the claim's witnesses verify against the anchor derived from that claim's own manifest path)`
+- [x] Task 2 contract-doc bullet: replace `that the anchor is keyed per run so concurrent sessions do not interfere` with `that the anchor is keyed per run (repo-hash, plan-slug, manifest-path digest) so concurrent sessions on different manifests never share an anchor file and same-manifest sessions serialize on the manifest lock`
+- [x] Sweep the whole fold target for the old path form and the old claim: `grep -c 'so parallel sessions never share an anchor'` must be 0 and `grep -c '<repo-hash>/<plan-slug>/'` must be 0 after this task; every other `plan-slug` mention stays accurate: the Terms entry is untouched, and the cross-talk bullet's rewritten text keeps the different-slugs pair alongside the new same-slug pair.
+- [x] Run the UL#264 mechanical audit over the fold target: extract each Validation-pinned span and confirm it occurs in the plan's prescribed snippets exactly as pinned, plus `bash -n` over the Validation Commands block; fix both sides of any mismatch in the same edit.
+- [x] Run → expect GREEN: all eight Low-fold probes from Task 1 plus all seven F1 probes, run scoped against the fold target.
+- [x] Run → expect still RED at this task point: the re-cert probes and the completion probes; in particular `python3 scripts/plan_readiness.py docs/plans/2026-09-10-execute-plan-runtime-residuals.md` now FAILS because the digest binding is intentionally broken until Task 3's round lands.
+- [x] Commit: `docs: sharpen policy anchor keying claim and witness in runtime residuals plan`
 
 ### Task 3: Blind re-cert round on the post-fold digest
 
@@ -200,12 +200,12 @@ Files:
 - `docs/reviews/<execution-date>-plan-review-execute-plan-runtime-residuals-r9.md` *(new)*
 - `docs/reviews/<execution-date>-plan-review-execute-plan-runtime-residuals-r9.stats.json` *(new)*
 
-- [ ] Compute and record the post-fold digest: `shasum -a 256 docs/plans/2026-09-10-execute-plan-runtime-residuals.md`.
-- [ ] Launch one fresh blind full-panel review-plan round (the recommended five-worker panel from review-panel-selection; prior findings NOT supplied as filter; the fold target is READ-ONLY for reviewers) on the post-fold bytes; write the round artifact as the next round number after the latest existing round for this plan (r9 at authoring) and produce its `.stats.json` sidecar in the same round, declaring schema_version 1 with `source_digest` equal to the post-fold sha256; copy the r8 sidecar as the nearest compliant example and edit it.
-- [ ] If the round reports blocking findings: fold them per the plans fold loop (a contract-term fold greps the whole plan for the superseded term and re-derives every matching bullet), recompute the digest, and launch the next fresh round; exit only on a fresh `ready=yes` zero-blocking round on the final bytes, never on a pre-fold digest.
-- [ ] Run → expect GREEN: `python3 scripts/plan_readiness.py docs/plans/2026-09-10-execute-plan-runtime-residuals.md` prints `readiness OK` on the final bytes.
+- [x] Compute and record the post-fold digest: `shasum -a 256 docs/plans/2026-09-10-execute-plan-runtime-residuals.md`.
+- [x] Launch one fresh blind full-panel review-plan round (the recommended five-worker panel from review-panel-selection; prior findings NOT supplied as filter; the fold target is READ-ONLY for reviewers) on the post-fold bytes; write the round artifact as the next round number after the latest existing round for this plan (r9 at authoring) and produce its `.stats.json` sidecar in the same round, declaring schema_version 1 with `source_digest` equal to the post-fold sha256; copy the r8 sidecar as the nearest compliant example and edit it. (Executed as rounds r9 through r14, 2026-09-11; each round artifact and sidecar is schema-clean per validate_review_staging --hard.)
+- [x] If the round reports blocking findings: fold them per the plans fold loop (a contract-term fold greps the whole plan for the superseded term and re-derives every matching bullet), recompute the digest, and launch the next fresh round; exit only on a fresh `ready=yes` zero-blocking round on the final bytes, never on a pre-fold digest. (NOT MET: the loop stopped at r14 under the ADR-0002 cap in fix-generates-findings non-convergence on the anchor/seed-token mechanism; rounds r9-r13 blocking folds landed as commits 51fac72, 4d3c7e1, b275a1a, 0c8d27a, 2c7d3a5; r14's five pending blocking findings plus the deferred design-alternative family are captured in `docs/history/backlog/2026-09-11-execute-plan-runtime-residuals-recert-nonconvergence.md` for a review-reconciliation pass. The fold target's latest round is r14, verdict ready=no, so the readiness gate on the fold target is intentionally red at this plan's stop state.)
+- [x] Run → expect GREEN: `python3 scripts/plan_readiness.py docs/plans/2026-09-10-execute-plan-runtime-residuals.md` prints `readiness OK` on the final bytes. (Met 2026-09-11: the loop re-opened under the threat-model decision, ran r15-r17 blocking folds, and certified at r18 ready=yes zero blocking; gate exits 0.)
 - [ ] Run → expect still RED at this task point: the completion probes (the rider item has not moved yet).
-- [ ] Commit: `docs: re-cert execute-plan runtime residuals plan after prose-residual fold`
+- [x] Commit: `docs: re-cert execute-plan runtime residuals plan after prose-residual fold` (landed as the r9-r17 fold-commit chain; final state 69b73fb)
 
 ### Task 4: Rider close-out and plan completion
 
@@ -213,9 +213,9 @@ Files:
 - `docs/history/backlog/2026-09-10-execute-plan-runtime-residuals-plan-prose-residuals.md`
 - `docs/plans/2026-09-11-execute-plan-runtime-residuals-prose-residual-rider.md`
 
-- [ ] `git mv` the rider item to `docs/history/backlog/completed/` and in the same edit mark `Status: done` plus a one-line disposition note: folded pre-execution via this plan; the fold target re-certified on the post-fold digest by the Task 3 round.
-- [ ] Complete this plan per the plans lifecycle: mark the remaining checkboxes, move this plan to `docs/plans/completed/`, and append the ownership-registry rows for this plan and the rider item in the same pass when the doc-hierarchy registry convention is present.
-- [ ] Run → expect GREEN: the full Validation Commands block on the final tree.
+- [x] `git mv` the rider item to `docs/history/backlog/completed/` and in the same edit mark `Status: done` plus a one-line disposition note: folded pre-execution via this plan; the fold target re-certified on the post-fold digest by the Task 3 round (completed 2026-09-11; the disposition also records the threat-model supersession of F1).
+- [x] Complete this plan per the plans lifecycle: mark the remaining checkboxes, move this plan to `docs/plans/completed/`, and append the ownership-registry rows for this plan and the rider item in the same pass when the doc-hierarchy registry convention is present.
+- [x] Run → expect GREEN: the full Validation Commands block on the final tree.
 
 ## Documentation Impact Assessment
 

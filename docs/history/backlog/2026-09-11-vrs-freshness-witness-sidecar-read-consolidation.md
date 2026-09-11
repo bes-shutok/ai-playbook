@@ -1,6 +1,8 @@
 # Backlog: witness selection encapsulation and single sidecar read in the review-staging validator
 
 Status: open
+Priority: deferred (efficiency/token/simplicity triage 2026-09-11: process-cosmetic or archived-record value only; revisit only if it starts costing real review rounds or tokens)
+
 Workflow: backlog
 Source: r1 branch review of 2026-09-11-vrs-freshness-prose-dedup (staging doc: docs/reviews/2026-09-11-2026-09-09-vrs-freshness-prose-dedup-code-review-r1.md), findings F4 and overflow item simplification#shrink-sidecar-double-read; deferred at address-pass triage as structural refactors outside the plan's pinned shape
 Severity: Low

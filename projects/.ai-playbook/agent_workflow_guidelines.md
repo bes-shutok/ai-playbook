@@ -1033,3 +1033,11 @@ host capabilities must preserve a durable receipt and fail closed for gated
 actions. The runtime contract and capability probe are the normative references;
 this guideline records the boundary and points to them rather than duplicating
 their schemas.
+
+## 64. Threat Model for Single-User Tooling: No Anti-Adversarial-Worker Mechanisms
+
+Personal and single-operator tooling (including the execute-plan runtime and its plans) does not defend against a malicious same-user worker. Mechanisms whose only purpose is detecting or resisting deliberate tampering by a worker that already runs with the user's own permissions — out-of-tree tamper-digest anchors, anti-spoof seed tokens, launch-path garbage collection of security state, migration fences against mid-upgrade forgery — are **deferred by default** and must not be designed, prescribed in plans, or folded in as review fixes. Collect them in a backlog item marked deferred with a **trigger condition** (a realistic incident or a multi-user/shared-host deployment), and revisit only when that condition fires.
+
+Review findings premised on a malicious same-user adversary are dispositioned as `deferred (threat-model)` in plan-review rounds, not blocking. Concurrency-correctness concerns (two *honest* sessions racing on one manifest), fail-closed handling of genuine errors, and accidental-damage guardrails stay in scope — those protect correctness, not against malice.
+
+**Driving principles for design and review until revised: efficiency, token usage, and simplicity.** When two designs are otherwise comparable, choose the one with less mechanism, fewer moving artifacts, and fewer prescribed witnesses; a review suggestion that adds machinery to close a defense-in-depth gap is a deferred-backlog candidate, not a fold.

@@ -1,6 +1,8 @@
 # Backlog: token-usage-telemetry r5 residuals
 
 Status: open
+Priority: deferred (efficiency/token/simplicity triage 2026-09-11: process-cosmetic or archived-record value only; revisit only if it starts costing real review rounds or tokens)
+
 Workflow: backlog
 Source: docs/reviews/2026-09-07-2026-09-06-token-usage-telemetry-code-review-r5.md (three Low, non-blocking findings; deferred at the 5-round cap per the backlog-deferral default; folding them would mutate the digest past the round budget)
 Severity: Low

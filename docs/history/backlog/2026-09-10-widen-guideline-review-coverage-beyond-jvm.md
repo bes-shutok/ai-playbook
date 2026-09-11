@@ -1,6 +1,8 @@
 # Backlog: widen guideline-driven review coverage beyond the JVM overlay
 
 Status: open
+Priority: deferred (efficiency/token/simplicity triage 2026-09-11: process-cosmetic or archived-record value only; revisit only if it starts costing real review rounds or tokens)
+
 Workflow: backlog
 Source: author follow-up to the strengthen-jvm-review-coverage backlog item (2026-09-10): review coverage symmetry for non-Java overlays and the wider guideline corpus
 Severity: Medium overall; individual gaps range from Low to Medium by reachability

@@ -5857,3 +5857,15 @@ When the identical command behaves differently in the agent shell versus the use
 **Example:** A rider fold was directed into an existing unexecuted plan whose mechanism was "amend plan X's Task 1 before X executes; the script does not exist yet." While the plan sat open, X executed and archived (its target path vanished from the plans dir) and a CLI channel the plan's fixture spec named was removed at execution. Extending the certified text would have shipped an unexecutable plan with a fixture naming a retired interface; the fold pivoted to the shipped component instead, re-deriving every pin against live probes.
 
 **Distinguishing from #116:** #116 catches a test whose premise goes stale when a later task in the SAME plan changes a contract; this lesson catches the whole plan's premise going stale from OUTSIDE the plan while it sits open. **See also:** the plans skill's plan-update guidance (compare against current code shape and git history before editing).
+
+## 317. Simulate The Prescribed Fix Over Every Shape The Criterion Quantifies
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a probe of today's defective behavior verifies the bug, not the cure; a fix prescription must be simulated once at authoring time against the real code for every variant the acceptance criterion quantifies, because the fix's remaining code paths can re-mask a sibling shape the single-instance probe never exercised.
+
+**Trigger:** authoring a fix plan whose acceptance criterion quantifies over a family ("any separator shape", "either direction", "any status value") while the probe evidence and RED canaries were built from one representative instance of that family.
+
+**Rule:** (1) Probe today's defect per plan discipline, then go one step further: simulate the prescribed post-fix code against the real regexes and functions for EVERY variant the criterion names, not just the probed one. (2) Trace what the fix's NON-gated code paths do with each variant: a gate that closes one mask can leave a sibling path (a prose regex matching the clean shape's own zero) re-masking the same defect through the front door. (3) Pin each family member with its own RED canary so the coverage is enforced at execution, not remembered.
+
+**Why:** a masking-fix plan probed the dash-separated clean-verdict shape end-to-end and prescribed gating the clean-verdict early return on the declared counts row; a review round simulated the prescription and found the canonical clean shape still extracted 0, because after the gated early return the verdict-prose count regex matched the clean shape's own `0 Medium+ findings` prose before the counts-row fallback. The criterion said "any separator shape"; the probe and canaries covered one shape. The fold grew a declared-count bypass arm plus a second extraction canary.
+
+**See also:** #246 (behavioral claims need a probe, not an absence-grep), #253 (generate exact expectations by running the prescribed transform).

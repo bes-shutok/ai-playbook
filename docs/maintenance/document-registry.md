@@ -152,3 +152,4 @@ Table format consumed by scripts/doc_registry_validator.py. -->
 | token-usage-telemetry-0729-plan | no | completed | 2026-07-29 | backfill | docs/history/feature-notes/2026-07-29-token-usage-telemetry.md |  |  |  |
 | doc-ownership-lifecycle | no | completed | 2026-09-10 | plan-completed | docs/plans/completed/2026-09-08-doc-ownership-lifecycle.md |  |  |  |
 | document-ownership-and-archive-lifecycle | no | completed | 2026-09-10 | plan-completed | docs/history/backlog/completed/2026-09-08-document-ownership-and-archive-lifecycle.md |  |  | user-approved 2026-09-10: origin header Status open->done plus em dash normalization at archive completion (execute-plan Phase 4) |
+| execute-plan-runtime-residuals-prose-residual-rider | no | completed | 2026-09-11 | plan-completed | docs/plans/completed/2026-09-11-execute-plan-runtime-residuals-prose-residual-rider.md |  |  |  |

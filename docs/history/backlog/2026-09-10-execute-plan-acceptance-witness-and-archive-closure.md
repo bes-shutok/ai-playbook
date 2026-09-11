@@ -1,6 +1,8 @@
 # Backlog: bind plan acceptance to executable evidence and archive closure
 
 Status: open
+Priority: deferred (efficiency/token/simplicity triage 2026-09-11: process-cosmetic or archived-record value only; revisit only if it starts costing real review rounds or tokens)
+
 Workflow: backlog
 Source: anonymized follow-up from an implementation-plan completion review
 Severity: Medium

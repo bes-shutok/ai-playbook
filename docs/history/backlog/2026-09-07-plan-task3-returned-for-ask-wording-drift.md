@@ -3,6 +3,8 @@
 - **Origin:** returned-for-ask semantics execute-plan Phase 3 review r2, finding F5 (risk + contract-docs, documentation#prose-prescription-drift), 2026-09-07; widened per review r4, finding F1 (correctness-completeness + risk + contract-docs), 2026-09-07; widened per review r6, finding F5 (contract-docs, consistency#sibling-plan-forward-conflict), 2026-09-07
 - **File:** docs/plans/2026-09-04-returned-for-ask-semantics.md (Terms "outstanding presentation" definition, Gist item 3, Task 3 first checkbox prescription)
 - **Status:** open
+Priority: deferred (efficiency/token/simplicity triage 2026-09-11: process-cosmetic or archived-record value only; revisit only if it starts costing real review rounds or tokens)
+
 
 Superseded spans in the unarchived plan (all pre-r1/r2 wording; the shipped skill text governs):
 

@@ -1,6 +1,8 @@
 # Backlog: prose-sweep fold 5 lacks a validation pin
 
 Status: open
+Priority: deferred (efficiency/token/simplicity triage 2026-09-11: process-cosmetic or archived-record value only; revisit only if it starts costing real review rounds or tokens)
+
 Origin: docs/reviews/2026-09-06-certified-plan-prose-residue-sweep-code-review-r1.md (finding 1, testing lens, Low, non-blocking)
 
 ## Finding

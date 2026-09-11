@@ -6,6 +6,8 @@ description: "Jira workflow for creating/updating Jira stories and creating git 
 # Jira Workflow
 
 ## Jira Story Format
+- For Jira operations, use the authenticated Atlassian MCP as the primary interface when available. Do not switch to browser or UI automation when the user requests MCP; use UI only when the user authorizes it as a fallback for a missing MCP capability.
+- Before a bulk issue-link migration, read the available link types and current links, confirm the exact type and direction, and verify whether deletion is available. If replacement links would leave both old and new types, stop and ask whether to remove the old links manually or authorize a UI fallback.
 - Keep scope at the requested service level (not program-wide).
 - Use forward-looking sections (for example scope/out-of-scope).
 - Limit body to business-relevant scope and main dev points; keep Jira story descriptions business-facing and move detailed technical implementation content into comments or linked docs.

@@ -3,6 +3,8 @@
 Origin: r7 exit round of execute-plan 2026-09-04-returned-for-ask-semantics (docs/reviews/2026-09-07-2026-09-04-returned-for-ask-semantics-code-review-r7.md). Zero blocking findings; all eight residuals are drift-hygiene/wording items deferred because the final round must not mutate the reviewed digest. Consolidated from correctness-completeness, risk, contract-docs, and the design-simplicity exit hybrid.
 
 Status: open
+Priority: deferred (efficiency/token/simplicity triage 2026-09-11: process-cosmetic or archived-record value only; revisit only if it starts costing real review rounds or tokens)
+
 
 ## Items
 

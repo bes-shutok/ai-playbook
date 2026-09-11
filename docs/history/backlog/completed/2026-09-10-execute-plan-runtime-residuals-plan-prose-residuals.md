@@ -1,6 +1,6 @@
 # Execute-plan runtime residuals plan: prose and spec residuals from the authoring certification round
 
-Status: open
+Status: done
 Workflow: backlog
 Source: docs/reviews/2026-09-10-plan-review-execute-plan-runtime-residuals-r8.md (certification round r8, ready=yes, zero blocking; findings F1-F5 plus one overflow item deferred non-blocking)
 
@@ -30,3 +30,5 @@ Medium (F1), Low (rest). Plan-text precision only; the plan is executable as cer
 ## Why not fixed now
 
 The review loop exited at its reconciliation bound: r8 is the single fresh certification round allowed after the mandatory reconcile fold, and it reported ready=yes with zero blocking. Folding these would change the digest and require a ninth round past the bound. Recorded per the backlog-capture rule.
+
+Disposition: folded pre-execution via the rider plan; the six residuals landed as rider Tasks 1-2, and the fold target's re-certification completed 2026-09-11 (r18 ready=yes, zero blocking) after the 2026-09-11 threat-model decision moved the anchor mechanism to the deferred backlog (F1's keying text superseded by that deferral).

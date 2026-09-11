@@ -2,6 +2,8 @@
 
 - **Date:** 2026-09-05
 - **Status:** open
+Priority: deferred (efficiency/token/simplicity triage 2026-09-11: process-cosmetic or archived-record value only; revisit only if it starts costing real review rounds or tokens)
+
 - **Origin:** code review round 6 (fresh full panel on 4d2656e) of the scope-control family plan (docs/plans/completed/2026-09-05-scope-control-family.md after archive). Zero blocking findings; these valid non-blocking findings were deferred unfixed to avoid mutating the clean digest (a fix would require a round-7 review beyond the authorized budget). Full detail: docs/reviews/2026-09-05-scope-control-family-code-review-r6.md (gitignored).
 
 ## Findings (12; 3 Medium, 9 Low)

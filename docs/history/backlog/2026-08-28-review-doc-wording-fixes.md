@@ -1,6 +1,8 @@
 # Review-doc wording fixes: Confluence scratch-file child-page scope, stale fence-blindness claim
 
-Status: open (F11 fixed 2026-08-29 by docs/plans/2026-08-28-fence-scanner-consolidation.md; F6 remains open)
+Status: open
+Priority: deferred (efficiency/token/simplicity triage 2026-09-11: process-cosmetic or archived-record value only; revisit only if it starts costing real review rounds or tokens)
+ (F11 fixed 2026-08-29 by docs/plans/2026-08-28-fence-scanner-consolidation.md; F6 remains open)
 Workflow: backlog
 Source: docs/reviews/2026-08-28-review-artifact-contracts-code-review-r6.md, round r6, findings F6 + F11 (validated as wording/contract ambiguities; deliberately deferred)
 

@@ -1,6 +1,8 @@
 # Backlog: VRS clean-verdict early return can mask a nonzero Medium+ staged count
 
 Status: open
+Priority: deferred (efficiency/token/simplicity triage 2026-09-11: process-cosmetic or archived-record value only; revisit only if it starts costing real review rounds or tokens)
+
 
 Date: 2026-09-11
 

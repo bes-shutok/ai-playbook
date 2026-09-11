@@ -1,6 +1,8 @@
 # Backlog: jvm-review-coverage plan residual probe friction
 
 Status: open
+Priority: deferred (efficiency/token/simplicity triage 2026-09-11: process-cosmetic or archived-record value only; revisit only if it starts costing real review rounds or tokens)
+
 Workflow: backlog
 Source: plan review r6 Lows from docs/reviews/2026-09-10-plan-review-strengthen-jvm-review-coverage-r6.md (plan docs/plans/2026-09-10-strengthen-jvm-review-coverage.md, certified ready=yes zero blocking)
 Severity: Low
