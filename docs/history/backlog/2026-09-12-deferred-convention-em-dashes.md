@@ -1,6 +1,6 @@
 # Backlog: replace peer-authored em dashes from the deferred-plans convention session
 
-Status: open
+Status: done (fixed 2026-09-12: the four scoped em dashes replaced with punctuation in doc-hierarchy SKILL.md, deferred/ README.md, and the guidelines section 64 amendment sentence; hygiene scan exit 0)
 Workflow: backlog
 Source: code review round 3 finding F-r3-16 (docs/reviews/2026-09-10-execute-plan-runtime-residuals-code-review-r3.md), deferred as peer-owned; extended by round 4 finding F-r4-11 (docs/reviews/2026-09-10-execute-plan-runtime-residuals-code-review-r4.md), same deferred disposition
 Severity: Low (mechanical text fix)

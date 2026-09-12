@@ -1,6 +1,7 @@
 # Backlog: execute-plan quota-window gate (pause near the 5h limit, schedule resume at cycle start)
 
-Status: open
+Status: done
+Disposition: done via execute-plan runtime guardrails (see docs/plans/completed/2026-09-11-execute-plan-runtime-guardrails.md); open live-calibration residual tracked in 2026-09-11-quota-probe-calibration-fallback.md
 Claimed by: docs/plans/2026-09-11-execute-plan-runtime-guardrails.md (2026-09-11)
 Workflow: backlog
 Source: user request 2026-09-10 to research hook-driven budget checks for execute-plan; feasibility research completed same day (findings embedded below)

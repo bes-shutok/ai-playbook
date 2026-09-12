@@ -351,12 +351,50 @@ Exit 0 means the latest `review-plan` round covers the current plan bytes (sidec
 
 A clean plan review establishes implementation readiness only; it does not authorize deployment, merge, or any other external effect. Deployment, merge, push, and other external actions remain governed by their own authorization rules (see user `AGENTS.md` Git Push Policy).
 
+**Budget-pause resume note:** the resume exemption digest rule is unaffected by a Budget gate pause because the pause protocol never edits the plan file. The resumed orchestrator clears the guard flag (`~/.ai-playbook/runtime/budget-guard.flag`) and the `budget-guard.fired` marker before relaunching any worker.
+
+### Step 0.6: Predecessor verification (hard gate, before Phase 1)
+
+When the plan carries a `Predecessors:` block, build the declaration JSON from it and run:
+
+```bash
+python3 scripts/execute_plan_runtime.py --operation precondition --predecessors-file <json>
+```
+
+The operation verifies against the repository working tree and takes no machine manifest: a fresh run has not created `runtime_state.json` yet, and the driver raises on a missing manifest path. On `blocked: precondition-unverified`, stop before any implement launch, report the driver's diagnostic (the reference and the outcomes tried), and record the returned result in `manifest.md`. A plan without the `Predecessors:` block skips this step.
+
+Ordering: the orchestrator resolves `validator` outcomes FIRST: run the declared validator and record its exit evidence in `manifest.md`. Predecessors already verified by that recorded validator evidence are EXCLUDED from the predecessors JSON document handed to the driver; the driver call then covers the remaining predecessors only, so a predecessor carrying only validator outcomes never reaches the driver. `validator` outcomes are always orchestrator-run, never driver-run; a declared commit identity is never as the sole proof of a prerequisite. When a plan text carries only a bare commit identity for a prerequisite, treat it as a `history-ref` value plus at least one `ancestry` or `artifact` outcome, and stop with a diagnostic when none verifies.
+
 ## Configuration (from facts document)
 
 | Key | Purpose | Fallback |
 |-----|---------|----------|
 | `shared_docs_dir` | Coding/stack guidelines for implement sub-agent | Resolve from `~/.ai-playbook/facts.md`; see `agent-runtime-layout.md` there |
 | `tmp_dir` | Project tmp root for execute-plan logs (read from `.ai-playbook/facts.md` TOML at Phase 0) | `docs/tmp/` |
+| `budget_pause_minutes_before_reset` | Pause when the binding quota window ends within N minutes | `20` |
+| `budget_pause_max_used_percent` | Pause when the binding quota window used percent is at or above N | `90` |
+| `budget_probe_runtime` | Force a specific probe runtime id (accepted values per `scripts/quota_window_probe.py --help`) instead of auto-detect; the fallback value `auto` means omit `--runtime` entirely so the probe auto-detects (passing the literal string `auto` is rejected by the CLI) | `auto` |
+
+### Budget gate (quota-window pause and resume)
+
+Resolve `budget_pause_minutes_before_reset`, `budget_pause_max_used_percent`, and `budget_probe_runtime` from the opening TOML block of `.ai-playbook/facts.md` per the table convention above. At the Step 1.5 and Step 3.5 boundaries only (never mid-task), run:
+
+```bash
+python3 scripts/quota_window_probe.py --minutes-before <N> --max-percent <P> [--runtime <id>] [--plan <plan-slug>] --write-flag ~/.ai-playbook/runtime/budget-guard.flag
+```
+
+- Exit codes: `0` = pause decision, `1` = continue (including `status: unknown`). Parse `pause_decision` from the probe's stdout JSON report, never from the exit code.
+- On `pause_decision: continue` (or `status: unknown`, noting the failure in `manifest.md`), continue the normal flow.
+- On `pause`, run the pause protocol:
+  1. Finish the current boundary only; do not start new work.
+  2. Keep the written guard flag armed. The guard flag is host-global: while armed it gates every session's tool calls on the host until expiry or manual removal, mirroring the hook README's host-scope note. Exception: when the binding limit is the weekly `secondary` window, the probe writes no flag at all — nothing is armed; skip to the report-for-user-decision step instead.
+  3. Append a `budget_pause` line to `manifest.md` with the runtime, reset epoch and ISO time, thresholds used, and the next step that would have run.
+  4. Schedule the resume: reset time rounded UP to the whole minute plus one minute.
+  5. On a host whose agent runtime supports one-shot scheduled automations, create one whose self-contained resume prompt says to execute the plan path, read the `budget_pause` record, apply the Step 0.5 resume rules, clear `~/.ai-playbook/runtime/budget-guard.flag` and `budget-guard.fired` before relaunching work, and stand down if the plan is archived or a peer session resumed it. If the automation create is refused, fall back to a launchd one-shot on the host clock; if both are unavailable, end with a report-only outcome naming the exact resume command and time.
+  6. On a host with no automation capability (launchd-only runtimes), use the launchd one-shot with a sentinel self-disable file.
+  7. When the binding limit is the weekly `secondary` window, do not schedule: report for user decision.
+
+The resume prompt continues through the normal Step 0.5 resume path and the driver's `continue` operation (a budget pause leaves no blocked claim, so the blocked-claim `resume` operation does not apply).
 
 ### Plan-file edits (skill-gate)
 
@@ -497,6 +535,8 @@ The user already invoked execute-plan; continuing through all tasks is the defau
 - Step 1.2 or 1.4 failed and you need user input to recover
 - The user interrupted or explicitly said stop/pause
 - All task checkboxes are `[x]` (proceed to Phase 2, also without asking)
+
+**Budget gate:** run the Budget gate here per the Budget gate section; on a pause the run stops at this boundary (Phase 5 is never reached, so session tmp survives for resume by construction).
 
 ## Phase 2: Plan Completion
 
@@ -727,6 +767,8 @@ A standing instruction from the user for this loop (for example, continue until 
 
 The full-panel and escalation budgets are unchanged and continue to apply alongside this cap; the Step 3.5 manifest update records the round just completed and never advances the counter. Any loop exit, including a user-directed stop from a stop row, closes any standing_continue line as `standing_continue: ended` with the exit reason.
 
+**Budget gate:** run the Budget gate here per the Budget gate section; on a pause the run stops at this boundary.
+
 ## Phase 4: Archive Plan
 
 Move the completed plan per `plans` skill lifecycle:
@@ -765,7 +807,7 @@ When Phase 4 completes, proceed to Phase 5.
 
 ## Phase 5: Remove session tmp files (success only)
 
-Delete the execute-plan session directory **only after the full workflow succeeded**. This is the last orchestrator step.
+Delete the execute-plan session directory **only after the full workflow succeeded**. This is the last orchestrator step. A run paused by the Budget gate never reaches Phase 5; tmp cleanup stays skipped until a resumed run completes the full workflow.
 
 **Success checklist (all must be true before removal):**
 

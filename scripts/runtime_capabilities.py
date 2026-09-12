@@ -60,6 +60,7 @@ BLOCKING_REASON_CODES = {
     "done-pending",
     "dirty-worktree",
     "cleanup-required",
+    "precondition-unverified",
 }
 # Closed reason-code set: every code the reference driver or adapter emits on
 # the normalized result boundary. Unknown or missing codes fail closed as
@@ -84,9 +85,10 @@ REASON_CODES = {
     "done-pending",
     "commit-pending",
     "cleanup-required",
+    "precondition-unverified",
 }
 # Reason codes whose blocked receipt may resume automatically.
-RESUMABLE_REASONS = {"approval-required", "timeout", "runtime-error", "stale-claim", "cleanup-required"}
+RESUMABLE_REASONS = {"approval-required", "timeout", "runtime-error", "stale-claim", "cleanup-required", "precondition-unverified"}
 PROFILE_FIELDS = {
     "id",
     "display_name",

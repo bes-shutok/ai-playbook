@@ -2027,11 +2027,198 @@ def _operation_create(args: argparse.Namespace, payload: Mapping[str, Any]) -> d
     )
 
 
+def _git_commit_matching_reference(repo_root: Path, reference: str) -> bool:
+    """True when a HEAD-reachable commit message contains the fixed string.
+
+    ``git log -F --grep`` pins the reference to a fixed-string match: a
+    ``.`` inside a reference must never act as a basic-regex wildcard. Any
+    witness failure counts as no match (fail closed).
+    """
+
+    completed = subprocess.run(
+        ["git", "log", "-F", "--format=%H", f"--grep={reference}", "HEAD"],
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    return completed.returncode == 0 and bool(completed.stdout.strip())
+
+
+def verify_preconditions(repo_root: Path | str, document: Mapping[str, Any]) -> dict[str, Any]:
+    """Verify declared predecessor work repository-locally; manifest-free.
+
+    Reads a predecessors JSON document (``{"predecessors": [...]}``) plus the
+    repository root; no machine manifest is loaded or required. Each
+    predecessor's outcomes are OR-combined per reference. The driver evaluates
+    only the repository-local kinds ``history-ref``, ``ancestry``, and
+    ``artifact``; the plan-declared ``validator`` kind is orchestrator-run
+    (exit evidence lives in ``manifest.md``) and never executes here. Any
+    malformed declaration, malformed document-level shape (non-mapping
+    document, or a ``predecessors`` value present but not a list), or
+    all-outcomes-fail predecessor returns the fail-closed blocked outcome with
+    a diagnostic naming the reference and every outcome tried.
+    """
+
+    root = Path(repo_root).resolve()
+
+    def _malformed_document(diagnostic: str) -> dict[str, Any]:
+        return _outcome(
+            "blocked",
+            "precondition-unverified",
+            [diagnostic],
+            "repository-read",
+            "precondition:verify",
+            0,
+            "preserve-and-reconcile",
+            resume_allowed=True,
+            predecessors=[],
+        )
+
+    if not root.is_dir():
+        # A missing or non-directory root would otherwise crash the git
+        # witnesses below with a traceback; fail closed instead.
+        return _malformed_document(
+            "repository root missing or not a directory: {}".format(root)
+        )
+
+    # Reuse the driver's existing git witnesses without constructing a driver:
+    # construction would load a machine manifest, which this manifest-free
+    # operation must never do.
+    witness = RuntimeDriver.__new__(RuntimeDriver)
+    witness.repo_root = root
+    head = witness._git_head_revision()
+
+    # Document-level shape fails closed: a missing key (or empty list) is the
+    # plan-without-predecessors success path, but a present-yet-non-list
+    # `predecessors` value (including null) must never degrade to [] and pass.
+    if not isinstance(document, Mapping):
+        return _malformed_document("malformed predecessors document: expected a JSON object mapping")
+    if "predecessors" in document:
+        predecessors = document["predecessors"]
+        if not isinstance(predecessors, (list, tuple)):
+            return _malformed_document("malformed predecessors document: 'predecessors' must be a list")
+    else:
+        predecessors = []
+    evidence: list[str] = []
+    diagnostics: list[str] = []
+    per_predecessor: list[dict[str, Any]] = []
+
+    def evaluate(outcome: Mapping[str, Any]) -> bool:
+        kind = str(outcome.get("kind", ""))
+        if kind == "history-ref":
+            value = outcome.get("value")
+            return isinstance(value, str) and bool(value.strip()) and _git_commit_matching_reference(root, value)
+        if kind == "ancestry":
+            value = outcome.get("value")
+            if not isinstance(value, str) or not value.strip() or not head:
+                return False
+            is_descendant, witness_ok = witness._git_commit_is_descendant(value, head)
+            return witness_ok and is_descendant
+        if kind == "artifact":
+            path = outcome.get("path")
+            contains = outcome.get("contains")
+            if not isinstance(path, str) or not isinstance(contains, str) or not contains:
+                return False
+            try:
+                resolved = _safe_relative_path(root, path)
+                text = (root / resolved).read_text(encoding="utf-8")
+            except (OSError, ValueError):
+                return False
+            return contains in text
+        return False
+
+    for declaration in predecessors:
+        ref = declaration.get("ref") if isinstance(declaration, Mapping) else None
+        ref_label = ref if isinstance(ref, str) and ref.strip() else "<missing>"
+        outcomes = declaration.get("outcomes") if isinstance(declaration, Mapping) else None
+        if (
+            not isinstance(declaration, Mapping)
+            or not isinstance(ref, str)
+            or not ref.strip()
+            or not isinstance(outcomes, (list, tuple))
+            or not outcomes
+        ):
+            diagnostics.append(f"malformed predecessor declaration: ref={ref_label} requires a non-empty ref and a non-empty outcomes list")
+            per_predecessor.append({"ref": ref_label, "verified": False, "verified_by": None})
+            continue
+        verified_by: dict[str, Any] | None = None
+        attempted: list[str] = []
+        malformed = False
+        for outcome in outcomes:
+            if not isinstance(outcome, Mapping):
+                malformed = True
+                attempted.append("malformed-outcome")
+                continue
+            kind = str(outcome.get("kind", ""))
+            if kind not in {"history-ref", "ancestry", "artifact", "validator"}:
+                malformed = True
+                attempted.append(f"unknown-kind {kind or '<missing>'}")
+                continue
+            if kind == "validator":
+                # Orchestrator-run outcome: the driver never executes
+                # plan-declared commands; it contributes no verification here.
+                attempted.append("validator (orchestrator-run; exit evidence in manifest.md)")
+                continue
+            raw_target = outcome.get("value") or outcome.get("path")
+            detail = str(raw_target or "<missing>")
+            if kind in {"history-ref", "ancestry"} and isinstance(raw_target, str) and raw_target.startswith("-"):
+                # A leading dash can never be a valid work-item reference; it
+                # is a malformed declaration, not an outcome that merely fails.
+                malformed = True
+                attempted.append(f"{kind} {detail} (malformed declaration: leading-dash value)")
+                continue
+            if kind == "artifact" and (
+                not isinstance(outcome.get("path"), str)
+                or not isinstance(outcome.get("contains"), str)
+                or not outcome.get("contains")
+            ):
+                # A structurally-broken artifact declaration (missing or
+                # non-string path; missing, empty, or non-string contains)
+                # cannot be evaluated at all — malformed, not merely failed.
+                malformed = True
+                attempted.append(f"artifact {detail} (malformed declaration)")
+                continue
+            attempted.append(f"{kind} {detail}")
+            if verified_by is None and evaluate(outcome):
+                verified_by = {"kind": kind, "target": str(raw_target or "")}
+        per_predecessor.append({"ref": ref, "verified": verified_by is not None, "verified_by": verified_by})
+        if verified_by is not None:
+            evidence.append(f"ref={ref} verified by {verified_by['kind']}")
+        else:
+            note = " (malformed declaration)" if malformed else ""
+            diagnostics.append(f"predecessor ref={ref} unverified{note}; outcomes tried: {', '.join(attempted)}")
+    if diagnostics:
+        return _outcome(
+            "blocked",
+            "precondition-unverified",
+            diagnostics,
+            "repository-read",
+            "precondition:verify",
+            0,
+            "preserve-and-reconcile",
+            resume_allowed=True,
+            predecessors=per_predecessor,
+        )
+    return _outcome(
+        "success",
+        "completed",
+        evidence or ["no predecessors declared"],
+        "repository-read",
+        "precondition:verify",
+        0,
+        "continue-parent",
+        predecessors=per_predecessor,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--operation", choices=("create", "claim", "checkpoint", "done", "resume", "continue", "terminal"))
+    parser.add_argument("--operation", choices=("create", "claim", "checkpoint", "done", "resume", "continue", "terminal", "precondition"))
+    parser.add_argument("--predecessors-file", type=Path, help="predecessors JSON document for the manifest-free precondition operation")
     parser.add_argument("--input", help="JSON object for create, checkpoint, or done")
     parser.add_argument("--plan-slug")
     parser.add_argument("--owner")
@@ -2043,8 +2230,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.selftest:
             selftest()
             return 0
-        if args.manifest is None or args.operation is None:
-            parser.error("--manifest and --operation are required unless --selftest is used")
+        if args.operation == "precondition":
+            # Manifest-free end to end: the precondition operation runs from a
+            # predecessors document and the repository root alone.
+            if args.predecessors_file is None:
+                parser.error("--predecessors-file is required for --operation precondition")
+        elif args.manifest is None or args.operation is None:
+            parser.error("--manifest and --operation are required unless --selftest is used (or --operation precondition with --predecessors-file)")
         profile = capabilities.load_profiles().get(capabilities.canonicalize_runtime_id(args.runtime)) if args.runtime else None
         adapter_kwargs = {}
         if args.approval_receipt is not None:
@@ -2058,6 +2250,31 @@ def main(argv: list[str] | None = None) -> int:
             # The manifest does not exist yet: create runs before any driver
             # construction and owns the seeding boundary itself.
             result = _operation_create(args, payload)
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        if args.operation == "precondition":
+            # Manifest-free: no driver is constructed and no manifest loaded;
+            # the repository root resolves from --repo-root or the cwd. An
+            # unreadable or unparsable predecessors file fails closed as a
+            # malformed document naming the file, never as a traceback.
+            try:
+                with Path(args.predecessors_file).open(encoding="utf-8") as stream:
+                    document = json.load(stream)
+            except (OSError, ValueError) as exc:
+                result = _outcome(
+                    "blocked",
+                    "precondition-unverified",
+                    [f"malformed predecessors document {args.predecessors_file}: {exc}"],
+                    "repository-read",
+                    "precondition:verify",
+                    0,
+                    "preserve-and-reconcile",
+                    resume_allowed=True,
+                    predecessors=[],
+                )
+                print(json.dumps(result, sort_keys=True))
+                return 0
+            result = verify_preconditions(Path(args.repo_root or Path.cwd()).resolve(), document)
             print(json.dumps(result, sort_keys=True))
             return 0
         driver = RuntimeDriver(

@@ -1,0 +1,21 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "limits": [
+      {
+        "type": "TOKENS_LIMIT",
+        "name": "tokens 5h window",
+        "percentage": 87.5,
+        "nextResetTime": 1789146000000
+      },
+      {
+        "type": "TIME_LIMIT",
+        "name": "time window",
+        "unit": 5,
+        "percentage": 43.2,
+        "nextResetTime": 1789577400000
+      }
+    ]
+  }
+}

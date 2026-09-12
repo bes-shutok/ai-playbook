@@ -114,8 +114,8 @@ state. Malformed results fail closed and are never treated as success.
 The standard reason codes are `completed`, `worker-hesitation`,
 `contract-violation`, `approval-required`, `timeout`, `dirty-worktree`,
 `cleanup-required`, `cleanup-unverified`, `malformed-result`, `owner-mismatch`,
-`stale-claim`, `explicit-abort`, `runtime-policy-unavailable`, and
-`runtime-error`. The
+`stale-claim`, `explicit-abort`, `runtime-policy-unavailable`,
+`runtime-error`, and `precondition-unverified`. The
 reference driver and adapter additionally emit `authorized` (envelope
 authorization success), `activation-verified` (adapter activation success),
 `worktree-witness-unavailable` (broken git scope witness), and the boundary
@@ -345,6 +345,7 @@ are:
 | `resume` | `resume` |
 | `continue` | `continue_parent` (also surfaces `terminal_result` on a complete manifest) |
 | `terminal` | `mark_terminal` (the terminal receipt itself is read back through `continue`/`resume` on the completed manifest) |
+| `precondition` | `verify_preconditions` (manifest-free: requires `--predecessors-file` instead of `--manifest`; never loads a machine manifest) |
 
 The driver, not the shared prose or the adapter, owns these transitions. A
 reload resumes from the first incomplete step and never relaunches a
@@ -379,6 +380,52 @@ checkboxes (for example a `- [x]` whose task is not `checkpointed`/
 through the skill-gated plan-edit step, never by mutating the machine
 manifest to match the plan; the manifest's task statuses, claims, and
 generation fence every transition.
+
+## Predecessor verification
+
+Before a plan step whose work depends on predecessor work starts, the
+orchestrator verifies each declared predecessor through the manifest-free
+`precondition` CLI operation: `--operation precondition` with a
+`--predecessors-file` JSON document and the repository root (cwd-based
+default, `--repo-root` override). No `--manifest` is supplied or loaded; the
+operation runs end to end without the machine manifest. The declaration
+shape is:
+
+```json
+{"predecessors": [{"ref": "example-crm-123", "outcomes": [{"kind": "history-ref", "value": "example-crm-123"}, {"kind": "ancestry", "value": "v1.2-tag"}, {"kind": "artifact", "path": "scripts/quota_window_probe.py", "contains": "pause_decision"}]}]}
+```
+
+Each predecessor carries a non-empty `ref` and a non-empty `outcomes` list.
+Outcomes are OR-combined per reference: one verifying outcome verifies the
+predecessor. The driver evaluates exactly three repository-local kinds:
+
+- `history-ref`: a HEAD-reachable commit message contains the reference as a
+  fixed string (`git log -F --grep`; never a basic regex, so a `.` in a
+  reference is never a wildcard). This is deliberately identity-agnostic:
+  rebased, cherry-picked, or squashed history still verifies when the
+  reference survives in a commit message.
+- `ancestry`: the named base commit is an ancestor of HEAD (the same
+  descendant witness the done boundary uses).
+- `artifact`: the path resolves under the repository root through the
+  fail-closed safe-path policy, exists, and its content contains the pinned
+  `contains` span.
+
+The plan-declared `validator` kind is orchestrator-run, not driver-run: the
+orchestrator executes the declared validation command and records its exit
+evidence in `manifest.md`. The orchestrator resolves validator outcomes first
+and excludes validator-verified predecessors from the predecessors document
+handed to the driver; the driver call covers the remaining predecessors only,
+so a predecessor carrying only validator outcomes never reaches the driver.
+The driver never executes plan-declared commands;
+at the driver boundary a `validator` outcome contributes no verification.
+
+The success verdict carries per-predecessor evidence naming which outcome
+verified each reference. The operation fails closed: a malformed declaration
+(unknown outcome kind, empty outcome list, missing `ref`, malformed
+document-level shape, or a missing repository root) or a predecessor
+whose every outcome fails returns `blocked` with reason code
+`precondition-unverified`, `resume_allowed: true`, and a diagnostic naming
+the reference and every outcome tried.
 
 ## Hook capability boundary
 

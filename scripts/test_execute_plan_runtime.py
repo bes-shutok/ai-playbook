@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 from unittest import mock
 from pathlib import Path
 
@@ -63,12 +64,18 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
         self.state_path = self.root / "runtime_state.json"
-        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
-        subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.root, check=True)
-        subprocess.run(["git", "config", "user.name", "Runtime Test"], cwd=self.root, check=True)
+        # Hermetic git: neutralize host global/system config so hooks,
+        # gpgsign, or aliases from the developer machine cannot leak into
+        # the fixture repository; identity is set repo-locally below.
+        self._git_env = dict(os.environ)
+        self._git_env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        self._git_env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "config", "user.name", "Runtime Test"], cwd=self.root, check=True, env=self._git_env)
         (self.root / ".gitignore").write_text("runtime_state.json\nruntime_state.json.lock\n", encoding="utf-8")
-        subprocess.run(["git", "add", ".gitignore"], cwd=self.root, check=True)
-        subprocess.run(["git", "commit", "-qm", "fixture"], cwd=self.root, check=True)
+        subprocess.run(["git", "add", ".gitignore"], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "commit", "-qm", "fixture"], cwd=self.root, check=True, env=self._git_env)
         runtime.create_manifest(
             self.state_path,
             "fixture-plan",
@@ -118,9 +125,9 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
 
     def commit_file(self, name="task-4.txt", content="committed change\n"):
         (self.root / name).write_text(content, encoding="utf-8")
-        subprocess.run(["git", "add", name], cwd=self.root, check=True)
-        subprocess.run(["git", "commit", "-qm", f"fixture commit {name}"], cwd=self.root, check=True)
-        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        subprocess.run(["git", "add", name], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "commit", "-qm", f"fixture commit {name}"], cwd=self.root, check=True, env=self._git_env)
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True, env=self._git_env).stdout.strip()
 
     def worker_checkpoint(self, task="task-3", generation=0, **overrides):
         result = {
@@ -2161,6 +2168,49 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(after["tasks"]["task-4"]["status"], "done-pending")
         self.assertEqual(after["claims"]["task-4"]["launch_record"], before)
 
+    def test_continue_selects_first_incomplete_after_budget_pause_gap(self):
+        # Characterization: a budget-paused run leaves completed tasks and no
+        # claim in flight. continue_parent must advance to the first incomplete
+        # task (task-3) without relaunching or re-checkpointing the completed
+        # tasks; the blocked-claim resume operation is not the continuation
+        # path because a pause leaves no blocked claim behind.
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"] = {
+            "task-1": {"id": "task-1", "number": 1, "status": "complete", "checkbox": True},
+            "task-2": {"id": "task-2", "number": 2, "status": "complete", "checkbox": True},
+            "task-3": {"id": "task-3", "number": 3, "status": "pending", "checkbox": False, "allowed_paths": ["task-3.txt"]},
+        }
+        state["claims"] = {}
+        state["checkpoints"] = {}
+        runtime._safe_write_json(self.state_path, state)
+
+        adapter = FakeAdapter(
+            lambda task, _prompt, generation, _deadline, _token: self.worker_checkpoint(
+                task=task["id"], generation=generation, checkpoint_identity=f"{task['id']}:worker-1"
+            )
+        )
+        driver = self.driver(adapter=adapter, seed_task3=False)
+
+        # No blocked claim exists, so the resume operation has nothing to
+        # resume; the continuation path is continue_parent, not resume.
+        resume_probe = driver.resume()
+        self.assertEqual(resume_probe["status"], "blocked")
+        self.assertEqual(resume_probe["reason_code"], "stale-claim")
+        self.assertEqual(adapter.launches, [])
+
+        result = driver.continue_parent()
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["state"], "done-pending")
+        self.assertEqual([launch[0] for launch in adapter.launches], ["task-3"])
+
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-1"]["status"], "complete")
+        self.assertEqual(after["tasks"]["task-2"]["status"], "complete")
+        self.assertEqual(after["tasks"]["task-3"]["status"], "done-pending")
+        self.assertNotIn("task-1", after["claims"])
+        self.assertNotIn("task-2", after["claims"])
+        self.assertFalse(any(key.startswith(("task-1", "task-2")) for key in after["checkpoints"]))
+
     def test_activation_receipt_fence_refuses_aborted_workflow(self):
         # F-r3-6 witness: the activation-receipt write is fenced against an
         # aborted workflow and a claim that is no longer live; no write lands.
@@ -2413,6 +2463,263 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(guarded["status"], "blocked")
         self.assertEqual(outcome["status"], "success")
         self.assertEqual(runtime.load_manifest(self.state_path)["tasks"]["task-4"]["status"], "done-pending")
+
+
+    def commit_message(self, message, name=None, content="predecessor work\n"):
+        """Commit one file with an arbitrary message; return the commit sha."""
+        target = name or f"predecessor-{uuid.uuid4().hex[:8]}.txt"
+        (self.root / target).write_text(content, encoding="utf-8")
+        subprocess.run(["git", "add", target], cwd=self.root, check=True)
+        subprocess.run(["git", "commit", "-qm", message], cwd=self.root, check=True)
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+
+    def orphan_commit(self):
+        tree = subprocess.run(["git", "rev-parse", "HEAD^{tree}"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        return subprocess.run(["git", "commit-tree", "-m", "orphan", tree], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+
+    def predecessors_file(self, document):
+        path = self.root / f"predecessors-{uuid.uuid4().hex[:8]}.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        return path
+
+    def verify(self, document):
+        return runtime.verify_preconditions(self.root, document)
+
+    def test_precondition_history_ref_verifies_rebased_history(self):
+        base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=self.root, check=True)
+        original = self.commit_message("CRM-1234 predecessor feature work")
+        subprocess.run(["git", "checkout", "-q", "--detach", base], cwd=self.root, check=True)
+        newer = self.commit_message("newer base unrelated to the feature")
+        subprocess.run(["git", "checkout", "-q", "work"], cwd=self.root, check=True)
+        subprocess.run(["git", "rebase", "-q", newer], cwd=self.root, check=True)
+        rebased = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        self.assertNotEqual(rebased, original)
+        result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "history-ref", "value": "CRM-1234"}]}]})
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["reason_code"], "completed")
+        self.assertEqual(result["predecessors"][0]["ref"], "CRM-1234")
+        self.assertTrue(result["predecessors"][0]["verified"])
+
+    def test_precondition_history_ref_verifies_cherry_picked_history(self):
+        subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=self.root, check=True)
+        source = self.commit_message("CRM-1234 cherry-pick source work")
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.root, check=True)
+        self.commit_message("divergent base commit")
+        subprocess.run(["git", "cherry-pick", source], cwd=self.root, check=True)
+        picked = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        self.assertNotEqual(picked, source)
+        result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "history-ref", "value": "CRM-1234"}]}]})
+        self.assertEqual(result["status"], "success")
+
+    def test_precondition_history_ref_verifies_squashed_history(self):
+        base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        self.commit_message("CRM-1234 first piece")
+        self.commit_message("CRM-5678 second piece")
+        subprocess.run(["git", "reset", "-q", "--soft", base], cwd=self.root, check=True)
+        self.commit_message("CRM-1234 CRM-5678 squashed predecessor work")
+        for ref in ("CRM-1234", "CRM-5678"):
+            result = self.verify({"predecessors": [{"ref": ref, "outcomes": [{"kind": "history-ref", "value": ref}]}]})
+            self.assertEqual(result["status"], "success", ref)
+            self.assertTrue(result["predecessors"][0]["verified"])
+
+    def test_precondition_ancestry_outcome(self):
+        ancestor = self.commit_message("ancestor base commit")
+        self.commit_message("descendant commit")
+        document = {"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "ancestry", "value": ancestor}]}]}
+        verified = self.verify(document)
+        self.assertEqual(verified["status"], "success")
+        orphan = self.orphan_commit()
+        unverified = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "ancestry", "value": orphan}]}]})
+        self.assertEqual(unverified["status"], "blocked")
+        self.assertEqual(unverified["reason_code"], "precondition-unverified")
+
+    def test_precondition_artifact_outcome(self):
+        probe = self.root / "scripts" / "quota_window_probe.py"
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text("# probe\npause_decision = True\n", encoding="utf-8")
+        document = {"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "artifact", "path": "scripts/quota_window_probe.py", "contains": "pause_decision"}]}]}
+        verified = self.verify(document)
+        self.assertEqual(verified["status"], "success")
+        absent = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "artifact", "path": "scripts/quota_window_probe.py", "contains": "absent_span"}]}]})
+        self.assertEqual(absent["status"], "blocked")
+        self.assertEqual(absent["reason_code"], "precondition-unverified")
+
+    def test_precondition_artifact_dotdot_path_refused(self):
+        # A normalizing dotdot path that would resolve back INSIDE the repo
+        # to a file carrying the pinned span must still be refused: the
+        # artifact witness rejects any '..' component, not just escapes.
+        probe = self.root / "scripts" / "quota_window_probe.py"
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text("# probe\npause_decision = True\n", encoding="utf-8")
+        result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "artifact", "path": "scripts/../scripts/quota_window_probe.py", "contains": "pause_decision"}]}]})
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "precondition-unverified")
+
+    def test_precondition_artifact_empty_contains_is_malformed(self):
+        # A structurally-broken artifact declaration (empty contains) is a
+        # malformed declaration, not an outcome that merely fails to verify.
+        probe_path = self.root / "scripts" / "quota_window_probe.py"
+        probe_path.parent.mkdir(parents=True, exist_ok=True)
+        probe_path.write_text("# probe\npause_decision = True\n", encoding="utf-8")
+        result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "artifact", "path": "scripts/quota_window_probe.py", "contains": ""}]}]})
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "precondition-unverified")
+        joined = " ".join(str(item) for item in result["evidence"])
+        self.assertIn("(malformed declaration)", joined)
+
+    def test_precondition_missing_repo_root_fails_closed(self):
+        missing = self.root / f"missing-root-{uuid.uuid4().hex[:8]}"
+        result = runtime.verify_preconditions(missing, {"predecessors": []})
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "precondition-unverified")
+        joined = " ".join(str(item) for item in result["evidence"])
+        self.assertIn("repository root missing or not a directory", joined)
+        self.assertIn(str(missing.resolve()), joined)
+        self.assertTrue(result["resume_allowed"])
+
+    def test_precondition_fails_closed_names_reference(self):
+        self.commit_message("CRM-1234 present work")
+        orphan = self.orphan_commit()
+        outcomes = [
+            {"kind": "history-ref", "value": "NOPE-9999"},
+            {"kind": "ancestry", "value": orphan},
+            {"kind": "artifact", "path": "scripts/missing_probe.py", "contains": "pause_decision"},
+        ]
+        result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": outcomes}]})
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "precondition-unverified")
+        self.assertTrue(result["resume_allowed"])
+        joined = " ".join(str(item) for item in result["evidence"])
+        self.assertIn("CRM-1234", joined)
+        self.assertIn("NOPE-9999", joined)
+        self.assertIn(orphan, joined)
+        self.assertIn("scripts/missing_probe.py", joined)
+
+    def test_precondition_malformed_declaration_fails_closed(self):
+        cases = (
+            {"ref": "CRM-1234", "outcomes": [{"kind": "time-travel", "value": "CRM-1234"}]},
+            {"ref": "CRM-1234", "outcomes": []},
+            {"outcomes": [{"kind": "history-ref", "value": "CRM-1234"}]},
+        )
+        for declaration in cases:
+            with self.subTest(declaration=declaration):
+                result = self.verify({"predecessors": [declaration]})
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "precondition-unverified")
+                self.assertTrue(result["resume_allowed"])
+                joined = " ".join(str(item) for item in result["evidence"]).lower()
+                self.assertIn("malformed", joined)
+
+    def test_precondition_any_outcome_verifies(self):
+        self.commit_message("CRM-1234 present work")
+        document = {"predecessors": [{"ref": "CRM-1234", "outcomes": [
+            {"kind": "artifact", "path": "scripts/missing_probe.py", "contains": "pause_decision"},
+            {"kind": "history-ref", "value": "CRM-1234"},
+        ]}]}
+        result = self.verify(document)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["predecessors"][0]["verified_by"]["kind"], "history-ref")
+
+    def test_precondition_history_ref_fixed_string_no_regex_meta(self):
+        self.commit_message("PROJ-123 fixed-string fixture commit")
+        result = self.verify({"predecessors": [{"ref": "PROJ-1.3", "outcomes": [{"kind": "history-ref", "value": "PROJ-1.3"}]}]})
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "precondition-unverified")
+
+    def test_precondition_cli_without_manifest(self):
+        self.commit_message("CRM-1234 cli fixture work")
+        predecessors = self.predecessors_file({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "history-ref", "value": "CRM-1234"}]}]})
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/execute_plan_runtime.py"),
+                "--operation", "precondition",
+                "--predecessors-file", str(predecessors),
+                "--repo-root", str(self.root),
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["reason_code"], "completed")
+
+    def test_precondition_malformed_document_fails_closed(self):
+        cases = (
+            {"predecessors": "CRM-1234"},
+            {"predecessors": None},
+            ["not", "a", "mapping"],
+        )
+        for document in cases:
+            with self.subTest(document=document):
+                result = self.verify(document)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "precondition-unverified")
+                joined = " ".join(str(item) for item in result["evidence"]).lower()
+                self.assertIn("malformed", joined)
+
+    def test_precondition_absent_or_empty_predecessors_stays_success(self):
+        for document in ({}, {"predecessors": []}):
+            with self.subTest(document=document):
+                result = self.verify(document)
+                self.assertEqual(result["status"], "success")
+                self.assertIn("no predecessors declared", result["evidence"])
+
+    def test_precondition_cli_malformed_file_fails_closed(self):
+        bad = self.root / "predecessors-broken.json"
+        bad.write_text("{not json", encoding="utf-8")
+        for target in (bad, self.root / "predecessors-absent.json"):
+            with self.subTest(target=target.name):
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "scripts/execute_plan_runtime.py"),
+                        "--operation", "precondition",
+                        "--predecessors-file", str(target),
+                        "--repo-root", str(self.root),
+                    ],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                result = json.loads(completed.stdout)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "precondition-unverified")
+                self.assertIn(str(target), " ".join(str(item) for item in result["evidence"]))
+
+    def test_precondition_artifact_path_escape_refused(self):
+        # A decoy OUTSIDE the repo root carries the pinned span: a blocked
+        # verdict proves the escape was refused, not that the span was missed.
+        span = "pinned predecessor span {}".format(uuid.uuid4().hex[:8])
+        decoy = self.root.parent / f"outside-decoy-{uuid.uuid4().hex[:8]}.txt"
+        decoy.write_text(span, encoding="utf-8")
+        self.addCleanup(decoy.unlink, missing_ok=True)
+        document = {"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "artifact", "path": "../outside.txt", "contains": span}]}]}
+        result = self.verify(document)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "precondition-unverified")
+
+    def test_precondition_validator_only_outcome_blocks_without_malformed_label(self):
+        document = {"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "validator", "value": "scripts/check.py"}]}]}
+        result = self.verify(document)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "precondition-unverified")
+        joined = " ".join(str(item) for item in result["evidence"])
+        self.assertIn("validator (orchestrator-run", joined)
+        self.assertNotIn("malformed", joined.lower())
+
+    def test_precondition_leading_dash_value_is_malformed_declaration(self):
+        for kind in ("history-ref", "ancestry"):
+            with self.subTest(kind=kind):
+                result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": kind, "value": "--injected-option"}]}]})
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "precondition-unverified")
+                joined = " ".join(str(item) for item in result["evidence"]).lower()
+                self.assertIn("malformed declaration", joined)
 
 
 if __name__ == "__main__":

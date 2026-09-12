@@ -85,7 +85,7 @@ class RuntimeCapabilitiesTest(unittest.TestCase):
         self.assertNotIn("created", capabilities.REASON_CODES)
         self.assertEqual(
             capabilities.RESUMABLE_REASONS,
-            {"approval-required", "timeout", "runtime-error", "stale-claim", "cleanup-required"},
+            {"approval-required", "timeout", "runtime-error", "stale-claim", "cleanup-required", "precondition-unverified"},
         )
 
     def test_all_documented_runtimes_have_profiles(self) -> None:
