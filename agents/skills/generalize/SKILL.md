@@ -236,7 +236,7 @@ to its final destination, so the lesson is anchored to its family and cross-refe
 than duplicated. See `../learn/SKILL.md` for the Generalization pass steps. `audit` mode is
 invoked separately, when a corpus has grown large enough to need consolidation.
 
-**Routing fork (mirrors `learn` Step 1.2 item 4 four-way fork + 4b):** after the `map` mode
+**Routing fork (mirrors `learn` Step 1.2 item 4 five-branch fork + 4b/4c):** after the `map` mode
 resolves the family, the FIRST discriminator for placement is **abstract precept vs concrete
 lesson**, then portability. Do **not** treat "not useful in every language" as proof the rule is
 project-specific:
@@ -247,14 +247,15 @@ project-specific:
    in `jvm_guidelines.md`, `java_guidelines.md`, `kotlin_guidelines.md`, or `python_guidelines.md`).
    Default here when the rule would correctly guide an unrelated service in the same stack with no
    shared domain. Incident repos keep at most a thin witness pointer.
+2b. **Company-wide convention** -> `company_guidelines_master` (facts key): a do/do-not rule shared by repositories of the same company or organization because they perform the same kind of work, even when product domains differ and the rule is not universal. Full rule in the company master; incident repos keep at most a concise witness pointer. Require the sibling search and company-portability gate (`learn` 4c) before choosing this over fork (4).
 3. **Concrete cross-project lesson** -> **user-level corpus** (`development_lessons.md` resolved
    from `shared_docs_dir`), strict-tagged (`**Principle:** Family X`, next `UL#N`). The user-level
    corpus is gated by `lessons_index.py` (the `learn` Step 6.6 gate). The value of a corpus entry
    is the incident witness; do not flatten a concrete lesson into a precept in `coding_guidelines.md`
    or a stack guideline file.
 4. **Project-specific** -> repo `development_lessons.md` (convention-tagged, `**Principle:** Family X`).
-   Project corpora are convention; they are not gated (warn-only dup check). Require a residual-domain pass (`learn` Step 1.7 item 6) and the
-   stack-portability gate (`learn` 4b) before choosing this over fork (2).
+   Project corpora are convention; they are not gated at placement time (warn-only intra-corpus dup check; a commit-time cross-corpus duplicate gate applies via done Step 3 item 4a). Require a residual-domain pass (`learn` Step 1.7 item 6) and the
+   stack-portability gate (`learn` 4b) and the company-portability gate (`learn` 4c) before choosing this over fork (2) or fork (2b); a fork (4) placement records its residual dependency in the placement receipt (`learn` Step 1.2 item 5c).
 
 ### With plans
 

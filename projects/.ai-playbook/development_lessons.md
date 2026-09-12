@@ -3757,7 +3757,7 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **Example (2026-07-27 playbook-lessons migration, r3 F1 address):** Round r3 flagged ~57 lessons with domain framing; a pre-triage guessed ~12 "likely MOVE" by identifier load. On reading each Rule, only ONE was a true MOVE (its Rule was entirely source-domain mechanics, reducing to a generic "verify against source" already covered by a sibling). The other ~56 had portable Rules (output-label hygiene, test-discriminator discipline, archived-source authority, classifier-reachability checks) with domain framing only in Examples. Those were KEEP-AND-REWRITE: each Example/Anti-pattern paragraph was rewritten to a non-domain analog (function/test names, sheet/column names, region/category mechanics swapped for generic equivalents), Rule and Principle intact. Without the Rule-portability discriminator, the token-density heuristic would have wrongly relocated ~55 portable engineering lessons out of the cross-project corpus. See the r3 address log Phases A and C.
 
-**See also:** #166 (the detection layer this fixes decisions for), coding_guidelines.md #25 (Family H parent), coding_guidelines.md #18 (Family A: the Rule's portability is the equivalence-class property, the Example's tokens are an incidental member), `learn` SKILL Step 1.2 item 4 (the four-way fork; MOVE vs KEEP-AND-REWRITE maps project-specific vs cross-project UL as fork 4 vs fork 3; stack-portable precepts are fork 2, not a full project `#N`).
+**See also:** #166 (the detection layer this fixes decisions for), coding_guidelines.md #25 (Family H parent), coding_guidelines.md #18 (Family A: the Rule's portability is the equivalence-class property, the Example's tokens are an incidental member), `learn` SKILL Step 1.2 item 4 (the five-branch fork; MOVE vs KEEP-AND-REWRITE maps project-specific vs cross-project UL as fork 4 vs fork 3; company-wide conventions are fork 2b, stack-portable precepts are fork 2, not a full project `#N`).
 
 ## 178. A Loaded Skill's Hard Gates Are the Skill, Not the Format Section
 
@@ -5204,7 +5204,7 @@ When the identical command behaves differently in the agent shell versus the use
 
 **Rule:** (1) After EVERY revision that touches either side of a pin (the gate pattern or the prescribed text), run a mechanical audit: extract every pin, verify it occurs exactly once in the prescribed text, and run a shell syntax check over any embedded script. (2) Never fix one side alone; a pin fix and its text fix must land in the same edit. (3) Strip possessive apostrophes from pinned phrases - a literal apostrophe inside a single-quoted shell pattern is a syntax error.
 
-**Why:** across five revision rounds of one plan's validation gates, pin/text drift was the top blocking family (mismatched wording, a doubled phrase, a case difference, an orphaned span); a fold fixed a pin but left its paragraph unfixed and the certification round failed on it; a short audit script would have caught every instance at fold time.
+**Why:** across five revision rounds of one plan's validation gates, pin/text drift was the top blocking family (mismatched wording, a doubled phrase, a case difference, an orphaned span); a fold fixed a pin but left its paragraph unfixed and the certification round failed on it; a short audit script would have caught every instance at fold time. Cross-file witness (2026-09-12, skills-playbook plan review r3): the pin lived in the plan's Validation block while the prescribed text lived in a skill file; a wording rewrite of the skill side alone orphaned the probe and turned the plan's Done-when gate red on the live tree. The contract was cross-artifact, so the "same edit" rule means "same change set", not "same file": grep dependents (plans, tests, hooks) for the old pinned string whenever the artifact that carries the prescribed text is reworded.
 
 **See also:** #263 (a negative witness must overstep the tolerance dimension alone), #220 (vacuous sweeps need RED-today proof).
 
@@ -5869,3 +5869,17 @@ When the identical command behaves differently in the agent shell versus the use
 **Why:** a masking-fix plan probed the dash-separated clean-verdict shape end-to-end and prescribed gating the clean-verdict early return on the declared counts row; a review round simulated the prescription and found the canonical clean shape still extracted 0, because after the gated early return the verdict-prose count regex matched the clean shape's own `0 Medium+ findings` prose before the counts-row fallback. The criterion said "any separator shape"; the probe and canaries covered one shape. The fold grew a declared-count bypass arm plus a second extraction canary.
 
 **See also:** #246 (behavioral claims need a probe, not an absence-grep), #253 (generate exact expectations by running the prescribed transform).
+
+## 318. Close Markdown Fences By The CommonMark Rule And Fail Closed On Unclosed Fences
+
+**Principle:** Family G (data-loss observability) - a validator whose parser silently tolerates damaged input converts a corrupted corpus into a false-clean verdict.
+
+**Trigger:** any tool splits a Markdown corpus into blocks by scanning fence lines (``` / ~~~) before comparing, counting, or gating on the resulting blocks.
+
+**Rule:** (1) Close a fence only per the CommonMark rule: same fence character, closing run at least as long as the opener, nothing but whitespace after the run; an info string is legal only on the opening line. (2) An unclosed fence at EOF is a hard parse error (dedicated exit tier, message naming the file and opening line), never a clean pass and never silent truncation. (3) Pin both behaviors with tests: a stray standalone fence must not read clean, and an inner shorter fence inside a longer wrapper must not close the wrapper.
+
+**Why:** a duplicate-lesson scope validator split corpora on any fence-looking line; a stray standalone fence left the rest of the corpus outside every block, and the validator reported a clean pass on a damaged corpus. The false-clean direction is the worst failure mode for a gate: the commit it licenses is wrong, and nothing surfaces the damage.
+
+**Example:** a corpus file contained a stray ``` line; the old parser closed on it and skipped the remainder, returning the clean exit code on a damaged corpus. The rewrite pinned the closing rule and an unclosed-fence error tier; regression tests pin the stray-fence, inner-fence-under-longer-wrapper, and unclosed-fence shapes.
+
+**See also:** #72 (guards must fail closed when input is absent), #120 (re-measure mechanisms the docs call validated).

@@ -9,7 +9,7 @@ Follow `python_guidelines.md` (shared docs) for the validator script and its tes
 - Company guidelines master: cross-repo company guideline source of truth resolved from the `company_guidelines_master` facts key; canonical, repo mirrors are sync-only.
 - Project lessons corpus: the incident repo's `docs/maintenance/development_lessons.md` (project-level numbered lessons).
 - Witness: the short concrete incident example a project corpus may retain after the full rule is placed at a broader scope.
-- Placement receipt: temporary `learn`-run output stating the selected scope and why each broader scope was rejected (`learn` Step 1.2 item 5c).
+- Placement receipt: temporary `learn`-run output stating the selected scope and why each alternative scope was rejected (`learn` Step 1.2 item 5c; wording amended r3, see Task 3 amendment).
 - Scope audit: `done` Step 3 item 4a pre-commit check that a newly created or substantially edited project lesson is not a company-wide rule stored only at project level.
 - Duplicate full rule: near-verbatim rule body present in both the project lessons corpus and the company guidelines master.
 - Residual dependency: the material dependency on the service domain, module contract, repository architecture, or project-only operational behavior that keeps a rule project-specific (fork 4); every fork (4) placement receipt must state it.
@@ -144,7 +144,7 @@ expect_line "company-wide conventions are fork 2b" projects/.ai-playbook/develop
 expect_line "Pre-commit lesson scope audit" agents/skills/done/SKILL.md
 expect_line 'LESSON_SCOPE_SCRIPT:-${HOME}/.ai-playbook/scripts/check_lesson_scope.py' agents/skills/done/SKILL.md
 expect_line "do NOT silently commit the narrower placement" agents/skills/done/SKILL.md
-expect_line "is a tool failure, not a clean pass" agents/skills/done/SKILL.md
+expect_line "is a tool failure: stop, report the validator error" agents/skills/done/SKILL.md
 expect_line "must not move or duplicate lessons to reconcile placements" agents/skills/done/SKILL.md
 expect_line "Never commit a new or substantially edited project lesson whose scope audit" agents/skills/done/SKILL.md
 expect_line "or the Step 3 item 4a lesson scope audit" agents/skills/done/SKILL.md
@@ -168,24 +168,24 @@ Files:
 - `scripts/check_lesson_scope.py` *(new)*
 - `scripts/test_check_lesson_scope.py` *(new)*
 
-- [ ] `test_check_lesson_scope.py#test_verbatim_duplicate_flagged`; given a project corpus block and a company master block carrying the identical rule body, expects exit 1 and output naming both blocks
-- [ ] `test_check_lesson_scope.py#test_near_verbatim_duplicate_flagged`; given the same rule body differing in letter case, whitespace runs, and heading numbering, expects exit 1 and a `DUPLICATE:` output line naming both blocks
-- [ ] `test_check_lesson_scope.py#test_multiple_duplicates_each_reported`; given two distinct rule blocks in the project corpus each duplicated in the company master, expects exit 1 and two `DUPLICATE:` output lines, one per pair
-- [ ] `test_check_lesson_scope.py#test_project_only_rule_clean`; given a rule present only in the project corpus, expects exit 0
-- [ ] `test_check_lesson_scope.py#test_witness_pointer_clean`; given a project corpus entry that is a short pointer line to the company rule without its body, expects exit 0
-- [ ] `test_check_lesson_scope.py#test_temporary_note_no_false_positive`; given a short temporary session-note-style block sharing topic words but not the rule body with a company rule, expects exit 0
-- [ ] `test_check_lesson_scope.py#test_ecosystem_tier_out_of_comparison`; given the rule duplicated only against a third file (a language guidelines file) that is not passed as an argument, expects exit 0
-- [ ] `test_check_lesson_scope.py#test_missing_company_master_clean`; given a present corpus and an absent company master path, expects exit 0 with a warning line on stderr
-- [ ] `test_check_lesson_scope.py#test_missing_corpus_clean`; given an absent project corpus path, expects exit 0
-- [ ] `test_check_lesson_scope.py#test_usage_error_exit_two`; given fewer than two path arguments, expects exit 2 with usage on stderr
-- [ ] `test_check_lesson_scope.py#test_extra_argument_exit_two`; given three path arguments, expects exit 2 with usage on stderr
-- [ ] `test_check_lesson_scope.py#test_unreadable_corpus_exit_two`; given a corpus file that exists but is unreadable (created then `chmod 0o000`, restored in teardown; skip when running as root), expects exit 2 with an error line on stderr
-- [ ] `test_check_lesson_scope.py#test_unreadable_company_master_exit_two`; given a company master file that exists but is unreadable (created then `chmod 0o000`, restored in teardown; skip when running as root), expects exit 2 with an error line on stderr
-- [ ] `test_check_lesson_scope.py#test_short_identical_body_stays_clean`; given a corpus block and a company master block with identical normalized bodies but each under `MIN_RULE_WORDS` words, expects exit 0 (short blocks are witness pointers by design)
-- [ ] Run → expect RED: `python3 -m unittest discover -s scripts -p 'test_check_lesson_scope.py'` (the test module and the script do not exist yet, discovery errors)
-- [ ] Write `scripts/check_lesson_scope.py` (minimal implementation of the contract below)
-- [ ] Run → expect GREEN: `python3 -m unittest discover -s scripts -p 'test_check_lesson_scope.py'`
-- [ ] Commit: `feat: add lesson scope duplicate validator`
+- [x] `test_check_lesson_scope.py#test_verbatim_duplicate_flagged`; given a project corpus block and a company master block carrying the identical rule body, expects exit 1 and output naming both blocks
+- [x] `test_check_lesson_scope.py#test_near_verbatim_duplicate_flagged`; given the same rule body differing in letter case, whitespace runs, and heading numbering, expects exit 1 and a `DUPLICATE:` output line naming both blocks
+- [x] `test_check_lesson_scope.py#test_multiple_duplicates_each_reported`; given two distinct rule blocks in the project corpus each duplicated in the company master, expects exit 1 and two `DUPLICATE:` output lines, one per pair
+- [x] `test_check_lesson_scope.py#test_project_only_rule_clean`; given a rule present only in the project corpus, expects exit 0
+- [x] `test_check_lesson_scope.py#test_witness_pointer_clean`; given a project corpus entry that is a short pointer line to the company rule without its body, expects exit 0
+- [x] `test_check_lesson_scope.py#test_temporary_note_no_false_positive`; given a short temporary session-note-style block sharing topic words but not the rule body with a company rule, expects exit 0
+- [x] `test_check_lesson_scope.py#test_ecosystem_tier_out_of_comparison`; given the rule duplicated only against a third file (a language guidelines file) that is not passed as an argument, expects exit 0
+- [x] `test_check_lesson_scope.py#test_missing_company_master_clean`; given a present corpus and an absent company master path, expects exit 0 with a warning line on stderr
+- [x] `test_check_lesson_scope.py#test_missing_corpus_clean`; given an absent project corpus path, expects exit 0
+- [x] `test_check_lesson_scope.py#test_usage_error_exit_two`; given fewer than two path arguments, expects exit 2 with usage on stderr
+- [x] `test_check_lesson_scope.py#test_extra_argument_exit_two`; given three path arguments, expects exit 2 with usage on stderr
+- [x] `test_check_lesson_scope.py#test_unreadable_corpus_exit_two`; given a corpus file that exists but is unreadable (created then `chmod 0o000`, restored in teardown; skip when running as root), expects exit 2 with an error line on stderr
+- [x] `test_check_lesson_scope.py#test_unreadable_company_master_exit_two`; given a company master file that exists but is unreadable (created then `chmod 0o000`, restored in teardown; skip when running as root), expects exit 2 with an error line on stderr
+- [x] `test_check_lesson_scope.py#test_short_identical_body_stays_clean`; given a corpus block and a company master block with identical normalized bodies but each under `MIN_RULE_WORDS` words, expects exit 0 (short blocks are witness pointers by design)
+- [x] Run → expect RED: `python3 -m unittest discover -s scripts -p 'test_check_lesson_scope.py'` (the test module and the script do not exist yet, discovery errors)
+- [x] Write `scripts/check_lesson_scope.py` (minimal implementation of the contract below)
+- [x] Run → expect GREEN: `python3 -m unittest discover -s scripts -p 'test_check_lesson_scope.py'`
+- [x] Commit: `feat: add lesson scope duplicate validator`
 
 Validator contract (the full behavior the implementation must deliver):
 
@@ -205,57 +205,69 @@ Files:
 - `agents/skills/generalize/SKILL.md` (same change set; `learn` Step 1.2 item 5b mandates updating every living mirror claim in the same edit)
 - `projects/.ai-playbook/development_lessons.md` (same change set; lesson 177 See also line)
 
-- [ ] In Step 1.2 item 4, replace `Four-way fork (resolve` with `Five-branch fork (resolve`, keeping the rest of the line unchanged
-- [ ] In Step 1.2 item 3b, replace both `four-way fork` occurrences with `five-branch fork` (the parenthetical and the "Item 4's ... is judgment" sentence)
-- [ ] Insert new branch bullet between the (2) and (3) bullets of the item 4 fork:
+- [x] In Step 1.2 item 4, replace `Four-way fork (resolve` with `Five-branch fork (resolve`, keeping the rest of the line unchanged
+- [x] In Step 1.2 item 3b, replace both `four-way fork` occurrences with `five-branch fork` (the parenthetical and the "Item 4's ... is judgment" sentence)
+- [x] Insert new branch bullet between the (2) and (3) bullets of the item 4 fork:
 
 ```markdown
    - **(2b) Company-wide convention -> `company_guidelines_master` (facts key)**: a do/do-not rule or convention shared by repositories of the same company or organization because they perform the same kind of work (same integration responsibility, shared platform or delivery conventions), even when their product domains differ and the rule is not universal across organizations. Place the **full rule** in the company guidelines master and keep at most a concise project witness plus a pointer in the incident repo's project corpus; sync repo mirrors after editing the master (Company rule workflow, Step 2). Add a one-line cross-reference in instruction files per the Step 6 placement ladder. **Sibling search is required before choosing fork (4)**: grep the company guidelines master for the lesson's topic keywords first; a hit is strong evidence the company scope applies.
 ```
 
-- [ ] Insert new item between items 4 and 4b:
+- [x] Insert new item between items 4 and 4b:
 
 ```markdown
 4a. **Separate the generalized rule from its incident witness (required for every candidate lesson).** The generalized rule determines placement; the incident witness (the concrete failure, files, and reproduction) may remain in the project corpus as a short example or pointer. Never let a long witness narrative justify a narrower placement: placement follows the rule, not the story.
 ```
 
-- [ ] Insert new item after item 4b:
+- [x] Insert new item after item 4b:
 
 ```markdown
 4c. **Company-portability gate (required before fork (4) full project lesson).** Ask: "Would this rule guide another repository in the same organization that performs the same kind of work, even if its product domain differs?" If **yes**, you are in fork **(2b)**: write the full rule to `company_guidelines_master` first, keep only a concise project witness and pointer in the project corpus, and sync repo mirrors. If you almost chose fork (4) because the incident happened in one company repo, re-run this gate after the 4b stack-portability gate. Anti-pattern: storing a company-wide integration convention as a full project lesson because "it is not universal across every possible project" (that is fork (2b), not fork (4)). A team or infrastructure ownership boundary (which team owns which tickets, components, or delivery stages) binds sibling repos with the same responsibility, so it is company scope, not project scope. If no, continue down the ladder: fork (3) when the witness is the reusable value, fork (4) only with a stated residual dependency.
 ```
 
-- [ ] In Step 1.2 item 5, change `(fork 1 or 2)` to `(fork 1, 2, or 2b)` keeping the rest of the sentence unchanged
-- [ ] Insert new item after item 5b:
+- [x] In Step 1.2 item 5, change `(fork 1 or 2)` to `(fork 1, 2, or 2b)` keeping the rest of the sentence unchanged
+- [x] Insert new item after item 5b:
 
 ```markdown
 5c. **Placement receipt (required in the learn run output).** For every placed lesson, state the selected scope and why each broader scope was rejected (one line per lesson; for example "fork (2b): company-wide convention; not universal (org-specific), not fork (4) (guides sibling repos with the same responsibility)"). Evaluate the residual dependency and the canonical-destination resolution BEFORE executing item 5's corpus write: item 5c conditions the write, it does not follow it. For a fork (4) placement the receipt must also state the residual dependency that keeps the rule project-specific (a material dependency on the service domain, module contract, repository architecture, or project-only operational behavior). If no residual dependency remains, do not write the full lesson to the project corpus: re-route to fork (2b) or fork (3). When the rule is company-scope but `company_guidelines_master` does not resolve (personal repo), report the missing canonical destination as a blocking placement question instead of writing a full project lesson. The receipt is temporary run output; it need not become part of the canonical lesson, but `done`'s pre-commit scope audit uses it as placement evidence.
 ```
 
-- [ ] In the Completion Checklist, insert a new bullet directly after the bullet beginning `incident-repo == cwd-repo verified`:
+- [x] In the Completion Checklist, insert a new bullet directly after the bullet beginning `incident-repo == cwd-repo verified`:
 
 ```markdown
 - company-portability gate (Step 1.2 item 4c) ran before every project-specific placement, and the sibling search of `company_guidelines_master` ran before every full project lesson; a placement receipt (item 5c), stating the residual dependency for every fork (4) placement, was emitted for every placed lesson
 ```
 
-- [ ] In `agents/skills/generalize/SKILL.md` "With learn" section, replace the routing fork intro `(mirrors \`learn\` Step 1.2 item 4 four-way fork + 4b)` with `(mirrors \`learn\` Step 1.2 item 4 five-branch fork + 4b/4c)`
-- [ ] In the same section, insert entry between listed entries 2 and 3:
+- [x] In `agents/skills/generalize/SKILL.md` "With learn" section, replace the routing fork intro `(mirrors \`learn\` Step 1.2 item 4 four-way fork + 4b)` with `(mirrors \`learn\` Step 1.2 item 4 five-branch fork + 4b/4c)`
+- [x] In the same section, insert entry between listed entries 2 and 3:
 
 ```markdown
 2b. **Company-wide convention** -> `company_guidelines_master` (facts key): a do/do-not rule shared by repositories of the same company or organization because they perform the same kind of work, even when product domains differ and the rule is not universal. Full rule in the company master; incident repos keep at most a concise witness pointer. Require the sibling search and company-portability gate (`learn` 4c) before choosing this over fork (4).
 ```
 
-- [ ] In the same section entry 4, extend the sentence beginning `Require a residual-domain pass` so its gate list reads `... the stack-portability gate (`learn` 4b) and the company-portability gate (`learn` 4c) before choosing this over fork (2)`, and append the follow-on sentence: `a fork (4) placement records its residual dependency in the placement receipt (`learn` Step 1.2 item 5c).`; the sentence is wrapped across two source lines in the file, so locate it by content, not by line
-- [ ] In `projects/.ai-playbook/development_lessons.md` lesson #177, update its See also line (the one citing `learn` SKILL Step 1.2 item 4): replace `the four-way fork` with `the five-branch fork`, and insert `company-wide conventions are fork 2b, ` immediately before `stack-portable precepts are fork 2`, keeping the rest of the line unchanged
-- [ ] Verification: `grep -oi "five-branch fork" agents/skills/learn/SKILL.md | wc -l` reports at least 3 and `grep -ci "four-way" agents/skills/learn/SKILL.md agents/skills/generalize/SKILL.md projects/.ai-playbook/development_lessons.md` reports 0 for all three files
-- [ ] Commit: `skills: add company-wide branch to learn scope fork with mirror fan-out`
+- [x] In the same section entry 4, extend the sentence beginning `Require a residual-domain pass` so its gate list reads `... the stack-portability gate (`learn` 4b) and the company-portability gate (`learn` 4c) before choosing this over fork (2)`, and append the follow-on sentence: `a fork (4) placement records its residual dependency in the placement receipt (`learn` Step 1.2 item 5c).`; the sentence is wrapped across two source lines in the file, so locate it by content, not by line
+- [x] In `projects/.ai-playbook/development_lessons.md` lesson #177, update its See also line (the one citing `learn` SKILL Step 1.2 item 4): replace `the four-way fork` with `the five-branch fork`, and insert `company-wide conventions are fork 2b, ` immediately before `stack-portable precepts are fork 2`, keeping the rest of the line unchanged
+- [x] Verification: `grep -oi "five-branch fork" agents/skills/learn/SKILL.md | wc -l` reports at least 3 and `grep -ci "four-way" agents/skills/learn/SKILL.md agents/skills/generalize/SKILL.md projects/.ai-playbook/development_lessons.md` reports 0 for all three files
+- [x] Commit: `skills: add company-wide branch to learn scope fork with mirror fan-out`
 
 ### Task 3: done pre-commit lesson scope audit
+
+> **Amendment (2026-09-12, Phase 3 r1-r2 review folds).** The certified verbatim insert block below is the byte-level record as authored; the live `done` Step 3 item 4a text now diverges by these accepted post-review deltas:
+> - explicit check order in item 4a.1: resolve `company_guidelines_master` first (trivial pass when absent), then `test -f` the script (warn and continue when absent), then run with stderr captured;
+> - any WARNING line on stderr is treated as a placement-path resolution failure (stop before commit and report the unresolved path, like a tool failure), not a clean pass;
+> - exit 1 with no `DUPLICATE:` line, and any exit code other than 0/1/2 (including interpreter codes), is treated as a tool failure per the exit 2 path;
+> - a mirror-sync precondition clause was added in r1 and removed in r2 as unverifiable; the canonical-master pin (added in r1) remains;
+> - item 2's conjunction ("no receipt and the scope cannot be established") was widened to a disjunction ("no receipt, or its scope cannot be established");
+> - the validator's matching runs difflib.SequenceMatcher with `autojunk=False` (Task 1 contract, documented in the script docstring);
+> - the generalize entry-4 alternates now name fork (2) or fork (2b) (Task 2 mirror, fixed in r2);
+> - the r2 rewrite of the 4a.1 tool-failure sentence retired the old probe string "is a tool failure, not a clean pass" (it survives only inside the certified fenced block above), so the Validation Commands probe was updated to the live wording "is a tool failure: stop, report the validator error" (r3 fold F1);
+> - learn Step 1.2 item 5c changed "why each broader scope was rejected" to "why each alternative scope was rejected" (one-word delta against the certified Task 2 block, r3 fold F8); the certified block keeps the original wording as the byte-level record;
+> - the block model is fence-aware (a `#`-prefixed line inside an open ```/~~~ fence is body text, not a heading boundary; pinned by fence tests) and an unclosed fence is a tool failure (exit 2), amendment r4.
 
 Files:
 - `agents/skills/done/SKILL.md`
 
-- [ ] Insert new step between Step 3 item 4 and item 4b:
+- [x] Insert new step between Step 3 item 4 and item 4b:
 
 ````markdown
 4a. **Pre-commit lesson scope audit (when the project lessons corpus is touched).** If the session's staged or unstaged diff creates or substantially edits the project lessons corpus (`docs/maintenance/development_lessons.md`, or `PROJECT_CORPUS_REL` from `lessons_recall.py`), audit scope BEFORE staging it:
@@ -269,19 +281,19 @@ Files:
    4. **Commit boundary:** the project witness and the company guidelines change are committed in the same pass ONLY when both were intentionally produced by the same workflow (`learn` placed them deliberately). done must not move or duplicate lessons to reconcile placements.
 ````
 
-- [ ] In the Step 6 report wording, extend the line `If `blocked` at Step 0 or learn: state why and what the user should run (`stale-clean`, fix corpus, retry).` to `If `blocked` at Step 0, learn, or the Step 3 item 4a lesson scope audit: state why and what the user should run (`stale-clean`, fix corpus, classify the duplicated lesson, retry).`
-- [ ] In the hard rules list near the end of the skill, insert directly after the rule beginning `Never skip a session-touched, non-gitignored project lessons corpus`:
+- [x] In the Step 6 report wording, extend the line `If `blocked` at Step 0 or learn: state why and what the user should run (`stale-clean`, fix corpus, retry).` to `If `blocked` at Step 0, learn, or the Step 3 item 4a lesson scope audit: state why and what the user should run (`stale-clean`, fix corpus, classify the duplicated lesson, retry).`
+- [x] In the hard rules list near the end of the skill, insert directly after the rule beginning `Never skip a session-touched, non-gitignored project lessons corpus`:
 
 ```markdown
 - Never commit a new or substantially edited project lesson whose scope audit (Step 3 item 4a) has not passed.
 ```
 
-- [ ] Verification: `grep -c "check_lesson_scope.py" agents/skills/done/SKILL.md` reports at least 1 and the Step 3 item sequence reads 4, 4a, 4b
-- [ ] Commit: `skills: add pre-commit lesson scope audit to done`
+- [x] Verification: `grep -c "check_lesson_scope.py" agents/skills/done/SKILL.md` reports at least 1 and the Step 3 item sequence reads 4, 4a, 4b
+- [x] Commit: `skills: add pre-commit lesson scope audit to done`
 
 ### Task 4: Final validation and hygiene
 
 Files: none expected (residual fixes land in the files above)
 
-- [ ] Run the full Validation Commands block from the repo root → expect every command green
-- [ ] Commit residual validation fixes, if any: `fix: lesson scope audit residue`
+- [x] Run the full Validation Commands block from the repo root → expect every command green
+- [x] Commit residual validation fixes, if any: `fix: lesson scope audit residue`

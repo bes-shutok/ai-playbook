@@ -530,6 +530,15 @@ After learn and stash steps complete:
    git rm --cached <file>
    ```
    Gitignored files belong on the `docs` branch only (handled in Step 2), not on the working feature branch.
+4a. **Pre-commit lesson scope audit (when the project lessons corpus is touched).** If the session's staged or unstaged diff creates or substantially edits the project lessons corpus (`docs/maintenance/development_lessons.md`, or `PROJECT_CORPUS_REL` from `lessons_recall.py`), audit scope BEFORE staging it:
+   1. **Mechanical duplicate check.** First resolve the company guidelines master (`company_guidelines_master` in facts); if it does not resolve (personal repo), the mechanical check passes trivially (do not run the script). Otherwise verify the validator script file exists (e.g. `test -f` on the resolved path); if it is absent, print a one-line warning and continue with the placement-evidence check (cold-start; do not block the session on a missing optional validator). Only when the file exists, run the validator with stderr captured (with `$PROJECT_CORPUS` and `$COMPANY_MASTER` set to the resolved corpus and master paths; override the script path via `LESSON_SCOPE_SCRIPT` for local testing only):
+```bash
+python3 "${LESSON_SCOPE_SCRIPT:-${HOME}/.ai-playbook/scripts/check_lesson_scope.py}" "$PROJECT_CORPUS" "$COMPANY_MASTER"
+```
+       Outcome semantics: exit 0 with no WARNING line on stderr = clean pass, covering rules of at least 25 normalized words (the witness-pointer floor: shorter blocks are presumed witness pointers and never match). Exit 1 with at least one `DUPLICATE:` line = a full rule is duplicated across the project corpus and the company master (handled by item 3 below). Any WARNING line on stderr, any exit code other than 0 or 1 (including exit 2 and interpreter codes such as 126 or 127), or exit 1 with no `DUPLICATE:` line, is a tool failure: stop, report the validator error, release the lock per Step 6, and return blocked; do not stage the corpus. The validator is sized for prose corpora; an unusually long run signals a degenerate (for example fence-damaged or headingless) corpus and is treated as a tool failure per the sentence above. `$COMPANY_MASTER` must resolve to the canonical master from facts, never a repo mirror.
+   2. **Placement-evidence check.** Confirm the learn run's placement receipt (`learn` Step 1.2 item 5c) covers every new or substantially edited lesson. If a lesson has no receipt, or its scope cannot be established from the receipt, stop before commit and request classification from the user; do NOT silently commit the narrower placement. For a fork (4) lesson, the receipt must state the residual dependency; a fork (4) receipt with no residual dependency stops before commit for reclassification, exactly like a missing receipt.
+   3. **On exit 1 with at least one `DUPLICATE:` line (duplicate full rule):** stop before commit, release the lock per Step 6, and return blocked with the validator output; ask the user to classify the lesson (company master vs project corpus). Never move, rewrite, or duplicate lessons automatically.
+   4. **Commit boundary:** the project witness and the company guidelines change are committed in the same pass ONLY when both were intentionally produced by the same workflow (`learn` placed them deliberately). done must not move or duplicate lessons to reconcile placements.
 4b. **Session-touched project lessons corpus (non-ignored):** After Step 1 (`learn`), if this session created or updated the project lessons file (`docs/maintenance/development_lessons.md`, or `PROJECT_CORPUS_REL` from `lessons_recall.py`) and `git check-ignore` does **not** match it, **stage and commit it on the feature branch** with the other session changes. Untracked (`??`) is not a skip reason. Syncing the same path to the orphan `docs` branch in Step 2 does **not** replace the feature-branch commit. Only gitignored corpora stay docs-branch-only.
 5. Stage relevant non-ignored files (including 4b when it applies). Prefer adding specific files by name; never use `git add -A` or `git add .` unless the user explicitly requests it.
 6. Write a concise commit message. If there is a story key, prefix with `[<STORY-KEY>]`; otherwise use a plain descriptive subject. Focus on the "why" not the "what".
@@ -627,7 +636,7 @@ If release fails (token mismatch, env missing), run `status` from the project ro
 - Project repo: commit hash(es) created, or **working tree clean** at `HEAD` (include `git log -1 --oneline`).
 - Skills / shared docs repos: commits created or none.
 - Lock: confirm `status` shows **free** after Step 6.
-- If `blocked` at Step 0 or learn: state why and what the user should run (`stale-clean`, fix corpus, retry).
+- If `blocked` at Step 0, learn, or the Step 3 item 4a lesson scope audit: state why and what the user should run (`stale-clean`, fix corpus, classify the duplicated lesson, retry).
 
 ## Integration Points
 
@@ -658,6 +667,7 @@ Step 2.62 sweeps `{tmp_dir}` entries whose owning plan archived (plans Plan Life
 - Always verify that new or revised reusable docs, reference material, and explanatory artifacts added in the session are referenced from instructions or related canonical docs where future agents will need them.
 - Never stage or commit a file that is gitignored, even if it appears in `git diff` (it was previously force-tracked). Use `git rm --cached` to remove it from tracking; do not commit it on the feature branch.
 - Never skip a session-touched, non-gitignored project lessons corpus (`development_lessons.md`) just because it is untracked or already synced to the orphan `docs` branch; commit it on the feature branch (Step 3 item 4b).
+- Never commit a new or substantially edited project lesson whose scope audit (Step 3 item 4a) has not passed.
 - Never add `Co-Authored-By:` or `Co-authored-by:` trailers or use `git commit --trailer` for agent attribution. See user `AGENTS.md` (Git Commit Trailer Policy). Disable automatic agent attribution in IDE settings when present.
 - Never use `--no-verify`.
 - Never commit secrets, PII files (`.env`, credential files), or personal/org-specific information into public repositories.

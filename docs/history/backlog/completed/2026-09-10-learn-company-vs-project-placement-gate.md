@@ -1,6 +1,12 @@
 # Learn: make company-versus-project placement explicit
 
-Status: open
+Status: done
+
+Completion note (2026-09-12): rider folded into the learn-company-scope-placement plan
+(no standalone plan); residual-dependency receipt contract (5c), blocking placement
+question, 4c ownership-boundary sentences, generalize entry-4 residual record, done
+no-residual stop, and the rider acceptance probes all landed and are green in the plan's
+Validation block at execution exit (see docs/plans/completed/2026-09-09-learn-company-scope-placement.md).
 Workflow: backlog
 Source: anonymized Learn placement review
 Severity: Medium

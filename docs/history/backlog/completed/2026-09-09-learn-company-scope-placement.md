@@ -1,6 +1,12 @@
 # Backlog: learn must detect company-wide lesson scope
 
-Status: open
+Status: done
+
+Completion note (2026-09-12): executed via the learn-company-scope-placement plan
+(docs/plans/completed/2026-09-09-learn-company-scope-placement.md). Coverage per the
+plan's Evaluation Criteria, Gist rider acceptance map, and Validation probes (certified
+r11 pre-execution; tasks 1-4 landed and the full Validation block green at exit; Phase 3
+rounds r1-r5 clean exit with residuals backlogged separately).
 Workflow: backlog
 Priority: Medium
 Created: 2026-09-09
