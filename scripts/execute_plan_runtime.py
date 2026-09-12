@@ -11,25 +11,24 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import fnmatch
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping
+from pathlib import Path, PurePosixPath
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 import runtime_capabilities as capabilities
+from runtime_capabilities import bounded_evidence
 
 
 STATUSES = {"success", "contract-violation", "blocked", "aborted", "error"}
-MAX_EVIDENCE_BYTES = 4096
-MAX_EVIDENCE_ITEM_BYTES = 512
 SCHEMA_VERSION = 1
 ALLOWED_OPERATION_KINDS = {
     "repository-task",
@@ -46,7 +45,21 @@ GATED_OPERATION_KINDS = {
     "push",
 }
 SHELL_MARKERS = (";", "&&", "||", "|", "`", "$(", "${", "\n", "\r")
-_LOCK_LOCAL = threading.local()
+# Ambient worktree noise tolerated only on the pre-launch startup path: a
+# startup blocked purely by these untracked entries is resumable after
+# cleanup. Post-launch paths never consult this list; launch-record presence,
+# not file mtime, separates ambient noise from worker-caused changes there.
+AMBIENT_NOISE_PATTERNS = (
+    ".DS_Store",
+    ".DS_Store?",
+    "._.DS_Store",
+    ".#*",  # editor interchange / lock files
+    "#*#",
+    "*.swp",
+    "*.swo",
+    "*.swpx",
+    "*~",
+)
 
 
 @dataclass(frozen=True)
@@ -91,6 +104,11 @@ def _safe_relative_path(repo_root: Path, value: str) -> str:
     resolved = (repo_root / candidate).resolve()
     if resolved != repo_root and repo_root not in resolved.parents:
         raise ValueError("path escapes repository root")
+    if value.endswith("/") or resolved.is_dir():
+        # Directory prefix matching is explicitly out of scope: a
+        # directory-valued entry silently never matches a file-level witness,
+        # so fail closed with the entry named for actionable remediation.
+        raise ValueError(f"allowed path names a directory; list files explicitly instead of a directory prefix: {value}")
     return resolved.relative_to(repo_root).as_posix()
 
 
@@ -120,33 +138,6 @@ def validate_action_envelope(
 
 def _now() -> float:
     return time.time()
-
-
-def _redact(value: str) -> str:
-    value = re.sub(r"(?i)(token|password|secret|api[_-]?key)[\"']?\s*[:=]\s*[\"']?([^\s,;\"'}]+)", r"\1=<redacted>", value)
-    value = re.sub(r"(?i)bearer\s+[A-Za-z0-9._-]+", "Bearer <redacted>", value)
-    return value
-
-
-def bounded_evidence(items: Any, limit: int = MAX_EVIDENCE_BYTES) -> list[str]:
-    """Return bounded, redacted evidence suitable for durable state."""
-
-    if isinstance(items, str):
-        items = [items]
-    if not isinstance(items, (list, tuple)):
-        items = [repr(items)]
-    result: list[str] = []
-    used = 0
-    for item in items:
-        text = _redact(str(item))[:MAX_EVIDENCE_ITEM_BYTES]
-        remaining = limit - used
-        if remaining <= 0:
-            break
-        text = text[:remaining]
-        if text:
-            result.append(text)
-            used += len(text)
-    return result or ["evidence unavailable"]
 
 
 def _safe_write_json(path: Path, value: Mapping[str, Any]) -> None:
@@ -203,7 +194,7 @@ def create_manifest(
             "state": capabilities_data.get(name, "unsupported"),
             "fallback": profile.get("fallback", "No runtime profile was selected; use explicit operator recovery."),
         }
-        for name in ("parent_continuation", "final_response", "resume")
+        for name in sorted(capabilities.CAPABILITY_NAMES)
     }
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -224,15 +215,16 @@ def create_manifest(
 
 @contextlib.contextmanager
 def _manifest_lock(path: Path, owner: str) -> Iterator[bool]:
-    """Use an advisory lock whose kernel lease survives stale lock files."""
+    """Use an advisory lock whose kernel lease survives stale lock files.
+
+    The lock is deliberately non-reentrant: a same-thread nested acquisition
+    yields ``acquired=False`` instead of silently extending a held lease, so
+    every nested acquisition site must restructure around unlocked adapter
+    I/O and freshly re-read manifests after re-acquisition.
+    """
 
     lock_path = Path(f"{path}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    key = str(path.resolve())
-    held = getattr(_LOCK_LOCAL, "held", set())
-    if key in held:
-        yield True
-        return
     fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
     acquired = False
     try:
@@ -245,12 +237,9 @@ def _manifest_lock(path: Path, owner: str) -> Iterator[bool]:
         os.ftruncate(fd, 0)
         os.write(fd, f"{owner}\n".encode())
         os.fsync(fd)
-        held.add(key)
-        _LOCK_LOCAL.held = held
         yield True
     finally:
         if acquired:
-            held.discard(key)
             fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
@@ -261,8 +250,7 @@ def _locked_mutation(method: Callable[..., Any]) -> Callable[..., Any]:
     def wrapped(self: "RuntimeDriver", *args: Any, **kwargs: Any) -> Any:
         with _manifest_lock(self.manifest_path, self.owner) as acquired:
             if not acquired:
-                manifest = load_manifest(self.manifest_path)
-                return _outcome("blocked", "stale-claim", ["manifest mutation is held by another owner"], "repository-task", "mutation:conflict", manifest.get("generation", 0), "resumable-conflict")
+                return _mutation_unavailable(self, "mutation:conflict")
             return method(self, *args, **kwargs)
 
     wrapped.__name__ = method.__name__
@@ -297,6 +285,114 @@ def _outcome(
     }
 
 
+@dataclass(frozen=True)
+class _RetryRelaunch:
+    """Marker: a retry launch must run after the manifest lock is released."""
+
+    claim: Mapping[str, Any]
+    task: Mapping[str, Any]
+    retry_policy: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class _AdapterWindow:
+    """Marker: the adapter resume runs after the manifest lock is released."""
+
+    task: Mapping[str, Any]
+    claim: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class _ContinueParent:
+    """Marker: resume delegates to the parent-continuation path."""
+
+
+@dataclass(frozen=True)
+class _ReconcileCommit:
+    """Marker: commit reconciliation runs after the manifest lock is released."""
+
+    task_id: str
+    commit_identity: str
+    lookup: Callable[[str], bool]
+    token: Any
+    generation: Any
+
+
+def _stale_claim_outcome(
+    checkpoint_identity: Any,
+    generation: Any,
+    evidence: Any,
+    action_scope: str = "repository-task",
+    recovery_action: str = "preserve-and-reconcile",
+) -> dict[str, Any]:
+    """Shared resumable stale-claim outcome for contention and progression guards."""
+
+    return _outcome(
+        "blocked",
+        "stale-claim",
+        evidence,
+        action_scope,
+        str(checkpoint_identity),
+        int(generation),
+        recovery_action,
+    )
+
+
+def _abort_outcome(
+    identity: Any,
+    generation: Any,
+    evidence: Any,
+    action_scope: str = "repository-task",
+    **extra: Any,
+) -> dict[str, Any]:
+    """Shared aborted/explicit-abort envelope: preserve-and-stop, never resumable."""
+
+    return _outcome(
+        "aborted",
+        "explicit-abort",
+        evidence,
+        action_scope,
+        str(identity),
+        int(generation),
+        "preserve-and-stop",
+        **extra,
+    )
+
+
+def _claim_progressed_past_receipt(
+    task: Mapping[str, Any] | None,
+    claim: Mapping[str, Any] | None,
+    *,
+    include_terminal: bool = False,
+) -> bool:
+    """True when a stale non-success receipt must not regress the durable state.
+
+    The core statuses (``done-pending``, ``commit-pending``, ``aborted``) and a
+    closed claim are shared by every emission site: a receipt arriving for an
+    aborted task or claim must never persist. ``include_terminal``
+    additionally covers ``checkpointed``/``complete`` for the blocked-persist
+    path, which must never overwrite a terminal task.
+    """
+
+    if (claim or {}).get("state") == "closed":
+        return True
+    statuses: set[str] = {"done-pending", "commit-pending", "aborted"}
+    if include_terminal:
+        statuses |= {"checkpointed", "complete"}
+    return task is not None and task.get("status") in statuses
+
+
+def _mutation_unavailable(driver: "RuntimeDriver", checkpoint_identity: str, action_scope: str = "repository-task") -> dict[str, Any]:
+    manifest = load_manifest(driver.manifest_path)
+    return _stale_claim_outcome(
+        checkpoint_identity,
+        manifest.get("generation", 0),
+        ["manifest mutation is held by another owner"],
+        action_scope,
+        "resumable-conflict",
+    )
+
+
 class RuntimeDriver:
     """Own durable task transitions; never owns commits."""
 
@@ -319,31 +415,72 @@ class RuntimeDriver:
         self.clock = clock
         manifest = load_manifest(self.manifest_path)
         manifest_owner = manifest.get("owner")
+        self._explicit_owner = owner is not None
         if owner is not None:
             self.owner = owner
         elif isinstance(manifest_owner, str) and manifest_owner.strip():
             # Derive the owner from the machine manifest so separate driver
             # processes sharing one manifest also share one owner identity.
+            # Provisional: re-resolved under the manifest lock below so two
+            # first constructions on a fresh manifest commit exactly one
+            # owner identity.
             self.owner = manifest_owner
         else:
             self.owner = f"runtime-{uuid.uuid4().hex}"
         if plan_slug and manifest.get("plan_slug") != plan_slug:
             raise ValueError("manifest plan slug mismatch")
         self.plan_slug = str(manifest["plan_slug"])
-        self._refresh_capability_receipts()
+        self._resolve_owner_and_receipts()
 
-    def _refresh_capability_receipts(self) -> None:
+    def _resolve_owner_and_receipts(self) -> None:
+        """Commit owner identity and capability receipts under the manifest lock.
+
+        Owner resolution and the receipt refresh run inside the locked
+        section: when two first constructions race on a fresh manifest, the
+        loser re-reads the manifest under the lock and adopts the winner's
+        committed owner instead of silently failing every later owner fence.
+        When the lock is contended at construction, the driver makes one
+        best-effort unlocked re-read and adopts a committed owner if present;
+        a manifest with no committed owner (or a failed re-read) is a
+        fail-closed construction error naming the contention, never a
+        silently kept provisional identity that would miss every later owner
+        fence. A profile-less construction (for example a CLI invocation
+        without ``--runtime``) skips the receipt write so durable capability
+        receipts are never downgraded to ``unsupported``, while the locked
+        owner initialization still persists ``manifest["owner"]``.
+        """
+
         with _manifest_lock(self.manifest_path, self.owner) as acquired:
             if not acquired:
+                # Adoption or fail-closed: an unlocked read is safe here
+                # because nothing is written and the adopted value only ever
+                # converges two racers onto the winner's committed identity.
+                if self._explicit_owner:
+                    return
+                contention_error: Exception | None = None
+                try:
+                    contended = load_manifest(self.manifest_path)
+                except (OSError, ValueError) as exc:
+                    contention_error = exc
+                    contended = None
+                committed = contended.get("owner") if contended else None
+                if not (isinstance(committed, str) and committed.strip()):
+                    raise ValueError(f"manifest lock contended at construction; no committed owner to adopt: {self.manifest_path}") from contention_error
+                self.owner = committed
                 return
             manifest = load_manifest(self.manifest_path)
-            manifest.setdefault("owner", self.owner)
-            capabilities_data = dict(self.profile.get("capabilities", {}))
-            receipts = manifest.setdefault("capabilities", {})
-            fallback = self.profile.get("fallback", "Use the durable receipt and parent continuation.")
-            for name in ("parent_continuation", "final_response", "resume"):
-                state = capabilities_data.get(name, "unsupported")
-                receipts[name] = {"state": state, "fallback": fallback}
+            committed_owner = manifest.get("owner")
+            if not self._explicit_owner and isinstance(committed_owner, str) and committed_owner.strip():
+                self.owner = committed_owner
+            else:
+                manifest.setdefault("owner", self.owner)
+            if self.profile:
+                capabilities_data = dict(self.profile.get("capabilities", {}))
+                receipts = manifest.setdefault("capabilities", {})
+                fallback = self.profile.get("fallback", "Use the durable receipt and parent continuation.")
+                for name in sorted(capabilities.CAPABILITY_NAMES):
+                    state = capabilities_data.get(name, "unsupported")
+                    receipts[name] = {"state": state, "fallback": fallback}
             self._save(manifest)
 
     def _save(self, manifest: dict[str, Any]) -> None:
@@ -438,12 +575,20 @@ class RuntimeDriver:
             policy_token=token,
         )
 
-    def authorize_action(self, action_scope: str, path: str | None = None) -> dict[str, Any]:
-        """Default-deny operations outside repository-local continuation."""
+    def authorize_action(self, action_scope: str, path: str | None = None, manifest: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Default-deny operations outside repository-local continuation.
+
+        Callers inside an already-loaded checkpoint cycle pass the loaded
+        manifest through so authorization triggers no per-call manifest
+        re-read.
+        """
 
         scope = str(action_scope or "")
         lowered = scope.lower()
-        generation = load_manifest(self.manifest_path).get("generation", 0)
+        if manifest is not None:
+            generation = manifest.get("generation", 0)
+        else:
+            generation = load_manifest(self.manifest_path).get("generation", 0)
         if scope in GATED_OPERATION_KINDS or any(term in lowered for term in GATED_OPERATION_KINDS):
             return self._policy_block("approval-required", [f"action_scope={scope}"], generation)
         if scope not in ALLOWED_OPERATION_KINDS and not scope.startswith("repository-task:"):
@@ -475,7 +620,7 @@ class RuntimeDriver:
             result = capabilities.normalize_result(raw, int(self.profile.get("retry_budget", 2)))
             result["evidence"] = bounded_evidence(result["evidence"])
             result["resume_allowed"] = bool(result["resume_allowed"])
-            if result["action_scope"].startswith("external") or not self.authorize_action(result["action_scope"])["status"] == "success":
+            if result["action_scope"].startswith("external") or not self.authorize_action(result["action_scope"], manifest=manifest)["status"] == "success":
                 return _outcome("blocked", "approval-required", result["evidence"] + [result["action_scope"], f"action_scope={result['action_scope']}"], result["action_scope"], result["checkpoint_identity"], result["generation"], "preserve-and-await-approval")
             task_id = self._task_id_from_checkpoint(result["checkpoint_identity"])
             claim = manifest.get("claims", {}).get(task_id, {})
@@ -496,12 +641,21 @@ class RuntimeDriver:
                         return _outcome("blocked", "contract-violation", [str(exc), f"target={target}"], operation or "unknown", result["checkpoint_identity"], result["generation"], "preserve-and-reconcile")
                     if not allowed_paths or normalized_target not in allowed_paths:
                         return _outcome("blocked", "contract-violation", [f"unlisted path={normalized_target}"], operation or "unknown", result["checkpoint_identity"], result["generation"], "preserve-and-reconcile")
-                if self.authorize_action(operation, target or None)["status"] != "success":
+                if self.authorize_action(operation, target or None, manifest=manifest)["status"] != "success":
                     return _outcome("blocked", "contract-violation", [f"post-launch action={operation}"], operation or "unknown", result["checkpoint_identity"], result["generation"], "preserve-and-reconcile")
             return result
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             checkpoint = str(raw.get("checkpoint_identity") or "runtime:malformed")
             return self._result_error(str(exc), generation, checkpoint_identity=checkpoint)
+
+    def _launch_record(self, claim: Mapping[str, Any], baseline_revision: str) -> dict[str, Any]:
+        """Snapshot a claim's launch identity for later drift checks."""
+
+        return {
+            "baseline_revision": str(baseline_revision or ""),
+            "generation": claim.get("generation"),
+            "launched_at": self.clock(),
+        }
 
     def _persist_blocked_claim(
         self,
@@ -509,30 +663,75 @@ class RuntimeDriver:
         result: Mapping[str, Any],
         task_id: str | None = None,
     ) -> dict[str, Any]:
-        task_id = task_id or str(claim.get("task_id", ""))
+        """Locking wrapper for unlocked call sites (launch and resume paths)."""
+
         with _manifest_lock(self.manifest_path, self.owner) as acquired:
+            if not acquired:
+                return _mutation_unavailable(self, str(claim.get("token", "claim")))
             manifest = load_manifest(self.manifest_path)
-            current_claim = manifest.get("claims", {}).get(task_id)
-            if not acquired or not current_claim or current_claim.get("token") != claim.get("token") or current_claim.get("generation") != claim.get("generation"):
-                return _outcome(
-                    "blocked",
-                    "owner-mismatch",
-                    ["claim changed before blocked receipt"],
-                    "repository-task",
-                    str(claim.get("token", "claim")),
-                    int(claim.get("generation", manifest.get("generation", 0))),
-                    "preserve-and-reconcile",
-                )
-            task = manifest.get("tasks", {}).get(task_id)
-            if task is not None:
-                task["status"] = "blocked"
-                task["resume_allowed"] = bool(result.get("resume_allowed", False))
-                task["blocked_receipt"] = dict(result)
-                if result.get("session_id"):
-                    task["session_id"] = str(result["session_id"])
-            current_claim["state"] = "blocked"
-            manifest["history"].append({"event": "worker-blocked", "task_id": task_id, "reason_code": result.get("reason_code", "malformed-result")})
-            self._save(manifest)
+            return self._persist_blocked_claim_locked(claim, result, task_id, manifest)
+
+    @staticmethod
+    def _apply_blocked(
+        manifest: dict[str, Any],
+        task_id: str,
+        result: Mapping[str, Any],
+        *,
+        resume_allowed: Any,
+        session_id: Any,
+    ) -> None:
+        """Shared blocked-persist mutation tail for both persist sites."""
+
+        task = manifest["tasks"].get(task_id)
+        if task is not None:
+            task["status"] = "blocked"
+            task["resume_allowed"] = bool(resume_allowed)
+            task["blocked_receipt"] = dict(result)
+            if session_id:
+                task["session_id"] = str(session_id)
+        manifest["claims"][task_id]["state"] = "blocked"
+        manifest["history"].append({"event": "worker-blocked", "task_id": task_id, "reason_code": result.get("reason_code", "malformed-result")})
+
+    def _persist_blocked_claim_locked(
+        self,
+        claim: Mapping[str, Any],
+        result: Mapping[str, Any],
+        task_id: str | None,
+        manifest: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist a blocked claim; the caller already holds the manifest lock."""
+
+        task_id = task_id or str(claim.get("task_id", ""))
+        current_claim = manifest.get("claims", {}).get(task_id)
+        if not current_claim or current_claim.get("token") != claim.get("token") or current_claim.get("generation") != claim.get("generation"):
+            return _outcome(
+                "blocked",
+                "owner-mismatch",
+                ["claim changed before blocked receipt"],
+                "repository-task",
+                str(claim.get("token", "claim")),
+                int(claim.get("generation", manifest.get("generation", 0))),
+                "preserve-and-reconcile",
+            )
+        task = manifest.get("tasks", {}).get(task_id)
+        if manifest.get("workflow_state") == "aborted":
+            # An aborted workflow is never resurrected by a late receipt.
+            return _abort_outcome(
+                claim.get("token", "claim"),
+                claim.get("generation", manifest.get("generation", 0)),
+                ["workflow was explicitly aborted before this receipt"],
+            )
+        if _claim_progressed_past_receipt(task, current_claim, include_terminal=True):
+            # A blocked receipt that arrives after the task already progressed
+            # (for example across a resume adapter window) must never regress
+            # the durable state; surface the resumable stale-claim outcome.
+            return _stale_claim_outcome(
+                claim.get("token", "claim"),
+                claim.get("generation", manifest.get("generation", 0)),
+                ["claim already progressed past this receipt"],
+            )
+        self._apply_blocked(manifest, task_id, result, resume_allowed=result.get("resume_allowed", False), session_id=result.get("session_id"))
+        self._save(manifest)
         return dict(result)
 
     def _invoke_adapter_launch(
@@ -552,19 +751,53 @@ class RuntimeDriver:
                 policy_token=policy_token,
             )
         except TimeoutError:
-            return _outcome("blocked", "timeout", ["launch deadline exceeded"], "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile", resume_allowed=True)
+            return _outcome("blocked", "timeout", ["launch deadline exceeded"], "repository-task", f"{task['id']}:launch", int(claim["generation"]), "preserve-and-reconcile", resume_allowed=True, claim_token=claim["token"])
         except TypeError as exc:
-            return _outcome("blocked", "runtime-policy-unavailable", [f"adapter rejected policy token: {exc}"], "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile")
+            return _outcome("blocked", "runtime-policy-unavailable", [f"adapter rejected policy token: {exc}"], "repository-task", f"{task['id']}:launch", int(claim["generation"]), "preserve-and-reconcile", claim_token=claim["token"])
         except Exception as exc:
-            return _outcome("error", "runtime-error", [type(exc).__name__], "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile")
+            return _outcome("error", "runtime-error", [type(exc).__name__], "repository-task", f"{task['id']}:launch", int(claim["generation"]), "preserve-and-reconcile", claim_token=claim["token"])
         if not isinstance(raw, Mapping):
-            return _outcome("blocked", "malformed-result", ["adapter returned a non-mapping result"], "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile")
+            return _outcome("blocked", "malformed-result", ["adapter returned a non-mapping result"], "repository-task", f"{task['id']}:launch", int(claim["generation"]), "preserve-and-reconcile", claim_token=claim["token"])
         raw = dict(raw)
         raw["claim_token"] = claim["token"]
         return raw
 
-    @_locked_mutation
     def record_worker_checkpoint(self, raw: Mapping[str, Any]) -> dict[str, Any]:
+        """Commit a checkpoint receipt; retry adapter I/O runs outside the lock.
+
+        The receipt validation, retry accounting, and state transitions run
+        under the manifest lock. When a retry launch is warranted the locked
+        region ends first: the adapter call runs unlocked (mirroring the
+        launch pattern) and the recursive checkpoint re-acquires the lock
+        against a freshly read manifest.
+        """
+
+        outcome: dict[str, Any] | _RetryRelaunch
+        with _manifest_lock(self.manifest_path, self.owner) as acquired:
+            if not acquired:
+                return _mutation_unavailable(self, "mutation:conflict")
+            outcome = self._record_checkpoint_locked(raw)
+        if isinstance(outcome, _RetryRelaunch):
+            retry_raw = self._invoke_adapter_launch(
+                outcome.claim,
+                outcome.task,
+                "Rewrite the authorized repository task and return a structured result.",
+                None,
+                outcome.claim.get("policy_token", {}),
+            )
+            # The driver owns the retry budget: override any worker- or
+            # adapter-supplied policy with the decremented budget so a
+            # hostile envelope cannot re-supply attempts each round.
+            retry_raw["retry_policy"] = outcome.retry_policy
+            # Every launch return path carries the claim token, but a
+            # hand-rolled runner result could still omit it: without the
+            # token the recursive checkpoint would misdiagnose owner-mismatch
+            # instead of persisting the attempt receipt.
+            retry_raw.setdefault("claim_token", outcome.claim["token"])
+            return self.record_worker_checkpoint(retry_raw)
+        return outcome
+
+    def _record_checkpoint_locked(self, raw: Mapping[str, Any]) -> dict[str, Any] | _RetryRelaunch:
         result = self.validate_adapter_result(raw)
         manifest = load_manifest(self.manifest_path)
         task_id = self._task_id_from_checkpoint(result["checkpoint_identity"])
@@ -581,56 +814,97 @@ class RuntimeDriver:
                 "preserve-and-reconcile",
             )
         if result["status"] != "success":
-            if result["reason_code"] == "worker-hesitation":
-                result["recovery_action"] = "rewrite-and-retry"
-                result["contract_rule"] = "worker must not ask conversational permission for authorized repository work"
-            elif result["status"] == "contract-violation":
-                result["contract_rule"] = str(raw.get("contract_rule") or "adapter result violated the typed action contract")
-            task = manifest["tasks"].get(task_id)
-            retry = result.get("retry_policy", {})
-            retryable = (
-                result["status"] == "contract-violation" and retry.get("mode") == "rewrite-and-retry"
-            ) or (result["status"] == "error" and retry.get("mode") == "bounded")
-            if retryable and retry.get("attempts_remaining", 0) > 0 and self.adapter is not None:
-                retry["attempts_remaining"] = int(retry["attempts_remaining"]) - 1
-                # A failed attempt must not poison the stable checkpoint
-                # identity: record it under a distinct attempt identity so the
-                # retry can still land the real checkpoint.
-                manifest["checkpoints"][f"{result['checkpoint_identity']}#attempt-initial"] = {"result": result, "task_id": task_id, "attempt": "initial"}
-                manifest["history"].append({"event": "worker-retry", "task_id": task_id, "generation": result["generation"], "reason_code": result["reason_code"], "attempts_remaining": retry["attempts_remaining"]})
-                task["status"] = "launched"
-                self._save(manifest)
-                retry_raw = self._invoke_adapter_launch(
-                    claim,
-                    task,
-                    "Rewrite the authorized repository task and return a structured result.",
-                    None,
-                    claim.get("policy_token", {}),
-                )
-                # The driver owns the retry budget: override any worker- or
-                # adapter-supplied policy with the decremented budget so a
-                # hostile envelope cannot re-supply attempts each round.
-                retry_raw["retry_policy"] = retry
-                return self.record_worker_checkpoint(retry_raw)
-            if task and not self._task_complete(task):
-                task["status"] = "blocked"
-                task["resume_allowed"] = result["reason_code"] in capabilities.RESUMABLE_REASONS
-                task["blocked_receipt"] = result
-                if raw.get("session_id"):
-                    task["session_id"] = str(raw["session_id"])
-                claim["state"] = "blocked"
-                manifest["history"].append({"event": "worker-blocked", "task_id": task_id, "reason_code": result["reason_code"]})
-                self._save(manifest)
-            return result
-        manifest = load_manifest(self.manifest_path)
-        # Re-fetch task and claim from the freshly loaded snapshot: objects
-        # fetched before this reload belong to a stale manifest and writes to
-        # them would be silently lost on save.
+            return self._checkpoint_retry_or_blocked(result, raw, manifest, task_id, claim)
+        return self._checkpoint_success_commit(result, raw, manifest, task_id, claim_token)
+
+    def _checkpoint_retry_or_blocked(self, result: dict[str, Any], raw: Mapping[str, Any], manifest: dict[str, Any], task_id: str, claim: Mapping[str, Any]) -> dict[str, Any] | _RetryRelaunch:
+        """Handle a non-success checkpoint receipt: bounded retries and blocked claims.
+
+        Owns retry budget accounting and the durable attempt records; returns
+        either the receipt to surface to the caller or a ``_RetryRelaunch``
+        marker telling the caller to relaunch after the lock is released.
+        """
+
+        if result["reason_code"] == "worker-hesitation":
+            result["recovery_action"] = "rewrite-and-retry"
+            result["contract_rule"] = "worker must not ask conversational permission for authorized repository work"
+        elif result["status"] == "contract-violation":
+            result["contract_rule"] = str(raw.get("contract_rule") or "adapter result violated the typed action contract")
+        if manifest.get("workflow_state") == "aborted":
+            # An explicit abort wins over any in-flight receipt, retryable or
+            # not: never persist, never relaunch, never un-abort.
+            return _abort_outcome(
+                result["checkpoint_identity"],
+                result["generation"],
+                ["workflow was explicitly aborted before this receipt"],
+            )
+        task = manifest["tasks"].get(task_id)
+        retry = result.get("retry_policy", {})
+        retryable = (
+            result["status"] == "contract-violation" and retry.get("mode") == "rewrite-and-retry"
+        ) or (result["status"] == "error" and retry.get("mode") == "bounded")
+        # The progression guard is a conjunct of the retry decision and of the
+        # non-success receipt guard below: a stale retryable receipt (for
+        # example one landing after a competing writer completed a success
+        # checkpoint inside a resume adapter window) must never relaunch a
+        # done-pending, commit-pending, checkpointed, complete, or aborted
+        # task. The receipt guard keeps one distinction: a terminal
+        # (checkpointed/complete) task with a live claim surfaces the receipt
+        # itself rather than stale-claim, because nothing regressed and the
+        # reason code (for example approval-required) stays actionable.
+        progressed = _claim_progressed_past_receipt(task, claim, include_terminal=True)
+        if retryable and progressed:
+            retryable = False
+        if retryable and retry.get("attempts_remaining", 0) > 0 and self.adapter is not None and task is not None:
+            retry["attempts_remaining"] = int(retry["attempts_remaining"]) - 1
+            # A failed attempt must not poison the stable checkpoint
+            # identity: record it under a distinct attempt identity so the
+            # retry can still land the real checkpoint. The ordinal derives
+            # from the existing checkpoint history so consecutive errors
+            # persist distinct durable records instead of overwriting one
+            # fixed key.
+            identity = result["checkpoint_identity"]
+            prior_ordinals = sorted(
+                int(key.rsplit("#attempt-", 1)[1])
+                for key in manifest["checkpoints"]
+                if key.startswith(f"{identity}#attempt-") and key.rsplit("#attempt-", 1)[-1].isdigit()
+            )
+            ordinal = (prior_ordinals[-1] + 1) if prior_ordinals else 1
+            manifest["checkpoints"][f"{identity}#attempt-{ordinal}"] = {"result": result, "task_id": task_id, "attempt": ordinal}
+            manifest["history"].append({"event": "worker-retry", "task_id": task_id, "generation": result["generation"], "reason_code": result["reason_code"], "attempt": ordinal, "attempts_remaining": retry["attempts_remaining"]})
+            task["status"] = "launched"
+            if not isinstance(claim.get("launch_record"), Mapping):
+                # A driver-owned relaunch is a launch: snapshot the record for
+                # claims whose manifest predates launch records, so drift
+                # detection stays armed for the retry result.
+                manifest["claims"][task_id]["launch_record"] = self._launch_record(claim, claim.get("baseline_revision"))
+            self._save(manifest)
+            return _RetryRelaunch(claim=dict(manifest["claims"][task_id]), task=task, retry_policy=retry)
+        if progressed and (task is None or not self._task_complete(task)):
+            # A stale non-success receipt (for example one landing after a
+            # competing writer completed a success checkpoint inside a resume
+            # adapter window) must not regress done-pending; surface the
+            # resumable stale-claim outcome instead.
+            return _stale_claim_outcome(
+                result["checkpoint_identity"],
+                result["generation"],
+                ["claim already progressed past this receipt"],
+            )
+        if task and not self._task_complete(task):
+            self._apply_blocked(manifest, task_id, result, resume_allowed=result["reason_code"] in capabilities.RESUMABLE_REASONS, session_id=raw.get("session_id"))
+            self._save(manifest)
+        return result
+
+    def _checkpoint_success_commit(self, result: dict[str, Any], raw: Mapping[str, Any], manifest: dict[str, Any], task_id: str, claim_token: Any) -> dict[str, Any]:
+        """Commit a successful checkpoint receipt and transition the task to done-pending.
+
+        Runs inside the caller's held manifest lock; the locked snapshot is
+        passed in, so no manifest reload is needed here.
+        """
+
         identity = result["checkpoint_identity"]
         task = manifest["tasks"].get(task_id)
         claim = manifest["claims"].get(task_id)
-        if claim is None or claim.get("owner") != self.owner or claim.get("token") != claim_token or claim.get("generation") != result["generation"]:
-            return _outcome("blocked", "owner-mismatch", ["checkpoint receipt does not match a live claim"], "repository-task", identity, result["generation"], "preserve-and-reconcile")
         prior = manifest["checkpoints"].get(identity)
         if prior is not None and prior.get("result", {}).get("status") == "success":
             return {**result, "state": "done-pending", "duplicate": True, "actions": []}
@@ -638,37 +912,79 @@ class RuntimeDriver:
             return self._result_error(f"unknown checkpoint task: {task_id}", result["generation"])
         if claim.get("state") not in {"claimed", "launched", "blocked"}:
             return _outcome("blocked", "owner-mismatch", ["checkpoint claim is not live"], "repository-task", identity, result["generation"], "preserve-and-reconcile")
+        drift = self._claim_drift_outcome(manifest, claim, "repository-task", identity)
+        if drift is not None:
+            return drift
         verdict, unexpected = self._worktree_scope_violation(claim)
         if verdict == "unavailable":
             return _outcome("blocked", "worktree-witness-unavailable", ["git diff scope witness failed"], "repository-task", identity, result["generation"], "preserve-and-reconcile", resume_allowed=False)
         if verdict == "violation":
             violation = _outcome("blocked", "contract-violation", [f"out-of-scope change: {path}" for path in unexpected], "repository-task", identity, result["generation"], "preserve-and-reconcile", resume_allowed=False)
-            return self._persist_blocked_claim(claim, violation, task_id)
-        task["status"] = "done-pending"
-        task["checkpoint_identity"] = identity
+            # The checkpoint's locked region is still held: use the unlocked
+            # inner helper so the contract-violation receipt is persisted
+            # without a nested lock acquisition (which the non-reentrant
+            # lock would refuse and misdiagnose as owner-mismatch).
+            return self._persist_blocked_claim_locked(claim, violation, task_id, manifest)
+        completion: dict[str, Any] = {"status": "done-pending", "checkpoint_identity": identity}
         if raw.get("session_id"):
-            task["session_id"] = str(raw["session_id"])
-        if claim:
-            claim["state"] = "launched"
-        manifest["checkpoints"][identity] = {"result": result, "task_id": task_id, "recorded_at": self.clock()}
-        manifest["history"].append({"event": "worker-checkpoint", "task_id": task_id, "generation": result["generation"]})
-        self._save(manifest)
+            completion["session_id"] = str(raw["session_id"])
+        if not isinstance(claim.get("launch_record"), Mapping):
+            # A fenced checkpoint proves the claim launched even when the
+            # launch record was never written (manifests from before the
+            # launch record existed); snapshot the claim's own live fields now
+            # so later done-boundary drift checks stay armed.
+            manifest["claims"][task_id]["launch_record"] = self._launch_record(claim, claim.get("baseline_revision"))
+        self._complete_and_persist(
+            manifest,
+            task_id,
+            completion=completion,
+            history=[{"event": "worker-checkpoint", "task_id": task_id, "generation": result["generation"]}],
+            checkpoint_record=(identity, {"result": result, "task_id": task_id, "recorded_at": self.clock()}),
+            claim_state="launched",
+        )
         refreshed = self.refresh_manifest()
         return {**result, "state": refreshed["tasks"][task_id]["status"], "duplicate": False, "actions": []}
 
-    @_locked_mutation
     def record_done(self, raw: Mapping[str, Any]) -> dict[str, Any]:
+        """Record the done handoff; the next-claim transition runs after the lock.
+
+        The verification and completion writes run under the manifest lock;
+        the next-claim transition is deliberately outside the locked region
+        so it never performs a nested (non-reentrant) lock acquisition.
+        """
+
+        with _manifest_lock(self.manifest_path, self.owner) as acquired:
+            if not acquired:
+                return _mutation_unavailable(self, "runtime:done", action_scope="done-handoff")
+            outcome, claim_next = self._record_done_locked(raw)
+        if claim_next:
+            return self._attach_next_claim_action(outcome)
+        return outcome
+
+    def _attach_next_claim_action(self, outcome: dict[str, Any]) -> dict[str, Any]:
+        """Claim the next task and attach the launch-task action to the outcome.
+
+        Runs only after the caller's manifest lock is released: the claim
+        transition acquires the (non-reentrant) lock itself.
+        """
+
+        claim = self.claim_next_task()
+        if claim.get("claimed"):
+            outcome["actions"] = [{"type": "launch-task", "task_id": claim["task_id"], "generation": claim["generation"]}]
+        return outcome
+
+    def _record_done_locked(self, raw: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
         manifest = load_manifest(self.manifest_path)
         if not isinstance(raw, Mapping):
-            return self._result_error("done handoff must be a mapping", action_scope="done-handoff")
+            return self._result_error("done handoff must be a mapping", action_scope="done-handoff"), False
         checkpoint_identity = raw.get("checkpoint_identity")
         if not isinstance(checkpoint_identity, str) or not checkpoint_identity.strip():
-            return _outcome("blocked", "done-pending", ["checkpoint_identity is required before mutating state"], "done-handoff", "runtime:done", manifest.get("generation", 0), "preserve-and-reconcile")
+            return _outcome("blocked", "done-pending", ["checkpoint_identity is required before mutating state"], "done-handoff", "runtime:done", manifest.get("generation", 0), "preserve-and-reconcile"), False
         task_id = str(raw.get("task_id") or self._task_id_from_checkpoint(checkpoint_identity))
         task = manifest["tasks"].get(task_id)
         claim = manifest["claims"].get(task_id) if task else None
         if raw.get("status") != "success":
-            return _outcome("blocked", "done-pending", ["successful done handoff required"], "done-handoff", str(raw.get("checkpoint_identity", f"{task_id}:done")), manifest.get("generation", 0), "preserve-and-reconcile")
+            return _outcome("blocked", "done-pending", ["successful done handoff required"], "done-handoff", str(raw.get("checkpoint_identity", f"{task_id}:done")), manifest.get("generation", 0), "preserve-and-reconcile"), False
         required = ("commit_identity", "log_evidence")
         valid_log = isinstance(raw.get("log_evidence"), (list, tuple)) and bool(raw.get("log_evidence")) and all(isinstance(item, str) and item.strip() for item in raw["log_evidence"])
         fenced = claim and claim.get("owner") == self.owner and claim.get("token") == raw.get("claim_token") and claim.get("generation") == raw.get("generation")
@@ -685,50 +1001,124 @@ class RuntimeDriver:
             and self._task_id_from_checkpoint(checkpoint_identity) == task_id
         )
         if not valid:
-            return _outcome("blocked", "done-pending", [f"missing or unfenced done evidence: {', '.join(required)}"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile")
+            return _outcome("blocked", "done-pending", [f"missing or unfenced done evidence: {', '.join(required)}"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile"), False
         if not self.commit_lookup(str(raw["commit_identity"])):
-            return _outcome("blocked", "commit-pending", [f"commit not found: {raw['commit_identity']}"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile")
-        # Done-boundary verification: the committed artifact is checked, not
-        # just attested. Only a claim with a recorded launch baseline can be
-        # verified; the launch path fails closed when no baseline is available.
-        baseline_revision = str((claim or {}).get("baseline_revision") or "").strip()
-        if baseline_revision:
-            commit_identity = str(raw["commit_identity"])
-            allowed = set((claim.get("policy_token") or {}).get("allowed_paths", ()))
-            is_descendant, witness_ok = self._git_commit_is_descendant(baseline_revision, commit_identity)
-            if not witness_ok or not allowed:
-                return _outcome("blocked", "worktree-witness-unavailable", ["done-boundary git witness failed"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
-            if not is_descendant:
-                return _outcome("blocked", "commit-pending", [f"commit is not new work on the claim baseline: {commit_identity}"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
-            committed_paths = self._git_diff_paths(baseline_revision, commit_identity)
-            if committed_paths is None:
-                return _outcome("blocked", "worktree-witness-unavailable", ["done-boundary git diff witness failed"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
-            out_of_scope = [path for path in committed_paths if path not in allowed]
-            if out_of_scope:
-                return _outcome("blocked", "commit-pending", [f"out-of-scope committed change: {path}" for path in out_of_scope], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
-            try:
-                actually_dirty = self._git_worktree_dirty()
-            except (OSError, RuntimeError):
-                return _outcome("blocked", "worktree-witness-unavailable", ["done-boundary clean-state witness failed"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
-            if actually_dirty:
-                return _outcome("blocked", "commit-pending", ["worktree is not clean at the done boundary"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
+            return _outcome("blocked", "commit-pending", [f"commit not found: {raw['commit_identity']}"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile"), False
+        boundary = self._done_boundary_block(claim, str(raw["commit_identity"]), checkpoint_identity, manifest.get("generation", 0), manifest=manifest)
+        if boundary is not None:
+            return boundary, False
         if task.get("status") == "checkpointed" and task.get("commit_identity") == raw["commit_identity"]:
-            return _outcome("success", "completed", ["duplicate done handoff"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "continue-parent", actions=[], duplicate=True)
-        task.update({"status": "commit-pending", "commit_identity": str(raw["commit_identity"]), "done_log_evidence": bounded_evidence(raw["log_evidence"])})
-        manifest["history"].append({"event": "commit-pending", "task_id": task_id, "commit_identity": str(raw["commit_identity"])})
-        task.update({"status": "checkpointed", "checkbox": True, "complete": True})
-        claim["state"] = "closed"
-        manifest["history"].append({"event": "done-commit", "task_id": task_id, "commit_identity": str(raw["commit_identity"])})
+            return _outcome("success", "completed", ["duplicate done handoff"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "continue-parent", actions=[], duplicate=True), False
+        self._complete_and_persist(
+            manifest,
+            task_id,
+            completion={
+                "status": "checkpointed",
+                "checkbox": True,
+                "complete": True,
+                "commit_identity": str(raw["commit_identity"]),
+                "done_log_evidence": bounded_evidence(raw["log_evidence"]),
+            },
+            # commit-pending is owned solely by mark_commit_pending; the done
+            # handoff records only its own completion event.
+            history=[
+                {"event": "done-commit", "task_id": task_id, "commit_identity": str(raw["commit_identity"])},
+            ],
+            claim_state="closed",
+        )
+        return _outcome("success", "completed", ["done commit, checkbox, clean-state, and log evidence recorded"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "continue-parent", actions=[]), True
+
+    def _done_boundary_block(self, claim: Mapping[str, Any] | None, commit_identity: str, checkpoint_identity: str, generation: int, manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Verify the done boundary against the claim's launch baseline.
+
+        The committed artifact is checked, not just attested. Only a claim with
+        a recorded launch baseline can be verified; the launch path fails
+        closed when no baseline is available, so a missing baseline skips
+        verification here (preserving the launch-time failure). Returns None
+        when verification passes, or a blocked outcome describing the failure.
+        ``manifest`` is the locked-read snapshot supplied by the caller; every
+        call site runs under the manifest lock, so the parameter is required.
+        """
+
+        # Drift first: a claim whose launch-record snapshot no longer matches
+        # the live manifest (or is missing on a demonstrably launched claim)
+        # must surface stale-claim before any commit handoff.
+        drift = self._claim_drift_outcome(manifest, claim, "done-handoff", checkpoint_identity)
+        if drift is not None:
+            return drift
+        baseline_revision = str((claim or {}).get("baseline_revision") or "").strip()
+        if not baseline_revision:
+            return None
+        allowed = set((claim.get("policy_token") or {}).get("allowed_paths", ()))
+        is_descendant, witness_ok = self._git_commit_is_descendant(baseline_revision, commit_identity)
+        if not witness_ok or not allowed:
+            return _outcome("blocked", "worktree-witness-unavailable", ["done-boundary git witness failed"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
+        if not is_descendant:
+            return _outcome("blocked", "commit-pending", [f"commit is not new work on the claim baseline: {commit_identity}"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
+        committed_paths = self._git_diff_paths(baseline_revision, commit_identity)
+        if committed_paths is None:
+            return _outcome("blocked", "worktree-witness-unavailable", ["done-boundary git diff witness failed"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
+        out_of_scope = [path for path in committed_paths if path not in allowed]
+        if out_of_scope:
+            return _outcome("blocked", "commit-pending", [f"out-of-scope committed change: {path}" for path in out_of_scope], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
+        try:
+            symlink_escapes = self._git_committed_symlink_escapes(commit_identity, [path for path in committed_paths if path in allowed])
+        except (OSError, RuntimeError):
+            return _outcome("blocked", "worktree-witness-unavailable", ["done-boundary symlink witness failed"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
+        if symlink_escapes:
+            return _outcome("blocked", "commit-pending", [f"committed symlink escapes repository: {path}" for path in symlink_escapes], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
+        try:
+            actually_dirty = self._git_worktree_dirty()
+        except (OSError, RuntimeError):
+            return _outcome("blocked", "worktree-witness-unavailable", ["done-boundary clean-state witness failed"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
+        if actually_dirty:
+            return _outcome("blocked", "commit-pending", ["worktree is not clean at the done boundary"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
+        return None
+
+    def _complete_and_persist(
+        self,
+        manifest: dict[str, Any],
+        task_id: str,
+        *,
+        completion: Mapping[str, Any],
+        history: Sequence[Mapping[str, Any]] = (),
+        checkpoint_record: tuple[str, dict[str, Any]] | None = None,
+        claim_state: str | None = None,
+    ) -> None:
+        """Apply a success-path completion and persist it under the held lock.
+
+        Shared by the checkpoint success commit (task done-pending, claim
+        stays live for the done handoff) and the done handoff (task
+        checkpointed, claim closed). The next-claim transition is owned by
+        the unlocked call sites, never performed here: this helper runs
+        inside the caller's manifest lock and the lock is non-reentrant.
+        """
+
+        task = manifest["tasks"][task_id]
+        task.update(completion)
+        if checkpoint_record is not None:
+            manifest["checkpoints"][checkpoint_record[0]] = checkpoint_record[1]
+        for event in history:
+            manifest["history"].append(event)
+        if claim_state is not None and task_id in manifest["claims"]:
+            manifest["claims"][task_id]["state"] = claim_state
         self._save(manifest)
-        claim = self.claim_next_task()
-        actions = [{"type": "launch-task", "task_id": claim["task_id"], "generation": claim["generation"]}] if claim.get("claimed") else []
-        return _outcome("success", "completed", ["done commit, checkbox, clean-state, and log evidence recorded"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "continue-parent", actions=actions)
 
     def claim_next_task(self) -> dict[str, Any]:
         with _manifest_lock(self.manifest_path, self.owner) as acquired:
             manifest = load_manifest(self.manifest_path)
             if not acquired:
                 return _outcome("blocked", "stale-claim", ["manifest claim is held by another owner"], "repository-task", "claim:conflict", manifest.get("generation", 0), "resumable-conflict", claimed=False)
+            if manifest.get("workflow_state") == "aborted":
+                # An explicitly aborted workflow never hands out a new claim:
+                # refuse before any generation bump or claim write so no
+                # claimed residue is left behind for later reconciliation.
+                return _abort_outcome(
+                    "claim:aborted",
+                    manifest.get("generation", 0),
+                    ["workflow was explicitly aborted before claim"],
+                    claimed=False,
+                )
             pending = [task for task in manifest["tasks"].values() if not self._task_complete(task) and task.get("status") == "pending"]
             pending.sort(key=lambda task: (task.get("number", 0), task.get("id", "")))
             if not pending:
@@ -751,12 +1141,15 @@ class RuntimeDriver:
 
         manifest = load_manifest(self.manifest_path)
         current_claim = manifest["claims"].get(task_id)
+        if manifest.get("workflow_state") == "aborted":
+            # An explicit abort racing the launch window is an abort outcome,
+            # not an owner mismatch: the claim may still be live and owned.
+            return _abort_outcome(claim["token"], claim["generation"], ["workflow was explicitly aborted before launch"])
         if (
             not current_claim
             or current_claim.get("token") != claim["token"]
             or current_claim.get("generation") != claim["generation"]
             or current_claim.get("state") not in {"claimed", "launched"}
-            or manifest.get("workflow_state") == "aborted"
         ):
             return _outcome("blocked", "owner-mismatch", ["claim changed before launch"], "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile")
         baseline_revision = self._git_head_revision()
@@ -764,7 +1157,8 @@ class RuntimeDriver:
             # A missing baseline would silently disable the scope witness at
             # every later checkpoint; fail closed at launch instead.
             return _outcome("blocked", "worktree-witness-unavailable", ["git baseline revision unavailable at launch"], "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile", resume_allowed=False)
-        current_claim.update({"state": "launched", "policy_token": policy_token, "baseline_revision": baseline_revision})
+        launch_record = self._launch_record(claim, baseline_revision)
+        current_claim.update({"state": "launched", "policy_token": policy_token, "baseline_revision": baseline_revision, "launch_record": launch_record})
         # Re-fetch the task from this live snapshot; a task object captured
         # from an earlier manifest snapshot would be silently dropped on save.
         manifest["tasks"][task_id]["status"] = "launched"
@@ -780,6 +1174,14 @@ class RuntimeDriver:
         current_claim = manifest["claims"].get(task_id)
         if not current_claim or current_claim.get("token") != claim["token"] or current_claim.get("generation") != claim["generation"]:
             return _outcome("blocked", "owner-mismatch", ["claim changed before activation receipt"], "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile")
+        if manifest.get("workflow_state") == "aborted":
+            # Never write an activation receipt onto an aborted workflow.
+            return _abort_outcome(claim["token"], claim["generation"], ["workflow was explicitly aborted before the activation receipt"])
+        if current_claim.get("state") not in {"claimed", "launched"}:
+            # A claim that left the live set on an active workflow is
+            # contention or progression, not an abort: surface the resumable
+            # stale-claim outcome instead of an explicit-abort envelope.
+            return _stale_claim_outcome(claim["token"], claim["generation"], ["claim is no longer live; activation receipt refused"])
         current_claim["activation_receipt"] = getattr(self.adapter, "activation_receipt", dict(activation))
         self._save(manifest)
         return None
@@ -838,7 +1240,7 @@ class RuntimeDriver:
 
         manifest = self.refresh_manifest()
         if manifest.get("workflow_state") == "aborted":
-            return _outcome("aborted", "explicit-abort", ["workflow was explicitly aborted"], "parent-continuation", "runtime:aborted", manifest.get("generation", 0), "preserve-and-stop")
+            return _abort_outcome("runtime:aborted", manifest.get("generation", 0), ["workflow was explicitly aborted"], action_scope="parent-continuation")
         if manifest.get("workflow_state") in {"terminal", "complete"}:
             return self.terminal_result() or self._result_error("terminal receipt disappeared")
         reconciliation = self.reconcile_startup()
@@ -857,6 +1259,19 @@ class RuntimeDriver:
             task = manifest["tasks"].get(existing_claim.get("task_id"))
             if task is None:
                 return self._result_error("claimed task is absent from manifest")
+            if task.get("status") in {"done-pending", "commit-pending"}:
+                # A task that already reached its commit boundary (for example
+                # after a crash between checkpoint and done handoff) must not
+                # be relaunched: the done handoff is the correct next step.
+                return _outcome(
+                    "blocked",
+                    "done-pending",
+                    ["claimed task is awaiting the done handoff; relaunch refused"],
+                    "parent-continuation",
+                    f"{task['id']}:done",
+                    int(existing_claim.get("generation", 0)),
+                    "preserve-and-reconcile",
+                )
             result = self._launch_claimed_task(existing_claim, prompt, deadline_seconds)
             self.refresh_manifest()
             return result
@@ -869,11 +1284,64 @@ class RuntimeDriver:
         self.refresh_manifest()
         return result
 
-    @_locked_mutation
     def resume(self, prompt: str = "continue execute-plan", deadline_seconds: float | None = None) -> dict[str, Any]:
-        """Resume only blocked tasks whose receipt permits continuation."""
+        """Resume only blocked tasks whose receipt permits continuation.
+
+        Mirrors the launch pattern: the state selection and fence checks run
+        under the manifest lock, the adapter resume call runs with the lock
+        released, and the lock is re-acquired afterwards with the manifest
+        re-read and checked for drift before any nested checkpoint write.
+        """
+
+        with _manifest_lock(self.manifest_path, self.owner) as acquired:
+            if not acquired:
+                return _mutation_unavailable(self, "runtime:resume", action_scope="parent-continuation")
+            selection = self._resume_select_locked()
+        if isinstance(selection, _AdapterWindow):
+            task, claim = selection.task, selection.claim
+            # Adapter I/O runs outside the manifest flock.
+            try:
+                raw = self.adapter.resume(task["session_id"], prompt, claim["generation"], task_id=task["id"], deadline_seconds=deadline_seconds, policy_token=claim.get("policy_token"))
+            except Exception as exc:
+                raw = _outcome("error", "runtime-error", [type(exc).__name__], "repository-task", f"{task['id']}:resume", claim["generation"], "preserve-and-reconcile")
+            if isinstance(raw, Mapping):
+                raw = dict(raw)
+                raw["claim_token"] = claim["token"]
+            else:
+                raw = _outcome("blocked", "malformed-result", ["adapter resume returned a non-mapping result"], "repository-task", f"{task['id']}:resume", claim["generation"], "preserve-and-reconcile")
+            # Re-acquire the lock and re-read the manifest: a competing writer
+            # that rewrote the claim during the adapter window fails closed
+            # with the resumable stale-claim outcome; a stale in-memory
+            # snapshot is never written back.
+            with _manifest_lock(self.manifest_path, self.owner) as reacquired:
+                if not reacquired:
+                    return _mutation_unavailable(self, f"{task['id']}:resume", action_scope="parent-continuation")
+                fresh = load_manifest(self.manifest_path)
+                live_claim = fresh.get("claims", {}).get(task["id"])
+                drift = self._claim_drift_outcome(fresh, live_claim, "parent-continuation", f"{task['id']}:resume")
+                if drift is not None:
+                    return drift
+            validated = self.validate_adapter_result(raw)
+            if validated.get("reason_code") == "malformed-result":
+                return self._persist_blocked_claim(claim, validated, task["id"])
+            return self.record_worker_checkpoint(raw)
+        if isinstance(selection, _ContinueParent):
+            return self.continue_parent(prompt, deadline_seconds)
+        return selection
+
+    def _resume_select_locked(self) -> dict[str, Any] | _AdapterWindow | _ContinueParent:
+        """Select the resume target under the held manifest lock.
+
+        Returns the final outcome, an ``_AdapterWindow`` marker telling the
+        caller to run the adapter resume with the lock released, or a
+        ``_ContinueParent`` marker for the replacement path.
+        """
 
         manifest = self.refresh_manifest()
+        if manifest.get("workflow_state") == "aborted":
+            # An explicitly aborted workflow is never auto-resumed; mirror
+            # continue_parent's preserve-and-stop abort outcome.
+            return _abort_outcome("runtime:aborted", manifest.get("generation", 0), ["workflow was explicitly aborted"], action_scope="parent-continuation")
         if manifest.get("workflow_state") in {"terminal", "complete"}:
             return self.terminal_result() or self._result_error("terminal receipt disappeared")
         resumable = [
@@ -899,26 +1367,13 @@ class RuntimeDriver:
         if not isinstance(claim.get("policy_token"), Mapping) or claim["policy_token"].get("generation") != claim.get("generation"):
             return _outcome("blocked", "runtime-policy-unavailable", ["resume policy token is missing or stale"], "parent-continuation", str(claim.get("token", f"{task['id']}:resume")), int(claim.get("generation", manifest.get("generation", 0))), "preserve-and-reconcile")
         if self.adapter is not None and task.get("session_id") and claim:
-            try:
-                raw = self.adapter.resume(task["session_id"], prompt, claim["generation"], task_id=task["id"], deadline_seconds=deadline_seconds, policy_token=claim.get("policy_token"))
-            except Exception as exc:
-                raw = _outcome("error", "runtime-error", [type(exc).__name__], "repository-task", f"{task['id']}:resume", claim["generation"], "preserve-and-reconcile")
-            if isinstance(raw, Mapping):
-                raw = dict(raw)
-                raw["claim_token"] = claim["token"]
-            else:
-                raw = _outcome("blocked", "malformed-result", ["adapter resume returned a non-mapping result"], "repository-task", f"{task['id']}:resume", claim["generation"], "preserve-and-reconcile")
-            validated = self.validate_adapter_result(raw)
-            if validated.get("reason_code") == "malformed-result":
-                return self._persist_blocked_claim(claim, validated, task["id"])
-            return self.record_worker_checkpoint(raw)
+            return _AdapterWindow(task=dict(task), claim=dict(claim))
         task["status"] = "pending"
         claim["state"] = "replaced"
         manifest["history"].append({"event": "resume", "tasks": [task["id"] for task in resumable]})
         self._save(manifest)
-        return self.continue_parent(prompt, deadline_seconds)
+        return _ContinueParent()
 
-    @_locked_mutation
     def reconcile_startup(
         self,
         commit_lookup: Callable[[str], bool] | None = None,
@@ -927,30 +1382,120 @@ class RuntimeDriver:
     ) -> dict[str, Any]:
         """Recover only provable commits; quarantine ambiguous claims."""
 
+        with _manifest_lock(self.manifest_path, self.owner) as acquired:
+            if not acquired:
+                return _mutation_unavailable(self, "worktree:witness")
+            selection = self._reconcile_startup_locked(commit_lookup, dirty_worktree, live_worker_owner)
+        if isinstance(selection, _ReconcileCommit):
+            # Delegation runs after the lock releases: the commit
+            # reconciliation acquires the (non-reentrant) lock itself.
+            return self.reconcile_commit_before_checkpoint(
+                selection.task_id,
+                selection.commit_identity,
+                selection.lookup,
+                claim_token=selection.token,
+                generation=selection.generation,
+            )
+        return selection
+
+    def _reconcile_startup_locked(
+        self,
+        commit_lookup: Callable[[str], bool] | None,
+        dirty_worktree: bool,
+        live_worker_owner: str | None,
+    ) -> dict[str, Any] | _ReconcileCommit:
         manifest = load_manifest(self.manifest_path)
         commit_lookup = commit_lookup or self.commit_lookup
+        ambient_entries: list[tuple[str, str]] | None = None
+        # Any claim carrying launch evidence (state claimed/launched or a
+        # launch record) proves the worktree entered a launch window; the
+        # dirty-worktree gate below must fire even when every such claim sits
+        # on a completed task (legacy manifests), which the per-claim loop
+        # would otherwise skip entirely.
+        launch_evidence_claims = [
+            claim for claim in manifest["claims"].values()
+            if claim.get("state") in {"claimed", "launched"} or isinstance(claim.get("launch_record"), Mapping)
+        ]
         if not dirty_worktree:
             try:
                 dirty_worktree = self._git_worktree_dirty()
             except (OSError, RuntimeError) as exc:
                 return _outcome("blocked", "worktree-witness-unavailable", [str(exc)], "repository-task", "worktree:witness", manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
+            if dirty_worktree:
+                # Only the pre-launch startup path consults the ambient-noise
+                # allowlist: before launch nothing proves the noise was worker
+                # caused, so a purely ambient dirty worktree blocks resumably
+                # for cleanup instead of the non-resumable dirty-worktree gate.
+                try:
+                    entries = self._git_worktree_entries()
+                except (OSError, RuntimeError) as exc:
+                    return _outcome("blocked", "worktree-witness-unavailable", [str(exc)], "repository-task", "worktree:witness", manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
+                if entries and all(self._is_ambient_noise_entry(code, path) for code, path in entries):
+                    ambient_entries = entries
+        if ambient_entries is not None:
+
+            def cleanup_outcome(token: Any, generation: Any) -> dict[str, Any]:
+                return _outcome(
+                    "blocked",
+                    "cleanup-required",
+                    [f"ambient worktree noise requires cleanup: {code} {path}" for code, path in ambient_entries],
+                    "repository-task",
+                    token,
+                    generation,
+                    "preserve-and-reconcile",
+                )
+
+            # Any claim carrying a launch record proves the worktree entered a
+            # launch window (including a blocked claim that already launched):
+            # ambient-shaped noise after launch is indistinguishable from
+            # worker-caused dirt and keeps the hard block, so the resumable
+            # hoisted return fires only when no claim has launch evidence.
+            if not launch_evidence_claims:
+                # Hoisted no-live-claim case: purely ambient noise on a
+                # worktree with nothing in flight is the same resumable
+                # cleanup condition as the claim-attached case below; without
+                # this return the loop no-ops and startup silently proceeds.
+                return cleanup_outcome("worktree:witness", manifest.get("generation", 0))
+        if dirty_worktree and launch_evidence_claims:
+            examined = [
+                claim for claim in launch_evidence_claims
+                if manifest["tasks"].get(str(claim.get("task_id")), {}).get("status")
+                not in {"done-pending", "checkpointed", "complete"}
+            ]
+            if not examined:
+                # Every launch-evidence claim sits on a task the per-claim
+                # loop below skips (completed or at its commit boundary), so
+                # the dirty gate is evaluated once here instead of being
+                # silently skipped. The ambient discriminator still applies:
+                # a launch-evidence claim without a launch record keeps the
+                # resumable cleanup outcome; anything else keeps the hard
+                # dirty-worktree block.
+                if ambient_entries is not None:
+                    prelaunch = next(
+                        (claim for claim in launch_evidence_claims if not isinstance(claim.get("launch_record"), Mapping)),
+                        None,
+                    )
+                    if prelaunch is not None:
+                        return cleanup_outcome(prelaunch.get("token", "claim"), prelaunch.get("generation", 0))
+                return _outcome("blocked", "dirty-worktree", ["uncommitted worktree requires explicit reconciliation"], "repository-task", "worktree:witness", manifest.get("generation", 0), "preserve-and-reconcile")
         for task_id, claim in manifest["claims"].items():
-            if claim.get("state") not in {"claimed", "launched"}:
+            if claim.get("state") not in {"claimed", "launched"} and not isinstance(claim.get("launch_record"), Mapping):
                 continue
             task = manifest["tasks"].get(task_id, {})
             if task.get("status") in {"done-pending", "checkpointed", "complete"}:
                 continue
             if dirty_worktree:
+                # The resumable cleanup-required outcome requires a pre-launch
+                # claim: once the launch record exists, ambient-shaped noise is
+                # indistinguishable from worker-caused dirt and keeps the hard
+                # dirty-worktree block (launch-record presence, not mtime, is
+                # the discriminator).
+                if ambient_entries is not None and not isinstance(claim.get("launch_record"), Mapping):
+                    return cleanup_outcome(claim.get("token", "claim"), claim.get("generation", 0))
                 return _outcome("blocked", "dirty-worktree", ["uncommitted worktree requires explicit reconciliation"], "repository-task", claim.get("token", "claim"), claim.get("generation", 0), "preserve-and-reconcile")
             commit_identity = task.get("commit_identity")
             if commit_identity and task.get("done_log_evidence") and commit_lookup and commit_lookup(commit_identity):
-                return self.reconcile_commit_before_checkpoint(
-                    task_id,
-                    commit_identity,
-                    commit_lookup,
-                    claim_token=claim.get("token"),
-                    generation=claim.get("generation"),
-                )
+                return _ReconcileCommit(task_id, commit_identity, commit_lookup, claim.get("token"), claim.get("generation"))
             if live_worker_owner and live_worker_owner == claim.get("owner"):
                 return _outcome("blocked", "stale-claim", ["ambiguous live worker claim"], "repository-task", claim.get("token", "claim"), claim.get("generation", 0), "preserve-and-reconcile")
             return _outcome("blocked", "owner-mismatch", ["claim owner or generation cannot be proven safe"], "repository-task", claim.get("token", "claim"), claim.get("generation", 0), "preserve-and-reconcile")
@@ -968,9 +1513,37 @@ class RuntimeDriver:
         )
         return completed.returncode == 0
 
-    def _git_worktree_dirty(self) -> bool:
+    @staticmethod
+    def _parse_porcelain_z(output: str) -> list[tuple[str, str]]:
+        """Parse NUL-delimited ``git status --porcelain -z`` records.
+
+        With ``-z`` git emits literal paths (a double quote or non-ASCII byte
+        in a name never becomes a C-quoted rendering), and rename or copy
+        records carry the original path as a following NUL field instead of
+        the ``orig -> new`` arrow. Malformed records surface with their raw
+        text so callers treat them as real (never ambient, never allowed)
+        paths.
+        """
+
+        entries: list[tuple[str, str]] = []
+        fields = output.split("\0")
+        index = 0
+        while index < len(fields):
+            record = fields[index]
+            index += 1
+            if not record:
+                continue
+            entries.append((record[:2], record[3:]))
+            if record[:1] in {"R", "C"} and index < len(fields):
+                entries.append((record[:2], fields[index]))
+                index += 1
+        return entries
+
+    def _git_worktree_entries(self) -> list[tuple[str, str]]:
+        """Enumerate worktree entries with the flagged porcelain -z witness."""
+
         completed = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "-c", "core.quotePath=false", "status", "--porcelain", "-z", "--untracked-files=all"],
             cwd=self.repo_root,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -979,7 +1552,24 @@ class RuntimeDriver:
         )
         if completed.returncode != 0:
             raise RuntimeError("git status witness failed")
-        return bool(completed.stdout.strip())
+        return self._parse_porcelain_z(completed.stdout)
+
+    def _is_ambient_noise_entry(self, code: str, path: str) -> bool:
+        """True only for untracked, in-repo entries matching the allowlist."""
+
+        if code != "??":
+            return False
+        if not path or "\\" in path or "\x00" in path or path.startswith('"'):
+            # A quoted or malformed rendering can never be proven ambient;
+            # fail closed to the hard block.
+            return False
+        if self._path_escapes_repo(path):
+            return False
+        name = PurePosixPath(path).name
+        return any(fnmatch.fnmatchcase(name, pattern) for pattern in AMBIENT_NOISE_PATTERNS)
+
+    def _git_worktree_dirty(self) -> bool:
+        return bool(self._git_worktree_entries())
 
     def _git_head_revision(self) -> str:
         completed = subprocess.run(
@@ -999,8 +1589,11 @@ class RuntimeDriver:
 
         ``git diff`` alone is blind to untracked files (the primary write form
         in this workflow), so untracked entries from ``git status`` are added.
-        ``core.quotePath=false`` keeps names comparable as literal posix paths.
-        Returns ``None`` when either git witness fails.
+        Both witnesses run with ``core.quotePath=false`` and the status witness
+        uses the NUL-delimited ``-z`` form parsed by the shared porcelain
+        helper, so names containing quotes or non-ASCII bytes stay comparable
+        as literal posix paths. Returns ``None`` when either git witness
+        fails.
         """
 
         diff = subprocess.run(
@@ -1015,7 +1608,7 @@ class RuntimeDriver:
             return None
         paths = {line.strip() for line in diff.stdout.splitlines() if line.strip()}
         status = subprocess.run(
-            ["git", "-c", "core.quotePath=false", "status", "--porcelain", "--untracked-files=all"],
+            ["git", "-c", "core.quotePath=false", "status", "--porcelain", "-z", "--untracked-files=all"],
             cwd=self.repo_root,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -1024,13 +1617,9 @@ class RuntimeDriver:
         )
         if status.returncode != 0:
             return None
-        for line in status.stdout.splitlines():
-            if len(line) < 4:
-                continue
-            for part in line[3:].split(" -> "):
-                path = part.strip().strip('"')
-                if path:
-                    paths.add(path)
+        for _code, path in self._parse_porcelain_z(status.stdout):
+            if path:
+                paths.add(path)
         return sorted(paths)
 
     def _path_escapes_repo(self, path: str) -> bool:
@@ -1038,13 +1627,14 @@ class RuntimeDriver:
 
         A tracked in-scope path replaced by a symlink pointing outside the
         repository must count as a scope violation even though the diff lists
-        only the (in-scope) name.
+        only the (in-scope) name. A path whose resolution raises ``OSError``
+        cannot be proven contained, so it fails closed as escaping.
         """
 
         try:
             resolved = (self.repo_root / path).resolve()
         except OSError:
-            return False
+            return True
         return resolved != self.repo_root and self.repo_root not in resolved.parents
 
     def _git_commit_is_descendant(self, baseline: str, commit: str) -> tuple[bool, bool]:
@@ -1076,6 +1666,126 @@ class RuntimeDriver:
             return None
         return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
 
+    def _git_committed_symlink_escapes(self, commit: str, paths: Sequence[str]) -> list[str]:
+        """Return committed symlink paths whose targets escape the repository.
+
+        ``git diff --name-only`` lists only the (possibly in-scope) link name,
+        so a committed symlink (blob mode 120000, checked via ``git ls-tree``)
+        pointing outside the repository root is verified separately. Any
+        witness failure counts the path as escaping (fail closed).
+        """
+
+        if not paths:
+            return []
+        tree = subprocess.run(
+            ["git", "ls-tree", "-z", commit, "--", *paths],
+            cwd=self.repo_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        if tree.returncode != 0:
+            raise RuntimeError("git ls-tree witness failed")
+        escapes: list[str] = []
+        for record in tree.stdout.split("\0"):
+            if not record:
+                continue
+            meta, _, path = record.partition("\t")
+            parts = meta.split()
+            if len(parts) != 3 or parts[0] != "120000" or parts[1] != "blob":
+                continue
+            target = subprocess.run(
+                ["git", "cat-file", "blob", f"{commit}:{path}"],
+                cwd=self.repo_root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+            if target.returncode != 0:
+                escapes.append(path)
+                continue
+            candidate = Path(target.stdout)
+            if candidate.is_absolute():
+                escapes.append(path)
+                continue
+            try:
+                resolved = (self.repo_root / candidate).resolve()
+            except OSError:
+                escapes.append(path)
+                continue
+            if resolved != self.repo_root and self.repo_root not in resolved.parents:
+                escapes.append(path)
+        return escapes
+
+    def _claim_drift_outcome(
+        self,
+        manifest: Mapping[str, Any],
+        claim: Mapping[str, Any] | None,
+        action_scope: str,
+        checkpoint_identity: str,
+    ) -> dict[str, Any] | None:
+        """Compare the live manifest against the claim's launch-record snapshot.
+
+        Callers must pass a manifest snapshot read under the manifest lock,
+        never an ambient unlocked read. The launch record (``baseline_revision``,
+        ``generation``, ``launched_at``) is written atomically with the claim
+        transition on the launch path; a genuinely pre-launch claim (no launch
+        record, no recorded checkpoints, pending or claimed task status (or a
+        commit-pending status recorded by the parent before any launch), claim
+        state ``claimed``) undergoes no drift checks. When a record exists, the
+        live claim drifts when its ``baseline_revision`` or ``generation`` no
+        longer matches the snapshot, and a claim in any post-launch state whose
+        record is missing also maps to ``stale-claim`` so record absence never
+        disarms drift detection (covering manifests written across the
+        re-activation or rollback window). A legacy claim carrying only a
+        hand-written ``baseline_revision`` counts as its own snapshot. Returns
+        ``None`` when the snapshot is valid or exempt, else the resumable
+        ``stale-claim`` outcome.
+        """
+
+        task_id = str((claim or {}).get("task_id") or self._task_id_from_checkpoint(checkpoint_identity))
+        task = manifest.get("tasks", {}).get(task_id, {})
+        record = (claim or {}).get("launch_record")
+        if not isinstance(record, Mapping):
+            checkpoints_recorded = any(
+                isinstance(entry, Mapping) and entry.get("task_id") == task_id
+                for entry in manifest.get("checkpoints", {}).values()
+            )
+            pre_launch = (
+                not checkpoints_recorded
+                and task.get("status") in {"pending", "claimed", "commit-pending"}
+                and (claim or {}).get("state") == "claimed"
+            )
+            has_legacy_baseline = bool(str((claim or {}).get("baseline_revision") or "").strip())
+            if pre_launch or has_legacy_baseline:
+                return None
+            return _outcome(
+                "blocked",
+                "stale-claim",
+                ["claim is in a post-launch state but has no launch record"],
+                action_scope,
+                checkpoint_identity,
+                manifest.get("generation", 0),
+                "preserve-and-reconcile",
+            )
+        drifted = (
+            str((claim or {}).get("baseline_revision") or "") != str(record.get("baseline_revision") or "")
+            or (claim or {}).get("generation") != record.get("generation")
+        )
+        if drifted:
+            return _outcome(
+                "blocked",
+                "stale-claim",
+                ["claim baseline or generation no longer matches the launch record"],
+                action_scope,
+                checkpoint_identity,
+                manifest.get("generation", 0),
+                "preserve-and-reconcile",
+            )
+        return None
+
     def _worktree_scope_violation(self, claim: Mapping[str, Any]) -> tuple[str, list[str]]:
         """Enforce the claim's allowed-path boundary with a git witness.
 
@@ -1106,11 +1816,22 @@ class RuntimeDriver:
         claim = manifest["claims"].get(task_id)
         if not claim or claim.get("token") != token or claim.get("owner") != self.owner:
             return _outcome("blocked", "owner-mismatch", ["abort receipt does not match claim owner"], "repository-task", token, manifest.get("generation", 0), "preserve-and-reconcile")
+        task = manifest["tasks"].get(task_id)
+        if _claim_progressed_past_receipt(task, claim, include_terminal=True):
+            # An explicit abort must not regress a task that already reached
+            # its receipt boundary (done-pending, checkpointed, complete,
+            # aborted) or a closed claim: the durable state stays untouched
+            # and the resumable stale-claim outcome surfaces instead.
+            return _stale_claim_outcome(
+                token,
+                claim.get("generation", manifest.get("generation", 0)),
+                ["claim already progressed past the abort receipt"],
+            )
         manifest["tasks"][task_id]["status"] = "aborted"
         claim["state"] = "aborted"
         manifest["workflow_state"] = "aborted"
         self._save(manifest)
-        return _outcome("aborted", "explicit-abort", [f"task={task_id}"], "repository-task", token, claim.get("generation", 0), "preserve-and-stop")
+        return _abort_outcome(token, claim.get("generation", 0), [f"task={task_id}"])
 
     @_locked_mutation
     def mark_commit_pending(self, task_id: str, commit_identity: str, log_evidence: Any = (), claim_token: str | None = None, generation: int | None = None) -> dict[str, Any]:
@@ -1121,34 +1842,66 @@ class RuntimeDriver:
         claim = manifest["claims"].get(task_id) if task else None
         if task is None or claim is None or claim.get("owner") != self.owner or (claim_token is not None and claim.get("token") != claim_token) or (generation is not None and claim.get("generation") != generation):
             return _outcome("blocked", "owner-mismatch", [f"task={task_id}"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "preserve-and-reconcile")
+        if manifest.get("workflow_state") == "aborted":
+            # A stale commit-pending write must never resurrect an aborted
+            # workflow or overwrite its aborted task.
+            return _abort_outcome(f"{task_id}:commit", manifest.get("generation", 0), ["workflow was explicitly aborted before the commit-pending write"], action_scope="done-handoff")
+        if claim.get("state") == "closed" or task.get("status") in {"aborted", "checkpointed", "complete"}:
+            # Progression fence: the commit boundary is owned by the live
+            # launch window; a closed claim or a task that already reached a
+            # later boundary (aborted, checkpointed, complete) is never
+            # rewritten to commit-pending.
+            return _stale_claim_outcome(
+                f"{task_id}:commit",
+                claim.get("generation", manifest.get("generation", 0)),
+                ["claim already progressed past the commit-pending write"],
+                action_scope="done-handoff",
+            )
         task.update({"status": "commit-pending", "commit_identity": str(commit_identity), "done_log_evidence": bounded_evidence(log_evidence)})
         manifest["history"].append({"event": "commit-pending", "task_id": task_id, "commit_identity": str(commit_identity)})
         self._save(manifest)
         return _outcome("success", "commit-pending", [f"task={task_id}", f"commit={commit_identity}"], "done-handoff", f"{task_id}:commit", claim.get("generation", 0), "preserve-and-reconcile")
 
-    @_locked_mutation
     def reconcile_commit_before_checkpoint(self, task_id: str, commit_identity: str, commit_lookup: Callable[[str], bool], claim_token: str | None = None, generation: int | None = None) -> dict[str, Any]:
+        """Reconcile a provable commit; the next claim runs after the lock."""
+
+        with _manifest_lock(self.manifest_path, self.owner) as acquired:
+            if not acquired:
+                return _mutation_unavailable(self, f"{task_id}:commit", action_scope="done-handoff")
+            outcome, claim_next = self._reconcile_commit_locked(task_id, commit_identity, commit_lookup, claim_token, generation)
+        if claim_next:
+            return self._attach_next_claim_action(outcome)
+        return outcome
+
+    def _reconcile_commit_locked(self, task_id: str, commit_identity: str, commit_lookup: Callable[[str], bool], claim_token: str | None, generation: int | None) -> tuple[dict[str, Any], bool]:
         manifest = load_manifest(self.manifest_path)
         task = manifest["tasks"].get(task_id)
         if task is None:
-            return self._result_error(f"unknown task: {task_id}")
+            return self._result_error(f"unknown task: {task_id}"), False
         if task.get("status") == "checkpointed" and task.get("commit_identity") == commit_identity:
-            return _outcome("success", "completed", ["commit already reconciled"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "continue-parent", actions=[])
+            return _outcome("success", "completed", ["commit already reconciled"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "continue-parent", actions=[]), False
         claim = manifest["claims"].get(task_id)
         if not claim or claim.get("owner") != self.owner or (claim_token is not None and claim.get("token") != claim_token) or (generation is not None and claim.get("generation") != generation):
-            return _outcome("blocked", "owner-mismatch", ["commit recovery receipt does not match the live claim"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "preserve-and-reconcile")
+            return _outcome("blocked", "owner-mismatch", ["commit recovery receipt does not match the live claim"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "preserve-and-reconcile"), False
         if task.get("commit_identity") != commit_identity or not task.get("done_log_evidence"):
-            return _outcome("blocked", "commit-pending", ["matching done-log evidence and commit identity are required"], "done-handoff", f"{task_id}:commit", claim.get("generation", manifest.get("generation", 0)), "preserve-and-reconcile")
+            return _outcome("blocked", "commit-pending", ["matching done-log evidence and commit identity are required"], "done-handoff", f"{task_id}:commit", claim.get("generation", manifest.get("generation", 0)), "preserve-and-reconcile"), False
         if not commit_lookup(commit_identity):
-            return _outcome("blocked", "commit-pending", [f"commit not found: {commit_identity}"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "preserve-and-reconcile")
+            return _outcome("blocked", "commit-pending", [f"commit not found: {commit_identity}"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "preserve-and-reconcile"), False
+        # The committed artifact is verified exactly as the done handoff would
+        # verify it: an out-of-scope or escaping commit is never reconciled
+        # into a completed checkpoint. The drift snapshot check runs on the
+        # same locked manifest the done handoff uses, so a claim whose launch
+        # record drifted between quarantine and reconciliation surfaces
+        # stale-claim here too.
+        boundary = self._done_boundary_block(claim, commit_identity, f"{task_id}:commit", manifest.get("generation", 0), manifest=manifest)
+        if boundary is not None:
+            return boundary, False
         task.update({"status": "checkpointed", "checkbox": True, "complete": True, "commit_identity": commit_identity})
         manifest["checkpoints"][f"{task_id}:commit"] = {"task_id": task_id, "commit_identity": commit_identity, "reconciled": True}
         if task_id in manifest["claims"]:
             manifest["claims"][task_id]["state"] = "closed"
         self._save(manifest)
-        claim = self.claim_next_task()
-        actions = [{"type": "launch-task", "task_id": claim["task_id"], "generation": claim["generation"]}] if claim.get("claimed") else []
-        return _outcome("success", "completed", [f"reconciled commit={commit_identity}"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "continue-parent", actions=actions)
+        return _outcome("success", "completed", [f"reconciled commit={commit_identity}"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "continue-parent", actions=[]), True
 
     def parent_continuation_available(self) -> bool:
         return self.profile.get("capabilities", {}).get("parent_continuation", "unsupported") != "unsupported"
@@ -1219,12 +1972,67 @@ def selftest() -> None:
     print("execute-plan runtime selftest: durable claim, checkpoint, and done boundary passed")
 
 
+def _operation_create(args: argparse.Namespace, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Seed the machine manifest from a plan task list.
+
+    This is the only documented path that translates plan checkboxes into
+    machine manifest state: it wraps ``create_manifest`` (the same seeding
+    routine ``--selftest`` uses), validates every task's allowed-path entries
+    against the same fail-closed path policy the launch envelope enforces,
+    and refuses to overwrite an existing manifest.
+    """
+
+    if args.manifest is None:
+        raise ValueError("--manifest is required")
+    manifest_path = Path(args.manifest)
+    tasks = payload.get("tasks")
+    if isinstance(tasks, str) or not isinstance(tasks, (list, tuple, Mapping)):
+        raise ValueError("create operation requires a task list under payload key 'tasks'")
+    plan_slug = str(args.plan_slug or payload.get("plan_slug") or "")
+    if not plan_slug.strip():
+        raise ValueError("create operation requires --plan-slug (or payload plan_slug)")
+    repo_root = Path(args.repo_root or Path.cwd()).resolve()
+    for task in tasks.values() if isinstance(tasks, Mapping) else tasks:
+        # Validate the item shape before any subscripting: a malformed list
+        # item must raise the fail-closed ValueError, not a raw TypeError. A
+        # mapping-valued input derives each id from its key, so the string-id
+        # check applies only to list items.
+        if not isinstance(task, Mapping) or (
+            not isinstance(tasks, Mapping) and not isinstance(task.get("id"), str)
+        ):
+            raise ValueError("create operation tasks must be mappings with a string id")
+        for entry in task.get("allowed_paths", task.get("files", ())):
+            _safe_relative_path(repo_root, str(entry))
+    # The lock lease is independent of manifest existence: fencing the
+    # exists-check, create, and owner write inside _manifest_lock makes a
+    # concurrent create fail closed instead of last-writer-wins.
+    with _manifest_lock(manifest_path, str(args.owner or f"create-{uuid.uuid4().hex}")) as acquired:
+        if not acquired:
+            raise ValueError(f"manifest creation is held by another owner: {manifest_path}")
+        if manifest_path.exists():
+            raise ValueError(f"manifest already exists; create refuses to overwrite: {manifest_path}")
+        manifest = create_manifest(manifest_path, plan_slug, tasks)
+        if args.owner:
+            manifest["owner"] = args.owner
+            _safe_write_json(manifest_path, manifest)
+    return _outcome(
+        "success",
+        "created",
+        [f"manifest={manifest_path}", f"tasks={len(manifest['tasks'])}", f"plan={plan_slug}"],
+        "repository-task",
+        f"create:{plan_slug}",
+        manifest["generation"],
+        "continue-parent",
+        actions=[],
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--operation", choices=("claim", "checkpoint", "done", "resume", "continue", "terminal"))
-    parser.add_argument("--input", help="JSON object for checkpoint or done")
+    parser.add_argument("--operation", choices=("create", "claim", "checkpoint", "done", "resume", "continue", "terminal"))
+    parser.add_argument("--input", help="JSON object for create, checkpoint, or done")
     parser.add_argument("--plan-slug")
     parser.add_argument("--owner")
     parser.add_argument("--repo-root", type=Path)
@@ -1245,6 +2053,13 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("approval receipt runtime does not match --runtime")
             adapter_kwargs["approval_receipt"] = args.approval_receipt
         adapter = capabilities.resolve_adapter(args.runtime, args.repo_root or Path.cwd(), **adapter_kwargs) if args.runtime else None
+        payload = json.loads(args.input) if args.input else {}
+        if args.operation == "create":
+            # The manifest does not exist yet: create runs before any driver
+            # construction and owns the seeding boundary itself.
+            result = _operation_create(args, payload)
+            print(json.dumps(result, sort_keys=True))
+            return 0
         driver = RuntimeDriver(
             args.manifest,
             plan_slug=args.plan_slug,
@@ -1253,7 +2068,6 @@ def main(argv: list[str] | None = None) -> int:
             owner=args.owner,
             repo_root=args.repo_root,
         )
-        payload = json.loads(args.input) if args.input else {}
         if args.operation == "claim":
             result = driver.claim_next_task()
         elif args.operation == "checkpoint":

@@ -1,6 +1,7 @@
 # Backlog: runtime budget-guard hooks (PreToolUse backstop for the 5h quota window)
 
 Status: open
+Claimed by: docs/plans/2026-09-11-execute-plan-runtime-guardrails.md (2026-09-11)
 Workflow: backlog
 Source: user request 2026-09-10 to research hook-driven budget checks; split out of the execute-plan quota-window item as an independent mechanical backstop
 Severity: Low-Medium (defense in depth; the skill-level gate in the companion item is the primary control)

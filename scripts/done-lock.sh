@@ -36,7 +36,7 @@ Environment:
   DONE_LOCK_HOLDER_PID       Long-lived holder PID (default: PPID of the acquire process).
                              Callers that `eval "$(done-lock.sh acquire)"` should leave this unset
                              so PPID is the eval'ing shell. Do not use the acquire script PID.
-  DONE_LOCK_DIR / DONE_LOCK_TOKEN / DONE_LOCK_GENERATION
+  DONE_LOCK_DIR / DONE_LOCK_TOKEN
                              Required in env for release / release-repo. Session file is
                              fence/status only; release-repo will not source it.
 
@@ -54,24 +54,6 @@ require_git_repo() {
   fi
   repo_id="$(printf '%s' "$repo_root" | shasum -a 256 | cut -c1-16)"
   lock_dir="${LOCK_ROOT}/${repo_id}"
-}
-
-read_label() {
-  label=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --label)
-        shift
-        label="${1:-}"
-        [[ -n "$label" ]] || { echo "done-lock: --label requires a value" >&2; exit 1; }
-        ;;
-      *)
-        echo "done-lock: unknown argument: $1" >&2
-        exit 1
-        ;;
-    esac
-    shift
-  done
 }
 
 now_epoch() {
@@ -96,7 +78,6 @@ load_lock_meta() {
   lock_meta_holder_pid=""
   lock_meta_holder_identity=""
   lock_meta_token=""
-  lock_meta_generation=""
   [[ -f "$meta" ]] || return 1
   lock_meta_label="$(meta_field "$meta" label)"
   lock_meta_started_epoch="$(meta_field "$meta" started_epoch)"
@@ -105,7 +86,6 @@ load_lock_meta() {
   lock_meta_holder_pid="$(meta_field "$meta" holder_pid)"
   lock_meta_holder_identity="$(meta_field "$meta" holder_identity)"
   lock_meta_token="$(meta_field "$meta" lock_token)"
-  lock_meta_generation="$(meta_field "$meta" generation)"
   return 0
 }
 
@@ -177,17 +157,14 @@ is_dead_holder_lock() {
 }
 
 session_fence_matches_lock() {
-  local session_file s_dir s_token s_generation
+  local session_file s_dir s_token
   session_file="$(lock_session_file)"
   [[ -f "$session_file" ]] || return 1
   s_dir="$(grep -E '^DONE_LOCK_DIR=' "$session_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
   s_token="$(grep -E '^DONE_LOCK_TOKEN=' "$session_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
-  s_generation="$(grep -E '^DONE_LOCK_GENERATION=' "$session_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
-  [[ -n "$s_dir" && -n "$s_token" && -n "$s_generation" ]] || return 1
+  [[ -n "$s_dir" && -n "$s_token" ]] || return 1
   load_lock_meta || return 1
-  [[ "$s_dir" == "$lock_dir" && "$s_token" == "$lock_meta_token" \
-    && "$s_generation" == "$lock_meta_generation" \
-    && "$lock_meta_generation" == "$lock_meta_token" ]]
+  [[ "$s_dir" == "$lock_dir" && "$s_token" == "$lock_meta_token" ]]
 }
 
 is_stealable_lock() {
@@ -283,7 +260,6 @@ started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 hostname=$(hostname -s 2>/dev/null || hostname)
 holder_pid=${holder}
 holder_identity=${holder_identity}
-generation=${lock_token}
 EOF
   then
     rm -f "$tmp"
@@ -300,7 +276,6 @@ print_exports() {
   local token="$1"
   printf 'export DONE_LOCK_DIR=%q\n' "$lock_dir"
   printf 'export DONE_LOCK_TOKEN=%q\n' "$token"
-  printf 'export DONE_LOCK_GENERATION=%q\n' "$token"
 }
 
 lock_session_file() {
@@ -343,7 +318,6 @@ write_lock_session() {
   if ! cat >"${tmp}" <<EOF
 DONE_LOCK_DIR=${lock_dir}
 DONE_LOCK_TOKEN=${token}
-DONE_LOCK_GENERATION=${token}
 EOF
   then
     rm -f "$tmp"
@@ -360,20 +334,6 @@ clear_lock_session() {
   local session_file
   session_file="$(lock_session_file)"
   rm -f "${session_file}"
-}
-
-load_lock_session() {
-  if [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]]; then
-    return 0
-  fi
-  local session_file
-  session_file="$(lock_session_file)"
-  if [[ ! -f "$session_file" ]]; then
-    return 1
-  fi
-  # shellcheck disable=SC1090
-  source "$session_file"
-  [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]]
 }
 
 remove_incomplete_lock_dir() {
@@ -402,28 +362,36 @@ remove_incomplete_lock_dir() {
   return 0
 }
 
+install_lock() {
+  # Shared acquisition body for both try_acquire call sites (fresh mkdir and
+  # post-steal re-mkdir): write meta, write the session fence, re-verify, export.
+  local label="$1"
+  local token
+  token="$(uuidgen 2>/dev/null || openssl rand -hex 16)"
+  if ! write_meta "$token" "$label"; then
+    # Peer claimed meta first, or dir was recycled under us; do not export a false hold.
+    return 1
+  fi
+  if ! write_lock_session "$token"; then
+    load_lock_meta || true
+    steal_remove_if_unchanged "$token" "$lock_meta_started_epoch" "fence-write-failed" || true
+    return 1
+  fi
+  # Re-read: abort if meta no longer matches our token (lost race after write).
+  load_lock_meta || return 1
+  if [[ "$lock_meta_token" != "$token" ]]; then
+    return 1
+  fi
+  print_exports "$token"
+  return 0
+}
+
 try_acquire() {
   local label="$1"
   mkdir -p "$(dirname "$lock_dir")"
   if mkdir "$lock_dir" 2>/dev/null; then
-    local token
-    token="$(uuidgen 2>/dev/null || openssl rand -hex 16)"
-    if ! write_meta "$token" "$label"; then
-      # Peer claimed meta first, or dir was recycled under us; do not export a false hold.
-      return 1
-    fi
-    if ! write_lock_session "$token"; then
-      load_lock_meta || true
-      steal_remove_if_unchanged "$token" "$lock_meta_started_epoch" "fence-write-failed" || true
-      return 1
-    fi
-    # Re-read: abort if meta no longer matches our token (lost race after write).
-    load_lock_meta || return 1
-    if [[ "$lock_meta_token" != "$token" ]]; then
-      return 1
-    fi
-    print_exports "$token"
-    return 0
+    install_lock "$label"
+    return
   fi
   # Do not rm -rf incomplete dirs from the acquire path (TOCTOU with in-flight write_meta).
   # Operator/stale-clean removes aged incomplete dirs.
@@ -437,26 +405,19 @@ try_acquire() {
     is_dead_holder_lock && reason="abandoned"
     if steal_remove_if_unchanged "$expected_token" "$expected_epoch" "$reason"; then
       if mkdir "$lock_dir" 2>/dev/null; then
-        local token
-        token="$(uuidgen 2>/dev/null || openssl rand -hex 16)"
-        if ! write_meta "$token" "$label"; then
-          return 1
-        fi
-        if ! write_lock_session "$token"; then
-          load_lock_meta || true
-          steal_remove_if_unchanged "$token" "$lock_meta_started_epoch" "fence-write-failed" || true
-          return 1
-        fi
-        load_lock_meta || return 1
-        if [[ "$lock_meta_token" != "$token" ]]; then
-          return 1
-        fi
-        print_exports "$token"
-        return 0
+        install_lock "$label"
+        return
       fi
     fi
   fi
   return 1
+}
+
+require_label_value() {
+  if [[ $# -eq 0 || -z "${1:-}" ]]; then
+    echo "done-lock: --label requires a value" >&2
+    exit 1
+  fi
 }
 
 cmd_acquire() {
@@ -465,7 +426,8 @@ cmd_acquire() {
     case "$1" in
       --label)
         shift
-        label="${1:-}"
+        require_label_value "$@"
+        label="$1"
         shift
         ;;
       *)
@@ -490,7 +452,8 @@ cmd_wait_acquire() {
     case "$1" in
       --label)
         shift
-        label="${1:-}"
+        require_label_value "$@"
+        label="$1"
         shift
         ;;
       --max-wait)
@@ -524,10 +487,9 @@ cmd_wait_acquire() {
 cmd_release() {
   local dir="${DONE_LOCK_DIR:-}"
   local token="${DONE_LOCK_TOKEN:-}"
-  local generation="${DONE_LOCK_GENERATION:-}"
   # Same confused-deputy guard as release-repo: never adopt the shared session file.
-  if [[ -z "$dir" || -z "$token" || -z "$generation" ]]; then
-    echo "done-lock: release requires DONE_LOCK_DIR, DONE_LOCK_TOKEN, and DONE_LOCK_GENERATION in env" >&2
+  if [[ -z "$dir" || -z "$token" ]]; then
+    echo "done-lock: release requires DONE_LOCK_DIR and DONE_LOCK_TOKEN in env" >&2
     echo "done-lock: re-export them from your acquire Step 0 output; refusing shared session load" >&2
     exit 1
   fi
@@ -541,12 +503,11 @@ cmd_release() {
     echo "done-lock: lock directory missing metadata; refusing unsafe release" >&2
     exit 1
   fi
-  local meta_token meta_generation meta_epoch released_for
+  local meta_token meta_epoch released_for
   meta_token="$(meta_field "$meta" lock_token)"
-  meta_generation="$(meta_field "$meta" generation)"
   meta_epoch="$(meta_field "$meta" started_epoch)"
-  if [[ "$token" != "$meta_token" || "$generation" != "$meta_generation" ]]; then
-    echo "done-lock: token or generation mismatch; not releasing ${dir}" >&2
+  if [[ "$token" != "$meta_token" ]]; then
+    echo "done-lock: token mismatch; not releasing ${dir}" >&2
     exit 1
   fi
   released_for="$(meta_field "$meta" repo_root)"
@@ -698,7 +659,6 @@ cmd_selftest() {
       DONE_LOCK_HOLDER_PID="${DONE_LOCK_HOLDER_PID-}" \
       DONE_LOCK_DIR="${DONE_LOCK_DIR-}" \
       DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN-}" \
-      DONE_LOCK_GENERATION="${DONE_LOCK_GENERATION-}" \
       bash "$script_path" "$@"
   }
 
@@ -969,6 +929,68 @@ cmd_selftest() {
     fail=1
   else
     echo "selftest OK: newline label rejected"
+  fi
+
+  # 14) --label validation: missing value and empty label are rejected with a
+  # specific error by both argument-parsing stances (acquire, wait-acquire).
+  local err
+  for cmd in acquire wait-acquire; do
+    err="$(cd "$root" && run "$cmd" --label 2>&1 >/dev/null || true)"
+    if [[ "$err" != *"--label requires a value"* ]]; then
+      echo "selftest FAIL: ${cmd} missing --label value error not specific: ${err}" >&2
+      fail=1
+    elif [[ "$err" != *"done-lock: --label requires a value" ]]; then
+      echo "selftest FAIL: ${cmd} missing --label value error mismatch" >&2
+      fail=1
+    fi
+    err="$(cd "$root" && run "$cmd" --label "" 2>&1 >/dev/null || true)"
+    if [[ "$err" != *"done-lock: --label requires a value"* ]]; then
+      echo "selftest FAIL: ${cmd} empty label not rejected: ${err}" >&2
+      fail=1
+    fi
+  done
+  if [[ "$fail" -eq 0 ]]; then
+    echo "selftest OK: --label missing value and empty label rejected"
+  fi
+
+  # 15) Token-only session shape: acquire writes exactly the two lock identity
+  # keys, and the release path consumes that token-only fence end to end.
+  if ! (
+    cd "$root"
+    rm -f .ai-playbook/done-lock.session
+    # Case 13 leaves a meta-less lock dir behind (label rejected after mkdir); clear it.
+    rm -rf "$test_lock_dir"
+    eval "$(run acquire --label token-only-shape)"
+    key_count="$(grep -c '^DONE_LOCK_' .ai-playbook/done-lock.session || true)"
+    if [[ "$key_count" -ne 2 ]]; then
+      echo "selftest FAIL: session file expected 2 identity keys, got ${key_count}" >&2
+      exit 1
+    fi
+    # The meta file must not carry any dead lock-generation key: nothing in
+    # the script reads one, and writing an unread identity field invites
+    # drift between the fence and its record.
+    if grep -q '^generation=' "${DONE_LOCK_DIR}/${META_FILE}"; then
+      echo "selftest FAIL: meta file carries a dead generation key" >&2
+      exit 1
+    fi
+    run release-repo
+    [[ ! -f .ai-playbook/done-lock.session ]]
+  ); then
+    echo "selftest FAIL: token-only session shape release" >&2
+    fail=1
+  else
+    echo "selftest OK: token-only session shape consumed by release"
+  fi
+
+  # 16) No-sourcing invariant: the script must never source a session file
+  # (repo-controlled content; sourcing would be arbitrary code execution).
+  local sourcing_hits
+  sourcing_hits="$(grep -nE '(^|[[:space:];&])(source|\.)[[:space:]]+[^|]*done-lock\.session' "$script_path" || true)"
+  if [[ -n "$sourcing_hits" ]]; then
+    echo "selftest FAIL: script sources a session file: ${sourcing_hits}" >&2
+    fail=1
+  else
+    echo "selftest OK: no source command reads session files"
   fi
 
   rm -rf "$tmp"

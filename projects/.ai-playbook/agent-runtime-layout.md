@@ -25,24 +25,29 @@ Shared workflow policy owns authorization, durable state, retry budgets,
 continuation, and commit boundaries. A host adapter owns only its local launch,
 wait, resume, and event translation protocol.
 
-The registry currently defines eight eligible profiles. The paths and command
-families below are verified against the current repository inventory and the
-runtime catalog under `agents/skills/agterm/agent-runtimes.md`:
+The registry currently defines one eligible profile and eight deferred
+runtimes (seven no-adapter runtimes plus Pi). The paths and command families
+below are verified against the current repository inventory and the runtime
+catalog under `agents/skills/agterm/agent-runtimes.md`:
 
 | ID | Display name | Adapter boundary | Eligibility |
 | --- | --- | --- | --- |
-| `claude` | Claude Code | `runtime-adapter:claude` | eligible |
-| `codex` | Codex | `runtime-adapter:codex` | eligible |
-| `cursor` | Cursor | `runtime-adapter:cursor` | eligible |
-| `zcode` | ZCode | `runtime-adapter:zcode` | eligible |
-| `opencode` | OpenCode | `runtime-adapter:opencode` | eligible |
-| `copilot` | Copilot | `runtime-adapter:copilot` | eligible |
-| `gemini` | Gemini CLI | `runtime-adapter:gemini` | eligible |
-| `antigravity` | Antigravity | `runtime-adapter:antigravity` | eligible |
+| `codex` | Codex | `execute_plan_runtime_codex:CodexAdapter` | eligible |
+| `claude` | Claude Code | none (no verified adapter) | deferred |
+| `cursor` | Cursor | none (no verified adapter) | deferred |
+| `zcode` | ZCode | none (no verified adapter) | deferred |
+| `opencode` | OpenCode | none (no verified adapter) | deferred |
+| `copilot` | Copilot | none (no verified adapter) | deferred |
+| `gemini` | Gemini CLI | none (no verified adapter) | deferred |
+| `antigravity` | Antigravity | none (no verified adapter) | deferred |
+| `pi` | Pi | none (resume not verified) | deferred |
 
-Pi is explicitly deferred. Its `pi` runtime entry remains in the registry's
-deferred set until a verified resume contract and repeatable session identity
-are available; it is not silently treated as an eligible profile.
+The seven no-adapter runtimes are deferred with reason "no verified adapter";
+they remain canonical-but-deferred in the registry. Pi is explicitly deferred
+with its own reason ("Execute-plan resume behavior is not documented or
+verified for Pi."). Its `pi` runtime entry remains in the registry's deferred
+set until a verified resume contract and repeatable session identity are
+available; no deferred runtime is silently treated as an eligible profile.
 
 ## Verified Runtime Sources
 ### Shared Agent Skill Registry

@@ -428,11 +428,11 @@ The three runtime paths are DISPOSABLE (safe to delete):
 ## Capability boundary and registry parity
 
 The shared gate core does not know which agent invoked it. The adapter is the
-only place that translates the host payload and block envelope. A host hook
-cannot enforce this policy when its event cannot block the write or cannot carry
-the path and session payload required by the core. Runtime identity, capability
-tiers, fallbacks, and lifecycle result fields are defined by the registry and
-the shared execute-plan runtime contract; this document keeps only the
+only place that translates the host payload and block envelope. The full hook
+capability boundary, runtime identity, capability tiers, fallbacks, and
+lifecycle result fields are stated once in
+`agents/skills/execute-plan/runtime-contract.md` (Hook capability boundary);
+read that file for the normative rule. This document keeps only the
 skill-gate-specific adapter and probe behavior.
 
 Probe diagnostics are deliberately distinct: missing adapter, missing

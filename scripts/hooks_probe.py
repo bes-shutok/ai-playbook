@@ -111,8 +111,14 @@ def _profile_data(inventory: dict, runtime_id: str) -> dict:
 
 
 def _profile_runtime_ids(inventory: dict) -> list[str]:
+    """Order-preserving unique union of canonical and deferred runtime ids.
+
+    Canonical-but-deferred runtimes appear in both lists; the dedupe keeps one
+    probe row per runtime so the catalog length pin stays exact.
+    """
+
     root = inventory.get("inventory", {})
-    return list(root.get("canonical_ids", ())) + list(root.get("deferred_ids", ()))
+    return list(dict.fromkeys(list(root.get("canonical_ids", ())) + list(root.get("deferred_ids", ()))))
 
 
 def _profile_probe(runtime_id: str, inventory: dict, home: Path | None = None) -> ProbeResult:

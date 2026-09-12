@@ -62,11 +62,12 @@ is to ship the enforcement unwired and flip rows via the wiring recipe when an
 adapter is actually built. Hosts that do expose a stop-adjacent event are the
 natural first candidates for that recipe.
 
-This is also a payload rule: an event that cannot block, or cannot carry the
-plan path and review evidence needed by the validator, cannot enforce the
-policy. Keep that protocol translation in a thin per-runtime adapter. The
-agent-neutral validator and the runtime profile registry remain the sources of
-truth; the capability probe reports missing adapter, missing registration,
+This is also a payload rule: whether a host event can enforce the policy is
+governed by the hook capability boundary stated once in
+`agents/skills/execute-plan/runtime-contract.md`; read that file for the
+normative rule. Keep that protocol translation in a thin per-runtime adapter.
+The agent-neutral validator and the runtime profile registry remain the sources
+of truth; the capability probe reports missing adapter, missing registration,
 unsupported event, and degraded fallback separately and fails closed for
 malformed adapter data.
 

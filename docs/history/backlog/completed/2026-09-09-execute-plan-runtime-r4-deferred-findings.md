@@ -1,6 +1,7 @@
 # Execute-plan runtime r4 deferred findings: registry adapter coupling, capability over-declaration, manifest seeding, policy-token validator unification, low-severity residuals
 
-Status: open
+Status: done
+Disposition (2026-09-11): plain fix close-out via plan 2026-09-10-execute-plan-runtime-residuals: F13/F14/overflow(b) by Task 5 (generic entrypoint resolution, deferrals section, generated activation fixture), F15 by Task 8 (`create` seeding operation), F18 by Task 6 (unified policy-token validator), overflow(a) plus done-lock smalls by Task 9, overflow(c)/(d)/(e) by Task 10 (single-home prose, lock-section verify-and-close, README row move).
 Workflow: backlog
 Source: docs/reviews/2026-09-09-branch-review-agent-agnostic-execute-plan-r4.md (branch review round r4, findings F13, F14, F15, F18 + 5 overflow items; deferred from the r4 receiving-review pass on branch 2026-09-09-agent-agnostic-execute-plan)
 

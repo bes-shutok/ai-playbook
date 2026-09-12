@@ -71,22 +71,22 @@ Parallel agent sessions on the **same git repository** must not run `learn`, `do
    # fresh, and release-repo refuses to source the session fence file, so the
    # token must survive here in chat context to be re-exported there.
    printf '%s\n' "$LOCK_EXPORTS"
-   if [[ -z "${DONE_LOCK_DIR:-}" || -z "${DONE_LOCK_TOKEN:-}" || -z "${DONE_LOCK_GENERATION:-}" ]]; then
+   if [[ -z "${DONE_LOCK_DIR:-}" || -z "${DONE_LOCK_TOKEN:-}" ]]; then
      echo "done-lock: acquire succeeded without lock exports" >&2
      exit 1
    fi
    ```
 
    Install a trap in the controlling shell immediately after the successful
-   acquire so an interrupted same-shell run attempts generation-fenced release:
+   acquire so an interrupted same-shell run attempts token-fenced release:
 
    ```bash
-   trap 'status=$?; if [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" && -n "${DONE_LOCK_GENERATION:-}" ]]; then DONE_LOCK_DIR="$DONE_LOCK_DIR" DONE_LOCK_TOKEN="$DONE_LOCK_TOKEN" DONE_LOCK_GENERATION="$DONE_LOCK_GENERATION" "$LOCK_SCRIPT" release-repo || true; fi; exit "$status"' EXIT INT TERM
+   trap 'status=$?; if [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]]; then DONE_LOCK_DIR="$DONE_LOCK_DIR" DONE_LOCK_TOKEN="$DONE_LOCK_TOKEN" "$LOCK_SCRIPT" release-repo || true; fi; exit "$status"' EXIT INT TERM
    ```
 
    The trap is a safety net, not a substitute for the explicit Step 6 release.
 
-3. Keep `DONE_LOCK_DIR`, `DONE_LOCK_TOKEN`, and `DONE_LOCK_GENERATION` in scope when the same shell session runs multiple steps. **Across separate Shell tool calls**, re-export all three values from your Step 0 acquire stdout (chat context). The file `<repo>/.ai-playbook/done-lock.session` is a **fence/status** signal only; Step 6 `release-repo` requires env vars and will **not** source that file (confused-deputy guard after stale-clean / peer acquire).
+3. Keep `DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` in scope when the same shell session runs multiple steps. **Across separate Shell tool calls**, re-export both values from your Step 0 acquire stdout (chat context). The file `<repo>/.ai-playbook/done-lock.session` is a **fence/status** signal only; Step 6 `release-repo` requires env vars and will **not** source that file (confused-deputy guard after stale-clean / peer acquire).
 4. If **wait-acquire** times out, run `status`, report the holder (`label`, `age_secs`, `holder_pid`, `holder_alive`, `stealable` / `abandoned`), return `blocked`, and **do not** commit. Do not bypass an active lock. Do **not** run `stale-clean` unless `status` shows the lock is stale/abandoned **and** you intend to take over; after `stale-clean`, only the chat that successfully re-acquires may release (using that acquire's token).
 5. **Stealable locks** (auto-stolen on the next `acquire` / `wait-acquire` poll):
    - **Stale:** age ≥ `DONE_LOCK_STALE_SECS` (default 1800 = 30m) permits explicit `stale-clean`; age alone does not authorize automatic takeover.
@@ -531,10 +531,11 @@ After learn and stash steps complete:
    ```
    Gitignored files belong on the `docs` branch only (handled in Step 2), not on the working feature branch.
 4a. **Pre-commit lesson scope audit (when the project lessons corpus is touched).** If the session's staged or unstaged diff creates or substantially edits the project lessons corpus (`docs/maintenance/development_lessons.md`, or `PROJECT_CORPUS_REL` from `lessons_recall.py`), audit scope BEFORE staging it:
-   1. **Mechanical duplicate check.** First resolve the company guidelines master (`company_guidelines_master` in facts); if it does not resolve (personal repo), the mechanical check passes trivially (do not run the script). Otherwise verify the validator script file exists (e.g. `test -f` on the resolved path); if it is absent, print a one-line warning and continue with the placement-evidence check (cold-start; do not block the session on a missing optional validator). Only when the file exists, run the validator with stderr captured (with `$PROJECT_CORPUS` and `$COMPANY_MASTER` set to the resolved corpus and master paths; override the script path via `LESSON_SCOPE_SCRIPT` for local testing only):
+   1. **Mechanical duplicate check.** First resolve the company guidelines master (`company_guidelines_master` in facts) by applying the ownership-scoping resolution test (`learn` Step 1.2 item 5c, anchored to the repo being audited): it resolves only when the repo sits under the company workspace root (`company_projects_root` in facts) and the key's path exists. Outside the company root (a repo under the personal root, or under neither workspace root) the master does not resolve and the mechanical check passes trivially: do not run the script, and print a one-line note (`company master out of scope for this repo; duplicate check skipped`). Under the company root with the key's path missing, print a one-line WARNING (`config drift: company guidelines master not found; company duplicate audit not run`); this outcome counts as passed-with-drift and does not block the Step 3 commit (the placement-evidence check below still applies); it is not a failed audit. Otherwise (master resolved) verify the validator script file exists (e.g. `test -f` on the resolved path); if it is absent, print a one-line warning (`lesson scope validator absent; mechanical duplicate check skipped (cold-start)`) and continue with the placement-evidence check (cold-start; do not block the session on a missing optional validator). Only when the file exists, run the validator with stderr captured (with `$PROJECT_CORPUS` and `$COMPANY_MASTER` set to the resolved corpus and master paths; override the script path via `LESSON_SCOPE_SCRIPT` for local testing only):
 ```bash
 python3 "${LESSON_SCOPE_SCRIPT:-${HOME}/.ai-playbook/scripts/check_lesson_scope.py}" "$PROJECT_CORPUS" "$COMPANY_MASTER"
 ```
+       Whichever witness line fired above (out-of-scope note, drift WARNING, cold-start warning) is echoed into the Step 7 outcome report so the skip decision is reconstructable after the session.
        Outcome semantics: exit 0 with no WARNING line on stderr = clean pass, covering rules of at least 25 normalized words (the witness-pointer floor: shorter blocks are presumed witness pointers and never match). Exit 1 with at least one `DUPLICATE:` line = a full rule is duplicated across the project corpus and the company master (handled by item 3 below). Any WARNING line on stderr, any exit code other than 0 or 1 (including exit 2 and interpreter codes such as 126 or 127), or exit 1 with no `DUPLICATE:` line, is a tool failure: stop, report the validator error, release the lock per Step 6, and return blocked; do not stage the corpus. The validator is sized for prose corpora; an unusually long run signals a degenerate (for example fence-damaged or headingless) corpus and is treated as a tool failure per the sentence above. `$COMPANY_MASTER` must resolve to the canonical master from facts, never a repo mirror.
    2. **Placement-evidence check.** Confirm the learn run's placement receipt (`learn` Step 1.2 item 5c) covers every new or substantially edited lesson. If a lesson has no receipt, or its scope cannot be established from the receipt, stop before commit and request classification from the user; do NOT silently commit the narrower placement. For a fork (4) lesson, the receipt must state the residual dependency; a fork (4) receipt with no residual dependency stops before commit for reclassification, exactly like a missing receipt.
    3. **On exit 1 with at least one `DUPLICATE:` line (duplicate full rule):** stop before commit, release the lock per Step 6, and return blocked with the validator output; ask the user to classify the lesson (company master vs project corpus). Never move, rewrite, or duplicate lessons automatically.
@@ -613,17 +614,17 @@ Do not push. These are local-only docs repositories.
 
 **Always run Step 6 before Step 7**, including when Steps 1–5 failed or returned early. This lets a waiting parallel `done` resume.
 
-From the project git root, release with **`DONE_LOCK_DIR`, `DONE_LOCK_TOKEN`, and `DONE_LOCK_GENERATION` from your Step 0 acquire** (re-export from that tool output if the shell lost env). `release-repo` requires those env vars and refuses to load the shared session file:
+From the project git root, release with **`DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` from your Step 0 acquire** (re-export from that tool output if the shell lost env). `release-repo` requires those env vars and refuses to load the shared session file. The lock session/metadata shape is token-only as of the 2026-09-11 done-lock change; no generation export is involved:
 
 ```bash
-DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" DONE_LOCK_GENERATION="${DONE_LOCK_GENERATION:?}" \
+DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" \
   "${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}" release-repo
 ```
 
 Equivalent:
 
 ```bash
-DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" DONE_LOCK_GENERATION="${DONE_LOCK_GENERATION:?}" \
+DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" \
   "${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}" release
 ```
 

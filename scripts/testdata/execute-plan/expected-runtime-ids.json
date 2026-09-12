@@ -9,16 +9,18 @@
     "gemini",
     "antigravity"
   ],
-  "deferred_ids": ["pi"],
+  "deferred_ids": [
+    "claude",
+    "cursor",
+    "zcode",
+    "opencode",
+    "copilot",
+    "gemini",
+    "antigravity",
+    "pi"
+  ],
   "profiles": {
-    "claude": {"adapter_entrypoint": "runtime-adapter:claude", "retry_budget": 2, "capabilities": {"launch": "unsupported", "wait": "unsupported", "resume": "unsupported", "checkpoint": "full", "approval": "full", "parent_continuation": "full", "final_response": "degraded"}},
-    "codex": {"adapter_entrypoint": "runtime-adapter:codex", "retry_budget": 2, "capabilities": {"launch": "full", "wait": "full", "resume": "full", "checkpoint": "full", "approval": "full", "parent_continuation": "full", "final_response": "degraded"}},
-    "cursor": {"adapter_entrypoint": "runtime-adapter:cursor", "retry_budget": 2, "capabilities": {"launch": "unsupported", "wait": "unsupported", "resume": "unsupported", "checkpoint": "full", "approval": "full", "parent_continuation": "full", "final_response": "degraded"}},
-    "zcode": {"adapter_entrypoint": "runtime-adapter:zcode", "retry_budget": 2, "capabilities": {"launch": "unsupported", "wait": "unsupported", "resume": "unsupported", "checkpoint": "full", "approval": "degraded", "parent_continuation": "full", "final_response": "degraded"}},
-    "opencode": {"adapter_entrypoint": "runtime-adapter:opencode", "retry_budget": 2, "capabilities": {"launch": "unsupported", "wait": "unsupported", "resume": "unsupported", "checkpoint": "full", "approval": "degraded", "parent_continuation": "full", "final_response": "degraded"}},
-    "copilot": {"adapter_entrypoint": "runtime-adapter:copilot", "retry_budget": 2, "capabilities": {"launch": "unsupported", "wait": "unsupported", "resume": "unsupported", "checkpoint": "full", "approval": "degraded", "parent_continuation": "full", "final_response": "degraded"}},
-    "gemini": {"adapter_entrypoint": "runtime-adapter:gemini", "retry_budget": 2, "capabilities": {"launch": "unsupported", "wait": "unsupported", "resume": "unsupported", "checkpoint": "full", "approval": "degraded", "parent_continuation": "degraded", "final_response": "degraded"}},
-    "antigravity": {"adapter_entrypoint": "runtime-adapter:antigravity", "retry_budget": 2, "capabilities": {"launch": "unsupported", "wait": "unsupported", "resume": "unsupported", "checkpoint": "full", "approval": "degraded", "parent_continuation": "degraded", "final_response": "degraded"}}
+    "codex": {"adapter_entrypoint": "execute_plan_runtime_codex:CodexAdapter", "retry_budget": 2, "capabilities": {"parent_continuation": "full", "final_response": "degraded", "resume": "full"}}
   },
   "aliases": {
     "claude": ["Claude Code"],

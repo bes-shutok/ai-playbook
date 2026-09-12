@@ -1,6 +1,7 @@
 # Backlog: execute-plan quota-window gate (pause near the 5h limit, schedule resume at cycle start)
 
 Status: open
+Claimed by: docs/plans/2026-09-11-execute-plan-runtime-guardrails.md (2026-09-11)
 Workflow: backlog
 Source: user request 2026-09-10 to research hook-driven budget checks for execute-plan; feasibility research completed same day (findings embedded below)
 Severity: Medium (long runs die mid-task on provider quota exhaustion; scheduled overnight runs strand until manual restart)

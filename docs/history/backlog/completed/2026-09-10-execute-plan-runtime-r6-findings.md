@@ -1,6 +1,7 @@
 # Execute-plan runtime r6 verification findings: ignored-path witness blindness (accepted limitation), done-boundary symlink escape, witness usability
 
-Status: open
+Status: done
+Disposition (2026-09-11): F1 deferred by the 2026-09-11 threat-model decision to docs/history/backlog/2026-09-11-deferred-malicious-worker-hardening.md (Task 2 added only the honest-drift launch record); overflow items closed by the Task 8 directory-path rejection and seeding-producer documentation; F2-F13 closed by Tasks 1, 3, 7, 11 of plan 2026-09-10-execute-plan-runtime-residuals.
 Workflow: backlog
 Source: docs/reviews/2026-09-10-branch-review-agent-agnostic-execute-plan-r6.md (verification round r6 of docs/plans/2026-09-09-agent-agnostic-execute-plan.md, archived at merge)
 

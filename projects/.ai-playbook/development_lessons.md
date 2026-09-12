@@ -2230,6 +2230,8 @@ A single domain rule (a scope limit, a routing decision, a threshold-based exclu
 
 **Witness (gold-source rule addition with no stale token, 2026-08-19 skill-split plan review r2):** The drift also fires with NO stale token to grep. A prior fix round added a flat format rule to the `review-staging` gold source ("no fenced code blocks in finding bodies") while a consumer review skill's own Comment examples still mandated fenced code blocks, so the corpus was internally contradictory even though no old wording survived anywhere; a stale-token grep returns empty here by construction. The sweep for this direction is semantic: after any gold-source rule change, grep consumers for mandates of the now-forbidden shape (here, fenced-block example syntax), not only for the previous vocabulary. The fix harmonized both files on a preferred shape (inline spans) with fenced blocks conditionally allowed, i.e. a rule added without checking consumers may need softening rather than one-sided propagation.
 
+**Witness (retired protocol identifier in a consumer skill doc, 2026-09-12 execute-plan runtime plan review r2):** After the done-lock protocol changed to a token-only session shape (retiring the generation export), the consumer skill doc (`agents/skills/done/SKILL.md`) still required the retired env var in its release snippets, trap, and scope guidance, so following the documented release procedure would ABORT the release and leak the lock (a functional break, not cosmetic wording). A review round after the protocol change caught it; the fix removed every reference and verified with a corpus-wide grep for the retired identifier returning empty. The added angle: when the gold source is a runtime protocol (lock/session/env contract), consumer-doc drift fails HARD at the worst moment (during cleanup), so the grep-for-the-retired-token step belongs in the same change set as the protocol change, not in a later review round.
+
 ---
 
 
@@ -5883,3 +5885,42 @@ When the identical command behaves differently in the agent shell versus the use
 **Example:** a corpus file contained a stray ``` line; the old parser closed on it and skipped the remainder, returning the clean exit code on a damaged corpus. The rewrite pinned the closing rule and an unclosed-fence error tier; regression tests pin the stray-fence, inner-fence-under-longer-wrapper, and unclosed-fence shapes.
 
 **See also:** #72 (guards must fail closed when input is absent), #120 (re-measure mechanisms the docs call validated).
+## 319. `git commit --only <dir>` Excludes the Source Deletions of a Staged `git mv` Targeting That Dir
+
+**Principle:** Family B - verify a file move is fully committed (both halves), not just the half your path filter names.
+
+When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git commit --only <dir>` (or `--only <dest-file>`), git commits the destination add but silently EXCLUDES the staged deletion of the source path because the source path is outside the `--only` pathspec. The result is a half-move commit: the new file exists, the old file is still tracked, and `git status` shows staged `D` entries that a quick glance reads as "already handled". Committing the completion with a second `--only <source-path>` commit is required.
+
+**Why:** `--only` filters by pathspec, and a rename's two halves have different paths; any pathspec that names only one half commits only that half. The full-rename commit appeared in the log (with `create mode` lines), which makes it look complete.
+
+**How to apply:** after any move commit that used a pathspec, run `git status --short` and expect a clean tree; staged `D` entries for the moved sources mean the move is incomplete, so commit them immediately in a follow-up commit (same message family, "move completion"). Better: when committing a rename, pass BOTH halves to `--only`, or commit without a pathspec when the working tree contains only your own changes.
+
+**Witness (2026-09-11, two occurrences in one session):** parking 16 deferred backlog items (`git commit --only docs/history/backlog/deferred` left 16 staged `D` root entries) and parking the VRS round-2 plan (`--only docs/plans/deferred` left the root copy staged `D`); each needed an immediate "move completion" follow-up commit.
+
+## 320. Signal-Kill Test Witnesses Need Async-Delivery Grace and a Disposable Child
+
+**Principle:** Family H (verify the real thing, not the abstraction) - an asynchronous OS side effect is not observable the instant you request it, and a process-identity test must never wager the test runner's own process.
+
+**Trigger:** writing a test that asserts a signal was (or was not) delivered to a child process, especially a kill-order or PID-recycling witness around `kill(pid, SIGKILL)` followed by an immediate `poll()`/`waitpid()`.
+
+**Rule:** (1) After requesting an asynchronous signal, insert a short grace pause before polling the target's exit state; an immediate poll can miss the exit and let a regression pass vacuously (verify by tracing the kill syscall during RED triage). (2) Never build a PID-identity test around the runner's own PID (`os.getpid()`); spawn a real disposable child with a deliberately bogus captured identity so a regressed identity guard fails an assertion against the disposable child instead of signalling the test runner itself.
+
+**Why:** in a kill-order test, SIGKILL delivery is asynchronous, so the un-graced witness passed under the pre-fix code order during RED; and the original recycled-PID witness used the runner's PID, where a regressed guard would kill the process running the tests. The rebuilt witness (grace pause + disposable child) fails loudly and safely on regression.
+
+**See also:** #317 (simulate the prescribed fix over every shape the criterion quantifies) for the sibling trap of probing only the happy path.
+
+## 321. A Shared Lifecycle Guard Must Enumerate Every Terminal State And Run Before The Branches It Protects
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a guard's completeness is measured against the actual state set the machine persists, not the states its author remembered, and a guard evaluated after the branch it protects protects nothing.
+
+**Trigger:** adding a new terminal state (abort, cancel, expire) to a workflow state machine that already protects transitions with a shared predicate, or deduplicating several inline guards into one shared predicate.
+
+**Rule:** (1) Fold the new terminal state into EVERY consumer of the guard family in the same change set: the shared predicate's core status set, persist-site fences, resume/relaunch selection, retry decisions, and the MUTATING operations (abort, claim, and every mark-transition entry point), not only the receipt paths that report state. Grep the existing terminal states as the enumeration witness; every hit is a site the new state must reach. (2) Order guards before decisions: a progression guard must be evaluated as a conjunct of (or ahead of) any retry/relaunch branch that could regress the state it protects. A decision branch placed before the guard silently bypasses it for the stale inputs it exists to catch.
+
+**Why:** deduplication widens a predicate's blast radius. Each earlier state piggybacked on the shared guard, so a later state that misses it defeats every deduplicated site at once: an explicit abort was undone by an in-flight retryable receipt, resume re-selected the aborted workflow, and the retry branch regressed it to launched. Separately, a retry branch running before the guard regressed a done-pending task on a stale receipt even though the guard existed.
+
+**Witness (2026-09-12, execute-plan runtime review r3):** the `aborted` state, added after the progression-guard predicate was deduplicated, was absent from the predicate's core statuses, resume selection, and the retry decision (3 blocking findings, one race window); the retry branch was also ordered ahead of the guard (reproduced live). The fix added `aborted` to all sites and made the predicate a conjunct of the retry decision.
+
+**Witness (same machine, review round r4, mutator side):** the r3 fixes fenced only the receipt paths; round 4 then found `abort`, `claim_next_task`, and `mark_commit_pending` still mutating over progressed/aborted state (one High severity). Completing the family meant sweeping the mutating entry points with the same predicate, plus splitting one conflated rejection envelope into distinct stale-claim vs aborted-workflow reason codes.
+
+**See also:** #317 (simulate the prescribed fix over every shape the criterion quantifies), #72 (guards must fail closed when input is absent).

@@ -1,7 +1,7 @@
 # Backlog: jvm-review-coverage plan residual probe friction
 
 Status: open
-Priority: deferred (efficiency/token/simplicity triage 2026-09-11: process-cosmetic or archived-record value only; revisit only if it starts costing real review rounds or tokens)
+Priority: medium (revived 2026-09-12 per user decision: code quality added as the fourth driving principle (guidelines section 64) - review-coverage and validator-correctness value is no longer priced at zero)
 
 Workflow: backlog
 Source: plan review r6 Lows from docs/reviews/2026-09-10-plan-review-strengthen-jvm-review-coverage-r6.md (plan docs/plans/2026-09-10-strengthen-jvm-review-coverage.md, certified ready=yes zero blocking)

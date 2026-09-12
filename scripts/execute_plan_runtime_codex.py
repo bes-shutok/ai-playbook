@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import runtime_capabilities as capabilities
-from execute_plan_runtime import MAX_EVIDENCE_BYTES, bounded_evidence
+from runtime_capabilities import bounded_evidence
 
 
 DEFAULT_LAUNCH_DEADLINE = 30.0
@@ -22,25 +22,8 @@ DANGEROUS_FLAGS = {"--approve-for-me", "--dangerously-bypass-approvals-and-sandb
 SAFE_ENV_KEYS = {"PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR"}
 
 
-def _valid_policy_token(policy_token: Mapping[str, Any] | None, operation: str) -> bool:
-    if operation not in {"launch", "wait", "resume"} or not isinstance(policy_token, Mapping):
-        return False
-    repo_root = policy_token.get("repo_root")
-    paths = policy_token.get("allowed_paths")
-    return (
-        isinstance(policy_token.get("token"), str)
-        and bool(policy_token["token"])
-        and isinstance(repo_root, str)
-        and Path(repo_root).is_absolute()
-        and policy_token.get("network") is False
-        and isinstance(paths, list)
-        and bool(paths)
-        and all(isinstance(path, str) and path and not Path(path).is_absolute() and ".." not in Path(path).parts for path in paths)
-    )
-
-
 def _subprocess_runner(argv: list[str], timeout_seconds: float, operation: str, policy_token: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    if operation in {"launch", "wait", "resume"} and not _valid_policy_token(policy_token, operation):
+    if operation in {"launch", "wait", "resume"} and not capabilities.validate_policy_token(policy_token, operation=operation):
         return {"returncode": 2, "stderr": "policy token required at process boundary"}
     environment = {key: os.environ[key] for key in SAFE_ENV_KEYS if key in os.environ}
     if policy_token is not None:
@@ -146,19 +129,11 @@ def _verify_process_terminated(process: Any) -> bool:
             process.wait(timeout=1)
         except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
             return False
-    try:
-        os.killpg(process.pid, 0)
-    except (OSError, ProcessLookupError):
-        return process.poll() is not None
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=1)
-        os.killpg(process.pid, 0)
-    except (OSError, ProcessLookupError):
-        return process.poll() is not None
-    except subprocess.TimeoutExpired:
-        return False
-    return False
+    # No post-reap process-group escalation: after the leader is reaped its
+    # pgid can be recycled by an unrelated process, and an un-narrowed killpg
+    # would signal it. Surviving descendants are covered by the
+    # identity-narrowed owned-pids loop in _timeout_result.
+    return process.poll() is not None
 
 
 class CodexAdapter:
@@ -343,6 +318,14 @@ class CodexAdapter:
                         break
                     time.sleep(0.01)
                 else:
+                    # Consult the identity immediately before the kill: a PID
+                    # whose captured identity flipped since the poll loop was
+                    # recycled by a foreign process and must never be signalled.
+                    # The check is a best-effort narrowing; the kernel-level
+                    # recycle race is closed only by a pidfd-based signal where
+                    # the platform provides one.
+                    if not _pid_identity_matches(numeric_pid, str(identity)):
+                        continue
                     try:
                         os.kill(numeric_pid, signal.SIGKILL)
                     except OSError:
@@ -407,7 +390,7 @@ class CodexAdapter:
         task_id = str(task["id"])
         if self._option_like(prompt):
             return self._blocked("contract-violation", ["option-like or empty prompt rejected"], generation=generation, checkpoint=f"{task_id}:policy")
-        if not self._validate_policy_token(policy_token, generation):
+        if not capabilities.validate_policy_token(policy_token, repo_root=str(self.repo_root), generation=generation):
             return self._blocked("runtime-policy-unavailable", ["missing or invalid driver policy token"], generation=generation, checkpoint=f"{task_id}:policy")
         argv = [self.executable, "exec", "--json", "-C", str(self.repo_root), prompt]
         if self.activation_receipt is None:
@@ -415,26 +398,11 @@ class CodexAdapter:
         result = self._invoke_and_translate(argv, self._finite(deadline_seconds, self.launch_deadline), "launch", generation, task_id, policy_token=policy_token)
         return result
 
-    def _validate_policy_token(self, policy_token: Mapping[str, Any] | None, generation: int) -> bool:
-        if not isinstance(policy_token, Mapping):
-            return False
-        return (
-            isinstance(policy_token.get("token"), str)
-            and bool(policy_token["token"])
-            and policy_token.get("repo_root") == str(self.repo_root)
-            and policy_token.get("generation") == generation
-            and policy_token.get("network") is False
-            and policy_token.get("operation_kind") in {"repository-task", "repository-read", "repository-write", "done-handoff", "checkpoint"}
-            and isinstance(policy_token.get("allowed_paths"), list)
-            and bool(policy_token["allowed_paths"])
-            and all(isinstance(path, str) and path and not Path(path).is_absolute() and ".." not in Path(path).parts for path in policy_token["allowed_paths"])
-        )
-
     def wait(self, session_id: str, generation: int = 1, task_id: str | None = None, deadline_seconds: float | None = None, policy_token: Mapping[str, Any] | None = None) -> dict[str, Any]:
         task_id = task_id or self._task_from_session(session_id)
         if self._option_like(session_id):
             return self._blocked("contract-violation", ["option-like or empty session id rejected"], generation=generation, checkpoint=f"{task_id}:policy")
-        if not self._validate_policy_token(policy_token, generation):
+        if not capabilities.validate_policy_token(policy_token, repo_root=str(self.repo_root), generation=generation):
             return self._blocked("runtime-policy-unavailable", ["missing or invalid driver policy token"], generation=generation, checkpoint=f"{task_id}:policy")
         argv = [self.executable, "exec", "resume", session_id, "--json"]
         return self._invoke_and_translate(argv, self._finite(deadline_seconds, self.wait_deadline), "wait", generation, task_id, policy_token=policy_token)
@@ -443,7 +411,7 @@ class CodexAdapter:
         task_id = task_id or self._task_from_session(session_id)
         if self._option_like(session_id) or self._option_like(prompt):
             return self._blocked("contract-violation", ["option-like or empty session id or prompt rejected"], generation=generation, checkpoint=f"{task_id}:policy")
-        if not self._validate_policy_token(policy_token, generation):
+        if not capabilities.validate_policy_token(policy_token, repo_root=str(self.repo_root), generation=generation):
             return self._blocked("runtime-policy-unavailable", ["missing or invalid driver policy token"], generation=generation, checkpoint=f"{task_id}:policy")
         argv = [self.executable, "exec", "resume", session_id, "--json", prompt]
         return self._invoke_and_translate(argv, self._finite(deadline_seconds, self.wait_deadline), "resume", generation, task_id, policy_token=policy_token)

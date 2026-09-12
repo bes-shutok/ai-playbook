@@ -1,6 +1,7 @@
 # Agent-agnostic execute-plan plan prose accuracy residuals (post-execution errata)
 
-Status: open
+Status: done
+Disposition (2026-09-11): record-only under the completed-history refusal rule; the four prose findings (F1, F3, F5, F6) are errata on the completed plan body, which stays untouched.
 Workflow: backlog
 Source: docs/reviews/2026-09-09-plan-review-agent-agnostic-execute-plan-r8.md (re-cert round r8), findings F1 + F3 + F5 + F6 (Medium/Low, non-blocking; deferred; plan fully executed, archive imminent)
 

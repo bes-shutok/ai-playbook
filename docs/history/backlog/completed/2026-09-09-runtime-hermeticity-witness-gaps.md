@@ -1,6 +1,7 @@
 # Runtime hermeticity witness gaps: env sanitization, live-installation read, ambient manifest read, clock/tz/locale assertions
 
-Status: open
+Status: done
+Disposition (2026-09-11): the missing-var fail-closed upgrade for `EXECUTE_PLAN_PACKAGE_MANIFEST` was declined as a behavior change that would break non-activated runs (recorded in the Task 11 witnesses and Task 12 log); the ambient-read witness (`test_package_manifest_ambient_read`) covers both branches of the current contract, and the F2 env/live-read plus F4 locale-clock witnesses landed in Task 11 of plan 2026-09-10-execute-plan-runtime-residuals.
 Workflow: backlog
 Source: docs/reviews/2026-09-09-plan-review-agent-agnostic-execute-plan-r8.md (re-cert round r8), findings F2 + F4 (Medium/Low, non-blocking; deferred from execution of docs/plans/2026-09-09-agent-agnostic-execute-plan.md)
 

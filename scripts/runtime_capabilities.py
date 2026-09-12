@@ -9,6 +9,8 @@ provider-neutral result shape used by the execute-plan driver.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib
 import json
 import os
 import re
@@ -25,16 +27,20 @@ from typing import Any, Mapping
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INVENTORY_PATH = ROOT / "projects/.ai-playbook/execute-plan-runtime-inventory.toml"
+# Single home of the bounded-evidence helpers: both the driver and every
+# adapter import them from here; no other module may define or assign them.
+MAX_EVIDENCE_BYTES = 4096
+MAX_EVIDENCE_ITEM_BYTES = 512
 CAPABILITY_OWNER = "registry"
 CAPABILITY_NAMES = {
-    "launch",
-    "wait",
-    "resume",
-    "checkpoint",
-    "approval",
     "parent_continuation",
     "final_response",
+    "resume",
 }
+# Allowlist of adapter modules an inventory entrypoint may import. This is the
+# same table the resolution path consults; validate_inventory asserts every
+# eligible entrypoint's module is present so drift fails closed at validation.
+ADAPTER_ENTRYPOINT_MODULES = {"execute_plan_runtime_codex"}
 CAPABILITY_STATES = {"full", "degraded", "unsupported"}
 NORMALIZED_STATUSES = {
     "success",
@@ -53,6 +59,7 @@ BLOCKING_REASON_CODES = {
     "commit-pending",
     "done-pending",
     "dirty-worktree",
+    "cleanup-required",
 }
 # Closed reason-code set: every code the reference driver or adapter emits on
 # the normalized result boundary. Unknown or missing codes fail closed as
@@ -76,9 +83,10 @@ REASON_CODES = {
     "worktree-witness-unavailable",
     "done-pending",
     "commit-pending",
+    "cleanup-required",
 }
 # Reason codes whose blocked receipt may resume automatically.
-RESUMABLE_REASONS = {"approval-required", "timeout", "runtime-error", "stale-claim"}
+RESUMABLE_REASONS = {"approval-required", "timeout", "runtime-error", "stale-claim", "cleanup-required"}
 PROFILE_FIELDS = {
     "id",
     "display_name",
@@ -95,10 +103,43 @@ PROFILE_FIELDS = {
     "approval_policy",
     "retry_budget",
 }
+# Operations that require a valid policy token at the process boundary.
+POLICY_TOKEN_OPERATIONS = frozenset({"launch", "wait", "resume"})
+# Operation kinds a policy token may authorize.
+POLICY_TOKEN_OPERATION_KINDS = frozenset(
+    {"repository-task", "repository-read", "repository-write", "done-handoff", "checkpoint"}
+)
 
 
 def _normalized(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _redact(value: str) -> str:
+    value = re.sub(r"(?i)(token|password|secret|api[_-]?key)[\"']?\s*[:=]\s*[\"']?([^\s,;\"'}]+)", r"\1=<redacted>", value)
+    value = re.sub(r"(?i)bearer\s+[A-Za-z0-9._-]+", "Bearer <redacted>", value)
+    return value
+
+
+def bounded_evidence(items: Any, limit: int = MAX_EVIDENCE_BYTES) -> list[str]:
+    """Return bounded, redacted evidence suitable for durable state."""
+
+    if isinstance(items, str):
+        items = [items]
+    if not isinstance(items, (list, tuple)):
+        items = [repr(items)]
+    result: list[str] = []
+    used = 0
+    for item in items:
+        text = _redact(str(item))[:MAX_EVIDENCE_ITEM_BYTES]
+        remaining = limit - used
+        if remaining <= 0:
+            break
+        text = text[:remaining]
+        if text:
+            result.append(text)
+            used += len(text)
+    return result or ["evidence unavailable"]
 
 
 def load_inventory(path: Path | str | None = None) -> dict[str, Any]:
@@ -177,11 +218,19 @@ def validate_inventory(inventory: Mapping[str, Any]) -> None:
     runtimes = inventory.get("runtimes")
     if not isinstance(runtimes, Mapping):
         raise ValueError("runtimes table is required")
-    if set(runtimes) != set(canonical_ids):
-        raise ValueError("runtime profile IDs must match inventory.canonical_ids")
+    if set(runtimes) != set(canonical_ids) - set(deferred_ids):
+        raise ValueError(
+            "runtime profile IDs must match the eligible canonical IDs "
+            "(inventory.canonical_ids minus inventory.deferred_ids)"
+        )
     for runtime_id, profile in runtimes.items():
         if profile.get("id") != runtime_id:
             raise ValueError(f"profile key and id differ for {runtime_id}")
+        module = str(profile.get("adapter_entrypoint", "")).partition(":")[0]
+        if module not in ADAPTER_ENTRYPOINT_MODULES:
+            raise ValueError(
+                f"profile {runtime_id} adapter entrypoint module is not in the import table: {module!r}"
+            )
         validate_profile(profile)
     deferrals = inventory.get("deferrals")
     if not isinstance(deferrals, Mapping) or set(deferrals) != set(deferred_ids):
@@ -247,15 +296,89 @@ class UnsupportedAdapter:
         return self.resume(session_id, "", generation, task_id=task_id)
 
 
-def load_approval_receipt(path: Path | str) -> dict[str, Any]:
+def validate_policy_token(
+    policy_token: Mapping[str, Any] | None,
+    *,
+    operation: str | None = None,
+    repo_root: str | None = None,
+    generation: int | None = None,
+) -> bool:
+    """The single parameterized policy-token validator.
+
+    Serves both enforcement boundaries: launch validity (``operation`` gates
+    the process boundary call) and claim revalidation (``repo_root`` and
+    ``generation`` bind the token to the adapter's claim). Only the parameters
+    a boundary owns are checked; the token shape itself is always verified.
+    """
+
+    if not isinstance(policy_token, Mapping):
+        return False
+    if operation is not None and operation not in POLICY_TOKEN_OPERATIONS:
+        return False
+    token_repo_root = policy_token.get("repo_root")
+    if not isinstance(token_repo_root, str) or not Path(token_repo_root).is_absolute():
+        return False
+    paths = policy_token.get("allowed_paths")
+    if not (
+        isinstance(policy_token.get("token"), str)
+        and bool(policy_token["token"])
+        and policy_token.get("network") is False
+        and policy_token.get("operation_kind") in POLICY_TOKEN_OPERATION_KINDS
+        and isinstance(paths, list)
+        and bool(paths)
+        and all(
+            isinstance(path, str) and path and not Path(path).is_absolute() and ".." not in Path(path).parts
+            for path in paths
+        )
+    ):
+        return False
+    if repo_root is not None and token_repo_root != repo_root:
+        return False
+    if generation is not None and policy_token.get("generation") != generation:
+        return False
+    return True
+
+
+def approval_policy_fingerprint(config_path: Path | str) -> str:
+    """Compute the stable fingerprint of a recorded non-interactive approval policy.
+
+    Reads the host config file (TOML), extracts the recorded non-interactive
+    approval policy (``approval_policy``), and returns a SHA-256 hex digest over
+    the policy value. A missing file, an unreadable config, or an absent
+    policy fails closed with ``ValueError``.
+    """
+
+    path = Path(config_path)
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(f"approval receipt config is missing or unreadable: {path}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"approval receipt config is not valid TOML: {path}") from exc
+    policy = data.get("approval_policy")
+    if not isinstance(policy, str) or not policy.strip():
+        raise ValueError(f"approval receipt config records no non-interactive approval policy: {path}")
+    return hashlib.sha256(f"approval_policy={policy}".encode("utf-8")).hexdigest()
+
+
+def load_approval_receipt(path: Path | str, *, config_root: Path | str | None = None) -> dict[str, Any]:
     """Load and validate an auditable host approval-verification receipt.
 
     The receipt is the production source for the adapter's verified
-    non-interactive approval state. It must name the runtime it verifies and
-    record ``approval = "verified"``; anything else fails closed.
+    non-interactive approval state. It must name the runtime it verifies,
+    record ``approval = "verified"``, be owner-only readable (mode ``0600``),
+    and record both mandatory cross-check fields: ``config_path`` (the host
+    config file the operator attested) and ``policy_fingerprint`` (the
+    fingerprint of the recorded non-interactive approval policy in that
+    config). The config is re-read from the host (a relative ``config_path``
+    resolves against the injected ``config_root``, never the ambient
+    environment, and must be absolute when no config root is injected) and the
+    recomputed fingerprint must match; anything else fails closed. The two
+    fields are operator-attested evidence, not a cryptographic credential.
     """
 
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    receipt_path = Path(path)
+    data = json.loads(receipt_path.read_text(encoding="utf-8"))
     if (
         not isinstance(data, dict)
         or not isinstance(data.get("runtime"), str)
@@ -263,24 +386,71 @@ def load_approval_receipt(path: Path | str) -> dict[str, Any]:
         or data.get("approval") != "verified"
     ):
         raise ValueError(f"approval receipt is not a verified host approval policy: {path}")
+    if receipt_path.stat().st_mode & 0o077:
+        raise ValueError(f"approval receipt must be owner-only (mode 0600): {path}")
+    config_path = data.get("config_path")
+    fingerprint = data.get("policy_fingerprint")
+    if (
+        not isinstance(config_path, str)
+        or not config_path.strip()
+        or not isinstance(fingerprint, str)
+        or not fingerprint.strip()
+    ):
+        raise ValueError(f"approval receipt must record config_path and policy_fingerprint: {path}")
+    resolved_config = Path(config_path)
+    if not resolved_config.is_absolute():
+        if config_root is None:
+            raise ValueError(
+                f"approval receipt config_path must be absolute when no config root is injected: {path}"
+            )
+        resolved_config = Path(config_root) / resolved_config
+    if approval_policy_fingerprint(resolved_config) != fingerprint:
+        raise ValueError(f"approval receipt policy fingerprint mismatch: {path}")
     return data
 
 
+def _load_adapter_entrypoint(entrypoint: Any) -> type:
+    """Resolve an ``import.path.module:Symbol`` entrypoint through importlib.
+
+    Fail closed: a missing module or symbol raises a registry ValueError, never
+    a leaked ``ImportError`` or ``AttributeError``.
+    """
+
+    if not isinstance(entrypoint, str) or ":" not in entrypoint:
+        raise ValueError(f"adapter entrypoint is malformed: {entrypoint!r}")
+    module_name, _, symbol = entrypoint.partition(":")
+    if module_name not in ADAPTER_ENTRYPOINT_MODULES or not symbol:
+        raise ValueError(f"adapter entrypoint is not declared in the import table: {entrypoint!r}")
+    try:
+        module = importlib.import_module(module_name)
+        adapter_cls = getattr(module, symbol)
+    except (ImportError, AttributeError) as exc:
+        raise ValueError(
+            f"adapter entrypoint failed to resolve: {entrypoint!r}"
+        ) from exc
+    if not isinstance(adapter_cls, type):
+        raise ValueError(f"adapter entrypoint does not name an adapter class: {entrypoint!r}")
+    return adapter_cls
+
+
 def resolve_adapter(runtime_id: str, repo_root: Path | str, **kwargs: Any) -> Any:
-    """Resolve every eligible registry profile to a real or fail-closed adapter."""
+    """Resolve every eligible registry profile to a real or fail-closed adapter.
+
+    Deferred runtimes resolve to ``UnsupportedAdapter`` carrying the deferral's
+    recorded reason before any not-eligible error path is reached.
+    """
 
     inventory = load_inventory()
     canonical = canonicalize_runtime_id(runtime_id, inventory)
     profile = inventory["runtimes"].get(canonical)
     if profile is None:
+        deferral = inventory["deferrals"].get(canonical)
+        if deferral is not None:
+            return UnsupportedAdapter(deferral["reason"])
         raise ValueError(f"runtime is not eligible: {canonical}")
-    if profile["adapter_entrypoint"] == "runtime-adapter:codex":
-        from execute_plan_runtime_codex import CodexAdapter
-
-        return CodexAdapter(repo_root, **kwargs)
-    return UnsupportedAdapter(
-        f"no verified host adapter for runtime profile {canonical} ({profile['adapter_entrypoint']})"
-    )
+    entrypoint = profile.get("adapter_entrypoint")
+    adapter_cls = _load_adapter_entrypoint(entrypoint)
+    return adapter_cls(repo_root, **kwargs)
 
 
 def _default_retry_policy(status: str, reason_code: str, retry_budget: int = 2) -> dict[str, Any]:
@@ -290,7 +460,10 @@ def _default_retry_policy(status: str, reason_code: str, retry_budget: int = 2) 
         "malformed-result",
         "cleanup-unverified",
     }:
-        return {"mode": "bounded", "max_attempts": retry_budget, "attempts_remaining": retry_budget}
+        budget = max(0, int(retry_budget))
+        if budget == 0:
+            return {"mode": "none", "max_attempts": 0, "attempts_remaining": 0}
+        return {"mode": "bounded", "max_attempts": budget, "attempts_remaining": budget}
     return {"mode": "none", "max_attempts": 0, "attempts_remaining": 0}
 
 
@@ -348,11 +521,14 @@ def normalize_result(raw: Mapping[str, Any], retry_budget: int = 2) -> dict[str,
         # The profile owns the retry budget: clamp any worker- or
         # adapter-supplied policy to the profile cap so an untrusted envelope
         # cannot re-supply an unbounded budget (contract-violation is capped
-        # at its single rewrite-and-retry).
-        budget_cap = max(1, int(retry_budget))
+        # at its single rewrite-and-retry). A budget of zero grants zero
+        # retries outright with an explicit `none` retry mode.
+        budget_cap = max(0, int(retry_budget))
         retry_cap = 1 if status == "contract-violation" else (budget_cap if status == "error" else 0)
         retry_policy["max_attempts"] = min(retry_policy["max_attempts"], retry_cap)
         retry_policy["attempts_remaining"] = min(retry_policy["attempts_remaining"], retry_cap)
+        if retry_cap == 0:
+            retry_policy["mode"] = "none"
     if status == "success":
         recovery_action = "continue-parent"
     elif reason_code == "approval-required":
@@ -444,7 +620,10 @@ def verify_activation(fixture_root: Path | str) -> dict[str, Any]:
         raise ValueError("activation registry deferred IDs do not match expectation")
     profiles = loaded_registry.get("runtimes", {})
     expected_profiles = expected_ids.get("profiles", {})
-    if set(profiles) != set(expected_ids.get("canonical_ids", ())):
+    eligible_expected = set(expected_ids.get("canonical_ids", ())) - set(
+        expected_ids.get("deferred_ids", ())
+    )
+    if set(profiles) != eligible_expected:
         raise ValueError("activation registry profile set does not match expectation")
     for runtime_id, expected in expected_profiles.items():
         profile = profiles.get(runtime_id)
@@ -538,6 +717,33 @@ def _probe_loaded_package(destination: Path) -> subprocess.CompletedProcess[str]
     )
 
 
+def stage_package(source_root: Path | str, target_root: Path | str) -> Path:
+    """Stage the skill package plus runtime scripts and registry into ``target_root``.
+
+    Untracked ``__pycache__`` payloads are excluded so the staged tree contains
+    only committed package bytes. Reused by the activation path and by tests
+    that generate the loaded fixture tree outside the committed seeds.
+    """
+
+    source_path = Path(source_root)
+    target = Path(target_root)
+    shutil.copytree(
+        source_path,
+        target,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    runtime_dir = target / "runtime"
+    runtime_dir.mkdir()
+    for relative in (
+        "execute_plan_runtime.py",
+        "execute_plan_runtime_codex.py",
+        "runtime_capabilities.py",
+    ):
+        shutil.copy2(ROOT / "scripts" / relative, runtime_dir / relative)
+    shutil.copy2(DEFAULT_INVENTORY_PATH, target / "registry.toml")
+    return target
+
+
 def activate(runtime_id: str, source: Path | str, loaded_root: Path | str | None = None) -> dict[str, Any]:
     """Atomically stage an execute-plan package and verify its loaded driver."""
 
@@ -557,19 +763,27 @@ def activate(runtime_id: str, source: Path | str, loaded_root: Path | str | None
     if package.get("name") != "execute-plan-runtime":
         raise ValueError("activation package name is invalid")
     driver_entrypoint = package_manifest.get("driver", {}).get("entrypoint")
-    adapter_entrypoint = package_manifest.get("adapters", {}).get("codex", {}).get("entrypoint")
-    if driver_entrypoint != "scripts/execute_plan_runtime.py:RuntimeDriver" or adapter_entrypoint != "scripts/execute_plan_runtime_codex.py:CodexAdapter":
-        raise ValueError("activation package entrypoints are invalid")
+    if driver_entrypoint != "scripts/execute_plan_runtime.py:RuntimeDriver":
+        raise ValueError("activation package driver entrypoint is invalid")
+    # The package manifest's adapter entrypoints are verified against the same
+    # registry entrypoint declaration resolution consults, keyed by module
+    # name; no runtime-name conditional lives here.
+    adapters = package_manifest.get("adapters", {})
+    declared_entrypoints = {
+        spec.get("entrypoint")
+        for spec in adapters.values()
+        if isinstance(spec, Mapping)
+    }
+    for profile in inventory["runtimes"].values():
+        module, _, symbol = str(profile["adapter_entrypoint"]).partition(":")
+        expected_entrypoint = f"scripts/{module}.py:{symbol}"
+        if expected_entrypoint not in declared_entrypoints:
+            raise ValueError("activation package entrypoints are invalid")
     destination = Path(loaded_root or (source_path.parent / ".execute-plan-activated" / canonical)).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{canonical}-", dir=destination.parent))
     package = staging / "execute-plan"
-    shutil.copytree(source_path, package)
-    runtime_dir = package / "runtime"
-    runtime_dir.mkdir()
-    for relative in ("execute_plan_runtime.py", "execute_plan_runtime_codex.py", "runtime_capabilities.py"):
-        shutil.copy2(ROOT / "scripts" / relative, runtime_dir / relative)
-    shutil.copy2(DEFAULT_INVENTORY_PATH, package / "registry.toml")
+    stage_package(source_path, package)
     for path in package.rglob("*"):
         if path.is_file():
             os.chmod(path, 0o600)
@@ -645,7 +859,10 @@ def activate(runtime_id: str, source: Path | str, loaded_root: Path | str | None
 def selftest() -> None:
     inventory = load_inventory()
     profiles = load_profiles()
-    if set(profiles) != set(inventory["inventory"]["canonical_ids"]):
+    eligible_ids = set(inventory["inventory"]["canonical_ids"]) - set(
+        inventory["inventory"]["deferred_ids"]
+    )
+    if set(profiles) != eligible_ids:
         raise AssertionError("registry profile IDs are not internally consistent")
     if canonicalize_runtime_id("agy", inventory) != "antigravity":
         raise AssertionError("Antigravity alias did not normalize")

@@ -7,31 +7,7 @@ contract_version = "1.0"
 capability_owner = "registry"
 registry_path = "projects/.ai-playbook/execute-plan-runtime-inventory.toml"
 canonical_ids = ["claude", "codex", "cursor", "zcode", "opencode", "copilot", "gemini", "antigravity"]
-deferred_ids = ["pi"]
-
-[runtimes.claude]
-id = "claude"
-display_name = "Claude Code"
-aliases = ["claude", "claude code"]
-source_catalogs = ["runtime-layout", "agterm", "hooks-probe"]
-eligibility = "eligible"
-adapter_entrypoint = "runtime-adapter:claude"
-launch_operation = "launch-worker"
-wait_operation = "wait-for-result"
-resume_operation = "resume-session"
-fallback = "Use a bounded parent handoff when final-response enforcement is unavailable."
-adapter_version = "1.0"
-approval_policy = "adapter-enforced-default-deny"
-retry_budget = 2
-
-[runtimes.claude.capabilities]
-launch = "unsupported"
-wait = "unsupported"
-resume = "unsupported"
-checkpoint = "full"
-approval = "full"
-parent_continuation = "full"
-final_response = "degraded"
+deferred_ids = ["claude", "cursor", "zcode", "opencode", "copilot", "gemini", "antigravity", "pi"]
 
 [runtimes.codex]
 id = "codex"
@@ -39,7 +15,7 @@ display_name = "Codex"
 aliases = ["codex"]
 source_catalogs = ["runtime-layout", "agterm", "hooks-probe"]
 eligibility = "eligible"
-adapter_entrypoint = "runtime-adapter:codex"
+adapter_entrypoint = "execute_plan_runtime_codex:CodexAdapter"
 launch_operation = "launch-worker"
 wait_operation = "wait-for-result"
 resume_operation = "resume-session"
@@ -49,157 +25,65 @@ approval_policy = "adapter-enforced-default-deny"
 retry_budget = 2
 
 [runtimes.codex.capabilities]
-launch = "full"
-wait = "full"
-resume = "full"
-checkpoint = "full"
-approval = "full"
 parent_continuation = "full"
 final_response = "degraded"
+resume = "full"
 
-[runtimes.cursor]
+[deferrals.claude]
+id = "claude"
+display_name = "Claude Code"
+aliases = ["claude", "claude code"]
+source_catalogs = ["runtime-layout", "agterm", "hooks-probe"]
+eligibility = "deferred"
+reason = "no verified adapter"
+
+[deferrals.cursor]
 id = "cursor"
 display_name = "Cursor"
 aliases = ["cursor", "cursor agent", "cursor agent cli"]
 source_catalogs = ["runtime-layout", "agterm", "hooks-probe"]
-eligibility = "eligible"
-adapter_entrypoint = "runtime-adapter:cursor"
-launch_operation = "launch-worker"
-wait_operation = "wait-for-result"
-resume_operation = "resume-session"
-fallback = "Use the file-backed manifest and a parent receipt when the host hook is degraded."
-adapter_version = "1.0"
-approval_policy = "adapter-enforced-default-deny"
-retry_budget = 2
+eligibility = "deferred"
+reason = "no verified adapter"
 
-[runtimes.cursor.capabilities]
-launch = "unsupported"
-wait = "unsupported"
-resume = "unsupported"
-checkpoint = "full"
-approval = "full"
-parent_continuation = "full"
-final_response = "degraded"
-
-[runtimes.zcode]
+[deferrals.zcode]
 id = "zcode"
 display_name = "ZCode"
 aliases = ["zcode"]
 source_catalogs = ["agterm"]
-eligibility = "eligible"
-adapter_entrypoint = "runtime-adapter:zcode"
-launch_operation = "launch-worker"
-wait_operation = "wait-for-result"
-resume_operation = "resume-session"
-fallback = "Use an explicit operator resume when the runtime session cannot be recovered."
-adapter_version = "1.0"
-approval_policy = "adapter-enforced-default-deny"
-retry_budget = 2
+eligibility = "deferred"
+reason = "no verified adapter"
 
-[runtimes.zcode.capabilities]
-launch = "unsupported"
-wait = "unsupported"
-resume = "unsupported"
-checkpoint = "full"
-approval = "degraded"
-parent_continuation = "full"
-final_response = "degraded"
-
-[runtimes.opencode]
+[deferrals.opencode]
 id = "opencode"
 display_name = "OpenCode"
 aliases = ["opencode", "open code"]
 source_catalogs = ["runtime-layout", "agterm"]
-eligibility = "eligible"
-adapter_entrypoint = "runtime-adapter:opencode"
-launch_operation = "launch-worker"
-wait_operation = "wait-for-result"
-resume_operation = "resume-session"
-fallback = "Preserve the checkpoint and require an explicit operator resume if session lookup fails."
-adapter_version = "1.0"
-approval_policy = "adapter-enforced-default-deny"
-retry_budget = 2
+eligibility = "deferred"
+reason = "no verified adapter"
 
-[runtimes.opencode.capabilities]
-launch = "unsupported"
-wait = "unsupported"
-resume = "unsupported"
-checkpoint = "full"
-approval = "degraded"
-parent_continuation = "full"
-final_response = "degraded"
-
-[runtimes.copilot]
+[deferrals.copilot]
 id = "copilot"
 display_name = "Copilot"
 aliases = ["copilot", "copilot cli"]
 source_catalogs = ["runtime-layout", "agterm"]
-eligibility = "eligible"
-adapter_entrypoint = "runtime-adapter:copilot"
-launch_operation = "launch-worker"
-wait_operation = "wait-for-result"
-resume_operation = "resume-session"
-fallback = "Use a preserved checkpoint and operator resume when approval or finalization is degraded."
-adapter_version = "1.0"
-approval_policy = "adapter-enforced-default-deny"
-retry_budget = 2
+eligibility = "deferred"
+reason = "no verified adapter"
 
-[runtimes.copilot.capabilities]
-launch = "unsupported"
-wait = "unsupported"
-resume = "unsupported"
-checkpoint = "full"
-approval = "degraded"
-parent_continuation = "full"
-final_response = "degraded"
-
-[runtimes.gemini]
+[deferrals.gemini]
 id = "gemini"
 display_name = "Gemini CLI"
 aliases = ["gemini", "gemini cli"]
 source_catalogs = ["runtime-layout"]
-eligibility = "eligible"
-adapter_entrypoint = "runtime-adapter:gemini"
-launch_operation = "launch-worker"
-wait_operation = "wait-for-result"
-resume_operation = "resume-session"
-fallback = "Use a file-backed checkpoint and explicit operator recovery when continuation is degraded."
-adapter_version = "1.0"
-approval_policy = "adapter-enforced-default-deny"
-retry_budget = 2
+eligibility = "deferred"
+reason = "no verified adapter"
 
-[runtimes.gemini.capabilities]
-launch = "unsupported"
-wait = "unsupported"
-resume = "unsupported"
-checkpoint = "full"
-approval = "degraded"
-parent_continuation = "degraded"
-final_response = "degraded"
-
-[runtimes.antigravity]
+[deferrals.antigravity]
 id = "antigravity"
 display_name = "Antigravity"
 aliases = ["antigravity", "agy"]
 source_catalogs = ["runtime-layout", "hooks-probe"]
-eligibility = "eligible"
-adapter_entrypoint = "runtime-adapter:antigravity"
-launch_operation = "launch-worker"
-wait_operation = "wait-for-result"
-resume_operation = "resume-session"
-fallback = "Use durable receipts and operator recovery when session identity or approval hooks are unavailable."
-adapter_version = "1.0"
-approval_policy = "adapter-enforced-default-deny"
-retry_budget = 2
-
-[runtimes.antigravity.capabilities]
-launch = "unsupported"
-wait = "unsupported"
-resume = "unsupported"
-checkpoint = "full"
-approval = "degraded"
-parent_continuation = "degraded"
-final_response = "degraded"
+eligibility = "deferred"
+reason = "no verified adapter"
 
 [deferrals.pi]
 id = "pi"

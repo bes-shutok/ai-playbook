@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -11,11 +12,30 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from execute_plan_runtime_codex import CodexAdapter, _cancel_process_tree, _verify_process_terminated
+from execute_plan_runtime_codex import CodexAdapter, _cancel_process_tree, _verify_process_terminated, _subprocess_runner
+import runtime_capabilities as capabilities
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "testdata/execute-plan/codex"
+
+# Frame modules that never own an intercepted open: only the pathlib/io
+# plumbing the observation wrapper wraps. The first frame outside this set is
+# the open's caller (a test-module caller stays attributed to the test module
+# and is therefore filtered out of the denial assertion).
+_OBSERVATION_PLUMBING_MODULES = {"pathlib", "io", "os", "genericpath", "posixpath"}
+_GUARDED_READ_MODULES = {"execute_plan_runtime_codex", "runtime_capabilities"}
+
+
+def _nearest_caller_module() -> str:
+    frame = sys._getframe(1).f_back
+    while frame is not None:
+        module = str(frame.f_globals.get("__name__", ""))
+        if module not in _OBSERVATION_PLUMBING_MODULES:
+            return module
+        frame = frame.f_back
+    return "<unknown>"
 
 
 class RecordedRunner:
@@ -138,14 +158,38 @@ class CodexAdapterTest(unittest.TestCase):
 
     def test_approval_receipt_is_the_production_verification_source(self):
         with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.toml"
+            config.write_text('approval_policy = "never"\n', encoding="utf-8")
             receipt = Path(directory) / "approval.json"
-            receipt.write_text(json.dumps({"runtime": "codex", "approval": "verified"}), encoding="utf-8")
+            receipt.write_text(
+                json.dumps(
+                    {
+                        "runtime": "codex",
+                        "approval": "verified",
+                        "config_path": str(config),
+                        "policy_fingerprint": capabilities.approval_policy_fingerprint(config),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            receipt.chmod(0o600)
             adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_receipt=receipt)
             activation = adapter.activation_check()
             self.assertEqual(activation["status"], "success")
             self.assertIn(str(receipt), " ".join(activation["evidence"]))
             bad = Path(directory) / "bad.json"
-            bad.write_text(json.dumps({"runtime": "codex", "approval": "assumed"}), encoding="utf-8")
+            bad.write_text(
+                json.dumps(
+                    {
+                        "runtime": "codex",
+                        "approval": "assumed",
+                        "config_path": str(config),
+                        "policy_fingerprint": capabilities.approval_policy_fingerprint(config),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bad.chmod(0o600)
             with self.assertRaises(ValueError):
                 CodexAdapter("/repo", runner=RecordedRunner(), approval_receipt=bad)
 
@@ -164,21 +208,76 @@ class CodexAdapterTest(unittest.TestCase):
                 child.terminate()
                 child.wait()
 
-    def test_timeout_cleanup_treats_recycled_pid_identity_as_exited(self):
-        # A live foreign process (this test process) reusing a captured PID
-        # must not be signalled: the captured identity no longer matches.
-        runner = RecordedRunner(timeout=True, cleanup_verified=True)
-        adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
-        self.assertEqual(adapter.activation_check()["status"], "success")
-        result = adapter._timeout_result(
-            {"handle": "recycled-handle", "owned_pids": {os.getpid(): "Mon Jan  1 00:00:00 1999"}},
-            "launch",
-            1,
-            "task-4:worker",
-        )
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["reason_code"], "timeout")
-        self.assertTrue(any(call[0] == "cancel" for call in runner.calls))
+    def test_recycled_pid_test_uses_disposable_child(self):
+        # The recycled-PID witness runs against a real disposable child
+        # process, never os.getpid(): a regressed identity guard must fail an
+        # assertion here instead of risking the test runner's own process.
+        with tempfile.TemporaryDirectory():
+            child = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                start_new_session=True,
+            )
+            try:
+                runner = RecordedRunner(timeout=True, cleanup_verified=True)
+                adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
+                self.assertEqual(adapter.activation_check()["status"], "success")
+                result = adapter._timeout_result(
+                    {"handle": child, "owned_pids": {child.pid: "Mon Jan  1 00:00:00 1999"}},
+                    "launch",
+                    1,
+                    "task-4:worker",
+                )
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "timeout")
+                self.assertTrue(any(call[0] == "cancel" for call in runner.calls))
+                # The live foreign process reusing the captured PID must not be
+                # signalled: the captured identity no longer matches. Grace
+                # pause first so a delivered SIGKILL is observed as an exit.
+                time.sleep(0.2)
+                self.assertIsNone(child.poll())
+            finally:
+                child.terminate()
+                child.wait()
+
+    def test_identity_check_precedes_sigkill(self):
+        # The identity must be consulted immediately before os.kill(pid,
+        # SIGKILL): when the match flips to false between the poll loop and
+        # the kill, the recycled foreign process must not be signalled.
+        with tempfile.TemporaryDirectory():
+            child = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                start_new_session=True,
+            )
+            try:
+                runner = RecordedRunner(timeout=True, cleanup_verified=True)
+                adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
+                self.assertEqual(adapter.activation_check()["status"], "success")
+                calls = {"count": 0}
+
+                def flip_after_first(pid, identity):
+                    calls["count"] += 1
+                    return calls["count"] == 1
+
+                with mock.patch(
+                    "execute_plan_runtime_codex._pid_identity_matches",
+                    side_effect=flip_after_first,
+                ):
+                    result = adapter._timeout_result(
+                        {"handle": child, "owned_pids": {child.pid: "captured-identity"}},
+                        "launch",
+                        1,
+                        "task-4:worker",
+                    )
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "timeout")
+                # No SIGKILL landed on the recycled foreign PID; give a
+                # delivered signal time to surface as an exit before polling.
+                time.sleep(0.2)
+                self.assertIsNone(child.poll())
+                self.assertGreaterEqual(calls["count"], 2)
+            finally:
+                child.terminate()
+                child.wait()
 
     def test_real_owned_process_group_is_cleaned_on_timeout(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -214,6 +313,177 @@ class CodexAdapterTest(unittest.TestCase):
             child_pid = int(pid_file.read_text())
             with self.assertRaises(ProcessLookupError):
                 os.kill(child_pid, 0)
+
+
+    def test_subprocess_env_sanitized(self):
+        # Literal expectation, deliberately NOT derived from SAFE_ENV_KEYS:
+        # a mutation that widens the allowlist must fail this assertion, not
+        # silently re-derive the expected set.
+        expected_child_keys = {
+            "PATH",
+            "HOME",
+            "LANG",
+            "LC_ALL",
+            "TZ",
+            "TMPDIR",
+            "EXECUTE_PLAN_POLICY_TOKEN",
+            "EXECUTE_PLAN_ALLOWED_PATHS",
+        }
+        original_env = dict(os.environ)
+        with tempfile.TemporaryDirectory() as repo:
+            poisoned = dict(original_env)
+            poisoned.update(
+                {
+                    "HOME": str(Path(repo) / "home"),
+                    "LANG": "C",
+                    "LC_ALL": "C",
+                    "TZ": "UTC",
+                    "TMPDIR": str(Path(repo) / "tmp"),
+                    # Poison: none of these may survive into the child.
+                    "PYTHONPATH": "/hostile/site-packages",
+                    "EXECUTE_PLAN_SECRET": "leak-me",
+                    "OPENAI_API_KEY": "sk-leak",
+                }
+            )
+            try:
+                os.environ.clear()
+                os.environ.update(poisoned)
+                policy = {"token": "policy", "repo_root": repo, "allowed_paths": ["task.txt"], "operation_kind": "repository-task", "network": False, "generation": 1}
+                result = _subprocess_runner(
+                    [sys.executable, "-c", "import json, os; print(json.dumps(sorted(os.environ)))"],
+                    15,
+                    "launch",
+                    policy_token=policy,
+                )
+            finally:
+                os.environ.clear()
+                os.environ.update(original_env)
+        self.assertEqual(result.get("returncode"), 0, result.get("stderr"))
+        # __CF_USER_TEXT_ENCODING is injected by macOS posix_spawn itself, not
+        # by the runner's allowlist; everything else must match the literal set.
+        self.assertEqual(set(json.loads(result["stdout"])) - {"__CF_USER_TEXT_ENCODING"}, expected_child_keys)
+
+    def test_no_live_installation_read(self):
+        # The adapter lifecycle must not read any live installation path when
+        # HOME and the package manifest point into a fixture root. Reads are
+        # observed via module-scoped patches of the pathlib/io open call sites
+        # (never process-wide audit hooks); the denial fires only for opens
+        # whose nearest caller module is execute_plan_runtime_codex or
+        # runtime_capabilities, while the zero-observation guard stays
+        # unfiltered. Child-process reads are covered by the env-allowlist
+        # witness, not here.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "home").mkdir()
+            (root / "tmp").mkdir()
+            (root / "repo").mkdir()
+            config = root / "config.toml"
+            config.write_text('approval_policy = "never"\n', encoding="utf-8")
+            receipt = root / "approval.json"
+            receipt.write_text(
+                json.dumps(
+                    {
+                        "runtime": "codex",
+                        "approval": "verified",
+                        "config_path": str(config),
+                        "policy_fingerprint": capabilities.approval_policy_fingerprint(config),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            receipt.chmod(0o600)
+            manifest = root / "package-manifest.toml"
+            manifest.write_text(
+                "[adapters.codex]\nlaunch_deadline_seconds = 17.5\nwait_deadline_seconds = 42.0\n",
+                encoding="utf-8",
+            )
+            original_env = dict(os.environ)
+            observed: list[tuple[str, str]] = []
+            # All target modules are pre-imported before arming, so importlib
+            # opens cannot fire inside the observation window.
+            self.assertIn("execute_plan_runtime_codex", sys.modules)
+            self.assertIn("runtime_capabilities", sys.modules)
+
+            def recording_path_open(path, *args, **kwargs):
+                observed.append((str(path), _nearest_caller_module()))
+                return original_path_open(path, *args, **kwargs)
+
+            original_path_open = Path.open
+            original_read_text = Path.read_text
+            original_read_bytes = Path.read_bytes
+
+            def recording_read_text(path, *args, **kwargs):
+                observed.append((str(path), _nearest_caller_module()))
+                return original_read_text(path, *args, **kwargs)
+
+            def recording_read_bytes(path, *args, **kwargs):
+                observed.append((str(path), _nearest_caller_module()))
+                return original_read_bytes(path, *args, **kwargs)
+
+            original_io_open = io.open
+
+            def recording_io_open(file, *args, **kwargs):
+                observed.append((str(file), _nearest_caller_module()))
+                return original_io_open(file, *args, **kwargs)
+
+            try:
+                os.environ["HOME"] = str(root / "home")
+                # TMPDIR pinned into the fixture root so system-temp reads
+                # cannot false-positive as live-installation access.
+                os.environ["TMPDIR"] = str(root / "tmp")
+                os.environ["EXECUTE_PLAN_PACKAGE_MANIFEST"] = str(manifest)
+                with mock.patch.object(Path, "open", recording_path_open), mock.patch.object(
+                    Path, "read_text", recording_read_text
+                ), mock.patch.object(Path, "read_bytes", recording_read_bytes), mock.patch(
+                    "io.open", recording_io_open
+                ):
+                    adapter = CodexAdapter(root / "repo", runner=RecordedRunner(), approval_receipt=receipt)
+                    self.assertEqual(adapter.launch_deadline, 17.5)
+                    self.assertEqual(adapter.activation_check()["status"], "success")
+                    policy = {"token": "policy", "repo_root": str((root / "repo").resolve()), "allowed_paths": ["task.txt"], "operation_kind": "repository-task", "network": False, "generation": 1}
+                    launch = adapter.launch({"id": "task-4"}, "implement task", 1, policy_token=policy)
+                    self.assertEqual(launch["status"], "success")
+            finally:
+                os.environ.clear()
+                os.environ.update(original_env)
+            fixture_prefix = str(root)
+            inside = [entry for entry in observed if entry[0].startswith(fixture_prefix)]
+            # Zero-observation guard: the interception must have seen real
+            # opens inside the fixture root, unfiltered by caller module.
+            self.assertTrue(inside, observed)
+            violations = [
+                entry for entry in observed if entry[1] in _GUARDED_READ_MODULES and not entry[0].startswith(fixture_prefix)
+            ]
+            self.assertEqual(violations, [], observed)
+
+    def test_package_manifest_ambient_read(self):
+        # Absent-var branch: the documented default-deadline fallback is the
+        # current contract. (Failing closed on a missing manifest is declined
+        # as a behavior change that would break non-activated runs; recorded
+        # in the Task 12 disposition.) Literals 30.0/300.0 on purpose: a
+        # mutation of the default constants must fail these assertions.
+        self.assertNotIn("EXECUTE_PLAN_PACKAGE_MANIFEST", os.environ)
+        adapter = CodexAdapter("/repo", runner=RecordedRunner())
+        self.assertEqual(adapter.launch_deadline, 30.0)
+        self.assertEqual(adapter.wait_deadline, 300.0)
+
+        # Valid-manifest branch: the manifest deadlines are loaded and used.
+        # try/finally restores the environment (mirroring the no-live-read
+        # witness) so the exported manifest pointer cannot leak into later
+        # tests in the same process.
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                manifest = Path(directory) / "package-manifest.toml"
+                manifest.write_text(
+                    "[adapters.codex]\nlaunch_deadline_seconds = 17.5\nwait_deadline_seconds = 42.0\n",
+                    encoding="utf-8",
+                )
+                os.environ["EXECUTE_PLAN_PACKAGE_MANIFEST"] = str(manifest)
+                adapter = CodexAdapter("/repo", runner=RecordedRunner())
+        finally:
+            os.environ.pop("EXECUTE_PLAN_PACKAGE_MANIFEST", None)
+        self.assertEqual(adapter.launch_deadline, 17.5)
+        self.assertEqual(adapter.wait_deadline, 42.0)
 
 
 if __name__ == "__main__":

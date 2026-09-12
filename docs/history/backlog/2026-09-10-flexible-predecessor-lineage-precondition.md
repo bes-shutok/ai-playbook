@@ -1,6 +1,7 @@
 # Execute-plan predecessor lineage precondition should be flexible
 
 Status: open
+Claimed by: docs/plans/2026-09-11-execute-plan-runtime-guardrails.md (2026-09-11)
 Workflow: backlog
 Source: user requirement clarification during execute-plan startup
 

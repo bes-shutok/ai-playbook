@@ -28,40 +28,12 @@ Orchestrate plan execution from the main agent. Always run Phase 0 (branch setup
 ## Runtime-neutral execution contract
 
 The shared skill supplies policy, task scope, worker evidence requirements, and
-safe recovery rules. It does not select a vendor protocol or reconstruct
-runtime state in prose. The parent invokes
-`scripts/execute_plan_runtime.py` for task selection, atomic claim, worker
-launch handoff, checkpoint, done-boundary handoff, reload, resume, and
-normalized outcomes. The registry-selected runtime adapter is the only host
-boundary.
+safe recovery rules; the registry-selected runtime adapter is the only host
+boundary, and the structured machine manifest (`runtime_state.json`) is the
+authoritative state that the parent reloads and validates after every
+checkpoint or done handoff before selecting the next incomplete step.
 
-The structured machine manifest, `runtime_state.json`, is authoritative. After
-every checkpoint or done handoff, the parent reloads and validates that
-manifest before selecting the first incomplete step. `agent-logs.md` remains
-append-only telemetry and receipt data. It is never an alternate state machine
-and never authorizes a transition by itself.
-
-The driver validates a typed action envelope before launch and passes only its
-policy token to the adapter. The envelope contains the canonical repository
-root, task-allowed paths, operation kind, network flag, and evidence. Paths are
-canonicalized and confined to the repository; traversal, shell indirection,
-unlisted policy-file changes, network, and external actions fail closed before
-launch. An adapter that cannot enforce this boundary returns `blocked`.
-
-The worker execution contract authorizes repository-scoped edits, tests, local
-recovery, and the per-task commit handoff for this invocation. Workers must not
-ask conversational permission or call a user-question facility for those
-actions. Push, deploy, merge, external communication, access changes, and
-network operations remain gated. A worker result is closed and structured:
-`success` requires evidence, `blocked` names a genuine hard gate and safe next
-action, `aborted` records an explicit stop, `error` records a runtime or tool
-failure, and `contract-violation` records the violated rule, recovery action,
-and evidence. Natural-language hesitation is not an approval state.
-
-The parent must not send a terminal response while the machine manifest is
-active. A missing final-response hook may be degraded while in-process driver
-continuation remains available. Terminal state is established separately from
-final-response enforcement.
+Read agents/skills/execute-plan/runtime-contract.md for the normative runtime contract, result schema, policy boundary, manifest ownership, and continuation transitions.
 
 **Continuous execution:** Once execute-plan is invoked, run the full plan end-to-end (Phase 1 tasks → Phase 2 → Phase 3 → Phase 4 → Phase 5) **without asking for permission between steps**. Brief progress reports are fine; stopping to ask "proceed to Task N?" or "start review?" is not. Pause only on hard gates (inclusion-check failure, failure, timeout, max review rounds, user interrupt, or explicit user abort).
 
@@ -342,6 +314,8 @@ session_start_commit: <sha>
 
 Update the manifest when Phase 0 completes. See [agent-logs.md](agent-logs.md) for log paths.
 
+**Machine manifest seeding (Phase 0):** When a structured machine manifest (`runtime_state.json`) is used for the run, the driver's `create` operation (`--operation create`) is the **only documented path that translates plan checkboxes into machine manifest state**: it seeds the authoritative manifest from the plan task list (pending statuses, fresh generation, mode `0600`) and validates every task's `allowed_paths` entries against the same fail-closed path policy enforced at launch. Directory-valued entries (including trailing-slash entries) are rejected with an actionable error naming the entry; directory prefix matching is out of scope because it would silently never match the file-level witnesses. No other path may write the initial machine manifest.
+
 **Hard gate:** The parent agent must **not** edit production or test files listed in the plan's `Files:` sections until Step 0.4 completes **and** execute-plan is chosen (invocation signal or plan-path gate option 1).
 
 ### Step 0.4b: Stale plan-path checkpoint (doc-hierarchy migration)
@@ -428,6 +402,7 @@ Rules:
 - Process tasks in document order (Task 1, then Task 2, …).
 - A task is incomplete if **any** of its `- [ ]` lines are unchecked, including nested items under `Files:`.
 - Implement **one task per iteration**; all clauses in that task section, not the whole plan.
+- The `create` operation is the only documented seeding path from plan checkboxes into machine manifest state (see Phase 0); during Phase 1 the machine manifest stays authoritative and task completion flows only through the driver's checkpoint and done-boundary operations.
 
 ### Inclusion Hard Gate (before Step 1.2)
 

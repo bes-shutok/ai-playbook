@@ -1,6 +1,7 @@
 # Execute-plan runtime r5 deferred findings: F5-F17 plus overflow items
 
-Status: open
+Status: done
+Disposition (2026-09-11): F9 verify-closed (Task 12 quotePath pin, 5 invocation-form matches, no re-fix); F14 closed by the Task 7 import-edge severance (the unused `MAX_EVIDENCE_BYTES` import removed by deletion); all other findings and overflow items closed by Tasks 1, 4, 6, 7, 9, 10, 11 of plan 2026-09-10-execute-plan-runtime-residuals.
 Workflow: backlog
 Source: docs/reviews/2026-09-09-branch-review-agent-agnostic-execute-plan-r5.md (final review round r5 of 5), findings F5-F17 (12 findings, Medium/Low, non-blocking or non-fix-family) plus the 5 recorded overflow items; deferred from the r5 receiving-review pass of docs/plans/2026-09-09-agent-agnostic-execute-plan.md
 

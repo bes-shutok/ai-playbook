@@ -519,6 +519,8 @@ Every plan must include a `## Validation Commands` fenced bash block (see plan t
 
 32. **List-set diffs must match namespace and collation on BOTH sides, proven by execution:** when a Validation Command compares a generated name set (grep over runner output) against an expected literal list, each side must carry the same naming form (strip the family prefix with `sed` or include it in the literals; a `grep -oE 'family/...'` capture keeps the prefix) and the same collation (a `sort -u`-built file emits lexical order, so pipe the literal side through `sort` too). Pin-vs-prescription audits alone do not catch this: EXECUTE the diff once at authoring time against a simulated post-change set (today's real output plus the declared additions) and record that it passes and that stripping one declared addition flips it (witnesses, one session: a preservation diff failed on ordering alone, then on full-prefixed-vs-bare names after the ordering fix).
 
+33. **Count criteria need count gates:** when a criterion or gate promises a span appears exactly N times at its site, the command must assert the count (`test "$(grep -oF 'pin' file | wc -l)" -eq N`), not presence; `grep -qF` cannot fail on a duplicated pin, so a duplicated insertion satisfies an exactly-once criterion (witness: a review round caught Evaluation Criteria promising "present exactly once at its site" while the gates were bare presence checks; the fold converted them to occurrence-count gates).
+
 ## Plan Quality Gate
 
 Before finalizing a new or updated plan, run the `review-plan` skill as a sub-agent:

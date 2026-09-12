@@ -280,8 +280,9 @@ only the hook-specific probe behavior.
 
 For every view, the diagnostics remain separate: `missing adapter`, `missing
 registration`, `unsupported event`, `malformed adapter`, and `degraded
-fallback`. A host hook cannot enforce a policy when its event cannot block or
-cannot carry the required payload. Missing registration and malformed adapter
+fallback`. The normative hook capability boundary rule lives in
+`agents/skills/execute-plan/runtime-contract.md` (Hook capability boundary);
+this document does not restate it. Missing registration and malformed adapter
 data fail closed and never produce `PASS`.
 
 Run `python3 scripts/hooks_probe.py --all` from the instructions repo (or

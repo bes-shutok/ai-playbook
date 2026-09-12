@@ -54,7 +54,7 @@ eligible profile has these exact fields:
 | `launch_operation` | Operation that starts one claimed worker step. |
 | `wait_operation` | Operation that waits for the worker result. |
 | `resume_operation` | Operation that resumes a persisted worker session. |
-| `capabilities` | States for the seven named lifecycle capabilities. |
+| `capabilities` | States for the three receipt capabilities consumers read: `parent_continuation`, `final_response`, and `resume`. |
 | `fallback` | Non-empty safe behavior for every degraded or unsupported capability. |
 | `adapter_version` | Version of the adapter contract implemented at the boundary. |
 | `approval_policy` | How the adapter preserves genuine approval gates. |
@@ -62,7 +62,10 @@ eligible profile has these exact fields:
 
 Capability states are closed: `full`, `degraded`, or `unsupported`. A degraded
 or unsupported capability is never interpreted as full. The profile fallback is
-returned with the blocked or degraded result.
+returned with the blocked or degraded result. Deferral rows carry the runtime
+id, display name, `eligibility: "deferred"`, the accepted `aliases` list, and
+the deferral `reason`; they carry no lifecycle capabilities and resolve to the
+fail-closed unsupported adapter with the recorded reason.
 
 Runtime-specific launch syntax, event envelopes, hook payloads, and session
 identifiers belong in adapter references and profile data. They do not belong
@@ -110,14 +113,17 @@ state. Malformed results fail closed and are never treated as success.
 
 The standard reason codes are `completed`, `worker-hesitation`,
 `contract-violation`, `approval-required`, `timeout`, `dirty-worktree`,
-`cleanup-unverified`, `malformed-result`, `owner-mismatch`, `stale-claim`,
-`explicit-abort`, `runtime-policy-unavailable`, and `runtime-error`. The
+`cleanup-required`, `cleanup-unverified`, `malformed-result`, `owner-mismatch`,
+`stale-claim`, `explicit-abort`, `runtime-policy-unavailable`, and
+`runtime-error`. The
 reference driver and adapter additionally emit `authorized` (envelope
 authorization success), `activation-verified` (adapter activation success),
 `worktree-witness-unavailable` (broken git scope witness), and the boundary
 events `done-pending` and `commit-pending`. This extended set is closed:
 normalization rejects a missing or unknown reason code as a malformed result
-instead of defaulting it.
+instead of defaulting it. The CLI create operation emits `created` as its own
+CLI envelope outside the adapter normalization boundary (which stays closed
+over the documented adapter codes).
 
 ## Durable task state machine
 
@@ -137,10 +143,60 @@ supplied, the driver derives the owner identity from the machine manifest so
 separate driver processes operating on one manifest share one owner; a
 per-invocation owner is used only for a manifest that has none yet.
 
+### Launch record and drift detection
+
+At launch, the driver atomically writes a launch-record snapshot on the claim
+together with the `launched` state transition, under the manifest lock:
+`launch_record` with `baseline_revision` (the git HEAD at launch), `generation`
+(the claim generation), and `launched_at` (a launch timestamp; the launch
+record is the only home of that timestamp). Both drift witnesses - the worktree scope witness
+on the checkpoint path and the done-boundary verification - compare the live
+manifest against that snapshot through one shared helper. The comparison always
+consumes a manifest snapshot read under the manifest lock, never an ambient
+unlocked read.
+
+Drift rules:
+
+- A changed snapshot is stale: when the live claim `baseline_revision` or
+  `generation` no longer matches `launch_record` (another session rewrote the
+  manifest after launch - erased or changed baseline, replaced generation),
+  both witnesses surface the resumable `stale-claim` outcome, preserve the
+  manifest, and refuse the commit handoff. Legitimate checkpoints and checkbox
+  bookkeeping do not touch the snapshot and keep both witnesses green.
+- A genuinely pre-launch claim (no launch record, no recorded checkpoints,
+  pending or claimed task status (or a commit-pending status recorded by the
+  parent before any launch), claim state `claimed`) undergoes no drift
+  checks.
+- Record absence never disarms detection on a claim that has demonstrably
+  launched: a claim in any post-launch state (recorded checkpoints or a
+  non-pending task status) whose launch record is missing - for example a
+  manifest written across the re-activation or rollback window - maps to the
+  same resumable `stale-claim` outcome instead of the pre-launch exemption.
+- A driver-owned relaunch or a fenced checkpoint that proves a launch on a
+  claim whose manifest predates launch records backfills the snapshot from the
+  claim's own live fields, keeping later done-boundary checks armed.
+
 Startup reconciliation owns crash recovery. It reloads the durable manifest,
 checks the claim, logs, task identity, and exact repository commit, and records a
 completed checkpoint when a commit is provably present. It never relaunches a
-provably completed commit or an ambiguous live worker.
+provably completed commit or an ambiguous live worker. A commit recovered on
+this path is verified against the claim's launch baseline exactly as the done
+handoff verifies it: an out-of-scope or escaping committed path blocks the
+reconciliation with the same boundary outcome the done handoff produces.
+
+Before launch only, the startup dirty-worktree gate tolerates ambient noise: a
+dirty worktree consisting purely of untracked allowlisted entries (`.DS_Store`
+variants and editor swap files such as `.#*`, `#*#`, `*.swp`, `*.swo`,
+`*.swpx`, `*~`) blocks with the resumable `cleanup-required` reason instead of
+the non-resumable `dirty-worktree`. Anything outside the allowlist, including
+tracked modifications, keeps the hard block on the same path. File mtime is
+never the ambient-versus-worker discriminator because a worker can forge it:
+after the claim's launch record exists, ambient noise is indistinguishable
+from a worker-caused escape and stays non-resumably blocked, and the
+checkpoint scope witness never consults the allowlist. Tasks already
+progressed past launch (done-pending, checkpointed, complete) defer the
+startup dirty-worktree check; ambient or worker dirt in that window is
+enforced by the done-boundary clean-state witness instead.
 
 ## Transition table
 
@@ -155,6 +211,7 @@ provably completed commit or an ambiguous live worker.
 | `error` | Runtime error code and bounded evidence | Preserve generation for reconciliation | Numeric profile budget | `blocked` or terminal after budget exhaustion | Reconcile, then retry only within the numeric budget. |
 | `timeout` | Deadline, operation, and cancellation evidence | Do not take over an ambiguous live claim | 0 | `blocked`, `resume_allowed: true` | Verify process cleanup before any later claim. |
 | `dirty-worktree` | Paths and clean-state evidence | Preserve claim and quarantine generation | 0 | `blocked`, `resume_allowed: false` | Require explicit reconciliation before relaunch. |
+| `cleanup-required` | Ambient noise paths on the pre-launch startup path | Preserve claim and quarantine generation | 0 | `blocked`, `resume_allowed: true` | Remove allowlisted ambient entries or resume after cleanup. |
 | `cleanup-unverified` | Owned process and failed termination evidence | Preserve claim; never take over | 0 | `blocked`, `resume_allowed: false` | Require operator cleanup verification; do not retry. |
 | `commit-pending` | Started receipt and task identity | Keep claim fenced during reconciliation | 0 | `blocked` or `checkpointed` | Inspect the exact commit before deciding whether work is complete. |
 | `done-pending` | Worker checkpoint plus done handoff evidence | Keep claim until done boundary closes | 0 | `blocked` or `checkpointed` | Do not launch the next task until commit, checkbox, clean state, and log evidence exist. |
@@ -281,6 +338,7 @@ are:
 
 | CLI operation | Driver method |
 | --- | --- |
+| `create` | `create_manifest` (via `_operation_create`; seeding only, runs before any driver construction) |
 | `claim` | `claim_next_task` |
 | `checkpoint` | `record_worker_checkpoint` |
 | `done` | `record_done` |
@@ -298,6 +356,29 @@ orchestrator-maintained Markdown `manifest.md` is a human audit receipt, and
 documents from structured-state reads; neither document can authorize a
 transition by itself. Machine-state writes are atomic, locked,
 generation-fenced, and revalidated after every checkpoint.
+
+### Seeding boundary and resume reconciliation
+
+The `create` operation is the only documented seeding path that translates
+plan checkboxes into machine manifest state. It wraps `create_manifest` (the
+same seeding routine the selftest uses), refuses to overwrite an existing
+manifest, persists the supplied owner identity, and is the seeding producer
+for per-task `allowed_paths`: every task's entries are validated through the
+same fail-closed path policy the launch envelope enforces, so the non-empty
+`allowed_paths` requirement that feeds the empty-scope fail-closed gate is
+established at seeding time. A missing or directory-valued entry (including a
+trailing-slash entry) is rejected at `create` and again at envelope
+validation with an actionable error naming the entry; directory prefix
+matching is explicitly out of scope because a directory-valued entry would
+silently never match the file-level scope witnesses - failing closed beats a
+silent never-matching entry.
+
+On resume, the manifest wins over the plan file's checkboxes. Divergent plan
+checkboxes (for example a `- [x]` whose task is not `checkpointed`/
+`complete` in the machine manifest) are corrected by rewriting the plan file
+through the skill-gated plan-edit step, never by mutating the machine
+manifest to match the plan; the manifest's task statuses, claims, and
+generation fence every transition.
 
 ## Hook capability boundary
 
@@ -356,6 +437,12 @@ finite and positive. A timed-out operation cancels its owned process tree and
 must verify termination; failed verification becomes
 `cleanup-unverified` with no retry or claim takeover.
 
+Timeout cleanup consults each owned PID's captured start-time identity
+immediately before escalating to `SIGKILL`, so a recycled foreign process is
+treated as exited instead of signalled. This identity check is a best-effort
+narrowing of the PID-recycle race; the kernel-level race itself is closed only
+by a pidfd-based signal where the platform provides one.
+
 The adapter never passes `--approve-for-me`,
 `--dangerously-bypass-approvals-and-sandbox`, or any equivalent bypass flag.
 The verified non-interactive approval configuration has exactly one production
@@ -366,3 +453,29 @@ If the target host has no such receipt, the adapter
 returns `blocked: runtime-policy-unavailable` and preserves the machine
 manifest. Host results are translated into the normalized schema before the
 driver sees them.
+
+The approval receipt is owner-only evidence: the file must have mode `0600`
+(any group- or other-readable mode is rejected), and it must record two
+mandatory cross-check fields: `config_path` (the host config file the
+operator attested, for codex the host codex config) and `policy_fingerprint`
+(the fingerprint of the non-interactive approval policy recorded in that
+config, for codex its `approval_policy` value). Both fields are
+operator-attested evidence, not a cryptographic credential. Loading the
+receipt re-reads the recorded config path from the host and recomputes the
+policy fingerprint; a missing config file, an absent non-interactive approval
+policy, or a recomputed fingerprint that differs from the recorded
+`policy_fingerprint` is rejected as an approval-receipt policy cross-check
+failure (only the mismatch case names the fingerprint mismatch). A relative
+`config_path` resolves only against an injected config
+root and must be absolute when none is injected; a relative path without an
+injected root is rejected as an invalid receipt, a failure distinct from the
+cross-check rejection. Each failure prints its specific message on stderr. A rejected receipt fails closed before driver
+construction: the driver CLI exits non-zero with an "approval receipt"
+failure message on stderr (no normalized result is emitted) and preserves the
+machine manifest, so the run stays resumable. Remediation is operator re-attestation: re-activate the
+host runtime, confirm its non-interactive approval policy, and issue a fresh
+mode-0600 receipt recording the current config path and fingerprint; this is the
+same remediation as any other failed activation attestation. Pre-upgrade
+receipts lacking `config_path` or `policy_fingerprint` (or carrying a looser
+file mode) fail closed under this reading by design; re-attesting them after
+host re-activation is a documented migration step, not an unplanned break.
