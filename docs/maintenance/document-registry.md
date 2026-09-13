@@ -1,7 +1,9 @@
 <!-- Document ownership registry (plans doc-ownership-lifecycle).
 Identity scheme: filename minus leading YYYY-MM-DD- date prefix
-and .md extension, kebab-case. On collision a short MMDD date
-suffix is appended; when the date also collides (same base in
+and .md extension, kebab-case; flat RFC filenames without a date
+prefix (*-rfc.md) take the filename minus the .md extension and
+the trailing -rfc. On collision a short MMDD date suffix is
+appended; when the date also collides (same base in
 two completed-history directories) a directory tag (plan/backlog)
 is appended too. Collided identities: backlog-inbox-location-gate, docs-branch-temp-file-hygiene, docs-branch-trap-before-restore-region, execute-plan-fresh-review-coverage-gaps, plan-readiness-trailer-gate-r5-deferrals, plans-facts-do-not-resolve-design-ambiguity, returned-for-ask-semantics, review-panel-hermeticity-dimension, review-pointer-wiring-polish, reviewed-plan-readiness-gate, token-usage-telemetry.
 Rows are backfilled: archived date from the filename date
@@ -167,3 +169,7 @@ Table format consumed by scripts/doc_registry_validator.py. -->
 | rfc-design-create-mode-identity-header-wiring | no | completed | 2026-09-12 | done, wiring landed in rfc-design create mode | docs/history/backlog/completed/2026-09-10-rfc-design-create-mode-identity-header-wiring.md  |  |  | user-approved 2026-09-12: origin header Status open->done plus one-line disposition at archive completion (plan Task 1, per the user work order) |
 | execute-plan-runtime-residuals-recert-nonconvergence | no | completed | 2026-09-13 | backlog-completed | docs/history/backlog/completed/2026-09-11-execute-plan-runtime-residuals-recert-nonconvergence.md  |  |  | user-approved 2026-09-13: origin of driver-residuals plan: Status open->done at archive completion (Task 1 disposition ledger all-green; review r1-r3 clean) |
 | vrs-quotepath-pin-vs-worktree-entries-reuse | no | completed | 2026-09-13 | backlog-completed | docs/history/backlog/completed/2026-09-11-vrs-quotePath-pin-vs-worktree-entries-reuse.md  |  |  | user-approved 2026-09-13: origin of driver-residuals plan: Status open->done at archive completion (Task 2 dedupe landed b4f7c97, pin 5->4; review r1-r3 clean) |
+| doc-registry-r7-residuals | no | completed | 2026-09-10 | backlog-completed | docs/history/backlog/completed/2026-09-10-doc-registry-r7-residuals.md |  |  |  |
+| doc-registry-fold-exit-surface-exception-coverage | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-11-doc-registry-fold-exit-surface-exception-coverage.md |  |  |  |
+| doc-registry-cli-doc-precision | no | completed | 2026-09-13 | backlog-completed | docs/history/backlog/completed/2026-09-13-doc-registry-cli-doc-precision.md |  |  |  |
+| doc-registry-validator-residuals | no | completed | 2026-09-13 | plan-completed | docs/plans/completed/2026-09-13-doc-registry-validator-residuals.md |  |  |  |

@@ -1,6 +1,6 @@
 # Doc-registry fold plan: pre-subcommand unknown-flag exit-2 path has no pinning fixture
 
-Status: open
+Status: done
 Workflow: backlog
 Source: docs/reviews/2026-09-11-plan-review-doc-registry-freeze-move-licensing-fold-r7.md (round 7, finding F1, Low, non-blocking)
 

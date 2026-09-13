@@ -2791,7 +2791,7 @@ A selftest fixture authored from the predicate's own assumptions satisfies NONE 
 
 In all three, the discipline existed at one site; the sibling was added/found later without the discipline; the re-bite was caught only when a review specifically looked for the missing propagation.
 
-**See also:** coding_guidelines.md #18 (Family A: cover the whole partition, not just the tested cell), #19 (Family D parent), tax-reporting "Decision Points TOML Missing Must Raise `ConfigurationError`, Not Bare `FileNotFoundError`" (Family G parent), #77 (recalibrate exception policy per call site - the inverse complement of this lesson: that one is about DIVERGING policy where divergence is correct; this one is about PROPAGATING discipline where uniformity is correct), #101 (propagate exception policy through wrappers), #131 (selftest fixtures must mirror real installs).
+**See also:** coding_guidelines.md #18 (Family A: cover the whole partition, not just the tested cell), #19 (Family D parent), tax-reporting "Decision Points TOML Missing Must Raise `ConfigurationError`, Not Bare `FileNotFoundError`" (Family G parent), #77 (recalibrate exception policy per call site - the inverse complement of this lesson: that one is about DIVERGING policy where divergence is correct; this one is about PROPAGATING discipline where uniformity is correct), #101 (propagate exception policy through wrappers), #131 (selftest fixtures must mirror real installs), #326 (a new selftest arm must also isolate the cwd axis, not only the axes the established discipline already names).
 
 ## 134. An API Rate-Limit Error's Reset Timestamp Is in the Provider's Reporting Timezone, Not the Local Timezone; Verify With a Cheap Probe Before Treating a Far-Future Reset as a Hard Multi-Hour Block
 
@@ -5934,9 +5934,9 @@ When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git c
 
 **Principle:** Family E (a derived value captured before mutation diverges from the post-mutation state) applied to wall-clock reads: a record carrying a reset/expiry timestamp is stale data once that timestamp is past, and any decision computed from it after the boundary is fabricated, not conservative.
 
-**Trigger:** decision logic (threshold check, binding selection, urgency ranking) consumes records that carry a future `reset_at`/`expires_at` epoch, and the code reads the wall clock implicitly (`time.time()` deep inside the decision) or compares each record against its own clock read.
+**Trigger:** decision logic (threshold check, binding selection, urgency ranking) consumes records that carry a future `reset_at`/`expires_at` epoch, and the code reads the wall clock implicitly (`time.time()` deep inside the decision) or compares each record against its own clock read; the same shape covers forward-dated tokens validated against a day-granularity tolerance (`today` vs `datetime.date.today()`).
 
-**Rule:** (1) Read the clock once and pass it in (`now` parameter, default `time.time()`); never let the decision function read the clock itself, so tests can pin `now` and the comparison is consistent across records. (2) Partition records into live (`reset_at > now`) and expired before selecting a binding record or evaluating thresholds; expired records participate in neither. (3) When records exist but none are live, do NOT carry on with an empty or stale selection: return the unknown/fail-open outcome with an explicit stale-data reason. (4) Pin boundary tests (exactly-at, one-second-either-side) against the injected `now`, and add a mixed expired+live case proving the expired record neither wins binding nor forces the decision.
+**Rule:** (1) Read the clock once and pass it in (`now` parameter, default `time.time()`); never let the decision function read the clock itself, so tests can pin `now` and the comparison is consistent across records. (2) Partition records into live (`reset_at > now`) and expired before selecting a binding record or evaluating thresholds; expired records participate in neither. (3) When records exist but none are live, do NOT carry on with an empty or stale selection: return the unknown/fail-open outcome with an explicit stale-data reason. (4) Pin boundary tests (exactly-at, one-second-either-side) against the injected `now`, and add a mixed expired+live case proving the expired record neither wins binding nor forces the decision. (5) When a boundary can only be exercised end-to-end through a runner that reads the real clock, pick fixture offsets whose expected outcome survives a boundary straddle between authoring and run time (for a one-day forward tolerance: +0 days passes and +3 days fails under either reading, while +1/+2 flip at midnight); pin the exact boundary only via the injected seam.
 
 **Why:** without the partition, an already-reset record can still "win" a binding selection or drive a threshold decision using numbers that describe a window that no longer exists; the system acts on a quota/limit state that is hours stale while believing it is live. The fail-open-on-all-expired rule matters because "no live data" and "no data" must produce the same honest unknown, not a decision computed from ghosts.
 
@@ -5962,15 +5962,15 @@ When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git c
 
 **Principle:** Family D (single source of truth: a mechanism prescription restated across several plan records drifts when the correction updates only the record the code fix touched)
 
-**Trigger:** a review finding or user amendment forces an execution correction that REVERSES a mechanism the plan prescribed — replacing it, not merely tuning it — and the plan document remains the review loop's gold source for later rounds.
+**Trigger:** a review finding or user amendment forces an execution correction that REVERSES a mechanism the plan prescribed (replacing it, not merely tuning it), and the plan document remains the review loop's gold source for later rounds.
 
-**Rule:** (1) After landing the reversal, grep the plan for the old mechanism's name and every distinctive term of the old prescription; each hit is a record to fold in the same change set: the Terms entry, the Gist, the Task text, and the Design Invariants — not only the task checkbox and the code. (2) Where a record must keep the old name (pinned selftest arm names, fixture labels), re-characterize the surrounding claim so the record describes the new semantics instead of prescribing the dead one. (3) The fold is part of the correction's definition of done, not a deferred doc cleanup: every later round re-reads the plan as gold source and will re-prescribe the stale mechanism against the corrected code.
+**Rule:** (1) After landing the reversal, grep the plan for the old mechanism's name and every distinctive term of the old prescription; each hit is a record to fold in the same change set: the Terms entry, the Gist, the Task text, and the Design Invariants (not only the task checkbox and the code). (2) Where a record must keep the old name (pinned selftest arm names, fixture labels), re-characterize the surrounding claim so the record describes the new semantics instead of prescribing the dead one. (3) The fold is part of the correction's definition of done, not a deferred doc cleanup: every later round re-reads the plan as gold source and will re-prescribe the stale mechanism against the corrected code.
 
-**Why:** an address-round fix removed a per-section first-block latch and replaced it with re-open-on-empty-opener semantics in the code, docstring, and one task; the plan's Terms entry, Gist, Task text, and a Design Invariant each still prescribed the latch, so each later round risked re-flagging the corrected code as a plan-adherence failure — the stale records had made the gold source wrong.
+**Why:** an address-round fix removed a per-section first-block latch and replaced it with re-open-on-empty-opener semantics in the code, docstring, and one task; the plan's Terms entry, Gist, Task text, and a Design Invariant each still prescribed the latch, so each later round risked re-flagging the corrected code as a plan-adherence failure: the stale records had made the gold source wrong.
 
 **Witness (2026-09-13, plan-readiness trailer-tail r1 address round):** the four stale records were enumerated only because the fix log listed them; neither the plan nor the correction workflow carried a checklist connecting a mechanism reversal to its record fan-out.
 
-**See also:** #12 (three-way doc sync: fold artifact copies in the same commit), #62 (re-read RED tests against revised invariants — the test side of the same fold), #72 (verify plan claims against source before writing them).
+**See also:** #12 (three-way doc sync: fold artifact copies in the same commit), #62 (re-read RED tests against revised invariants; the test side of the same fold), #72 (verify plan claims against source before writing them).
 
 ## 325. Relaunch A Rate-Limited Review Lens; Never Drop It From Panel Accounting
 
@@ -5982,6 +5982,102 @@ When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git c
 
 **Why:** a five-lens code-review panel lost its testing lens to a rate limit in round 2; accounting it as 4/5-complete tempted the loop to exit on the survivors. Relaunching the lens into the targeted round 3 kept the coverage claim honest: the loop exited CLEAN only once all five lenses had verdicts on record.
 
-**Witness (2026-09-13, trailer-tail code-review loop r2-r3):** the review log records "4/5 complete (testing lens rate-limited -> relaunched in r3)" and the exit line certifies 5/5 — the relaunch, not the dropout, is what made the CLEAN verdict meaningful.
+**Witness (2026-09-13, trailer-tail code-review loop r2-r3):** the review log records "4/5 complete (testing lens rate-limited -> relaunched in r3)" and the exit line certifies 5/5: the relaunch, not the dropout, is what made the CLEAN verdict meaningful.
 
-**See also:** #307 (a killed sub-agent may have flushed complete artifacts — audit disk before relaunching), #173 and #185 (partial-predecessor audits on relaunched steps).
+**See also:** #307 (a killed sub-agent may have flushed complete artifacts; audit disk before relaunching), #173 and #185 (partial-predecessor audits on relaunched steps).
+
+## 326. Isolate the cwd Axis in Selftests of cwd-Resolving Entry Points
+
+**Principle:** Family A (cover the whole partition, not just the tested cell: the partition is every environment input the entry point reads) cross Family H (a fixture check that runs against the real config verifies the real config, not the fixture).
+
+**Trigger:** adding a selftest arm (or promoting an inline shell probe into a CLI) whose entry point resolves configuration from the process working directory, in a subsystem that already has an established HOME/tempdir isolation discipline from a previous incident.
+
+**Rule:** (1) Before writing the arm, enumerate every environment input the entry point under test reads (HOME, cwd, env vars, module globals); an established discipline covers only the axes a previous incident named, and a new axis is unprotected by default. (2) For a cwd-reading entry point, chdir into the isolated fixture before invoking it in-process, and restore the original cwd in a `finally` so a mid-test failure cannot strand the harness in the temp dir. (3) Give the fixture a config value that differs from every real config the harness could fall back to; with equal values a missed chdir still reports ALL PASS on coincidence. (4) Place the chdir/finally INSIDE the temporary-directory context block so the directory's cleanup runs after cwd has left it: an outer finally restores too late (rmtree of a directory that is still some process's cwd fails on Windows) and can mask the block's own error.
+
+**Witness (2026-09-13, facts-paths resolve-CLI plan task):** the new arm built an isolated facts fixture and invoked the CLI's `main()` in-process; `main()` resolves via `Path.cwd()`, and the fixture value equaled the real repo's value, so without the chdir the check would pass vacuously while reading the real gitignored facts. The chdir plus finally-restore made the arm discriminating, and a RED run before the entry-point fix confirmed it exercised the real code. Review r1 of the same plan found the restore placed outside the TemporaryDirectory block; moving it inside released cwd before cleanup and kept an outer handler from masking the block's error.
+
+**See also:** #133 (propagate an established isolation discipline to every sibling arm; this lesson is the enumerate-every-axis complement), #220 (vacuous sweeps need RED-today proof).
+
+## 327. Pin Environment-Dependent Behavior Under Both Values, Not Host Conditionals
+
+**Principle:** Family A (cover the whole partition, not just the tested cell: the partition is every value the behavior axis can take across hosts, and a host-conditional fixture covers exactly one cell on the host that runs it)
+
+**Trigger:** a guard branch's expected outcome (warn vs hard, pass vs fail) depends on an environment-varying function (filesystem case folding, locale casing, timezone), and the suite expresses the expectation through a platform conditional instead of controlling the function.
+
+**Rule:** (1) When an assertion's expected outcome varies with an environment-dependent helper, pin the helper to each partition value in turn (including the identity/no-op value) around the fixture invocation, save/restore in try/finally, and assert each arm's expectation under its own pin, so every arm runs on every host. (2) Host-conditional fixtures may remain only as supplemental real-platform coverage, never as the sole protection of a branch. (3) A branch whose only pin is the ambient host behavior is untested on every host where the behavior differs; treat that as a coverage gap, not a platform quirk.
+
+**Why:** case-folding comparisons agree on case-insensitive hosts and diverge on case-sensitive ones; a warn branch guarded only by a host conditional is verified on one host class and can silently regress on the other.
+
+**Witness (2026-09-13, doc-registry validator r1 review):** two fold-dependent fixtures asserted warn/hard expectations host-conditionally only; the address round added a fold pin (lowercase and identity) around each so both arms run everywhere, and live mutation checks showed a neutralized branch now fails via the pin, not just on the matching host.
+
+**See also:** #326 (enumerate every environment axis a selftest must isolate; the fixture-input complement), #133 (propagate a discipline to every sibling call site), #220 (vacuous guards need RED-today proof).
+
+## 328. A Rename License Must Require The Sibling Spelling To Differ
+
+**Principle:** Family A (cover the whole partition, not just the tested cell: for an exception predicate that licenses a flagged change pair by matching a companion change, the partition is the companion's normalized identity relative to the changed side: equal or differing)
+
+**Trigger:** a guard licenses an exception (for example a rename) when a companion change (the other half of a delete+add pair) matches the changed path, and the match runs over a canonicalizing comparison (case folding, separator normalization).
+
+**Rule:** The license conjunct must require the companion's normalized spelling to DIFFER from the changed side. Under a folding comparison a same-spelling companion IS the changed path: the pair is a deletion plus re-add of one file, not a rename, and must keep the unlicensed (hard) verdict.
+
+**Why:** Fold equality collapses identity and same-spelling into one cell, so without the differ conjunct the sibling arm also matches the pair whose two sides name the same path, downgrading exactly the delete-and-re-add shape the guard exists to block.
+
+**Witness (2026-09-13, doc-registry validator r2 review):** the case-only-rename predicate lacked the differ conjunct; a stdin delete+add pair of one registered completed-history path was downgraded from hard to the case-only-rename warn. Fixed with the conjunct plus a same-spelling fixture pinned under both fold values (the pin idiom of #327).
+
+**See also:** #327 (pin the fold helper under both values; the fixture-side complement), #220 (a guard change needs RED-today proof: dropping the conjunct must fail the new fixture).
+
+## 329. A Path-Resolving Surface Must Expand The Tilde Itself
+
+**Principle:** Family C (representation: the raw stored form of a value is not its resolved form; each surface that promises the resolved form must perform the expansion at its own boundary)
+
+**Trigger:** a config value may carry a leading `~/`, and a CLI or API surface prints or returns it as a path; or a raw accessor's docstring claims expansion the code does not perform.
+
+**Rule:** Shell parameter expansion never re-expands a tilde inside an already-substituted value, so a raw `~/...` value interpolated into a command or printed verbatim stays a literal two-character path. Every surface that promises a usable path applies tilde expansion itself; a raw accessor documents verbatim return (no expansion, no anchoring) so callers know expansion is theirs.
+
+**Why:** The contract "prints the resolved path" and the implementation "prints the stored value" agree in tests that use absolute fixture paths and diverge the first time a real config value carries a tilde.
+
+**Witness (2026-09-13, facts_paths resolve CLI):** the resolve command printed the stored `~/...` literal; fixed to print the expanded form with a selftest asserting the expanded output, and the raw accessor's docstring corrected to claim no expansion.
+
+**See also:** #326 (isolate the cwd axis in selftests of path-resolving entry points; the sibling environment axis).
+
+## 330. One Mutation-Killing Witness Per Guard Conjunct, Not One Per Guard
+
+**Principle:** Family A (cover the whole partition, not just the tested cell: for a compound guard the partition is its conjuncts, and an input witnesses only the conjuncts that are load-bearing for that input) cross Family H (verify the real thing: credit comes from a killed mutation, not from exercising the composed verdict).
+
+**Trigger:** adding a regression fixture for a guard whose condition is a conjunction (for example an exception license: outer change-type test AND inner companion-transition test), following a plan or reviewer prescription that the prescribed input pair "kills" the guard's mutations.
+
+**Rule:** (1) Enumerate the guard's conjuncts before crediting a fixture with coverage. (2) An input kills a conjunct's deletion only if flipping that conjunct alone flips the outcome for THAT input; a conjunct that restates a property the input already has (the input's change type IS the letter the conjunct tests) is trivially true and its deletion is invisible. (3) For each conjunct, live-mutate its deletion against the fixture; when it survives, add a minimal same-family arm whose input differs on that conjunct's axis while keeping the sibling shape. (4) Treat a prescription's "kills both conjuncts" as a claim to verify per conjunct.
+
+**Why:** the prescribed pair satisfied every conjunct, so it exercised the composed verdict yet could witness only the conjunct whose absence changed the outcome; the outer conjunct's regression protection was silently absent until a second arm made it load-bearing.
+
+**Witness (2026-09-13, doc-registry validator r3 address):** the case-only-rename license `change_type == "D" and is_licensed_transition(other_ct)` was given the prescribed D+?? sibling pair; deleting the inner call flipped the run, deleting the outer `== "D"` test did not (the pair's own type is D). A second minimal arm (M of the registered src plus a licensed-A case-variant sibling) made the outer conjunct load-bearing; both mutations verified killed under both fold pins.
+
+**See also:** #328 (the guard-side conjunct this fixture family protects), #327 (pin the fold helper under both values), #220 (prove a gate RED-today; treat a "verified empirically" claim as untrusted), #198 (a silent no-op mutation indicts the harness).
+
+## 331. Embed cwd-Defaulting Resolvers With An Explicit Root, Not Inherited cwd
+
+**Principle:** Family C (boundary contract: a helper's cwd default is its own fallback convenience, not a guarantee about the caller's location; a caller that needs a repo-anchored resolution supplies the anchor at its own boundary)
+
+**Trigger:** embedding a config- or path-resolving CLI call that defaults its lookup root to the process cwd inside a workflow step, hook, or script that can run from any directory.
+
+**Rule:** (1) Capture the intended anchor first (for a repo-scoped step, the git root) and pass it as the resolver's explicit root argument; use the cwd default only when no anchor exists. (2) Keep the prior fail-open degradation (empty result feeding the documented fallback path) when the anchor cannot be resolved, so hardening a subdirectory run does not turn it into a hard failure. (3) When extending the resolver, add a no-chdir selftest arm whose fixture value differs from the real config, so a lost argument fails the exact match instead of passing on an ambient value.
+
+**Why:** a cwd-defaulted resolve silently reads a different root's facts or resolves empty when the step runs from a subdirectory; the fallback path makes the wrong-root case silent rather than loud.
+
+**Witness (2026-09-13, done registry gate + facts_paths resolve):** the done skill's registry-gate step invoked `resolve tmp_dir` with no root, inheriting the shell's cwd; fixed to capture the git root and call `resolve tmp_dir <git-root>`, with the CLI extended to `resolve <key> [root]`, the fail-open empty-result fallback chain kept, and an explicit-root selftest arm whose sentinel value fails a lost argument.
+
+**See also:** #326 (the test-side complement: isolate the cwd axis in selftests of cwd-resolving entry points), #329 (each surface performs its own expansion at its own boundary).
+
+## 332. Derive A Prose Count Quantifier From The Items It Summarizes
+
+**Principle:** Family D (single source of truth: a count quantifier in prose ("two tiers", "three cases") is a derived fact about the enumeration it summarizes; writing it from memory creates a second source that drifts from the items the moment the items change)
+
+**Trigger:** writing or reviewing a summary sentence that quantifies an enumerated set (code arms, list items, table rows, cases), especially while editing nearby text about just one of the items.
+
+**Rule:** (1) When a sentence quantifies an enumeration, derive the count at write time by enumerating the items, not from recall of a prior state. (2) When adding or removing an item, grep the surrounding prose for its quantifier ("two", "three", "both", "pair") and update every quantifier that covers the item in the same edit as the item itself. (3) On review, treat the quantifier as a checkable claim: count the items before approving the sentence.
+
+**Why:** the count word is not mechanically bound to the items, so it silently survives item additions; a reader who trusts the quantifier stops at the stated number and never discovers the item the sentence now hides.
+
+**Witness (2026-09-13, doc-registry validator r4 review):** the doc-hierarchy skill's registered-src exemption sentence said "two bounded warn tiers" while the validator ships three warn arms (case-only-rename fold-equal old side, untracked dir-collapse under an immutable root, untracked case-variant of the registered src); the blocking review finding was the undercount, fixed by enumerating the third tier in place.
+
+**See also:** #330 (enumerate-then-claim discipline on the test side: a guard's conjuncts are enumerated before coverage is credited), #220 (treat an unverified claim as unproven until executed against the current artifact).

@@ -4,7 +4,7 @@
 Two responsibilities, both stdlib-only and agent-agnostic:
 
 1. **Facts-FILE key resolution.** Parses ``.ai-playbook/facts.md`` for keys that
-   live in DIFFERENT on-disk formats (r2 Blocker - they cannot share one parser):
+   live in DIFFERENT on-disk formats (they cannot share one parser):
    - ``plans_dir`` / ``tmp_dir`` are TOML-fence ``key = "value"`` lines in the
      REPO facts file -> ``resolve_toml_key`` -> ``resolve_plans_dir`` /
      ``resolve_tmp_dir``.
@@ -22,7 +22,7 @@ Two responsibilities, both stdlib-only and agent-agnostic:
    ``_append_hooks_log_line`` helper before returning a cwd-derived hash. NEVER
    raises. See the plan's Terms (Skill-gate marker steps 1-4).
 
-r15-L4 NOTE: the project-key path owns ONE observability side effect (the
+NOTE: the project-key path owns ONE observability side effect (the
 ``no-anchor`` log line); acceptable for v1. If a SECOND leaf-side log token
 appears, extract ``resolve_project_key`` (and its log write) into its own leaf
 (``project_key.py``), leaving this file as pure facts-file parsing.
@@ -47,7 +47,7 @@ from pathlib import Path
 # uniform (mirrors lessons_corpus.py / lessons_adopt.py).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# Named constant (r17): the SINGLE source for the resolver's
+# Named constant: the SINGLE source for the resolver's
 # ``subprocess.run(..., timeout=RESOLVER_GIT_TIMEOUT_S)``. The doctor's
 # ``timeout > RESOLVER_GIT_TIMEOUT_S`` bound and the #doctor_agy_timeout selftest
 # import this symbol, so a rename/move breaks them loudly at import time.
@@ -55,7 +55,7 @@ RESOLVER_GIT_TIMEOUT_S = 5
 
 
 # --------------------------------------------------------------------------- #
-# hooks.log shared helper (r17). The SINGLE contract home for the hooks.log
+# hooks.log shared helper. The SINGLE contract home for the hooks.log
 # write: the resolver's ``no-anchor`` line and (later) the cores'
 # ``env-var`` / ``project-only`` lines all call this. Stated NOWHERE else.
 # --------------------------------------------------------------------------- #
@@ -69,7 +69,7 @@ def _append_hooks_log_line(payload: dict) -> None:
     The makedirs, the open, AND the write are ALL wrapped in ONE
     ``try/except OSError`` and SILENT on failure (NEVER raises). Defensive
     choices:
-    - ``default=str`` is REQUIRED (SERIALIZE-DEFENSIVELY, r18-M3): bare
+    - ``default=str`` is REQUIRED (serialize-defensively): bare
       ``json.dumps`` raises ``TypeError``/``ValueError`` (NOT ``OSError``) on a
       non-serializable field (a caller passing ``datetime.now()`` for ``ts``),
       which escapes the silent-catch and violates NEVER-raises. ``default=str``
@@ -77,7 +77,7 @@ def _append_hooks_log_line(payload: dict) -> None:
       ``bytes``). A circular payload or a value whose ``__str__`` raises still
       escapes and is the caller's responsibility (PRECONDITION: ``payload`` is an
       acyclic dict of str-coercible-without-raising values).
-    - makedirs in the SAME except (r17-L1): a read-only ``~/.ai-playbook/``
+    - makedirs in the SAME except: a read-only ``~/.ai-playbook/``
       parent makes makedirs raise ``PermissionError``; the single
       ``try/except OSError`` covers it so the gate stays unaffected.
     - ``O_NOFOLLOW`` refuses a pre-planted symlink at the leaf; ``O_APPEND``
@@ -104,12 +104,13 @@ def _append_hooks_log_line(payload: dict) -> None:
 # --------------------------------------------------------------------------- #
 def resolve_toml_key_raw(start_dir: Path, key: str) -> str | None:
     """Parse the REPO ``.ai-playbook/facts.md`` TOML-fence block for ``key`` and
-    return its value as an UN-resolved raw string.
+    return its value as a raw string with NO expansion.
 
-    Returns the stripped TOML value (tilde-expanded via ``expanduser`` so a
-    ``~/...`` value is usable, but NOT ``Path.resolve()``-anchored) as a ``str``,
-    or ``None`` if the file or key is absent. The raw (un-anchored) form lets a
-    cross-repo caller anchor a repo-relative value at the repo root itself,
+    Returns the stripped TOML value verbatim: NO tilde expansion and NO
+    ``Path.resolve()``-anchoring. Expansion is the caller's job (the
+    ``resolve`` CLI applies ``os.path.expanduser`` to the printed value;
+    ``resolve_toml_key`` applies ``.expanduser().resolve()``). The raw form lets
+    a cross-repo caller anchor a repo-relative value at the repo root itself,
     instead of having ``Path.resolve()`` anchor it against the process CWD
     (which is wrong for cross-repo discovery). This is the SINGLE parser for the
     TOML-fence format; ``resolve_toml_key`` delegates here (DRY).
@@ -226,7 +227,7 @@ def _resolve_table_key_in_file(facts_path: Path, key: str) -> Path | None:
 
     Returns the resolved value as a ``Path`` (tilde-expanded, resolved), or
     ``None`` if the file/key is absent or unreadable. Shared backing for
-    ``resolve_projects_roots`` (r19): the workspace-root keys live as markdown
+    ``resolve_projects_roots``: the workspace-root keys live as markdown
     table rows in ``~/.ai-playbook/facts.md``.
     """
     if not facts_path.is_file():
@@ -328,7 +329,7 @@ def selftest() -> int:
         nonlocal all_ok
         all_ok = _selftest_check(label, cond, detail) and all_ok
 
-    # r1-M6 isolation baseline (mirrors lessons_recall.py _m13_before): every
+    # Isolation baseline (mirrors lessons_recall.py _m13_before): every
     # resolve_project_key/_append_hooks_log_line call below must run under an
     # isolated HOME so keying=no-anchor lines land in a tmp tree, NOT the
     # developer's REAL ~/.ai-playbook/logs/hooks.log. The final
@@ -396,25 +397,29 @@ def selftest() -> int:
             f"plans={plans} shared={shared}",
         )
 
-    # ---- resolve_toml_key_raw: UN-resolved raw string (F3) ----
+    # ---- resolve_toml_key_raw: UN-resolved raw string ----
     # ``resolve_toml_key_raw`` returns the stripped TOML value as a ``str``
-    # (tilde-expanded but NOT ``.resolve()``-anchored), so cross-repo callers
-    # can anchor a repo-relative value at the repo root themselves. It shares
-    # ONE parser with ``resolve_toml_key`` (DRY; no second fence parser).
+    # with NO expansion (no tilde expansion, no ``.resolve()`` anchoring), so
+    # cross-repo callers can anchor a repo-relative value at the repo root
+    # themselves. It shares ONE parser with ``resolve_toml_key`` (DRY; no
+    # second fence parser).
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         (td_path / ".ai-playbook").mkdir()
         rel_value = "docs/reviews/"
         abs_value = "/tmp/zz-raw-abs-XYZ/"
+        tilde_value = "~/tilde-fixture/"
         (td_path / ".ai-playbook" / "facts.md").write_text(
             "```toml\n"
             f'reviews_dir = "{rel_value}"\n'
             f'plans_dir = "{abs_value}"\n'
+            f'tmp_dir = "{tilde_value}"\n'
             "```\n",
             encoding="utf-8",
         )
         raw_rel = resolve_toml_key_raw(td_path, "reviews_dir")
         raw_abs = resolve_toml_key_raw(td_path, "plans_dir")
+        raw_tilde = resolve_toml_key_raw(td_path, "tmp_dir")
         raw_missing = resolve_toml_key_raw(td_path, "does_not_exist")
         check(
             "resolve_toml_key_raw: relative value returned as raw str",
@@ -425,6 +430,12 @@ def selftest() -> int:
             "resolve_toml_key_raw: absolute value returned as raw str",
             isinstance(raw_abs, str) and raw_abs == abs_value,
             f"raw_abs={raw_abs!r}",
+        )
+        check(
+            "resolve_toml_key_raw: tilde value returned EXACTLY raw"
+            " (no expansion)",
+            isinstance(raw_tilde, str) and raw_tilde == tilde_value,
+            f"raw_tilde={raw_tilde!r}",
         )
         check(
             "resolve_toml_key_raw: absent key returns None",
@@ -498,13 +509,14 @@ def selftest() -> int:
     expected_anchor = os.path.realpath(str(start))
     expected_hash = hashlib.sha1(expected_anchor.encode()).hexdigest()[:16]
 
-    # r1-M6: arms 1 and 2 call resolve_project_key, which writes a
+    # Arms 1 and 2 call resolve_project_key, which writes a
     # keying=no-anchor line to the hooks.log resolved from Path.home() at call
     # time. They MUST run under an isolated HOME so that write lands in a tmp
     # tree, NOT the developer's REAL ~/.ai-playbook/logs/hooks.log (the same
     # discipline lessons_recall.py and skill_gate.py apply to their _consult
     # calls). The arms below (absent-parent, read-only-parent, non-serializable)
-    # already patch HOME; arms 1-2 were the leaf missed in r1/r2/r3.
+    # already patch HOME; arms 1-2 gained the same patch after
+    # initially running bare.
     orig_home = os.environ.get("HOME")
     with tempfile.TemporaryDirectory() as home_tmp:
         os.environ["HOME"] = home_tmp
@@ -718,7 +730,107 @@ def selftest() -> int:
             f"p2={p2} c2={c2}",
         )
 
-    # r1-M6 regression guard: no selftest block leaked a keying line into the
+    # ---- resolve CLI: main(["resolve", "<key>"]) through Path.cwd() ----
+    # main() resolves via Path.cwd(), so this check MUST chdir into the
+    # isolated directory first and restore the original cwd in a finally
+    # NESTED INSIDE the TemporaryDirectory block: cwd is restored BEFORE
+    # rmtree cleanup (on Windows rmtree cannot delete the process cwd,
+    # and an outer finally would run after cleanup and could mask the
+    # block's original error). The fixture value is a SENTINEL no real
+    # facts file contains ("docs/tmp-cli-fixture/", not this repo's
+    # real "docs/tmp/"), and the known-key assertion compares the exact
+    # string: a lost chdir reads the repo's real gitignored facts.md
+    # and FAILS on the ambient value instead of passing vacuously. A
+    # tilde-prefixed second key pins the consumer surface: the CLI
+    # applies expanduser to the printed value (a literal ~/... string
+    # would be unusable to shell consumers).
+    import contextlib
+    import io
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        (td_path / ".ai-playbook").mkdir()
+        cli_tmp_value = "docs/tmp-cli-fixture/"
+        cli_tilde_value = "~/tilde-fixture/"
+        (td_path / ".ai-playbook" / "facts.md").write_text(
+            "```toml\n"
+            f'tmp_dir = "{cli_tmp_value}"\n'
+            f'plans_dir = "{cli_tilde_value}"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        orig_cwd = os.getcwd()
+        try:
+            os.chdir(td_path)
+
+            cli_out = io.StringIO()
+            with contextlib.redirect_stdout(cli_out):
+                cli_rc = main(["resolve", "tmp_dir"])
+            check(
+                "resolve CLI: known key prints the raw value and exits 0",
+                cli_rc == 0 and cli_out.getvalue() == cli_tmp_value + "\n",
+                f"rc={cli_rc} out={cli_out.getvalue()!r}",
+            )
+
+            tilde_out = io.StringIO()
+            with contextlib.redirect_stdout(tilde_out):
+                tilde_rc = main(["resolve", "plans_dir"])
+            check(
+                "resolve CLI: tilde value prints the expanded path",
+                tilde_rc == 0
+                and tilde_out.getvalue()
+                == os.path.expanduser(cli_tilde_value) + "\n",
+                f"rc={tilde_rc} out={tilde_out.getvalue()!r}",
+            )
+
+            unknown_out = io.StringIO()
+            with contextlib.redirect_stdout(unknown_out):
+                unknown_rc = main(["resolve", "does_not_exist"])
+            check(
+                "resolve CLI: unknown key prints empty and exits 0",
+                unknown_rc == 0 and unknown_out.getvalue() == "\n",
+                f"rc={unknown_rc} out={unknown_out.getvalue()!r}",
+            )
+        finally:
+            os.chdir(orig_cwd)
+
+    # ---- resolve CLI: explicit repo-root argument (NO chdir) ----
+    # ``resolve <key> [root]`` anchors the facts lookup at the given
+    # root instead of Path.cwd(), so a subdirectory run cannot silently
+    # resolve tmp_dir under the wrong root. This check runs WITHOUT
+    # chdir (the root is the third argv); the sentinel value makes a
+    # lost argument (cwd fallback) fail the exact match against this
+    # repo's real facts value or an empty result.
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        (td_path / ".ai-playbook").mkdir()
+        root_tmp_value = "docs/tmp-root-anchor-fixture/"
+        (td_path / ".ai-playbook" / "facts.md").write_text(
+            "```toml\n"
+            f'tmp_dir = "{root_tmp_value}"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        root_out = io.StringIO()
+        with contextlib.redirect_stdout(root_out):
+            root_rc = main(["resolve", "tmp_dir", str(td_path)])
+        check(
+            "resolve CLI: explicit root anchors resolution without chdir",
+            root_rc == 0 and root_out.getvalue() == root_tmp_value + "\n",
+            f"rc={root_rc} out={root_out.getvalue()!r}",
+        )
+
+    # Non-resolve, non-selftest argv keeps the usage exit 2.
+    usage_err = io.StringIO()
+    with contextlib.redirect_stderr(usage_err):
+        usage_rc = main(["--bogus"])
+    check(
+        "resolve CLI: non-resolve non-selftest argv exits 2 with usage",
+        usage_rc == 2 and "usage" in usage_err.getvalue(),
+        f"rc={usage_rc} err={usage_err.getvalue()!r}",
+    )
+
+    # Regression guard: no selftest block leaked a keying line into the
     # REAL ~/.ai-playbook/logs/hooks.log. Every resolve_project_key call now
     # runs under an isolated HOME; a future bare call outside isolation would
     # trip this.
@@ -745,7 +857,18 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if args and args[0] == "--selftest":
         return selftest()
-    sys.stderr.write("usage: facts_paths.py --selftest\n")
+    if len(args) in (2, 3) and args[0] == "resolve":
+        # Optional third argv anchors the facts lookup at that repo root
+        # instead of Path.cwd(), so a subdirectory run cannot silently
+        # resolve the key under the wrong root.
+        start_dir = Path(args[2]) if len(args) == 3 else Path.cwd()
+        raw = resolve_toml_key_raw(start_dir, args[1])
+        # expanduser: a ~/... fact must reach shell consumers already
+        # expanded (shell parameter expansion never re-expands a
+        # tilde inside an already-substituted value).
+        print(os.path.expanduser(raw) if raw is not None else "")
+        return 0
+    sys.stderr.write("usage: facts_paths.py --selftest | resolve <key> [root]\n")
     return 2
 
 

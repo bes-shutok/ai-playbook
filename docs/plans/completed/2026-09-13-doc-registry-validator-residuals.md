@@ -75,8 +75,10 @@ Edge cases that shaped the design: the status strip happens in the message
 only (a parse-time strip would change `is_licensed_transition` semantics:
 the two-char form `' A'` is NOT a licensed transition because the leading
 space is status-column data, while the stripped `'A'` would match the
-name-status letter rule and license the write); the two HARD-to-warn
-reclassifications are the only ones the plan permits, and both carry an
+name-status letter rule and license the write); the three HARD-to-warn
+reclassifications are the only ones the plan permits (untracked dir collapse,
+case-only rename old side, and the folding-host untracked case-variant of
+Task 2 item 4), and each carries an
 explicit verify duty; the skew offsets move from +1/+2 to +0/+3 so a run
 straddling local midnight cannot flip an expectation (today's +2 "bad"
 fixture passes if the clock reads one day later at check time).
@@ -84,7 +86,7 @@ fixture passes if the clock reads one day later at check time).
 ## Evaluation Criteria
 
 **Quality dimensions:**
-- correctness: each of the 19 findings lands exactly as re-anchored; the gate stays fail-closed; the only HARD-to-warn reclassifications are the two mandated ones (untracked dir collapse, case-only rename old side), each with an explicit verify duty; live probes in this repo's Validation Commands match the pinned strings.
+- correctness: each of the 19 findings lands exactly as re-anchored; the gate stays fail-closed; the only HARD-to-warn reclassifications are the three mandated ones (untracked dir collapse; case-only rename old side; untracked case-variant on folding hosts), each with an explicit verify duty; live probes in this repo's Validation Commands match the pinned strings.
 - test coverage: every behavior change lands with an `st.expect` (or `st.check`) fixture; behavior fixes run RED before the fix and GREEN after; characterization pins (origin 2, successor-cycle protection) state GREEN-on-arrival.
 - maintainability: one shared audit-note defect scan replaces two divergent hand-rolled scans; no dead branch remains in `successor_cycles`; zero provenance round tags remain in the validator source.
 - documentation: wording synced and pinned by greps: done hard-findings list, done Step 2.648 pointer, facts_paths resolve CLI, doc-hierarchy flat-RFC clause, registry header clause, ADR-0003 cost note.
@@ -126,7 +128,7 @@ fixture passes if the clock reads one day later at check time).
 
 ## Design Invariants (CR Guard)
 
-- Fail-closed direction preserved: no task may downgrade an existing HARD family to warn or skip, except the two mandated reclassifications (untracked dir collapse; case-only rename old side), which move to the warn tier WITH an explicit verify duty in the message.
+- Fail-closed direction preserved: no task may downgrade an existing HARD family to warn or skip, except the three mandated reclassifications (untracked dir collapse; case-only rename old side; untracked case-variant on folding hosts), which move to the warn tier WITH an explicit verify duty in the message.
 - The registered-src exemption stays bounded to the add/rename transition; doc-hierarchy remains its prose SOT; done Step 2.648 keeps a pointer, not a restatement.
 - Every warn tier names the cause and the duty (stage the move / verify); no silent passes.
 - The facts-module-absent warn is additive diagnostics: resolution behavior (defaults) is unchanged.
@@ -186,11 +188,11 @@ override note must begin with a real, non-future 'user-approved YYYY-MM-DD:'
 token (ADR-0001 user confirmation)") hand-roll the same contract with
 divergent strings; the validate message omits the real-non-future date rule.
 
-- [ ] Add RED fixture near the existing audit-note validate fixtures: given a registry whose completed row carries `self-approved quick fix`, `run(["--root", str(root), "validate"])` expects exit 1 with `want_substr="real, non-future"` (fails today; the validate message lacks the phrase). Name it `test_validate_audit_message_states_full_contract`.
-- [ ] Run → expect RED on `test_validate_audit_message_states_full_contract` ONLY (every other check green): `python3 scripts/doc_registry_validator.py --selftest`.
-- [ ] Implement in one edit: add module-level helper `audit_note_defects(rows)` returning the rows whose `state` is completed/superseded, whose non-empty `audit` fails `audit_note_valid`, plus `audit_note_hard_message(row)` returning the ONE shared message: `HARD malformed audit note '<audit>' in registry row (src=<src>); an override note must begin with a real, non-future 'user-approved YYYY-MM-DD:' token (ADR-0001 user confirmation)` (keeps the `malformed audit note` substring the validate fixtures pin); rewire `cmd_validate`'s audit branch and `cmd_check_writes`'s inline row-scan check (the check that fires before the multi-claim `continue`, keeping that ordering guarantee) to use the helper for detection and the template for the message (`cmd_check_writes` keeps its own `note_hard` counting and its separate override/standing-override audit reads); and flip the two check-writes fixture pins that expect the old wording: `test_check_writes_selfminted_note_hard_fails` and `test_multi_claimed_row_bad_audit_note_reported` change `want_substr="invalid audit note"` to `want_substr="malformed audit note"` (the flips land with the rewire; flipping them before the rewire would fail the RED run).
-- [ ] Run → expect GREEN: `python3 scripts/doc_registry_validator.py --selftest`.
-- [ ] Commit: `doc-registry: one shared audit-note defect scan with the full contract message`
+- [x] Add RED fixture near the existing audit-note validate fixtures: given a registry whose completed row carries `self-approved quick fix`, `run(["--root", str(root), "validate"])` expects exit 1 with `want_substr="real, non-future"` (fails today; the validate message lacks the phrase). Name it `test_validate_audit_message_states_full_contract`.
+- [x] Run → expect RED on `test_validate_audit_message_states_full_contract` ONLY (every other check green): `python3 scripts/doc_registry_validator.py --selftest`.
+- [x] Implement in one edit: add module-level helper `audit_note_defects(rows)` returning the rows whose `state` is completed/superseded, whose non-empty `audit` fails `audit_note_valid`, plus `audit_note_hard_message(row)` returning the ONE shared message: `HARD malformed audit note '<audit>' in registry row (src=<src>); an override note must begin with a real, non-future 'user-approved YYYY-MM-DD:' token (ADR-0001 user confirmation)` (keeps the `malformed audit note` substring the validate fixtures pin); rewire `cmd_validate`'s audit branch and `cmd_check_writes`'s inline row-scan check (the check that fires before the multi-claim `continue`, keeping that ordering guarantee) to use the helper for detection and the template for the message (`cmd_check_writes` keeps its own `note_hard` counting and its separate override/standing-override audit reads); and flip the two check-writes fixture pins that expect the old wording: `test_check_writes_selfminted_note_hard_fails` and `test_multi_claimed_row_bad_audit_note_reported` change `want_substr="invalid audit note"` to `want_substr="malformed audit note"` (the flips land with the rewire; flipping them before the rewire would fail the RED run).
+- [x] Run → expect GREEN: `python3 scripts/doc_registry_validator.py --selftest`.
+- [x] Commit: `doc-registry: one shared audit-note defect scan with the full contract message`
 
 ### Task 2: Check-writes classification and message fixes (origin 1 items 2, 3, 4, 5)
 
@@ -200,13 +202,13 @@ Files:
 All four probes were executed live on 2026-09-13; the RED expectations below
 are the observed today-behaviors flipped.
 
-- [ ] Item 2 (message whitespace): add RED fixture `test_hard_message_strips_status_padding`: given stdin `M  docs/plans/completed/a.md` (two-char porcelain form) against a fixture whose completed row registers `docs/plans/completed/a.md`, `check-writes --stdin` expects exit 1 with `want_substr="change type M;"` (today the output reads `change type M ;`; the probe confirmed it). Fix: apply `.strip()` to `change_type` in the HARD message interpolation ONLY (the raw two-char value stays semantic for `is_licensed_transition`).
-- [ ] Item 4 (untracked case-variant): add RED fixture `test_untracked_case_variant_warns_stage_move`: given stdin `?? docs/plans/completed/A.md` with registered src `docs/plans/completed/a.md`, `check-writes --stdin` expects exit `0` on a folding host (`folds = sys.platform in ("darwin", "win32")`, the suite's anchored trait idiom) with `want_substr="is not the registered spelling"` and `want_substr="stage the move"`, and exit 1 on an identity host with `want_substr="immutable path written without override"` (on identity hosts the variant is a genuinely distinct file; today on a folding host: generic HARD, exit 1, probe confirmed). Fix: in the entries loop, after the byte-equal registered-src branch, an entry with `?` in its change type whose folded path is in `lifecycle_folded` but whose unfolded path is not in `lifecycle_srcs` prints `warn: untracked case-variant of registered lifecycle src; <rel> is not the registered spelling <stored>; stage the move (git add) so the change type can be checked` and continues.
-- [ ] Item 3 (untracked dir collapse): add RED fixture `test_untracked_dir_collapse_hints_stage_move`: given a fixture whose `docs/plans/completed` directory exists (create it explicitly in the block) and stdin `?? docs/plans/completed/`, `check-writes --stdin` expects exit 0 with `want_substr="untracked directory"` and `want_substr="stage the move"` (today: generic HARD on `docs/plans/completed`, exit 1, probe confirmed). Fix: an untracked entry that is not a registered src but resolves to an existing directory under an immutable root (`(root / rel).is_dir()`) prints `warn: untracked directory <rel> under a completed-history dir; git collapsed its contents; stage the move (git add) so the individual change types can be checked` and continues.
-- [ ] Item 5 (case-only rename): add RED fixture `test_case_only_rename_old_side_warns`: given stdin `R  docs/plans/completed/a.md -> docs/plans/completed/A.md`, `check-writes --stdin` expects exit `0` on a folding host (`folds = sys.platform in ("darwin", "win32")`, the suite's anchored trait idiom) with `want_substr="case-only rename"`, and exit 1 on an identity host with `want_substr="immutable path written without override"` (a case-only rename is only fold-equal, hence warnable, where the platform folds; on identity hosts the two paths are genuinely distinct files and the old side stays a HARD deletion; today on a folding host the probe showed the old side HARD as `change type D`, exit 1). Fix: in the registered-src HARD branch, before printing, when `change_type == "D"` and `entries` contains a sibling `(other_rel, other_ct)` with `other_ct is not None` (bare channel lines carry `None`, and `is_licensed_transition(None)` would raise), `is_licensed_transition(other_ct)` true, `posixpath.dirname(other_rel) == posixpath.dirname(rel)` and `_fold(other_rel) == _fold(rel)`, print `warn: case-only rename of registered lifecycle src; <rel> is the fold-equal old side of a same-directory rename; verify it is a pure case normalization, not a content change or a deletion` and continue (warn tier, not counted hard).
-- [ ] Regression guard (no new fixtures; the suite already pins both edges): verify the EXISTING fixtures `test_rename_out_of_immutable_dir_fails` (`R  docs/plans/completed/a.md -> docs/live/a.md` stays exit 1) and `test_rename_into_registered_src_licensed` (`R  docs/tmp/x.md -> docs/plans/completed/a.md` stays exit 0) keep passing, proving the sibling detection does not leak across directories or fold-mismatched pairs.
-- [ ] Run → expect the four new fixtures RED on their folding-host expectation and both existing regression fixtures still GREEN, then implement, then Run → expect GREEN: `python3 scripts/doc_registry_validator.py --selftest`.
-- [ ] Commit: `doc-registry: check-writes classification and message fixes`
+- [x] Item 2 (message whitespace): add RED fixture `test_hard_message_strips_status_padding`: given stdin `M  docs/plans/completed/a.md` (two-char porcelain form) against a fixture whose completed row registers `docs/plans/completed/a.md`, `check-writes --stdin` expects exit 1 with `want_substr="change type M;"` (today the output reads `change type M ;`; the probe confirmed it). Fix: apply `.strip()` to `change_type` in the HARD message interpolation ONLY (the raw two-char value stays semantic for `is_licensed_transition`).
+- [x] Item 4 (untracked case-variant): add RED fixture `test_untracked_case_variant_warns_stage_move`: given stdin `?? docs/plans/completed/A.md` with registered src `docs/plans/completed/a.md`, `check-writes --stdin` expects exit `0` on a folding host (`folds = sys.platform in ("darwin", "win32")`, the suite's anchored trait idiom) with `want_substr="is not the registered spelling"` and `want_substr="stage the move"`, and exit 1 on an identity host with `want_substr="immutable path written without override"` (on identity hosts the variant is a genuinely distinct file; today on a folding host: generic HARD, exit 1, probe confirmed). Fix: in the entries loop, after the byte-equal registered-src branch, an entry with `?` in its change type whose folded path is in `lifecycle_folded` but whose unfolded path is not in `lifecycle_srcs` prints `warn: untracked case-variant of registered lifecycle src; <rel> is not the registered spelling <stored>; stage the move (git add) so the change type can be checked` and continues.
+- [x] Item 3 (untracked dir collapse): add RED fixture `test_untracked_dir_collapse_hints_stage_move`: given a fixture whose `docs/plans/completed` directory exists (create it explicitly in the block) and stdin `?? docs/plans/completed/`, `check-writes --stdin` expects exit 0 with `want_substr="untracked directory"` and `want_substr="stage the move"` (today: generic HARD on `docs/plans/completed`, exit 1, probe confirmed). Fix: an untracked entry that is not a registered src but resolves to an existing directory under an immutable root (`(root / rel).is_dir()`) prints `warn: untracked directory <rel> under a completed-history dir; git collapsed its contents; stage the move (git add) so the individual change types can be checked` and continues.
+- [x] Item 5 (case-only rename): add RED fixture `test_case_only_rename_old_side_warns`: given stdin `R  docs/plans/completed/a.md -> docs/plans/completed/A.md`, `check-writes --stdin` expects exit `0` on a folding host (`folds = sys.platform in ("darwin", "win32")`, the suite's anchored trait idiom) with `want_substr="case-only rename"`, and exit 1 on an identity host with `want_substr="immutable path written without override"` (a case-only rename is only fold-equal, hence warnable, where the platform folds; on identity hosts the two paths are genuinely distinct files and the old side stays a HARD deletion; today on a folding host the probe showed the old side HARD as `change type D`, exit 1). Fix: in the registered-src HARD branch, before printing, when `change_type == "D"` and `entries` contains a sibling `(other_rel, other_ct)` with `other_ct is not None` (bare channel lines carry `None`, and `is_licensed_transition(None)` would raise), `is_licensed_transition(other_ct)` true, and same-directory fold-equality of the NORMALIZED paths with the sibling spelling DIFFERING from the old side (`normalize_repo_path` applied to both sides before the dirname and `_fold` comparisons, plus `other_norm != rel`, so a same-spelling deletion+re-add pair stays HARD and only a genuine case-variant rename matches), print `warn: case-only rename of registered lifecycle src; <rel> is the fold-equal old side of a same-directory rename; verify it is a pure case normalization, not a content change or a deletion` and continue (warn tier, not counted hard).
+- [x] Regression guard (no new fixtures; the suite already pins both edges): verify the EXISTING fixtures `test_rename_out_of_immutable_dir_fails` (`R  docs/plans/completed/a.md -> docs/live/a.md` stays exit 1) and `test_rename_into_registered_src_licensed` (`R  docs/tmp/x.md -> docs/plans/completed/a.md` stays exit 0) keep passing, proving the sibling detection does not leak across directories or fold-mismatched pairs.
+- [x] Run → expect the four new fixtures RED on their folding-host expectation and both existing regression fixtures still GREEN, then implement, then Run → expect GREEN: `python3 scripts/doc_registry_validator.py --selftest`.
+- [x] Commit: `doc-registry: check-writes classification and message fixes`
 
 ### Task 3: Warn when the facts module is absent (origin 1 item 1)
 
@@ -218,10 +220,10 @@ Today `_import_facts_paths()` returning `None` makes
 existing warn fires only on the exception arm), so a repo with non-default
 facts keys gets default dirs gated and configured dirs ungated silently.
 
-- [ ] Add RED fixture `test_facts_module_absent_warns`: inside the selftest, save `_import_facts_paths`, monkeypatch it to `lambda: None`, call `resolve_config(root)` on a minimal fixture root under `contextlib.redirect_stderr`, assert the captured stderr contains `facts_paths module not importable` and that all three resolved cfg values equal the documented defaults; restore the original in a `finally` (same save/set/finally idiom the selftest short-circuit fixture uses for `cmd_selftest`). Fails today because no warn is printed.
-- [ ] Fix: in `resolve_repo_relative_key`, when `_import_facts_paths()` returns `None`, print `warn: facts_paths module not importable next to the validator; facts keys resolve to defaults` to stderr (mirrors the exception-arm warn). Once per key is acceptable; do not add global once-only state.
-- [ ] Run → expect RED, implement, Run → expect GREEN: `python3 scripts/doc_registry_validator.py --selftest`.
-- [ ] Commit: `doc-registry: warn when the facts module is not importable`
+- [x] Add RED fixture `test_facts_module_absent_warns`: inside the selftest, save `_import_facts_paths`, monkeypatch it to `lambda: None`, call `resolve_config(root)` on a minimal fixture root under `contextlib.redirect_stderr`, assert the captured stderr contains `facts_paths module not importable` and that all three resolved cfg values equal the documented defaults; restore the original in a `finally` (same save/set/finally idiom the selftest short-circuit fixture uses for `cmd_selftest`). Fails today because no warn is printed.
+- [x] Fix: in `resolve_repo_relative_key`, when `_import_facts_paths()` returns `None`, print `warn: facts_paths module not importable next to the validator; facts keys resolve to defaults` to stderr (mirrors the exception-arm warn). Once per key is acceptable; do not add global once-only state.
+- [x] Run → expect RED, implement, Run → expect GREEN: `python3 scripts/doc_registry_validator.py --selftest`.
+- [x] Commit: `doc-registry: warn when the facts module is not importable`
 
 ### Task 4: Injectable clock seam and midnight-robust skew fixtures (origin 1 item 6)
 
@@ -232,11 +234,11 @@ Today `audit_note_valid` reads `datetime.date.today()` at check time while
 the skew fixtures compute `skew_ok` (+1 day) and `skew_bad` (+2 days) at
 fixture-build time; a run straddling local midnight flips the +2 expectation.
 
-- [ ] Add RED checks via `st.check` (direct calls, no CLI): `audit_note_valid("user-approved 2026-01-02: fix", today=datetime.date(2026, 1, 1))` is True, `audit_note_valid("user-approved 2026-01-03: fix", today=datetime.date(2026, 1, 1))` is False, `audit_note_valid("user-approved 2099-01-01: fix", today=datetime.date(2026, 1, 1))` is False. RED mode today: the selftest aborts with `TypeError: ... unexpected keyword argument 'today'` at the first direct call (the conditions evaluate eagerly), so RED is verified by that crash, not by three FAIL lines.
-- [ ] Fix: `audit_note_valid(audit, today=None)` with `if today is None: today = datetime.date.today()`; the comparison uses the parameter; the production call sites pass nothing (behavior unchanged).
-- [ ] Retarget the CLI skew fixtures to midnight-robust offsets in the same task and rename them to match: `skew_ok` becomes +0 days with the check renamed `test_audit_note_today_passes`, `skew_bad` becomes +3 days with the check renamed `test_audit_note_three_days_ahead_fails` (`+0` passes whether the check-time clock reads the build-day or the next; `+3` fails under both, since the tolerance is one day); update the comment to state the straddle argument.
-- [ ] Run → expect the direct-call checks RED, implement, Run → expect GREEN: `python3 scripts/doc_registry_validator.py --selftest`.
-- [ ] Commit: `doc-registry: injectable clock seam and midnight-robust skew fixtures`
+- [x] Add RED checks via `st.check` (direct calls, no CLI): `audit_note_valid("user-approved 2026-01-02: fix", today=datetime.date(2026, 1, 1))` is True, `audit_note_valid("user-approved 2026-01-03: fix", today=datetime.date(2026, 1, 1))` is False, `audit_note_valid("user-approved 2099-01-01: fix", today=datetime.date(2026, 1, 1))` is False. RED mode today: the selftest aborts with `TypeError: ... unexpected keyword argument 'today'` at the first direct call (the conditions evaluate eagerly), so RED is verified by that crash, not by three FAIL lines.
+- [x] Fix: `audit_note_valid(audit, today=None)` with `if today is None: today = datetime.date.today()`; the comparison uses the parameter; the production call sites pass nothing (behavior unchanged).
+- [x] Retarget the CLI skew fixtures to midnight-robust offsets in the same task and rename them to match: `skew_ok` becomes +0 days with the check renamed `test_audit_note_today_passes`, `skew_bad` becomes +3 days with the check renamed `test_audit_note_three_days_ahead_fails` (`+0` passes whether the check-time clock reads the build-day or the next; `+3` fails under both, since the tolerance is one day); update the comment to state the straddle argument.
+- [x] Run → expect the direct-call checks RED, implement, Run → expect GREEN: `python3 scripts/doc_registry_validator.py --selftest`.
+- [x] Commit: `doc-registry: injectable clock seam and midnight-robust skew fixtures`
 
 ### Task 5: Pre-subcommand unknown-flag pin and CLI doc precision (origin 2 + origin 3 items 1-2; item 3 of origin 3)
 
@@ -249,11 +251,11 @@ no fixture for `--bogus validate` (probe 2026-09-13: argparse
 declares many deltas but not the empty `--root=` value or the `--stdin`
 before `--selftest` consequence; the dispatch-block NOTE overclaims.
 
-- [ ] Add characterization fixture `test_unknown_flag_before_subcommand_fails_closed`: given `run(["--bogus", "validate"])`, expects exit 2 with `want_substr="usage"`. GREEN on arrival (behavior already correct; this is the coverage pin the fold plan's exception lacked). Place it beside the existing `--bogus --selftest` fixture.
-- [ ] Extend the `_build_parser` docstring with two declared-delta bullets, no provenance tags: (a) `--root=` with an empty attached value resolves as no `--root` (the empty value is falsy, so repo-root search via git toplevel then cwd applies; fail-neutral); (b) `--stdin` before `--selftest` breaks the bare-token pre-scan, so argparse rejects the unknown top-level `--stdin` with usage exit 2 where the bare `--selftest` form would have run the suite (exit 0 to exit 2, left-to-right scan consequence; fail-closed).
-- [ ] Rewrite the dispatch-block NOTE to the softened form: the block is order-dependent by design, and a reorder can silently rebind `root` to another valid fixture dir (a root-sensitive pin would keep passing against the wrong fixture), so bind a local fixture root if a root-sensitive pin is ever added. Remove the "failures are loud" claim.
-- [ ] Run → expect GREEN throughout (characterization + docstring edits): `python3 scripts/doc_registry_validator.py --selftest`.
-- [ ] Commit: `doc-registry: pin pre-subcommand unknown flag and declare CLI deltas`
+- [x] Add characterization fixture `test_unknown_flag_before_subcommand_fails_closed`: given `run(["--bogus", "validate"])`, expects exit 2 with `want_substr="usage"`. GREEN on arrival (behavior already correct; this is the coverage pin the fold plan's exception lacked). Place it beside the existing `--bogus --selftest` fixture.
+- [x] Extend the `_build_parser` docstring with two declared-delta bullets, no provenance tags: (a) `--root=` with an empty attached value resolves as no `--root` (the empty value is falsy, so repo-root search via git toplevel then cwd applies; fail-neutral); (b) `--stdin` before `--selftest` breaks the bare-token pre-scan, so argparse rejects that argv with usage exit 2 (missing-subcommand error; `--stdin` itself is reported as unrecognized only when a valid subcommand follows) where the bare `--selftest` form would have run the suite (exit 0 to exit 2, left-to-right scan consequence; fail-closed).
+- [x] Rewrite the dispatch-block NOTE to the softened form: the block is order-dependent by design, and a reorder can silently rebind `root` to another valid fixture dir (a root-sensitive pin would keep passing against the wrong fixture), so bind a local fixture root if a root-sensitive pin is ever added. Remove the "failures are loud" claim.
+- [x] Run → expect GREEN throughout (characterization + docstring edits): `python3 scripts/doc_registry_validator.py --selftest`.
+- [x] Commit: `doc-registry: pin pre-subcommand unknown flag and declare CLI deltas`
 
 ### Task 6: Drop the dead else in successor_cycles (origin 1 item 13)
 
@@ -265,10 +267,10 @@ on the next line; the `else:` clause is dead. The existing
 `test_successor_cycle_fails` characterization already protects cycle
 detection.
 
-- [ ] Run → expect GREEN (characterization before refactor): `python3 scripts/doc_registry_validator.py --selftest` (records `test_successor_cycle_fails` passing).
-- [ ] Delete the `else:` clause and its indented update, keeping the unconditional `seen_done.update(walked)`.
-- [ ] Run → expect GREEN: `python3 scripts/doc_registry_validator.py --selftest`.
-- [ ] Commit: `doc-registry: drop dead else in successor_cycles`
+- [x] Run → expect GREEN (characterization before refactor): `python3 scripts/doc_registry_validator.py --selftest` (records `test_successor_cycle_fails` passing).
+- [x] Delete the `else:` clause and its indented update, keeping the unconditional `seen_done.update(walked)`.
+- [x] Run → expect GREEN: `python3 scripts/doc_registry_validator.py --selftest`.
+- [x] Commit: `doc-registry: drop dead else in successor_cycles`
 
 ### Task 7: Strip ephemeral review-round provenance tags (origin 1 item 15)
 
@@ -284,10 +286,10 @@ makes no delimiter assumption (it excludes the noqa line instead). Git
 history preserves provenance. babe974 cleaned fences and formatting, not
 these tags.
 
-- [ ] Inventory: `grep -nE "F[0-9]" scripts/doc_registry_validator.py` and rewrite every tag hit (all except the noqa line) to keep the semantic content while removing the token (for example `# r6 F4: a malformed audit note on a multiply-claimed src row is reported...` becomes `# A malformed audit note on a multiply-claimed src row is reported...`; docstring `(r5 F2)` parentheticals drop the parenthetical). Do not introduce new tags; do not change any string that a fixture pins (the pinned substrings contain no tags; verified 2026-09-13).
-- [ ] Run → expect GREEN: `python3 scripts/doc_registry_validator.py --selftest`.
-- [ ] Run the Validation Commands round-tag sweep → expect the clean pass (RED today: 73 tag lines remain after the noqa exclusion, so the two-stage sweep prints `FAIL: provenance round tag remains`; after this task only the noqa line survives the first grep and the sweep falls through clean).
-- [ ] Commit: `doc-registry: strip ephemeral review-round provenance tags`
+- [x] Inventory: `grep -nE "F[0-9]" scripts/doc_registry_validator.py` and rewrite every tag hit (all except the noqa line) to keep the semantic content while removing the token (for example `# r6 F4: a malformed audit note on a multiply-claimed src row is reported...` becomes `# A malformed audit note on a multiply-claimed src row is reported...`; docstring `(r5 F2)` parentheticals drop the parenthetical). Do not introduce new tags; do not change any string that a fixture pins (the pinned substrings contain no tags; verified 2026-09-13).
+- [x] Run → expect GREEN: `python3 scripts/doc_registry_validator.py --selftest`.
+- [x] Run the Validation Commands round-tag sweep → expect the clean pass (RED today: 73 tag lines remain after the noqa exclusion, so the two-stage sweep prints `FAIL: provenance round tag remains`; after this task only the noqa line survives the first grep and the sweep falls through clean).
+- [x] Commit: `doc-registry: strip ephemeral review-round provenance tags`
 
 ### Task 8: done Step 2.648 syncs and the facts_paths resolve CLI (origin 1 items 9, 11, 14)
 
@@ -301,13 +303,13 @@ owns, and its hard-findings list says "malformed audit-note tokens" where the
 contract is "malformed or ill-dated". README was verified pointer-only
 already, so it needs no edit.
 
-- [ ] facts_paths: extend `main()` so `resolve <key>` prints `resolve_toml_key_raw(Path.cwd(), key)` output (empty string when unresolved) and returns 0; every other non-selftest argv keeps the usage exit 2 (update the usage line to `usage: facts_paths.py --selftest | resolve <key>`).
-- [ ] facts_paths selftest: add a check that an isolated directory containing a minimal `.ai-playbook/facts.md` resolves `tmp_dir` through `main(["resolve", "tmp_dir"])` (capture stdout); the check MUST `os.chdir` into the isolated directory first and restore the original cwd in a `finally`, because `main()` resolves via `Path.cwd()` and a missing chdir would read the repo's real gitignored `facts.md` and can pass vacuously; also check that an unknown key resolves empty and that a non-resolve non-selftest argv still exits 2 with usage.
-- [ ] done Step 2.648 command block: replace the inline sed with `FACTS_PATHS_SCRIPT="${FACTS_PATHS_SCRIPT:-${HOME}/.ai-playbook/scripts/facts_paths.py}"` and `TMP_DIR_2648="$(python3 "$FACTS_PATHS_SCRIPT" resolve tmp_dir 2>/dev/null || true)"`; the existing `${TMP_DIR_2648:-docs/tmp}` fallback is unchanged, so an absent or old facts_paths degrades exactly as the absent-facts.md case did (fail-open parity; document that in one sentence beside the block).
-- [ ] done Step 2.648 intro: replace the full exemption restatement with a pointer whose distinctive phrase is `The prose SOT for the registered-src exemption is the doc-hierarchy skill`; keep the validator resolution and the run instructions.
-- [ ] done hard-findings bullet: change `malformed audit-note tokens` to `malformed or ill-dated audit-note tokens`.
-- [ ] Run → expect GREEN: `python3 scripts/facts_paths.py --selftest`, then `python3 scripts/doc_registry_validator.py --selftest` (untouched, still green).
-- [ ] Commit: `skills: route done tmp_dir through facts_paths and sync audit wording`
+- [x] facts_paths: extend `main()` so `resolve <key> [root]` prints `resolve_toml_key_raw(Path.cwd() or the given root, key)` output (empty string when unresolved; expansion is the caller's job, the CLI applies expanduser) and returns 0; every other non-selftest argv keeps the usage exit 2 (usage line `usage: facts_paths.py --selftest | resolve <key> [root]`, reconciled in review r3/r4 for the root-anchored extension).
+- [x] facts_paths selftest: add a check that an isolated directory containing a minimal `.ai-playbook/facts.md` resolves `tmp_dir` through `main(["resolve", "tmp_dir"])` (capture stdout); the check MUST `os.chdir` into the isolated directory first and restore the original cwd in a `finally`, because `main()` resolves via `Path.cwd()` and a missing chdir would read the repo's real gitignored `facts.md` and can pass vacuously; also check that an unknown key resolves empty and that a non-resolve non-selftest argv still exits 2 with usage.
+- [x] done Step 2.648 command block: replace the inline sed with `FACTS_PATHS_SCRIPT="${FACTS_PATHS_SCRIPT:-${HOME}/.ai-playbook/scripts/facts_paths.py}"` and `TMP_DIR_2648="$(python3 "$FACTS_PATHS_SCRIPT" resolve tmp_dir 2>/dev/null || true)"`; the existing `${TMP_DIR_2648:-docs/tmp}` fallback is unchanged, so an absent or old facts_paths degrades exactly as the absent-facts.md case did (fail-open parity; document that in one sentence beside the block).
+- [x] done Step 2.648 intro: replace the full exemption restatement with a pointer whose distinctive phrase is `The prose SOT for the registered-src exemption is the doc-hierarchy skill`; keep the validator resolution and the run instructions.
+- [x] done hard-findings bullet: change `malformed audit-note tokens` to `malformed or ill-dated audit-note tokens`.
+- [x] Run → expect GREEN: `python3 scripts/facts_paths.py --selftest`, then `python3 scripts/doc_registry_validator.py --selftest` (untouched, still green).
+- [x] Commit: `skills: route done tmp_dir through facts_paths and sync audit wording`
 
 ### Task 9: Flat-RFC identity clause and ADR-0003 cost note (origin 1 items 7 + 12)
 
@@ -323,16 +325,16 @@ registry header comment repeats the scheme and must stay aligned. The
 a derive-by-default tier or an accepted-cost record; the accepted-cost record
 is the proportionate close and lands in ADR-0003.
 
-- [ ] doc-hierarchy identity-derivation paragraph: append the clause `For flat RFC filenames without a date prefix (*-rfc.md), identity is the filename minus the .md extension and the trailing -rfc` (wording may be folded into the existing sentence; the grep pins `trailing -rfc`).
-- [ ] Registry header comment: extend the identity-scheme sentence with the same trailing `-rfc` clause so the two statements of the scheme do not diverge.
-- [ ] project-decisions ADR-0003 section: append a note recording that each completion appends one filesystem-derivable registry row by design and that this per-row append is an accepted ADR-0003 cost; the derive-by-default tier was considered and declined (decision date 2026-09-13).
-- [ ] Run the Validation Commands wording pins for this task → all three pass (RED today: none of the three phrases exists yet).
-- [ ] Commit: `docs: flat-RFC identity clause and ADR-0003 accepted-cost note`
+- [x] doc-hierarchy identity-derivation paragraph: append the clause `For flat RFC filenames without a date prefix (*-rfc.md), identity is the filename minus the .md extension and the trailing -rfc` (wording may be folded into the existing sentence; the grep pins `trailing -rfc`).
+- [x] Registry header comment: extend the identity-scheme sentence with the same trailing `-rfc` clause so the two statements of the scheme do not diverge.
+- [x] project-decisions ADR-0003 section: append a note recording that each completion appends one filesystem-derivable registry row by design and that this per-row append is an accepted ADR-0003 cost; the derive-by-default tier was considered and declined (decision date 2026-09-13).
+- [x] Run the Validation Commands wording pins for this task → all three pass (RED today: none of the three phrases exists yet).
+- [x] Commit: `docs: flat-RFC identity clause and ADR-0003 accepted-cost note`
 
 ### Task 10: Final validation
 
 Files: none (validation only)
 
-- [ ] Run the full Validation Commands block → every command exits 0.
-- [ ] `git status --porcelain` shows only this plan's files modified relative to the session's own commits.
-- [ ] Commit (only if earlier tasks left any unstaged plan-owned change): `doc-registry: residual close-out final validation`
+- [x] Run the full Validation Commands block → every command exits 0.
+- [x] `git status --porcelain` shows only this plan's files modified relative to the session's own commits.
+- [x] Commit (only if earlier tasks left any unstaged plan-owned change): `doc-registry: residual close-out final validation`

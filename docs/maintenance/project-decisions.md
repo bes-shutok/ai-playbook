@@ -25,3 +25,5 @@ Decided 2026-09-08 during the grill of backlog item `2026-09-08-document-ownersh
 **Considered options:** service-repos-only (leaves the churn that motivated the backlog legal in this repo); require a new "adopted" signal for non-service repos (third scope class, more machinery).
 
 **Consequences:** doc-hierarchy-family wording must distinguish schema binding (service repos, signal-gated) from convention adoption (this repo). Validators and registry tooling must work on any repo with resolved facts paths, not depend on the migration-complete signal.
+
+**Update 2026-09-13:** the ownership registry appends one filesystem-derivable registry row per completed document by design (identity derives from the filename per the registry header scheme); this per-row append is an accepted ADR-0003 cost, not an automation gap. The derive-by-default tier, where tooling would derive and append rows from the filesystem itself, was considered and declined.

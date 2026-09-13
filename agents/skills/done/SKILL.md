@@ -201,7 +201,7 @@ HYGIENE="${CONFLUENCE_MIRROR_HYGIENE_SCRIPT:-${HOME}/.ai-playbook/scripts/conflu
 
 ## Step 2.648: Document registry hygiene
 
-Before `docs-branch`, validate the document ownership registry and gate writes to completed-history paths. The registered-src exemption is bounded to the transition: the src of a registry row with `state: completed` or `superseded` is licensed only when its change type is an add or rename (`A`/`R`, the one-time archive move); the same src modified or deleted (`M`/`D`) is a hard finding unless the row carries an audit-note override, and a path fed without a change-type letter passes at warn tier with a verify duty. Unregistered paths under completed-history dirs and every other immutable write stay gated regardless of change type. Resolve the validator via the facts key (env-var override for local testing):
+Before `docs-branch`, validate the document ownership registry and gate writes to completed-history paths. The prose SOT for the registered-src exemption is the doc-hierarchy skill. Resolve the validator via the facts key (env-var override for local testing):
 
 ```bash
 DOC_REGISTRY_VALIDATOR="${DOC_REGISTRY_VALIDATOR_SCRIPT:-${HOME}/.ai-playbook/scripts/doc_registry_validator.py}"
@@ -223,7 +223,9 @@ Run, from the project git root:
 2. **Immutable-path write gate**, when the session produced changed files:
 
    ```bash
-   TMP_DIR_2648="$(sed -n 's/^tmp_dir = ["'\'']\(.*\)["'\'']$/\1/p' "$REPO_TOP/.ai-playbook/facts.md" 2>/dev/null | head -n 1)"
+   FACTS_PATHS_SCRIPT="${FACTS_PATHS_SCRIPT:-${HOME}/.ai-playbook/scripts/facts_paths.py}"
+   REPO_TOP_2648="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+   TMP_DIR_2648="$(python3 "$FACTS_PATHS_SCRIPT" resolve tmp_dir "$REPO_TOP_2648" 2>/dev/null || true)"
    SESSION_HEAD_FILE="${TMP_DIR_2648:-docs/tmp}/done-session/session-start-head.txt"
    if [ -f "$SESSION_HEAD_FILE" ]; then
      SESSION_START_HEAD="$(cat "$SESSION_HEAD_FILE")"
@@ -237,6 +239,8 @@ Run, from the project git root:
      && git rev-parse HEAD > "$SESSION_HEAD_FILE"
    ```
 
+   Degradation: an absent git root (`git rev-parse` fails outside a repo) leaves `REPO_TOP_2648` empty, which anchors the resolve at the current directory (`Path("")` is cwd; matching the `|| pwd` anchor of the block this replaced), so a facts file resolvable from there still yields the real tmp dir. An absent or old facts_paths script (one that rejects the root argument) or an absent facts file degrades exactly as the absent-facts.md case did: `TMP_DIR_2648` resolves empty and the unchanged `${TMP_DIR_2648:-docs/tmp}` fallback applies (fail-open parity).
+
    The final line re-anchors the session-base file at the end of this step: because the session's commits land in later steps, the recorded HEAD predates them, so the next run re-covers this session's commits (change types intact; freeze-move adds stay licensed) rather than missing them; fail-closed by design.
 
    Include changed files from every write state with their change type: the porcelain arm covers unstaged edits, staged changes, and untracked files (`XY PATH`, renames as `R old -> new`); the name-status arm covers changes committed since the session started (`A/M/D<TAB>path`), matching the union pattern used by the neighboring hygiene steps; skip the gate when nothing changed. The change-type letters are what bound the registered-src exemption to the archive transition, so never downgrade the union to name-only output. Trust boundary: the letters are asserted by the feeding command and are only as trustworthy as it; the validator does not re-derive them from git, so never feed it a hand-typed or filtered change list in place of the git commands above. The committed-since base is fail-loud and self-anchoring: read the previous run's HEAD from `{tmp_dir}/done-session/session-start-head.txt` when present, else `ORIG_HEAD` (on first adoption, before any session-base file exists, `ORIG_HEAD` is the only anchor and may point at a checkout/rewrite base rather than the true session start; the session-base file removes that limitation from the second run on); when the base does not resolve to a commit (fresh clone or init-only repo), say so and use the current HEAD as the base for this run so the arm degrades loudly, never silently. Run this step's commands in each repository named by the Step 0 inventory when the session touched more than one (the gate must run where the immutable paths live, not only where the latest artifact sits).
@@ -244,7 +248,7 @@ Run, from the project git root:
 Result handling:
 
 - **Warn-only findings** (including but not limited to stale aliases, legacy files without registry entries, dangling successors, multiply-claimed srcs, and the no-change-type-letter verify warn on registered srcs): report them in the step summary; they do not block. A standing-override warn carries a duty, not just information: clear the audit note after the licensed write lands so the guard is not left disarmed.
-- **Hard findings** (including but not limited to registry parse errors, invalid `sot`/`state` values, malformed audit-note tokens, duplicate identities or SOT declarations, successor cycles, and unprotected writes to completed-history paths): stop and remediate before continuing, with the same stop semantics as the neighboring hygiene steps; fix the registry row or move the change into the living SOT instead of editing a completed artifact.
+- **Hard findings** (including but not limited to registry parse errors, invalid `sot`/`state` values, malformed or ill-dated audit-note tokens, duplicate identities or SOT declarations, successor cycles, and unprotected writes to completed-history paths): stop and remediate before continuing, with the same stop semantics as the neighboring hygiene steps; fix the registry row or move the change into the living SOT instead of editing a completed artifact.
 
 **After Step 2.648 completes, immediately continue to Step 2.645.**
 

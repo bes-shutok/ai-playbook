@@ -24,7 +24,7 @@ Three subcommands plus a hermetic ``--selftest``:
   form ONLY (``R  old -> new``) and only when the porcelain status
   starts with ``R``: for every other status a `` -> `` sequence in the
   path text is filename data, and the whole rest of the line is the
-  literal path (r6 F1; an ``M``/``??`` line naming an arrow-bearing
+  literal path (an ``M``/``??`` line naming an arrow-bearing
   file gates that full path, never a phantom split). For genuine
   renames BOTH sides are gated, the old side as
   a deletion-typed entry (a rename out of an immutable dir is the
@@ -54,14 +54,24 @@ Three subcommands plus a hermetic ``--selftest``:
   audit note in the registry row for the path is the corruption
   override; the note must be removed after the licensed write lands.
   The lifecycle exemption compares the UNFOLDED normalized path
-  against the registry src's stored spelling (byte equality; r6 F2):
+  against the registry src's stored spelling (byte equality):
   a case-variant add of a registered src is not the licensed
   transition; on folding platforms it takes the warn-tier verify path
-  naming the near-match. Audit-note defects found in the registry row
-  scan are counted separately from write findings in the summary line
-  (r6 F6). A missing registry file fails OPEN (warn, never exit 1).
+  naming the near-match. Three further warn tiers bound the HARD
+  tiers, each with an explicit duty: an untracked entry resolving to
+  an existing directory under an immutable root warns with a
+  stage-the-move duty (git collapsed the contents' change types); on
+  folding hosts the fold-equal old side of a same-directory
+  case-only rename of a registered src warns with a verify duty,
+  while a rename INTO the registered spelling keeps the case-variant
+  old side HARD (accepted asymmetry; only the
+  out-of-registered-spelling direction is mandated); on folding
+  hosts an untracked case-variant of a registered src warns with a
+  stage-the-move duty. Audit-note defects found in the registry row
+  scan are counted separately from write findings in the summary line.
+  A missing registry file fails OPEN (warn, never exit 1).
 
-Trust boundary (F5): the change-type letters and paths on stdin are
+Trust boundary: the change-type letters and paths on stdin are
 asserted by the feeding command and are only as trustworthy as that
 command. The validator does NOT re-derive change types from git; a
 caller (or actor) that relabels an ``M`` as an ``A`` defeats the
@@ -185,7 +195,9 @@ def resolve_repo_relative_key(root: Path, key: str, default: str) -> str:
     Uses ``facts_paths.resolve_toml_key_raw`` (raw value parser) when the
     sibling module is importable, so repo-relative values anchor at the
     root rather than the process CWD. Falls back to the default when the
-    facts file, key, or module is absent.
+    facts file, key, or module is absent; the module-absent fallback
+    warns (a repo with non-default facts keys would otherwise get the
+    default dirs gated and the configured dirs ungated silently).
     """
     facts_paths = _import_facts_paths()
     if facts_paths is not None:
@@ -196,6 +208,9 @@ def resolve_repo_relative_key(root: Path, key: str, default: str) -> str:
         except Exception as exc:
             print("warn: facts key %s unresolved (%s); using default %s"
                   % (key, exc, default), file=sys.stderr)
+    else:
+        print("warn: facts_paths module not importable next to the"
+              " validator; facts keys resolve to defaults", file=sys.stderr)
     return default
 
 
@@ -214,7 +229,7 @@ def normalize_repo_path(path: str) -> str:
     silently fail the immutability prefix match). Root-escaping results
     (``..`` components) return ``""``: they can never equal a
     repo-relative path, so gating on them would be dead code and walking
-    them would leave the repo root (F8).
+    them would leave the repo root.
     """
     p = path.strip().strip('"')
     if not p:
@@ -230,7 +245,7 @@ def normalize_repo_path(path: str) -> str:
 def _fold(path: str) -> str:
     """Fold a repo-relative path for comparison so case-variant
     spellings gate identically on case-insensitive filesystems
-    (darwin, windows); identity on case-sensitive ones (F6).
+    (darwin, windows); identity on case-sensitive ones.
 
     ``os.path.normcase`` folds only on Windows, so darwin (whose
     default APFS/HFS+ volumes are case-insensitive) folds explicitly
@@ -246,7 +261,7 @@ def resolve_config(root: Path) -> dict:
 
     Root-escaping values (``..`` components) never match repo-relative
     paths and would silently disable a gate family, so they warn and
-    fall back to the documented default (fail-open-with-hint, F8).
+    fall back to the documented default (fail-open-with-hint).
     """
     cfg = {}
     for key, default in (
@@ -307,7 +322,7 @@ def parse_registry(path: Path) -> Optional[list[dict]]:
     RegistryParseError, as does a data row whose cell count differs
     from the column count (a shifted row would silently misassign
     every later cell) and a backslash-run of two or more before a pipe
-    (ambiguous Markdown escaping; fail closed, F9).
+    (ambiguous Markdown escaping; fail closed).
     """
     if not path.is_file():
         return None
@@ -394,7 +409,7 @@ def is_immutable(path: str, cfg: dict) -> bool:
 
     Both sides are case-folded first: on case-insensitive filesystems a
     write to a case-variant spelling lands in the immutable dir while
-    byte-exact matching would classify it mutable (F6). On
+    byte-exact matching would classify it mutable. On
     case-sensitive platforms the fold is identity.
     """
     if is_exempt(path):
@@ -453,7 +468,7 @@ class ChangeLineError(Exception):
 
 
 def is_licensed_transition(change_type: str) -> bool:
-    """True only for a CLEAN add or rename (F3).
+    """True only for a CLEAN add or rename.
 
     Porcelain XY: the staged (first) column is exactly ``A`` or ``R``
     and the second column is blank (``A ``, ``R ``); conflict statuses
@@ -466,15 +481,20 @@ def is_licensed_transition(change_type: str) -> bool:
                 and change_type[0] in "AR")
 
 
-def audit_note_valid(audit: str) -> bool:
+def audit_note_valid(audit: str,
+                     today: Optional[datetime.date] = None) -> bool:
     """A non-empty audit note on a completed/superseded row must begin
     with the dated confirmation token ``user-approved YYYY-MM-DD:``
-    (ADR-0001 user-confirmation precondition; F6). The date must parse
+    (ADR-0001 user-confirmation precondition). The date must parse
     as a real calendar date (not month 99 / day 99) and must not be in
-    the future (an approval cannot post-date today; r5 F7). One-day
-    clock skew is tolerated (r6 F7): a legitimately-today approval
+    the future (an approval cannot post-date today). One-day
+    clock skew is tolerated: a legitimately-today approval
     minted in a timezone ahead of the validator host passes near
-    midnight; two or more days ahead still fails."""
+    midnight; two or more days ahead still fails. ``today`` is the
+    injectable clock seam (defaults to the real check-time
+    ``datetime.date.today()``); production call sites pass nothing, the
+    selftest injects a fixed day so direct-call pins cannot straddle
+    midnight."""
     if not _AUDIT_TOKEN_RE.match(audit):
         return False
     date_str = audit[len("user-approved "):].split(":", 1)[0]
@@ -482,7 +502,44 @@ def audit_note_valid(audit: str) -> bool:
         approved = datetime.date.fromisoformat(date_str)
     except ValueError:
         return False
-    return approved <= datetime.date.today() + datetime.timedelta(days=1)
+    if today is None:
+        today = datetime.date.today()
+    return approved <= today + datetime.timedelta(days=1)
+
+
+def audit_note_defects(rows: list[dict]) -> list[dict]:
+    """Rows whose audit note violates the override-token contract.
+
+    A defect is a row with ``state`` completed or superseded whose
+    non-empty ``audit`` cell fails ``audit_note_valid`` (a self-minted
+    or ill-dated note licenses nothing). ONE shared scan feeds
+    both ``validate`` and ``check-writes`` so the two subcommands
+    detect exactly the same defect set.
+    """
+    defects: list[dict] = []
+    for row in rows:
+        state = row.get("state", "").strip().lower()
+        audit = row.get("audit", "").strip()
+        if state in ("completed", "superseded") and audit \
+                and not audit_note_valid(audit):
+            defects.append(row)
+    return defects
+
+
+def audit_note_hard_message(row: dict) -> str:
+    """The ONE shared HARD message for an audit-note defect.
+
+    Both subcommands print this exact template so the wording cannot
+    drift: it keeps the ``malformed audit note`` substring the validate
+    fixtures pin and states the full contract (the date must be a
+    real, non-future calendar date).
+    """
+    return ("HARD malformed audit note '%s' in registry row (src=%s);"
+            " an override note must begin with a real, non-future"
+            " 'user-approved YYYY-MM-DD:' token (ADR-0001 user"
+            " confirmation)"
+            % (row.get("audit", "").strip(),
+               row.get("src", "") or "?"))
 
 
 def parse_change_line(line: str) -> list[tuple[str, Optional[str]]]:
@@ -490,13 +547,13 @@ def parse_change_line(line: str) -> list[tuple[str, Optional[str]]]:
     entries (renames yield two: old side then new side).
 
     Classification happens on the RAW line (only the newline is
-    stripped; F1): leading whitespace is status-column data
+    stripped): leading whitespace is status-column data
     (`` M path``), never decoration. Accepted forms:
 
     - Porcelain ``XY PATH`` (``len >= 3``, first two chars a valid XY
       pair with at most one blank, third char a space): status
       ``s[:2]``, path ``s[3:]``. Rename semantics apply ONLY when the
-      porcelain status starts with ``R`` (r6 F1): a porcelain rename
+      porcelain status starts with ``R``: a porcelain rename
       ``R  old -> new`` yields the old side typed ``D`` (the artifact
       is leaving; gated exactly like a deletion) and the new side with
       ``s[:2]``. For any other status a `` -> `` sequence is filename
@@ -505,7 +562,7 @@ def parse_change_line(line: str) -> list[tuple[str, Optional[str]]]:
       (optionally score-suffixed). A tab line with an unrecognized
       letter, or a tab-form rename (two paths), raises
       ChangeLineError (usage exit 2; the prescribed name-status feeder
-      pins ``--no-renames``, F10/F13).
+      pins ``--no-renames``).
     - Bare path (``change_type=None``; legacy semantics at warn tier).
 
     Blank lines return ``[]``.
@@ -535,15 +592,15 @@ def parse_change_line(line: str) -> list[tuple[str, Optional[str]]]:
             and (s[1] in _PORCELAIN_STATUS_CHARS or s[1] == " ")):
         status, rest = s[:2], s[3:].strip()
         if status[0] == "R" and " -> " in rest:
-            # Rename semantics are bounded to the rename letter (r6
-            # F1): only a porcelain status starting with R may split on
-            # the arrow. For every other status the arrow is filename
+            # Rename semantics are bounded to the rename letter: only
+            # a porcelain status starting with R may split on the
+            # arrow. For every other status the arrow is filename
             # data and the whole rest is the literal path.
             if rest.count(" -> ") != 1:
                 # Ambiguous: a filename itself contains the arrow
                 # sequence, so either side of any split could be the
                 # separator. Fail closed (exit 2) rather than gate the
-                # wrong path (r5 F3).
+                # wrong path.
                 raise ChangeLineError(
                     "ambiguous porcelain rename line %r (the ' -> '"
                     " separator occurs more than once); rename the file"
@@ -551,7 +608,7 @@ def parse_change_line(line: str) -> list[tuple[str, Optional[str]]]:
                     " explicitly" % s)
             old, new = rest.split(" -> ", 1)
             if " -> " in old or " -> " in new:
-                # r5 F3 second clause: either side of the split still
+                # Second clause: either side of the split still
                 # containing the arrow sequence is ambiguous the same
                 # way; fail closed rather than gate the wrong path.
                 raise ChangeLineError(
@@ -587,12 +644,12 @@ def successor_cycles(rows: list[dict]) -> list[str]:
             if node in walked:
                 cycle = walked[walked.index(node):] + [node]
                 cycles.append(" -> ".join(cycle))
-                seen_done.update(cycle[:-1])
+                # Every cycle node is already in walked, so the
+                # unconditional seen_done.update(walked) after the loop
+                # subsumes any in-loop update (deleted as redundant).
                 break
             walked.append(node)
             node = successor_of[node]
-        else:
-            seen_done.update(walked)
         seen_done.update(walked)
     return cycles
 
@@ -638,21 +695,14 @@ def cmd_validate(root: Path, cfg: dict, out: io.StringIO) -> int:
                   % (row.get("state", ""), row.get("src", "") or "?"),
                   file=out)
             hard += 1
-        # F6: a non-empty audit note on a completed/superseded row must
-        # carry the dated user-confirmation token; a self-minted note
-        # must not license an immutable write.
-        audit = row.get("audit", "").strip()
-        if state in ("completed", "superseded") and audit \
-                and not audit_note_valid(audit):
-            print("HARD malformed audit note '%s' in registry row"
-                  " (src=%s); an override note must begin with"
-                  " 'user-approved YYYY-MM-DD:' (ADR-0001 user"
-                  " confirmation)" % (audit, row.get("src", "") or "?"),
-                  file=out)
-            hard += 1
         ident = row.get("identity", "").strip()
         if ident:
             by_identity.setdefault(ident, []).append(row)
+
+    # Audit-note defects (shared scan; see the helper docstrings).
+    for row in audit_note_defects(rows):
+        print(audit_note_hard_message(row), file=out)
+        hard += 1
 
     # Duplicate identity (hard).
     for ident, group in by_identity.items():
@@ -713,10 +763,19 @@ def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, Optional[st
 
     ``entries`` pairs each raw path with its optional change type
     (``None`` for letter-less argv/bare-stdin lines). Registered-src
-    exemption is bounded to the add/rename transition (F1): a completed
+    exemption is bounded to the add/rename transition: a completed
     or superseded src with an ``A``/``R`` letter is the licensed
     archive move; any other letter is a HARD unprotected write; no
-    letter passes at warn tier with a verify duty.
+    letter passes at warn tier with a verify duty. Three further
+    warn tiers bound the HARD tiers, each with an explicit duty: an
+    untracked entry resolving to an existing directory under an
+    immutable root warns with a stage-the-move duty; on folding
+    hosts the fold-equal old side of a same-directory case-only
+    rename of a registered src warns with a verify duty, while a
+    rename INTO the registered spelling keeps the case-variant old
+    side HARD (accepted asymmetry); on folding hosts an untracked
+    case-variant of a registered src warns with a stage-the-move
+    duty.
     """
     reg_path = registry_path(root, cfg)
     try:
@@ -748,7 +807,7 @@ def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, Optional[st
     # the src of a completed or superseded row is licensed only for the
     # add/rename change type (the plans and rfc-design completion
     # transitions); body edits and deletions stay gated.
-    # r6 F2: the exemption compares the UNFOLDED normalized path
+    # The exemption compares the UNFOLDED normalized path
     # against the registry src's stored spelling (byte equality); the
     # fold still classifies the immutable-directory prefix and feeds
     # the near-match warn tier for case-variant adds.
@@ -756,25 +815,21 @@ def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, Optional[st
     lifecycle_folded: dict[str, str] = {}  # folded src -> stored spelling
     overrides: set[str] = set()
     hard = 0        # unprotected immutable write findings
-    note_hard = 0   # registry audit-note defects (row scan, r6 F6)
+    note_hard = 0   # registry audit-note defects (row scan)
+    # Precomputed once; the per-row membership test below consumes
+    # the shared scan (the rows are the same dict objects, so the
+    # defect set matches validate's exactly).
+    defect_rows = audit_note_defects(rows)
     for row in rows:
         audit = row.get("audit", "").strip()
         src_norm = normalize_repo_path(row.get("src", ""))
         src = _fold(src_norm)
         state = row.get("state", "").strip().lower()
-        # r6 F4: the audit-note token check fires regardless of
+        # The audit-note token check fires regardless of
         # multi-claim status; the multi-claim continue below must not
         # hide a malformed note on a multiply-claimed src row.
-        if state in ("completed", "superseded") and audit \
-                and not audit_note_valid(audit):
-            # r5 F1: check-writes enforces the same token contract as
-            # validate; a self-minted or ill-dated note licenses
-            # nothing (HARD, not a silent override).
-            print("HARD invalid audit note '%s' on registry row"
-                  " for %s; an override note must begin with a"
-                  " real, non-future 'user-approved YYYY-MM-DD:'"
-                  " token (ADR-0001 user confirmation)"
-                  % (audit, src), file=out)
+        if row in defect_rows:
+            print(audit_note_hard_message(row), file=out)
             note_hard += 1
         if not src or src in multi_claimed:
             continue
@@ -804,7 +859,7 @@ def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, Optional[st
             continue
         if rel in lifecycle_srcs:
             if change_type is not None and "?" in change_type:
-                # F4: untracked at a registered lifecycle src is the
+                # Untracked at a registered lifecycle src is the
                 # freeze move arriving before staging; warn with the
                 # cause, do not steer to the audit-note override.
                 print("warn: untracked registered lifecycle src %s;"
@@ -831,17 +886,83 @@ def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, Optional[st
                       " git diff --name-status output to discriminate)"
                       % rel, file=out)
                 continue
+            # origin: 2026-09-10-doc-registry-r7-residuals backlog
+            # item 5: a porcelain case-only rename inside a
+            # completed-history dir arrives as the old side typed D
+            # plus a same-directory sibling entry whose change type is
+            # the licensed transition. On folding hosts the pair is one
+            # file renormalized, so the old side warns instead of
+            # gating as a deletion; on identity hosts the fold differs,
+            # no sibling matches, and the D stays HARD. Bare channel
+            # lines carry change_type None and are skipped
+            # (is_licensed_transition(None) would raise). Both sibling
+            # sides are normalized before the directory/fold
+            # comparison, so a C-quoted raw sibling can still
+            # fold-match instead of keeping the old side gated. The
+            # sibling spelling must also DIFFER from the old side
+            # after normalization: fold-equality includes identity, so
+            # without the differ conjunct a same-spelling licensed
+            # pair (name-status D of the registered src plus A for
+            # the identical path) would downgrade a genuine
+            # deletion+re-add to a warn.
+            if change_type == "D" and any(
+                    other_ct is not None
+                    and is_licensed_transition(other_ct)
+                    and posixpath.dirname(other_norm)
+                    == posixpath.dirname(rel)
+                    and _fold(other_norm) == _fold(rel)
+                    and other_norm != rel
+                    for other_rel, other_ct in entries
+                    for other_norm in (normalize_repo_path(other_rel),)):
+                print("warn: case-only rename of registered lifecycle"
+                      " src; %s is the fold-equal old side of a"
+                      " same-directory rename; verify it is a pure case"
+                      " normalization, not a content change or a"
+                      " deletion" % rel, file=out)
+                continue
+            # The porcelain status carries padding ("M " has a
+            # trailing blank); the message strips it so the finding
+            # reads "change type M;", while the RAW value above stays
+            # semantic for the licensed-transition check.
             print("HARD immutable path written without override: %s"
                   " (change type %s; the registered-src exemption"
                   " licenses only the add/rename transition; body"
                   " edits and deletions need an audit-note override)"
-                  % (rel, change_type), file=out)
+                  % (rel, change_type.strip()), file=out)
             hard += 1
+            continue
+        if (change_type is not None and "?" in change_type
+                and (root / rel).is_dir()):
+            # git status --porcelain collapses an untracked
+            # directory to the directory itself, hiding the contents'
+            # change types. The dir spelling is not a registered src
+            # (handled above) but resolves to an existing directory
+            # under an immutable root, so warn with the stage-the-move
+            # hint instead of gating the dir as an unprotected
+            # immutable write.
+            print("warn: untracked directory %s under a"
+                  " completed-history dir; git collapsed its contents;"
+                  " stage the move (git add) so the individual change"
+                  " types can be checked" % rel, file=out)
+            continue
+        if (change_type is not None and "?" in change_type
+                and frel in lifecycle_folded):
+            # An untracked case-variant spelling of a
+            # registered src is the freeze move arriving under a
+            # case-variant spelling. On folding platforms it IS the
+            # registered file, so warn with the stage-the-move hint
+            # instead of a HARD immutable write; on identity platforms
+            # the fold differs, this branch is skipped, and the
+            # genuinely distinct file stays gated below.
+            print("warn: untracked case-variant of registered lifecycle"
+                  " src; %s is not the registered spelling %s; stage"
+                  " the move (git add) so the change type can be"
+                  " checked" % (rel, lifecycle_folded[frel]), file=out)
             continue
         if (change_type is not None
                 and is_licensed_transition(change_type)
                 and frel in lifecycle_folded):
-            # r6 F2: a case-variant add of a registered lifecycle src
+            # A case-variant add of a registered lifecycle src
             # is not byte-equal to the stored spelling, so it is NOT
             # the licensed transition; on folding platforms it takes
             # the warn-tier verify path naming the near-match (like a
@@ -912,9 +1033,9 @@ def _build_parser() -> argparse.ArgumentParser:
     validate/inventory and honored before the subcommand; both spellings
     are now usage exit 2).
 
-    Further argparse-native deltas beyond those two (r1 F2):
-    - ``-h``/``--help`` exits 0 with argparse help. Positional nuance
-      (r5 F2): ``-h`` BEFORE the subcommand was an unknown-flag exit 2
+    Further argparse-native deltas beyond those two:
+    - ``-h``/``--help`` exits 0 with argparse help. Positional nuance:
+      ``-h`` BEFORE the subcommand was an unknown-flag exit 2
       on main; ``-h`` AFTER a subcommand (e.g. ``check-writes -h``) was
       gated as a literal path on main and now renders argparse help
       (exit 0, no gating).
@@ -930,7 +1051,7 @@ def _build_parser() -> argparse.ArgumentParser:
       previously the token was silently consumed as the root value.
     - ``--root=--selftest`` (``=``-attached form) with a flag-like
       value is rejected with usage exit 2, same as the spaced form
-      (r5 F3 collapsed the asymmetry: on main the attached form was
+      (this collapsed the asymmetry: on main the attached form was
       resolved as a path and could fall back to the repo-root search,
       the one fail-open direction; both spellings now exit 2).
     - ``-h``/``--help`` help text prints to real stdout (outside
@@ -939,8 +1060,19 @@ def _build_parser() -> argparse.ArgumentParser:
       as unknown flags (argparse); only negative-number-like tokens
       survive as check-writes paths (argparse negative-number
       heuristic). ``-h``/``--help`` is the exception to this rule: after
-      a subcommand it renders help exit 0 (r5 F2), where main gated it
+      a subcommand it renders help exit 0, where main gated it
       as a literal path.
+    - ``--root=`` with an empty attached value resolves as if no
+      ``--root`` was given: the empty value is falsy, so the
+      repo-root search (git toplevel, then cwd) applies; fail-neutral.
+    - The ``--stdin --selftest`` invocation (``--stdin`` before
+      ``--selftest``) breaks the bare-token pre-scan, so the
+      invocation is rejected with usage exit 2 by the
+      missing-subcommand error where the bare ``--selftest`` form
+      would have run the suite (exit 0 to exit 2, left-to-right scan
+      consequence; fail-closed). The ``--stdin`` flag itself is
+      reported as unrecognized arguments only when a valid subcommand
+      follows (e.g. ``--stdin validate``).
     """
     parser = argparse.ArgumentParser(
         prog="doc_registry_validator.py",
@@ -953,7 +1085,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                 metavar="{validate|check-writes|inventory}")
     # allow_abbrev is NOT inherited from the top-level parser; each
     # subparser must set it or abbreviation matching silently returns
-    # (r4 F1: `check-writes --std` resolved to --stdin instead of
+    # (e.g. `check-writes --std` resolved to --stdin instead of
     # exiting 2 as the declared delta promises).
     sub.add_parser("validate", help="check the registry table",
                    allow_abbrev=False)
@@ -978,15 +1110,15 @@ def _dispatch(argv: list[str], stdin_text: str, out: io.StringIO) -> int:
         return 2
     # A bare --selftest token before any other token short-circuits
     # before subparser validation (even `--selftest --bogus` runs the
-    # selftest). The scan is left-to-right and value-aware (r1 F1):
+    # selftest). The scan is left-to-right and value-aware:
     # `--root` consumes the NEXT token as its value, so a `--selftest`
     # there is not treated as bare and the scan continues; argparse
     # then re-parses the full argv and rejects a flag-like `--root`
-    # value (exit 2, fail-closed — the old parser blindly consumed
+    # value (exit 2, fail-closed; the old parser blindly consumed
     # it). A bare `--selftest` AFTER a consumed `--root VALUE` pair
     # still short-circuits here (matching the old parser; read-only),
     # so the flag-like-value exit-2 delta applies only when `--selftest`
-    # is itself the consumed `--root` value (r5 F4). ANY other token
+    # is itself the consumed `--root` value. ANY other token
     # (flag, positional, `--`, `--stdin`) breaks
     # the scan so the invocation falls through to argparse, which
     # exit-2s on unknown flags; `check-writes --selftest` still exits 2
@@ -1002,7 +1134,7 @@ def _dispatch(argv: list[str], stdin_text: str, out: io.StringIO) -> int:
 
     ns = _build_parser().parse_args(args)
     root_explicit = ns.root
-    # r5 F3: a flag-like --root value (only reachable via the `=`
+    # A flag-like --root value (only reachable via the `=`
     # attached form; the spaced form is already argparse's usage error)
     # collapses the old fail-open asymmetry: both spellings now exit 2.
     if root_explicit is not None and root_explicit.startswith("-"):
@@ -1019,7 +1151,7 @@ def _dispatch(argv: list[str], stdin_text: str, out: io.StringIO) -> int:
         return cmd_inventory(root, cfg, out)
     # check-writes: gather (path, change-type) entries from the channel.
     if ns.stdin and ns.paths:
-        # F7: key the conflict check on channel state, not parsed
+        # Key the conflict check on channel state, not parsed
         # entries; empty stdin must not silently discard argv paths.
         print("error: --stdin cannot be combined with argv paths\n"
               + USAGE, file=sys.stderr)
@@ -1039,7 +1171,7 @@ def _dispatch(argv: list[str], stdin_text: str, out: io.StringIO) -> int:
         print("error: check-writes needs paths (argv or --stdin)\n"
               + USAGE, file=sys.stderr)
         return 2
-    # F16: reject backslash-bearing input paths (fail closed; git
+    # Reject backslash-bearing input paths (fail closed; git
     # emits forward slashes, and normpath keeps backslashes so a
     # converted spelling could never be trusted to be a rename).
     for raw, _change_type in entries:
@@ -1137,7 +1269,7 @@ def cmd_selftest() -> int:
     try:
         _run_selftest_checks(st)
     finally:
-        # Every fixture root is removed (F12: no leaked temp dirs), even
+        # Every fixture root is removed (no leaked temp dirs), even
         # when a check raises mid-run.
         for fixture_root in _FIXTURE_ROOTS:
             shutil.rmtree(fixture_root, ignore_errors=True)
@@ -1301,7 +1433,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     st.expect("test_header_mismatch_fails", code, output, 1,
               want_substr="parse error")
 
-    # F10: strict header equality; a reordered header is a loud parse
+    # Strict header equality; a reordered header is a loud parse
     # error, not a silently accepted deviation (zero consumers rely on
     # reorder acceptance).
     reordered = ("| sot | identity | state | archived | reason | src"
@@ -1511,12 +1643,12 @@ def _run_selftest_checks(st: Selftest) -> None:
     st.expect("test_removed_diff_channel_fails_closed", code, output, 2,
               want_substr="usage")
 
-    # Subparser abbreviation (r4 F1): allow_abbrev is not inherited by
+    # Subparser abbreviation: allow_abbrev is not inherited by
     # add_parser subparsers, so each subparser sets it explicitly and
     # `--std` must NOT resolve to --stdin; it fails closed as unknown
     # flag (on main the hand-rolled parser also exited 2 here).
-    # Discriminator (r5 F1): under the allow_abbrev-dropped mutation
-    # `--std` resolves to --stdin and the F7 conflict guard fires
+    # Discriminator: under the allow_abbrev-dropped mutation
+    # `--std` resolves to --stdin and the conflict guard fires
     # (same exit 2 + usage but with "cannot be combined"); forbidding
     # that message makes the pin flip under the mutation while the
     # correct code (argparse unrecognized-arguments error) carries no
@@ -1526,8 +1658,11 @@ def _run_selftest_checks(st: Selftest) -> None:
               want_substr="usage", forbid_substr="cannot be combined")
 
     # Dispatch layer fail-closed pins (argparse rewrite characterization).
-    # NOTE: `root` here is bound by the earlier fixture block above
-    # (order-dependent by design; failures are loud if that changes).
+    # NOTE: the block is order-dependent by design; `root` is bound by
+    # the earlier fixture block above, and a reorder can silently
+    # rebind `root` to another valid fixture dir (a root-sensitive pin
+    # would keep passing against the wrong fixture), so bind a local
+    # fixture root if a root-sensitive pin is ever added.
     # Missing subcommand.
     code, output = run([])
     st.expect("test_missing_subcommand_fails_closed", code, output, 2,
@@ -1554,7 +1689,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     st.expect("test_stdin_rejected_outside_check_writes_fails_closed", code,
               output, 2, want_substr="usage")
 
-    # Pins the pre-subcommand --selftest short-circuit (r1 F1): the
+    # Pins the pre-subcommand --selftest short-circuit: the
     # scan stops at the bare --selftest token BEFORE any other token is
     # examined, so the selftest runs (exit 0), unknown tail and all.
     # cmd_selftest is stubbed (the _fold-pinning pattern) so the pin
@@ -1569,30 +1704,38 @@ def _run_selftest_checks(st: Selftest) -> None:
     st.expect("test_selftest_shortcircuit_before_subcommand", code, output,
               0, forbid_substr="usage")
 
-    # Pins the r1 F1 fail-closed fix: an unknown token BEFORE
+    # Pins the fail-closed fix: an unknown token BEFORE
     # --selftest breaks the pre-scan, so argparse handles the line and
     # exits 2 (the old order-insensitive scan wrongly exited 0 here).
     code, output = run(["--bogus", "--selftest"])
     st.expect("test_unknown_flag_before_selftest_fails_closed", code, output,
               2, want_substr="usage")
 
+    # Characterization (the coverage pin the fold plan's exception
+    # lacked): an unknown flag BEFORE the subcommand falls through the
+    # pre-scan to argparse, which rejects it with usage exit 2. Green
+    # on arrival; behavior was already correct, this pin protects it.
+    code, output = run(["--bogus", "validate"])
+    st.expect("test_unknown_flag_before_subcommand_fails_closed", code,
+              output, 2, want_substr="usage")
+
     # --root without a value.
     code, output = run(["--root"])
     st.expect("test_root_requires_value_fails_closed", code, output, 2,
               want_substr="usage")
 
-    # --root followed by an option-like token (r2 F1): the pre-scan
+    # --root followed by an option-like token: the pre-scan
     # skips it (not bare --selftest), argparse re-parses the full argv
-    # and rejects the flag-like --root value — fail-closed, where the
+    # and rejects the flag-like --root value (fail-closed), where the
     # old parser silently consumed the token as the root value.
     code, output = run(["--root", "--selftest", "validate"])
     st.expect("test_root_value_selftest_token_fails_closed", code, output, 2,
               want_substr="usage")
 
-    # r5 F3: the `=`-attached flag-like --root value (the spaced form is
+    # The `=`-attached flag-like --root value (the spaced form is
     # pinned above) also fails closed with a usage error; the old
     # fail-open asymmetry (path resolution + repo-root fallback) is
-    # collapsed — both spellings exit 2.
+    # collapsed; both spellings exit 2.
     code, output = run(["--root=--selftest", "validate"])
     st.expect("test_root_eq_flag_like_value_fails_closed", code, output, 2,
               want_substr="usage")
@@ -1602,17 +1745,17 @@ def _run_selftest_checks(st: Selftest) -> None:
     st.expect("test_double_dash_argument_fails_closed", code, output, 2,
               want_substr="usage")
 
-    # Literal -- argument before --selftest (r3 F1): pins that a --
+    # Literal -- argument before --selftest: pins that a --
     # token preceded by --root is rejected (argparse path); guard
     # placement itself is pinned by
-    # test_selftest_before_double_dash_fails_closed below (r4 F3:
+    # test_selftest_before_double_dash_fails_closed below (argparse
     # argparse independently rejects both inputs pinned here, so this
     # fixture alone does not discriminate guard placement).
     code, output = run(["--root", str(root), "--", "--selftest"])
     st.expect("test_double_dash_with_root_before_selftest_fails_closed",
               code, output, 2, want_substr="usage", forbid_substr="selftest OK")
 
-    # Discriminating guard-placement pin (r4 F3): --selftest BEFORE the
+    # Discriminating guard-placement pin: --selftest BEFORE the
     # literal -- would be consumed by the pre-scan short-circuit if the
     # literal-`--` guard ran after it; the guard must reject first.
     # cmd_selftest is stubbed (the _fold-pinning pattern) so the pin
@@ -1632,7 +1775,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     st.expect("test_check_writes_needs_paths_fails_closed", code, output, 2,
               want_substr="usage")
 
-    # F1: the registered-src exemption is bounded to the add/rename
+    # The registered-src exemption is bounded to the add/rename
     # transition. Registered src + clean add/rename letter = licensed
     # (exit 0, informational); registered src + M/D letter = HARD
     # without an audit note; unregistered immutable path fails
@@ -1657,7 +1800,7 @@ def _run_selftest_checks(st: Selftest) -> None:
                        stdin_text="M  docs/plans/completed/a.md\n")
     st.expect("test_registered_src_modify_letter_fails", code, output, 1,
               want_substr="immutable path written without override")
-    # F1: leading-space worktree porcelain forms keep their status
+    # Leading-space worktree porcelain forms keep their status
     # column (unstaged M/D of a registered src is HARD; unregistered
     # immutable path with a leading-space letter still fails).
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
@@ -1678,7 +1821,7 @@ def _run_selftest_checks(st: Selftest) -> None:
                        stdin_text=" D docs/plans/completed/b.md\n")
     st.expect("test_leading_space_delete_unregistered_fails", code,
               output, 1, want_substr="docs/plans/completed/b.md")
-    # F2: a rename OUT of an immutable dir gates the old side (typed
+    # A rename OUT of an immutable dir gates the old side (typed
     # as a deletion); a rename INTO a registered lifecycle src is the
     # licensed freeze move.
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
@@ -1689,7 +1832,7 @@ def _run_selftest_checks(st: Selftest) -> None:
                        stdin_text="R  docs/tmp/x.md -> docs/plans/completed/a.md\n")
     st.expect("test_rename_into_registered_src_licensed", code, output,
               0, want_substr="licensed lifecycle add")
-    # F3: conflict statuses are not licensed adds.
+    # Conflict statuses are not licensed adds.
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text="AA docs/plans/completed/a.md\n")
     st.expect("test_conflict_status_not_licensed", code, output, 1,
@@ -1698,7 +1841,7 @@ def _run_selftest_checks(st: Selftest) -> None:
                        stdin_text="AU docs/plans/completed/a.md\n")
     st.expect("test_conflict_status_au_not_licensed", code, output, 1,
               want_substr="immutable path written without override")
-    # F4: untracked at a registered lifecycle src is the freeze move
+    # Untracked at a registered lifecycle src is the freeze move
     # arriving; warn tier naming the cause, no override steer.
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text="?? docs/plans/completed/a.md\n")
@@ -1716,7 +1859,7 @@ def _run_selftest_checks(st: Selftest) -> None:
                        stdin_text="A  docs/plans/completed/b.md\n")
     st.expect("test_unregistered_add_letter_still_fails", code, output, 1,
               want_substr="docs/plans/completed/b.md")
-    # F10: recognized-but-uncommon letters (T) parse and gate; unknown
+    # Recognized-but-uncommon letters (T) parse and gate; unknown
     # letters and tab-form renames are usage errors (exit 2).
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text="T\tdocs/plans/completed/a.md\n")
@@ -1730,19 +1873,19 @@ def _run_selftest_checks(st: Selftest) -> None:
                        stdin_text="R100\tdocs/old.md\tdocs/new.md\n")
     st.expect("test_tab_rename_line_fails_closed", code, output, 2,
               want_substr="usage")
-    # F16: backslash-bearing input paths are rejected (fail closed).
+    # Backslash-bearing input paths are rejected (fail closed).
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text="M  docs\\plans\\completed\\a.md\n")
     st.expect("test_backslash_stdin_path_fails_closed", code, output, 2,
               want_substr="usage")
-    # F7: --stdin plus argv paths is a usage error even with empty
+    # --stdin plus argv paths is a usage error even with empty
     # stdin (channel state, not parsed content, decides).
     code, output = run(["--root", str(root), "check-writes", "--stdin",
                         "docs/plans/completed/a.md"], stdin_text="")
     st.expect("test_stdin_channel_with_argv_paths_fails_closed", code,
               output, 2, want_substr="usage")
 
-    # F6: audit-note token format on completed rows (validate).
+    # Audit-note token format on completed rows (validate).
     root = make_fixture("f6-audit-valid", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
                         " docs/plans/completed/a.md |  |  |"
@@ -1758,7 +1901,19 @@ def _run_selftest_checks(st: Selftest) -> None:
     st.expect("test_audit_note_malformed_token_fails", code, output, 1,
               want_substr="malformed audit note")
 
-    # r5 F7: the audit-token date must be a real calendar date, not in
+    # Shared wording: validate's audit-note HARD message states
+    # the FULL contract (the date must be real and non-future), the
+    # same message check-writes prints for the same defect; one
+    # shared template so the two subcommands cannot drift.
+    root = make_fixture("f6-audit-full-contract", registry_header() +
+                        "| doc-a | no | completed | 2026-01-01 | r |"
+                        " docs/plans/completed/a.md |  |  |"
+                        " self-approved quick fix |\n")
+    code, output = run(["--root", str(root), "validate"])
+    st.expect("test_validate_audit_message_states_full_contract", code,
+              output, 1, want_substr="real, non-future")
+
+    # The audit-token date must be a real calendar date, not in
     # the future (shape-only matching let 9999-99-99 and future dates
     # license immutable writes).
     for label, bad_date in (("month_99", "2026-99-10"),
@@ -1778,7 +1933,7 @@ def _run_selftest_checks(st: Selftest) -> None:
                   + "_no_override", code, output, 1,
                   want_substr="immutable path written without override")
 
-    # r5 F1: check-writes enforces the same token contract as validate;
+    # Check-writes enforces the same token contract as validate;
     # a self-minted note on the override row licenses nothing.
     root = make_fixture("f1-selfminted-override", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
@@ -1787,13 +1942,28 @@ def _run_selftest_checks(st: Selftest) -> None:
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text="M  docs/plans/completed/a.md\n")
     st.expect("test_check_writes_selfminted_note_hard_fails", code,
-              output, 1, want_substr="invalid audit note")
-    # r6 F6: the summary counts the row-scan audit-note defect
+              output, 1, want_substr="malformed audit note")
+    # The summary counts the row-scan audit-note defect
     # separately from write findings.
     st.check("test_check_writes_summary_counts_note_defect_separately",
              "1 registry audit-note defect" in output, repr(output))
 
-    # r6 F4: a malformed audit note on a multiply-claimed src row is
+    # The shared audit-note HARD message renders the STORED src
+    # spelling from the registry row (the template formats the row's
+    # raw src cell, never a folded or re-normalized form): a
+    # mixed-case registered src must surface in the message exactly
+    # as stored, on the check-writes channel too.
+    root = make_fixture("audit-note-stored-src-spelling", registry_header() +
+                        "| doc-a | no | completed | 2026-01-01 | r |"
+                        " Docs/Plans/Completed/a.md |  |  |"
+                        " self-approved quick fix |\n")
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text="M  Docs/Plans/Completed/a.md\n")
+    st.expect("test_check_writes_audit_note_names_stored_src_spelling",
+              code, output, 1,
+              want_substr="src=Docs/Plans/Completed/a.md")
+
+    # A malformed audit note on a multiply-claimed src row is
     # reported by standalone check-writes too (the multi-claim
     # continue must not hide it).
     root = make_fixture("f4-dup-src-bad-note", registry_header() +
@@ -1805,31 +1975,51 @@ def _run_selftest_checks(st: Selftest) -> None:
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text="A  docs/plans/completed/a.md\n")
     st.expect("test_multi_claimed_row_bad_audit_note_reported", code,
-              output, 1, want_substr="invalid audit note")
+              output, 1, want_substr="malformed audit note")
 
-    # r6 F7: one-day clock skew tolerated. An approval dated tomorrow
-    # (minted today in a timezone ahead of the host) passes; the day
-    # after tomorrow still fails.
-    skew_ok = (datetime.date.today()
-               + datetime.timedelta(days=1)).isoformat()
+    # Injectable clock seam: direct calls pin the one-day tolerance
+    # against a FIXED reference day, so the suite itself can never
+    # straddle midnight (the CLI fixtures below can only approximate
+    # this). One day ahead of the injected clock passes; two or more
+    # days ahead, and a far-future date, fail.
+    st.check("test_audit_note_direct_one_day_ahead_passes",
+             audit_note_valid("user-approved 2026-01-02: fix",
+                              today=datetime.date(2026, 1, 1)) is True)
+    st.check("test_audit_note_direct_two_days_ahead_fails",
+             audit_note_valid("user-approved 2026-01-03: fix",
+                              today=datetime.date(2026, 1, 1)) is False)
+    st.check("test_audit_note_direct_far_future_fails",
+             audit_note_valid("user-approved 2099-01-01: fix",
+                              today=datetime.date(2026, 1, 1)) is False)
+
+    # One-day clock skew tolerated. The offsets are
+    # midnight-robust: these fixtures are built at one clock reading
+    # and checked at another, and a run straddling local midnight flips
+    # a build-time +1/+2 expectation. +0 passes whether the check-time
+    # clock reads the build day or the next (an approval legitimately
+    # minted today in a timezone ahead of the host passes near
+    # midnight); +3 fails under both readings, since the tolerance is
+    # one day. The direct-call checks above pin the exact boundary
+    # against an injected fixed day.
+    skew_ok = datetime.date.today().isoformat()
     skew_bad = (datetime.date.today()
-                + datetime.timedelta(days=2)).isoformat()
+                + datetime.timedelta(days=3)).isoformat()
     root = make_fixture("f7-skew-ok", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
                         " docs/plans/completed/a.md |  |  |"
                         " user-approved %s: fix |\n" % skew_ok)
     code, output = run(["--root", str(root), "validate"])
-    st.expect("test_audit_note_tomorrow_passes", code, output, 0,
+    st.expect("test_audit_note_today_passes", code, output, 0,
               forbid_substr="malformed audit note")
     root = make_fixture("f7-skew-bad", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
                         " docs/plans/completed/a.md |  |  |"
                         " user-approved %s: fix |\n" % skew_bad)
     code, output = run(["--root", str(root), "validate"])
-    st.expect("test_audit_note_day_after_tomorrow_fails", code, output, 1,
+    st.expect("test_audit_note_three_days_ahead_fails", code, output, 1,
               want_substr="malformed audit note")
 
-    # r5 F3: a porcelain rename whose path text contains the arrow
+    # A porcelain rename whose path text contains the arrow
     # sequence is ambiguous; fail closed (exit 2), never a silent
     # misparse. A clean rename still parses both sides.
     root = make_fixture("f3-arrow-rename", registry_header() +
@@ -1846,7 +2036,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     st.expect("test_arrow_bearing_rename_into_src_fails_closed", code,
               output, 2, want_substr="ambiguous")
 
-    # r6 F1: the arrow split is bounded to the rename letter. Any other
+    # The arrow split is bounded to the rename letter. Any other
     # status carries the arrow as filename data: the whole rest is the
     # literal path and gates as itself (no phantom split entries).
     root = make_fixture("f1-arrow-norename", registry_header())
@@ -1873,7 +2063,7 @@ def _run_selftest_checks(st: Selftest) -> None:
               1, want_substr="docs/plans/completed/a.md -> evil.md",
               forbid_substr="licensed lifecycle add")
 
-    # F1: a registered src with an M letter plus an audit note passes
+    # A registered src with an M letter plus an audit note passes
     # with the standing-override warn (the corruption override path).
     root = make_fixture("f1-override", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
@@ -1887,7 +2077,7 @@ def _run_selftest_checks(st: Selftest) -> None:
              "clear the audit note after the licensed write lands"
              in output, repr(output))
 
-    # F3: single-dash and centered GFM alignment separators are
+    # Single-dash and centered GFM alignment separators are
     # separator rows, not data (no phantom enum/cycle findings).
     centered = ("| identity | sot | state | archived | reason | src"
                 " | successor | aliases | audit |\n"
@@ -1899,15 +2089,17 @@ def _run_selftest_checks(st: Selftest) -> None:
     st.expect("test_centered_separator_row_parses_clean", code, output, 0,
               forbid_substr=":-:")
 
-    # F5: a C-quoted stdin path is unquoted before comparison (macOS
-    # NFD filenames arrive quoted from git without quotePath=false).
+    # A quoted stdin path is unquoted before comparison: caller- or
+    # tool-quoted paths are stripped of their surrounding quotes;
+    # git-emitted C-quoted paths always embed backslash escapes and
+    # fail closed at the backslash guard before the strip runs.
     root = make_fixture("quoted-path", registry_header())
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text='"docs/plans/completed/a b.md"\n')
     st.expect("test_quoted_stdin_path_named_unquoted", code, output, 1,
               want_substr="docs/plans/completed/a b.md")
 
-    # F6/F11 (r5 F2): gates and exemption sets compare case-folded
+    # Gates and exemption sets compare case-folded
     # spellings. The fold trait is anchored OUTSIDE the code under
     # test: an unconditional delegation check plus concrete
     # platform-conditional expectations, so deleting _fold's body
@@ -1953,7 +2145,7 @@ def _run_selftest_checks(st: Selftest) -> None:
                  for p in registered_src_paths(from_doc_registry)),
              repr(registered_src_paths(from_doc_registry)))
 
-    # r6 F5: the fold-family gate assertions run with _fold pinned to
+    # The fold-family gate assertions run with _fold pinned to
     # str.lower AND to identity on EVERY platform, so both traits are
     # anchored regardless of host (a regression removing the darwin
     # fold fails the suite on Linux too). Each pinned run asserts the
@@ -1998,7 +2190,7 @@ def _run_selftest_checks(st: Selftest) -> None:
                 st.expect("test_fold_pin_" + pin_label
                           + "_unregistered_passes", code, output, 0,
                           forbid_substr=unregistered_variant)
-            # r6 F2 trait under the same pin: a case-variant add of a
+            # Trait under the same pin: a case-variant add of a
             # registered src is a near-match warn (never a licensed
             # add) when folding, and a plain unregistered hard gate
             # when not.
@@ -2018,7 +2210,370 @@ def _run_selftest_checks(st: Selftest) -> None:
     finally:
         globals()["_fold"] = real_fold
 
-    # F8: a root-escaping facts value warns and falls back to the
+    # origin: 2026-09-10-doc-registry-r7-residuals backlog
+    # item 2: hard-message whitespace. The two-char porcelain form
+    # carries status padding ("M " has a trailing blank), and the
+    # registered-src HARD message interpolated the RAW value, printing
+    # the typo-looking "change type M ;". The message must strip the
+    # status padding; the raw value stays semantic for the licensed
+    # transition check.
+    root = make_fixture("hard-msg-padding", registry_header() +
+                        "| doc-a | no | completed | 2026-01-01 | r |"
+                        " docs/plans/completed/a.md |  |  |  |\n")
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text="M  docs/plans/completed/a.md\n")
+    st.expect("test_hard_message_strips_status_padding", code, output, 1,
+              want_substr="change type M;")
+
+    # Untracked case-variant of a registered src: "?? " at a
+    # fold-equal but not byte-equal spelling is the freeze move arriving
+    # under a case-variant spelling. On folding hosts it IS the
+    # registered file, so warn with the stage-the-move hint; on identity
+    # hosts the variant is a genuinely distinct file and stays HARD.
+    # (Unpinned CLI-channel coverage on the real platform fold; the
+    # fold-pinned block below anchors both traits on every host.)
+    root = make_fixture("untracked-case-variant", registry_header() +
+                        "| doc-a | no | completed | 2026-01-01 | r |"
+                        " docs/plans/completed/a.md |  |  |  |\n")
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text="?? docs/plans/completed/A.md\n")
+    if folds:
+        st.expect("test_untracked_case_variant_warns_stage_move", code,
+                  output, 0, want_substr="is not the registered spelling")
+        st.check("test_untracked_case_variant_hints_stage_move",
+                 "stage the move" in output, repr(output))
+    else:
+        st.expect("test_untracked_case_variant_warns_stage_move", code,
+                  output, 1,
+                  want_substr="immutable path written without override")
+
+    # Fold-pinned coverage for the same branch (suite pin idiom): the
+    # warn trait is asserted under the lower pin and the HARD trait
+    # under the identity pin on EVERY host, so deleting the branch
+    # fails the suite on identity hosts too (the host-conditional
+    # fixture above exercises the branch only when the platform folds).
+    real_fold = _fold
+    try:
+        for pin_label, pinned_fold, fold_active in (
+                ("lower", str.lower, True),
+                ("identity", lambda p: p, False)):
+            globals()["_fold"] = pinned_fold
+            root = make_fixture(
+                "untracked-case-variant-pin-" + pin_label,
+                registry_header() +
+                "| doc-a | no | completed | 2026-01-01 | r |"
+                " docs/plans/completed/a.md |  |  |  |\n")
+            code, output = run(["--root", str(root), "check-writes",
+                                "--stdin"],
+                               stdin_text="?? docs/plans/completed/A.md\n")
+            if fold_active:
+                st.expect("test_untracked_case_variant_fold_pin_"
+                          + pin_label + "_warns_stage_move", code, output,
+                          0, want_substr="is not the registered spelling")
+            else:
+                st.expect("test_untracked_case_variant_fold_pin_"
+                          + pin_label + "_stays_hard", code, output, 1,
+                          want_substr="immutable path written without"
+                          " override")
+    finally:
+        globals()["_fold"] = real_fold
+
+    # Untracked dir collapse: git status --porcelain
+    # collapses an untracked directory to the directory itself, hiding
+    # the contents' change types. The dir spelling is not a registered
+    # src but resolves to an existing directory under an immutable root;
+    # warn with the stage-the-move hint instead of gating the dir as an
+    # unprotected immutable write (the dir is created explicitly so the
+    # fixture is host-independent).
+    root = make_fixture("untracked-dir-collapse", registry_header())
+    (root / "docs/plans/completed").mkdir(parents=True, exist_ok=True)
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text="?? docs/plans/completed/\n")
+    st.expect("test_untracked_dir_collapse_hints_stage_move", code, output,
+              0, want_substr="untracked directory")
+    st.check("test_untracked_dir_collapse_names_stage_move",
+             "stage the move" in output, repr(output))
+
+    # Killer for the dir-collapse arm's "?" conjunct: a TRACKED change
+    # type at the collapsed dir spelling is an unprotected immutable
+    # write (HARD), not a stage-the-move warn. Deleting the
+    # "?" in change_type conjunct flips this run to the dir-collapse
+    # warn (exit 0), so the forbid kills that flip. Host-independent
+    # (the dir is created explicitly; no fold involved), so a plain
+    # run pins both traits on every host.
+    root = make_fixture("tracked-change-at-collapsed-dir",
+                        registry_header())
+    (root / "docs/plans/completed").mkdir(parents=True, exist_ok=True)
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text="M  docs/plans/completed/\n")
+    st.expect("test_tracked_change_at_collapsed_dir_stays_hard", code,
+              output, 1,
+              want_substr="immutable path written without override",
+              forbid_substr="untracked directory")
+
+    # Case-only rename: a porcelain case-only rename inside
+    # a completed-history dir arrives as the old side typed D (the
+    # deletion-typed HARD branch) plus a same-directory sibling whose
+    # change type is the licensed transition. On folding hosts the pair
+    # is one file renormalized, so the old side warns; on identity hosts
+    # the fold differs, no sibling matches, and the D stays HARD.
+    # (Unpinned CLI-channel coverage on the real platform fold; the
+    # fold-pinned block below anchors both traits on every host.)
+    root = make_fixture("case-only-rename", registry_header() +
+                        "| doc-a | no | completed | 2026-01-01 | r |"
+                        " docs/plans/completed/a.md |  |  |  |\n")
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text="R  docs/plans/completed/a.md ->"
+                       " docs/plans/completed/A.md\n")
+    if folds:
+        st.expect("test_case_only_rename_old_side_warns", code, output, 0,
+                  want_substr="case-only rename")
+    else:
+        st.expect("test_case_only_rename_old_side_warns", code, output, 1,
+                  want_substr="immutable path written without override")
+
+    # Fold-pinned coverage for the same branch (suite pin idiom): the
+    # warn trait under the lower pin and the HARD trait under the
+    # identity pin on EVERY host (the host-conditional fixture above is
+    # the unpinned CLI-channel coverage on the real platform fold).
+    real_fold = _fold
+    try:
+        for pin_label, pinned_fold, fold_active in (
+                ("lower", str.lower, True),
+                ("identity", lambda p: p, False)):
+            globals()["_fold"] = pinned_fold
+            root = make_fixture(
+                "case-only-rename-pin-" + pin_label,
+                registry_header() +
+                "| doc-a | no | completed | 2026-01-01 | r |"
+                " docs/plans/completed/a.md |  |  |  |\n")
+            code, output = run(["--root", str(root), "check-writes",
+                                "--stdin"],
+                               stdin_text="R  docs/plans/completed/a.md ->"
+                               " docs/plans/completed/A.md\n")
+            if fold_active:
+                st.expect("test_case_only_rename_fold_pin_" + pin_label
+                          + "_old_side_warns", code, output, 0,
+                          want_substr="case-only rename")
+            else:
+                st.expect("test_case_only_rename_fold_pin_" + pin_label
+                          + "_old_side_hard", code, output, 1,
+                          want_substr="immutable path written without"
+                          " override")
+    finally:
+        globals()["_fold"] = real_fold
+
+    # Same-spelling deletion+re-add pair stays HARD on every host: a
+    # name-status D of the registered src plus an A for the IDENTICAL
+    # path is a genuine deletion+re-add, not a case-only rename
+    # (fold-equality includes identity, so the sibling scan requires
+    # the sibling spelling to differ). Suite pin idiom: under the
+    # lower pin dropping the differ conjunct flips this run to the
+    # case-only-rename warn (exit 0), so the pins carry the pair's
+    # full kill-power on every host and keep the differ conjunct's
+    # kill-map entry alive (an unpinned twin of this fixture would be
+    # behaviorally equivalent to one of the pins and add none).
+    real_fold = _fold
+    try:
+        for pin_label, pinned_fold in (("lower", str.lower),
+                                       ("identity", lambda p: p)):
+            globals()["_fold"] = pinned_fold
+            root = make_fixture(
+                "same-spelling-delete-readd-pin-" + pin_label,
+                registry_header() +
+                "| doc-a | no | completed | 2026-01-01 | r |"
+                " docs/plans/completed/a.md |  |  |  |\n")
+            code, output = run(["--root", str(root), "check-writes",
+                                "--stdin"],
+                               stdin_text="D\tdocs/plans/completed/a.md\n"
+                               "A  docs/plans/completed/a.md\n")
+            st.expect("test_same_spelling_delete_readd_fold_pin_"
+                      + pin_label + "_stays_hard", code, output, 1,
+                      want_substr="immutable path written without"
+                      " override")
+    finally:
+        globals()["_fold"] = real_fold
+
+    # Case-only rename in NAME-STATUS form: the prescribed feeder pins
+    # --no-renames, so the case-only pair surfaces as an explicit D
+    # line for the old side plus an A line for the new side. Same
+    # sibling shape and platform split as the porcelain rename above
+    # (warn on folding hosts, HARD on identity hosts); the fold-pinned
+    # block anchors both traits on every host.
+    root = make_fixture("case-only-rename-name-status", registry_header() +
+                        "| doc-a | no | completed | 2026-01-01 | r |"
+                        " docs/plans/completed/a.md |  |  |  |\n")
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text="D\tdocs/plans/completed/a.md\n"
+                       "A  docs/plans/completed/A.md\n")
+    if folds:
+        st.expect("test_case_only_rename_name_status_old_side_warns",
+                  code, output, 0, want_substr="case-only rename")
+    else:
+        st.expect("test_case_only_rename_name_status_old_side_warns",
+                  code, output, 1,
+                  want_substr="immutable path written without override")
+
+    # Fold-pinned coverage for the name-status shape (suite pin idiom):
+    # the warn trait under the lower pin and the HARD trait under the
+    # identity pin on EVERY host. Deleting the whole sibling branch
+    # fails the lower pin here (and in the porcelain block above).
+    real_fold = _fold
+    try:
+        for pin_label, pinned_fold, fold_active in (
+                ("lower", str.lower, True),
+                ("identity", lambda p: p, False)):
+            globals()["_fold"] = pinned_fold
+            root = make_fixture(
+                "case-only-rename-name-status-pin-" + pin_label,
+                registry_header() +
+                "| doc-a | no | completed | 2026-01-01 | r |"
+                " docs/plans/completed/a.md |  |  |  |\n")
+            code, output = run(["--root", str(root), "check-writes",
+                                "--stdin"],
+                               stdin_text="D\tdocs/plans/completed/a.md\n"
+                               "A  docs/plans/completed/A.md\n")
+            if fold_active:
+                st.expect("test_case_only_rename_name_status_fold_pin_"
+                          + pin_label + "_old_side_warns", code, output,
+                          0, want_substr="case-only rename")
+            else:
+                st.expect("test_case_only_rename_name_status_fold_pin_"
+                          + pin_label + "_old_side_hard", code, output,
+                          1, want_substr="immutable path written"
+                          " without override")
+    finally:
+        globals()["_fold"] = real_fold
+
+    # The other_ct-is-not-None guard pinned: a bare channel line
+    # (change_type None) shares the entries list with a rename, and the
+    # sibling scan must SKIP it (is_licensed_transition(None) would
+    # raise and crash the run) rather than evaluate it.
+    root = make_fixture("bare-line-plus-rename", registry_header() +
+                        "| doc-a | no | completed | 2026-01-01 | r |"
+                        " docs/plans/completed/a.md |  |  |  |\n")
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text="docs/notes.md\n"
+                       "R  docs/plans/completed/a.md ->"
+                       " docs/plans/completed/A.md\n")
+    if folds:
+        st.expect("test_bare_line_sibling_skipped_not_crashed", code,
+                  output, 0, want_substr="case-only rename")
+    else:
+        st.expect("test_bare_line_sibling_skipped_not_crashed", code,
+                  output, 1,
+                  want_substr="immutable path written without override")
+
+    # Single-conjunct arms, each pinned separately under both fold
+    # pins (the case-only-rename fixture pins only the JOINT match).
+    # Arm 1, same fold but a DIFFERENT directory spelling: under the
+    # lower pin the pair is fold-equal, so only the same-directory
+    # conjunct keeps the old side HARD; dropping that conjunct flips
+    # this run to the case-only-rename warn (exit 0).
+    real_fold = _fold
+    try:
+        for pin_label, pinned_fold in (("lower", str.lower),
+                                       ("identity", lambda p: p)):
+            globals()["_fold"] = pinned_fold
+            root = make_fixture(
+                "rename-dir-conjunct-pin-" + pin_label,
+                registry_header() +
+                "| doc-a | no | completed | 2026-01-01 | r |"
+                " docs/plans/completed/a.md |  |  |  |\n")
+            code, output = run(["--root", str(root), "check-writes",
+                                "--stdin"],
+                               stdin_text="R  docs/plans/completed/a.md ->"
+                               " Docs/Plans/Completed/A.md\n")
+            st.expect("test_rename_dirname_conjunct_fold_pin_"
+                      + pin_label + "_stays_hard", code, output, 1,
+                      want_substr="immutable path written without"
+                      " override")
+    finally:
+        globals()["_fold"] = real_fold
+
+    # Arm 2, same directory but a fold-MISMATCHED sibling (a different
+    # filename, registered so its own rename letter passes as the
+    # licensed lifecycle add): only the fold-equality conjunct rejects
+    # the sibling; dropping it would let the old side warn and the
+    # whole run exit 0.
+    real_fold = _fold
+    try:
+        for pin_label, pinned_fold in (("lower", str.lower),
+                                       ("identity", lambda p: p)):
+            globals()["_fold"] = pinned_fold
+            root = make_fixture(
+                "rename-fold-conjunct-pin-" + pin_label,
+                registry_header() +
+                "| doc-a | no | completed | 2026-01-01 | r |"
+                " docs/plans/completed/a.md |  |  |  |\n"
+                "| doc-b | no | completed | 2026-01-01 | r |"
+                " docs/plans/completed/b.md |  |  |  |\n")
+            code, output = run(["--root", str(root), "check-writes",
+                                "--stdin"],
+                               stdin_text="R  docs/plans/completed/a.md ->"
+                               " docs/plans/completed/b.md\n")
+            st.expect("test_rename_fold_conjunct_fold_pin_"
+                      + pin_label + "_stays_hard", code, output, 1,
+                      want_substr="immutable path written without"
+                      " override")
+    finally:
+        globals()["_fold"] = real_fold
+
+    # Arm 3, an UNLICENSED sibling change type: name-status D of the
+    # registered src plus an untracked case-variant sibling ("??").
+    # Only the is_licensed_transition(other_ct) conjunct rejects the
+    # sibling; deleting it flips this run (under the lower pin) to the
+    # case-only-rename warn (exit 0), so the forbid below kills that
+    # mutation on every host.
+    real_fold = _fold
+    try:
+        for pin_label, pinned_fold in (("lower", str.lower),
+                                       ("identity", lambda p: p)):
+            globals()["_fold"] = pinned_fold
+            root = make_fixture(
+                "rename-licensed-ct-conjunct-pin-" + pin_label,
+                registry_header() +
+                "| doc-a | no | completed | 2026-01-01 | r |"
+                " docs/plans/completed/a.md |  |  |  |\n")
+            code, output = run(["--root", str(root), "check-writes",
+                                "--stdin"],
+                               stdin_text="D\tdocs/plans/completed/a.md\n"
+                               "?? docs/plans/completed/A.md\n")
+            st.expect("test_rename_licensed_ct_conjunct_fold_pin_"
+                      + pin_label + "_stays_hard", code, output, 1,
+                      want_substr="immutable path written without"
+                      " override",
+                      forbid_substr="case-only rename")
+    finally:
+        globals()["_fold"] = real_fold
+
+    # Arm 4, the outer change-type conjunct: a MODIFY of the registered
+    # src plus a licensed-add case-variant sibling is not a case-only
+    # rename; deleting the outer change_type == "D" conjunct flips this
+    # run (under the lower pin) to the rename warn (exit 0).
+    real_fold = _fold
+    try:
+        for pin_label, pinned_fold in (("lower", str.lower),
+                                       ("identity", lambda p: p)):
+            globals()["_fold"] = pinned_fold
+            root = make_fixture(
+                "rename-outer-d-conjunct-pin-" + pin_label,
+                registry_header() +
+                "| doc-a | no | completed | 2026-01-01 | r |"
+                " docs/plans/completed/a.md |  |  |  |\n")
+            code, output = run(["--root", str(root), "check-writes",
+                                "--stdin"],
+                               stdin_text="M  docs/plans/completed/a.md\n"
+                               "A  docs/plans/completed/A.md\n")
+            st.expect("test_rename_outer_d_conjunct_fold_pin_"
+                      + pin_label + "_stays_hard", code, output, 1,
+                      want_substr="immutable path written without"
+                      " override",
+                      forbid_substr="case-only rename")
+    finally:
+        globals()["_fold"] = real_fold
+
+    # A root-escaping facts value warns and falls back to the
     # documented default instead of silently disabling the gate family.
     escaping_facts = ("# fixture facts\n\n```toml\n"
                       "plans_completed_dir = \"../shared/completed/\"\n"
@@ -2033,7 +2588,37 @@ def _run_selftest_checks(st: Selftest) -> None:
     st.expect("test_root_escaping_facts_value_falls_back", code, output,
               1, want_substr="escapes the repo root")
 
-    # F9: a backslash-run of two or more before a pipe is a parse
+    # Absent facts module (plan 2026-09-13-doc-registry-validator-residuals,
+    # task 3): when the sibling facts_paths module is not importable, every
+    # facts key silently resolved to its default. A repo with non-default
+    # facts keys got the default dirs gated and the configured dirs ungated
+    # with NO diagnostic (the exception-arm warn never fired). The fallback
+    # must warn. _import_facts_paths is monkeypatched to None (the same
+    # save/set/finally idiom the cmd_selftest short-circuit pins use); the
+    # patch cannot hide the warn because the resolution path is the one
+    # under test.
+    root = make_fixture("facts-module-absent")
+    real_import_facts_paths = _import_facts_paths
+    try:
+        globals()["_import_facts_paths"] = lambda: None
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            cfg = resolve_config(root)
+    finally:
+        globals()["_import_facts_paths"] = real_import_facts_paths
+    st.check("test_facts_module_absent_warns",
+             "facts_paths module not importable" in err.getvalue()
+             and cfg == {
+                 "plans_completed_dir":
+                     normalize_repo_path(DEFAULT_PLANS_COMPLETED_DIR),
+                 "backlog_completed_dir":
+                     normalize_repo_path(DEFAULT_BACKLOG_COMPLETED_DIR),
+                 "doc_registry_rel":
+                     normalize_repo_path(DEFAULT_DOC_REGISTRY_REL),
+             },
+             "stderr=%r cfg=%r" % (err.getvalue(), cfg))
+
+    # A backslash-run of two or more before a pipe is a parse
     # error (fail closed on ambiguous Markdown escaping).
     run_line = ("| doc-a | no | completed | 2026-01-01 |"
                 " fix A \\\\| B | docs/plans/completed/a.md |"

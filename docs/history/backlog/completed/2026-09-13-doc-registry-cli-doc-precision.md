@@ -1,6 +1,6 @@
 # Backlog: doc-registry validator CLI declared-delta registry precision
 
-Status: open
+Status: done
 Origin: code review r6 of 2026-09-09-doc-registry-freeze-move-licensing-fold (docs/reviews/2026-09-13-2026-09-09-doc-registry-freeze-move-licensing-fold-code-review-r6.md, findings F1-F3, all Low non-blocking)
 
 - scripts/doc_registry_validator.py `_build_parser` docstring: declare the empty `--root=` value delta (behaves as no `--root`, repo-root search fallback; fail-neutral) or reject empty values with the flag-like check.
