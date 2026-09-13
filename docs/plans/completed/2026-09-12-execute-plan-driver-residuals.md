@@ -113,15 +113,15 @@ This task is read-only: probes only, no file edits, no commit; nothing to add to
 
 Run each probe from the repository root; any failure aborts execution with a drift report (do not adapt the plan mid-run; a drifted tree needs a fresh authoring pass).
 
-- [ ] Sequencing gate: for each of `2026-09-10-execute-plan-runtime-residuals` and `2026-09-11-execute-plan-runtime-guardrails`, `docs/plans/<name>.md` does not exist and `docs/plans/completed/<name>.md` does; on failure report `SEQUENCING: prior execution not landed` and stop
-- [ ] Pre-dedupe count baseline: `python3 -c 'import pathlib,re; t=pathlib.Path("scripts/execute_plan_runtime.py").read_text(); n=len(re.findall(r"\"-c\",\s+\"core[.]quotePath=false\"", t)); assert n == 5, n'`; a mismatch is count drift; stop and report
-- [ ] Non-reentrant lock landed: `grep -q "deliberately non-reentrant" scripts/execute_plan_runtime.py` (span verified unique on 2026-09-12)
-- [ ] Locked-conflict stale-claim landed: `grep -A10 "def _locked_mutation" scripts/execute_plan_runtime.py | grep -q "manifest mutation is held by another owner"`
-- [ ] Fresh post-window re-read landed: `grep -A2 "def _record_done_locked" scripts/execute_plan_runtime.py | grep -q "load_manifest(self.manifest_path)"`
-- [ ] Receipt contract line landed: `grep -q "anything else fails closed" scripts/runtime_capabilities.py` (span verified unique on 2026-09-12)
-- [ ] Approval fixtures in both suites: `grep -q "approval" scripts/test_execute_plan_runtime.py` and `grep -q "approval" scripts/test_execute_plan_runtime_codex.py`
-- [ ] Dissolved-machinery guard (all clean today, rc 1 on 2026-09-12): with the `expect_absent` helper from the Validation Commands block, `expect_absent "seed[_ ]token|sibling sweep|TOFU" scripts/execute_plan_runtime.py`, `expect_absent "codex-only" scripts/test_execute_plan_runtime.py`, `expect_absent "codex-only" scripts/test_execute_plan_runtime_codex.py`
-- [ ] Record the ledger result (all-green probe list) in the task log
+- [x] Sequencing gate: for each of `2026-09-10-execute-plan-runtime-residuals` and `2026-09-11-execute-plan-runtime-guardrails`, `docs/plans/<name>.md` does not exist and `docs/plans/completed/<name>.md` does; on failure report `SEQUENCING: prior execution not landed` and stop
+- [x] Pre-dedupe count baseline: `python3 -c 'import pathlib,re; t=pathlib.Path("scripts/execute_plan_runtime.py").read_text(); n=len(re.findall(r"\"-c\",\s+\"core[.]quotePath=false\"", t)); assert n == 5, n'`; a mismatch is count drift; stop and report
+- [x] Non-reentrant lock landed: `grep -q "deliberately non-reentrant" scripts/execute_plan_runtime.py` (span verified unique on 2026-09-12)
+- [x] Locked-conflict stale-claim landed: `grep -qF '_mutation_unavailable(self, "mutation:conflict")' scripts/execute_plan_runtime.py` and `grep -qF "manifest mutation is held by another owner" scripts/execute_plan_runtime.py`; drift-fold basis (2026-09-13, execution Task 1 pass 1, provenance corrected r1): the sentinel was extracted into `_mutation_unavailable` by the runtime-residuals close-out squash 0857056 (verified via `git log -S '_mutation_unavailable'`; already present before c9c833d), so the original `-A10` span probe was born dead at authoring: the span did not contain the sentinel even on the authoring tree; the replacement probes witness the delegation call and the sentinel presence
+- [x] Fresh post-window re-read landed: `grep -A2 "def _record_done_locked" scripts/execute_plan_runtime.py | grep -q "load_manifest(self.manifest_path)"`
+- [x] Receipt contract line landed: `grep -q "anything else fails closed" scripts/runtime_capabilities.py` (span verified unique on 2026-09-12)
+- [x] Approval fixtures in both suites: `grep -q "approval" scripts/test_execute_plan_runtime.py` and `grep -q "approval" scripts/test_execute_plan_runtime_codex.py`
+- [x] Dissolved-machinery guard (all clean today, rc 1 on 2026-09-12): with the `expect_absent` helper from the Validation Commands block, `expect_absent "seed[_ ]token|sibling sweep|TOFU" scripts/execute_plan_runtime.py`, `expect_absent "codex-only" scripts/test_execute_plan_runtime.py`, `expect_absent "codex-only" scripts/test_execute_plan_runtime_codex.py`
+- [x] Record the ledger result (all-green probe list) in the task log
 
 ### Task 2: RED then GREEN: dedupe `_git_changed_paths` onto `_git_worktree_entries`
 
@@ -129,15 +129,15 @@ Files:
 - `scripts/test_execute_plan_runtime.py` (two new tests in `ExecutePlanRuntimeTest`)
 - `scripts/execute_plan_runtime.py` (`_git_changed_paths` only)
 
-- [ ] `ExecutePlanRuntimeTest#test_changed_paths_delegates_to_worktree_entries`; given a committed baseline from `self.commit_file()`, an untracked file `notes.txt`, and a call-counting wrapper patched over the driver instance's `_git_worktree_entries` (the wrapper records one count per call and delegates to the original), expects `_git_changed_paths(baseline)` returns `["notes.txt"]` and the wrapper recorded exactly 1 call
-- [ ] `ExecutePlanRuntimeTest#test_changed_paths_returns_none_when_status_witness_raises`; given `_git_worktree_entries` patched with `side_effect=RuntimeError("git status witness failed")` and a valid committed baseline from `self.commit_file()`, expects `_git_changed_paths(baseline)` returns `None` and does not raise
-- [ ] Run → expect RED: `python3 -m unittest discover -s scripts -p 'test_execute_plan_runtime.py'`; exactly the two new tests fail (the spy records 0 calls today because `_git_changed_paths` runs its own status invocation, and the patched-raise method is never invoked so the `None` assertion fails); every pre-existing test passes. RED-today basis: the 2026-09-12 source performs no delegation on either the committed HEAD or the working tree
-- [ ] Implement: in `_git_changed_paths`, delete the re-inlined status invocation and its parse loop; obtain the status entries via `self._git_worktree_entries()` inside `try` / `except RuntimeError` and `return None` on the except path; keep the sorted-union return and the docstring contract unchanged
-- [ ] Run → expect GREEN: the same discovery command passes with the two new tests green and no pre-existing regressions
-- [ ] Commit: `refactor: dedupe the porcelain status invocation through _git_worktree_entries (quotePath pin 5 to 4)` with both files in one commit
+- [x] `ExecutePlanRuntimeTest#test_changed_paths_delegates_to_worktree_entries`; given a committed baseline from `self.commit_file()`, a second `self.commit_file()` after the baseline (committed `task-4.txt`, clean in status but present in the diff witness), untracked `notes.txt` and `t.txt`, and a call-counting wrapper patched over the driver instance's `_git_worktree_entries` (the wrapper records one count per call and delegates to the original), expects `_git_changed_paths(baseline)` returns the sorted union `["notes.txt", "t.txt", "task-4.txt"]` and the wrapper recorded exactly 1 call
+- [x] `ExecutePlanRuntimeTest#test_changed_paths_returns_none_when_status_witness_raises`; given `_git_worktree_entries` patched with `side_effect=RuntimeError("git status witness failed")` and a valid committed baseline from `self.commit_file()`, expects `_git_changed_paths(baseline)` returns `None` and does not raise
+- [x] Run → expect RED: `python3 -m unittest discover -s scripts -p 'test_execute_plan_runtime.py'`; exactly the two new tests fail (the spy records 0 calls today because `_git_changed_paths` runs its own status invocation, and the patched-raise method is never invoked so the `None` assertion fails); every pre-existing test passes. RED-today basis: the 2026-09-12 source performs no delegation on either the committed HEAD or the working tree
+- [x] Implement: in `_git_changed_paths`, delete the re-inlined status invocation and its parse loop; obtain the status entries via `self._git_worktree_entries()` inside `try` / `except RuntimeError` and `return None` on the except path; keep the sorted-union return and the docstring contract unchanged
+- [x] Run → expect GREEN: the same discovery command passes with the two new tests green and no pre-existing regressions
+- [x] Commit: `refactor: dedupe the porcelain status invocation through _git_worktree_entries (quotePath pin 5 to 4)` with both files in one commit
 
 ### Task 3: final validation sweep
 
 This task is read-only: it runs the Validation Commands block; no file edits, no commit.
 
-- [ ] Run the entire Validation Commands block → expect exit 0: both suites green, the HOME-pinned selftest green, the quotePath pin green at 4, and all three dissolved-machinery sweeps clean
+- [x] Run the entire Validation Commands block → expect exit 0: both suites green, the HOME-pinned selftest green, the quotePath pin green at 4, and all three dissolved-machinery sweeps clean

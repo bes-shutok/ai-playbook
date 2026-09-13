@@ -1,5 +1,6 @@
-Status: open
+Status: done
 Priority: high
+Disposition: done 2026-09-13 via docs/plans/completed/2026-09-12-execute-plan-driver-residuals.md Task 1: fail-closed ledger verified every r14 finding's recorded disposition on the execution-time tree (folded landed via rider r15-r18; dissolved machinery absent; superseded), all-green (review r1-r3, provenance and union-coverage folds landed); threat-model deferral per guidelines 64 honored.
 Created: 2026-09-11
 Origin: execution of docs/plans/2026-09-11-execute-plan-runtime-residuals-prose-residual-rider.md (Task 3 re-cert loop)
 

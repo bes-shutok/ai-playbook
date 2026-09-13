@@ -1607,17 +1607,11 @@ class RuntimeDriver:
         if diff.returncode != 0:
             return None
         paths = {line.strip() for line in diff.stdout.splitlines() if line.strip()}
-        status = subprocess.run(
-            ["git", "-c", "core.quotePath=false", "status", "--porcelain", "-z", "--untracked-files=all"],
-            cwd=self.repo_root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-        )
-        if status.returncode != 0:
+        try:
+            entries = self._git_worktree_entries()
+        except RuntimeError:
             return None
-        for _code, path in self._parse_porcelain_z(status.stdout):
+        for _code, path in entries:
             if path:
                 paths.add(path)
         return sorted(paths)

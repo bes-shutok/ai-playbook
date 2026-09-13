@@ -2722,5 +2722,42 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 self.assertIn("malformed declaration", joined)
 
 
+    def test_changed_paths_delegates_to_worktree_entries(self):
+        baseline = self.commit_file()
+        # A second commit after the baseline keeps the worktree clean in the
+        # status witness while still producing a tracked entry in
+        # ``git diff --name-only <baseline>`` (the diff half of the union).
+        self.commit_file(content="second committed change\n")
+        (self.root / "notes.txt").write_text("untracked note\n", encoding="utf-8")
+        (self.root / "t.txt").write_text("tracked edit\n", encoding="utf-8")
+        driver = self.driver()
+        original = driver._git_worktree_entries
+        calls = []
+
+        def counting_wrapper():
+            calls.append(1)
+            return original()
+
+        driver._git_worktree_entries = counting_wrapper
+        self.assertEqual(driver._git_changed_paths(baseline), ["notes.txt", "t.txt", "task-4.txt"])
+        self.assertEqual(len(calls), 1)
+
+    def test_changed_paths_returns_none_when_status_witness_raises(self):
+        baseline = self.commit_file()
+        driver = self.driver()
+        def failing_witness():
+            raise RuntimeError("git status witness failed")
+
+        driver._git_worktree_entries = failing_witness
+        self.assertIsNone(driver._git_changed_paths(baseline))
+
+    def test_changed_paths_returns_none_when_diff_witness_fails(self):
+        self.commit_file()
+        driver = self.driver()
+        # An unknown baseline revision makes ``git diff --name-only <baseline>``
+        # exit non-zero; the method must fail closed to None, not raise.
+        self.assertIsNone(driver._git_changed_paths("0" * 40))
+
+
 if __name__ == "__main__":
     unittest.main()

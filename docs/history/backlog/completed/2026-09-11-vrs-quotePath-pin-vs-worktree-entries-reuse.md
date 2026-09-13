@@ -1,7 +1,7 @@
 # Backlog: quotePath pin vs worktree-entries reuse in _git_changed_paths
 
-Status: open
-Workflow: backlog
+Status: done
+Disposition: done 2026-09-13 via docs/plans/completed/2026-09-12-execute-plan-driver-residuals.md Task 2: _git_changed_paths delegates the status witness to _git_worktree_entries (identical argv + shared parser, RuntimeError wrapped to preserve the None contract); quotePath pin re-derived 5 to 4 in the plan's Validation block (commit b4f7c97; review r1-r3 mutation-proven).
 Source: 2026-09-10-execute-plan-runtime-residuals code review r1, finding DS-4 (design-simplicity, Low), deferred by the review round's triage
 Severity: Low (blocked by a plan Validation pin)
 Scope: scripts/execute_plan_runtime.py
