@@ -1,6 +1,6 @@
 # Backlog: execute-plan driver residuals plan wording precision (r2 Lows)
 
-Status: open
+Status: done (closed moot 2026-09-13: the plan executed and archived as docs/plans/completed/2026-09-12-execute-plan-driver-residuals.md via squash c188b39; archived plan bodies are immutable, so the Assumption-3 and Ship-when wording Lows no longer have an actionable fix surface)
 Workflow: backlog
 Source: docs/reviews/2026-09-12-plan-review-execute-plan-driver-residuals-r2.md (ready=yes, zero blocking; both findings Low, non-blocking)
 Severity: Low (plan-text precision only; the plan is executable as certified)
