@@ -10,16 +10,21 @@ Block model note: content before the first heading (preamble) is not
 turned into a block and is therefore excluded from comparison. Heading
 detection is fence-aware: a `#`-prefixed line inside an open ``` or ~~~
 code fence is body text, not a heading boundary. A fence still open at
-EOF is a loud failure (exit 2).
+EOF is a loud failure (exit 2). Heading boundaries are h1 and h2;
+h3 and deeper headings are body text inside their block (amendment
+superseding the earlier h3-split behavior, which let internal h3
+subheadings split a duplicated rule into fragments that individually
+miss the ratio gate). A headingless file with no non-whitespace
+content parses to zero blocks.
 
 Blocks under MIN_RULE_WORDS (25) normalized words are skipped as
 presumed witness pointers and never match.
 
 Consumer contract note: WARNING on stderr with exit 0 is the designed
-cold start for direct personal-repo runs (a missing corpus or master).
-Gate consumers that pre-resolve both paths (like the done pre-commit
-audit) must treat any WARNING line as a placement-path resolution
-failure and stop.
+cold start for direct personal-repo runs (a missing corpus or master,
+or an existing file that parses to zero blocks). Gate consumers that
+pre-resolve both paths (like the done pre-commit audit) must treat any
+WARNING line as a placement-path resolution failure and stop.
 
 Matching runs difflib.SequenceMatcher with autojunk=False so
 popular-character discounting does not suppress near-verbatim
@@ -40,7 +45,7 @@ from dataclasses import dataclass
 DUPLICATE_RATIO = 0.90
 MIN_RULE_WORDS = 25
 
-_HEADING_RE = re.compile(r"^#{1,3} ")
+_HEADING_RE = re.compile(r"^#{1,2} ")
 _FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _ENUM_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+")
 _WS_RE = re.compile(r"\s+")
@@ -107,7 +112,7 @@ def parse_blocks(text: str) -> list[Block]:
     if fence_char is not None:
         raise UnclosedFenceError(fence_line)
     if not heading_indexes:
-        return [_make_block(lines, 1)] if lines else []
+        return [_make_block(lines, 1)] if "".join(lines).strip() else []
     blocks: list[Block] = []
     for pos, idx in enumerate(heading_indexes):
         end = heading_indexes[pos + 1] if pos + 1 < len(heading_indexes) else len(lines)

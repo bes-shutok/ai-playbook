@@ -27,12 +27,35 @@ RULE_B = (
 
 SHORT_POINTER = "See the company guidelines master for the rollout title scope rule."
 
+TAIL = (
+    "This witness tail documents where the rule was first applied and why "
+    "the audit trail keeps the rollout title as the scope of record for "
+    "every later incident trace."
+)
+
 # Exactly 25 words (MIN_RULE_WORDS); see test_exact_min_word_boundary_flagged.
 EXACT_MIN_BODY = (
     "A boundary rule body repeated verbatim in both files with exactly "
     "the minimum number of normalized words required for the duplicate "
     "floor to apply here"
 )
+
+# Shared clean-run fixture: a topically distinct rule body used by both
+# the no-duplicate pin and the empty-stderr pin so the pair cannot drift.
+DIVERGENT_BODY = (
+    "Before approving a rollout, verify that the feature flag "
+    "default matches the intended launch state, because a wrong "
+    "default silently ships the change to every environment and "
+    "defeats the staged ramp plan."
+)
+
+# Characterization fixtures pinning the two fence-closer conjuncts (same
+# character; nothing but whitespace after the run). The triple-backtick
+# runs sit mid-line inside the string literals; both bodies were probed
+# verbatim to exit 1 on the correct parser and exit 2 (unclosed fence)
+# under the corresponding single-conjunct mutant.
+FENCE_TILDE_BODY = f"{RULE_A}\n\n" + "```bash\n~~~\nprintf titles\n```\n"
+FENCE_TRAILING_BODY = f"{RULE_A}\n\n" + "```text\n```bash extra\n### fake heading\n```\n"
 
 
 def _run(*args: str) -> tuple[int, str, str]:
@@ -113,13 +136,7 @@ class CheckLessonScopeTest(unittest.TestCase):
         self.assertIn("DUPLICATE:", out)
 
     def test_divergent_rule_bodies_clean(self) -> None:
-        divergent = (
-            "Before approving a rollout, verify that the feature flag "
-            "default matches the intended launch state, because a wrong "
-            "default silently ships the change to every environment and "
-            "defeats the staged ramp plan."
-        )
-        self._write(self.corpus, self._corpus_with("12. Verify flag defaults before approval", divergent))
+        self._write(self.corpus, self._corpus_with("12. Verify flag defaults before approval", DIVERGENT_BODY))
         self._write(self.master, self._master_with("51. Keep rollout PR titles in sync", RULE_A))
         code, out, _err = _run(str(self.corpus), str(self.master))
         self.assertEqual(code, 0)
@@ -439,11 +456,88 @@ class CheckLessonScopeTest(unittest.TestCase):
         self.assertIn("WARNING:", err)
         self.assertIn(str(self.corpus), err)
 
-    def test_h3_heading_splits_blocks(self) -> None:
+    def test_whitespace_only_corpus_warns(self) -> None:
+        # A corpus wiped to blank lines must not parse as a silent clean
+        # block: same zero-block WARNING contract as an empty file.
+        self._write(self.corpus, "\n   \n")
+        self._write(self.master, self._master_with("51. Keep rollout PR titles in sync", RULE_A))
+        code, _out, err = _run(str(self.corpus), str(self.master))
+        self.assertEqual(code, 0)
+        self.assertIn("WARNING:", err)
+        self.assertIn(str(self.corpus), err)
+
+    def test_h3_heading_does_not_split_blocks(self) -> None:
+        # h3 and deeper headings are body text inside their block (the
+        # h1/h2 boundary amendment), so this parses to a single block.
         module = _load_validator_module()
         text = "# Top\nintro\n\n### Sub\nbody\n"
         blocks = module.parse_blocks(text)
-        self.assertEqual([block.line for block in blocks], [1, 4])
+        self.assertEqual([block.line for block in blocks], [1])
+
+    def test_h3_split_duplicate_evasion_closed(self) -> None:
+        # A duplicated rule whose corpus copy carries an internal h3
+        # subheading must not split into fragments that individually miss
+        # the 25-word floor or the ratio gate; the pair is a duplicate.
+        self._write(self.corpus, self._corpus_with("12. Rollout title rule", f"{RULE_A}\n\n### Subsection\n\n{TAIL}"))
+        self._write(self.master, self._master_with("51. Rollout title rule", f"{RULE_A}\n\n{TAIL}"))
+        code, out, _err = _run(str(self.corpus), str(self.master))
+        self.assertEqual(code, 1)
+        self.assertIn("DUPLICATE:", out)
+
+    def test_tilde_line_does_not_close_backtick_fence(self) -> None:
+        # Pins the same-character closer conjunct: a `~~~` line does not
+        # close an open ``` fence, so the verbatim duplicated rule stays
+        # one block per file and is flagged. Under a mutant that closes on
+        # any fence character, the trailing ``` line opens an unclosed
+        # fence and the run exits 2 instead.
+        self._write(self.corpus, self._corpus_with("12. Rule", FENCE_TILDE_BODY))
+        self._write(self.master, self._master_with("51. Rule", FENCE_TILDE_BODY))
+        code, out, err = _run(str(self.corpus), str(self.master))
+        self.assertEqual(code, 1)
+        self.assertIn("DUPLICATE:", out)
+        self.assertEqual(err, "")
+
+    def test_fence_line_with_trailing_text_does_not_close(self) -> None:
+        # Pins the no-trailing-content closer conjunct: a ```-run line
+        # with trailing info text ("```bash extra") does not close the
+        # open fence, so the duplicated rule (including the in-fence fake
+        # heading) stays one block per file and is flagged. Under a mutant
+        # that closes on any trailing text, the final ``` opens an
+        # unclosed fence and the run exits 2 instead.
+        self._write(self.corpus, self._corpus_with("12. Rule", FENCE_TRAILING_BODY))
+        self._write(self.master, self._master_with("51. Rule", FENCE_TRAILING_BODY))
+        code, out, err = _run(str(self.corpus), str(self.master))
+        self.assertEqual(code, 1)
+        self.assertIn("DUPLICATE:", out)
+        self.assertEqual(err, "")
+
+    def test_zero_block_master_warns(self) -> None:
+        # Master-side mirror of test_zero_block_corpus_warns: an existing
+        # master file that parses to zero blocks warns on stderr (done
+        # WARNING semantics stop the commit); exit stays 0 so direct
+        # personal-repo runs keep the cold-start contract.
+        self._write(self.corpus, self._corpus_with("12. Keep rollout PR titles in sync", RULE_A))
+        self._write(self.master, "")
+        code, _out, err = _run(str(self.corpus), str(self.master))
+        self.assertEqual(code, 0)
+        self.assertIn("WARNING:", err)
+        self.assertIn(str(self.master), err)
+
+    def test_warning_lines_only_in_documented_conditions(self) -> None:
+        # WARNING is emitted only for a missing file or a zero-block
+        # file; a clean run and a duplicate run must both keep stderr
+        # completely empty so gate consumers stop on WARNING lines only
+        # in the documented cold-start/zero-block conditions.
+        self._write(self.corpus, self._corpus_with("12. Verify flag defaults before approval", DIVERGENT_BODY))
+        self._write(self.master, self._master_with("51. Keep rollout PR titles in sync", RULE_A))
+        code, _out, err = _run(str(self.corpus), str(self.master))
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        self._write(self.corpus, self._corpus_with("12. Keep rollout PR titles in sync", RULE_A))
+        self._write(self.master, self._master_with("51. Keep rollout PR titles in sync", RULE_A))
+        code, _out, err = _run(str(self.corpus), str(self.master))
+        self.assertEqual(code, 1)
+        self.assertEqual(err, "")
 
 
 if __name__ == "__main__":

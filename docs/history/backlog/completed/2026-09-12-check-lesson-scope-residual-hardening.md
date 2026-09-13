@@ -1,6 +1,6 @@
 # check_lesson_scope: residual hardening from the r5 exit round
 
-Status: open
+Status: done
 Workflow: backlog
 Source: execute-plan Phase 3 round 5 review of the learn-company-scope-placement plan (8 valid non-blocking findings deferred at the max-round cap per the backlog-deferral default)
 Severity: Medium (family; per-finding severity below)

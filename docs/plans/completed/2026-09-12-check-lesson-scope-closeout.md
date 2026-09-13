@@ -143,13 +143,13 @@ echo "validation: all checks passed"
 Files:
 - `scripts/test_check_lesson_scope.py`
 
-- [ ] Add module constant `TAIL` with the exact probed text: `"This witness tail documents where the rule was first applied and why the audit trail keeps the rollout title as the scope of record for every later incident trace."`
-- [ ] Add `CheckLessonScopeTest#test_whitespace_only_corpus_warns`; given a corpus file whose full content is `"\n   \n"` and a normal master, expects exit 0, `WARNING:` on stderr, and the corpus path named in stderr (same contract as `test_zero_block_corpus_warns`).
-- [ ] Add `CheckLessonScopeTest#test_h3_split_duplicate_evasion_closed` with the exact probed construction (probed 2026-09-12: exit 0 today, exit 1 after Task 2):
-- [ ] corpus body built as `self._write(self.corpus, self._corpus_with("12. Rollout title rule", f"{RULE_A}\n\n### Subsection\n\n{TAIL}"))`
-- [ ] master body built as `self._write(self.master, self._master_with("51. Rollout title rule", f"{RULE_A}\n\n{TAIL}"))`
-- [ ] expects exit 1 with `DUPLICATE:` on stdout (the h3 must not split the corpus rule into fragments that miss the gate).
-- [ ] Run `python3 -m unittest discover -s scripts -p 'test_check_lesson_scope.py'`; expect exactly the two new tests RED (probed 2026-09-12: the whitespace corpus run exits 0 with empty stderr, and the h3 repro exits 0 with no DUPLICATE line) and all 32 existing tests GREEN. No commit yet; Task 2 commits tests and fix together.
+- [x] Add module constant `TAIL` with the exact probed text: `"This witness tail documents where the rule was first applied and why the audit trail keeps the rollout title as the scope of record for every later incident trace."`
+- [x] Add `CheckLessonScopeTest#test_whitespace_only_corpus_warns`; given a corpus file whose full content is `"\n   \n"` and a normal master, expects exit 0, `WARNING:` on stderr, and the corpus path named in stderr (same contract as `test_zero_block_corpus_warns`).
+- [x] Add `CheckLessonScopeTest#test_h3_split_duplicate_evasion_closed` with the exact probed construction (probed 2026-09-12: exit 0 today, exit 1 after Task 2):
+- [x] corpus body built as `self._write(self.corpus, self._corpus_with("12. Rollout title rule", f"{RULE_A}\n\n### Subsection\n\n{TAIL}"))`
+- [x] master body built as `self._write(self.master, self._master_with("51. Rollout title rule", f"{RULE_A}\n\n{TAIL}"))`
+- [x] expects exit 1 with `DUPLICATE:` on stdout (the h3 must not split the corpus rule into fragments that miss the gate).
+- [x] Run `python3 -m unittest discover -s scripts -p 'test_check_lesson_scope.py'`; expect exactly the two new tests RED (probed 2026-09-12: the whitespace corpus run exits 0 with empty stderr, and the h3 repro exits 0 with no DUPLICATE line) and all 32 existing tests GREEN. Commit deviation note (execution 2026-09-13): the runtime driver's done handoff requires a per-task commit_identity, so the RED tests were committed alone as e15a324 instead of riding Task 2's commit; the suite at e15a324 is intentionally RED (2 failing) and GREEN from 86e2101 onward.
 
 ### Task 2: GREEN: `#{1,2}` boundaries and the blank-headingless zero-block branch
 
@@ -157,27 +157,27 @@ Files:
 - `scripts/check_lesson_scope.py`
 - `scripts/test_check_lesson_scope.py`
 
-- [ ] Change `_HEADING_RE` to `re.compile(r"^#{1,2} ")`.
-- [ ] Change the headingless branch of `parse_blocks` to `return [_make_block(lines, 1)] if "".join(lines).strip() else []` so an all-blank headingless file parses to zero blocks.
-- [ ] Extend the module docstring's block model note with the exact sentences: `Heading boundaries are h1 and h2; h3 and deeper headings are body text inside their block (amendment superseding the earlier h3-split behavior, which let internal h3 subheadings split a duplicated rule into fragments that individually miss the ratio gate).` and `A headingless file with no non-whitespace content parses to zero blocks.`
-- [ ] Flip the pin: rename `test_h3_heading_splits_blocks` to `test_h3_heading_does_not_split_blocks`; given `parse_blocks("# Top\nintro\n\n### Sub\nbody\n")`, expects a single block whose line is `1` (the h3 stays body text).
-- [ ] Run the suite; expect all 34 tests GREEN.
-- [ ] Commit: `validator: close zero-block and h3-split evasion gaps (r5 findings 1-2)`
+- [x] Change `_HEADING_RE` to `re.compile(r"^#{1,2} ")`.
+- [x] Change the headingless branch of `parse_blocks` to `return [_make_block(lines, 1)] if "".join(lines).strip() else []` so an all-blank headingless file parses to zero blocks.
+- [x] Extend the module docstring's block model note with the exact sentences: `Heading boundaries are h1 and h2; h3 and deeper headings are body text inside their block (amendment superseding the earlier h3-split behavior, which let internal h3 subheadings split a duplicated rule into fragments that individually miss the ratio gate).` and `A headingless file with no non-whitespace content parses to zero blocks.`
+- [x] Flip the pin: rename `test_h3_heading_splits_blocks` to `test_h3_heading_does_not_split_blocks`; given `parse_blocks("# Top\nintro\n\n### Sub\nbody\n")`, expects a single block whose line is `1` (the h3 stays body text).
+- [x] Run the suite; expect all 34 tests GREEN.
+- [x] Commit: `validator: close zero-block and h3-split evasion gaps (r5 findings 1-2)`
 
 ### Task 3: characterization pins for the fence conjuncts and the WARNING contract
 
 Files:
 - `scripts/test_check_lesson_scope.py`
 
-- [ ] Add module constants with the exact probed fixture bodies (the triple-backtick runs sit mid-line inside the strings):
-- [ ] `FENCE_TILDE_BODY = f"{RULE_A}\n\n` + three-backtick-open + `bash` + newline + `~~~` + newline + `printf titles` + newline + three-backtick-close + `\n"` (probed verbatim 2026-09-12)
-- [ ] `FENCE_TRAILING_BODY = f"{RULE_A}\n\n` + three-backtick-open + `text` + newline + three-backtick-open + `bash extra` + newline + `### fake heading` + newline + three-backtick-close + `\n"` (probed verbatim 2026-09-12)
-- [ ] Add `CheckLessonScopeTest#test_tilde_line_does_not_close_backtick_fence`; given corpus and master blocks whose shared body is `FENCE_TILDE_BODY` under `12. Rule` / `51. Rule` headings, expects exit 1 with `DUPLICATE:` on stdout and empty stderr (pins the same-character closer conjunct; probed 2026-09-12 to exit 2 under a mutant that drops the conjunct).
-- [ ] Add `CheckLessonScopeTest#test_fence_line_with_trailing_text_does_not_close`; given corpus and master blocks whose shared body is `FENCE_TRAILING_BODY` under `12. Rule` / `51. Rule` headings, expects exit 1 with `DUPLICATE:` on stdout and empty stderr (pins the no-trailing-content conjunct; probed 2026-09-12 to exit 2 under a mutant that drops the conjunct).
-- [ ] Add `CheckLessonScopeTest#test_zero_block_master_warns`; given an empty master file and a normal corpus, expects exit 0, `WARNING:` on stderr, and the master path named in stderr (mirror of `test_zero_block_corpus_warns`).
-- [ ] Add `CheckLessonScopeTest#test_warning_lines_only_in_documented_conditions`; given (a) the divergent-body clean pair from `test_divergent_rule_bodies_clean` and (b) the verbatim `RULE_A` duplicate pair, expects exit 0 and exit 1 respectively with completely empty stderr in both runs (WARNING is emitted only for a missing file or a zero-block file, never on clean or duplicate outcomes).
-- [ ] Run the suite; expect all 38 tests GREEN immediately (these are characterization pins, verified GREEN on today's tree at authoring; their value is mutation kill, with both mutant exits recorded in the Gist).
-- [ ] Commit: `tests: pin fence-closer conjuncts and the WARNING emission contract (r5 findings 3-5, 7)`
+- [x] Add module constants with the exact probed fixture bodies (the triple-backtick runs sit mid-line inside the strings):
+- [x] `FENCE_TILDE_BODY = f"{RULE_A}\n\n` + three-backtick-open + `bash` + newline + `~~~` + newline + `printf titles` + newline + three-backtick-close + `\n"` (probed verbatim 2026-09-12)
+- [x] `FENCE_TRAILING_BODY = f"{RULE_A}\n\n` + three-backtick-open + `text` + newline + three-backtick-open + `bash extra` + newline + `### fake heading` + newline + three-backtick-close + `\n"` (probed verbatim 2026-09-12)
+- [x] Add `CheckLessonScopeTest#test_tilde_line_does_not_close_backtick_fence`; given corpus and master blocks whose shared body is `FENCE_TILDE_BODY` under `12. Rule` / `51. Rule` headings, expects exit 1 with `DUPLICATE:` on stdout and empty stderr (pins the same-character closer conjunct; probed 2026-09-12 to exit 2 under a mutant that drops the conjunct).
+- [x] Add `CheckLessonScopeTest#test_fence_line_with_trailing_text_does_not_close`; given corpus and master blocks whose shared body is `FENCE_TRAILING_BODY` under `12. Rule` / `51. Rule` headings, expects exit 1 with `DUPLICATE:` on stdout and empty stderr (pins the no-trailing-content conjunct; probed 2026-09-12 to exit 2 under a mutant that drops the conjunct).
+- [x] Add `CheckLessonScopeTest#test_zero_block_master_warns`; given an empty master file and a normal corpus, expects exit 0, `WARNING:` on stderr, and the master path named in stderr (mirror of `test_zero_block_corpus_warns`).
+- [x] Add `CheckLessonScopeTest#test_warning_lines_only_in_documented_conditions`; given (a) the divergent-body clean pair from `test_divergent_rule_bodies_clean` and (b) the verbatim `RULE_A` duplicate pair, expects exit 0 and exit 1 respectively with completely empty stderr in both runs (WARNING is emitted only for a missing file or a zero-block file, never on clean or duplicate outcomes).
+- [x] Run the suite; expect all 38 tests GREEN immediately (these are characterization pins, verified GREEN on today's tree at authoring; their value is mutation kill, with both mutant exits recorded in the Gist).
+- [x] Commit: `tests: pin fence-closer conjuncts and the WARNING emission contract (r5 findings 3-5, 7)`
 
 ### Task 4: docs: README exit-2 row and done 4a.1 sentence deletion
 
@@ -185,17 +185,17 @@ Files:
 - `README.md`
 - `agents/skills/done/SKILL.md`
 
-- [ ] In the `scripts/check_lesson_scope.py` row of the README Scripts table, change the parenthetical `(exit 0 clean/cold start, 1 duplicate, 2 usage/IO error)` to `(exit 0 clean/cold start, 1 duplicate, 2 usage/IO error or unclosed code fence)`.
-- [ ] In done Step 3 item 4a.1, delete exactly the sentence `The validator is sized for prose corpora; an unusually long run signals a degenerate (for example fence-damaged or headingless) corpus and is treated as a tool failure per the sentence above.` (the surrounding Outcome semantics sentences stay untouched).
-- [ ] Run Validation Commands checks 2 and 3; expect both to pass (check 3 is RED-today and flips with this task).
-- [ ] Commit: `docs: align README exit-2 row and done audit prose with validator contract (r5 findings 6, 8)`
+- [x] In the `scripts/check_lesson_scope.py` row of the README Scripts table, change the parenthetical `(exit 0 clean/cold start, 1 duplicate, 2 usage/IO error)` to `(exit 0 clean/cold start, 1 duplicate, 2 usage/IO error or unclosed code fence)`.
+- [x] In done Step 3 item 4a.1, delete exactly the sentence `The validator is sized for prose corpora; an unusually long run signals a degenerate (for example fence-damaged or headingless) corpus and is treated as a tool failure per the sentence above.` (the surrounding Outcome semantics sentences stay untouched).
+- [x] Run Validation Commands checks 2 and 3; expect both to pass (check 3 is RED-today and flips with this task).
+- [x] Commit: `docs: align README exit-2 row and done audit prose with validator contract (r5 findings 6, 8)`
 
 ### Task 5: runtime deployment of the validator symlink
 
 Files:
 - `~/.ai-playbook/scripts/check_lesson_scope.py` *(machine-local runtime symlink; no repo-tracked file changes, so this task ends without a commit)*
 
-- [ ] Create the idempotent per-file symlink, keeping symlink semantics (never a second copy): `ln -sfn "$(git rev-parse --show-toplevel)/scripts/check_lesson_scope.py" "$HOME/.ai-playbook/scripts/check_lesson_scope.py"`
-- [ ] exception confirmed by user: "Standing pre-authorization: accept all recommended options and suggestions throughout without asking me." (2026-09-12 scheduled authoring prompt, automation-c1c77b40); item: create the runtime validator symlink; target/environment: `~/.ai-playbook/scripts/` on the machine running execution; confirmation time/session: 2026-09-12, authoring session for this plan; why executable now: the repo copy exists at `scripts/check_lesson_scope.py`, the runtime dir exists on this machine with the all-symlink registry model (23 sibling symlinks verified 2026-09-12), and the consumer (done 4a) runs on this machine; completion evidence: `test -L` plus the fixture trio through the runtime path exiting 0/1/2, both in this task's checklist and in Validation Commands check 5.
-- [ ] Verify with `test -L` and `readlink` that the path is a symlink resolving into the repo checkout (Validation Commands check 5 does this fail-closed).
-- [ ] Run the full Validation Commands block; expect exit 0 end to end including the runtime fixture trio.
+- [x] Create the idempotent per-file symlink, keeping symlink semantics (never a second copy): `ln -sfn "$(git rev-parse --show-toplevel)/scripts/check_lesson_scope.py" "$HOME/.ai-playbook/scripts/check_lesson_scope.py"`
+- [x] exception confirmed by user: "Standing pre-authorization: accept all recommended options and suggestions throughout without asking me." (2026-09-12 scheduled authoring prompt, automation-c1c77b40); item: create the runtime validator symlink; target/environment: `~/.ai-playbook/scripts/` on the machine running execution; confirmation time/session: 2026-09-12, authoring session for this plan; why executable now: the repo copy exists at `scripts/check_lesson_scope.py`, the runtime dir exists on this machine with the all-symlink registry model (23 sibling symlinks verified 2026-09-12), and the consumer (done 4a) runs on this machine; completion evidence: `test -L` plus the fixture trio through the runtime path exiting 0/1/2, both in this task's checklist and in Validation Commands check 5.
+- [x] Verify with `test -L` and `readlink` that the path is a symlink resolving into the repo checkout (Validation Commands check 5 does this fail-closed).
+- [x] Run the full Validation Commands block; expect exit 0 end to end including the runtime fixture trio.

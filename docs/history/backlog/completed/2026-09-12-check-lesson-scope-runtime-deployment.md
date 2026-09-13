@@ -1,6 +1,6 @@
 # Deploy check_lesson_scope.py to runtime scripts dirs
 
-Status: open
+Status: done
 Workflow: backlog
 Source: execute-plan Phase 3 r1 review of the learn-company-scope-placement plan (finding F4, security#validator-not-deployed-to-default-path)
 Severity: Medium
