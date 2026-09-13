@@ -125,6 +125,7 @@ Stdlib only. Repo-relative paths only; no PII.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import datetime
 import io
@@ -136,6 +137,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 DEFAULT_PLANS_COMPLETED_DIR = "docs/plans/completed/"
 DEFAULT_BACKLOG_COMPLETED_DIR = "docs/history/backlog/completed/"
@@ -263,7 +265,7 @@ def resolve_config(root: Path) -> dict:
     return cfg
 
 
-def resolve_repo_root(explicit: str | None) -> Path:
+def resolve_repo_root(explicit: Optional[str]) -> Path:
     """Resolve the repo root: explicit flag, else git toplevel, else cwd."""
     if explicit:
         return Path(explicit).expanduser().resolve()
@@ -295,7 +297,7 @@ class RegistryParseError(Exception):
     """Malformed registry table (unknown header or shifted row)."""
 
 
-def parse_registry(path: Path) -> list[dict] | None:
+def parse_registry(path: Path) -> Optional[list[dict]]:
     """Parse the registry Markdown table; None when the file is absent.
 
     Returns a list of row dicts keyed by REGISTRY_COLUMNS. The header
@@ -310,7 +312,7 @@ def parse_registry(path: Path) -> list[dict] | None:
     if not path.is_file():
         return None
     rows: list[dict] = []
-    col_order: list[str] | None = None
+    col_order: Optional[list[str]] = None
     for lineno, line in enumerate(path.read_text(encoding="utf-8")
                                   .splitlines(), start=1):
         stripped = line.strip()
@@ -483,7 +485,7 @@ def audit_note_valid(audit: str) -> bool:
     return approved <= datetime.date.today() + datetime.timedelta(days=1)
 
 
-def parse_change_line(line: str) -> list[tuple[str, str | None]]:
+def parse_change_line(line: str) -> list[tuple[str, Optional[str]]]:
     """Parse one stdin line into a list of ``(path, change_type)``
     entries (renames yield two: old side then new side).
 
@@ -704,7 +706,7 @@ def cmd_validate(root: Path, cfg: dict, out: io.StringIO) -> int:
     return 1 if hard else 0
 
 
-def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, str | None]],
+def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, Optional[str]]],
                      out: io.StringIO) -> int:
     """Gate changed paths (with optional change-type letters) against
     immutable completed-history directories.
@@ -891,84 +893,138 @@ def run(argv: list[str], stdin_text: str = "") -> tuple[int, str]:
     """Execute the CLI in-process; returns (exit_code, stdout_text)."""
     buf = io.StringIO()
     with contextlib.redirect_stderr(buf):
-        code = _dispatch(argv, stdin_text, buf)
+        try:
+            code = _dispatch(argv, stdin_text, buf)
+        except SystemExit as exc:
+            # argparse signals usage errors via SystemExit(2); keep the
+            # (code, output) contract instead of raising.
+            code = exc.code if isinstance(exc.code, int) else 2
     return code, buf.getvalue()
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser.
+
+    Declared fail-closed deltas versus the hand-rolled parser:
+    abbreviation matching is disabled (allow_abbrev=False; only exact
+    flags ever worked, so no working invocation changes), and --stdin is
+    accepted only on check-writes (previously it was silently ignored on
+    validate/inventory and honored before the subcommand; both spellings
+    are now usage exit 2).
+
+    Further argparse-native deltas beyond those two (r1 F2):
+    - ``-h``/``--help`` exits 0 with argparse help. Positional nuance
+      (r5 F2): ``-h`` BEFORE the subcommand was an unknown-flag exit 2
+      on main; ``-h`` AFTER a subcommand (e.g. ``check-writes -h``) was
+      gated as a literal path on main and now renders argparse help
+      (exit 0, no gating).
+    - ``--root=PATH`` (``=``-attached form) is accepted (was exit 2).
+    - Extra positionals after ``validate``/``inventory`` now exit 2
+      (argparse rejects unrecognized arguments; fail-closed direction).
+    - Negative-number-like tokens (e.g. ``-5``) are accepted as
+      check-writes paths (argparse negative-number heuristic; fail-open
+      cosmetic only: such a token can never match an immutable
+      repo-relative path).
+    - ``--root`` followed by an option-like token (e.g.
+      ``--root --selftest``) now exits 2 ("expected one argument");
+      previously the token was silently consumed as the root value.
+    - ``--root=--selftest`` (``=``-attached form) with a flag-like
+      value is rejected with usage exit 2, same as the spaced form
+      (r5 F3 collapsed the asymmetry: on main the attached form was
+      resolved as a path and could fall back to the repo-root search,
+      the one fail-open direction; both spellings now exit 2).
+    - ``-h``/``--help`` help text prints to real stdout (outside
+      run()'s captured-output contract); main() is unaffected.
+    - Single-dash non-numeric tokens (e.g. ``-x``) are now usage exit 2
+      as unknown flags (argparse); only negative-number-like tokens
+      survive as check-writes paths (argparse negative-number
+      heuristic). ``-h``/``--help`` is the exception to this rule: after
+      a subcommand it renders help exit 0 (r5 F2), where main gated it
+      as a literal path.
+    """
+    parser = argparse.ArgumentParser(
+        prog="doc_registry_validator.py",
+        description="Validate the document registry and gate writes.",
+        epilog=USAGE.strip(),
+        allow_abbrev=False,
+    )
+    parser.add_argument("--root", metavar="PATH")
+    sub = parser.add_subparsers(dest="subcommand", required=True,
+                                metavar="{validate|check-writes|inventory}")
+    # allow_abbrev is NOT inherited from the top-level parser; each
+    # subparser must set it or abbreviation matching silently returns
+    # (r4 F1: `check-writes --std` resolved to --stdin instead of
+    # exiting 2 as the declared delta promises).
+    sub.add_parser("validate", help="check the registry table",
+                   allow_abbrev=False)
+    cw = sub.add_parser("check-writes", help="gate changed paths",
+                        allow_abbrev=False)
+    cw.add_argument("--stdin", action="store_true",
+                    help="read change lines from stdin (check-writes only)")
+    cw.add_argument("paths", nargs="*", metavar="path")
+    sub.add_parser("inventory", help="list registry coverage gaps",
+                   allow_abbrev=False)
+    return parser
 
 
 def _dispatch(argv: list[str], stdin_text: str, out: io.StringIO) -> int:
     args = list(argv)
-    root_explicit: str | None = None
-    channel: str | None = None
-    paths: list[str] = []
+    # A literal `--` argument stays a usage error rather than being
+    # consumed by argparse as an end-of-options separator. The guard
+    # runs BEFORE the pre-scan short-circuit below so a `--` anywhere
+    # (e.g. `--root -- --selftest`) cannot skip past it.
+    if "--" in args:
+        print("error: unknown flag: --\n%s" % USAGE, file=sys.stderr)
+        return 2
+    # A bare --selftest token before any other token short-circuits
+    # before subparser validation (even `--selftest --bogus` runs the
+    # selftest). The scan is left-to-right and value-aware (r1 F1):
+    # `--root` consumes the NEXT token as its value, so a `--selftest`
+    # there is not treated as bare and the scan continues; argparse
+    # then re-parses the full argv and rejects a flag-like `--root`
+    # value (exit 2, fail-closed — the old parser blindly consumed
+    # it). A bare `--selftest` AFTER a consumed `--root VALUE` pair
+    # still short-circuits here (matching the old parser; read-only),
+    # so the flag-like-value exit-2 delta applies only when `--selftest`
+    # is itself the consumed `--root` value (r5 F4). ANY other token
+    # (flag, positional, `--`, `--stdin`) breaks
+    # the scan so the invocation falls through to argparse, which
+    # exit-2s on unknown flags; `check-writes --selftest` still exits 2
+    # via the subparser.
     i = 0
     while i < len(args):
-        arg = args[i]
-        if arg.startswith("--"):
-            if arg == "--root":
-                i += 1
-                if i >= len(args):
-                    print("error: --root requires a value\n" + USAGE,
-                          file=sys.stderr)
-                    return 2
-                root_explicit = args[i]
-            elif arg == "--stdin":
-                if channel is not None:
-                    print("error: conflicting input channels\n" + USAGE,
-                          file=sys.stderr)
-                    return 2
-                channel = "stdin"
-            elif arg == "--selftest":
-                return cmd_selftest()
-            else:
-                print("error: unknown flag: %s\n%s" % (arg, USAGE),
-                      file=sys.stderr)
-                return 2
-        elif arg in ("validate", "check-writes", "inventory"):
-            subcommand = arg
-            rest = args[i + 1:]
-            for rest_arg in rest:
-                if rest_arg.startswith("--"):
-                    if rest_arg == "--stdin":
-                        if channel is not None and channel != "stdin":
-                            print("error: conflicting input channels\n"
-                                  + USAGE, file=sys.stderr)
-                            return 2
-                        channel = "stdin"
-                    elif rest_arg == "--root":
-                        print("error: --root must precede the subcommand\n"
-                              + USAGE, file=sys.stderr)
-                        return 2
-                    else:
-                        print("error: unknown flag: %s\n%s" % (rest_arg, USAGE),
-                              file=sys.stderr)
-                        return 2
-                else:
-                    paths.append(rest_arg)
-            break
-        else:
-            print("error: unrecognized argument: %s\n%s" % (arg, USAGE),
-                  file=sys.stderr)
-            return 2
-        i += 1
-    else:
-        print("error: missing subcommand\n" + USAGE, file=sys.stderr)
+        if args[i] == "--root":
+            i += 2  # consume the flag and its value; a missing value
+            continue  # is argparse's error to report below
+        if args[i] == "--selftest":
+            return cmd_selftest()
+        break
+
+    ns = _build_parser().parse_args(args)
+    root_explicit = ns.root
+    # r5 F3: a flag-like --root value (only reachable via the `=`
+    # attached form; the spaced form is already argparse's usage error)
+    # collapses the old fail-open asymmetry: both spellings now exit 2.
+    if root_explicit is not None and root_explicit.startswith("-"):
+        print("error: flag-like --root value %r rejected\n%s"
+              % (root_explicit, USAGE), file=sys.stderr)
         return 2
 
     root = resolve_repo_root(root_explicit)
     cfg = resolve_config(root)
 
-    if subcommand == "validate":
+    if ns.subcommand == "validate":
         return cmd_validate(root, cfg, out)
-    if subcommand == "inventory":
+    if ns.subcommand == "inventory":
         return cmd_inventory(root, cfg, out)
     # check-writes: gather (path, change-type) entries from the channel.
-    if channel == "stdin" and paths:
+    if ns.stdin and ns.paths:
         # F7: key the conflict check on channel state, not parsed
         # entries; empty stdin must not silently discard argv paths.
         print("error: --stdin cannot be combined with argv paths\n"
               + USAGE, file=sys.stderr)
         return 2
-    if channel == "stdin":
+    if ns.stdin:
         text = stdin_text if stdin_text else sys.stdin.read()
         entries = []
         try:
@@ -977,8 +1033,8 @@ def _dispatch(argv: list[str], stdin_text: str, out: io.StringIO) -> int:
         except ChangeLineError as exc:
             print("error: %s\n%s" % (exc, USAGE), file=sys.stderr)
             return 2
-    elif paths:
-        entries = [(p, None) for p in paths]
+    elif ns.paths:
+        entries = [(p, None) for p in ns.paths]
     else:
         print("error: check-writes needs paths (argv or --stdin)\n"
               + USAGE, file=sys.stderr)
@@ -994,7 +1050,7 @@ def _dispatch(argv: list[str], stdin_text: str, out: io.StringIO) -> int:
     return cmd_check_writes(root, cfg, entries, out)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     args = sys.argv[1:] if argv is None else list(argv)
     code, output = run(args)
     if output:
@@ -1017,9 +1073,9 @@ doc_registry_rel = "docs/maintenance/document-registry.md"
 
 
 def make_fixture(prefix: str, registry_body: str = "",
-                 extra_files: list[str] | None = None,
+                 extra_files: Optional[list[str]] = None,
                  with_facts: bool = True,
-                 facts_body: str | None = None) -> Path:
+                 facts_body: Optional[str] = None) -> Path:
     """Build a hermetic repo-like tree under a fresh temp dir.
 
     Every root is registered in ``_FIXTURE_ROOTS``; ``cmd_selftest``
@@ -1052,7 +1108,7 @@ def registry_header() -> str:
 
 
 class Selftest:
-    def __init__(self) -> None:
+    def __init__(self):
         self.failures: list[str] = []
         self.count = 0
 
@@ -1195,6 +1251,28 @@ def _run_selftest_checks(st: Selftest) -> None:
           and "HARD immutable path written" in output)
     st.check("test_immutable_write_override_living_row_fails", ok,
              "exit=%d output=%r" % (code, output))
+
+    # check-writes: a freeze move (R-letter rename) arriving at the dst
+    # named by a superseded row's successor field is licensed at warn tier.
+    root = make_fixture("freeze-move", registry_header() +
+                        "| doc-s | no | superseded | 2026-01-01 | r |"
+                        " docs/plans/completed/a.md | doc-new |  |  |\n")
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text=
+                       "R  docs/live/a.md -> docs/plans/completed/a.md\n")
+    st.expect("test_check_writes_successor_row_licenses_move", code, output,
+              0, want_substr="licensed lifecycle add")
+
+    # check-writes: the same freeze move against a LIVING row (no
+    # successor) stays hard-gated as an immutable-path write.
+    root = make_fixture("freeze-move-living", registry_header() +
+                        "| doc-s | no | living |  |  |"
+                        " docs/plans/completed/a.md |  |  |  |\n")
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text=
+                       "R  docs/live/a.md -> docs/plans/completed/a.md\n")
+    st.expect("test_check_writes_move_without_successor_row_fails", code,
+              output, 1, want_substr="immutable path written without override")
 
     # Hard finding: enum typos (sot/state) rejected.
     root = make_fixture("enum-sot", registry_header() +
@@ -1431,6 +1509,127 @@ def _run_selftest_checks(st: Selftest) -> None:
     # (fail closed on the retired channel, never a silent pass).
     code, output = run(["--root", str(root), "check-writes", "--diff"])
     st.expect("test_removed_diff_channel_fails_closed", code, output, 2,
+              want_substr="usage")
+
+    # Subparser abbreviation (r4 F1): allow_abbrev is not inherited by
+    # add_parser subparsers, so each subparser sets it explicitly and
+    # `--std` must NOT resolve to --stdin; it fails closed as unknown
+    # flag (on main the hand-rolled parser also exited 2 here).
+    # Discriminator (r5 F1): under the allow_abbrev-dropped mutation
+    # `--std` resolves to --stdin and the F7 conflict guard fires
+    # (same exit 2 + usage but with "cannot be combined"); forbidding
+    # that message makes the pin flip under the mutation while the
+    # correct code (argparse unrecognized-arguments error) carries no
+    # such text.
+    code, output = run(["check-writes", "--std", "x"])
+    st.expect("test_subparser_abbreviation_fails_closed", code, output, 2,
+              want_substr="usage", forbid_substr="cannot be combined")
+
+    # Dispatch layer fail-closed pins (argparse rewrite characterization).
+    # NOTE: `root` here is bound by the earlier fixture block above
+    # (order-dependent by design; failures are loud if that changes).
+    # Missing subcommand.
+    code, output = run([])
+    st.expect("test_missing_subcommand_fails_closed", code, output, 2,
+              want_substr="usage")
+
+    # Unknown subcommand word.
+    code, output = run(["frobnicate"])
+    st.expect("test_unknown_subcommand_fails_closed", code, output, 2,
+              want_substr="usage")
+
+    # --root after the subcommand.
+    code, output = run(["check-writes", "--root", str(root)])
+    st.expect("test_root_after_subcommand_fails_closed", code, output, 2,
+              want_substr="usage")
+
+    # --selftest after the subcommand.
+    code, output = run(["check-writes", "--selftest"])
+    st.expect("test_selftest_after_subcommand_fails_closed", code, output, 2,
+              want_substr="usage")
+
+    # --stdin outside check-writes is a usage error (fail closed; the
+    # old hand-rolled parser silently ignored it on validate).
+    code, output = run(["--stdin", "validate"])
+    st.expect("test_stdin_rejected_outside_check_writes_fails_closed", code,
+              output, 2, want_substr="usage")
+
+    # Pins the pre-subcommand --selftest short-circuit (r1 F1): the
+    # scan stops at the bare --selftest token BEFORE any other token is
+    # examined, so the selftest runs (exit 0), unknown tail and all.
+    # cmd_selftest is stubbed (the _fold-pinning pattern) so the pin
+    # does not recurse into the whole suite; the dispatch layer calls
+    # the module global, so the stub is what the short-circuit reaches.
+    real_cmd_selftest = cmd_selftest
+    try:
+        globals()["cmd_selftest"] = lambda: 0
+        code, output = run(["--selftest", "--bogus"])
+    finally:
+        globals()["cmd_selftest"] = real_cmd_selftest
+    st.expect("test_selftest_shortcircuit_before_subcommand", code, output,
+              0, forbid_substr="usage")
+
+    # Pins the r1 F1 fail-closed fix: an unknown token BEFORE
+    # --selftest breaks the pre-scan, so argparse handles the line and
+    # exits 2 (the old order-insensitive scan wrongly exited 0 here).
+    code, output = run(["--bogus", "--selftest"])
+    st.expect("test_unknown_flag_before_selftest_fails_closed", code, output,
+              2, want_substr="usage")
+
+    # --root without a value.
+    code, output = run(["--root"])
+    st.expect("test_root_requires_value_fails_closed", code, output, 2,
+              want_substr="usage")
+
+    # --root followed by an option-like token (r2 F1): the pre-scan
+    # skips it (not bare --selftest), argparse re-parses the full argv
+    # and rejects the flag-like --root value — fail-closed, where the
+    # old parser silently consumed the token as the root value.
+    code, output = run(["--root", "--selftest", "validate"])
+    st.expect("test_root_value_selftest_token_fails_closed", code, output, 2,
+              want_substr="usage")
+
+    # r5 F3: the `=`-attached flag-like --root value (the spaced form is
+    # pinned above) also fails closed with a usage error; the old
+    # fail-open asymmetry (path resolution + repo-root fallback) is
+    # collapsed — both spellings exit 2.
+    code, output = run(["--root=--selftest", "validate"])
+    st.expect("test_root_eq_flag_like_value_fails_closed", code, output, 2,
+              want_substr="usage")
+
+    # Literal -- argument (must not become an end-of-options separator).
+    code, output = run(["--"])
+    st.expect("test_double_dash_argument_fails_closed", code, output, 2,
+              want_substr="usage")
+
+    # Literal -- argument before --selftest (r3 F1): pins that a --
+    # token preceded by --root is rejected (argparse path); guard
+    # placement itself is pinned by
+    # test_selftest_before_double_dash_fails_closed below (r4 F3:
+    # argparse independently rejects both inputs pinned here, so this
+    # fixture alone does not discriminate guard placement).
+    code, output = run(["--root", str(root), "--", "--selftest"])
+    st.expect("test_double_dash_with_root_before_selftest_fails_closed",
+              code, output, 2, want_substr="usage", forbid_substr="selftest OK")
+
+    # Discriminating guard-placement pin (r4 F3): --selftest BEFORE the
+    # literal -- would be consumed by the pre-scan short-circuit if the
+    # literal-`--` guard ran after it; the guard must reject first.
+    # cmd_selftest is stubbed (the _fold-pinning pattern) so the pin
+    # does not recurse into the whole suite; under either
+    # guard-moved/guard-deleted mutation this flips to stubbed exit 0.
+    real_cmd_selftest = cmd_selftest
+    try:
+        globals()["cmd_selftest"] = lambda: 0
+        code, output = run(["--selftest", "--"])
+    finally:
+        globals()["cmd_selftest"] = real_cmd_selftest
+    st.expect("test_selftest_before_double_dash_fails_closed", code, output,
+              2, want_substr="usage", forbid_substr="selftest OK")
+
+    # Bare check-writes with no paths and no --stdin.
+    code, output = run(["--root", str(root), "check-writes"])
+    st.expect("test_check_writes_needs_paths_fails_closed", code, output, 2,
               want_substr="usage")
 
     # F1: the registered-src exemption is bounded to the add/rename

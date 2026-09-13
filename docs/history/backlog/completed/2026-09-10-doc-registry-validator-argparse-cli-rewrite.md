@@ -1,6 +1,6 @@
 # Doc registry validator: hand-rolled CLI parser duplicates argparse behavior
 
-Status: open
+Status: done
 Workflow: backlog
 Source: docs/reviews/2026-09-10-2026-09-08-doc-ownership-lifecycle-code-review-r1.md (round 1 of docs/plans/2026-09-08-doc-ownership-lifecycle.md, finding F12)
 

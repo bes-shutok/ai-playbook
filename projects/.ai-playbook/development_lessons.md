@@ -358,19 +358,21 @@ When using `except Exception: continue` or similar graceful degradation patterns
 **Pattern**:
 ```python
 # ❌ WRONG: silent failure hides the problem
-try:
-    rows = read_source_rows(file_path)
-    # ... process rows ...
-except Exception:
-    continue  # No visibility into what failed
+for file_path in source_paths:
+    try:
+        rows = read_source_rows(file_path)
+        # ... process rows ...
+    except Exception:
+        continue  # No visibility into what failed
 
 # ✅ CORRECT: observable degradation
-try:
-    rows = read_source_rows(file_path)
-    # ... process rows ...
-except Exception as e:
-    logger.warning("Failed to scan %s: %s. Continuing with empty set.", file_path, e)
-    continue
+for file_path in source_paths:
+    try:
+        rows = read_source_rows(file_path)
+        # ... process rows ...
+    except Exception as e:
+        logger.warning("Failed to scan %s: %s. Continuing with empty set.", file_path, e)
+        continue
 ```
 
 **Why**: When the function fails silently, you can't tell whether the empty result is correct (no data) or caused by a bug (file couldn't be read). Logging makes the difference visible.
@@ -868,10 +870,11 @@ When a function renders multiple independent sections (e.g., Excel sheet writers
 
 **Pattern to avoid:**
 ```python
-if not optional_data:
-    render_no_data_message()
-    return  # ❌ Skips mandatory methodology section
-render_mandatory_section()
+def render_report():
+    if not optional_data:
+        render_no_data_message()
+        return  # ❌ Skips mandatory methodology section
+    render_mandatory_section()
 ```
 
 **Correct pattern:**
@@ -1174,20 +1177,22 @@ When implementing a two-pointer sliding-window matcher that finds a contiguous r
 
 **Required behavior (canonical two-pointer form):**
 ```python
-left = 0
-running_sum = ZERO
-for right in range(n):
-    running_sum += items[right].amount
-    range_size = right - left + 1
-    tolerance = scale * range_size
-    while running_sum > target + tolerance and left < right:
-        running_sum -= items[left].amount
-        left += 1
+def find_matching_window(items, target, scale):
+    n = len(items)
+    left = 0
+    running_sum = ZERO
+    for right in range(n):
+        running_sum += items[right].amount
         range_size = right - left + 1
-        tolerance = scale * range_size   # recompute after shrink
-    if abs(running_sum - target) <= tolerance:
-        return items[left:right + 1]
-return None
+        tolerance = scale * range_size
+        while running_sum > target + tolerance and left < right:
+            running_sum -= items[left].amount
+            left += 1
+            range_size = right - left + 1
+            tolerance = scale * range_size   # recompute after shrink
+        if abs(running_sum - target) <= tolerance:
+            return items[left:right + 1]
+    return None
 ```
 
 **Why `left < right` and not `left <= right`:** The shrink loop's purpose is to discard items from the left while the sum is too large. When `left == right`, the window is the single item at index `right`; shrinking further would empty the window. The single item may itself match the target within tolerance (the `range_size == 1` case), so it must be tested by the matching condition below the shrink loop, not discarded by the shrink loop.
@@ -2010,7 +2015,7 @@ When a loader builds a kwargs dict whose values are heterogeneous (e.g., some `b
 ```python
 from typing import Any
 
-def _load_flags(...) -> dict[str, Any]:
+def _load_flags(raw: dict[str, Any]) -> dict[str, Any]:
     flag_kwargs: dict[str, Any] = {}
     for name, value in raw.items():
         # type-dispatching validation guarantees the per-key type here
@@ -5924,3 +5929,31 @@ When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git c
 **Witness (same machine, review round r4, mutator side):** the r3 fixes fenced only the receipt paths; round 4 then found `abort`, `claim_next_task`, and `mark_commit_pending` still mutating over progressed/aborted state (one High severity). Completing the family meant sweeping the mutating entry points with the same predicate, plus splitting one conflated rejection envelope into distinct stale-claim vs aborted-workflow reason codes.
 
 **See also:** #317 (simulate the prescribed fix over every shape the criterion quantifies), #72 (guards must fail closed when input is absent).
+
+## 322. Time-Bound Decision Inputs Must Be Partitioned Live Vs Expired Against One Injectable Now
+
+**Principle:** Family E (a derived value captured before mutation diverges from the post-mutation state) applied to wall-clock reads: a record carrying a reset/expiry timestamp is stale data once that timestamp is past, and any decision computed from it after the boundary is fabricated, not conservative.
+
+**Trigger:** decision logic (threshold check, binding selection, urgency ranking) consumes records that carry a future `reset_at`/`expires_at` epoch, and the code reads the wall clock implicitly (`time.time()` deep inside the decision) or compares each record against its own clock read.
+
+**Rule:** (1) Read the clock once and pass it in (`now` parameter, default `time.time()`); never let the decision function read the clock itself, so tests can pin `now` and the comparison is consistent across records. (2) Partition records into live (`reset_at > now`) and expired before selecting a binding record or evaluating thresholds; expired records participate in neither. (3) When records exist but none are live, do NOT carry on with an empty or stale selection: return the unknown/fail-open outcome with an explicit stale-data reason. (4) Pin boundary tests (exactly-at, one-second-either-side) against the injected `now`, and add a mixed expired+live case proving the expired record neither wins binding nor forces the decision.
+
+**Why:** without the partition, an already-reset record can still "win" a binding selection or drive a threshold decision using numbers that describe a window that no longer exists; the system acts on a quota/limit state that is hours stale while believing it is live. The fail-open-on-all-expired rule matters because "no live data" and "no data" must produce the same honest unknown, not a decision computed from ghosts.
+
+**Witness (2026-09-12, quota-window probe review r3):** the probe picked a binding quota window and evaluated pause thresholds over the raw limits list; a window whose `reset_at_epoch` had already passed still participated, so a stale near-limit reading could pause work after the quota had actually reset. The fix injected `now` into `build_report`, partitioned live vs expired, selected binding and thresholds over live only, and returned an explicit `all quota windows already reset; data stale` unknown when limits existed but none were live; boundary tests were re-anchored with `now=1000`.
+
+**See also:** #61 (recompute derived values after each mutation, sibling Family E), #72 (fail closed/unknown when required input is absent or unverifiable).
+
+## 323. A Once-Per-Window Suppression Marker Must Be Bound To The Window Identity It Fired For
+
+**Principle:** Family E cross with idempotency scoping: a "already acted" marker is only valid inside the window whose observation produced it; a marker that outlives its window is a stale suppressor that silently disarms the guard for every later window.
+
+**Trigger:** code writes a one-shot marker file/flag ("fired", "notified", "intervened") to guarantee a single intervention per time window, and reads it back later (next process, next session, next host visit) as a bare boolean.
+
+**Rule:** (1) Write the window's identity token (the reset/expiry epoch of the window the decision fired on) INTO the marker, not just a constant like `fired`. (2) On read, compare the marker's token with the CURRENT decision's window token: a mismatch means the marker belongs to a previous window; remove it and proceed to act, do not suppress. (3) Keep the failure-mode ordering: if writing the marker fails, still act (a failed marker write must not become an accidental suppression bypass), and a marker that cannot be parsed is treated as absent. (4) Pin all three behaviors: matching token suppresses, stale token acts after quiet removal, write-failure still acts.
+
+**Why:** a bare boolean marker encodes "acted" but not "acted for WHICH window". Time windows roll: after the first window expires the marker persists on disk, the next window's decision reads it and skips the intervention entirely, so a guard designed for once-per-window becomes once-ever. Binding the marker to the epoch token gives suppression exactly the same lifetime as the decision that created it, and the quiet removal on mismatch is safe because re-acting once at a genuine window boundary is the correct behavior.
+
+**Witness (2026-09-12, host-global guard-flag hook review r3):** the budget-guard hook wrote a fired marker containing the literal string `fired`; after the quota window reset and a new window's expiry armed a new flag, the stale marker from the prior window still suppressed the block. The fix records `str(reset_at_epoch)` of the window it fired for and, on read, treats a mismatching marker as stale: quiet-remove and fall through to block. A regression test pins the stale-marker-still-blocks path.
+
+**See also:** #322 (partition time-bound inputs against one injectable now, the decision side of the same window lifecycle), #321 (enumerate every terminal state in shared lifecycle guards).

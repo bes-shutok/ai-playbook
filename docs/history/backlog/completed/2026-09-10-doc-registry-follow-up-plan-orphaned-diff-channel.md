@@ -1,6 +1,6 @@
 # Follow-up plan still pins the retired `--diff` channel (r4 F9)
 
-Status: open
+Status: done
 Workflow: backlog
 
 ## Problem

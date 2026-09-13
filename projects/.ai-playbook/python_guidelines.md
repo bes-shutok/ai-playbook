@@ -142,11 +142,11 @@ value), encode that contract in the name: e.g. suffix with `_inplace`:
 
 ```python
 # ❌ UNCLEAR: caller may assume the return value is the complete result
-def _match_consumption_to_lots(pool, ...):
+def _match_consumption_to_lots(pool, *args, **kwargs):
     ...  # also mutates pool, carryover_cost, partial_tx_keys
 
 # ✅ CLEAR: mutation is auditable at the call site
-def _consume_against_pool_inplace(pool, ...):
+def _consume_against_pool_inplace(pool, *args, **kwargs):
     ...  # caller knows pool is being modified
 ```
 
@@ -670,3 +670,62 @@ Pair this with content checks: a "non-empty" check like
 Gate to check: grep test and selftest code for bare `assert` used as a
 data-invariant guard (not a simple expected-value check); each hit is a guard
 that dies under `-O`.
+
+## 26. Sentinel-file checks must use `Path.is_file()`, not `Path.exists()`
+
+A filesystem marker whose presence means "this state was reached" (a fired
+marker, a throttle latch, a run-once flag) must be tested with
+`Path.is_file()` (or `os.path.isfile`), not `Path.exists()`. `exists()` is
+also satisfied by a directory at the marker path, so a fixture that plants a
+directory where the marker would be written (to make a best-effort marker
+write fail) is misread as "marker already present", and the guard silently
+skips the action the marker exists to throttle. Rule: for any sentinel whose
+semantics are "a file was created here", test regular-file-ness; `exists()`
+is correct only when ANY filesystem entry at the path carries the same
+meaning. Gate to check: grep marker/sentinel reads for `.exists()`; each hit
+on a create-a-file latch is a latent directory-at-path false positive.
+
+## 27. Git-history tests must prove the setup changed history, not just run the command
+
+A test fixture that prepares state via a history-mutating git command (rebase,
+amend, cherry-pick, filter-branch) can silently no-op: rebasing a branch onto
+the commit it was already based on rewrites nothing, so a later assertion on
+the "new" commit identity compares the branch against itself. Build fixtures
+against a base that actually differs (rebase onto a NEWER base commit, amend
+after a content change), and where cheap, assert the mutation itself (old
+identity is no longer HEAD) so a no-op setup fails loudly at arrange time,
+not as a confusing assertion mismatch at act time. Gate to check: grep test
+fixtures for `git rebase`/`git commit --amend` and confirm each targets a
+base or pre-state distinct from the current one.
+
+## 28. Fixture repos driven by subprocess git must disable host git config
+
+A test fixture that runs `git` as a subprocess inside a freshly `git init`-ed
+temp repo still inherits the HOST's global and system config: a developer's
+`commit.gpgsign`, `core.hooksPath`, or a global init template can make every
+fixture commit fail (no signing key in CI) or execute arbitrary host hooks,
+and the failure reproduces only on that one machine. Build the subprocess
+environment explicitly per fixture: start from `dict(os.environ)`, then set
+`GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_SYSTEM=/dev/null` (repo-local
+`git config` calls in the fixture supply identity and any needed settings),
+and pass it as `env=` to EVERY git subprocess call in setup and helpers.
+Gate to check: grep test fixtures for `subprocess...git` and confirm each
+call site passes an env that nulls both config sources.
+
+## 29. Fenced Python examples in docs must be syntactically valid
+
+IDE and linter inspections run over Python code fences in Markdown, so a
+snippet that is "obviously illustrative" still surfaces as real diagnostics
+(`Formal parameter name expected`, `return` outside function) on every file
+open. Keep every fence compilable:
+
+- For elided parameter lists use `*args, **kwargs`, never a bare `...` in
+  the signature (a `...` body/expression is fine).
+- Wrap statement fragments that use `return`/`continue` in a minimal
+  enclosing `def`/`for` so the control-flow keywords are in legal positions.
+- Prefer `Optional[X]` over `X | None` in annotations when the repo or its
+  editors may run a Python before 3.10, even with
+  `from __future__ import annotations`.
+
+Gate to check: compile each ```python fence of the touched Markdown
+(`compile(block, path, "exec")`) before committing doc edits.

@@ -1,6 +1,6 @@
 # Backlog: unify successor-row and override-row licensing for freeze moves in doc-registry check-writes
 
-Status: open
+Status: done
 Workflow: backlog
 Origin: Plan-review r8 Low (plausible-edge, hypothesis confidence) on `docs/plans/2026-09-08-doc-ownership-lifecycle.md`, digest 33bf86f3
 Severity: Low
