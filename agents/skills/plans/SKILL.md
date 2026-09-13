@@ -361,7 +361,7 @@ Examples:
 - Every plan must include a **Review Scope** section (see below).
 - Every plan must include a **Gist & Examples** section (see Universal Patterns).
 - Every plan must include an **Evaluation Criteria** section defining quality dimensions, **Done when**, and **Ship when** (see Phase 1).
-- When Phase 1 recorded high-confidence assumptions (confidence gate), the plan must include an `## Assumptions` section listing each assumption with its basis; a plan that silently builds on an unlisted assumption is a defect; the section always renders and closes with the decision-points trailer carried from the Step 1.4 confirmation, and plan_readiness.py enforces the trailer for plans whose latest review round's sidecar date field is dated on or after 2026-09-08.
+- When Phase 1 recorded high-confidence assumptions (confidence gate), the plan must include an `## Assumptions` section listing each assumption with its basis; a plan that silently builds on an unlisted assumption is a defect; the section always renders and closes with the decision-points trailer carried from the Step 1.4 confirmation, and plan_readiness.py enforces the trailer under the sidecar-date rule (see the DECISION_MARKER_MIN_DATE constant in scripts/plan_readiness.py for the exact date and exemption semantics).
 - Before finalizing, verify pre-computation bug pattern checks are addressed (see Universal Patterns).
 
 ## Documentation Impact Assessment

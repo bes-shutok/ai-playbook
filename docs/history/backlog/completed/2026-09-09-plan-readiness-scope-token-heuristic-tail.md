@@ -1,6 +1,6 @@
 # Plan-readiness Review Scope token heuristic tail
 
-Status: open
+Status: done
 Origin: r2 review F10/F11 (docs/reviews/2026-09-09-plan-authoring-tooling-polish-code-review-r2.md, overflow manifest; branch 2026-09-08-plan-authoring-tooling-polish). Extended with r3 findings F2/F3 and the r3 overflow manifest shapes (docs/reviews/2026-09-09-plan-authoring-tooling-polish-code-review-r3.md, 2026-09-09).
 
 ## Problem

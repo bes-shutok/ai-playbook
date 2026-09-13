@@ -5957,3 +5957,31 @@ When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git c
 **Witness (2026-09-12, host-global guard-flag hook review r3):** the budget-guard hook wrote a fired marker containing the literal string `fired`; after the quota window reset and a new window's expiry armed a new flag, the stale marker from the prior window still suppressed the block. The fix records `str(reset_at_epoch)` of the window it fired for and, on read, treats a mismatching marker as stale: quiet-remove and fall through to block. A regression test pins the stale-marker-still-blocks path.
 
 **See also:** #322 (partition time-bound inputs against one injectable now, the decision side of the same window lifecycle), #321 (enumerate every terminal state in shared lifecycle guards).
+
+## 324. Fold All Plan Records When A Correction Reverses A Prescribed Mechanism
+
+**Principle:** Family D (single source of truth: a mechanism prescription restated across several plan records drifts when the correction updates only the record the code fix touched)
+
+**Trigger:** a review finding or user amendment forces an execution correction that REVERSES a mechanism the plan prescribed — replacing it, not merely tuning it — and the plan document remains the review loop's gold source for later rounds.
+
+**Rule:** (1) After landing the reversal, grep the plan for the old mechanism's name and every distinctive term of the old prescription; each hit is a record to fold in the same change set: the Terms entry, the Gist, the Task text, and the Design Invariants — not only the task checkbox and the code. (2) Where a record must keep the old name (pinned selftest arm names, fixture labels), re-characterize the surrounding claim so the record describes the new semantics instead of prescribing the dead one. (3) The fold is part of the correction's definition of done, not a deferred doc cleanup: every later round re-reads the plan as gold source and will re-prescribe the stale mechanism against the corrected code.
+
+**Why:** an address-round fix removed a per-section first-block latch and replaced it with re-open-on-empty-opener semantics in the code, docstring, and one task; the plan's Terms entry, Gist, Task text, and a Design Invariant each still prescribed the latch, so each later round risked re-flagging the corrected code as a plan-adherence failure — the stale records had made the gold source wrong.
+
+**Witness (2026-09-13, plan-readiness trailer-tail r1 address round):** the four stale records were enumerated only because the fix log listed them; neither the plan nor the correction workflow carried a checklist connecting a mechanism reversal to its record fan-out.
+
+**See also:** #12 (three-way doc sync: fold artifact copies in the same commit), #62 (re-read RED tests against revised invariants — the test side of the same fold), #72 (verify plan claims against source before writing them).
+
+## 325. Relaunch A Rate-Limited Review Lens; Never Drop It From Panel Accounting
+
+**Principle:** Family H (verify the real thing: a panel-completeness claim must be audited against per-worker outcomes; fewer returned verdicts than launched lenses means the panel is not complete)
+
+**Trigger:** a multi-lens review panel returns fewer completed lenses than launched because one lens died on a provider rate limit (or any kill without a verdict), and the loop is tempted to exit on the survivors' verdicts or footnote the dead lens.
+
+**Rule:** (1) Keep panel accounting per worker, not per round: a killed lens is an open obligation attached to the loop, never written off by the round in which it died. (2) Relaunch the killed lens into the NEXT round's launch set (fresh context, same lens charter); a targeted follow-up round is a valid carrier. (3) Loop exit requires a verdict from every launched lens or an explicit, logged waiver naming the missing lens; clean verdicts from surviving lenses do not substitute for the dead one.
+
+**Why:** a five-lens code-review panel lost its testing lens to a rate limit in round 2; accounting it as 4/5-complete tempted the loop to exit on the survivors. Relaunching the lens into the targeted round 3 kept the coverage claim honest: the loop exited CLEAN only once all five lenses had verdicts on record.
+
+**Witness (2026-09-13, trailer-tail code-review loop r2-r3):** the review log records "4/5 complete (testing lens rate-limited -> relaunched in r3)" and the exit line certifies 5/5 — the relaunch, not the dropout, is what made the CLEAN verdict meaningful.
+
+**See also:** #307 (a killed sub-agent may have flushed complete artifacts — audit disk before relaunching), #173 and #185 (partial-predecessor audits on relaunched steps).

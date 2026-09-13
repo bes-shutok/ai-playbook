@@ -1,6 +1,6 @@
 # Backlog: trailer-gate arms-table meta-guards: negative witness + message disambiguation
 
-Status: open
+Status: done
 Date: 2026-09-09
 Class: deferred review findings, regenerating-classes rule per ADR-0002 (duplicate-unit-witness / fix-generated polish family)
 Source: `docs/reviews/2026-09-09-2026-09-09-plan-readiness-trailer-gate-r5-deferrals-code-review-r3.md` (round 3 targeted panel, zero blocking; both findings Low, non-blocking, valid but deferred to stop fix-regeneration)

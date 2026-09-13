@@ -1,6 +1,6 @@
 # Backlog: trailer gate tilde-side selftest arm coverage (r1 overflow F3/F4)
 
-Status: open
+Status: done
 Workflow: backlog
 Source: docs/reviews/2026-09-09-2026-09-09-plan-readiness-trailer-gate-r5-deferrals-code-review-r1.md (Overflow manifest, rows 1-2; branch 2026-09-09-trailer-gate-r5-deferrals, execute-plan Phase 3 round 1)
 Severity: 2 Low (both non-blocking, testing worker overflow)

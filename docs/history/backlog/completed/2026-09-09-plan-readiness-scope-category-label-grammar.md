@@ -1,6 +1,6 @@
 # plan-readiness: Review Scope category-label grammar misses label-with-prose lines
 
-Status: open
+Status: done
 Origin: tooling-polish plan code review r4 F1 (docs/reviews/2026-09-09-plan-authoring-tooling-polish-code-review-r4.md), diff digest 4aa0a410
 
 ## Finding (Medium, verified)

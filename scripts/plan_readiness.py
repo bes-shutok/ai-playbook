@@ -330,9 +330,14 @@ def decision_marker_problem(plan_text: str) -> str | None:
 
 
 # Category-block label inside the ## Review Scope section: a bolded
-# ``**<label>:**`` line opens a block; subsequent ``- `` items belong to
-# it. A label containing ``Out of scope`` is prose, not a category block.
-_REVIEW_SCOPE_CATEGORY_RE = re.compile(r"^\*\*(.+?):\*\*\s*$")
+# ``**<label>:**`` line opens a block with or without same-line guidance
+# prose after the label (the plans skill Review Scope template's own
+# Documentation label carries prose); subsequent ``- `` items belong to
+# it. A label containing ``Out of scope`` is prose, not a category
+# block. Label handling (strip, out-of-scope exclusion) is unchanged and
+# uses ``group(1)`` only; the same-line guidance prose after the label
+# is matched but not captured (r1 F12a).
+_REVIEW_SCOPE_CATEGORY_RE = re.compile(r"^\*\*(.+?):\*\*[ \t]*(?:.*)$")
 # A test-detectable path: any path SEGMENT named test/tests/spec.
 _REVIEW_SCOPE_TEST_SEGMENTS = ("test", "tests", "spec")
 
@@ -367,53 +372,89 @@ def _review_scope_path_token(item: str) -> str:
 
     List items in Review Scope category blocks and task ``Files:`` lists
     carry trailing annotations (``- ``src/service.py`` *(new; this
-    plan)*``); comparisons must see the bare path. The first backticked
-    span wins when present, else the first whitespace-delimited token
-    after backtick stripping (F2: annotation-blind parsing made the
-    category, duplicate, and inventory checks silently inoperative for
-    the template's annotated common case). A single leading ``./`` is
-    stripped (r2 F5: ``./src/a.py`` in scope and ``src/a.py`` in Files
-    must not fail coverage on notation drift).
+    plan)*``); comparisons must see the bare path. The backticked span
+    wins ONLY when it is the item's leading content (one anchored match,
+    ``re.match(r"\\s*`+([^`]+)`+", item)``, r1 F12d; a doubled-backtick
+    fence is accepted, r2 risk follow-up); any backticked span
+    that is not leading content is prose, and extraction falls through to
+    the first whitespace-delimited token after backtick stripping (F2:
+    annotation-blind parsing made the category, duplicate, and inventory
+    checks silently inoperative for the template's annotated common
+    case; the earlier unconditional first-span rule let a mid-prose span
+    such as ``- see `docs/a.md` and also `docs/b.md``` win as a false
+    path). Inside the winning leading span, a trailing parenthesized
+    annotation is stripped (``re.sub(r"\\s*\\([^()]*\\)\\s*$", "",
+    span).strip()``; r3 F2: ``- ``src/service.py (new; this plan)````
+    extracts as bare ``src/service.py``). Separators are normalized at a
+    single shared exit for BOTH branches (``token.replace("\\\\", "/")``;
+    r3 overflow: Windows-style backslash paths must compare equal to
+    their slash forms in every downstream check), and a single leading
+    ``./`` is stripped (r2 F5: ``./src/a.py`` in scope and ``src/a.py``
+    in Files must not fail coverage on notation drift).
     """
     def _strip_dot_slash(token: str) -> str:
         return token[2:] if token.startswith("./") else token
 
-    ticked = re.search(r"`([^`]+)`", item)
-    if ticked:
-        return _strip_dot_slash(ticked.group(1).strip())
-    if not item.strip():
-        return ""
-    return _strip_dot_slash(item.strip().strip("`").strip().split()[0])
+    lead = re.match(r"\s*`+([^`]+)`+", item)
+    if lead:
+        # Leading-span rule: a backticked span (single or doubled backtick
+        # fence, r2 risk follow-up) is the item's leading content and wins;
+        # a trailing parenthesized annotation inside the span is stripped
+        # (r3 F2). The strip applies ONLY here, to the winning span.
+        token = re.sub(r"\s*\([^()]*\)\s*$", "", lead.group(1)).strip()
+    else:
+        if not item.strip():
+            return ""
+        token = item.strip().strip("`").strip().split()[0]
+    return _strip_dot_slash(token.replace("\\", "/"))
 
 
 def _review_scope_task_files(stripped: str) -> list[str]:
-    """Every ``Files:`` list-item path from ``### Task`` sections.
+    """Every ``Files:`` list-item path from ``###``/``####`` Task and
+    Step sections.
 
-    Extraction reads ONLY the list items in the ``Files:`` block of each
-    task section. A ``Files:`` line opens a block ONLY when it carries no
-    inline payload (``Files: none new (...)`` is prose, not a list
-    opener); collection ends at the first checkbox item (``- [``) or any
-    line that is neither a ``- `` item nor blank, so checkbox bullets
-    elsewhere in the task are never collected as paths (F1: the repo
-    template places ``Files:`` above the task checkboxes, and the old
-    blank-tolerant loop collected every checkbox as a path). An INDENTED
+    Sections open at any ``###`` or ``####`` heading whose title starts
+    with ``Task`` or ``Step``. Extraction reads ONLY the list items in
+    the ``Files:`` block of each task section. A ``files:`` line
+    (case-insensitive; an uppercase ``FILES:`` opener is the same block)
+    opens collection whenever it carries no inline payload (r1 F1: EVERY
+    empty-payload ``files:`` line (re-)opens collection, so a later real
+    ``Files:`` block in the same section is inventoried instead of being
+    silently dropped by a first-block latch); a payload-bearing line
+    such as ``Files: none new (...)`` is prose, not a list opener, and
+    closes collection. Collection ends at the first checkbox item
+    (``- [``) or any line that is neither a ``- `` item nor blank, so
+    checkbox bullets elsewhere in the task are never collected as paths
+    (F1: the repo template places ``Files:`` above the task checkboxes,
+    and the old blank-tolerant loop collected every checkbox as a path).
+    An INDENTED
     list item (raw line starts with whitespace, stripped form starts
     with ``- ``) is a nested annotation sub-bullet, not a path: it is
     skipped while collection CONTINUES for the sibling top-level items
     (r2 F3: collecting it yielded a garbage path token and a spurious
     gate failure naming a phantom path; matches the top-level-only
-    semantics of the Review Scope category parser). Each item is
-    normalized to its leading path token (``_review_scope_path_token``).
+    semantics of the Review Scope category parser). Only path-shaped
+    tokens are collected (contains ``/`` or carries a doc/implementation
+    suffix; r4 F2: bare ``- none`` items must not fabricate paths). Each
+    item is normalized to its leading path token
+    (``_review_scope_path_token``).
     """
     paths: list[str] = []
-    for match in re.finditer(r"^### Task.*$", stripped, re.MULTILINE):
-        tail = re.split(r"\n#{2,3} ", stripped[match.end() :], maxsplit=1)[0]
+    for match in re.finditer(
+        r"^#{3,4} (?:Task|Step).*$", stripped, re.MULTILINE
+    ):
+        tail = re.split(r"\n#{2,4} ", stripped[match.end() :], maxsplit=1)[0]
         collecting = False
         for line in tail.splitlines():
-            if line.startswith("Files:"):
-                # An inline payload (e.g. "Files: none new (validation
-                # only; ...)") is a prose statement, not a list opener.
-                collecting = not line[len("Files:"):].strip()
+            opener = re.match(r"files:(.*)$", line, re.IGNORECASE)
+            if opener:
+                # An empty-payload files: line always (re-)opens
+                # collection (r1 F1: a later real Files: block in the
+                # same section must be inventoried); a line carrying an
+                # inline payload ("Files: none new (validation only;
+                # ...)" is a prose statement, not a list opener) closes
+                # collection.
+                collecting = not opener.group(1).strip()
                 continue
             if not collecting:
                 continue
@@ -423,13 +464,21 @@ def _review_scope_task_files(stripped: str) -> list[str]:
             if stripped_line.startswith("- ["):
                 collecting = False
                 continue
-            indented_item = line[:1].isspace() and stripped_line.startswith("- ")
-            if stripped_line.startswith("- ") and not indented_item:
+            if stripped_line.startswith("- "):
+                if line[:1].isspace():
+                    # Indented nested annotation sub-bullet: skipped,
+                    # collection continues (r2 F3, see docstring).
+                    continue
                 token = _review_scope_path_token(stripped_line[2:])
-                if token:
+                if token and (
+                    "/" in token
+                    or token.lower().endswith(
+                        REVIEW_SCOPE_DOC_SUFFIXES
+                        + REVIEW_SCOPE_IMPLEMENTATION_SUFFIXES
+                    )
+                ):
+                    # r4 F2: bare `- none` items must not fabricate paths.
                     paths.append(token)
-            elif indented_item:
-                continue
             else:
                 collecting = False
     return paths
@@ -451,7 +500,8 @@ def review_scope_problem(plan_text: str) -> str | None:
         path, the declared category, and the expected category
         (``Tests`` for test-detectable, ``Production code`` otherwise);
     (b) a path listed under two different category blocks;
-    (c) a ``Files:`` list path from a ``### Task`` section that appears
+    (c) a ``Files:`` list path from a ``###``/``####`` Task and Step
+        section that appears
         nowhere in the Review Scope section text (category list,
         plan-related-extension prose, or out-of-scope list). Items in
         both surfaces are normalized to their leading path token before
@@ -593,6 +643,18 @@ def digest_failure_reason(first_error: str, round_no: int) -> str:
         f"sidecar source_digest failed an unrecognized check (round "
         f"r{round_no}); raw error: {first_error}"
     )
+
+
+# Shared gated-probe date guards (single owners): a round gates a probe only
+# when its sidecar date is exactly YYYY-MM-DD (a missing/blank/malformed date
+# is exempt, r4 F4) and sorts at or after the gate's minimum date, and both
+# gated probes report failures through the one reason format below.
+def _gate_fires(round_date: str, min_date: str) -> bool:
+    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", round_date)) and round_date >= min_date
+
+
+def _gated_probe_reason(problem: str, min_date: str, round_no: int, round_date: str) -> str:
+    return f"{problem} (required for plans reviewed on or after {min_date}; latest round r{round_no} is dated {round_date})"
 
 
 def evaluate_readiness(
@@ -781,9 +843,8 @@ def evaluate_readiness(
     # for the digest are decoded here; only a decode failure can still
     # reach this reason family.
     round_date = str(payload.get("date") or "").strip()
-    date_is_exact = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", round_date))
-    trailer_gated = date_is_exact and round_date >= DECISION_MARKER_MIN_DATE
-    scope_gated = date_is_exact and round_date >= REVIEW_SCOPE_MIN_DATE
+    trailer_gated = _gate_fires(round_date, DECISION_MARKER_MIN_DATE)
+    scope_gated = _gate_fires(round_date, REVIEW_SCOPE_MIN_DATE)
     # Decode sharing without widening the decode failure (r2 F2): the
     # plan bytes are decoded ONCE, and ONLY when at least one of the two
     # date guards fires — an undecodable plan whose round is date-exempt
@@ -801,10 +862,8 @@ def evaluate_readiness(
     if trailer_gated:
         problem = decision_marker_problem(plan_text)
         if problem:
-            return False, (
-                f"{problem} (required for plans reviewed on or after "
-                f"{DECISION_MARKER_MIN_DATE}; latest round r{round_no} is "
-                f"dated {round_date})"
+            return False, _gated_probe_reason(
+                problem, DECISION_MARKER_MIN_DATE, round_no, round_date
             )
 
     # 7. Review Scope category gate (forward-looking): plans whose LATEST
@@ -816,10 +875,8 @@ def evaluate_readiness(
     if scope_gated:
         problem = review_scope_problem(plan_text)
         if problem:
-            return False, (
-                f"{problem} (required for plans reviewed on or after "
-                f"{REVIEW_SCOPE_MIN_DATE}; latest round r{round_no} is "
-                f"dated {round_date})"
+            return False, _gated_probe_reason(
+                problem, REVIEW_SCOPE_MIN_DATE, round_no, round_date
             )
 
     return True, None
@@ -1898,6 +1955,18 @@ def _selftest_round_selection(
     )
 
 
+def _validate_arm(suffix: str, needle: str | None, expect_ok: bool) -> None:
+    # r5 F4: the table validates its own needle/polarity pairing, and
+    # (r1 F2) a fail-arm needle must have only non-empty "|"-separated
+    # parts, else an empty part would satisfy the check vacuously.
+    # (r2 F1) both guards are explicit raises so they survive python -O,
+    # and needle parts must be non-whitespace, not merely non-empty.
+    if (needle is None) != expect_ok:
+        raise AssertionError(f"needle/expect_ok polarity mismatch: {suffix}")
+    if needle is not None and not all(p.strip() for p in needle.split("|")):
+        raise AssertionError(f"empty needle part: {suffix}")
+
+
 def _selftest_decision_marker(plans_dir: Path, reviews_dir: Path, check) -> None:
     """Decision-points trailer family: gated vs legacy rounds, shapes.
 
@@ -1908,7 +1977,9 @@ def _selftest_decision_marker(plans_dir: Path, reviews_dir: Path, check) -> None
     (reason or "")``). Every ``selftest#decision_marker/*`` check name is
     verbatim from the pre-refactor family; the sidecar-mutation arms
     (missing/blank/malformed date) are a second table below (r5 F10: one
-    fixture write and one ``mutate(sidecar)`` call per row), and the
+    fixture write and one ``mutate(sidecar)`` call per row; r1 F6: the
+    decode rows in that family each carry an explicit expect-pass flag
+    and the assertion is selected from the row), and the
     fence-boundary comments sit beside their tuples.
     """
     trailer = "Decision points requiring a grill: "
@@ -2281,6 +2352,22 @@ def _selftest_decision_marker(plans_dir: Path, reviews_dir: Path, check) -> None
             False,
             "missing decision-points trailer",
         ),
+        # (r1 overflow F3): a 3-tilde line does NOT close a 4-tilde opener
+        # (tilde-side twin of the short-close backtick arm above); it is
+        # legal fence content, so the REAL trailer after it stays inside
+        # the open fence (a lenient closer that ignores run length would
+        # expose the trailer and flip this arm red).
+        (
+            "trailer_inside_tilde_short_close_fails",
+            (
+                "# P\n\n## Assumptions\n\nNone needed.\n\n~~~~\nquoted template\n~~~\n"
+                f"{trailer}none remain.\n"
+                "~~~~\n"
+            ),
+            "2026-09-08",
+            False,
+            "missing decision-points trailer",
+        ),
         # (r4 F5): a closer
         # line with exactly 4 leading spaces is outside the <=3 indent
         # bound, so the fence stays open and the REAL trailer after the
@@ -2293,6 +2380,28 @@ def _selftest_decision_marker(plans_dir: Path, reviews_dir: Path, check) -> None
                 "# P\n\n## Assumptions\n\n```\nquoted template\n    ```\n"
                 f"{trailer}none remain.\n"
                 "```\n"
+            ),
+            "2026-09-08",
+            False,
+            "missing decision-points trailer",
+        ),
+        # (r1 overflow F4): a 4-space-indented tilde line is fence CONTENT
+        # (indent > 3 can never close; tilde-side twin of the indent-4
+        # backtick arm above), so the REAL trailer after it stays inside
+        # the open fence (a lenient closer that ignores indent would
+        # expose the trailer and flip this arm red). The pseudo-closer
+        # carries a FULL-LENGTH (4) tilde run so the run-length rule does
+        # not independently block it: the indent gate is the only
+        # protection being probed (the plan's Task 3 checkbox was corrected
+        # to the full-length run for the same reason — a 3-tilde line is
+        # rejected by the run-length rule alone, making the indent-gate
+        # mutation probe unable to flip the arm).
+        (
+            "trailer_after_indent_4_tilde_closer_stays_fenced",
+            (
+                "# P\n\n## Assumptions\n\nNone needed.\n\n~~~~\nquoted template\n    ~~~~\n"
+                f"{trailer}none remain.\n"
+                "~~~~\n"
             ),
             "2026-09-08",
             False,
@@ -2327,6 +2436,24 @@ def _selftest_decision_marker(plans_dir: Path, reviews_dir: Path, check) -> None
             "2026-09-08",
             True,
             None,
+        ),
+        # (r1 overflow): a tilde opener keeps accepting ANY info string —
+        # the r5 F8 backtick-info rejection must NOT apply to tilde
+        # openers (fail-side mirror of the backtick-info paragraph arm
+        # above) — so the fence OPENS and the real trailer inside stays
+        # swallowed (extending the rejection to tilde openers would close
+        # the fence and flip this arm red).
+        (
+            "trailer_inside_tilde_fence_with_backtick_info_fails",
+            (
+                "# P\n\n## Assumptions\n\nNone needed.\n\n~~~x ``` styled\n"
+                "quoted template\n"
+                f"{trailer}none remain.\n"
+                "~~~\n"
+            ),
+            "2026-09-08",
+            False,
+            "missing decision-points trailer",
         ),
         # (r5 F8): a leading tab
         # reads as indent >= 4, so the line can never open (or close) a
@@ -2373,15 +2500,7 @@ def _selftest_decision_marker(plans_dir: Path, reviews_dir: Path, check) -> None
     ]
 
     for suffix, plan_text, date, expect_ok, needle in arms:
-        # r5 F4: the table validates its own needle/polarity pairing, and
-        # (r1 F2) a fail-arm needle must have only non-empty "|"-separated
-        # parts, else an empty part would satisfy the check vacuously.
-        # (r2 F1) both guards are explicit raises so they survive python -O,
-        # and needle parts must be non-whitespace, not merely non-empty.
-        if (needle is None) != expect_ok:
-            raise AssertionError(suffix)
-        if needle is not None and not all(p.strip() for p in needle.split("|")):
-            raise AssertionError(suffix)
+        _validate_arm(suffix, needle, expect_ok)
         plan, _ = _write_clean_state(
             plans_dir, reviews_dir, plan_text=plan_text, date=date
         )
@@ -2398,6 +2517,27 @@ def _selftest_decision_marker(plans_dir: Path, reviews_dir: Path, check) -> None
             f"ok={ok} reason={reason}",
         )
         _clean_reviews_dir(reviews_dir)
+
+    # Negative-witness meta-rows (r2-F1 design invariant): each row calls
+    # _validate_arm with a malformed arm and asserts its DISTINCT message
+    # fires; converting a guard back to a bare ``assert`` loses the
+    # message prefix and python -O strips a bare assert entirely, so both
+    # regressions flip these rows red.
+    meta_arms: list[tuple[str, object, str]] = [
+        ("meta_polarity_mismatch_raises", lambda: _validate_arm("meta_probe", None, False), "needle/expect_ok polarity mismatch"),
+        ("meta_empty_needle_part_raises", lambda: _validate_arm("meta_probe", "a| |b", False), "empty needle part"),
+    ]
+    for name, probe, expected in meta_arms:
+        message = ""
+        try:
+            probe()
+        except AssertionError as exc:
+            message = str(exc)
+        check(
+            f"selftest#decision_marker/{name}",
+            expected in message,
+            f"message={message!r}",
+        )
 
     # Sidecar-mutation arms (r5 F10): one (name, mutate) table with
     # a single fixture write and one mutate(sidecar) call per row; every row
@@ -2446,6 +2586,50 @@ def _selftest_decision_marker(plans_dir: Path, reviews_dir: Path, check) -> None
             f"ok={ok} reason={reason}",
         )
         _clean_reviews_dir(reviews_dir)
+
+    # Decode-sharing arms (r2-F2: the plan bytes are decoded ONCE and ONLY
+    # when at least one date guard fires): an undecodable plan whose round
+    # is date-exempt still passes, while the same undecodable plan under a
+    # gated date fails with the decode reason. Both rows overwrite the plan
+    # bytes and then refresh source_digest to match, so the stale-digest
+    # reason can never mask the decode reason under test. Each row carries
+    # an explicit expect-pass flag (r1 F6): the assertion is selected by
+    # row identity, not by re-inspecting the mutated sidecar at assertion
+    # time.
+    decode_arms: list[tuple[str, object, bool]] = [
+        ("undecodable_plan_date_exempt_passes", lambda s: s.pop("date"), True),
+        ("undecodable_plan_gated_fails", lambda s: None, False),
+    ]
+    for name, mutate, expect_ok in decode_arms:
+        plan, review = _write_clean_state(
+            plans_dir, reviews_dir, plan_text="# P\n\nBody.\n", date="2026-09-08"
+        )
+        sidecar = json.loads(
+            review.with_suffix(".stats.json").read_text(encoding="utf-8")
+        )
+        mutate(sidecar)
+        plan.write_bytes(b"\xff\xfe\x00 undecodable")
+        sidecar["source_digest"] = vrs.compute_source_digest(
+            "plan", plan.read_bytes()
+        )
+        review.with_suffix(".stats.json").write_text(
+            json.dumps(sidecar), encoding="utf-8"
+        )
+        ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+        # Assertion selected by the row's explicit expect-pass flag
+        # (r1 F6): the pass row requires ok with no reason; the fail row
+        # requires the decode reason.
+        if expect_ok:
+            passed = ok and reason is None
+        else:
+            passed = not ok and "cannot read plan bytes" in (reason or "")
+        check(
+            f"selftest#decision_marker/{name}",
+            passed,
+            f"ok={ok} reason={reason}",
+        )
+        _clean_reviews_dir(reviews_dir)
+
 
 def _selftest_review_scope(plans_dir: Path, reviews_dir: Path, check) -> None:
     """Review Scope category family: path-kind vs declared category,
@@ -2502,6 +2686,56 @@ def _selftest_review_scope(plans_dir: Path, reviews_dir: Path, check) -> None:
         and "src/service.py" in reason
         and "Documentation" in reason
         and "Production code" in reason,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # template_prose_label_implementation_under_documentation: the plans
+    # skill Review Scope template's own Documentation label carries
+    # same-line guidance prose, so a plan copying the template opens a
+    # category block from the label-with-prose line; an
+    # implementation-suffix path listed under it must fail check (a)
+    # with the category-mismatch reason naming the path and both
+    # categories.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Documentation:** production code and tests use the"
+            " explicit list\n\n- src/service.py\n"
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/"
+        "template_prose_label_implementation_under_documentation",
+        not ok
+        and reason is not None
+        and "src/service.py" in reason
+        and "Documentation" in reason
+        and "Production code" in reason,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # template_prose_label_doc_under_documentation_ok: a documentation-
+    # suffix path declared under the prose-carrying Documentation label
+    # is authoritative and passes (characterization arm; green before
+    # and after the grammar fix).
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Documentation:** production code and tests use the"
+            " explicit list\n\n- docs/guide.md\n"
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/template_prose_label_doc_under_documentation_ok",
+        ok and reason is None,
         f"ok={ok} reason={reason}",
     )
     _clean_reviews_dir(reviews_dir)
@@ -2920,6 +3154,271 @@ def _selftest_review_scope(plans_dir: Path, reviews_dir: Path, check) -> None:
         and reason is not None
         and "scripts-old/tool.py" in reason
         and "omitted from the Review Scope" in reason,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # uppercase_files_opener_collected (r3 F3): an uppercase `FILES:`
+    # opener listing a path the scope never mentions must be collected
+    # and fail check (c) with the omitted-from-inventory reason; pre-fix
+    # the block is never collected and the gate passes vacuously.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Documentation:**\n\n- docs/guide.md\n",
+            tasks_body=(
+                "### Task 1: X\n\n"
+                "FILES:\n\n"
+                "- src/unlisted.py\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/uppercase_files_opener_collected",
+        not ok
+        and reason is not None
+        and "src/unlisted.py" in reason
+        and "omitted from the Review Scope" in reason,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # second_files_block_latched (r3 F3, re-characterized by r1 F1): a
+    # later bare `Files:` echo now RE-OPENS collection (r1 F1), but the
+    # token it harvests (`word`) is not path-shaped — no slash, no
+    # doc/implementation suffix (r4 F2) — so it is dropped and the
+    # inventory check still passes; pre-r1-F1 the echo stayed closed.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Documentation:**\n\n- docs/guide.md\n",
+            tasks_body=(
+                "### Task 1: X\n\n"
+                "Files:\n\n"
+                "- docs/guide.md\n\n"
+                "Notes: echo\n\n"
+                "Files:\n\n"
+                "- word\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/second_files_block_latched",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # step_heading_files_collected: a `### Step` section heading carries
+    # its own Files: block; pre-fix the `^### Task` scan skips Step
+    # headings entirely and the gate passes vacuously.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Documentation:**\n\n- docs/guide.md\n",
+            tasks_body=(
+                "### Step 1: X\n\n"
+                "Files:\n\n"
+                "- src/unlisted.py\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/step_heading_files_collected",
+        not ok
+        and reason is not None
+        and "src/unlisted.py" in reason
+        and "omitted from the Review Scope" in reason,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # task4_heading_files_collected: a `#### Task` section's Files: block
+    # is scanned too; pre-fix nothing matches `^### Task` and nothing is
+    # collected (the fixture has no `### Task` section anywhere).
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Documentation:**\n\n- docs/guide.md\n",
+            tasks_body=(
+                "#### Task 1: X\n\n"
+                "Files:\n\n"
+                "- src/unlisted.py\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/task4_heading_files_collected",
+        not ok
+        and reason is not None
+        and "src/unlisted.py" in reason
+        and "omitted from the Review Scope" in reason,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # bare_none_files_item_not_phantom (r4 F2): a bare `- none` item in a
+    # Files: list must not tokenize to the phantom path `none` and
+    # false-reject check (c).
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Documentation:**\n\n- docs/guide.md\n",
+            tasks_body=(
+                "### Task 1: X\n\n"
+                "Files:\n\n"
+                "- docs/guide.md\n"
+                "- none\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/bare_none_files_item_not_phantom",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # backticked_space_path_coverage_ok (characterization arm; green
+    # before and after): a backticked span carries spaces intact;
+    # backticks are the convention for space-bearing paths, so the
+    # unbackticked multi-token payload keeps the first-token rule
+    # unchanged.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Production code:**\n\n- `my docs/white paper.md`\n",
+            tasks_body=(
+                "### Task 1: X\n\n"
+                "Files:\n\n"
+                "- `my docs/white paper.md`\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/backticked_space_path_coverage_ok",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # bare_scope_entry_covers_slashed_task_ok (r3-F1 surviving polarity
+    # witness; characterization arm, green before and after): a bare
+    # scope entry `scripts` covers a slashed task Files token `scripts/`;
+    # the lost mirror direction (slashed scope covering a bare task
+    # token) is recorded in the plan's Design Invariants.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Production code:**\n\n- scripts\n",
+            tasks_body=(
+                "### Task 1: X\n\n"
+                "Files:\n\n"
+                "- scripts/\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/bare_scope_entry_covers_slashed_task_ok",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # prose_two_spans_not_a_path: a task Files item whose leading content
+    # is prose carrying two backticked spans must contribute NO path; the
+    # first-span-wins rule made the mid-prose span `docs/a.md` win as a
+    # false path and fail the inventory check. The scope text mentions
+    # neither docs/a.md nor docs/b.md anywhere, so the raw-text boundary
+    # fallback cannot mask the RED.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Documentation:**\n\n- docs/guide.md\n",
+            tasks_body=(
+                "### Task 1: Do the thing\n\n"
+                "Files:\n\n"
+                "- see `docs/a.md` and also `docs/b.md`\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/prose_two_spans_not_a_path",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # in_tick_annotation_stripped: a parenthesized annotation INSIDE the
+    # backticked span must not stay attached to the extracted path; the
+    # Production code label is pinned so check (a) stays silent and the
+    # arm exercises the inventory check (c).
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Production code:**\n\n- src/service.py\n",
+            tasks_body=(
+                "### Task 1: Do the thing\n\n"
+                "Files:\n\n"
+                "- `src/service.py (new; this plan)`\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/in_tick_annotation_stripped",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # windows_separator_coverage_ok: a backslash-separated task Files
+    # path must be covered by a slash-form directory scope entry;
+    # separator normalization at extraction makes the downstream
+    # comparison see one form.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Production code:**\n\n- scripts/\n",
+            tasks_body=(
+                "### Task 1: Do the thing\n\n"
+                "Files:\n\n"
+                "- scripts\\service.py\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/windows_separator_coverage_ok",
+        ok and reason is None,
         f"ok={ok} reason={reason}",
     )
     _clean_reviews_dir(reviews_dir)

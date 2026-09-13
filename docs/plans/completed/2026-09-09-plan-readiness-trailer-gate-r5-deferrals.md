@@ -98,7 +98,7 @@ Files:
 
 Except where an item says otherwise (scratch-only), every checklist item in this task edits the file listed above.
 
-- [x] Record the baseline arm-name set for the Task 4 preservation check: `python3 scripts/plan_readiness.py --selftest | grep -oE 'selftest#decision_marker/[A-Za-z0-9_/]+' | sort -u` into `docs/tmp/decision-marker-names.before` (create the file; scratch only, never committed)
+- [x] Record the baseline arm-name set for the Task 4 preservation check: `python3 scripts/plan_readiness.py --selftest | grep -oE 'selftest#decision_marker/[A-Za-z0-9_/]+' | sort -u` into `docs/tmp/decision-marker-names.before` (create the file; scratch only, never committed) and record the base commit for the Task 4 scope check: git rev-parse HEAD > docs/tmp/trailer-gate-base-sha.txt
 - [x] Reshape `trailer_inside_close_with_info_text_fails` (name, date, `expect_ok=False`, needle `"missing decision-points trailer"` all unchanged); plan_text becomes `"# P\n\n## Assumptions\n\n```\nquoted template\n``` note\n" + trailer + "none remain.\n```\n"`, so a REAL trailer sits after the ```` ``` note ```` pseudo-closer inside the still-open fence
 - [x] Reshape `trailer_inside_short_close_fails` the same way: plan_text `"# P\n\n## Assumptions\n\n````\nquoted template\n```\n" + trailer + "none remain.\n````\n"`, so the real trailer sits after the 3-backtick pseudo-closer inside the still-open 4-backtick fence
 - [x] Reshape `trailer_after_indent_4_closer_stays_fenced` the same way: plan_text `"# P\n\n## Assumptions\n\n```\nquoted template\n    ```\n" + trailer + "none remain.\n```\n"`, with the genuine bare closer ending the fence after the real trailer
@@ -156,5 +156,5 @@ Except where an item says otherwise (scratch-only), every checklist item in this
 
 - [x] Run the Validation Commands block → expect `ALL PASS`, exit 0
 - [x] Arm-name preservation: regenerate the name set into `docs/tmp/decision-marker-names.after` and run `comm -23 docs/tmp/decision-marker-names.before docs/tmp/decision-marker-names.after`; expect EMPTY output (no name removed), and `comm -13` shows exactly the seven new names (`backtick_info_opener_is_paragraph_passes`, `crlf_fenced_quote_passes`, `tab_indented_closer_line_is_content_fails`, `tab_indented_fence_line_is_content_passes`, `trailer_after_backtick_block_with_stray_tildes_passes`, `trailer_after_unicode_separator_close_stays_fenced`, `trailer_inside_tilde_close_with_info_text_fails`)
-- [x] Scope check: `git log --name-only <base>..HEAD` over the commits this plan created lists only `scripts/plan_readiness.py` (base is the commit current when Task 1 started)
-- [x] Delete the scratch files `docs/tmp/decision-marker-names.before`, `docs/tmp/decision-marker-names.after`, and any replay-probe scratch
+- [x] Scope check: `git log --name-only <base>..HEAD` over the commits this plan created lists only `scripts/plan_readiness.py` over the base recorded by Task 1: git log --name-only "$(cat docs/tmp/trailer-gate-base-sha.txt)"..HEAD
+- [x] Delete the scratch files `docs/tmp/decision-marker-names.before`, `docs/tmp/decision-marker-names.after`, `docs/tmp/trailer-gate-base-sha.txt`, and any replay-probe scratch

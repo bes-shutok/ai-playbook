@@ -1,6 +1,6 @@
 # Deduplicate the gated-probe date guards and reason wrappers in plan_readiness.py
 
-- **Status:** open
+- **Status:** done
 - **Workflow:** pre-plan backlog item; promote via the `plans` skill when scheduled, move to `backlog_completed_dir` on completion.
 
 ## Problem

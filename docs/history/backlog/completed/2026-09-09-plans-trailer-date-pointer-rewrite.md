@@ -1,6 +1,6 @@
 # plans: rewrite the inline trailer-date restatement (plans SKILL.md) as a pointer
 
-Status: open
+Status: done
 Origin: tooling-polish plan code review r4 F4 (docs/reviews/2026-09-09-plan-authoring-tooling-polish-code-review-r4.md); EXISTING debt (sentence predates the branch) surfaced by the Task 3 governance rule
 
 ## Finding (Low)

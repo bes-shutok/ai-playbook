@@ -1,6 +1,6 @@
 # Backlog: trailer-gate plan r5 F1, record base sha in a Task 1 scratch item
 
-Status: open
+Status: done
 Workflow: backlog
 Source: docs/reviews/2026-09-09-plan-review-plan-readiness-trailer-gate-r5-deferrals-r5.md (F1, Low, non-blocking, consistency#stale-cross-reference)
 Severity: Low (non-blocking)
