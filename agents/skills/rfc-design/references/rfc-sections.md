@@ -40,6 +40,7 @@ If a section is not applicable for MVP, write only:
 ### 1. Header
 Must include:
 - RFC title (feature name)
+- Capability identity: stable kebab-case concept identifier, independent of ticket, branch, or file path (assigned in create mode; ticket ids are provenance only, never the identity)
 - Owning team (if provided; otherwise `(TODO: confirm)`)
 - Status: Draft / In Review / Approved (default Draft)
 - Created date (infer from current date if not provided; mark `(TODO: confirm)` if inferred)

@@ -1,6 +1,7 @@
 # Backlog: rfc-design create-mode identity Header wiring
 
-Status: open
+Status: done
+Disposition: completed 2026-09-12 via docs/plans/2026-09-12-rfc-design-create-mode-identity-header-wiring.md; wiring landed as the rfc-design Step 1 create-mode identity rule, the `Capability identity:` Header bullet in references/rfc-sections.md, and the Step 4 Header-identity-first closure preference (filename derivation kept as fallback).
 Workflow: backlog
 Origin: Code review r3 finding F7 residual (branch 2026-09-10-doc-ownership-lifecycle; staging doc `docs/reviews/2026-09-10-2026-09-08-doc-ownership-lifecycle-code-review-r3.md`, round 3, F7)
 Severity: Low

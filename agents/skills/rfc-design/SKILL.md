@@ -261,6 +261,8 @@ Rules:
 
 After Step 0 and Step 0.1 gates pass, draft all RFC sections in one pass per `references/rfc-sections.md`. Do not run Step 2 until the draft is complete (all sections present or marked "Not applicable for MVP").
 
+**Capability identity (create mode):** when drafting begins, assign a stable kebab-case capability identity and record it in the RFC Header (`### 1. Header`, `Capability identity:` bullet per `references/rfc-sections.md`). The identity keys the closure registry row (Step 4) and is independent of ticket, branch, or file path; ticket ids are provenance only, never the identity. When the RFC file is saved, prefer a filename consistent with the identity (see the Save location rules under Documentation paths).
+
 ## Skill Ownership for RFC Lessons
 
 When a lesson changes RFC authoring workflow, section content requirements, or review-checklist expectations:
@@ -553,7 +555,7 @@ Verification rounds use `-r<N>` in the staging filename (`...-<mode>-r2.md`, `-r
 
 When the user declares an RFC **superseded** or **accepted**, prompt the freeze transition per `doc-hierarchy` "Document states":
 
-1. **Stable capability identity:** the closure row keys on a stable kebab-case capability identity, independent of ticket, branch, or file path; ticket ids are provenance only, never the identity. Current create mode does not yet emit a capability identity in the Header, so the filename-derived scheme (filename minus leading date prefix, per the ownership-registry comment header) is the live default; at closure, derive the identity that way and confirm it with the user before freezing (if the file was renamed before closure, derive from the original creation-time filename, e.g. via git log --follow on the RFC path, and say so when proposing the identity; never silently derive from the current path, which the rename changed). Emitting the identity in the Header at RFC creation is tracked in the backlog item `docs/history/backlog/2026-09-10-rfc-design-create-mode-identity-header-wiring.md`.
+1. **Stable capability identity:** the closure row keys on a stable kebab-case capability identity, independent of ticket, branch, or file path; ticket ids are provenance only, never the identity. Prefer the identity recorded in the RFC Header (`Capability identity:` bullet, assigned at creation per Step 1). For an RFC without a Header identity (pre-existing files), derive it at closure the filename-derived way (filename minus leading date prefix, per the ownership-registry comment header) and confirm it with the user before freezing (if the file was renamed before closure, derive from the original creation-time filename, e.g. via git log --follow on the RFC path, and say so when proposing the identity; never silently derive from the current path, which the rename changed).
 2. **Prompt, do not infer:** freeze is agent-prompted and user-confirmed. When the user declares the outcome, propose the registry row; never freeze based on file age or staleness.
 3. **Accepted RFC:** the accepting document (implementation plan, architecture topic, or code docs) becomes the SOT owner. In the RFC's registry row, set `state: completed`; the `successor` column carries the accepting document identity (accepted-SOT relation); column order and required cells defer to the `doc-hierarchy` ownership registry spec.
 4. **Superseded RFC:** the successor column carries the superseding document identity; `state: superseded`; archive move per `doc-hierarchy` where applicable.
