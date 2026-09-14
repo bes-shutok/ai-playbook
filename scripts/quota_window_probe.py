@@ -10,14 +10,15 @@ behind injectable interfaces on top of this module.
 from __future__ import annotations
 
 import argparse
-import io
 import json
+import math
 import os
 from datetime import datetime
 import pathlib
 import sys
 import time
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
+import urllib.error
 import urllib.request
 
 # Z.ai limit entry type -> window kind. Calibrated against the documented
@@ -31,6 +32,14 @@ ZCODE_KIND_MAP = {
 
 DEFAULT_MINUTES_THRESHOLD = 20
 DEFAULT_PERCENT_THRESHOLD = 90
+
+# Provider-reported resets beyond this horizon are clamped (review r1 F2):
+# the widest legitimate window observed is the monthly-scale secondary reset
+# in the captured live payload (about 26 days out), so the horizon covers a
+# full billing cycle plus margin while still bounding a hostile or buggy
+# epoch to weeks instead of an unbounded host-global lockout. The same bound
+# is enforced again at flag-write time as defense in depth.
+MAX_RESET_HORIZON_SECONDS = 40 * 86400
 
 
 def make_limit(kind: str, used_percent: float, reset_at_epoch: int, now: float,
@@ -75,6 +84,59 @@ def _find_limits_array(payload: Any) -> Optional[Sequence[Mapping]]:
     return holder["limits"] if holder is not None else None
 
 
+def _validated_limit(kind: str, raw_percent: Any, raw_reset: Any, now: float,
+                     reset_is_ms: bool = False) -> Optional[dict]:
+    """Shared per-entry guard for both parse loops (review r3 F4).
+
+    Absorbs convert -> validate -> clamp -> construct -> marker so a guard
+    edit cannot land in one runtime's parser and miss the other's (a drift
+    that already materialized once on this branch). Returns None when the
+    entry must drop alone; a malformed entry never aborts the parse.
+
+    - Conversion and limit construction sit inside per-entry guards
+      (review r2 F3): a non-numeric value, an epoch datetime cannot
+      represent, or a platform localtime failure (``OSError`` band,
+      review r3 F2) drops only its own entry.
+    - Non-finite or out-of-range percentages drop the entry (review r1 F2).
+    - Implausibly far horizons clamp to now + MAX_RESET_HORIZON_SECONDS,
+      and an engaged clamp is observable via a ``reset_clamped`` marker
+      (review r1 F2, r2 F7).
+    """
+    try:
+        used_percent = float(raw_percent)
+        reset_at_epoch = int(raw_reset)
+        if reset_is_ms:
+            reset_at_epoch //= 1000
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+    # Reject non-finite or out-of-range percentages per entry (review
+    # r1 F2): a fabricated inf/NaN/100+ percent must neither force a
+    # false pause nor abort the whole report.
+    if not (math.isfinite(used_percent) and 0.0 <= used_percent <= 100.0):
+        return None
+    # Clamp implausibly far horizons: a provider-chosen epoch must not
+    # arm a months-or-years-long host-global lockout (review r1 F2).
+    # An engaged clamp is observable (review r2 F7): the limit carries
+    # a reset_clamped marker that build_report turns into a reason.
+    clamped = min(reset_at_epoch, int(now) + MAX_RESET_HORIZON_SECONDS)
+    try:
+        entry_limit = make_limit(
+            kind=kind,
+            used_percent=used_percent,
+            reset_at_epoch=clamped,
+            now=now,
+        )
+    except (TypeError, ValueError, OverflowError, OSError):
+        # Limit construction stays inside the guard (review r2 F3): an
+        # epoch datetime cannot represent (for example a negative value,
+        # a year outside 1..9999, or the OSError localtime band) drops
+        # its entry alone.
+        return None
+    if clamped < reset_at_epoch:
+        entry_limit["reset_clamped"] = True
+    return entry_limit
+
+
 def parse_zcode_limits(payload: Mapping, now: Optional[float] = None) -> list[dict]:
     """Parse a Z.ai quota/limit response into the limit contract.
 
@@ -86,15 +148,27 @@ def parse_zcode_limits(payload: Mapping, now: Optional[float] = None) -> list[di
     entries = _find_limits_array(payload) or []
     limits = []
     for entry in entries:
-        kind = ZCODE_KIND_MAP.get(entry.get("type"))
-        if kind is None or "nextResetTime" not in entry:
+        # Symmetric entry guard (review r1 F6, extended r2 F3): a
+        # non-mapping element, a missing epoch OR a missing percentage
+        # drops only this entry, so one malformed limit cannot blind the
+        # whole gate (both windows).
+        if not isinstance(entry, Mapping):
             continue
-        limits.append(make_limit(
-            kind=kind,
-            used_percent=float(entry["percentage"]),
-            reset_at_epoch=int(entry["nextResetTime"]) // 1000,
-            now=now,
-        ))
+        # Review r3 F2: the kind lookup needs a hashable key. A list- or
+        # dict-typed ``type`` would raise TypeError (unhashable) outside
+        # any guard and abort the whole parse, so validate the shape
+        # before the map lookup.
+        entry_type = entry.get("type")
+        if not isinstance(entry_type, str):
+            continue
+        kind = ZCODE_KIND_MAP.get(entry_type)
+        if kind is None or "nextResetTime" not in entry or "percentage" not in entry:
+            continue
+        entry_limit = _validated_limit(
+            kind, entry["percentage"], entry["nextResetTime"], now, reset_is_ms=True
+        )
+        if entry_limit is not None:
+            limits.append(entry_limit)
     return limits
 
 
@@ -126,15 +200,20 @@ def parse_codex_rollout(lines: Iterable[str], now: Optional[float] = None) -> li
         return []
     limits = []
     for kind in ("primary", "secondary"):
+        # Same per-entry isolation and validation shape as the zcode path
+        # (review r2 F3 + r2 F5), shared via _validated_limit since r3 F4:
+        # a non-mapping window, a non-numeric value, a non-finite or
+        # out-of-range percent (JSON Infinity/NaN literals parse), an
+        # epoch datetime cannot represent, or an OSError-band epoch drops
+        # ONLY this window; resets_at is clamped to the same horizon.
         window = latest.get(kind)
         if not isinstance(window, Mapping) or "resets_at" not in window:
             continue
-        limits.append(make_limit(
-            kind=kind,
-            used_percent=float(window["used_percent"]),
-            reset_at_epoch=int(window["resets_at"]),
-            now=now,
-        ))
+        entry_limit = _validated_limit(
+            kind, window.get("used_percent"), window["resets_at"], now
+        )
+        if entry_limit is not None:
+            limits.append(entry_limit)
     return limits
 
 
@@ -195,6 +274,16 @@ def build_report(runtime: str, limits: Sequence[Mapping],
         minutes_threshold=minutes_threshold,
         percent_threshold=percent_threshold,
     )
+    # An engaged horizon clamp is observable (review r2 F7): a clamped
+    # limit's reset time is a bound, not the provider's real reset.
+    if any(limit.get("reset_clamped") for limit in live):
+        # Review r3 F6: the day figure derives from the constant so a
+        # retune cannot leave this reason lying.
+        reasons.append(
+            "reset clamped to {}-day horizon".format(
+                MAX_RESET_HORIZON_SECONDS // 86400
+            )
+        )
     return {
         "runtime": runtime,
         "limits": list(live),
@@ -207,18 +296,58 @@ def build_report(runtime: str, limits: Sequence[Mapping],
 
 # --- Task 2: transports, runtime discovery, fail-open, flag write ---
 
-ZCODE_QUOTA_URL = "https://api.z.ai/api/quota/limit"
+# Live Z.ai monitor endpoint (extracted from the ZCode desktop app bundle, 2026-09-13); the legacy https://api.z.ai/api/quota/limit answers 404-NOT_FOUND inside HTTP 200, which read as a permanent status: unknown; do not revert.
+ZCODE_QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit"
 DEFAULT_ZCODE_CONFIG = pathlib.Path("~/.zcode/cli/config.json").expanduser()
 DEFAULT_CODEX_SESSIONS = pathlib.Path("~/.codex/sessions").expanduser()
 
 Transport = Callable[[str, Mapping[str, str]], str]
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    # Documented replacement idiom (review r2 F9): a redirect handler whose
+    # redirect_request returns None makes the opener treat any 3xx as an
+    # error instead of following it. The transport's URL is the fixed
+    # https ZCODE_QUOTA_URL constant, so the handler-set difference versus
+    # the previously hand-assembled opener (which omitted the FTP/File/Data
+    # handlers) is moot for scheme coverage; build_opener() drops its
+    # default HTTPRedirectHandler in favor of this subclass automatically.
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _build_no_redirect_opener() -> "urllib.request.OpenerDirector":
+    # urllib's default opener follows redirects and replays every request
+    # header (including Authorization) verbatim to the redirect target, so a
+    # 3xx from the trusted endpoint could leak the provider API key to an
+    # arbitrary cross-host or cleartext downgrade. With _NoRedirectHandler
+    # installed, a 3xx surfaces as an HTTPError
+    # (HTTPErrorProcessor -> HTTPDefaultErrorHandler) and probe_zcode fails
+    # open to status: unknown with that reason. Filtering the handler list
+    # of a build_opener() result would NOT unregister the redirect methods,
+    # so the subclass replaces the default handler instead.
+    return urllib.request.build_opener(_NoRedirectHandler())
+
+
+_OPENER_NO_REDIRECTS = _build_no_redirect_opener()
+
+
 def urllib_transport(url: str, headers: Mapping[str, str]) -> str:
-    """Default HTTPS transport (stdlib urllib). Host context only."""
+    """Default HTTPS transport (stdlib urllib; redirects never followed)."""
     request = urllib.request.Request(url, headers=dict(headers))
-    with urllib.request.urlopen(request, timeout=10) as response:
-        return response.read().decode("utf-8")
+    try:
+        with _OPENER_NO_REDIRECTS.open(request, timeout=10) as response:
+            return response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        # Review r3 F9: the fail-open 3xx path surfaces as an HTTPError
+        # that carries the open response body; close it deterministically
+        # before the error propagates to the guard's unknown report, so
+        # the body is never left to the garbage collector's implicit
+        # cleanup (witnessed by test_zcode_transport_never_follows_
+        # redirects, which escalates ResourceWarning to an error at a
+        # forced collection pass; review r4 F2).
+        exc.close()
+        raise
 
 
 def load_api_key(config_path: os.PathLike | str) -> Optional[str]:
@@ -283,9 +412,10 @@ def probe_codex(sessions_dir: os.PathLike | str = DEFAULT_CODEX_SESSIONS,
         )
     try:
         text = rollout.read_text(encoding="utf-8")
-        # Parse stays inside the guard: a malformed rollout record (for
-        # example a non-numeric used_percent) must fail open like every
-        # other transport/parse failure, never escape as a traceback.
+        # Parse stays inside the guard: a read or unexpected parse failure
+        # must fail open like every other transport/parse failure, never
+        # escape as a traceback (per-entry malformed windows now drop
+        # inside parse_codex_rollout itself, review r2 F3/F5).
         limits = parse_codex_rollout(text.splitlines(), now=now)
     except Exception as exc:  # fail open: any read/parse failure
         return _unknown_report("codex", ["codex rollout parse failed: {}".format(exc)])
@@ -332,13 +462,27 @@ def write_flag_if_paused(flag_path: os.PathLike | str, runtime: str,
     binding_limit = next((l for l in limits if l["kind"] == binding), None)
     if binding_limit is None:
         return False
+    if binding_limit["reset_at_epoch"] > time.time() + MAX_RESET_HORIZON_SECONDS:
+        # Defense in depth (review r1 F2): a direct build_report caller can
+        # hand the writer an unclamped limit; never arm the host-global flag
+        # with an epoch beyond the clamp horizon. Not arming is the
+        # fail-open direction.
+        return False
     lines = [
         "runtime={}".format(runtime),
         "reset_at_epoch={}".format(binding_limit["reset_at_epoch"]),
         "reset_at_iso={}".format(binding_limit["reset_at_iso"]),
     ]
     if plan:
-        lines.append("plan={}".format(plan))
+        # Review r4 F1: the plan slug is forensic metadata, never trusted
+        # key material. parse_flag keeps the LAST occurrence of each key,
+        # so a newline-bearing --plan value would inject forged runtime/
+        # reset_at_epoch lines into the host-global flag. Keep only the
+        # first line (splitlines() also strips a trailing CR) and omit the
+        # plan line entirely when nothing remains.
+        first_line = plan.splitlines()[0] if plan.splitlines() else ""
+        if first_line:
+            lines.append("plan={}".format(first_line))
     path = pathlib.Path(flag_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -383,7 +527,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         description=(
             "Quota window probe (stdlib only). Exit codes: 0 = pause decision, "
             "1 = continue (including status unknown). Parse pause_decision "
-            "from the stdout JSON report, not from the exit code."
+            "from the stdout JSON report, not from the exit code. Resets "
+            "beyond MAX_RESET_HORIZON_SECONDS ({} days) are clamped to that "
+            "horizon at parse time (a clamped binding can still arm the flag "
+            "at the clamped epoch); the flag writer additionally refuses any "
+            "binding still beyond the horizon.".format(
+                MAX_RESET_HORIZON_SECONDS // 86400
+            )
         )
     )
     parser.add_argument("--runtime", choices=("zcode", "codex"))
@@ -413,6 +563,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                percent_threshold=args.max_percent)
     if args.write_flag:
         try:
+            # Review r4 F4: the boolean return is deliberately not relayed
+            # into reasons here. Every main()-reachable False arm is
+            # excluded by construction (both parsers clamp every limit to
+            # the horizon before main() sees it, and an empty limit set
+            # cannot carry a pause decision); the writer-level horizon
+            # check stays as genuine defense in depth for direct callers.
             write_flag_if_paused(args.write_flag, report["runtime"], report["limits"],
                                  report["pause_decision"], plan=args.plan)
         except OSError as exc:

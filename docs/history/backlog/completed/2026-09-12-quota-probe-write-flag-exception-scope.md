@@ -1,6 +1,6 @@
 # Backlog: quota probe --write-flag guard should catch the ValueError class, not only OSError
 
-Status: open
+Status: done (closed stale 2026-09-14: the fix landed via the budget-gate-quota-fixes execution without claiming this item - scripts/quota_window_probe.py line 357 now guards `except (OSError, ValueError)`; verified on main 0b533bab)
 Origin: review r5 CC-R5-1 (execute-plan runtime guardrails; round-cap deferral, zero blocking)
 Discovered: 2026-09-12
 

@@ -28,7 +28,13 @@ reason.
   - `reset_at_iso=<local ISO-8601>`: human-readable reset time, used
     verbatim in the block reason.
   - `plan=<slug>` (optional): the plan slug for forensics; names which
-    execute-plan run paused.
+    plan run paused (an execute-plan implementation run or a plans
+    authoring run).
+
+Reset horizon: resets beyond `MAX_RESET_HORIZON_SECONDS` (40 days) are
+clamped to that horizon at parse time (a clamped binding can still arm the
+flag at the clamped epoch), and the flag writer additionally refuses any
+binding still beyond the horizon (fail-open).
 
 ## Fired-marker anti-thrash rule
 
@@ -103,22 +109,68 @@ The matcher is omitted deliberately: this backstop gates every tool call, not
 a tool-name subset. Config-file hooks are disabled unless `hooks.enabled` is
 set to `true`.
 
-Codex (provisional): the `codex.sh` deny convention ships, but the repo's
-skill-gate README records `Codex has no blocking pre_tool_use event` as of its
-writing; the registration below is pending verification against the live
-Codex hooks schema. Verify on your Codex version before relying on it.
+Codex: registered in `~/.codex/hooks.json` under `hooks.PreToolUse` as a
+`.*` matcher group (schema mirrors the live registered group's field set:
+group-level `matcher`, hook fields `type`, `command`, `timeout`,
+`statusMessage`). The stored command is the repo-root-resolved absolute path;
+JSON does not expand `~`:
 
 ```json
 {
   "PreToolUse": [
-    { "command": "<repo-root>/agents/hooks/budget-guard/codex.sh" }
+    {
+      "matcher": ".*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "<repo-root>/agents/hooks/budget-guard/codex.sh",
+          "timeout": 10,
+          "statusMessage": "Checking budget guard"
+        }
+      ]
+    }
   ]
 }
 ```
 
+The `.*` matcher gates every tool call (the Codex schema requires a matcher;
+`.*` is the whole-tool-set equivalent of the omitted ZCode matcher above).
+
+Registration takes effect for sessions started after the config change; an
+already-running session does not load the new hook.
+
+The registered commands execute this repository's live working tree, so hook
+behavior tracks the checked-out branch: after any edit to
+`budget_guard_core.py` or either adapter script, smoke-check the hooks with
+`python3 -m unittest discover -s scripts -p 'test_budget_guard_hooks.py'`
+from the repository root. A deployed-copy registration (pinned hook files
+under `~/.ai-playbook/`) is tracked in
+`docs/history/backlog/2026-09-14-budget-guard-deployed-hook-copies.md`.
+
 PreToolUse-only: never register this hook on a Stop event. The block must
 land before a tool runs; on Stop it would arrive after the work is done and
 can wedge the session.
+
+### First-start hook trust prompt (Ship-when)
+
+The codex binary hash-gates hook trust (`trusted_hash` entries under
+`[hooks.state]` in `~/.codex/config.toml`) and does not run a newly registered
+hook until the user approves it at the next Codex session start. Until that
+approval lands, the hook above is registered but inert. Ship-when
+follow-through: after approving the prompt, run the single live drive
+described in the open question below, then complete its post-drive cleanup.
+
+### Open envelope question
+
+The adapter emits the flat `{"permissionDecision": "deny", "reason": ...}`
+envelope while the codex binary's own error strings name
+`permissionDecisionReason`; live acceptance by the codex binary is unverified
+until the first-start trust prompt is approved. The canonical open-question
+statement, Ship-when drive procedure, and post-drive decision table live in
+`docs/history/backlog/2026-09-13-codex-deny-envelope-verification.md`; a
+denial closes the question only when its reason embeds the armed flag's
+`reset_at_iso`. This README keeps the registration schema, the trust-prompt
+note, and exit conventions only.
 
 ## Exit conventions
 

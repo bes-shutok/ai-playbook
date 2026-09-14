@@ -351,7 +351,7 @@ Exit 0 means the latest `review-plan` round covers the current plan bytes (sidec
 
 A clean plan review establishes implementation readiness only; it does not authorize deployment, merge, or any other external effect. Deployment, merge, push, and other external actions remain governed by their own authorization rules (see user `AGENTS.md` Git Push Policy).
 
-**Budget-pause resume note:** the resume exemption digest rule is unaffected by a Budget gate pause because the pause protocol never edits the plan file. The resumed orchestrator clears the guard flag (`~/.ai-playbook/runtime/budget-guard.flag`) and the `budget-guard.fired` marker before relaunching any worker.
+**Budget-pause resume note:** the resume exemption digest rule is unaffected by a Budget gate pause because the pause protocol never edits the plan file. The resumed orchestrator clears the guard flag (`~/.ai-playbook/runtime/budget-guard.flag`) and the `budget-guard.fired` marker before relaunching any worker only if the flag's `reset_at_epoch` matches the reset epoch recorded in this run's `budget_pause` record; otherwise leave both in place and report the mismatch. If the flag (or fired marker) is already absent, nothing is armed, so proceed with the relaunch and note the pre-cleanup in the record (see the Budget gate pause protocol).
 
 ### Step 0.6: Predecessor verification (hard gate, before Phase 1)
 
@@ -380,21 +380,32 @@ Ordering: the orchestrator resolves `validator` outcomes FIRST: run the declared
 Resolve `budget_pause_minutes_before_reset`, `budget_pause_max_used_percent`, and `budget_probe_runtime` from the opening TOML block of `.ai-playbook/facts.md` per the table convention above. At the Step 1.5 and Step 3.5 boundaries only (never mid-task), run:
 
 ```bash
-python3 scripts/quota_window_probe.py --minutes-before <N> --max-percent <P> [--runtime <id>] [--plan <plan-slug>] --write-flag ~/.ai-playbook/runtime/budget-guard.flag
+# Three-step probe resolution mirroring Step 0.5: BUDGET_PROBE env override first; then the repo-local `scripts/quota_window_probe.py` when present; then the deployed $HOME/.ai-playbook/scripts/quota_window_probe.py.
+BUDGET_TOP="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+BUDGET_PROBE="${BUDGET_PROBE:-}"
+if [ -z "$BUDGET_PROBE" ] && [ -f "$BUDGET_TOP/scripts/quota_window_probe.py" ]; then
+  BUDGET_PROBE="$BUDGET_TOP/scripts/quota_window_probe.py"
+  echo "budget gate: using repo-local probe at $BUDGET_PROBE" >&2
+fi
+BUDGET_PROBE="${BUDGET_PROBE:-$HOME/.ai-playbook/scripts/quota_window_probe.py}"
+python3 "$BUDGET_PROBE" --minutes-before <N> --max-percent <P> [--runtime <id>] [--plan <plan-slug>] --write-flag ~/.ai-playbook/runtime/budget-guard.flag
 ```
 
 - Exit codes: `0` = pause decision, `1` = continue (including `status: unknown`). Parse `pause_decision` from the probe's stdout JSON report, never from the exit code.
 - On `pause_decision: continue` (or `status: unknown`, noting the failure in `manifest.md`), continue the normal flow.
+- A missing or unopenable probe script is treated as `status: unknown`, noted in `manifest.md`, and the flow continues; it must never block the run.
 - On `pause`, run the pause protocol:
   1. Finish the current boundary only; do not start new work.
-  2. Keep the written guard flag armed. The guard flag is host-global: while armed it gates every session's tool calls on the host until expiry or manual removal, mirroring the hook README's host-scope note. Exception: when the binding limit is the weekly `secondary` window, the probe writes no flag at all — nothing is armed; skip to the report-for-user-decision step instead.
+  2. Keep the written guard flag armed. The guard flag is host-global: while armed it gates every session's tool calls on the host until expiry or manual removal, mirroring the hook README's host-scope note. Exception: when the binding limit is the weekly `secondary` window, the probe writes no flag at all (nothing is armed); skip to the report-for-user-decision step instead.
   3. Append a `budget_pause` line to `manifest.md` with the runtime, reset epoch and ISO time, thresholds used, and the next step that would have run.
   4. Schedule the resume: reset time rounded UP to the whole minute plus one minute.
-  5. On a host whose agent runtime supports one-shot scheduled automations, create one whose self-contained resume prompt says to execute the plan path, read the `budget_pause` record, apply the Step 0.5 resume rules, clear `~/.ai-playbook/runtime/budget-guard.flag` and `budget-guard.fired` before relaunching work, and stand down if the plan is archived or a peer session resumed it. If the automation create is refused, fall back to a launchd one-shot on the host clock; if both are unavailable, end with a report-only outcome naming the exact resume command and time.
+  5. On a host whose agent runtime supports one-shot scheduled automations, create one whose self-contained resume prompt says to execute the plan path, read the `budget_pause` record, apply the Step 0.5 resume rules, clear `~/.ai-playbook/runtime/budget-guard.flag` and `budget-guard.fired` before relaunching work only if the flag's `reset_at_epoch` matches the reset epoch recorded in this run's `budget_pause` record (otherwise leave both in place and report the mismatch: the flag encodes a different, still-live window, another runtime's or a newer window of the same runtime; if the flag (or fired marker) is already absent, nothing is armed, so proceed with the relaunch and note the pre-cleanup in the record), re-reading the flag immediately before each deletion and aborting the clear if its `reset_at_epoch` changed since the match check (mirror the hook core's re-read-before-unlink pattern: a concurrent probe may have replaced the flag in between), and stand down if the plan is archived or a peer session resumed it. A cleanup call issued before the window resets may itself be denied once by the guard; retry it after that single block. If the automation create is refused, fall back to a launchd one-shot on the host clock; if both are unavailable, end with a report-only outcome naming the exact resume command and time.
   6. On a host with no automation capability (launchd-only runtimes), use the launchd one-shot with a sentinel self-disable file.
   7. When the binding limit is the weekly `secondary` window, do not schedule: report for user decision.
 
 The resume prompt continues through the normal Step 0.5 resume path and the driver's `continue` operation (a budget pause leaves no blocked claim, so the blocked-claim `resume` operation does not apply).
+
+The plans skill mirrors this protocol at plan-authoring boundaries (see the plans skill Budget gate section), which makes this section the canonical home of the shared pause protocol.
 
 ### Plan-file edits (skill-gate)
 
@@ -916,7 +927,7 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
 At Phase 0, read `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, and `{tmp_dir}` from `.ai-playbook/facts.md` (see `using-skills` Step 0; bootstrap runs only when Terms triggers fire) before plan-scoped edits or session log writes.
 
 ### Consumes `plans` skill
-As a consumer of `plans`, reads plan format, task order, validation commands, review scope, and commit messages. Before Step 1.2 and during Recovery, consumes the `plans` Checklist inclusion gate (Recovery: every checklist item including already `[x]`). It requires repository implementation or a release condition with a current receipt bound to the item, target, and time or session plus **why executable now** and completion evidence. External prerequisites are never exception-admissible. Pre-execution and Phase 3 reviews use the shared blocking-aware cycle. Before any plan-file edit, refreshes the plans-class marker per **Plan-file edits (skill-gate)** (same obligation as `plans` Writing).
+As a consumer of `plans`, reads plan format, task order, validation commands, review scope, and commit messages. Before Step 1.2 and during Recovery, consumes the `plans` Checklist inclusion gate (Recovery: every checklist item including already `[x]`). It requires repository implementation or a release condition with a current receipt bound to the item, target, and time or session plus **why executable now** and completion evidence. External prerequisites are never exception-admissible. Pre-execution and Phase 3 reviews use the shared blocking-aware cycle. Before any plan-file edit, refreshes the plans-class marker per **Plan-file edits (skill-gate)** (same obligation as `plans` Writing). Its Budget gate mirrors this skill's Budget gate protocol at plan-authoring boundaries; the Budget gate section here remains the canonical home (deltas owned by plans: the two authoring boundaries, the `budget_pause` record sink, the completed-plan stand-down trigger, the mandatory `--plan` argument at authoring boundaries, and the fallback compression, in which the sentinel self-disable file is attached to both launchd fallback cases and the host-clock wording is dropped).
 
 ### Consumes `tdd-guide` + `unit-test-runner` (via implement sub-agent)
 Implement sub-agent follows RED → GREEN → Refactor for behavioral tasks; runs validation commands with fresh output.

@@ -750,3 +750,94 @@ Witness: during a review-address round's mutation probes on a runtime
 script, an earlier probe cycle reported a false pass; after clearing the
 package's `__pycache__` and re-running with `PYTHONDONTWRITEBYTECODE=1`,
 every probe reproduced its expected failure cleanly.
+
+## 31. Filtering build_opener's Handlers List Never Disables urllib Redirects
+
+When a probe or client must NOT follow redirects (credential-bearing requests,
+SSRF guards), do not remove `HTTPRedirectHandler` from a `build_opener()`
+result's `.handlers` list: `OpenerDirector.add_handler` copies each handler's
+`<protocol>_open` / `http_error_<code>` bound methods into per-directive
+registries at construction time, and the dispatcher walks those registries,
+not the `.handlers` list. The filtered opener still follows redirects,
+silently.
+
+- Primary idiom: pass an `HTTPRedirectHandler` subclass whose
+  `redirect_request` returns `None` to `build_opener()`; `build_opener`
+  drops its default redirect handler in favor of the subclass
+  automatically, so any 3xx raises `HTTPError` instead of being followed,
+  and the caller decides how to fail.
+- Alternative (only when the handler set must be controlled directly):
+  assemble the opener explicitly from the default handler set minus the
+  redirect handler. That assembly MUST include `ProxyHandler()` (the
+  no-argument form carries the ambient proxy configuration); omitting it
+  silently bypasses host proxies and the client fails open to unknown in
+  proxied environments. At minimum carry `HTTPErrorProcessor`,
+  `HTTPSHandler` when available, `HTTPDefaultErrorHandler`, and
+  `ProxyHandler()`; any 3xx then raises `HTTPError` instead of being
+  followed.
+- Pin the behavior with a loopback test: a local server answers 302, and the
+  test asserts the redirect target received zero requests and the call
+  surfaced the 3xx (or its documented fail-open equivalent) rather than the
+  followed response.
+
+Witness: during a review round on an authenticated quota probe, a proposed
+fix filtered the handlers list of a `build_opener()` result; design
+inspection caught that redirect methods stay registered in the directive
+registries. The r1 fix landed handler-by-handler explicit assembly
+(7b0cc48f) with the loopback-302 test asserting the redirect target was
+never contacted; the r2 simplification fold then swapped the assembly for
+the subclass idiom, `build_opener(_NoRedirectHandler())` (9191cb17), which
+is the shipped form and the reason explicit assembly is documented here as
+the alternative, not the primary.
+
+## 32. Pin Ambient Proxy Config Via getproxies For Transport Tests
+
+When a transport test must be hermetic against the host's proxy environment
+(a loopback witness, a no-redirect opener, a direct-connection assertion),
+pinning environment variables per invocation (`no_proxy="*"`, cleared
+`http_proxy`) does not control the actual input: `ProxyHandler` calls
+`getproxies()` once at opener construction and caches the resulting mapping,
+so a proxy discovered while the environment was unpinned (for example a
+module-level opener built at import) survives any later env pin.
+
+- Patch the configuration source, not the environment:
+  `mock.patch.object(urllib.request, "getproxies", lambda: {})`, and
+  construct the object under test inside the patch scope (a nested `with`
+  that rebuilds the opener while `getproxies` is patched). A module-level
+  opener must be rebuilt under the patch; the import-time instance already
+  snapshotted the ambient mapping.
+- `mock.patch.object` evaluates its value argument before the patch is
+  entered, so a factory call passed as an argument still runs under the
+  ambient environment. Call the factory inside the `with` block instead.
+- Run the witness once under a hostile env (`http_proxy=http://127.0.0.1:9`
+  with `no_proxy` cleared) to prove the pin holds, not just under a clean
+  env.
+
+Witness: the loopback-302 redirect witness from #31 initially inherited the
+ambient proxy mapping on hosts with a configured proxy; the review fold
+pinned `getproxies` and rebuilt the no-redirect opener inside the patch,
+verified green under a hostile proxy env.
+
+## 33. Witness Response Closure With ResourceWarning Escalation
+
+When a transport test must pin that an HTTP response object (an `HTTPError`
+body, an `urlopen` response) is closed on every path, a return-value assert
+cannot see closure: closing produces no observable result on the call's
+normal channel. Escalate the warning channel instead. Wrap the client call in
+`warnings.catch_warnings()`, call `warnings.simplefilter("error",
+ResourceWarning)` inside the context, and run `gc.collect()` inside the same
+context before leaving it; an unclosed response then fails the test at
+finalization instead of emitting an ignored warning on some later collection.
+
+- CPython usually closes a response when its last reference drops, but
+  reference cycles defer finalization to the collector; the forced collect
+  inside the context pulls that finalization into the escalation window.
+- Keep the escalation scoped to the wrapped call plus collect, not module-wide,
+  so unrelated `ResourceWarning`s elsewhere in the suite stay unaffected.
+- Name the witness test in a comment at the `close()` site it pins; a prose
+  claim like "the suite witnesses this" is unverifiable at the code site.
+
+Witness: an r4 review of a no-redirect quota probe flagged the transport's
+bare `exc.close()` comment ("witnessed by the suite") as unverifiable; the
+redirect test escalated `ResourceWarning` to error around the probe call with
+a forced collect, and the `close()` site now names that test.

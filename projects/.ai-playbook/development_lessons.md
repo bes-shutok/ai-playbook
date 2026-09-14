@@ -6129,3 +6129,80 @@ When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git c
 **Distinguishing from #280:** #280 classifies error classes when tightening a catch-all into targeted fail-closed handling; this lesson aligns already-targeted catch tuples across sibling call sites of one operation, using the seam's broader tuple as the enumeration evidence.
 
 **See also:** #280 (error-class enumeration discipline when fail-closed), #330 (the witness must sit on the arm it claims to cover).
+## 336. Treat Plan-Sketched Fixture Formats as Illustrative Until the Parser Confirms
+
+**Principle:** Family H (verify the real thing, not the abstraction: a plan's data-format sketch is a claim about the consuming parser's input schema, and the parser is the source of truth)
+
+**Trigger:** implementing a plan step that builds a data-format fixture (flag file, seed config, probe input) whose concrete format the plan sketches in prose or as a sample payload.
+
+**Rule:** (1) Before building a plan-sketched fixture, read the consuming code's parse function and confirm the sketch (field names, types, encoding) matches what the parser actually reads. (2) On divergence, adapt the fixture to the parser's real schema, because the code and not the plan prose defines the format, and record the divergence in the task log. (3) When authoring a plan whose fixture format cannot be verified at authoring time, carry an explicit adaptation clause ("adapt the fixture to the consuming code's real schema") so a later divergence is an authorized adaptation rather than an omission that needs a plan amendment.
+
+**Why:** plan prose drifts from implementation (hand-sketched formats, later refactors). Building the fixture from the sketch literally yields a fixture the parser rejects or, worse, a probe that validates the wrong schema; halting to amend the plan costs a full round. Parser-first reading plus a pre-authorized adaptation clause converts the drift into a recorded non-event.
+
+**Witness (2026-09-13, budget-guard backstop registration, Task 5):** the plan's probe step sketched a JSON flag fixture; the implementing parser (`parse_flag` in the budget-guard core) reads `key=value` lines requiring `runtime`, `reset_at_iso`, and integer `reset_at_epoch`. Reading the parser first produced a correct `key=value` fixture on the first attempt: the block probe exited 2 with the expected block envelope embedding the reset time, and the pass probe exited 0 with empty stdout. The plan's adaptation clause covered the divergence with no amendment round.
+
+**Distinguishing from #56:** #56 mandates that the plan author verify code claims before writing tasks, and that the implementer verify mechanism descriptions before flipping tests GREEN. This lesson covers the execution-time fixture case: a format sketch that reached the plan unverified (deliberately hedged), where the implementer needs a parser-first adaptation path and the author needs the adaptation-clause alternative.
+
+**See also:** #56 (general plan-claim rule: verify plan claims against source before depending on them), #55 (trace the fixture when plan pseudocode compares same-unit fields by name).
+
+## 337. Name The First Actually-Failing Gate From An Executed Block
+
+**Principle:** Family H (verify the real thing: a RED-today evidence claim about a validation block is itself a checkable claim, and scanners that see missing files as clean make block prefixes pass vacuously)
+
+**Trigger:** recording authoring-time evidence that a plan's validation block fails today (the RED-today proof), especially when the gated files are created by the plan's own tasks and do not exist yet.
+
+**Rule:** (1) Execute the WHOLE validation block at authoring time; never predict which gate fails first. (2) A forbidden-pattern or presence gate whose target files do not exist yet passes vacuously on the missing paths; note each vacuous pass explicitly instead of citing it as coverage. (3) Record the first actually-failing gate (and its exit code) as the RED-today anchor; a predicted gate number is not evidence, and a wrong one misdirects the implementer's first debug cycle.
+
+**Why:** a scanner consulted about files that do not exist reports clean, so the block's first real failure sits at a later gate; an evidence line asserting the wrong anchor reads as verified, survives review rounds, and sends the implementer chasing a gate that was never the blocker.
+
+**Witness (2026-09-13, plan authoring run):** the plan's evidence line claimed the block "fails today at gate 1"; the em-dash scanner's file mode exits 0 on missing files, gate 1 passed vacuously, and a reviewer executing the block found the first real failure at a later license-diff gate; the claim was corrected to name the actual gate and the vacuous pass.
+
+**Distinguishing from #220:** #220 proves the target gate fires against current content (the sweep must match today); this lesson covers multi-gate blocks over to-be-created files, where the question is not whether a gate fires but WHICH gate the executed block actually fails first.
+
+**See also:** #220 (execute the sweep; unverified empirical claims are untrusted), #330 (enumerate before crediting: the conjunct-side sibling).
+
+## 338. A Review Round Killed After Its Markdown Is Not A Round
+
+**Principle:** Family H (verify the real thing: the `.stats.json` sidecar, not the staged Markdown, is the machine-bound witness that a review round ran on the exact reviewed bytes; a Markdown without its sidecar is an orphan artifact, not a verdict)
+
+**Trigger:** a review-round sub-agent (review-plan or any staging-contract round) is interrupted by a usage limit or crash after writing its staging Markdown but before writing its sidecar, leaving the orchestrator with no final message.
+
+**Rule:** (1) Treat a round whose sidecar is absent as incomplete no matter how complete the Markdown looks (Summary, verdict, and digest line all present); do not certify, archive, or pass a gate on it. (2) Never hand-transcribe the missing sidecar from the Markdown: the sidecar is the reviewer's machine-readable record, and an orchestrator-authored transcription breaks the provenance the digest binding exists for while looking valid to every downstream validator. (3) Continue round numbering past the orphan (do not reuse its number while its md stays on disk), fold or carry its findings like any prior round, and instruct every round to write its sidecar immediately after the Markdown, not last, so an interruption cannot orphan the pair again.
+
+**Why:** the readiness gate binds verdict, counts, and digest through the sidecar of the latest round; certifying from an unpaired Markdown silently bypasses the gate's conservation and digest checks, and re-running the number over a surviving orphan md leaves two artifacts claiming the same round with only one provable.
+
+**Witness (2026-09-14, company-master scoping residuals plan authoring):** a 5-hour usage limit killed the round-3 panel after it wrote a complete 153-line Markdown (ready=yes, zero blocking, digest line included) with no sidecar; the orchestrator kept the md as prior context, folded its one Low (moving the digest anyway), numbered the next round r4 with sidecar-first output, and the readiness gate certified on the fully paired r5 instead.
+
+**Distinguishing from #337:** #337 covers evidence claims about which gate an executed validation block fails first; this lesson covers interrupted reviewer processes, where the question is whether a review round counts at all.
+
+**See also:** #220 (execute the sweep; unverified empirical claims are untrusted), #149 (sidecar-pairing validator contract).
+
+## 339. Prove A Triage Edit Adds No New Gate Errors
+
+**Principle:** Family H (verify the real thing: the claim "my edit added no new validator errors" on an artifact that already fails the gate is itself checkable, by diffing the gate's error sets on the reconstructed pre-edit bytes, not by asserting scope discipline)
+
+**Trigger:** a triage or fix pass must edit an artifact (review staging doc, synthesis-frozen report) that ALREADY fails a hard validator for pre-existing schema drift, while the artifact's synthesis content (statistics, verdicts, severities) is immutable for the pass, so the standing failures cannot be fixed in scope.
+
+**Rule:** (1) Before the edit, reconstruct the pre-edit artifact (scratch copy with the planned edits reverted) and run the gate on it; capture the error set. (2) After the edit, run the gate again and diff the two error sets. (3) Identical or only-shrunk set: the edit adds zero new gate errors; record the remaining failures as pre-existing drift, name them to the artifact owner, and do NOT rewrite synthesis content to satisfy the gate. (4) New errors appear: fix them within the edit before finishing.
+
+**Why:** the alternatives all fail silently or destructively: skipping the triage edit leaves findings unaddressed; editing frozen synthesis fields to silence a gate corrupts the artifact's record while looking valid to every downstream reader; and "I only touched my sections" is an unverified claim no later audit can distinguish from introduced drift.
+
+**Witness (2026-09-14, budget-gate quota-fixes plan review r1 triage):** `validate_review_staging.py --hard` exited 1 on the round's staging doc; the triage pass reconstructed the pre-edit Markdown plus sidecar in a scratch dir, confirmed the validator error set (metadata freshness lines, confidence vocabulary, workers counting, discard reason) byte-identical before and after the triage update, and reported the failures as pre-existing synthesis-content drift for the artifact owner.
+
+**Distinguishing from #85:** #85 fixes a validator whose scan scope mixes legacy entries with new work (narrow the assertion); this lesson covers an artifact-level gate failing on the same artifact you must edit (prove your edit's error-set delta is empty and leave the standing failures owned elsewhere).
+
+**See also:** #85 (scope a validator to the population it judges), #149 (required sidecar and wrong-owner discard routing), #338 (a round is its Markdown plus sidecar pair).
+
+## 340. Sanitize Multi-Line Values Before Writing Key=Value Artifacts
+
+**Principle:** Family H (verify the real thing: a value interpolated into a parsed artifact is reinterpreted by its reader's grammar, so the writer must sanitize against the parser, not the write call's signature)
+
+**Trigger:** any writer that interpolates an externally sourced string (plan slug, user input, log line, path) into a line-oriented key=value artifact that a parser later re-reads.
+
+**Rule:** (1) Before writing, reduce an untrusted single-line field to its first line (`splitlines()[0]`, which also strips a trailing CR) and omit the field entirely when nothing remains. (2) Assume the reader resolves duplicate keys last-wins: an embedded newline turns the remainder into new `key=value` lines that silently override security-relevant fields written earlier. (3) Pin the fix with a test that parses the written artifact through the REAL reader (import the parser, assert the parsed fields keep the writer's originals); prove it RED-first by temporarily restoring raw interpolation and asserting the injected value appears in no parsed field.
+
+**Why:** a writer's own contract (bool return, exit code) cannot catch injection; the parsed artifact is the security boundary, and only the reader's duplicate-key semantics expose the override.
+
+**Witness (2026-09-14, quota probe guard flag):** a multi-line plan slug interpolated into a guard flag let an embedded `reset_at_epoch=...` line override the writer's epoch (last-wins parse); the writer now emits the first line only and omits empty values, pinned by a test parsing through the real hook-core parser (mutation-probed RED pre-fix, GREEN after revert).
+
+**See also:** #336 (the parser, not the plan sketch, defines the format; here the parser must also grade the writer), #330 (one mutation-killing witness per guard conjunct), #220 (proving RED today on empirical claims).

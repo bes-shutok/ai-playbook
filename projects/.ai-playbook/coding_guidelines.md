@@ -591,3 +591,15 @@ When a binary layout is measured in whole bytes (envelope tag, nonce, fixed-widt
 **Rule:** On failure, split the outcome by cause. A legitimate out-of-scope failure skips the guard with a one-line witness note so the skip is reconstructable later. A wiring/config-drift failure (the guarded resource moved, the configured path went stale) emits a loud warning that names the drift, never records the outcome as a clean pass, and never silently inherits the out-of-scope branch. Collapsing both causes into one unresolved branch flips the guard fail-open exactly where it is needed most; the pre-change behavior that failed closed becomes a silent skip.
 
 **Example:** A pre-commit duplicate audit scoped its company-guidelines check to repos under the company workspace root. The rewritten test treated "repo outside the root" and "under the root but the master file moved" as one unresolved case with a single silent trivial pass, where the drift case had previously failed closed as a tool error. The fix split the branches: the out-of-scope skip prints a one-line note; the missing master prints a config-drift WARNING, continues to the placement-evidence check, and is never recorded as a clean pass.
+
+## 33. Silent Clamps Must Be Observable On Record And Report (G)
+
+**Principle:** Family G (silent data handling must surface; the mutation-side sibling of #24's drop-side rule).
+
+**Shape trigger:** A trust-boundary guard rewrites a hostile input value into the valid range (clamp to a horizon or budget, truncation, coercion, floor/ceil) instead of dropping the record. Ask: after the rewrite, can any consumer or operator tell the field's value is synthetic?
+
+**Rule:** When a guard clamps or normalizes an out-of-range external value into validity, the rewrite must be visible at two levels. Mark the mutated record with an explicit flag so programmatic consumers can distinguish clamped data from genuine data, and surface the clamp in the human-facing report or reasons so any decision made on the clamped value names its basis. A silent clamp lets synthetic data masquerade as upstream-genuine, hides whether the guard ever engaged, and leaves the guard testable only through internals.
+
+**Example:** A probe clamps an externally supplied reset timestamp that lies beyond its maximum horizon to the horizon value. Without a marker, a scheduler treats the clamped epoch as the upstream system's genuine answer, and no report line explains why a pause was or was not armed. The fix marked the clamped record and appended a "reset clamped to horizon" reason to the report.
+
+**Distinguishing from #24:** #24 covers records absent from the output; this covers records present with falsified fields. Both share the failure signature "the output looks complete and valid; it is not".

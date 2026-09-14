@@ -101,12 +101,21 @@ class BudgetGuardHookTest(unittest.TestCase):
 
     def test_codex_deny_shape(self) -> None:
         flag = write_flag(self.tmp, runtime="codex")
-        result = run_hook(CODEX_SH, flag, self.tmp / "budget-guard.fired")
+        fired = self.tmp / "budget-guard.fired"
+        result = run_hook(CODEX_SH, flag, fired)
         expected = json.dumps(
             {"permissionDecision": "deny", "reason": REASON.format(runtime="codex")}
         )
         self.assertEqual(result.stdout, expected)
         self.assertEqual(result.returncode, 0)
+        # The codex path must write the fired marker on its block, too: the
+        # deny-envelope decision table uses the marker to discriminate
+        # "envelope rejected" from "hook never ran" (mirrors the zcode
+        # witness in test_fired_marker_written_on_block).
+        self.assertTrue(fired.exists())
+        self.assertEqual(
+            fired.read_text(encoding="utf-8").strip(), str(RESET_EPOCH)
+        )
 
     def test_flag_runtime_wins_over_adapter_runtime(self) -> None:
         # The flag's own runtime line is the forensic truth: a codex adapter
