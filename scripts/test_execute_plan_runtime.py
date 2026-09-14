@@ -11,7 +11,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import unittest
 import uuid
 from unittest import mock
@@ -738,9 +737,10 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def test_startup_ambient_noise_is_resumable_cleanup_required(self):
         self._prelaunch_claim()
         (self.root / ".DS_Store").write_text("ambient\n", encoding="utf-8")
+        (self.root / ".DS_Store?").write_text("ambient\n", encoding="utf-8")
         docs = self.root / "docs"
         docs.mkdir()
-        (docs / ".#notes.md").write_text("editor swap\n", encoding="utf-8")
+        (docs / "._.DS_Store").write_text("ambient\n", encoding="utf-8")
         driver = self.driver()
         startup = driver.reconcile_startup()
         self.assertEqual(startup["status"], "blocked")
@@ -750,21 +750,44 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(continued["reason_code"], "cleanup-required")
         self.assertTrue(continued["resume_allowed"])
 
-        # Anything outside the allowlist keeps the hard dirty-worktree block.
-        (docs / ".#notes.md").unlink()
-        (self.root / "notes.txt").write_text("not ambient\n", encoding="utf-8")
+        # Anything outside the allowlist keeps the hard dirty-worktree block,
+        # and its evidence names the offending entry so the operator can
+        # reconcile it explicitly.
+        (docs / ".#notes.md").write_text("editor swap\n", encoding="utf-8")
         hard = driver.reconcile_startup()
         self.assertEqual(hard["reason_code"], "dirty-worktree")
         self.assertFalse(hard["resume_allowed"])
+        self.assertIn("?? docs/.#notes.md", " ".join(hard["evidence"]))
 
         # Tracked modifications are never ambient noise on the same path.
-        (self.root / "notes.txt").unlink()
+        (docs / ".#notes.md").unlink()
         (self.root / ".DS_Store").unlink()
+        (self.root / ".DS_Store?").unlink()
+        (docs / "._.DS_Store").unlink()
         gitignore = self.root / ".gitignore"
         gitignore.write_text(gitignore.read_text(encoding="utf-8") + "# touched\n", encoding="utf-8")
         tracked = driver.reconcile_startup()
         self.assertEqual(tracked["reason_code"], "dirty-worktree")
         self.assertFalse(tracked["resume_allowed"])
+
+    def test_startup_ambient_evidence_sanitizes_control_bytes(self):
+        # The resumable cleanup-required evidence passes through the same
+        # presentation sanitizer as the hard dirty-worktree block: a
+        # control-byte directory name renders as its escaped form and the
+        # raw ESC byte never reaches the evidence, while the classification
+        # stays ambient (resumable cleanup-required, not a hard violation).
+        self._prelaunch_claim()
+        noisy = self.root / "we\x1bird dir"
+        noisy.mkdir()
+        (noisy / ".DS_Store").write_text("ambient\n", encoding="utf-8")
+        driver = self.driver()
+        startup = driver.reconcile_startup()
+        self.assertEqual(startup["status"], "blocked")
+        self.assertEqual(startup["reason_code"], "cleanup-required")
+        self.assertTrue(startup["resume_allowed"])
+        evidence = " ".join(startup["evidence"])
+        self.assertIn("?? we\\x1bird dir/.DS_Store", evidence)
+        self.assertNotIn("\x1b", evidence)
 
     def test_startup_ambient_noise_without_live_claim_is_resumable_cleanup(self):
         # No-live-claim case: a fresh manifest with zero claims and purely
@@ -1037,6 +1060,49 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         with mock.patch.object(driver, "_git_worktree_dirty", side_effect=RuntimeError("status failed")):
             result = driver.reconcile_startup()
         self.assertEqual(result["reason_code"], "worktree-witness-unavailable")
+
+    def test_startup_dirty_witness_failure_degrades_evidence_not_block(self):
+        # Degrade-direction witness (sibling of the git-witness failure test):
+        # with the dirt already witnessed, a failing entry enumeration keeps
+        # the hard dirty-worktree block and degrades the evidence to the bare
+        # reconciliation line; the block itself never softens.
+        self._prelaunch_claim()
+        (self.root / ".DS_Store").write_text("ambient\n", encoding="utf-8")
+        driver = self.driver()
+        with mock.patch.object(driver, "_git_worktree_entries", side_effect=RuntimeError("status failed")):
+            result = driver.reconcile_startup(dirty_worktree=True)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "dirty-worktree")
+        self.assertFalse(result["resume_allowed"])
+        self.assertEqual(result["evidence"], ["uncommitted worktree requires explicit reconciliation"])
+
+    def test_startup_dirty_evidence_truncates_with_tail(self):
+        # r3 truncation witness: a 22-entry dirt set keeps the bare
+        # reconciliation line plus the first 20 entries and delivers the
+        # "... and 2 more entries" tail. The fill-in enumeration arm (the
+        # injected dirty_worktree path) feeds the evidence. One entry
+        # carries a control byte so the same witness pins the sanitizer:
+        # the escaped rendering appears in evidence and the raw ESC byte
+        # never does.
+        self._prelaunch_claim()
+        driver = self.driver()
+        entries = [("??", f"f{i}.txt") for i in range(22)]
+        entries[5] = ("??", "esc\x1b[31m.txt")
+        with mock.patch.object(driver, "_git_worktree_entries", return_value=entries):
+            result = driver.reconcile_startup(dirty_worktree=True)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "dirty-worktree")
+        self.assertEqual(
+            result["evidence"],
+            ["uncommitted worktree requires explicit reconciliation"]
+            + [f"?? f{i}.txt" for i in range(5)]
+            + ["?? esc\\x1b[31m.txt"]
+            + [f"?? f{i}.txt" for i in range(6, 20)]
+            + ["... and 2 more entries"],
+        )
+        joined = " ".join(result["evidence"])
+        self.assertIn("?? esc\\x1b[31m.txt", joined)
+        self.assertNotIn("\x1b", joined)
 
     def test_cli_drives_claim_checkpoint_done_and_terminal(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1963,6 +2029,377 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(after["claims"]["task-4"]["state"], "closed")
         self.assertNotEqual(after["tasks"]["task-4"]["commit_identity"], "dd33ee44ff55")
 
+    def test_success_checkpoint_refuses_aborted_workflow(self):
+        # F-r5-1 witness (a): a late success checkpoint on an aborted
+        # workflow is the explicit-abort envelope with no persist; the
+        # manifest is byte-identical before and after the receipt.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False)
+        state = runtime.load_manifest(self.state_path)
+        # Simulate an abort that landed elsewhere while this claim stayed
+        # live: only the workflow state flips, never the claim or the task.
+        state["workflow_state"] = "aborted"
+        runtime._safe_write_json(self.state_path, state)
+        before = runtime.load_manifest(self.state_path)
+        outcome = driver.record_worker_checkpoint(self.worker_checkpoint(task="task-4", checkpoint_identity="task-4:worker-1"))
+        self.assertEqual(outcome["status"], "aborted")
+        self.assertEqual(outcome["reason_code"], "explicit-abort")
+        self.assertFalse(outcome["resume_allowed"])
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-4"]["status"], "pending")
+        self.assertEqual(after["claims"]["task-4"]["state"], "launched")
+        self.assertEqual(after["workflow_state"], "aborted")
+        self.assertNotIn("task-4:worker-1", after["checkpoints"])
+        self.assertEqual(after, before)
+        # Duplicate-ordering arm: land the identical receipt while the
+        # workflow is active, flip aborted, then replay it; the fence
+        # precedes the duplicate short-circuit, so the replay is the
+        # explicit-abort envelope, never the idempotent duplicate success,
+        # and the manifest stays byte-identical.
+        state["workflow_state"] = "active"
+        runtime._safe_write_json(self.state_path, state)
+        landed = driver.record_worker_checkpoint(self.worker_checkpoint(task="task-4", checkpoint_identity="task-4:worker-1"))
+        self.assertEqual(landed["state"], "done-pending")
+        landed_state = runtime.load_manifest(self.state_path)
+        self.assertEqual(landed_state["tasks"]["task-4"]["status"], "done-pending")
+        landed_state["workflow_state"] = "aborted"
+        runtime._safe_write_json(self.state_path, landed_state)
+        before = runtime.load_manifest(self.state_path)
+        replay = driver.record_worker_checkpoint(self.worker_checkpoint(task="task-4", checkpoint_identity="task-4:worker-1"))
+        self.assertEqual(replay["status"], "aborted")
+        self.assertEqual(replay["reason_code"], "explicit-abort")
+        self.assertEqual(runtime.load_manifest(self.state_path), before)
+
+    def test_done_handoff_refuses_aborted_workflow(self):
+        # F-r5-1 witness (b): the done handoff on an aborted workflow is the
+        # explicit-abort envelope; no completion write lands.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False)
+        landed = driver.record_worker_checkpoint(self.worker_checkpoint(task="task-4", checkpoint_identity="task-4:worker-1"))
+        self.assertEqual(landed["state"], "done-pending")
+        state = runtime.load_manifest(self.state_path)
+        state["workflow_state"] = "aborted"
+        runtime._safe_write_json(self.state_path, state)
+        before = runtime.load_manifest(self.state_path)
+        outcome = driver.record_done(self.done(task="task-4"))
+        self.assertEqual(outcome["status"], "aborted")
+        self.assertEqual(outcome["reason_code"], "explicit-abort")
+        self.assertFalse(outcome["resume_allowed"])
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-4"]["status"], "done-pending")
+        self.assertEqual(after["claims"]["task-4"]["state"], "launched")
+        self.assertNotIn("commit_identity", after["tasks"]["task-4"])
+        self.assertFalse(after["tasks"]["task-4"].get("checkbox"))
+        self.assertEqual(after, before)
+        # Commit-lookup ordering arm: the aborted fence sits before the
+        # commit lookup. With a driver whose commit lookup cannot find any
+        # commit, the same landed done-pending task against the aborted
+        # workflow still surfaces the explicit-abort envelope, never the
+        # commit-pending block, and the manifest stays byte-identical.
+        lookup_driver = self.driver(seed_task3=False, commit_lookup=lambda _c: False)
+        before = runtime.load_manifest(self.state_path)
+        outcome = lookup_driver.record_done(self.done(task="task-4"))
+        self.assertEqual(outcome["status"], "aborted")
+        self.assertEqual(outcome["reason_code"], "explicit-abort")
+        self.assertFalse(outcome["resume_allowed"])
+        self.assertEqual(runtime.load_manifest(self.state_path), before)
+        # Duplicate-ordering arm: land the done handoff while the workflow
+        # is active, flip aborted, then replay the identical handoff; the
+        # fence sits before the duplicate short-circuit, so the replay is
+        # the explicit-abort envelope, never the idempotent duplicate
+        # success, and the manifest stays byte-identical.
+        state["workflow_state"] = "active"
+        runtime._safe_write_json(self.state_path, state)
+        completed = driver.record_done(self.done(task="task-4"))
+        self.assertEqual(completed["status"], "success")
+        completed_state = runtime.load_manifest(self.state_path)
+        self.assertEqual(completed_state["tasks"]["task-4"]["status"], "checkpointed")
+        completed_state["workflow_state"] = "aborted"
+        runtime._safe_write_json(self.state_path, completed_state)
+        before = runtime.load_manifest(self.state_path)
+        replay = driver.record_done(self.done(task="task-4"))
+        self.assertEqual(replay["status"], "aborted")
+        self.assertEqual(replay["reason_code"], "explicit-abort")
+        self.assertEqual(runtime.load_manifest(self.state_path), before)
+
+    def test_commit_reconciliation_refuses_aborted_workflow(self):
+        # F-r5-1 witness (c): commit reconciliation on an aborted workflow is
+        # the explicit-abort envelope; no reconciliation write lands.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False)
+        pending = driver.mark_commit_pending("task-4", "aa11bb22cc33", ["done-log:task-4"], claim_token="seed-task-4", generation=0)
+        self.assertEqual(pending["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        state["workflow_state"] = "aborted"
+        runtime._safe_write_json(self.state_path, state)
+        before = runtime.load_manifest(self.state_path)
+        outcome = driver.reconcile_commit_before_checkpoint("task-4", "aa11bb22cc33", lambda _c: True, claim_token="seed-task-4", generation=0)
+        self.assertEqual(outcome["status"], "aborted")
+        self.assertEqual(outcome["reason_code"], "explicit-abort")
+        self.assertFalse(outcome["resume_allowed"])
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-4"]["status"], "commit-pending")
+        self.assertEqual(after["claims"]["task-4"]["state"], "launched")
+        self.assertNotIn("task-4:commit", after["checkpoints"])
+        self.assertEqual(after, before)
+        # A replayed identical reconciliation after the abort keeps surfacing
+        # the explicit-abort envelope; the manifest stays byte-identical.
+        replay = driver.reconcile_commit_before_checkpoint("task-4", "aa11bb22cc33", lambda _c: True, claim_token="seed-task-4", generation=0)
+        self.assertEqual(replay["status"], "aborted")
+        self.assertEqual(replay["reason_code"], "explicit-abort")
+        self.assertEqual(runtime.load_manifest(self.state_path), before)
+        # Duplicate-ordering pin: once the reconciliation has landed (the task
+        # is checkpointed with the matching commit identity), a replay on the
+        # aborted workflow returns the explicit-abort envelope, never the
+        # idempotent duplicate success; the manifest stays byte-identical.
+        state["workflow_state"] = "active"
+        runtime._safe_write_json(self.state_path, state)
+        landed = driver.reconcile_commit_before_checkpoint("task-4", "aa11bb22cc33", lambda _c: True, claim_token="seed-task-4", generation=0)
+        self.assertEqual(landed["status"], "success")
+        landed_state = runtime.load_manifest(self.state_path)
+        self.assertEqual(landed_state["tasks"]["task-4"]["status"], "checkpointed")
+        landed_state["workflow_state"] = "aborted"
+        runtime._safe_write_json(self.state_path, landed_state)
+        before = runtime.load_manifest(self.state_path)
+        duplicate = driver.reconcile_commit_before_checkpoint("task-4", "aa11bb22cc33", lambda _c: True, claim_token="seed-task-4", generation=0)
+        self.assertEqual(duplicate["status"], "aborted")
+        self.assertEqual(duplicate["reason_code"], "explicit-abort")
+        self.assertEqual(runtime.load_manifest(self.state_path), before)
+
+    def test_commit_reconciliation_foreign_token_keeps_owner_mismatch_before_fence(self):
+        # r3 identity-before-fence witness (a): on an aborted workflow, a
+        # reconciliation receipt carrying a foreign claim token fails the
+        # identity check first and surfaces owner-mismatch, never the
+        # explicit-abort fence; the manifest stays byte-identical.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False)
+        pending = driver.mark_commit_pending("task-4", "aa11bb22cc33", ["done-log:task-4"], claim_token="seed-task-4", generation=0)
+        self.assertEqual(pending["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        state["workflow_state"] = "aborted"
+        runtime._safe_write_json(self.state_path, state)
+        before = self.state_path.read_bytes()
+        outcome = driver.reconcile_commit_before_checkpoint("task-4", "aa11bb22cc33", lambda _c: True, claim_token="wrong-token", generation=0)
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "owner-mismatch")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_success_checkpoint_foreign_token_keeps_owner_mismatch_before_fence(self):
+        # r3 identity-before-fence witness (b): on an aborted workflow, a
+        # success checkpoint with a foreign claim token fails the identity
+        # check first (owner-mismatch), never the explicit-abort fence, and
+        # nothing persists.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False)
+        state = runtime.load_manifest(self.state_path)
+        state["workflow_state"] = "aborted"
+        runtime._safe_write_json(self.state_path, state)
+        before = self.state_path.read_bytes()
+        outcome = driver.record_worker_checkpoint(self.worker_checkpoint(task="task-4", checkpoint_identity="task-4:worker-1", claim_token="wrong-token"))
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "owner-mismatch")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_done_handoff_foreign_token_keeps_unfenced_block_before_fence(self):
+        # r3 identity-before-fence witness (c): on an aborted workflow, a
+        # done handoff with a foreign claim token fails the fence predicate
+        # first and surfaces the missing-or-unfenced done evidence block,
+        # never the explicit-abort envelope; nothing persists.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False)
+        landed = driver.record_worker_checkpoint(self.worker_checkpoint(task="task-4", checkpoint_identity="task-4:worker-1"))
+        self.assertEqual(landed["state"], "done-pending")
+        state = runtime.load_manifest(self.state_path)
+        state["workflow_state"] = "aborted"
+        runtime._safe_write_json(self.state_path, state)
+        before = self.state_path.read_bytes()
+        outcome = driver.record_done(self.done(task="task-4", claim_token="wrong-token"))
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "done-pending")
+        self.assertIn("missing or unfenced done evidence", outcome["evidence"][0])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_abort_exits_wedged_commit_pending_claim(self):
+        # F-r5-2 witness (a): a commit-pending claim whose recorded commit
+        # provably does not exist is wedged (crash between the commit-pending
+        # write and the commit itself); abort with the still-current token is
+        # the preserve-and-stop runtime exit.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False, commit_lookup=lambda _commit: False)
+        pending = driver.mark_commit_pending("task-4", "aa11bb22cc33", ["done-log:task-4"], claim_token="seed-task-4", generation=0)
+        self.assertEqual(pending["status"], "success")
+        outcome = driver.abort("task-4", "seed-task-4")
+        self.assertEqual(outcome["status"], "aborted")
+        self.assertEqual(outcome["reason_code"], "explicit-abort")
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-4"]["status"], "aborted")
+        self.assertEqual(after["claims"]["task-4"]["state"], "aborted")
+        self.assertEqual(after["workflow_state"], "aborted")
+
+    def test_abort_exits_wedged_commit_pending_with_missing_identity(self):
+        # Wedge-edge witness: a hand-corrupted commit-pending task whose
+        # commit_identity field is missing routes through the wedge path too
+        # (an empty identity fails the commit lookup, so the task is
+        # unreconcilable), and the explicit stop with the still-current token
+        # remains the runtime exit for task, claim, and workflow.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False, commit_lookup=lambda commit: bool(commit))
+        pending = driver.mark_commit_pending("task-4", "aa11bb22cc33", ["done-log:task-4"], claim_token="seed-task-4", generation=0)
+        self.assertEqual(pending["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"].pop("commit_identity")
+        runtime._safe_write_json(self.state_path, state)
+        outcome = driver.abort("task-4", "seed-task-4")
+        self.assertEqual(outcome["status"], "aborted")
+        self.assertEqual(outcome["reason_code"], "explicit-abort")
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-4"]["status"], "aborted")
+        self.assertEqual(after["claims"]["task-4"]["state"], "aborted")
+        self.assertEqual(after["workflow_state"], "aborted")
+
+    def test_abort_still_refuses_commit_pending_with_provable_commit(self):
+        # F-r5-2 witness (b): when the recorded commit provably exists the
+        # r4 progression refusal stands; the wedge exception is the only
+        # unlock and the durable state stays untouched.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False, commit_lookup=lambda _commit: True)
+        pending = driver.mark_commit_pending("task-4", "aa11bb22cc33", ["done-log:task-4"], claim_token="seed-task-4", generation=0)
+        self.assertEqual(pending["status"], "success")
+        outcome = driver.abort("task-4", "seed-task-4")
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "stale-claim")
+        self.assertTrue(outcome["resume_allowed"])
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-4"]["status"], "commit-pending")
+        self.assertEqual(after["claims"]["task-4"]["state"], "launched")
+        self.assertEqual(after["workflow_state"], "active")
+
+    def test_abort_still_refuses_wedged_shaped_closed_claim(self):
+        # Wedge-boundary witness: the wedge exception requires a live
+        # (non-closed) claim. A hand-corrupted closed claim on a
+        # commit-pending task with a missing commit_identity is wedged-shaped
+        # but keeps the r4 progression refusal, and the durable state stays
+        # untouched.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False, commit_lookup=lambda commit: bool(commit))
+        pending = driver.mark_commit_pending("task-4", "aa11bb22cc33", ["done-log:task-4"], claim_token="seed-task-4", generation=0)
+        self.assertEqual(pending["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        state["claims"]["task-4"]["state"] = "closed"
+        state["tasks"]["task-4"].pop("commit_identity")
+        runtime._safe_write_json(self.state_path, state)
+        before = runtime.load_manifest(self.state_path)
+        outcome = driver.abort("task-4", "seed-task-4")
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "stale-claim")
+        self.assertTrue(outcome["resume_allowed"])
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["claims"]["task-4"]["state"], "closed")
+        self.assertEqual(after["tasks"]["task-4"]["status"], "commit-pending")
+        self.assertEqual(after["workflow_state"], "active")
+        self.assertEqual(after, before)
+
+    def test_abort_wedge_witness_failure_keeps_progression_refusal(self):
+        # r3 wedge-degrade witness: when the commit witness raises, the
+        # wedge exception degrades to not-wedged and the r4 progression
+        # refusal stands; abort surfaces the resumable stale-claim outcome
+        # and the manifest stays byte-identical. Both failure shapes are
+        # pinned: RuntimeError from a failing git invocation and OSError
+        # from an environment failure (git not found).
+        def raising_lookup(_commit):
+            raise RuntimeError("status failed")
+
+        def oserror_lookup(_commit):
+            raise OSError("git not found")
+
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False, commit_lookup=raising_lookup)
+        pending = driver.mark_commit_pending("task-4", "aa11bb22cc33", ["done-log:task-4"], claim_token="seed-task-4", generation=0)
+        self.assertEqual(pending["status"], "success")
+        before = self.state_path.read_bytes()
+        outcome = driver.abort("task-4", "seed-task-4")
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "stale-claim")
+        self.assertTrue(outcome["resume_allowed"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+        # OSError arm: the same degrade covers the environment-failure
+        # shape; the refusal stands and the manifest stays byte-identical.
+        degraded_driver = self.driver(seed_task3=False, commit_lookup=oserror_lookup)
+        before = self.state_path.read_bytes()
+        outcome = degraded_driver.abort("task-4", "seed-task-4")
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "stale-claim")
+        self.assertTrue(outcome["resume_allowed"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_abort_wedge_decision_revalidated_against_fresh_manifest_before_save(self):
+        # r3 TOCTOU witness: a competing writer lands the task's completion
+        # after abort computed its wedge decision but before its save; the
+        # fresh-load re-validation refuses to clobber the completed state
+        # and surfaces the resumable stale-claim outcome instead.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False, commit_lookup=lambda _commit: False)
+        pending = driver.mark_commit_pending("task-4", "aa11bb22cc33", ["done-log:task-4"], claim_token="seed-task-4", generation=0)
+        self.assertEqual(pending["status"], "success")
+        real_load = runtime.load_manifest
+        loads = {"count": 0}
+
+        def interleaved_load(path):
+            manifest = real_load(path)
+            loads["count"] += 1
+            if loads["count"] == 2:
+                # The competing writer runs between abort's decision
+                # snapshot (first load) and its save: the task completes,
+                # the claim closes.
+                manifest["tasks"]["task-4"].update({"status": "checkpointed", "checkbox": True, "complete": True, "commit_identity": "aa11bb22cc33"})
+                manifest["claims"]["task-4"]["state"] = "closed"
+                runtime._safe_write_json(self.state_path, manifest)
+            return manifest
+
+        with mock.patch.object(runtime, "load_manifest", side_effect=interleaved_load):
+            outcome = driver.abort("task-4", "seed-task-4")
+        self.assertEqual(loads["count"], 2)
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "stale-claim")
+        self.assertTrue(outcome["resume_allowed"])
+        self.assertEqual(outcome["evidence"], ["manifest changed during abort; wedge decision stale"])
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-4"]["status"], "checkpointed")
+        self.assertTrue(after["tasks"]["task-4"]["complete"])
+        self.assertEqual(after["claims"]["task-4"]["state"], "closed")
+        self.assertEqual(after["workflow_state"], "active")
+
+    def test_terminal_task_live_claim_surfaces_actionable_receipt(self):
+        # F-r5-3 witness: a non-success receipt for a terminal (checkpointed)
+        # task with a live claim surfaces the raw actionable receipt instead
+        # of the stale-claim outcome; nothing regressed, so nothing persists.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False)
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["status"] = "checkpointed"
+        state["tasks"]["task-4"]["complete"] = True
+        runtime._safe_write_json(self.state_path, state)
+        before = runtime.load_manifest(self.state_path)
+        outcome = driver.record_worker_checkpoint(
+            self.worker_checkpoint(
+                task="task-4",
+                checkpoint_identity="task-4:worker-1",
+                status="approval-required",
+                reason_code="approval-required",
+                action_scope="external-write:publish",
+                evidence=["approval-request:publish"],
+            )
+        )
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "approval-required")
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-4"]["status"], "checkpointed")
+        self.assertEqual(after["claims"]["task-4"]["state"], "launched")
+        self.assertFalse(any(event["event"] in {"worker-retry", "worker-blocked"} for event in after["history"]))
+        self.assertFalse(any(key.startswith("task-4:worker-1#attempt-") for key in after["checkpoints"]))
+        self.assertEqual(after, before)
+
     def test_stale_retryable_receipt_does_not_regress_done_pending(self):
         # F-r3-2 witness: mirrors test_stale_blocked_receipt_... but the late
         # receipt is retryable (attempts remaining > 0) under both retry
@@ -2073,26 +2510,20 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(after["tasks"]["task-4"]["status"], "checkpointed")
         self.assertEqual(after["claims"]["task-4"]["state"], "closed")
 
-    def test_claim_progressed_past_receipt_include_terminal_matrix(self):
-        # F-r3-8 predicate-level witness: the include_terminal flag gates only
-        # checkpointed/complete; the core statuses (done-pending,
-        # commit-pending, aborted) and a closed claim always progress.
+    def test_claim_progressed_past_receipt_matrix(self):
+        # F-r3-8 predicate-level witness: the base statuses (done-pending,
+        # commit-pending, aborted, checkpointed, complete) and a closed claim
+        # always progress; non-progressed statuses and a None task do not.
         live_claim = {"state": "launched"}
-        for status in ("pending", "claimed", "launched", "blocked"):
-            task = {"status": status}
-            self.assertFalse(runtime._claim_progressed_past_receipt(task, live_claim))
-            self.assertFalse(runtime._claim_progressed_past_receipt(task, live_claim, include_terminal=True), status)
-        for status in ("done-pending", "commit-pending", "aborted"):
+        for status in ("done-pending", "commit-pending", "aborted", "checkpointed", "complete"):
             task = {"status": status}
             self.assertTrue(runtime._claim_progressed_past_receipt(task, live_claim), status)
-            self.assertTrue(runtime._claim_progressed_past_receipt(task, live_claim, include_terminal=True), status)
-        for status in ("checkpointed", "complete"):
+        for status in ("pending", "claimed", "launched", "blocked"):
             task = {"status": status}
             self.assertFalse(runtime._claim_progressed_past_receipt(task, live_claim), status)
-            self.assertTrue(runtime._claim_progressed_past_receipt(task, live_claim, include_terminal=True), status)
+        self.assertFalse(runtime._claim_progressed_past_receipt(None, live_claim))
         self.assertTrue(runtime._claim_progressed_past_receipt({"status": "launched"}, {"state": "closed"}))
         self.assertTrue(runtime._claim_progressed_past_receipt(None, {"state": "closed"}))
-        self.assertFalse(runtime._claim_progressed_past_receipt(None, live_claim))
 
     def test_blocked_claim_with_launch_record_and_ambient_noise_blocks_hard(self):
         # F-r3-4 witness: a blocked claim that already launched (it carries a
@@ -2146,6 +2577,23 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 else:
                     self.assertEqual(result["reason_code"], "dirty-worktree")
                     self.assertFalse(result["resume_allowed"])
+
+    def test_startup_routes_by_claim_key_not_task_id_field(self):
+        # r3 claim-key routing witness: the claims-dict key, never the
+        # claim's task_id field, names the task. A claim keyed "task-4"
+        # whose task_id field disagrees ("task-3", a completed task) still
+        # routes the dirty-worktree block to the task-4 claim: the outcome
+        # carries that claim's own token, not the hoisted no-claim witness
+        # identity.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        state = runtime.load_manifest(self.state_path)
+        state["claims"]["task-4"]["task_id"] = "task-3"
+        runtime._safe_write_json(self.state_path, state)
+        (self.root / "dirt.txt").write_text("real dirt\n", encoding="utf-8")
+        result = self.driver(seed_task3=False).reconcile_startup()
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "dirty-worktree")
+        self.assertEqual(result["checkpoint_identity"], "seed-task-4")
 
     def test_continue_parent_does_not_relaunch_done_pending_claim(self):
         # F-r3-5 witness: after a crash between checkpoint and done handoff, a
@@ -2233,6 +2681,20 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(outcome["status"], "blocked")
         self.assertEqual(outcome["reason_code"], "stale-claim")
         self.assertTrue(outcome["resume_allowed"])
+        self.assertNotIn("activation_receipt", runtime.load_manifest(self.state_path)["claims"]["task-4"])
+
+    def test_activation_receipt_aborted_workflow_beats_token_mismatch(self):
+        # r5-F6 witness: on an aborted workflow, a claim re-verification whose
+        # token does not match the live claim surfaces the abort outcome, not
+        # owner-mismatch; the abort check precedes the identity check exactly
+        # as the launch fence orders them.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False)
+        self.driver(seed_task3=False).abort("task-4", "seed-task-4")
+        claim = {"token": "stale-token", "generation": 0, "task_id": "task-4"}
+        outcome = driver._record_activation_receipt(claim, "task-4", {"status": "success"})
+        self.assertEqual(outcome["status"], "aborted")
+        self.assertEqual(outcome["reason_code"], "explicit-abort")
         self.assertNotIn("activation_receipt", runtime.load_manifest(self.state_path)["claims"]["task-4"])
 
     def test_profile_less_invocation_preserves_receipts(self):

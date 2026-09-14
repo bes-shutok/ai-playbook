@@ -185,10 +185,10 @@ handoff verifies it: an out-of-scope or escaping committed path blocks the
 reconciliation with the same boundary outcome the done handoff produces.
 
 Before launch only, the startup dirty-worktree gate tolerates ambient noise: a
-dirty worktree consisting purely of untracked allowlisted entries (`.DS_Store`
-variants and editor swap files such as `.#*`, `#*#`, `*.swp`, `*.swo`,
-`*.swpx`, `*~`) blocks with the resumable `cleanup-required` reason instead of
-the non-resumable `dirty-worktree`. Anything outside the allowlist, including
+dirty worktree consisting purely of untracked allowlisted entries (the
+`.DS_Store` family: `.DS_Store`, `.DS_Store?`, `._.DS_Store`) blocks with the
+resumable `cleanup-required` reason instead of the non-resumable
+`dirty-worktree`. Anything outside the allowlist, including
 tracked modifications, keeps the hard block on the same path. File mtime is
 never the ambient-versus-worker discriminator because a worker can forge it:
 after the claim's launch record exists, ambient noise is indistinguishable
@@ -213,7 +213,7 @@ enforced by the done-boundary clean-state witness instead.
 | `dirty-worktree` | Paths and clean-state evidence | Preserve claim and quarantine generation | 0 | `blocked`, `resume_allowed: false` | Require explicit reconciliation before relaunch. |
 | `cleanup-required` | Ambient noise paths on the pre-launch startup path | Preserve claim and quarantine generation | 0 | `blocked`, `resume_allowed: true` | Remove allowlisted ambient entries or resume after cleanup. |
 | `cleanup-unverified` | Owned process and failed termination evidence | Preserve claim; never take over | 0 | `blocked`, `resume_allowed: false` | Require operator cleanup verification; do not retry. |
-| `commit-pending` | Started receipt and task identity | Keep claim fenced during reconciliation | 0 | `blocked` or `checkpointed` | Inspect the exact commit before deciding whether work is complete. |
+| `commit-pending` | Started receipt and task identity | Keep claim fenced during reconciliation | 0 | `blocked`, `checkpointed`, or `aborted` (the wedged-claim abort exit) | Inspect the exact commit before deciding whether work is complete. Abort with the current token is permitted when the recorded commit provably does not exist (the wedged-claim runtime exit; preserve-and-stop). |
 | `done-pending` | Worker checkpoint plus done handoff evidence | Keep claim until done boundary closes | 0 | `blocked` or `checkpointed` | Do not launch the next task until commit, checkbox, clean state, and log evidence exist. |
 | `committed` | Commit identity, checkbox, clean state, and log evidence | Close matching claim | 0 | `checkpointed` | Record the commit and continue once, idempotently. |
 
@@ -365,11 +365,12 @@ plan checkboxes into machine manifest state. It wraps `create_manifest` (the
 same seeding routine the selftest uses), refuses to overwrite an existing
 manifest, persists the supplied owner identity, and is the seeding producer
 for per-task `allowed_paths`: every task's entries are validated through the
-same fail-closed path policy the launch envelope enforces, so the non-empty
-`allowed_paths` requirement that feeds the empty-scope fail-closed gate is
-established at seeding time. A missing or directory-valued entry (including a
-trailing-slash entry) is rejected at `create` and again at envelope
-validation with an actionable error naming the entry; directory prefix
+same fail-closed path policy the launch envelope enforces; entry validation
+at create covers each listed path's shape, while an empty `allowed_paths`
+list seeds successfully and fails closed later, at envelope authorization,
+where the empty-scope gate rejects it. A missing or directory-valued entry
+(including a trailing-slash entry) is rejected at `create` and again at
+envelope validation with an actionable error naming the entry; directory prefix
 matching is explicitly out of scope because a directory-valued entry would
 silently never match the file-level scope witnesses - failing closed beats a
 silent never-matching entry.
@@ -509,10 +510,13 @@ operator attested, for codex the host codex config) and `policy_fingerprint`
 config, for codex its `approval_policy` value). Both fields are
 operator-attested evidence, not a cryptographic credential. Loading the
 receipt re-reads the recorded config path from the host and recomputes the
-policy fingerprint; a missing config file, an absent non-interactive approval
-policy, or a recomputed fingerprint that differs from the recorded
-`policy_fingerprint` is rejected as an approval-receipt policy cross-check
-failure (only the mismatch case names the fingerprint mismatch). A relative
+policy fingerprint; a missing or unreadable config file, a config file that
+is not valid TOML, an absent non-interactive approval policy, or a recomputed
+fingerprint that differs from the recorded `policy_fingerprint` is rejected
+as an approval-receipt policy cross-check failure (only the mismatch case
+names the fingerprint mismatch); a config file holding non-UTF-8 bytes
+surfaces the raw decode error (`UnicodeDecodeError`, caught fail-closed at
+the CLI boundary) and is not a named cross-check class. A relative
 `config_path` resolves only against an injected config
 root and must be absolute when none is injected; a relative path without an
 injected root is rejected as an invalid receipt, a failure distinct from the

@@ -1,6 +1,6 @@
 # Backlog: ambient-noise pattern trim (YAGNI) vs plan Task 3 allowlist definition
 
-Status: open
+Status: done
 Workflow: backlog
 Source: 2026-09-10-execute-plan-runtime-residuals code review r2, finding F-r2-12 (design-simplicity, Low), deferred by the review round's triage
 Severity: Low (blocked by the plan's Task 3 allowlist definition)

@@ -5920,13 +5920,17 @@ When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git c
 
 **Trigger:** adding a new terminal state (abort, cancel, expire) to a workflow state machine that already protects transitions with a shared predicate, or deduplicating several inline guards into one shared predicate.
 
-**Rule:** (1) Fold the new terminal state into EVERY consumer of the guard family in the same change set: the shared predicate's core status set, persist-site fences, resume/relaunch selection, retry decisions, and the MUTATING operations (abort, claim, and every mark-transition entry point), not only the receipt paths that report state. Grep the existing terminal states as the enumeration witness; every hit is a site the new state must reach. (2) Order guards before decisions: a progression guard must be evaluated as a conjunct of (or ahead of) any retry/relaunch branch that could regress the state it protects. A decision branch placed before the guard silently bypasses it for the stale inputs it exists to catch.
+**Rule:** (1) Fold the new terminal state into EVERY consumer of the guard family in the same change set: the shared predicate's core status set, persist-site fences, resume/relaunch selection, retry decisions, and the MUTATING operations (abort, claim, and every mark-transition entry point), not only the receipt paths that report state. Grep the existing terminal states as the enumeration witness; every hit is a site the new state must reach. (2) Order guards before decisions: a progression guard must be evaluated as a conjunct of (or ahead of) any retry/relaunch or duplicate-replay (idempotency early-return) branch that could regress or bypass the state it protects. A decision branch placed before the guard silently bypasses it for the stale inputs it exists to catch.
 
 **Why:** deduplication widens a predicate's blast radius. Each earlier state piggybacked on the shared guard, so a later state that misses it defeats every deduplicated site at once: an explicit abort was undone by an in-flight retryable receipt, resume re-selected the aborted workflow, and the retry branch regressed it to launched. Separately, a retry branch running before the guard regressed a done-pending task on a stale receipt even though the guard existed.
 
 **Witness (2026-09-12, execute-plan runtime review r3):** the `aborted` state, added after the progression-guard predicate was deduplicated, was absent from the predicate's core statuses, resume selection, and the retry decision (3 blocking findings, one race window); the retry branch was also ordered ahead of the guard (reproduced live). The fix added `aborted` to all sites and made the predicate a conjunct of the retry decision.
 
 **Witness (same machine, review round r4, mutator side):** the r3 fixes fenced only the receipt paths; round 4 then found `abort`, `claim_next_task`, and `mark_commit_pending` still mutating over progressed/aborted state (one High severity). Completing the family meant sweeping the mutating entry points with the same predicate, plus splitting one conflated rejection envelope into distinct stale-claim vs aborted-workflow reason codes.
+
+**Witness (same machine, 2026-09-14 trim review r1):** the commit-reconciliation duplicate short-circuit sat ahead of the abort fence, so a duplicate-claim replay could land a success past the fence; the fix hoisted the identity checks and fence above the duplicate arm and pinned the ordering with a literal-replay arm plus a discriminating replay arm whose ordering-mutation probe fails pre-fix.
+
+**Witness (same machine, 2026-09-14 trim review r3):** round 3 pinned the mirrored ordering on all three fenced paths (success checkpoint, done handoff, commit reconciliation): a foreign claim token must receive the identity failure, not the abort fence's outcome, so on each path the identity checks precede the fence; three witnesses assert the identity reason code wins and the manifest stays byte-identical, each failing when the fence is hoisted above the identity check.
 
 **See also:** #317 (simulate the prescribed fix over every shape the criterion quantifies), #72 (guards must fail closed when input is absent).
 
@@ -6078,6 +6082,50 @@ When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git c
 
 **Why:** the count word is not mechanically bound to the items, so it silently survives item additions; a reader who trusts the quantifier stops at the stated number and never discovers the item the sentence now hides.
 
-**Witness (2026-09-13, doc-registry validator r4 review):** the doc-hierarchy skill's registered-src exemption sentence said "two bounded warn tiers" while the validator ships three warn arms (case-only-rename fold-equal old side, untracked dir-collapse under an immutable root, untracked case-variant of the registered src); the blocking review finding was the undercount, fixed by enumerating the third tier in place.
+**Witness (2026-09-13, doc-registry validator r4 review):** the doc-hierarchy skill's registered-src exemption sentence said "two bounded warn tiers" while the validator ships three warn arms (case-only-rename fold-equal old side, untracked dir-collapse under an immutable root, untracked case-variant of the registered src); the blocking review finding was the undercount, fixed by enumerating the third tier in place. Re-bite (2026-09-14, execute-plan runtime review r5 certification): a multi-task plan's done-record test total, already corrected twice in-branch, drifted again when a later round's witness test landed without a quantifier refresh; deferred to the backlog at the review cap.
 
 **See also:** #330 (enumerate-then-claim discipline on the test side: a guard's conjuncts are enumerated before coverage is credited), #220 (treat an unverified claim as unproven until executed against the current artifact).
+
+## 333. Prove A Redundancy Deletion With A Re-Add Probe, Not A Green Suite
+
+**Principle:** Family H (verify the real thing, not the abstraction: green tests around a deletion do not prove the deleted code was redundant; only re-introducing the deleted behavior and staying green does)
+
+**Trigger:** a refactor deletes code on a redundancy claim ("the filter is now inherent in the constructed list", "the callee already checks this", "the branch is unreachable"), with the full suite green before and after.
+
+**Rule:** (1) Do not credit "green before, green after" as redundancy evidence: a suite that never exercised the deleted arm stays green whether or not the claim holds. (2) Verify by mutation: temporarily re-add the deleted block at its old site (or invert the subsuming change) and run the FULL suite. Identical green proves the surviving code subsumes the deleted behavior on every suite-exercised path; any red names a path where the claim was false. (3) Revert the probe and record the run in the implement log. (4) State the bound: the probe certifies only suite-exercised paths; if an unexercised path must keep the old behavior, add its characterization test first, then re-run the probe.
+
+**Why:** the redundancy claim is a hypothesis that the old and new code paths are equivalent; a green suite cannot confirm an equivalence it never measures. The probe measures it directly, because the mutation IS the deleted behavior.
+
+**Witness (2026-09-14, startup-reconciliation trim refactor):** a per-claim reconciliation loop was narrowed to a pre-filtered `examined` list by deleting its two in-loop `continue` filters; re-adding the task-status filter after the loop's task lookup left all 124 tests green, proving that filter was fully subsumed by the list construction, not merely untested; the probe was then reverted.
+
+**See also:** #330 (the inverted direction: a guard's witness must go RED under mutation), #80 (a final-state assertion cannot distinguish fired-then-restored from never-fired), #220 (Family H execution discipline: a check proves nothing until it fires today).
+
+## 334. Re-Validate A Snapshot Decision Against A Fresh Load Before Saving
+
+**Principle:** Family E (temporal / ordering invariants) - a decision computed from a snapshot of durable state is a hypothesis about that state, valid only until the next writer; an interleaved writer between the load and the save turns the saved decision into a clobber instead of a refusal.
+
+**Trigger:** an operation that (1) loads durable state, (2) decides an outcome from that in-memory snapshot (a refusal, a fence verdict, a transition target), then (3) mutates and saves the durable store. The window between load and save exists even in single-process code.
+
+**Rule:** (1) Before the first mutation and the save, fresh-load the durable state and compare it against the snapshot on every axis the decision consumed: identity keys, claim/owner equality, and the state field itself. (2) On mismatch, return the refusal (stale-decision reason code plus evidence) WITHOUT saving. (3) Place the comparison before the in-memory mutations so pristine snapshot values are what get compared. (4) Pin it with a witness that interleaves the change between the two loads and asserts the durable bytes stay unchanged. (5) On match, re-apply the transition to the freshly loaded object and save that, never the snapshot; and state in the guard's comment only the axes the comparison detects, so the comment cannot claim more freshness than the mechanism provides.
+
+**Why:** the decision was correct when computed; saving it anyway overwrites the interleaved writer's durable progress (a completed state regressed to aborted) while reporting success. The refusal was the right outcome all along; only the freshness check makes it fire.
+
+**Witness (2026-09-14, execute-plan runtime trim review r3):** `abort` computed its wedge refusal from the startup-loaded manifest and saved on the refusal path; an interleaved task completion between load and save would have been overwritten with `aborted`. Fix: a fresh-load guard compares task, claim (dict equality), and `workflow_state` before any mutation or save; mismatch returns `blocked`/`stale-claim` with the manifest byte-identical. Removing the guard fails the witness (one load instead of two; `aborted` saved over completed). Review r4 of the same run closed the match path: the wedged save re-applied the transition fields to the fresh load and saved that object, and the guard comment states its detection bound (only compared axes; out-of-band edits to other fields pass undetected).
+
+**See also:** #321 (when two protections apply, which one runs first), #322 (partition live vs expired decision inputs against one injectable now), #330 (a witness must kill the guard's mutation, not just exercise the verdict).
+
+## 335. Treat A Test Seam's Broader Catch As The Natural Path's Gap
+
+**Principle:** Family G (guard fail-closed) - parity facet: two catch sites guarding the same operation define one raise surface; when the test-only injected path's except tuple is broader than the natural path's, the natural path leaks the extra exception shape to callers instead of returning the operation's own fail-closed outcome.
+
+**Trigger:** writing or reviewing exception handling around an I/O or subprocess call that has both a production path and a test-only seam (injected fill-in, mock side effect) with separate try/except blocks, especially when the two tuples differ.
+
+**Rule:** (1) At each guarded call site, derive the catch tuple from the call's full raise surface, not from the failure shapes that path's own tests happen to exercise. (2) When a test seam's except names a shape the natural path's except omits, treat that as a defect witness: the seam author already demonstrated the call can raise it. (3) Align the natural path to return the operation's fail-closed outcome for the omitted shape (never let it escape as a crash), and pin with a natural-path witness asserting the fail-closed verdict under that exception side effect; a witness on the seam alone does not cover the production arm.
+
+**Why:** decode-style failures (a byte sequence invalid in the locale encoding, from text-decoded subprocess output or file reads) raise an exception class unrelated to the I/O error the natural path was written for; the escape turns a designed fail-closed verdict into an unhandled crash for library callers while a top-level boundary happens to mask it.
+
+**Witness (2026-09-14, execute-plan runtime review r5 certification):** the natural-path enumeration around a git worktree listing caught only `(OSError, RuntimeError)` while the test-only injected-dirty fill-in around the same call also caught `UnicodeDecodeError`; a filename with a locale-invalid byte would crash the natural path instead of returning its `witness-unavailable` verdict. Deferred to the backlog at the review cap; fix direction: add the shape to both natural-path excepts plus a natural-path witness.
+
+**Distinguishing from #280:** #280 classifies error classes when tightening a catch-all into targeted fail-closed handling; this lesson aligns already-targeted catch tuples across sibling call sites of one operation, using the seam's broader tuple as the enumeration evidence.
+
+**See also:** #280 (error-class enumeration discipline when fail-closed), #330 (the witness must sit on the arm it claims to cover).

@@ -729,3 +729,24 @@ open. Keep every fence compilable:
 
 Gate to check: compile each ```python fence of the touched Markdown
 (`compile(block, path, "exec")`) before committing doc edits.
+
+## 30. Live-Mutation Probes Must Defeat the Bytecode Cache
+
+When a verification step mutates Python source on disk (scripted string
+replacement of a guard, rerun, expect a named test to fail), a stale
+`__pycache__` entry can execute in place of the mutated file: the cache
+validates against source size and mtime, and a same-size in-place
+replacement can leave both matching, so the interpreter silently runs the
+old bytecode and the probe "passes" with the mutation never executed.
+
+- Run every probe interpreter with `PYTHONDONTWRITEBYTECODE=1` (or
+  `python3 -B`) and delete the mutated module's `__pycache__` before each
+  probe run.
+- Treat a surprising pass as suspect: clear the cache and re-run before
+  crediting or dismissing the mutation. A probe that passed under an
+  unverified cache is not evidence.
+
+Witness: during a review-address round's mutation probes on a runtime
+script, an earlier probe cycle reported a false pass; after clearing the
+package's `__pycache__` and re-running with `PYTHONDONTWRITEBYTECODE=1`,
+every probe reproduced its expected failure cleanly.

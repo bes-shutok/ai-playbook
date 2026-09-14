@@ -53,12 +53,6 @@ AMBIENT_NOISE_PATTERNS = (
     ".DS_Store",
     ".DS_Store?",
     "._.DS_Store",
-    ".#*",  # editor interchange / lock files
-    "#*#",
-    "*.swp",
-    "*.swo",
-    "*.swpx",
-    "*~",
 )
 
 
@@ -362,23 +356,18 @@ def _abort_outcome(
 def _claim_progressed_past_receipt(
     task: Mapping[str, Any] | None,
     claim: Mapping[str, Any] | None,
-    *,
-    include_terminal: bool = False,
 ) -> bool:
     """True when a stale non-success receipt must not regress the durable state.
 
-    The core statuses (``done-pending``, ``commit-pending``, ``aborted``) and a
-    closed claim are shared by every emission site: a receipt arriving for an
-    aborted task or claim must never persist. ``include_terminal``
-    additionally covers ``checkpointed``/``complete`` for the blocked-persist
-    path, which must never overwrite a terminal task.
+    Every progressed status (``done-pending``, ``commit-pending``,
+    ``checkpointed``, ``complete``, ``aborted``) and a closed claim are shared
+    by every emission site: a receipt arriving for an aborted task or claim
+    must never persist.
     """
 
     if (claim or {}).get("state") == "closed":
         return True
-    statuses: set[str] = {"done-pending", "commit-pending", "aborted"}
-    if include_terminal:
-        statuses |= {"checkpointed", "complete"}
+    statuses: set[str] = {"done-pending", "commit-pending", "aborted", "checkpointed", "complete"}
     return task is not None and task.get("status") in statuses
 
 
@@ -390,6 +379,22 @@ def _mutation_unavailable(driver: "RuntimeDriver", checkpoint_identity: str, act
         ["manifest mutation is held by another owner"],
         action_scope,
         "resumable-conflict",
+    )
+
+
+def _printable_evidence(text: str) -> str:
+    """Presentation-only control-character escape for operator-facing evidence.
+
+    Control bytes (tabs, newlines, ESC, and other non-printables) become
+    literal ``\\xNN`` escapes, or ``\\uNNNN`` for non-printables above
+    U+00FF, so a hostile path cannot smuggle them into console, log, or
+    durable-JSON rendering of evidence; printable text, including
+    non-ASCII, passes through unchanged.
+    """
+
+    return "".join(
+        ch if ch.isprintable() else ("\\x" + format(ord(ch), "02x") if ord(ch) <= 0xFF else "\\u" + format(ord(ch), "04x"))
+        for ch in text
     )
 
 
@@ -721,7 +726,7 @@ class RuntimeDriver:
                 claim.get("generation", manifest.get("generation", 0)),
                 ["workflow was explicitly aborted before this receipt"],
             )
-        if _claim_progressed_past_receipt(task, current_claim, include_terminal=True):
+        if _claim_progressed_past_receipt(task, current_claim):
             # A blocked receipt that arrives after the task already progressed
             # (for example across a resume adapter window) must never regress
             # the durable state; surface the resumable stale-claim outcome.
@@ -852,7 +857,7 @@ class RuntimeDriver:
         # (checkpointed/complete) task with a live claim surfaces the receipt
         # itself rather than stale-claim, because nothing regressed and the
         # reason code (for example approval-required) stays actionable.
-        progressed = _claim_progressed_past_receipt(task, claim, include_terminal=True)
+        progressed = _claim_progressed_past_receipt(task, claim)
         if retryable and progressed:
             retryable = False
         if retryable and retry.get("attempts_remaining", 0) > 0 and self.adapter is not None and task is not None:
@@ -902,6 +907,13 @@ class RuntimeDriver:
         passed in, so no manifest reload is needed here.
         """
 
+        # The same global fence the sibling receipt paths enforce: an
+        # aborted workflow is never resurrected by a late success receipt.
+        # The fence sits before the duplicate short-circuit (mirroring the
+        # retry path's fence ordering) because the caller's identity check
+        # has already matched the live claim.
+        if manifest.get("workflow_state") == "aborted":
+            return _abort_outcome(result["checkpoint_identity"], result["generation"], ["workflow was explicitly aborted before the success checkpoint"])
         identity = result["checkpoint_identity"]
         task = manifest["tasks"].get(task_id)
         claim = manifest["claims"].get(task_id)
@@ -1002,6 +1014,10 @@ class RuntimeDriver:
         )
         if not valid:
             return _outcome("blocked", "done-pending", [f"missing or unfenced done evidence: {', '.join(required)}"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile"), False
+        if manifest.get("workflow_state") == "aborted":
+            # The same global fence the sibling receipt paths enforce: an
+            # aborted workflow is never completed by a late done handoff.
+            return _abort_outcome(checkpoint_identity, manifest.get("generation", 0), ["workflow was explicitly aborted before the done handoff"], action_scope="done-handoff"), False
         if not self.commit_lookup(str(raw["commit_identity"])):
             return _outcome("blocked", "commit-pending", [f"commit not found: {raw['commit_identity']}"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile"), False
         boundary = self._done_boundary_block(claim, str(raw["commit_identity"]), checkpoint_identity, manifest.get("generation", 0), manifest=manifest)
@@ -1172,11 +1188,13 @@ class RuntimeDriver:
 
         manifest = load_manifest(self.manifest_path)
         current_claim = manifest["claims"].get(task_id)
+        if manifest.get("workflow_state") == "aborted":
+            # An explicit abort racing the activation window is an abort
+            # outcome, not an owner mismatch: the claim may still be live
+            # and owned.
+            return _abort_outcome(claim["token"], claim["generation"], ["workflow was explicitly aborted before the activation receipt"])
         if not current_claim or current_claim.get("token") != claim["token"] or current_claim.get("generation") != claim["generation"]:
             return _outcome("blocked", "owner-mismatch", ["claim changed before activation receipt"], "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile")
-        if manifest.get("workflow_state") == "aborted":
-            # Never write an activation receipt onto an aborted workflow.
-            return _abort_outcome(claim["token"], claim["generation"], ["workflow was explicitly aborted before the activation receipt"])
         if current_claim.get("state") not in {"claimed", "launched"}:
             # A claim that left the live set on an active workflow is
             # contention or progression, not an abort: surface the resumable
@@ -1407,13 +1425,17 @@ class RuntimeDriver:
         manifest = load_manifest(self.manifest_path)
         commit_lookup = commit_lookup or self.commit_lookup
         ambient_entries: list[tuple[str, str]] | None = None
+        entries: list[tuple[str, str]] = []
         # Any claim carrying launch evidence (state claimed/launched or a
         # launch record) proves the worktree entered a launch window; the
         # dirty-worktree gate below must fire even when every such claim sits
         # on a completed task (legacy manifests), which the per-claim loop
-        # would otherwise skip entirely.
+        # would otherwise skip entirely. Claims are carried with their
+        # claims-dict key: the key, never the claim's task_id field, names
+        # the task (a missing or disagreeing field must not route to a
+        # phantom task).
         launch_evidence_claims = [
-            claim for claim in manifest["claims"].values()
+            (task_id, claim) for task_id, claim in manifest["claims"].items()
             if claim.get("state") in {"claimed", "launched"} or isinstance(claim.get("launch_record"), Mapping)
         ]
         if not dirty_worktree:
@@ -1432,13 +1454,32 @@ class RuntimeDriver:
                     return _outcome("blocked", "worktree-witness-unavailable", [str(exc)], "repository-task", "worktree:witness", manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
                 if entries and all(self._is_ambient_noise_entry(code, path) for code, path in entries):
                     ambient_entries = entries
+        if dirty_worktree and not entries:
+            # Injected dirty_worktree=True skips the ambient snapshot above;
+            # this one fresh enumeration feeds the evidence below, and a
+            # transient failure (including a non-UTF-8 filename that breaks
+            # output decoding) degrades the evidence only (dirtiness is
+            # already witnessed), never the block itself.
+            try:
+                entries = self._git_worktree_entries()
+            except (OSError, RuntimeError, UnicodeDecodeError):
+                entries = []
         if ambient_entries is not None:
+            # Both operator-facing evidence emission sites in this method
+            # (the resumable cleanup-required outcome below and the hard
+            # dirty-worktree block further down) pass their entries through
+            # the same _printable_evidence sanitizer: control characters
+            # become \xNN (and \uNNNN above U+00FF) escapes so a hostile
+            # path cannot smuggle control bytes into console, log, or
+            # durable-JSON rendering of operator-facing evidence; the
+            # porcelain parser and the ambient discriminator keep the raw
+            # bytes.
 
             def cleanup_outcome(token: Any, generation: Any) -> dict[str, Any]:
                 return _outcome(
                     "blocked",
                     "cleanup-required",
-                    [f"ambient worktree noise requires cleanup: {code} {path}" for code, path in ambient_entries],
+                    [f"ambient worktree noise requires cleanup: {_printable_evidence(code)} {_printable_evidence(path)}" for code, path in ambient_entries],
                     "repository-task",
                     token,
                     generation,
@@ -1456,34 +1497,43 @@ class RuntimeDriver:
                 # cleanup condition as the claim-attached case below; without
                 # this return the loop no-ops and startup silently proceeds.
                 return cleanup_outcome("worktree:witness", manifest.get("generation", 0))
-        if dirty_worktree and launch_evidence_claims:
-            examined = [
-                claim for claim in launch_evidence_claims
-                if manifest["tasks"].get(str(claim.get("task_id")), {}).get("status")
-                not in {"done-pending", "checkpointed", "complete"}
-            ]
-            if not examined:
-                # Every launch-evidence claim sits on a task the per-claim
-                # loop below skips (completed or at its commit boundary), so
-                # the dirty gate is evaluated once here instead of being
-                # silently skipped. The ambient discriminator still applies:
-                # a launch-evidence claim without a launch record keeps the
-                # resumable cleanup outcome; anything else keeps the hard
-                # dirty-worktree block.
-                if ambient_entries is not None:
-                    prelaunch = next(
-                        (claim for claim in launch_evidence_claims if not isinstance(claim.get("launch_record"), Mapping)),
-                        None,
-                    )
-                    if prelaunch is not None:
-                        return cleanup_outcome(prelaunch.get("token", "claim"), prelaunch.get("generation", 0))
-                return _outcome("blocked", "dirty-worktree", ["uncommitted worktree requires explicit reconciliation"], "repository-task", "worktree:witness", manifest.get("generation", 0), "preserve-and-reconcile")
-        for task_id, claim in manifest["claims"].items():
-            if claim.get("state") not in {"claimed", "launched"} and not isinstance(claim.get("launch_record"), Mapping):
-                continue
+        # The hard dirty-worktree block names the offending entries in its
+        # evidence so the operator can reconcile them explicitly; the
+        # evidence reuses the worktree snapshot already enumerated above
+        # (never a second witness pass), rendered through the same
+        # presentation sanitizer as the cleanup-required outcome above. The
+        # 20-entry cap exists to keep the operator-facing list readable and
+        # to deliver the "... and N more entries" tail (best-effort under
+        # the platform byte bound), not to prevent durable flooding:
+        # bounded_evidence already guarantees that.
+        worktree_evidence = ["uncommitted worktree requires explicit reconciliation"] + [
+            f"{_printable_evidence(code)} {_printable_evidence(path)}" for code, path in entries[:20]
+        ]
+        if len(entries) > 20:
+            worktree_evidence.append(f"... and {len(entries) - 20} more entries")
+        examined = [
+            (task_id, claim) for task_id, claim in launch_evidence_claims
+            if manifest["tasks"].get(task_id, {}).get("status")
+            not in {"done-pending", "checkpointed", "complete"}
+        ]
+        if dirty_worktree and launch_evidence_claims and not examined:
+            # Every launch-evidence claim sits on a task the per-claim
+            # loop below skips (completed or at its commit boundary), so
+            # the dirty gate is evaluated once here instead of being
+            # silently skipped. The ambient discriminator still applies:
+            # a launch-evidence claim without a launch record keeps the
+            # resumable cleanup outcome; anything else keeps the hard
+            # dirty-worktree block.
+            if ambient_entries is not None:
+                prelaunch = next(
+                    (claim for _task_id, claim in launch_evidence_claims if not isinstance(claim.get("launch_record"), Mapping)),
+                    None,
+                )
+                if prelaunch is not None:
+                    return cleanup_outcome(prelaunch.get("token", "claim"), prelaunch.get("generation", 0))
+            return _outcome("blocked", "dirty-worktree", worktree_evidence, "repository-task", "worktree:witness", manifest.get("generation", 0), "preserve-and-reconcile")
+        for task_id, claim in examined:
             task = manifest["tasks"].get(task_id, {})
-            if task.get("status") in {"done-pending", "checkpointed", "complete"}:
-                continue
             if dirty_worktree:
                 # The resumable cleanup-required outcome requires a pre-launch
                 # claim: once the launch record exists, ambient-shaped noise is
@@ -1492,7 +1542,7 @@ class RuntimeDriver:
                 # the discriminator).
                 if ambient_entries is not None and not isinstance(claim.get("launch_record"), Mapping):
                     return cleanup_outcome(claim.get("token", "claim"), claim.get("generation", 0))
-                return _outcome("blocked", "dirty-worktree", ["uncommitted worktree requires explicit reconciliation"], "repository-task", claim.get("token", "claim"), claim.get("generation", 0), "preserve-and-reconcile")
+                return _outcome("blocked", "dirty-worktree", worktree_evidence, "repository-task", claim.get("token", "claim"), claim.get("generation", 0), "preserve-and-reconcile")
             commit_identity = task.get("commit_identity")
             if commit_identity and task.get("done_log_evidence") and commit_lookup and commit_lookup(commit_identity):
                 return _ReconcileCommit(task_id, commit_identity, commit_lookup, claim.get("token"), claim.get("generation"))
@@ -1811,16 +1861,57 @@ class RuntimeDriver:
         if not claim or claim.get("token") != token or claim.get("owner") != self.owner:
             return _outcome("blocked", "owner-mismatch", ["abort receipt does not match claim owner"], "repository-task", token, manifest.get("generation", 0), "preserve-and-reconcile")
         task = manifest["tasks"].get(task_id)
-        if _claim_progressed_past_receipt(task, claim, include_terminal=True):
+        # Wedge exception (r5-F2): a commit-pending claim whose recorded
+        # commit provably does not exist is wedged; no receipt path can
+        # reconcile it, so the explicit stop with the still-current token
+        # is the only runtime exit. A missing or empty commit_identity on
+        # a hand-corrupted task routes through the wedge path too: an
+        # empty identity fails the commit lookup. A hand-corrupted closed
+        # claim never routes through the wedge path: the closed state keeps
+        # the r4 progression refusal (not wedged).
+        wedged = False
+        if task is not None and task.get("status") == "commit-pending" and claim.get("state") != "closed":
+            try:
+                wedged = not self.commit_lookup(str(task.get("commit_identity") or ""))
+            except (OSError, RuntimeError):
+                # Witness failure degrades to not-wedged: the refusal stands.
+                pass
+        if not wedged and _claim_progressed_past_receipt(task, claim):
             # An explicit abort must not regress a task that already reached
-            # its receipt boundary (done-pending, checkpointed, complete,
-            # aborted) or a closed claim: the durable state stays untouched
-            # and the resumable stale-claim outcome surfaces instead.
+            # its receipt boundary (done-pending, commit-pending,
+            # checkpointed, complete, aborted) or a closed claim: the
+            # durable state stays untouched unless the claim is wedged (a
+            # commit-pending task with a provably missing commit), where
+            # the explicit stop is the only runtime exit.
             return _stale_claim_outcome(
                 token,
                 claim.get("generation", manifest.get("generation", 0)),
                 ["claim already progressed past the abort receipt"],
             )
+        if wedged:
+            # TOCTOU guard (r3, guarantee wording corrected r4): the wedge
+            # decision above was computed from the locked snapshot; a
+            # competing writer may have landed the task's completion
+            # between that decision and this save. Compare the snapshot
+            # against a fresh load before persisting: all runtime writers
+            # hold the manifest lock for their whole body, so the re-read
+            # detects out-of-band manifest edits, but edits to fields
+            # other than the task, the claim, and the workflow state are
+            # not detected. When the comparison passes, the abort writes
+            # rebase on the fresh object so the persisted state is built
+            # from what was just re-verified, never the stale snapshot.
+            fresh = load_manifest(self.manifest_path)
+            if (
+                fresh["tasks"].get(task_id) != task
+                or fresh["claims"].get(task_id) != claim
+                or fresh.get("workflow_state") != manifest.get("workflow_state")
+            ):
+                return _outcome("blocked", "stale-claim", ["manifest changed during abort; wedge decision stale"], "repository-task", token, manifest.get("generation", 0), "preserve-and-reconcile")
+            fresh["tasks"][task_id]["status"] = "aborted"
+            fresh["claims"][task_id]["state"] = "aborted"
+            fresh["workflow_state"] = "aborted"
+            self._save(fresh)
+            return _abort_outcome(token, fresh["claims"][task_id].get("generation", 0), [f"task={task_id}"])
         manifest["tasks"][task_id]["status"] = "aborted"
         claim["state"] = "aborted"
         manifest["workflow_state"] = "aborted"
@@ -1872,11 +1963,20 @@ class RuntimeDriver:
         task = manifest["tasks"].get(task_id)
         if task is None:
             return self._result_error(f"unknown task: {task_id}"), False
-        if task.get("status") == "checkpointed" and task.get("commit_identity") == commit_identity:
-            return _outcome("success", "completed", ["commit already reconciled"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "continue-parent", actions=[]), False
         claim = manifest["claims"].get(task_id)
         if not claim or claim.get("owner") != self.owner or (claim_token is not None and claim.get("token") != claim_token) or (generation is not None and claim.get("generation") != generation):
             return _outcome("blocked", "owner-mismatch", ["commit recovery receipt does not match the live claim"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "preserve-and-reconcile"), False
+        if manifest.get("workflow_state") == "aborted":
+            # The same global fence the sibling receipt paths enforce: an
+            # aborted workflow is never reconciled by a late commit receipt.
+            # The fence sits above the duplicate short-circuit (mirroring the
+            # success-checkpoint path's fence ordering) so a replayed
+            # reconciliation cannot return the idempotent duplicate success
+            # on an aborted workflow; the identity check still precedes it,
+            # so a foreign claim keeps owner-mismatch.
+            return _abort_outcome(f"{task_id}:commit", manifest.get("generation", 0), ["workflow was explicitly aborted before the commit reconciliation"], action_scope="done-handoff"), False
+        if task.get("status") == "checkpointed" and task.get("commit_identity") == commit_identity:
+            return _outcome("success", "completed", ["commit already reconciled"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "continue-parent", actions=[]), False
         if task.get("commit_identity") != commit_identity or not task.get("done_log_evidence"):
             return _outcome("blocked", "commit-pending", ["matching done-log evidence and commit identity are required"], "done-handoff", f"{task_id}:commit", claim.get("generation", manifest.get("generation", 0)), "preserve-and-reconcile"), False
         if not commit_lookup(commit_identity):
