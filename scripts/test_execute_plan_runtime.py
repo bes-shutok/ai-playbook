@@ -84,6 +84,12 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             ],
         )
 
+    def _git(self, *args, cwd=None):
+        # Hermetic git subprocess for fixture sites: the pinned _git_env
+        # neutralizes host global/system config, and the asserted exit keeps
+        # fixture setup failures loud. Returns the CompletedProcess.
+        return subprocess.run(["git", *args], cwd=cwd or self.root, env=self._git_env, capture_output=True, text=True, check=True)
+
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
         os.environ.update(self._saved_env)
@@ -301,8 +307,8 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             "owner": "test-owner",
             "state": "blocked",
             "task_id": "task-4",
-            "baseline_revision": subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip(),
-            "launch_record": {"baseline_revision": subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip(), "generation": 1, "launched_at": 111.0},
+            "baseline_revision": self._git("rev-parse", "HEAD").stdout.strip(),
+            "launch_record": {"baseline_revision": self._git("rev-parse", "HEAD").stdout.strip(), "generation": 1, "launched_at": 111.0},
             "policy_token": {"token": "policy", "repo_root": str(self.root), "allowed_paths": ["task.txt"], "operation_kind": "repository-task", "network": False, "generation": 1},
         }
         runtime._safe_write_json(self.state_path, state)
@@ -492,7 +498,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(done["status"], "success")
 
     def test_out_of_scope_worktree_change_cannot_become_success_checkpoint(self):
-        baseline = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        baseline = self._git("rev-parse", "HEAD").stdout.strip()
         self.seed_claim(task="task-4", token="scope-token")
         state = runtime.load_manifest(self.state_path)
         state["claims"]["task-4"]["policy_token"] = {"token": "policy", "repo_root": str(self.root), "allowed_paths": ["allowed.txt"], "operation_kind": "repository-task", "network": False, "generation": 0}
@@ -500,7 +506,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         state["claims"]["task-4"]["launch_record"] = {"baseline_revision": baseline, "generation": 0, "launched_at": 111.0}
         runtime._safe_write_json(self.state_path, state)
         (self.root / "outside.txt").write_text("worker escaped scope\n", encoding="utf-8")
-        subprocess.run(["git", "add", "-N", "outside.txt"], cwd=self.root, check=True)
+        self._git("add", "-N", "outside.txt")
         result = self.driver().record_worker_checkpoint(self.worker_checkpoint(task="task-4", generation=0))
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "contract-violation")
@@ -508,7 +514,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(after["tasks"]["task-4"]["status"], "blocked")
 
     def _scope_claim(self, allowed):
-        baseline = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        baseline = self._git("rev-parse", "HEAD").stdout.strip()
         self.seed_claim(task="task-4", token="scope-token")
         state = runtime.load_manifest(self.state_path)
         state["claims"]["task-4"]["policy_token"] = {"token": "policy", "repo_root": str(self.root), "allowed_paths": list(allowed), "operation_kind": "repository-task", "network": False, "generation": 0}
@@ -604,8 +610,8 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def test_done_boundary_rejects_non_descendant_commit(self):
         self._scope_claim(allowed=("task-4.txt",))
         self.driver().record_worker_checkpoint(self.worker_checkpoint(task="task-4", generation=0))
-        tree = subprocess.run(["git", "rev-parse", "HEAD^{tree}"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
-        orphan = subprocess.run(["git", "commit-tree", "-m", "orphan", tree], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        tree = self._git("rev-parse", "HEAD^{tree}").stdout.strip()
+        orphan = self._git("commit-tree", "-m", "orphan", tree).stdout.strip()
         done = self.driver().record_done(self.done(task="task-4", generation=0, commit_identity=orphan))
         self.assertEqual(done["status"], "blocked")
         self.assertEqual(done["reason_code"], "commit-pending")
@@ -658,9 +664,9 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self._scope_claim(allowed=("link.txt",))
         self.driver().record_worker_checkpoint(self.worker_checkpoint(task="task-4", generation=0))
         os.symlink("/tmp/execute-plan-escape-target", self.root / "link.txt")
-        subprocess.run(["git", "add", "link.txt"], cwd=self.root, check=True)
-        subprocess.run(["git", "commit", "-qm", "committed symlink escape"], cwd=self.root, check=True)
-        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        self._git("add", "link.txt")
+        self._git("commit", "-qm", "committed symlink escape")
+        commit = self._git("rev-parse", "HEAD").stdout.strip()
         done = self.driver().record_done(self.done(task="task-4", generation=0, commit_identity=commit))
         self.assertEqual(done["status"], "blocked")
         self.assertEqual(done["reason_code"], "commit-pending")
@@ -1033,14 +1039,14 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def test_startup_reconciliation_uses_real_git_clean_state_before_commit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
-            subprocess.run(["git", "config", "user.name", "Runtime Test"], cwd=root, check=True)
+            self._git("init", "-q", cwd=root)
+            self._git("config", "user.email", "test@example.invalid", cwd=root)
+            self._git("config", "user.name", "Runtime Test", cwd=root)
             marker = root / "tracked.txt"
             marker.write_text("base\n", encoding="utf-8")
-            subprocess.run(["git", "add", "tracked.txt"], cwd=root, check=True)
-            subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
-            commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+            self._git("add", "tracked.txt", cwd=root)
+            self._git("commit", "-qm", "base", cwd=root)
+            commit = self._git("rev-parse", "HEAD", cwd=root).stdout.strip()
             state_path = root.parent / "runtime_state.json"
             runtime.create_manifest(state_path, "real-reconcile", [{"id": "task-1", "number": 1, "status": "pending"}])
             driver = runtime.RuntimeDriver(state_path, plan_slug="real-reconcile", owner="real-owner", repo_root=root)
@@ -1107,13 +1113,13 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def test_cli_drives_claim_checkpoint_done_and_terminal(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
-            subprocess.run(["git", "config", "user.name", "Runtime Test"], cwd=root, check=True)
+            self._git("init", "-q", cwd=root)
+            self._git("config", "user.email", "test@example.invalid", cwd=root)
+            self._git("config", "user.name", "Runtime Test", cwd=root)
             (root / "tracked.txt").write_text("base\n", encoding="utf-8")
-            subprocess.run(["git", "add", "tracked.txt"], cwd=root, check=True)
-            subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
-            commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+            self._git("add", "tracked.txt", cwd=root)
+            self._git("commit", "-qm", "base", cwd=root)
+            commit = self._git("rev-parse", "HEAD", cwd=root).stdout.strip()
             state_path = root / "runtime_state.json"
             runtime.create_manifest(state_path, "cli-plan", [{"id": "task-1", "number": 1, "status": "pending"}])
 
@@ -1343,12 +1349,12 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                     self.addCleanup(shutil.rmtree, root, ignore_errors=True)
                     # The replay root is a real git repo: launch paths now fail
                     # closed without a resolvable baseline revision.
-                    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-                    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
-                    subprocess.run(["git", "config", "user.name", "Runtime Test"], cwd=root, check=True)
+                    self._git("init", "-q", cwd=root)
+                    self._git("config", "user.email", "test@example.invalid", cwd=root)
+                    self._git("config", "user.name", "Runtime Test", cwd=root)
                     (root / "seed.txt").write_text("base\n", encoding="utf-8")
-                    subprocess.run(["git", "add", "seed.txt"], cwd=root, check=True)
-                    subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+                    self._git("add", "seed.txt", cwd=root)
+                    self._git("commit", "-qm", "base", cwd=root)
                     entries_before = set(parent.iterdir())
                     adapter_result = self._replay_success("task-1", 1)
                     adapter = FakeAdapter(adapter_result)
@@ -1512,7 +1518,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         driver = self.driver(adapter=FakeAdapter(spy), seed_task3=False)
         result = driver._launch_claimed_task({"task_id": "task-4", "token": "pre-launch-token", "generation": 0}, "continue", None)
         self.assertEqual(result["status"], "success")
-        baseline = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        baseline = self._git("rev-parse", "HEAD").stdout.strip()
         claim = observed["claim"]
         # The launch record lands atomically with the claim transition: the
         # worker already observes state=launched together with the snapshot.
@@ -1527,7 +1533,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertNotIn("launched_at", claim)
 
     def _launched_claim(self, allowed=("task-4.txt",)):
-        baseline = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        baseline = self._git("rev-parse", "HEAD").stdout.strip()
         state = runtime.load_manifest(self.state_path)
         state["claims"]["task-4"] = {
             "token": "drift-token",
@@ -1799,7 +1805,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(explicit.owner, "explicit-owner")
 
     def _resume_blocked_claim(self):
-        baseline = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        baseline = self._git("rev-parse", "HEAD").stdout.strip()
         state = runtime.load_manifest(self.state_path)
         # Reset durable checkpoint records so each adapter-window witness
         # proves its own competing-writer transition instead of hitting the
@@ -2785,7 +2791,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def test_blocked_persist_keeps_contract_violation_receipt(self):
         self._scope_claim(allowed=("allowed.txt",))
         (self.root / "outside-policy.txt").write_text("worker escape\n", encoding="utf-8")
-        subprocess.run(["git", "add", "-N", "outside-policy.txt"], cwd=self.root, check=True)
+        self._git("add", "-N", "outside-policy.txt")
         # Under the non-reentrant lock the blocked persist runs inside the
         # checkpoint's locked region: the scope violation must keep its
         # contract-violation receipt, never an owner-mismatch misdiagnosis
@@ -2931,13 +2937,13 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         """Commit one file with an arbitrary message; return the commit sha."""
         target = name or f"predecessor-{uuid.uuid4().hex[:8]}.txt"
         (self.root / target).write_text(content, encoding="utf-8")
-        subprocess.run(["git", "add", target], cwd=self.root, check=True)
-        subprocess.run(["git", "commit", "-qm", message], cwd=self.root, check=True)
-        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        self._git("add", target)
+        self._git("commit", "-qm", message)
+        return self._git("rev-parse", "HEAD").stdout.strip()
 
     def orphan_commit(self):
-        tree = subprocess.run(["git", "rev-parse", "HEAD^{tree}"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
-        return subprocess.run(["git", "commit-tree", "-m", "orphan", tree], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        tree = self._git("rev-parse", "HEAD^{tree}").stdout.strip()
+        return self._git("commit-tree", "-m", "orphan", tree).stdout.strip()
 
     def predecessors_file(self, document):
         path = self.root / f"predecessors-{uuid.uuid4().hex[:8]}.json"
@@ -2948,14 +2954,14 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         return runtime.verify_preconditions(self.root, document)
 
     def test_precondition_history_ref_verifies_rebased_history(self):
-        base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
-        subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=self.root, check=True)
+        base = self._git("rev-parse", "HEAD").stdout.strip()
+        self._git("checkout", "-q", "-b", "work")
         original = self.commit_message("CRM-1234 predecessor feature work")
-        subprocess.run(["git", "checkout", "-q", "--detach", base], cwd=self.root, check=True)
+        self._git("checkout", "-q", "--detach", base)
         newer = self.commit_message("newer base unrelated to the feature")
-        subprocess.run(["git", "checkout", "-q", "work"], cwd=self.root, check=True)
-        subprocess.run(["git", "rebase", "-q", newer], cwd=self.root, check=True)
-        rebased = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        self._git("checkout", "-q", "work")
+        self._git("rebase", "-q", newer)
+        rebased = self._git("rev-parse", "HEAD").stdout.strip()
         self.assertNotEqual(rebased, original)
         result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "history-ref", "value": "CRM-1234"}]}]})
         self.assertEqual(result["status"], "success")
@@ -2964,21 +2970,21 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertTrue(result["predecessors"][0]["verified"])
 
     def test_precondition_history_ref_verifies_cherry_picked_history(self):
-        subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=self.root, check=True)
+        self._git("checkout", "-q", "-b", "work")
         source = self.commit_message("CRM-1234 cherry-pick source work")
-        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.root, check=True)
+        self._git("checkout", "-q", "-")
         self.commit_message("divergent base commit")
-        subprocess.run(["git", "cherry-pick", source], cwd=self.root, check=True)
-        picked = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        self._git("cherry-pick", source)
+        picked = self._git("rev-parse", "HEAD").stdout.strip()
         self.assertNotEqual(picked, source)
         result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "history-ref", "value": "CRM-1234"}]}]})
         self.assertEqual(result["status"], "success")
 
     def test_precondition_history_ref_verifies_squashed_history(self):
-        base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True).stdout.strip()
+        base = self._git("rev-parse", "HEAD").stdout.strip()
         self.commit_message("CRM-1234 first piece")
         self.commit_message("CRM-5678 second piece")
-        subprocess.run(["git", "reset", "-q", "--soft", base], cwd=self.root, check=True)
+        self._git("reset", "-q", "--soft", base)
         self.commit_message("CRM-1234 CRM-5678 squashed predecessor work")
         for ref in ("CRM-1234", "CRM-5678"):
             result = self.verify({"predecessors": [{"ref": ref, "outcomes": [{"kind": "history-ref", "value": ref}]}]})

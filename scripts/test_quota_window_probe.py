@@ -330,24 +330,40 @@ class QuotaWindowProbeTest(unittest.TestCase):
                         "_OPENER_NO_REDIRECTS",
                         probe._build_no_redirect_opener(),
                     ):
-                        # Review r4 F2: ResourceWarning witness for the
-                        # r3 F9 exc.close() branch. An unclosed HTTPError
-                        # body only warns at GC time, which plain unittest
-                        # never escalates; escalate ResourceWarning to an
-                        # error and force a collection pass right after the
-                        # probe so deleting the close() fails here. The
-                        # transport closes the error, so this stays green.
+                        # Review r4 F2, reshaped (plan Task 2):
+                        # ResourceWarning witness for the r3 F9 exc.close()
+                        # branch. The plain escalation is vacuous on
+                        # python 3.14 (mutation-verified 2026-09-14): a
+                        # warning-as-error raised inside the HTTPError body
+                        # destructor becomes an unraisable that never
+                        # propagates to the gc.collect() call site. The
+                        # witness therefore records unraisables:
+                        # sys.unraisablehook is swapped for a list-appending
+                        # recorder across BOTH the probe call and the forced
+                        # collection pass, and the trailing assertion fails
+                        # when any recorded unraisable is a ResourceWarning.
+                        # On 3.14 the HTTPError body is tempfile-backed, so
+                        # the recorded warning surfaces through
+                        # _TemporaryFileCloser.__del__ as "Implicitly
+                        # cleaning up <HTTPError ...>". The transport closes
+                        # the error, so the intact branch records nothing.
+                        _unraisables: list = []
+                        _orig_hook = sys.unraisablehook
                         with warnings.catch_warnings():
                             warnings.simplefilter("error", ResourceWarning)
-                            report = probe.probe_zcode(
-                                config_path=config,
-                                url="http://127.0.0.1:{}/quota".format(
-                                    redirect_srv.server_address[1]
-                                ),
-                                transport=probe.urllib_transport,
-                                now=time.time(),
-                            )
-                            gc.collect()
+                            sys.unraisablehook = _unraisables.append
+                            try:
+                                report = probe.probe_zcode(
+                                    config_path=config,
+                                    url="http://127.0.0.1:{}/quota".format(
+                                        redirect_srv.server_address[1]
+                                    ),
+                                    transport=probe.urllib_transport,
+                                    now=time.time(),
+                                )
+                                gc.collect()
+                            finally:
+                                sys.unraisablehook = _orig_hook
         finally:
             for srv in (target_srv, redirect_srv):
                 srv.shutdown()
@@ -357,6 +373,13 @@ class QuotaWindowProbeTest(unittest.TestCase):
         self.assertTrue(any("302" in r for r in report["reasons"]), report["reasons"])
         # The credential must never reach the redirect target.
         self.assertEqual(hits, [])
+        # Review r1 F6, accepted surface (no behavior change): any
+        # in-window ResourceWarning unraisable counts as a failure. The
+        # recorder is deliberately not scoped to the probe's own objects,
+        # so foreign garbage collected inside the window would fail loudly
+        # by design; the recorded unraisable names its source, keeping a
+        # future flake diagnosable without weakening the assertion.
+        self.assertFalse(any(u.exc_type is ResourceWarning for u in _unraisables), [str(u) for u in _unraisables])
 
     def test_parse_zcode_clamps_implausible_reset_horizon(self) -> None:
         # Review r1 F2: a hostile or buggy reset beyond the clamp horizon
@@ -611,11 +634,87 @@ class QuotaWindowProbeTest(unittest.TestCase):
         self.assertEqual(report["pause_decision"], "continue")
         self.assertTrue(report["reasons"])
 
+    def test_codex_recordless_rollout_keeps_old_reason(self) -> None:
+        # A rollout with no rate_limits record at all (an unrelated JSON
+        # line only) keeps the original record-less reason: there is no
+        # rate_limits record whose windows could have been dropped.
+        rollout = json.dumps({"type": "session_meta", "payload": {}}) + "\n"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sessions = Path(tmpdir) / "sessions"
+            sessions.mkdir()
+            (sessions / "rollout-2026-09-12T10-00-00.jsonl").write_text(
+                rollout, encoding="utf-8"
+            )
+            report = probe.probe_codex(sessions_dir=sessions)
+        self.assertEqual(report["runtime"], "codex")
+        self.assertEqual(report["status"], "unknown")
+        self.assertEqual(report["pause_decision"], "continue")
+        self.assertEqual(
+            report["reasons"], ["rollout carried no rate_limits record"]
+        )
+
+    def test_codex_all_windows_dropped_reason_distinct(self) -> None:
+        # A rollout whose only rate_limits record carries a single
+        # malformed window (non-numeric used_percent) and no valid sibling
+        # is an all-windows-dropped shape: its reason must be distinct
+        # from the record-less case.
+        rollout = json.dumps({
+            "rate_limits": {
+                "primary": {"used_percent": "high", "resets_at": 1789182137}
+            }
+        }) + "\n"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sessions = Path(tmpdir) / "sessions"
+            sessions.mkdir()
+            (sessions / "rollout-2026-09-12T10-00-00.jsonl").write_text(
+                rollout, encoding="utf-8"
+            )
+            report = probe.probe_codex(sessions_dir=sessions)
+        self.assertEqual(report["runtime"], "codex")
+        self.assertEqual(report["status"], "unknown")
+        self.assertEqual(report["pause_decision"], "continue")
+        self.assertEqual(
+            report["reasons"],
+            ["rollout rate_limits record carried no usable windows"],
+        )
+
+    def test_codex_garbage_line_with_dropped_windows_keeps_new_reason(self) -> None:
+        # Review r1 F1: pins the fail-open branch for a MIXED rollout (a
+        # non-JSON garbage line plus a rate_limits record whose only window
+        # is malformed). The predicate's blank/unparseable-line skip must
+        # keep the all-windows-dropped reason; if its try/except or
+        # skip logic regressed, the garbage line would raise outside
+        # probe_codex's guard or collapse to the record-less reason.
+        rollout = (
+            "not json at all\n"
+            + json.dumps({
+                "rate_limits": {
+                    "primary": {"used_percent": "high", "resets_at": 1789182137}
+                }
+            })
+            + "\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sessions = Path(tmpdir) / "sessions"
+            sessions.mkdir()
+            (sessions / "rollout-2026-09-12T10-00-00.jsonl").write_text(
+                rollout, encoding="utf-8"
+            )
+            report = probe.probe_codex(sessions_dir=sessions)
+        self.assertEqual(report["runtime"], "codex")
+        self.assertEqual(report["status"], "unknown")
+        self.assertEqual(report["pause_decision"], "continue")
+        self.assertEqual(
+            report["reasons"],
+            ["rollout rate_limits record carried no usable windows"],
+        )
+
     def test_codex_malformed_used_percent_fail_open(self) -> None:
         # Review r2 F3/F5: a rollout whose rate_limits window carries a
         # non-numeric (or absent, or non-finite) used_percent drops at
         # per-entry parse level; probe_codex then fails open to an unknown
-        # report ("no usable rate_limits record"), never a traceback.
+        # report ("rollout rate_limits record carried no usable windows"),
+        # never a traceback.
         resets = int(time.time()) + 3600
         for used_percent in ('"high"', None, "Infinity"):
             with self.subTest(used_percent=used_percent):
@@ -641,9 +740,9 @@ class QuotaWindowProbeTest(unittest.TestCase):
                 self.assertEqual(report["runtime"], "codex")
                 self.assertEqual(report["status"], "unknown")
                 self.assertEqual(report["pause_decision"], "continue")
-                self.assertTrue(
-                    any("no rate_limits record" in r for r in report["reasons"]),
+                self.assertEqual(
                     report["reasons"],
+                    ["rollout rate_limits record carried no usable windows"],
                 )
         # Per-entry, not whole-parse: a healthy sibling window survives a
         # malformed primary and the report stays ok.

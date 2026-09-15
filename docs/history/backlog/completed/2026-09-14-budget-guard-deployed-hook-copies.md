@@ -1,6 +1,6 @@
 # Backlog: deployed copies for the budget-guard hook registration
 
-Status: open
+Status: done (2026-09-15; executed via docs/plans/completed/2026-09-14-budget-gate-family-residuals.md)
 Origin: review round r1 F7 (Low, non-blocking) of docs/reviews/2026-09-13-budget-gate-quota-fixes-code-review-r1.md (plan docs/plans/2026-09-13-budget-gate-quota-fixes.md); the cheap half (live-worktree note plus smoke-check command) was folded into agents/hooks/budget-guard/README.md in the same round, and this deployed-copy option is the deferred remainder
 Date: 2026-09-14
 

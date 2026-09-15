@@ -823,21 +823,34 @@ verified green under a hostile proxy env.
 When a transport test must pin that an HTTP response object (an `HTTPError`
 body, an `urlopen` response) is closed on every path, a return-value assert
 cannot see closure: closing produces no observable result on the call's
-normal channel. Escalate the warning channel instead. Wrap the client call in
-`warnings.catch_warnings()`, call `warnings.simplefilter("error",
+normal channel. Escalate the warning channel and record unraisables. Wrap the
+client call in `warnings.catch_warnings()`, call `warnings.simplefilter("error",
 ResourceWarning)` inside the context, and run `gc.collect()` inside the same
-context before leaving it; an unclosed response then fails the test at
-finalization instead of emitting an ignored warning on some later collection.
+context before leaving it. The escalation alone is vacuous when the warning is
+raised inside a destructor: a warning-as-error raised during `__del__`
+finalization becomes an unraisable that never propagates to the `gc.collect()`
+call site, so the witness passes while the bug survives (mutation-verified on
+CPython 3.14, where an unclosed `HTTPError` body is tempfile-backed and the
+warning surfaces as "Implicitly cleaning up <HTTPError ...>" through the
+tempfile closer's `__del__`). So also capture `sys.unraisablehook` before the
+context, set a list-appending recorder inside it across BOTH the client call
+and the forced collect, restore the original hook in one `finally`, and after
+the context assert no recorded unraisable has `exc_type is ResourceWarning`.
 
 - CPython usually closes a response when its last reference drops, but
   reference cycles defer finalization to the collector; the forced collect
   inside the context pulls that finalization into the escalation window.
-- Keep the escalation scoped to the wrapped call plus collect, not module-wide,
-  so unrelated `ResourceWarning`s elsewhere in the suite stay unaffected.
+- Keep the escalation and the recorder scoped to the wrapped call plus
+  collect, not module-wide, so unrelated `ResourceWarning`s elsewhere in the
+  suite stay unaffected.
 - Name the witness test in a comment at the `close()` site it pins; a prose
   claim like "the suite witnesses this" is unverifiable at the code site.
 
 Witness: an r4 review of a no-redirect quota probe flagged the transport's
 bare `exc.close()` comment ("witnessed by the suite") as unverifiable; the
 redirect test escalated `ResourceWarning` to error around the probe call with
-a forced collect, and the `close()` site now names that test.
+a forced collect, and the `close()` site now names that test. A later
+mutation check deleted that `close()` on CPython 3.14 and the
+escalation-only witness stayed green (the warning died as an unraisable);
+adding the unraisablehook recorder made the same mutation fail with the
+recorded "Implicitly cleaning up" unraisable.

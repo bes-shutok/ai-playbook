@@ -78,9 +78,12 @@ of retrying past it.
 
 ## Registration
 
-Paths below use `<repo-root>` as a placeholder for this repository's checkout
-root on your host: JSON config files do not expand `~`, so resolve repo-root
-to an absolute path before pasting.
+Both runtimes register the deployed copies of the hook trio under
+`~/.ai-playbook/hooks/budget-guard/` (real files, never symlinks), not this
+repository's working tree. The schema below writes commands in the
+`~/.ai-playbook/` form for readability; the values stored in the JSON config
+files must be the `$HOME`-expanded absolute deployed paths, because JSON
+config files do not expand `~`.
 
 ZCode: `~/.zcode/cli/config.json` under `hooks.events.PreToolUse`:
 
@@ -94,7 +97,7 @@ ZCode: `~/.zcode/cli/config.json` under `hooks.events.PreToolUse`:
           "hooks": [
             {
               "type": "command",
-              "command": "<repo-root>/agents/hooks/budget-guard/zcode.sh",
+              "command": "~/.ai-playbook/hooks/budget-guard/zcode.sh",
               "timeout": 10
             }
           ]
@@ -112,8 +115,7 @@ set to `true`.
 Codex: registered in `~/.codex/hooks.json` under `hooks.PreToolUse` as a
 `.*` matcher group (schema mirrors the live registered group's field set:
 group-level `matcher`, hook fields `type`, `command`, `timeout`,
-`statusMessage`). The stored command is the repo-root-resolved absolute path;
-JSON does not expand `~`:
+`statusMessage`):
 
 ```json
 {
@@ -123,7 +125,7 @@ JSON does not expand `~`:
       "hooks": [
         {
           "type": "command",
-          "command": "<repo-root>/agents/hooks/budget-guard/codex.sh",
+          "command": "~/.ai-playbook/hooks/budget-guard/codex.sh",
           "timeout": 10,
           "statusMessage": "Checking budget guard"
         }
@@ -139,13 +141,36 @@ The `.*` matcher gates every tool call (the Codex schema requires a matcher;
 Registration takes effect for sessions started after the config change; an
 already-running session does not load the new hook.
 
-The registered commands execute this repository's live working tree, so hook
-behavior tracks the checked-out branch: after any edit to
-`budget_guard_core.py` or either adapter script, smoke-check the hooks with
-`python3 -m unittest discover -s scripts -p 'test_budget_guard_hooks.py'`
-from the repository root. A deployed-copy registration (pinned hook files
-under `~/.ai-playbook/`) is tracked in
-`docs/history/backlog/2026-09-14-budget-guard-deployed-hook-copies.md`.
+### Deployed copies
+
+The registered commands execute pinned real-file copies of the trio under
+`~/.ai-playbook/hooks/budget-guard/`, so hook behavior does not track the
+checked-out branch; refreshes are an explicit re-deploy. Refresh recipe:
+
+1. Copy `zcode.sh`, `codex.sh`, and `budget_guard_core.py` from this
+   repository's `agents/hooks/budget-guard/` into
+   `~/.ai-playbook/hooks/budget-guard/`, preserving modes (the two adapter
+   scripts stay executable); deploy real files, never symlinks.
+2. Run the fixture probes against the deployed paths: in a temp directory,
+   write a future-dated flag fixture (`runtime=codex`, `reset_at_epoch` one
+   hour ahead, matching `reset_at_iso`) and invoke the deployed `codex.sh` and
+   `zcode.sh` with `--flag-path`/`--fired-path` inside the temp directory;
+   give each script its own fresh fixture files, because the fired marker
+   one block probe writes makes the other script's block probe pass
+   silently. All three fixture keys are required, and the
+   `--flag-path`/`--fired-path` values must stay inside the temp directory,
+   never the canonical `~/.ai-playbook/runtime/` paths: a fixture flag
+   written there arms a host-wide lockout and suppresses the live guard's
+   single block for the window. Expect the deny envelope with exit 0 (codex)
+   and the block envelope with exit 2 (zcode), both embedding the fixture's
+   `reset_at_iso`, then rerun both with no flag and expect exit 0 with
+   empty stdout. Delete the temp fixture files afterward.
+3. Repoint or verify the runtime configs: each budget-guard `command` value
+   must equal the `$HOME`-expanded absolute deployed path
+   (`$HOME/.ai-playbook/hooks/budget-guard/zcode.sh` and the `codex.sh`
+   analogue); verify by parsing the JSON and comparing against the expanded
+   path, since stored JSON values must be `$HOME`-expanded (JSON does not
+   expand `~`).
 
 PreToolUse-only: never register this hook on a Stop event. The block must
 land before a tool runs; on Stop it would arrive after the work is done and

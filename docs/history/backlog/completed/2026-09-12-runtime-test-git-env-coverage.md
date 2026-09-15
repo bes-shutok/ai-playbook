@@ -1,6 +1,6 @@
 # Backlog: apply the hermetic git env to every git subprocess call site in the runtime test harness
 
-Status: open
+Status: done (2026-09-15; executed via docs/plans/completed/2026-09-14-budget-gate-family-residuals.md)
 Origin: review r5 T-R5-1 (execute-plan runtime guardrails; round-cap deferral, zero blocking)
 Discovered: 2026-09-12
 

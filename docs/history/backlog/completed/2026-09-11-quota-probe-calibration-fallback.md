@@ -1,6 +1,6 @@
 # Backlog: quota probe calibration fallback when no local exhaustion line exists
 
-Status: open
+Status: done (2026-09-15; executed via docs/plans/completed/2026-09-14-budget-gate-family-residuals.md)
 Workflow: backlog
 Source: plan review r4 F1 (Low, non-blocking, ADR-0002 deferral) on docs/plans/2026-09-11-execute-plan-runtime-guardrails.md
 Severity: Low

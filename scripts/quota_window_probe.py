@@ -21,10 +21,17 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 import urllib.error
 import urllib.request
 
-# Z.ai limit entry type -> window kind. Calibrated against the documented
-# semantics (TOKENS_LIMIT carries the 5-hour token window that reports the
-# reset; TIME_LIMIT is the secondary time window). See the task log for the
-# calibration note; timezone encoding lives in the user facts document only.
+# Z.ai limit entry type -> window kind. Kind calibration (do not skip
+# silently): cross-check each type's nextResetTime against the observed
+# exhaustion line in the local ZCode log; TOKENS_LIMIT is the 5-hour window
+# that reports the reset (primary), TIME_LIMIT the weekly secondary window.
+# When no local exhaustion line is observable (fresh host, rotated or cleaned
+# logs, never-exhausted window), calibrate against a live nextResetTime
+# progression observed across two probe calls spaced apart (the moving window
+# is primary), or record the mapping as provisionally documented with the
+# fixture carrying the documented mapping and an explicit note in the run
+# log. Never skip the calibration silently; timezone encoding lives in the
+# user facts document only.
 ZCODE_KIND_MAP = {
     "TOKENS_LIMIT": "primary",
     "TIME_LIMIT": "secondary",
@@ -217,6 +224,29 @@ def parse_codex_rollout(lines: Iterable[str], now: Optional[float] = None) -> li
     return limits
 
 
+def rollout_carries_rate_limits(lines: Iterable[str]) -> bool:
+    """True when any rollout line parses to a record carrying rate_limits.
+
+    Mirrors parse_codex_rollout's own scan (strip per line, skip blanks and
+    unparseable lines, json.loads per record); unlike the parser, which
+    lets the last record win, this predicate returns on the first record
+    carrying rate_limits, so probe_codex can distinguish a record whose
+    windows all dropped from a record-less rollout at fail-open time
+    without touching the parser's list[dict] return contract.
+    """
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if _find_rate_limits(record) is not None:
+            return True
+    return False
+
+
 def select_binding(limits: Sequence[Mapping]) -> Optional[str]:
     """The binding window is the limit whose reset_at_epoch is earliest."""
     if not limits:
@@ -344,8 +374,10 @@ def urllib_transport(url: str, headers: Mapping[str, str]) -> str:
         # before the error propagates to the guard's unknown report, so
         # the body is never left to the garbage collector's implicit
         # cleanup (witnessed by test_zcode_transport_never_follows_
-        # redirects, which escalates ResourceWarning to an error at a
-        # forced collection pass; review r4 F2).
+        # redirects, which escalates ResourceWarning and records
+        # sys.unraisablehook unraisables across a forced collection pass;
+        # escalation alone is vacuous on py3.14, see python guidelines
+        # rule 33; review r4 F2).
         exc.close()
         raise
 
@@ -420,6 +452,14 @@ def probe_codex(sessions_dir: os.PathLike | str = DEFAULT_CODEX_SESSIONS,
     except Exception as exc:  # fail open: any read/parse failure
         return _unknown_report("codex", ["codex rollout parse failed: {}".format(exc)])
     if not limits:
+        # Split fail-open reason (review r2 F5 follow-up): a rollout that
+        # carried a rate_limits record whose windows all dropped at
+        # per-entry validation is a different diagnostic shape from a
+        # rollout with no rate_limits record at all.
+        if rollout_carries_rate_limits(text.splitlines()):
+            return _unknown_report(
+                "codex", ["rollout rate_limits record carried no usable windows"]
+            )
         return _unknown_report("codex", ["rollout carried no rate_limits record"])
     return build_report("codex", limits,
                         minutes_threshold=minutes_threshold,

@@ -1,6 +1,6 @@
 # Backlog: budget probe, vacuous ResourceWarning witness for the deterministic HTTPError close
 
-Status: open
+Status: done (2026-09-15; executed via docs/plans/completed/2026-09-14-budget-gate-family-residuals.md)
 Origin: execute-plan Phase 3 r5 review of docs/plans/2026-09-13-budget-gate-quota-fixes.md (testing lens, F1); deferred at the round cap (round 5 of 5; folding would mutate the digest and require a sixth round).
 
 ## Finding
