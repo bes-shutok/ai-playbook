@@ -1,7 +1,7 @@
 # Backlog: company master ownership-scoping loop residuals (r3 deferrals)
 
 - Date: 2026-09-12
-- Status: open
+- Status: done
 - Origin: review-loop r3 on the dedicated ownership-scoping fix (branch 2026-09-11-execute-plan-runtime-residuals, commits eb32be3/52f60ae/fc4ca8c); staged in docs/reviews/2026-09-12-branch-review-2026-09-11-execute-plan-runtime-residuals-r3.md
 - Disposition: r3 fix-risk triage deferrals plus r5 cap deferrals (5 of 5 full-panel rounds used; exit round blocking-clean with no fixes)
 

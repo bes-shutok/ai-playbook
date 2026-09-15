@@ -151,33 +151,33 @@ Authoring-time check 2026-09-14: every new-span gate, both stale-text forbidden-
 Files:
 - `agents/skills/done/SKILL.md`
 
-- [ ] Record the session base sha in the session notes (`git rev-parse HEAD`; called `<session-base>` below); Task 5 anchors its committed-diff check on it
-- [ ] In the Abandoned-lock definition, replace ``and there is no matching `<repo>/.ai-playbook/done-lock.session` for the lock generation.`` with ``and there is no matching `<repo>/.ai-playbook/done-lock.session`.``
-- [ ] Run → expect: the forbidden-match gate for the dropped qualifier passes (it fails on pre-change bytes) and the Abandoned-definition pin passes; the not-yet-landed new-span gates and the bare item-2b stale-text gate still fail (Tasks 2 through 4), while the moved-block count gates, every preservation gate, and the unchanged-content pins (drift WARNING print, done receipt citation) pass throughout
-- [ ] Commit: `skills: drop orphaned lock-generation qualifier from done Abandoned definition`
+- [x] Record the session base sha in the session notes (`git rev-parse HEAD`; called `<session-base>` below); Task 5 anchors its committed-diff check on it
+- [x] In the Abandoned-lock definition, replace ``and there is no matching `<repo>/.ai-playbook/done-lock.session` for the lock generation.`` with ``and there is no matching `<repo>/.ai-playbook/done-lock.session`.``
+- [x] Run → expect: the forbidden-match gate for the dropped qualifier passes (it fails on pre-change bytes) and the Abandoned-definition pin passes; the not-yet-landed new-span gates and the bare item-2b stale-text gate still fail (Tasks 2 through 4), while the moved-block count gates, every preservation gate, and the unchanged-content pins (drift WARNING print, done receipt citation) pass throughout
+- [x] Commit: `skills: drop orphaned lock-generation qualifier from done Abandoned definition`
 
 ### Task 2: carry the drift-path lesson-scope witness in the commit body (backlog item 1)
 
 Files:
 - `agents/skills/done/SKILL.md`
 
-- [ ] In the Step 3 item 4a drift branch, replace ``(the placement-evidence check below still applies); it is not a failed audit.`` with ``(the placement-evidence check below still applies); it is not a failed audit. Because the duplicate check did not run, the commit message body of the Step 3 commit that stages this corpus change carries the drift witness on its own body line, `lesson-scope-audit: config drift: company guidelines master not found; company duplicate audit not run`, so the skip decision is reconstructable from repository history alone.``
-- [ ] In the Step 3 item 4a echo note, replace ``is echoed into the Step 7 outcome report so the skip decision is reconstructable after the session.`` with ``is echoed into the Step 7 outcome report so the skip decision is reconstructable after the session; on the drift path the witness is additionally carried durably in the corpus commit message body, so repository history alone identifies the skip.``
-- [ ] In the same Step 3, append to item 6 (the commit-message item): replace ``Focus on the "why" not the "what".`` with ``Focus on the "why" not the "what". When the item 4a audit fired the drift witness, the commit body includes the `lesson-scope-audit:` body line exactly as specified in item 4a.``
-- [ ] Run → expect: the three new-span gates for the drift branch and echo note pass (they fail on pre-change bytes), the drift WARNING print pin passes, and the Task 1 gates stay green; the not-yet-prescribed learn new-span gates, the bare item-2b stale-text sweep, and both cross-file fan-out gates (the done 4a and facts citation flips, Task 4) still fail (Tasks 3 and 4), while the moved-block count gates and all preservation gates pass throughout
-- [ ] Commit: `skills: carry drift-path lesson-scope witness in the corpus commit body`
+- [x] In the Step 3 item 4a drift branch, replace ``(the placement-evidence check below still applies); it is not a failed audit.`` with ``(the placement-evidence check below still applies); it is not a failed audit. Because the duplicate check did not run, the commit message body of the Step 3 commit that stages this corpus change carries the drift witness on its own body line, `lesson-scope-audit: config drift: company guidelines master not found; company duplicate audit not run`, so the skip decision is reconstructable from repository history alone.``
+- [x] In the Step 3 item 4a echo note, replace ``is echoed into the Step 7 outcome report so the skip decision is reconstructable after the session.`` with ``is echoed into the Step 7 outcome report so the skip decision is reconstructable after the session; on the drift path the witness is additionally carried durably in the corpus commit message body, so repository history alone identifies the skip.``
+- [x] In the same Step 3, append to item 6 (the commit-message item): replace ``Focus on the "why" not the "what".`` with ``Focus on the "why" not the "what". When the item 4a audit fired the drift witness, the commit body includes the `lesson-scope-audit:` body line exactly as specified in item 4a.``
+- [x] Run → expect: the three new-span gates for the drift branch and echo note pass (they fail on pre-change bytes), the drift WARNING print pin passes, and the Task 1 gates stay green; the not-yet-prescribed learn new-span gates, the bare item-2b stale-text sweep, and both cross-file fan-out gates (the done 4a and facts citation flips, Task 4) still fail (Tasks 3 and 4), while the moved-block count gates and all preservation gates pass throughout
+- [x] Commit: `skills: carry drift-path lesson-scope witness in the corpus commit body`
 
 ### Task 3: disambiguate bare item-2b citations to fork (2b) (backlog item 3)
 
 Files:
 - `agents/skills/learn/SKILL.md`
 
-- [ ] In the item 5c routing-boundary sentence, replace ``The routing answer respects item 2b: outside the company root`` with ``The routing answer respects fork (2b): outside the company root``
-- [ ] In the Step 6 Completion Checklist line, replace ``wherever required by items 2b/4c/5c`` with ``wherever required by fork (2b), item 4c, or item 5c``
-- [ ] In the same checklist line, replace ``without counting against company scope, per item 2b)`` with ``without counting against company scope, per fork (2b))``
-- [ ] In the item 5b living-surfaces parenthetical, replace ``facts `Guideline canonical homes`, item 2b, item 5c,`` with ``facts `Guideline canonical homes`, fork (2b), item 5c,`` (the 5c to 5d flip in this list happens in Task 4; at this task point 5c is still the test's home, so the intermediate state is consistent)
-- [ ] Run → expect: the three disambiguation-span gates pass, the bare item-2b forbidden-match gate passes (it fails on pre-change bytes), and the checklist receipt-citation preservation gate passes; the not-yet-prescribed item 5d new-span gates still fail (Task 4), while the moved-block count gates pass throughout
-- [ ] Commit: `skills: disambiguate bare item-2b citations to fork (2b) in learn`
+- [x] In the item 5c routing-boundary sentence, replace ``The routing answer respects item 2b: outside the company root`` with ``The routing answer respects fork (2b): outside the company root``
+- [x] In the Step 6 Completion Checklist line, replace ``wherever required by items 2b/4c/5c`` with ``wherever required by fork (2b), item 4c, or item 5c``
+- [x] In the same checklist line, replace ``without counting against company scope, per item 2b)`` with ``without counting against company scope, per fork (2b))``
+- [x] In the item 5b living-surfaces parenthetical, replace ``facts `Guideline canonical homes`, item 2b, item 5c,`` with ``facts `Guideline canonical homes`, fork (2b), item 5c,`` (the 5c to 5d flip in this list happens in Task 4; at this task point 5c is still the test's home, so the intermediate state is consistent)
+- [x] Run → expect: the three disambiguation-span gates pass, the bare item-2b forbidden-match gate passes (it fails on pre-change bytes), and the checklist receipt-citation preservation gate passes; the not-yet-prescribed item 5d new-span gates still fail (Task 4), while the moved-block count gates pass throughout
+- [x] Commit: `skills: disambiguate bare item-2b citations to fork (2b) in learn`
 
 ### Task 4: promote the ownership-scoping resolution test to item 5d (backlog item 2)
 
@@ -186,25 +186,25 @@ Files:
 - `agents/skills/done/SKILL.md`
 - `~/.ai-playbook/facts.md`
 
-- [ ] In learn Step 1.2, insert the following new line between the item 5b line and the item 5c line (it carries the test block moved out of item 5c; the mechanics wording is byte-identical to today's 5c block, prefixed with the item number and title):
+- [x] In learn Step 1.2, insert the following new line between the item 5b line and the item 5c line (it carries the test block moved out of item 5c; the mechanics wording is byte-identical to today's 5c block, prefixed with the item number and title):
 
 ```text
 5d. **Ownership-scoping resolution test:** the master resolves only when the incident repo (per item 3b) sits under the company workspace root (`company_projects_root` in facts) AND the key's path exists. Containment compares fully resolved absolute paths component by component: resolve symlinks, expand the tilde, strip trailing separators, normalize Unicode to a single form, and normalize case when the filesystem is case-insensitive (mechanics mirrored in the facts `Guideline canonical homes` paragraph; update both per item 5b). A repo at the root itself is not under it, and a directory sharing only a leading substring with the root does not match. Outside the company root (a repo under the personal root, or under neither workspace root) the key is treated as unresolved even though the user-level facts table lists a global value; under the root with the path missing it is also unresolved (reason: config drift), which `done` Step 3 item 4a audits at commit time as a non-blocking drift WARNING.
 ```
 
-- [ ] In item 5c, replace the extracted block (from ``**Ownership-scoping resolution test:** the master resolves only when`` through ``audits at commit time as a non-blocking drift WARNING.`` inclusive) with ``The resolution outcome is decided by the ownership-scoping resolution test (item 5d).``
-- [ ] In the learn item 2b line, replace ``ownership-scoping resolution test in item 5c`` with ``ownership-scoping resolution test in item 5d``
-- [ ] In the learn item 4c line, replace ``per the item 5c ownership-scoping resolution test`` with ``per the item 5d ownership-scoping resolution test``
-- [ ] In the learn item 5b living-surfaces parenthetical, replace ``fork (2b), item 5c,`` with ``fork (2b), item 5d,``
-- [ ] In done Step 3 item 4a, replace ``ownership-scoping resolution test (`learn` Step 1.2 item 5c, anchored to the repo being audited)`` with ``ownership-scoping resolution test (`learn` Step 1.2 item 5d, anchored to the repo being audited)``
-- [ ] In the facts `Guideline canonical homes` paragraph, replace ``This is the test `learn` Step 1.2 item 5c and `done` Step 3 item 4a apply`` with ``This is the test `learn` Step 1.2 item 5d and `done` Step 3 item 4a apply``; this file is outside any git repository (verified 2026-09-14), so no commit step applies to it
-- [ ] Run → expect: every item 5d new-span gate and both cross-file fan-out gates pass, all preservation gates pass (the receipt-meaning 5c citations must not have been touched), and the bare item-2b gate stays green
-- [ ] Commit (learn and done only): `skills: promote ownership-scoping resolution test to learn item 5d`
+- [x] In item 5c, replace the extracted block (from ``**Ownership-scoping resolution test:** the master resolves only when`` through ``audits at commit time as a non-blocking drift WARNING.`` inclusive) with ``The resolution outcome is decided by the ownership-scoping resolution test (item 5d).``
+- [x] In the learn item 2b line, replace ``ownership-scoping resolution test in item 5c`` with ``ownership-scoping resolution test in item 5d``
+- [x] In the learn item 4c line, replace ``per the item 5c ownership-scoping resolution test`` with ``per the item 5d ownership-scoping resolution test``
+- [x] In the learn item 5b living-surfaces parenthetical, replace ``fork (2b), item 5c,`` with ``fork (2b), item 5d,``
+- [x] In done Step 3 item 4a, replace ``ownership-scoping resolution test (`learn` Step 1.2 item 5c, anchored to the repo being audited)`` with ``ownership-scoping resolution test (`learn` Step 1.2 item 5d, anchored to the repo being audited)``
+- [x] In the facts `Guideline canonical homes` paragraph, replace ``This is the test `learn` Step 1.2 item 5c and `done` Step 3 item 4a apply`` with ``This is the test `learn` Step 1.2 item 5d and `done` Step 3 item 4a apply``; this file is outside any git repository (verified 2026-09-14), so no commit step applies to it
+- [x] Run → expect: every item 5d new-span gate and both cross-file fan-out gates pass, all preservation gates pass (the receipt-meaning 5c citations must not have been touched), and the bare item-2b gate stays green
+- [x] Commit (learn and done only): `skills: promote ownership-scoping resolution test to learn item 5d`
 
 ### Task 5: full validation sweep
 
 Files: none (gates only)
 
-- [ ] Run the complete Validation Commands block from the repo root → expect exit 0 with `ALL GATES GREEN`; on any failure, fix the offending span in the owning file and re-run the block
-- [ ] Run `git diff --name-only <session-base>..HEAD -- agents/skills/` (the base sha Task 1 recorded) → expect exactly `agents/skills/learn/SKILL.md` and `agents/skills/done/SKILL.md`; any further `agents/skills/` path in that diff belongs to a peer session: report it and leave it untouched, never stage or revert it
-- [ ] No commit; the validation task leaves the tree with the four task commits in place
+- [x] Run the complete Validation Commands block from the repo root → expect exit 0 with `ALL GATES GREEN`; on any failure, fix the offending span in the owning file and re-run the block
+- [x] Run `git diff --name-only <session-base>..HEAD -- agents/skills/` (the base sha Task 1 recorded) → expect exactly `agents/skills/learn/SKILL.md` and `agents/skills/done/SKILL.md`; any further `agents/skills/` path in that diff belongs to a peer session: report it and leave it untouched, never stage or revert it
+- [x] No commit; the validation task leaves the tree with the four task commits in place
