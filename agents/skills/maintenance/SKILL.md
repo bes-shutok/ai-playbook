@@ -1,11 +1,11 @@
 ---
 name: maintenance
-description: "Schedule and run unattended maintenance turns that process the backlog and plan queue: survey open backlog items and open plans, apply the guards in order, decide (execute the best available plan, author for an uncovered item, or no-op), schedule at most one child session, and update the scheduler state file. Runs unattended from a recurring automation or on demand. Trigger phrases; \"maintenance run\", \"scheduler turn\", \"process the backlog and plans\", \"schedule next plan work\"."
+description: "Schedule and run unattended maintenance turns that process the backlog and plan queue: survey open backlog items and open plans, apply the guards in order, decide per lane (execute the best available plan, author for an uncovered item, or no-op), schedule at most one execution and one authoring child, and update the scheduler state file. Runs unattended from a recurring automation or on demand. Trigger phrases; \"maintenance run\", \"scheduler turn\", \"process the backlog and plans\", \"schedule next plan work\"."
 ---
 
 # Maintenance
 
-Unattended maintenance loop for this repository. One run of this skill is a **scheduler turn**: survey the work surface, apply the guards in fixed order, decide, schedule at most one child session, and update the state file. The turn is designed to run from a recurring automation with standing pre-authorization: never block on questions, decide and proceed.
+Unattended maintenance loop for this repository. One run of this skill is a **scheduler turn**: survey the work surface, apply the guards in fixed order, decide per lane, schedule at most one execution and one authoring child, and update the state file. The turn is designed to run from a recurring automation with standing pre-authorization: never block on questions, decide and proceed.
 
 This skill stays runtime-agnostic. Runtime-specific scheduling primitives and recipes live in the runtime overlay `agents/skills/maintenance/zcode.md` (load it only when the runtime is ZCode). The two child blueprints the turn fills and schedules live in `agents/skills/maintenance/prompt-templates.md`.
 
@@ -18,7 +18,7 @@ Read these keys from the opening TOML block of `.ai-playbook/facts.md`. This is 
 | `plans_dir` | Top-level plans directory the turn surveys for open plans and coverage greps | `docs/plans/` |
 | `backlog_dir` | Top-level backlog directory the turn surveys for open items | `docs/history/backlog/` |
 | `facts_path` | Path of the facts document whose opening TOML block provides the keys above | `.ai-playbook/facts.md` |
-| `child_lane_spacing_hours` | G1 lane spacing in hours (the `CHILD_LANE_SPACING_HOURS` constant in Step 2) | 5 |
+| `child_lane_spacing_hours` | Lane-guard (`G1e` / `G1a`) spacing in hours (the `CHILD_LANE_SPACING_HOURS` constant in Step 2) | 5 |
 
 ## The scheduler turn
 
@@ -43,33 +43,40 @@ Run Steps 0 through 6 in this order, in one pass. Never reorder the steps and ne
 
 Evaluate in this order; each guard names its observable signal. The proposed slot for this turn's child is now plus 30 minutes, unless the quota leg (Step 4) later moves it.
 
-- `G1 (child lane)`: trips when ANY child automation (authoring or execution, classified per the markers in `agents/skills/maintenance/zcode.md`) is armed to fire within `CHILD_LANE_SPACING_HOURS` (default 5, sized to outlast a typical child run; observed runs span one to four hours) of the proposed slot, or fired within that same window per the automation listing's last-run timestamp and may still be running, or a live child session is otherwise discoverable (an execute-plan claim via the runtime API, or active child session traces on the checkout). The markers are a shortcut, not a necessary condition: any enabled automation of this repository other than the recurring parent automation that fired this turn is lane-occupying when its fire or last-run time falls inside the proposed slot's spacing window, unless its visible prompt is affirmatively unrelated to plan/backlog work. The parent is excluded by id first: when the state file's recorded `parent_automation_id` is non-null, the exclusion matches that id alone; fall back to the scheduler prompt span match only when the recorded id is null (the automation's prompt containing the scheduler prompt template span from the runtime overlay). A fired child fewer than 6 hours past its `fire_at`, computed from the automation listing's fire and last-run fields, also keeps the lane busy; this arm reads the listing, so the state file stays advisory. When uncertain whether a child is in flight, treat the lane as busy.
-- Duplicate-parent tripwire: when the automation listing shows an ENABLED scheduler template span automation whose visible prompt contains the resolved repository root and whose id differs from the recorded `parent_automation_id`, or more than one ENABLED scheduler template span match whose visible prompt contains the resolved repository root while the recorded id is null, treat the extra as lane-occupying (G1 trips) and record a `turn_error` with reason `duplicate-parent-candidate` in the state file (Step 6) so a human collapses the duplicates.
+- `G1e (execution lane)`: trips when an execution child (classified per the markers in `agents/skills/maintenance/zcode.md`) occupies the lane per any arm below, checked in this order:
+  - State-file arm: the Step 6 record of a dispatched execution child whose `fire_at` has not yet elapsed, or whose `fire_at` plus six hours has not yet elapsed while its `outcome` is still `pending`, keeps the lane busy. One-shot children vanish from the automation listing on completion, so this arm is the primary in-flight detector for children this repository dispatched itself.
+  - Armed arm: an execution-child automation armed to fire within `CHILD_LANE_SPACING_HOURS` (default 5, sized to outlast a typical child run; observed runs span one to four hours) of the proposed slot.
+  - Fired arm: a fired execution child fewer than six hours past its `fire_at` (the post-fire outcome-horizon floor; the spacing constant governs pre-fire arming), computed from the automation listing when the child still appears there.
+  - Widened arm: any enabled automation of this repository other than the recorded parent, excluded by id first and by the scheduler prompt span match only when the recorded id is null, whose fire or last-run time falls inside the spacing window occupies a lane when its prompt matches that lane's markers or is not affirmatively unrelated to plan/backlog work; an authoring-classified child occupies only `G1a` and an execution-classified child only `G1e`, and when the lane of an in-flight child is uncertain, treat both lanes as busy.
+  - Discovery arm: a live execution session otherwise discoverable (an execute-plan claim check via the mechanism named in the runtime overlay, or active child session traces on the checkout).
+  When uncertain whether an execution child is in flight, treat the lane as busy.
+- `G1a (authoring lane)`: the same arms as `G1e`, evaluated only against authoring children (markers per the overlay; the widened arm's lane-classification rule applies symmetrically). The two lanes are independent by policy: an authoring child never trips `G1e` and an execution child never trips `G1a`. Executions are strictly sequential (never two in flight); an authoring child may run alongside an execution child, and its plan-document commits may land on whatever branch the shared checkout currently holds (including the execution child's feature branch), where they ride that execution's final squash merge as joint-state content.
+- Duplicate-parent tripwire: when the automation listing shows an ENABLED automation whose visible prompt begins with the scheduler prompt template's opening line (the span literal pinned in the runtime overlay's child-classification markers) and contains the resolved repository root, and whose id differs from the recorded `parent_automation_id`, or more than one such ENABLED span match while the recorded id is null, treat the extra as lane-occupying (both lane guards trip) and record a `turn_error` with reason `duplicate-parent-candidate` in the state file (Step 6) so a human collapses the duplicates. Self-heal arm: when the recorded `parent_automation_id` is absent from the listing and exactly one ENABLED span match exists, the turn adopts that id into the recorded value, clears a `duplicate-parent-candidate` turn error, and schedules normally; the human deletion remedy applies only when the recorded id is still present in the listing.
 - `G2 (failure cap)`: trips when an alert is present in the state file or recovered from the memory index read-back, from either the child cap (three consecutive no-progress child outcomes) or the turn tripwire (three consecutive `turn_error` records, or an N >= 3 write-failure streak note).
 - `G3 (joint state)`: trips when a merge or rebase is in progress on the checkout or the done-lock (`scripts/done-lock.sh`) is held, standing down the whole turn; a tripped G3 records the stand-down as a D3 no-op in the state file (Step 6) before stopping.
 
 ### Step 3: decision
 
-Apply the first rule that matches.
+Apply the rules in this order; the two lanes decide independently, so one turn may dispatch an execution child AND an authoring child (at most one of each).
 
-- `D1 (execute)`: when all guards pass and an open plan exists, schedule an execution child for the best open plan, skipping plans the memory index marks dependency-blocked when selecting: memory dependency-chain order when available, otherwise the oldest basename among digest-intact plans, otherwise the oldest open plan whose re-certification the child's PRE-STEP performs. When every open plan is dependency-blocked (nothing remains after the skip), fall through to D2. Treat a plan skipped as dependency-blocked whose marked blocker is no longer an open plan anywhere under the resolved plans_dir (completed or absent) as not blocked (self-healing), so a stale memory mark cannot starve the queue; a blocker still present under the deferred/ subdirectory keeps the plan blocked.
-- `D2 (author)`: when all guards pass and no open plan awaits execution (or every open plan is dependency-blocked per memory), schedule an authoring child for the highest-priority plan-uncovered open backlog item. When the plan-uncovered set is empty, D2 falls through to D3.
-- `D3 (no-op)`: otherwise record the reason and schedule nothing.
-- Any tripped guard resolves to D3; a tripped G1 in particular resolves never to D2, because the authoring blueprint commits on the current branch and would contaminate an in-flight execution child's Phase 0 feature branch on the shared checkout.
-- `D2 (author)` is dispatched only when the checkout's current branch is the repository default branch; otherwise resolve to D3 with the branch name as the reason.
+- `D1 (execute)`: when all guards pass except at most `G1a`, the execution lane (`G1e`) is free, and an open plan exists, schedule an execution child for the best open plan, skipping plans the memory index marks dependency-blocked when selecting: memory dependency-chain order when available, otherwise the oldest basename among digest-intact plans, otherwise the oldest open plan whose re-certification the child's PRE-STEP performs. When every open plan is dependency-blocked (nothing remains after the skip), fall through to D2. Treat a plan skipped as dependency-blocked whose marked blocker is no longer an open plan anywhere under the resolved plans_dir (completed or absent) as not blocked (self-healing), so a stale memory mark cannot starve the queue; a blocker still present under the deferred/ subdirectory keeps the plan blocked.
+- `D2 (author)`: when all guards pass except at most `G1e`, the authoring lane (`G1a`) is free, and an open backlog item is plan-uncovered (or every open plan is dependency-blocked per memory), schedule an authoring child for the highest-priority plan-uncovered open backlog item. When the plan-uncovered set is empty, D2 falls through to D3.
+- `D3 (no-op)`: otherwise, for a lane, record the reason and schedule nothing for that lane.
+- A tripped `G1e` resolves D1 to D3 for the execution lane; a tripped `G1a` resolves D2 to D3 for the authoring lane. `G2`, `G3`, or the duplicate-parent tripwire tripping stands the whole turn down to D3 for both lanes. There is no checkout-branch precondition for D2: the authoring child commits on whatever branch the shared checkout holds, including an in-flight execution child's Phase 0 branch, and those commits ride that branch's final merge as joint-state content.
 
 ### Step 4: quota leg
 
 - Run `python3 scripts/quota_window_probe.py`.
 - When its window data is usable, use it to time the child; never fire the child inside a window the probe's decision defers (a report-only pause never defers; the runtime overlay's Quota leg names which pauses defer).
 - When the probe output is not usable, apply the fallback pinned in `agents/skills/maintenance/zcode.md` ("Quota leg"). Dead probe output downgrades timing precision; it never blocks scheduling.
+- When the final fire time lands inside the provider's published peak-pricing window, apply the overlay's usage-pricing rule: defer to the window's end so the child's run bills at off-peak rates, unless the starvation exception applies. Starvation is named by observation: no child record with kind `execute` and `created_at` within the last 24 hours in the state file (fall back to the runtime listings when state writes have been failing), and the exception releases only the starved lane. The pricing cache lives in the state file's `pricing_cache` field and wins when fresher than the overlay's tracked seed; the turn updates only that state cache (plus a memory note when the values changed) and never edits tracked skill files to re-pin pricing.
 
 ### Step 5: scheduling
 
-- Assemble the child prompt from the matching blueprint in `agents/skills/maintenance/prompt-templates.md`, filling that blueprint's placeholders. Dispatch slice: for an execution child the scheduled automation prompt is ONLY the content of the `<prompt for the scheduled session>` block of the execution blueprint, with `{REPO_ROOT}` and `{some_plan}` filled. The wrapper sentences around that block (the SCHEDULER voice, "Schedule at {execution_time}") describe the deciding turn's own job and are never part of the scheduled payload; `{execution_time}` is filled into the scheduling call (the delay or cron fields), not into the payload. Authoring slice: for an authoring child the scheduled prompt is the authoring blueprint's fenced body with `{schedule_time}` and `{backlog_item}` filled; the two field lines after the block are fill-in spec and are never part of the payload.
-- Schedule at most one child session per scheduler turn: exactly one one-shot child firing at least 30 minutes out, via the runtime's scheduling primitive. Never schedule while any child is in flight (G1). The final fire time is never earlier than now plus 30 minutes, even when the quota leg defers past a reset that lands sooner.
-- Precondition: after the quota leg fixes the final fire time, re-evaluate G1 against that final slot before creating the automation; if it trips, resolve to D3 and record the reason (schedule nothing).
-- Record the child's automation id, kind, target, and fire time in the state file (Step 6).
+- Assemble the child prompt from the matching blueprint in `agents/skills/maintenance/prompt-templates.md`, filling that blueprint's placeholders. Dispatch slice: for an execution child the scheduled automation prompt is ONLY the content of the `<prompt for the scheduled session>` block of the execution blueprint, with `{REPO_ROOT}` and `{some_plan}` filled. The wrapper sentences around that block (the SCHEDULER voice, "Schedule at {execution_time}") describe the deciding turn's own job and are never part of the scheduled payload; `{execution_time}` is filled into the scheduling call (the delay or cron fields), not into the payload. Authoring slice: for an authoring child the scheduled prompt is the authoring blueprint's fenced body with `{REPO_ROOT}` (in the re-arm duty paragraph), `{schedule_time}`, and `{backlog_item}` filled; the two field lines after the block are fill-in spec and are never part of the payload.
+- Schedule at most one child per lane per scheduler turn (one execution AND one authoring at most), never into a lane whose child is in flight (`G1e` / `G1a`). A clocked child is a one-shot firing at least 30 minutes out: the final fire time is never earlier than now plus 30 minutes, even when the quota leg defers past a reset that lands sooner. A runtime dispatch primitive without a clock (idle-time dispatch) schedules no fire time and is exempt from the 30-minute floor. When both lanes dispatch in one turn, the execution child takes the clocked create and the authoring lane takes the idle-time primitive or defers to the next turn; the execution lane is never dispatched through a primitive without a clock, because the failure-cap machinery and this step's fire-time bookkeeping require its fire time. For an idle-time dispatch `{schedule_time}` is filled with the literal `an idle-time run (no scheduled fire time)`.
+- Precondition: after the quota leg fixes the final fire time, re-evaluate the lane guard (`G1e` or `G1a`) against that final slot before creating the automation; if it trips, resolve to D3 and record the reason (schedule nothing).
+- Record the child's automation id, kind, target, and fire time in the state file (Step 6); an idle-time dispatch records a null id and fire time with an `idle` marker on the target.
 
 ### Step 6: state update
 
@@ -80,6 +87,7 @@ Apply the first rule that matches.
 
 - The child-outcome check runs at the end of Step 1 (survey) and writes its `outcome`, `outcome_checked_at`, `consecutive_failures`, and `alert` updates to the state file before Step 2 evaluates the guards in fixed order; Step 6's whole-document rewrite carries them forward, so `G2 (failure cap)` arms on the tripping turn, not one turn late.
 - Each turn checks the oldest `pending` child whose `fire_at` plus 6 hours has passed.
+- Idle-time children are covered too: a `pending` child recorded with a null `fire_at` (idle-time dispatch) gets the same progress check once the runtime's idle-task listing (named in the overlay) no longer shows it queued or running, or six hours after its `created_at`, whichever comes first.
 - Progress for an authoring child means a top-level plan now references the target item or the item left the backlog top level.
 - Progress for an execution child means the target plan left the top-level plans directory (archived).
 - Otherwise, and only when no armed child targets the same work, the child is `failed`.
@@ -94,25 +102,28 @@ Path: `.ai-playbook/scheduler-state.json` (project runtime dir; gitignored).
 
 Scoping note:
 
-- The state file is advisory for concurrency. The single child lane and joint-state safety come from the runtime's automation listing, the done-lock, and claim checks, never from the state file.
-- `G2 (failure cap)` is the only guard that reads the state file's counters and alert, so a lost or truncated state file resets the child cap and would re-enable scheduling unless the Step 1 memory index read-back still surfaces an alert or a streak note at N >= 3; G1's parent-id exclusion and the duplicate-parent tripwire also read `parent_automation_id`, degrading to the prompt-span fallback when that id is lost.
-- The file is single-writer by convention: only scheduler turns write it; peers may read it.
-- Every turn rewrites the whole document from a fresh survey through a temp file plus atomic replace; a lost update degrades only the failure-cap rail and the recorded `parent_automation_id` rail (the id-first parent exclusion falls back to the scheduler prompt span match).
+- The state file is advisory for concurrency at large: the per-lane child caps and joint-state safety come from the runtime's automation listing, the done-lock, and claim checks. The one sanctioned exception is the lane guards' state-file arm (G1e / G1a in Step 2), which is the primary in-flight detector for children this repository dispatched itself, because one-shot children vanish from the automation listing on completion.
+- `G2 (failure cap)` is the only guard that reads the state file's counters and alert, so a lost or truncated state file resets the child cap and would re-enable scheduling unless the Step 1 memory index read-back still surfaces an alert or a streak note at N >= 3; the lane guards' parent-id exclusion and the duplicate-parent tripwire also read `parent_automation_id`, degrading to the prompt-span fallback when that id is lost.
+- The file has two sanctioned writer classes: scheduler turns, which rewrite the whole document from a fresh survey through a temp file plus atomic replace, and a dispatched child's re-arm FIRST ACTION, which performs a targeted field edit of `parent_automation_id` (or of `rearm_note` after a refused re-arm) through a temp file plus atomic replace and changes no other field. Peers may read it. A turn's Step 6 rewrite must carry forward the child-written values it does not own (`parent_automation_id`, `rearm_note`) rather than resetting them; a lost update degrades only the failure-cap rail and the recorded `parent_automation_id` rail (the id-first parent exclusion falls back to the scheduler prompt span match).
 - The `children` array keeps the last 20 entries.
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "last_run_at": "<iso8601>",
   "parent_automation_id": "<id or null>",
   "survey": {"open_backlog": 0, "open_plans": 0, "digest_intact_plans": 0},
-  "decision": "execute|author|noop",
-  "decision_reason": "<short reason>",
+  "decision": {"execution": "execute|noop", "authoring": "author|noop"},
+  "decision_reason": {"execution": "<short reason>", "authoring": "<short reason>"},
+  "pricing_cache": {"peak_window": "<pinned window>", "multipliers": "<pinned multipliers>",
+     "last_verified": "<iso date>", "source": "<notice url>"},
   "turn_error": null,
+  "rearm_note": null,
   "children": [
-    {"automation_id": "<id>", "kind": "execute|author", "target": "<path>",
-     "created_at": "<iso>", "fire_at": "<iso>", "quota_status": "ok|unknown",
-     "outcome": "pending|progress|failed", "outcome_checked_at": "<iso|null>"}
+    {"automation_id": "<id or null for idle-time>", "kind": "execute|author",
+     "target": "<path or <path> (idle)>", "created_at": "<iso>", "fire_at": "<iso or null>",
+     "quota_status": "ok|unknown", "outcome": "pending|progress|failed",
+     "outcome_checked_at": "<iso|null>"}
   ],
   "consecutive_failures": 0,
   "consecutive_turn_errors": 0,
@@ -124,9 +135,13 @@ Scoping note:
 
 `turn_error` is `null` or a short reason string; a fully successful turn resets it to null.
 
-`parent_automation_id` is the recurring parent automation's id, filled at initialization with the recurring parent's automation id (`null` when unknown); a scheduler turn never treats its own parent as a lane occupant (G1's widened rule excludes the parent by this id first and falls back to the scheduler prompt span match only when the recorded id is null; the duplicate-parent tripwire catches ENABLED span-matching extras whose visible prompt contains the resolved repository root).
+`rearm_note` is `null` or a child-written record of a refused parent re-arm; a turn clears it when the listing shows the parent armed again.
 
-Human check on a stalled loop: a loop that keeps recording G3 no-ops (a fresh `last_run_at` with repeated stand-down reasons) is running but standing down, so read the recent `decision_reason` records before concluding anything; repeated dependency-blocked no-op reasons alongside G3 stand-downs also explain a loop that schedules nothing; a stale `last_run_at` (older than two cadence periods) itself still means the parent automation is dead and must be re-armed per `agents/skills/maintenance/zcode.md` ("Recurring automation recipe").
+`pricing_cache` is the turn-owned usage-pricing cache (window, multipliers, verification date, source); it wins over the runtime overlay's tracked seed when its `last_verified` is fresher, and only the cache is updated by a turn (the tracked seed is re-pinned by a human; see the overlay's Quota leg).
+
+`parent_automation_id` is the recurring parent automation's id, filled at initialization with the recurring parent's automation id (`null` when unknown); a scheduler turn never treats its own parent as a lane occupant (the lane guards' widened arm excludes the parent by this id first and falls back to the scheduler prompt span match only when the recorded id is null; the duplicate-parent tripwire catches ENABLED extras whose prompt begins with the scheduler template's opening line and contains the resolved repository root, with the tripwire's self-heal arm adopting a sole live span match when the recorded id is gone).
+
+Human check on a stalled loop: a loop that keeps recording G3 no-ops (a fresh `last_run_at` with repeated stand-down reasons) is running but standing down, so read the recent per-lane `decision_reason` records before concluding anything; repeated dependency-blocked no-op reasons alongside G3 stand-downs also explain a loop that schedules nothing; a stale `last_run_at` (older than two cadence periods) means the parent automation is dead and must be re-armed per `agents/skills/maintenance/zcode.md` ("Recurring automation recipe"), unless the state file records a pending child whose fire time is still in the future: the dispatch ladder intentionally leaves the parent absent while a child is armed, and the child re-arms it as its first action, so that darkness is expected; a non-null `rearm_note` plus an absent parent means the last child could not re-arm and the recipe must be run by hand.
 
 Human clear procedure, both surfaces: edit `.ai-playbook/scheduler-state.json` to set `alert` back to `null` and the tripped counter (`consecutive_failures`, or `consecutive_turn_errors` when the tripwire tripped it) to 0, delete the matching alert note from the agent's persistent memory index when one was written (the child-cap or turn-tripwire alert note, or the `turn_tripwire` write-failure streak note whose `repo` key matches the resolved repository root), and, when that reason tripped the alert, delete or disable the duplicate automation named by the `duplicate-parent-candidate` reason after confirming it targets this repository; the `turn_error` field needs no manual edit, it resets naturally on the next successful write; scheduling re-arms on the next turn.
 
@@ -134,7 +149,14 @@ Human clear procedure, both surfaces: edit `.ai-playbook/scheduler-state.json` t
 
 - The maintenance loop never pushes to origin.
 - It never blocks on questions; unattended turns decide and proceed.
+- It schedules at most one child per lane per scheduler turn (one execution and one authoring at most).
+- It keeps at most one execution child in flight and at most one authoring child in flight at a time (per `G1e` / `G1a`); executions are strictly sequential.
 - It never touches peer-session state.
 - `docs/plans/deferred/` plans are never auto-picked (human revival only).
-- It schedules at most one child session per scheduler turn.
-- It keeps at most one child in flight at a time (any kind, per G1).
+
+## Revisions
+
+- 2026-09-15: dual-lane revision (user request). The single child lane split into `G1e` (execution lane) and `G1a` (authoring lane); one turn may dispatch one child of each kind in parallel. Executions are strictly sequential (never two at once); an authoring child may run alongside an execution and its commits land on whatever branch the shared checkout holds, riding the execution's squash merge (user correction, same day: no worktree isolation; an initial worktree design was removed). Supersedes the v1 single-lane spans ("at most one child session per scheduler turn", "one child in flight at a time"); the archived plan's validation block pins the v1 wording and is historical.
+- 2026-09-15 (same day, dispatch-ladder revision): the automation-born create-primitive cap was verified live (a bound session holds at most one armed created automation; deleting the armed parent lifts the block) and encoded as the dispatch ladder in the runtime overlay; the child payloads gained a re-arm-first duty so the child restores the parent the ladder deletes. The authoring default-branch gate (a D2 precondition and the authoring payload's fire-time gate) was removed accordingly: an authoring child legitimately runs while the shared checkout sits on the execution child's Phase 0 branch. Idle-time dispatch is the second-lane primitive and is exempt from the 30-minute floor.
+- 2026-09-15 (same day, review r1 fix round): state schema bumped to 2 (per-lane `decision` and `decision_reason`, plus the turn-owned `pricing_cache` and the child-written `rearm_note`); the lane guards gained a state-file in-flight arm and a pinned widened-arm lane classification because one-shot children vanish from the automation listing on completion; the duplicate-parent tripwire gained a span literal and a self-heal arm for a lost recorded id; the dispatch ladder gained a rollback and an idle-time watchdog backstop in the runtime overlay; the parent automation's title joined the recipe as the single creation source; `scripts/check_maintenance_pins.sh` pins the loop's core invariants mechanically; the pricing re-verification cache moved to the state file so unattended turns never edit tracked skill files.
+- Child model policy (2026-09-15, user request): authoring children run GLM-5.3-Flash at High effort; execution children default to High effort, and low effort is permitted only for simple plans (no active research or reflection needed). The clocked scheduling primitive exposes no per-automation model or effort selection, so clocked children inherit the host default model; the idle-time lane can carry the policy model and effort today per the runtime overlay. This section is the policy of record, and the deciding turn names the required model/effort in its output when it deviates from the host default.

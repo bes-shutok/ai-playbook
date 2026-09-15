@@ -1,7 +1,7 @@
 # Backlog: drift-witness corpus-commit fallback for gitignored-corpus sessions
 
 - Date: 2026-09-14
-- Status: open
+- Status: done (closed stale 2026-09-15: the company-master-scoping-loop-residuals execution landed the corpus-commit-body witness without claiming this item - done SKILL items 4a/6 now carry the lesson-scope-audit body line on the drift path; verified on main dded309c)
 - Origin: plan review r5 (Low, non-blocking, `quality#witness-presupposes-corpus-commit`) on `docs/plans/2026-09-14-company-master-scoping-loop-residuals.md`; staged in `docs/reviews/2026-09-14-plan-review-company-master-scoping-loop-residuals-r5.md`
 - Disposition: authoring review loop at its certification cap (round 5, ready=yes, zero blocking); the Low was left unfixed per the phase-3 churn-control bound and captured here per the backlog capture rule
 
