@@ -1,7 +1,7 @@
 # Backlog: maintenance clear procedure stale-id remedy
 
 **Captured:** 2026-09-14 (execute-plan Phase 3, review round r8 of the maintenance-scheduler-skill plan; staged finding F1 in docs/reviews/2026-09-14-2026-09-13-maintenance-scheduler-skill-code-review-r8.md)
-**Status:** open
+**Status:** done (2026-09-15) — the suggested split-remedy fix landed as the duplicate-parent tripwire's self-heal arm plus the restricted deletion remedy in the review r1 fix pass (commit 77c09f34): when the recorded `parent_automation_id` is absent from the listing and exactly one ENABLED span match exists, the turn adopts that id and clears the turn error instead of paging a human; the human deletion remedy now applies only when the recorded id is still present in the listing. Kept as a link target.
 **Priority:** low
 **Origin:** security#recovery-procedure-mismatch (risk lens, r8 focused round)
 
