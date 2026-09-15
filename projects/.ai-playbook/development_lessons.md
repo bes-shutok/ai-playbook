@@ -6206,3 +6206,136 @@ When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git c
 **Witness (2026-09-14, quota probe guard flag):** a multi-line plan slug interpolated into a guard flag let an embedded `reset_at_epoch=...` line override the writer's epoch (last-wins parse); the writer now emits the first line only and omits empty values, pinned by a test parsing through the real hook-core parser (mutation-probed RED pre-fix, GREEN after revert).
 
 **See also:** #336 (the parser, not the plan sketch, defines the format; here the parser must also grade the writer), #330 (one mutation-killing witness per guard conjunct), #220 (proving RED today on empirical claims).
+
+## 341. Verify The Executing Context Owns A Task's Primitives Before Dispatch
+
+**Principle:** Family H (verify the real thing: a capability the harness documents is not a capability of the specific executing context; tool surfaces differ per agent context, so primitive availability must be checked where the task actually runs)
+
+**Trigger:** a plan task (or any delegated unit) whose deliverable is a runtime mutation through a privileged primitive (scheduling, automation registries, credentials, host-level configuration) executed by a worker context that may hold a narrower tool set than the orchestrator.
+
+**Rule:** (1) At task start, inventory the executing context's actual tools against the task's required primitives and detect the gap before doing work. (2) Complete every deliverable that does not need the missing primitive. (3) For the blocked primitive, record the exact payload verbatim in the implement log and return blocked for orchestrator recovery; never bridge the gap by writing a registry's backing store directly, mutating shared configuration, or fabricating headless or protocol escape routes. (4) When probing escape routes is part of the diagnosis, diagnose each failure before the next attempt and bound plus roll back every configuration experiment. (5) The recovering orchestrator re-checks the listing for duplicates before creating and records the created id in the log.
+
+**Why:** privileged state must move through the runtime's supported surface; a fabricated route can corrupt live stores or strand configuration drift, and an unrecorded payload forces the recoverer to re-derive it.
+
+**Witness (2026-09-14, maintenance-scheduler plan, arm-automation task):** the worker subagent lacked the scheduling primitives, documented each exhausted escape route (headless CLI model-selection failure; automation methods implemented client-side), wrote the state-file deliverable, and returned blocked with the verbatim payload; the orchestrator created the automation on recovery after a listing-based duplicate check.
+
+**Distinguishing from #338:** #338 covers a round killed after writing its artifacts (whether it counts at all); this covers a task whose required primitive is absent from the executing context (route the mutation to the context that owns it).
+
+**See also:** #338 (orchestrator recovery after an interrupted round).
+
+## 342. Re-Read A File After Any Out-Of-Band Mutation Before Editing It
+
+**Principle:** Family H (verify the real thing, not the abstraction)
+
+**Trigger:** a session that mutates the same file through two channels: an edit tool that validates against its last Read, and shell commands (sed, awk, scripts) that change bytes out-of-band.
+
+**Rule:** after any shell-side mutation of a file you still intend to edit with the edit tool, re-Read the affected range before the next Edit call; treat the edit tool's "modified since read" refusal as the expected symptom of a stale snapshot, and re-read instead of retrying blind.
+
+**Why:** the edit tool compares against a cached snapshot; an intervening shell write invalidates it, and retrying without re-reading either fails again or lands on stale line content.
+
+**Witness (2026-09-14, review-fix iteration):** after a Read of a review staging doc, a sed pass flipped triage statuses; the next Edit of the outcomes section refused with "File has been modified since read"; re-reading the affected range and re-applying succeeded with no wrong content written.
+
+## 343. Anchor Bulk Text Replacement Against Prefix-Colliding Longer Values
+
+**Principle:** Family H (verify the real thing, not the abstraction)
+
+**Trigger:** a bulk status flip or batch replace where the match marker is also a prefix of a longer legitimate value in the same file.
+
+**Rule:** before a global replace-all, grep the marker and check whether any occurrence extends it into a different value; when a prefix collision exists, use an end-anchored substitution (or per-occurrence edits) and verify with before/after occurrence counts per value, not one aggregate total.
+
+**Why:** a short marker silently corrupts every longer value it prefixes; an aggregate count can balance out when one value shrinks while another wrongly grows, so only per-value counts expose the damage.
+
+**Witness (2026-09-14, review-fix iteration):** flipping review findings from pending to done, the marker "Triage: fix" was a prefix of "fix-at-archive" (a finding that must stay pending); a global replace would have flipped it too; an end-anchored sed with per-value before/after counts flipped exactly the 15 target lines.
+
+## 344. A Same-Kind Conflict Guard Must Exclude The Deciding Turn's Own Originator
+
+**Principle:** Family A (Equivalence-class coverage)
+
+**Trigger:** a guard classifies same-kind entities as busy or conflicting ("any X of this scope that ..."), and the deciding turn was itself launched by one of those X.
+
+**Rule:** when a conflict or occupancy predicate enumerates entities of the same kind as the deciding actor, explicitly exclude the actor's own originator; match that exclusion on a durable identifier recorded when the actor-originator relationship was created (plus any content marker that identifies the origin), not on an inference from turn context, and write the identifier at initialization so the exclusion is mechanically checkable.
+
+**Why:** the originator is a member of the enumerated class, so an unqualified predicate makes every deciding turn either see itself as blocked (spurious stand-down) or silently exempt; both falsify the guard.
+
+**Witness (2026-09-14, review r3, scheduler-skill plan):** the lane-occupancy rule counted any enabled automation of this repository as busy, including the recurring parent automation that fired the deciding turn (review Blocker). Fixed by excluding the parent via its prompt-template span or a `parent_automation_id` recorded in the state file at initialization.
+
+## 345. A Guard's Recorded Key Must Overrule Its Content Heuristic
+
+**Principle:** Family A (equivalence-class coverage: a guard that also matches by content pattern collapses two classes, the key's entity and the pattern's lookalike, into one)
+
+**Trigger:** an exclusion, dedup, or occupancy guard that can identify the same entity through two routes: a durable identifier recorded when the relationship was created, and a content-pattern match (a prompt-template span, a name substring, a marker string).
+
+**Rule:** (1) When the recorded id is present, the guard matches that id alone; the content-pattern route applies only as a fallback when the id is null. (2) A content-pattern match that disagrees with the recorded id (a different id, or more than one pattern match while the id is null) is a tripwire: treat it as occupying (the guard trips), record an error reason in the state surface so a human collapses the duplicates, and never silently exclude or pass. (3) Mirror the precedence wording in every restatement (state-file schema doc, runtime overlay) so no span still teaches the either-or form.
+
+**Why:** an either-or formulation (pattern match OR recorded id) lets any entity whose content happens to match the pattern be treated as the parent even when the recorded id names a different entity; a legitimate occupant is silently swallowed and the duplicate cause stays invisible.
+
+**Witness (2026-09-14, review r4, scheduler-skill plan):** the lane guard's parent exclusion matched "scheduler prompt span OR recorded parent id"; review flagged that a span-matching non-parent automation was silently excluded whenever the id was known. Fixed to id-first plus a duplicate-parent tripwire recording a `duplicate-parent-candidate` reason in the state file.
+
+**Distinguishing from #344:** #344 requires the originator exclusion to exist and to use a durable identifier; this covers precedence and disagreement handling when both an id route and a content route exist.
+
+**See also:** #344 (originator exclusion with a recorded id), #330 (one mutation-killing witness per guard conjunct).
+
+## 346. An Equivalence Claim In A Spec Must Name A Defined Mechanism
+
+**Principle:** Family H (verify the real thing: a spec sentence asserting two conditions are equivalent is a factual claim about the artifact, checkable by confirming the second mechanism is defined)
+
+**Trigger:** spec or skill prose offers a parenthetical equivalence or alternate detection route ("equivalently X", "or, equivalently, when Y") alongside a primary condition.
+
+**Rule:** (1) Before keeping an equivalence claim, verify the second mechanism is defined in the same artifact with its detection surface, payload, and arm/clear rule; an equivalence with no defined mechanism silently promises unimplemented behavior. (2) When a real failure mode exists, define the mechanism instead of deleting the claim; otherwise drop the equivalence. (3) When the reword wraps a pinned span, keep the pinned span byte-identical inside the replacement (or move the pin in the same change) so the validation still gates the intended sentence.
+
+**Why:** a reader, human or agent, treats the parenthetical as an implemented fallback and relies on it during incidents; the gap surfaces only when the fallback is actually needed.
+
+**Witness (2026-09-14, review r4, scheduler-skill plan):** a turn-tripwire parenthetical claimed "equivalently, three consecutive turns with no successful state update", but nothing detected failed state writes across turns; fixed by defining the failure-streak signal (a memory note with a consecutive-write-failure counter, written on every failed write and armed at the threshold on read-back) and rewording the claim to point at it.
+
+**See also:** #179 (its witness refinement: a derivation claim may name only sources the schema actually records), #194 (fix a skim surface and its validation pin in the same change).
+
+
+## 347. A Duplicate Tripwire Must Count Only Live Candidates
+
+**Principle:** Family A (equivalence-class coverage: a tripwire that counts same-shape candidates collapses live instances and retired artifacts into one class)
+
+**Trigger:** a duplicate or anomaly tripwire enumerates candidates of a kind (same template span, same name pattern, same target) to decide that "more than one exists".
+
+**Rule:** filter the candidate enumeration to live instances (enabled, attached, in service) before counting; a retired artifact of the same shape is cleanup residue and must not arm the tripwire. Mirror the liveness qualifier in every restatement of the tripwire arms.
+
+**Why:** leftovers from past changes share the detected shape by definition, so an unqualified count trips on routine residue; operators learn to dismiss the tripwire, which silences it for real duplicates.
+
+**Witness (2026-09-14, review r5, scheduler-skill plan):** the duplicate-parent tripwire counted any scheduler template span automation, so a disabled leftover automation tripped it. Fixed by requiring ENABLED matches on both tripwire arms (a differing id; more than one match while the id is null) and mirroring the qualifier in the runtime overlay and the state-file restatement.
+
+**Distinguishing from #345:** #345 sets precedence between the recorded id and a content-pattern match and requires a tripwire on disagreement; this filters which instances the pattern match may count at all.
+
+**See also:** #344 (originator exclusion with a recorded id), #345 (id-vs-content precedence and disagreement tripwire).
+
+
+## 348. A Threshold Stop Trips On Every Signal Origin And Clears Only Explicitly
+
+**Principle:** Family A (equivalence-class coverage: a stop gate that names one signal origin silently exempts every other origin of the same signal class)
+
+**Trigger:** a guard defines a threshold signal with several detection origins or recovery sources (per-arm counters, persisted alerts, a durable note read back from memory), and a consuming stop gate must trip when the signal is at or above threshold.
+
+**Rule:** state the consuming gate's trip condition over the whole signal class ("trips when an alert is present, from any arm or recovery source"), never over one arm. A success path may reset only sub-threshold state; when a read-back at or above threshold survives a successful write, convert it into the persisted alert instead of clearing it, and release the stop only through the documented human-clear procedure.
+
+**Why:** naming one origin in the gate condition exempts the others, so the loop keeps running past the threshold; a success-path clear of threshold state silently disarms the stop the signal exists to hold, and the failure recurs without a trace.
+
+**Witness (2026-09-14, review r5, scheduler-skill plan):** the failure-cap stop tripped only on three consecutive no-progress child outcomes; alerts from the turn tripwire (three consecutive `turn_error` records, or an N >= 3 write-failure streak note recovered on read-back) did not stop the loop, and a successful state write silently cleared an at-threshold streak note. Fixed by broadening the gate to any alert origin and converting a surviving at-threshold read-back into the persisted alert (reason: write-failure streak), cleared only by the human-clear procedure.
+
+**Distinguishing from #346:** #346 requires a claimed detection mechanism to be defined; this covers the next hop: once defined, every consuming gate must trip on it, and the clear path must be explicit.
+
+**See also:** #345 (record an error reason so a human resolves the trip), #346 (define the mechanism the claim names).
+
+
+## 349. Join A Before/After Inventory Diff On Its Unique Composite Key
+
+**Principle:** Family H (verify the real thing: a before/after "nothing else changed" proof is only as sound as its join key; a partial key silently merges distinct rows and positional alignment silently shifts when a row count legitimately changes)
+
+**Trigger:** a fix pass proves an edit touched only its intended targets by diffing two keyed inventories (pinned text spans, gate rows, file-plus-count pairs) captured before and after the edit.
+
+**Rule:** (1) Join the inventories on the composite key that is unique across the whole inventory, for example file plus span text; a single attribute such as span text alone can repeat in more than one file and mispairs rows. (2) Never substitute positional alignment (line-by-line paste or zipped lists) when either side can gain or lose rows; one legitimately added row shifts every later pair. (3) Express the result as per-key count deltas plus absent and added keys, so a new row surfaces as an authorized addition instead of corrupting the comparison.
+
+**Why:** both naive comparisons false-positive: the span-only join pairs same-text rows from different files, and positional alignment blames every row after an insertion; each invites "fixing" a clean edit or, worse, masks a real regression inside the noise.
+
+**Witness (2026-09-14, review r7, scheduler-skill plan):** the post-fix pin audit first joined before/after pin counts on span text alone and mispaired the two rows sharing the span "execute-plan skill" (one in zcode.md, one in prompt-templates.md); a paste fallback then misaligned by the one newly authorized gate pin. Redone as a join on the (file, span) key: zero count changes, zero absent pins, the only delta the authorized new pin.
+
+**Distinguishing from #339:** #339 diffs a validator's error sets on the same artifact pre- and post-edit; this diffs a keyed inventory across many files and governs the join key, not the error-set comparison.
+
+**See also:** #339 (prove an edit adds no new gate errors), #346 (keep a pinned span byte-identical when rewording around it).

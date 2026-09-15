@@ -1,6 +1,6 @@
 # Backlog: maintenance scheduler skill (recurring plan/backlog processor)
 
-Status: open
+Status: done
 Workflow: backlog
 Source: user request (Andrey, 2026-09-13 session)
 Class: new capability (skill + recurring driver automation)

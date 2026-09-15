@@ -5,7 +5,7 @@ prefix (*-rfc.md) take the filename minus the .md extension and
 the trailing -rfc. On collision a short MMDD date suffix is
 appended; when the date also collides (same base in
 two completed-history directories) a directory tag (plan/backlog)
-is appended too. Collided identities: backlog-inbox-location-gate, docs-branch-temp-file-hygiene, docs-branch-trap-before-restore-region, execute-plan-fresh-review-coverage-gaps, plan-readiness-trailer-gate-r5-deferrals, plans-facts-do-not-resolve-design-ambiguity, returned-for-ask-semantics, review-panel-hermeticity-dimension, review-pointer-wiring-polish, reviewed-plan-readiness-gate, token-usage-telemetry.
+is appended too. Collided identities: backlog-inbox-location-gate, docs-branch-temp-file-hygiene, docs-branch-trap-before-restore-region, execute-plan-fresh-review-coverage-gaps, maintenance-scheduler-skill, plan-readiness-trailer-gate-r5-deferrals, plans-facts-do-not-resolve-design-ambiguity, returned-for-ask-semantics, review-panel-hermeticity-dimension, review-pointer-wiring-polish, reviewed-plan-readiness-gate, token-usage-telemetry.
 Rows are backfilled: archived date from the filename date
 prefix. Aliases only where a genuine historical alias exists.
 Table format consumed by scripts/doc_registry_validator.py. -->
@@ -173,3 +173,5 @@ Table format consumed by scripts/doc_registry_validator.py. -->
 | doc-registry-fold-exit-surface-exception-coverage | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-11-doc-registry-fold-exit-surface-exception-coverage.md |  |  |  |
 | doc-registry-cli-doc-precision | no | completed | 2026-09-13 | backlog-completed | docs/history/backlog/completed/2026-09-13-doc-registry-cli-doc-precision.md |  |  |  |
 | doc-registry-validator-residuals | no | completed | 2026-09-13 | plan-completed | docs/plans/completed/2026-09-13-doc-registry-validator-residuals.md |  |  |  |
+| maintenance-scheduler-skill-plan | no | completed | 2026-09-15 | plan-completed | docs/plans/completed/2026-09-13-maintenance-scheduler-skill.md |  |  | user-approved 2026-09-15: execute-plan Phase 4 archive invocation (run charter standing pre-authorization): provenance paths updated to completed/ locations at archive (review F15 fix-at-archive); clear this note after the licensed write lands |
+| maintenance-scheduler-skill-backlog | no | completed | 2026-09-15 | backlog-completed | docs/history/backlog/completed/2026-09-13-maintenance-scheduler-skill.md |  |  | user-approved 2026-09-15: execute-plan Phase 4 archive invocation (run charter standing pre-authorization): Status open->done at archive completion (promoted origin of the archived plan, plans lifecycle); clear this note after the licensed write lands |
