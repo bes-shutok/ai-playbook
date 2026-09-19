@@ -4,7 +4,7 @@ Status: open
 Workflow: backlog
 Origin: 2026-09-16-maintenance-scheduler-liveness r1 review (finding DS-4, deferred to backlog by the triage)
 Severity: Low (design tension, not a liveness bug)
-Scope: agents/skills/maintenance/SKILL.md (Step 0 bullet), scripts/check_maintenance_pins.sh (Task 4 pin), docs/plans/2026-09-16-maintenance-scheduler-liveness.md (Task 4 wording and Validation gate 2 needle)
+Scope: agents/skills/maintenance/SKILL.md (Step 0 bullet), scripts/check_maintenance_pins.sh (Task 4 pin), docs/plans/2026-09-16-maintenance-scheduler-liveness.md (Task 4 wording and Validation gate 2 needle), agents/skills/maintenance/zcode.md (re-arm hygiene bullet; extended 2026-09-18, r5 entry 17: the bullet asserts the state-first shape governs the re-arm decision of the turn's Step 0 and rearm-on-touch sessions, a claim the listing-first Step 0 wording contradicted until the rewrite landed)
 
 ## Problem
 
@@ -50,3 +50,13 @@ One atomic edit pass across all three coupled surfaces:
    quote (the plan text itself stays historical), and flip the Validation
    gate 2 needle in the same commit so the plan's gate block and the pins
    suite never disagree.
+
+Note (2026-09-18, P12 origin 4): DS-4 finding restated inline. Consequence:
+the listing-first trigger paid one automation listing per touching session
+before the state file is consulted, inverting the state-first invariant for
+the touch surface. Origin: liveness r1 review, deferred by the triage
+because the three coupled surfaces (the Step 0 sentence, the pins-suite
+discriminating pin, and the archived plan's Validation gate 2 needle) had
+to move in one pass. The rewrite landed in one pass across all three coupled
+surfaces plus the zcode.md re-arm hygiene bullet added to Scope above, whose
+state-first claim becomes accurate with the Step 0 rewrite.

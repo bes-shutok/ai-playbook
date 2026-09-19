@@ -137,7 +137,7 @@ expect_pin "checked-checkbox count" "$S"
 expect_pin '\[[xX]\]' "$S"
 expect_pin "timestamp older than one cadence period" "$S"
 expect_pin 'lifecycleStatus` is completed or `enabled` is false' "$S"
-expect_pin "rearm-on-touch check: when the automation listing shows no ENABLED parent" "$S"
+expect_pin "rearm-on-touch check: consult the scheduler state file first" "$S"
 
 # 3. oscillation ladder and fallbacks in the overlay (Task 2)
 expect_pin "update the recorded parent record into the child one-shot" "$Z"
@@ -268,6 +268,8 @@ SUCCESSOR DISPATCH, after the final squash merge passes and before ending the se
 - [x] Commit: `maintenance: state-driven rearm duty, successor chaining, resume rule in child blueprints`
 
 ### Task 4: rearm-on-touch surfaces (indefinite-operation FIX-2)
+
+Deviation (2026-09-18, P12): the Step 0 trigger was rewritten to state-first wording (backlog 2026-09-17-step0-rearm-trigger-state-first-wording); the Task 4 quote above is historical, and this plan's gate needle was flipped to the new sentence's discriminating needle in the same commit so this plan's gate block and the pins suite never disagree.
 
 Files:
 - `agents/skills/maintenance/SKILL.md` (Step 0 sentence)

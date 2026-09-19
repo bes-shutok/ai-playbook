@@ -212,7 +212,8 @@ rc=$?
 [ "$fail" -eq 1 ] && exit 1
 
 # --- rearm-on-touch surfaces (Task 4) ---
-pin "step 0 rearm-on-touch check" grep -qF 'rearm-on-touch check: when the automation listing shows no ENABLED parent' "$S"
+pin "step 0 rearm-on-touch check" grep -qF 'rearm-on-touch check: consult the scheduler state file first' "$S"
+expect_absent "superseded listing-first rearm-on-touch trigger must be absent from SKILL.md" 'when the automation listing shows no ENABLED parent' "$S"
 pin "done-skill rearm-on-touch pointer" grep -qF 'rearm-on-touch check defined in the maintenance skill' "$D"
 [ "$fail" -eq 1 ] && exit 1
 
