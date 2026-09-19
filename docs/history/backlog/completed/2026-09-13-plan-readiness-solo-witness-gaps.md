@@ -1,6 +1,6 @@
 # Backlog: plan_readiness selftest solo-witness gaps (r1 testing lens)
 
-Status: open
+Status: done
 Origin: execution review r1 (2026-09-13) of docs/plans/2026-09-09-plan-readiness-trailer-tail.md, findings F7-F11
 
 Witness-coverage gaps left deferred (duplicate-witness class, backlog-by-default):

@@ -1,6 +1,6 @@
 # Backlog: doc-registry validator r5 prose residuals
 
-Status: open
+Status: done
 Origin: review round r5 of the 2026-09-13 doc-registry validator residuals close-out (branch 2026-09-13-doc-registry-validator-residuals, HEAD d084490; staging doc `docs/reviews/2026-09-13-doc-registry-validator-residuals-code-review-r5.md`). Valid non-blocking findings deferred at the five-round cap per the backlog-deferral default; fixing them would have mutated the reviewed digest and required a sixth round.
 
 ## Items

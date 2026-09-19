@@ -1749,7 +1749,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     # token preceded by --root is rejected (argparse path); guard
     # placement itself is pinned by
     # test_selftest_before_double_dash_fails_closed below (argparse
-    # argparse independently rejects both inputs pinned here, so this
+    # independently rejects both inputs pinned here, so this
     # fixture alone does not discriminate guard placement).
     code, output = run(["--root", str(root), "--", "--selftest"])
     st.expect("test_double_dash_with_root_before_selftest_fails_closed",

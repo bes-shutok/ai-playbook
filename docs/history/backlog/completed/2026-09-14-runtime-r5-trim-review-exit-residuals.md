@@ -1,6 +1,6 @@
 # Backlog: runtime r5-trim review-exit residuals (r5 certification round)
 
-Status: open
+Status: done
 Priority: 3
 Origin: execute-plan Phase 3 round 5 (final certification, blind correctness-completeness) of
 `docs/plans/2026-09-13-execute-plan-runtime-r5-residuals-yagni-trim.md`; deferred at the

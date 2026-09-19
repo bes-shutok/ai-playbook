@@ -262,6 +262,17 @@ the shared script.
 14.2. Keep the shared script agent-agnostic. Agent-specific protocol concerns
 belong in wrappers, not in the shared logic.
 
+14.3. **Harness-scoped rule families declare a supported set and skip outside
+it.** When a skill or shared rule only implements a subset of AI harnesses
+(for example a quota probe that only knows two runtimes), keep the rule text
+harness-agnostic: name the supported harness ids once, detect the live
+harness, and skip the whole family when the live id is outside that set. Do
+not hardcode product-specific branches such as "if Cursor then …" in skill
+or backlog prose. Growing support later means adding an id to the set and
+implementing its adapter path, not adding another named exception. Detect
+the live harness from session signals (env override, session ids), never
+from peer on-disk configs that can exist while another harness is running.
+
 ## 15. Out-of-Scope Findings: Document as Separate Ticket, Never Fix In-Place
 
 **Scope: projects with peer review and shared codebases (e.g. company repos). Not
@@ -693,6 +704,44 @@ Applies to plans, RFCs, PR descriptions, BFF/API docs, Confluence pages, Slack d
 
 45.9. **Do not overload product-phase labels in meeting or calendar titles.** When a phase name already labels the product or program (for example the new CRM is already called "MVP"), do not reuse that same word as a shorthand for a technical topic ("MVP delivery", "MVP notifications"). Prefer the concrete subject: ownership, Legacy CRM reuse, PII, service boundaries. Phase words stay for scope or timeline only when the meeting is actually about the phase gate itself.
 
+45.10. **Canonical writing contract.** This subsection is the canonical writing contract: the single shared statement of writing priorities for human-facing text. Skills point here and keep only their surface-specific rules. When a skill and this contract disagree, this contract wins; within section 45, 45.1 through 45.9 remain the detailed elaboration of priorities 3 through 5, and this subsection wins on intra-section conflict.
+
+Ordered priorities, applied in order and never traded backward for a later one:
+
+1. Preserve meaning and accuracy.
+2. Be concise.
+3. Use plain Globish (short common words, full sentences, readable by a non-native speaker).
+4. Keep only audience-relevant jargon.
+5. Define uncommon terms on first use, or add a `## Terms` section.
+6. Verify the final text before saving or sending it.
+
+Decision table by audience and artifact. The two worked pairs below anchor the first and fourth rows; the other rows are normative for their class.
+
+| Surface class | Shape |
+|---|---|
+| Slack-like message | Short, outcome-first; conclusion in the first lines; no internal engineering refs unless the audience uses them (worked pair below) |
+| Jira item | Compact and business-facing; respect the tracker's field size limits; expand implementation terms for business readers |
+| Atlassian (Confluence) comment | Collaborative suggestion tone; detail appropriate to the page's audience |
+| PR/review comment | Complete but compressed; suggestion tone; every finding actionable (worked pair below) |
+| Plans, RFCs, contracts | Complete but compressed; keep acceptance criteria, decisions, and open uncertainties |
+| Code comment | Excluded from this contract; comment prose rules are delegated to the documentation review lens (`review-agents/documentation.md`) |
+
+Jargon threshold: widely shared technical vocabulary (API, JSON, HTTP) stays when the audience needs it; team-local abbreviations and unexplained metaphors are replaced or defined.
+
+Final-pass checklist: remove duplicated context, generic introductions, stale drafting history, unnecessary headings, unexplained abbreviations, and sentences that do not change the reader's next action.
+
+Invariants:
+
+- Compression invariant: shorter text must not drop uncertainty, acceptance criteria, safety constraints, or the author's actual decision.
+- Session-language invariant: an explicit user-selected conversation language is a session invariant inherited by resumed turns, compacted context, delegated review updates, and final responses; English is the default when none was selected. The consistency check preserves code, quoted source text, and user-requested translations.
+- Human-finalization boundary: the agent may prepare a draft; the user reviews, edits, and verifies meaning; only the user sends. Improving writing quality never authorizes direct posting or skipping review.
+
+Worked pairs:
+
+Slack-like message, before: "Hi all, we deployed the reconciliation microservice to the staging environment and leveraged an out-of-band value insertion approach for the credentials, FYI the rollforward is in progress and we will possibly need to iterate." After: "The reconciliation service is now on staging. Credentials are created directly in AWS Secrets Manager. Rollout continues; updates to follow."
+
+Review comment, before: "This is wrong, refactor the parsing so the delta semantics issue goes away." After: "The response shape here can change fields between versions. Please consider comparing values after formatting them the same way, so a formatting-only difference does not read as a real change."
+
 ## 46. Maintain Workflow Invariants Until Explicitly Paused
 
 When a workflow (plan review, TDD cycle, PR process) has an explicit exit condition
@@ -1036,8 +1085,20 @@ their schemas.
 
 ## 64. Threat Model for Single-User Tooling: No Anti-Adversarial-Worker Mechanisms
 
-Personal and single-operator tooling (including the execute-plan runtime and its plans) does not defend against a malicious same-user worker. Mechanisms whose only purpose is detecting or resisting deliberate tampering by a worker that already runs with the user's own permissions — out-of-tree tamper-digest anchors, anti-spoof seed tokens, launch-path garbage collection of security state, migration fences against mid-upgrade forgery — are **deferred by default** and must not be designed, prescribed in plans, or folded in as review fixes. Collect them in a backlog item marked deferred with a **trigger condition** (a realistic incident or a multi-user/shared-host deployment), and revisit only when that condition fires.
+Personal and single-operator tooling (including the execute-plan runtime and its plans) does not defend against a malicious same-user worker. Mechanisms whose only purpose is detecting or resisting deliberate tampering by a worker that already runs with the user's own permissions (out-of-tree tamper-digest anchors, anti-spoof seed tokens, launch-path garbage collection of security state, migration fences against mid-upgrade forgery) are **deferred by default** and must not be designed, prescribed in plans, or folded in as review fixes. Collect them in a backlog item marked deferred with a **trigger condition** (a realistic incident or a multi-user/shared-host deployment), and revisit only when that condition fires.
 
-Review findings premised on a malicious same-user adversary are dispositioned as `deferred (threat-model)` in plan-review rounds, not blocking. Concurrency-correctness concerns (two *honest* sessions racing on one manifest), fail-closed handling of genuine errors, and accidental-damage guardrails stay in scope — those protect correctness, not against malice.
+Review findings premised on a malicious same-user adversary are dispositioned as `deferred (threat-model)` in plan-review rounds, not blocking. Concurrency-correctness concerns (two *honest* sessions racing on one manifest), fail-closed handling of genuine errors, and accidental-damage guardrails stay in scope: those protect correctness, not against malice.
 
 **Driving principles for design and review until revised: efficiency, token usage, simplicity, and code quality, ranked in that order.** When two designs are otherwise comparable, choose the one with less mechanism, fewer moving artifacts, and fewer prescribed witnesses; a review suggestion that adds machinery to close a defense-in-depth gap is a deferred-backlog candidate, not a fold. Code quality ranks fourth but is never priced at zero: a deferral whose cost is real code quality (review-coverage symmetry across language overlays, validator correctness, validator robustness) must record that quality cost in the deferral line and be revived deliberately once the cost compounds. (Amended 2026-09-12: code quality added as the fourth principle per user decision; the 2026-09-11 efficiency triage had priced it at zero and wrongly parked the language-coverage and VRS-correctness items.)
+
+## 65. Finder AppleScript: Inline References and Per-Step Invocations
+
+Write Finder AppleScript with fully inline element references at each use site, for example `duplicate (file n of src) to folder "X" of folder "Desktop" of home`. Never assign a folder reference to a variable by re-resolving its name: `set target to folder "X" of folder "Desktop" of home` fails with error -10006 (access not allowed) even when `exists folder "X" of ...` returns true and the folder was created fine. Split create and copy into separate `osascript` invocations with an `exists` check between them, since a failed mid-script run still persists the folders it already created. `killall Finder` clears a wedged Finder (the documented CloudStorage wedges) but is not required for the -10006 shape.
+
+## 66. Agent Memory Files Are Externally Mutable
+
+Treat agent memory files (for example the host's persistent memory index and topic files) as externally mutable: the host may normalize or fold their content between turns.
+
+- Re-read a memory file immediately before every edit to it; never rely on read-state from earlier in the session.
+- Prefer one full-file write per turn over successive edits when several sections must change.
+- On a modified-since-read failure, re-read, diff the fresh content against the intended change, and retry once. Never rewrite blind, and never assume the earlier edit was lost and duplicate it.

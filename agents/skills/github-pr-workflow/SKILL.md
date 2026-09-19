@@ -6,7 +6,7 @@ description: >
 
 # GitHub PR Workflow
 
-**Writing:** Follow `agent_workflow_guidelines.md` §45. PR summaries use plain English (e.g. "API response shape", not "wire contract"). Add `## Terms` when using 3+ project-specific words.
+**Writing:** Follow the canonical writing contract (`agent_workflow_guidelines.md` §45, 45.10); this skill keeps only its PR-specific rules.
 
 Rules for PR description/stats authoring, splitting a branch diff into appropriately sized PR chunks, creating the actual GitHub PR branches, reparenting a child after parent squash-merge, and shared GitHub PR operations used by review skills.
 

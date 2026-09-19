@@ -13,6 +13,8 @@ Two-phase agent: **(1) missing documentation**, **(2) prose clarity**. Run phase
 
 Pattern tags: `documentation#missing-<slug>` for phase 1; `documentation#prose-<slug>` for phase 2.
 
+**Comment prose ownership:** the canonical writing contract (`agent_workflow_guidelines.md` §45, 45.10) owns comment prose rules; this agent is the delegated owner of the code-comment class that the contract's decision table excludes from general human-facing prose.
+
 ---
 
 ## Phase 1: Missing documentation

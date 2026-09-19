@@ -50,7 +50,7 @@ Drop any folder of code, docs, papers, images, or video into graphify and get a 
 
 If the user invoked `/graphify --help` or `/graphify -h` (with no other arguments), print the contents of the `## Usage` section above verbatim and stop. Do not run any commands, do not detect files, do not default the path to `.`. Just print the Usage block and return.
 
-**Fast path — existing graph:** Before doing anything else, check whether `graphify-out/graph.json` exists. The expected location is `graphify-out/graph.json` relative to the **current working directory** (i.e. the project root where you are running commands). If it exists AND the user's request is a natural-language question about the codebase (e.g. "How does X work?", "What calls Y?", "Trace the data flow through Z") and NOT an explicit rebuild command (`--update`, `--cluster-only`, or a bare path/URL that implies fresh extraction): **skip Steps 1–5 entirely and jump straight to `## For /graphify query`.** Run `graphify query "<question>"` immediately. Do not run detect. Do not check corpus size. Do not ask the user to narrow. The graph is already built — use it.
+**Fast path — existing graph:** Before doing anything else, check whether `graphify-out/graph.json` exists. The expected location is `graphify-out/graph.json` relative to the **current working directory** (i.e. the project root where you are running commands). If it exists AND the user's request is a natural-language question about the codebase (e.g. "How does X work?", "What calls Y?", "Trace the data flow through Z") and NOT an explicit rebuild command (`--update`, `--cluster-only`, or a bare path/URL that implies fresh extraction): **run the Step 1 version-compat preflight first (on the drift warning, follow the Step 1 refresh or fallback before querying), then skip Steps 1–5 and jump straight to `## For /graphify query`.** Run `graphify query "<question>"` immediately. Do not run detect. Do not check corpus size. Do not ask the user to narrow. The graph is already built — use it.
 
 If no path was given, use `.` (current directory). Do not ask the user for a path.
 
@@ -63,6 +63,22 @@ Follow these steps in order. Do not skip steps.
 Only when the path is one or more `https://github.com/...` URLs, or several local subfolders to merge. See `references/github-and-merge.md` for the clone, cross-repo merge, and monorepo flow, then continue with the resolved local path. A plain local path skips this step.
 
 ### Step 1 - Ensure graphify is installed
+
+**Version-compat preflight (run before anything else in this step).** Run `graphify --version`. A warning of the shape:
+
+```
+warning: skill is from graphify <skill-version>, package is <package-version>. Run 'graphify install' to update.
+```
+
+is a **blocking preflight result**: the vendored skill guidance and the installed package have drifted, and this workflow's build, query, path, and explain steps must not run on mismatched guidance. On the warning, stop the workflow and refresh first:
+
+1. Run `graphify install --platform agents` (the agents platform maps to this repo's `agents/skills/` runtime layout).
+2. Verify `git status` in the skills repo that owns `agents/skills/graphify/` shows changes confined to `agents/skills/graphify/`. If the diff reaches anywhere else, abort the refresh and use the fallback below.
+3. Diff-review the refreshed files and carry forward any repo-local edits per the vendored-sync rules (full bidirectional sync, hygiene scan before commit).
+4. Run the public-hygiene scan, then commit the refresh in the skills repo as its own commit: `feat: refresh vendored graphify skill to match package`.
+5. Re-run `graphify --version` and continue only once the warning is gone.
+
+**Fallback (refresh cannot run: offline host, hostile diff, unsupported platform):** print the actionable mismatch with both versions, then continue only with flag guidance derived from `--help` output of the installed package for the steps whose flags may have drifted; say explicitly that you are running fallback guidance because of the version drift.
 
 ```bash
 # Detect the correct Python interpreter (handles uv tool, pipx, venv, system installs)

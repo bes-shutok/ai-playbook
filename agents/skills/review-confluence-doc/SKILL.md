@@ -9,7 +9,7 @@ description: >
 
 # Review Confluence Document
 
-**Writing:** Follow `agent_workflow_guidelines.md` §45 when suggesting rewrites. Keep feedback respectful and collaborative, and phrase every suggestion with softeners such as "could we please", "please consider", "one option might be" instead of imperative forms ("Remove this section", "Add a rollback plan"). Feedback should prefer plain English (e.g. "API contract", not "wire contract") and recommend a `## Terms` section when the page uses 3+ project-specific words.
+**Writing:** Follow the canonical writing contract (`agent_workflow_guidelines.md` §45, 45.10) when suggesting rewrites; this skill keeps only its Confluence-review-specific rules. Keep feedback respectful and collaborative, and phrase every suggestion with softeners such as "could we please", "please consider", "one option might be" instead of imperative forms ("Remove this section", "Add a rollback plan").
 
 Review an RFC or TDD document hosted on Confluence. Provide quality feedback focused on clarity, actionability, and missing context.
 
@@ -355,7 +355,6 @@ Apply these to every comment regardless of severity:
 - **Constructive tone, never hostile.** Keep blocking status explicit while the wording stays respectful; severity lives in the status lozenge, not in harsh phrasing.
 - **Suggestion tone, never imperative form.** Phrase every comment as a suggestion or question with common softeners that still convey the point: "please consider ...", "we could ...", "one option might be ...", "could we ...?". Do not write orders ("Remove this section", "Add a rollback plan", "Rewrite §3") at any severity. Avoid "Consider doing X" as well: it sounds soft but still reads as an instruction the reader must comply with; prefer "Please consider doing X. What do you think?".
 - **No em dashes** ("; ") anywhere in comment text. Use commas, semicolons, colons, or parentheses instead. (See also the global rule in Step 5.)
-- **Plain language (globish).** Short words, short sentences. Avoid jargon a non-native speaker would not know.
 - **Never reference internal machine-specific docs** (e.g. JVM guidelines, CLAUDE.md rules, internal playbooks) in Confluence comments. Explain the principle and its benefits directly instead.
 - **Status lozenges for severity**: use `Critical`, `High`, `Medium`, or `Low` at the start of each comment.
 

@@ -1,6 +1,6 @@
 # Backlog: plan_readiness path-shape and markup accepted-tail extensions
 
-Status: open
+Status: done
 Origin: execution review r1 (2026-09-13) of docs/plans/2026-09-09-plan-readiness-trailer-tail.md, findings F2 and F4
 
 - The r4-F2 path-shape predicate (`/` in token or known suffix) drops real

@@ -40,6 +40,8 @@ Review findings are evidence to assess, not authorization to broaden the reviewe
 
 When the user provides a specific concern in their request (e.g., "check for secrets", "look for performance issues", "make sure there is no personal data"), this does **not** narrow the review scope. The user's concern is a priority lens, not a scope filter. Launch all relevant sub-agents as usual; the user's focus area often surfaces findings that a narrow scan would miss.
 
+When the priority lens names a **module isolation** or "knows nothing about downstream X" constraint, apply it to the **service repository under review** (the PR head), even if the prompt initially names a sibling service. Confirm the isolation target in staging Metadata when the user corrects the service name mid-review.
+
 If the user explicitly says "only check X" or "skip everything except X", honor that request but still write the staging doc with whatever findings result.
 
 User args (e.g., "check for secrets", "against branch X") provide context for the review, not a mode selection. The review mode (Staged/Direct/Fix) is determined by trigger phrases, not by the content of the args.
@@ -147,19 +149,21 @@ Do **not** bulk-paste entire guideline files into every worker prompt.
 2. Add **section / rule hints** by worker lens and Domains. Prefer each file's own index when present (company numbered rules; project "Testing patterns" / rule-number tables). Examples for the testing worker: company test naming; project MockMvc / integration-runner / harness rules.
 3. Instruct workers: open only the hinted sections on demand; apply abstract patterns from the lens catalog; for concrete harness names, class suffixes, and runner commands, read **company and project guidelines together** plus sibling tests in this repo. Do not invent a convention that contradicts either file.
 
+The shared changed-scope trigger surfaces for every language overlay are enumerated once, here: shared conversion or persistence helpers reused across callers when the reuse adds a caller or changes an existing caller outcome, feature-flag and configuration wiring when the change alters readiness gating, timeout or scheduled-executor boundaries, and living-documentation status claims. This list is the single canonical enumeration for the review cycle; review-panel-selection.md and execute-plan reference it instead of restating it.
+
 For Java/Spring reviews, the Guideline Pack is incomplete unless it includes
 the shared `java_guidelines.md`, `jvm_guidelines.md`, and
 `coding_guidelines.md` paths. Add rule hints for Java rules #16 through #25
 when the diff contains Java, Maven, Spring configuration, generated request
-models, outbound HTTP clients, downstream error mapping, changed dependency
-coordinates, shared helpers reused across callers,
-feature-flag and configuration wiring,
-timeout or scheduled-executor boundaries, or
-living-documentation status claims. Workers must open the relevant hinted sections during
+models, outbound HTTP clients, downstream error mapping, or changed dependency coordinates, or when a shared trigger surface from the paragraph above is present. Workers must open the relevant hinted sections during
 their lens pass, and staging metadata must record the applied Java rule hints.
 Do not treat a path-only listing as evidence that the guidance was applied.
 
-Record in staging Metadata under the `Guideline pack:` field (the field name `review-staging` requires; do not use a snake_case key) with overlay id and the guideline paths actually attached (not the full file bodies), including whether company and project were both present.
+For Kotlin/Spring reviews, the Guideline Pack is incomplete unless it includes the shared `kotlin_guidelines.md`, `jvm_guidelines.md`, and `coding_guidelines.md` paths. Add rule hints for the Kotlin rules the `kotlin-spring.md` trigger table maps to the changed scope: the shared trigger surfaces from the paragraph above plus the Kotlin-specific signals the table names. Workers must open the relevant hinted sections during their lens pass, and staging metadata must record the applied Kotlin rule hints. Do not treat a path-only listing as evidence that the guidance was applied.
+
+For Python reviews, the Guideline Pack is incomplete unless it includes the shared `python_guidelines.md` and `coding_guidelines.md` paths. Add rule hints for the Python rules the `python.md` trigger table maps to the changed scope: the shared trigger surfaces from the paragraph above plus the Python-specific signals the table names. Workers must open the relevant hinted sections during their lens pass, and staging metadata must record the applied Python rule hints. Do not treat a path-only listing as evidence that the guidance was applied.
+
+Record in staging Metadata under the `Guideline pack:` field (the field name `review-staging` requires; do not use a snake_case key) with overlay id and the guideline paths actually attached (not the full file bodies), including whether company and project were both present, and the applied rule hints for each attached file that carries its own numbered index (shared language, company, and project files alike).
 
 ## Diff access (orchestrator and sub-agents)
 
@@ -300,7 +304,7 @@ Drop or reword findings that assume something not true in context:
 3. If post-TTL: the eviction targets already-expired keys; it is a defensive no-op, not a bug
 4. Do not suggest "add DB fallback" for a no-op path without calculating the cost (e.g. N extra DB reads per tick) and confirming the scenario where the fallback would be needed is actually reachable given the lifecycle timing
 
-Before criticizing error-handling strategy (throw vs return-default, fail-open vs fail-closed), trace what the caller does with each outcome. Returning a "safe" default (e.g. `false`) can mask infrastructure failures as normal business conditions; throwing may be intentional to let failures propagate to a handler that can log/alert/retry appropriately.
+Before criticizing error-handling strategy (throw vs return-default, fail-open vs fail-closed), trace what the caller does with each outcome. Returning a "safe" default (e.g. `false`) can mask infrastructure failures as normal business conditions; throwing may be intentional to let failures propagate to a handler that can log/alert/retry appropriately. When catch-and-continue clearly protects an existing production path (place order, MQ emit, payment) and the PR already fail-opens, do **not** recommend fail-closed. Prefer a Low metrics ask: one shared counter tagged by field or step so ops can see error rates without relying on rarely watched warn logs.
 
 Before claiming a timing or performance issue (lock TTL too short, timeout too tight, queue overflow), verify what the actual I/O operation does. Read the implementation of the slow-path method rather than assuming its transport (e.g. synchronous HTTP vs MQ enqueue vs in-memory call). Overstated severity based on wrong I/O assumptions undermines review credibility.
 
@@ -337,11 +341,11 @@ When a finding's evidence is in a file that IS in the diff but the recommended f
 
 ### 4.8 Tone Check
 - Always use suggestion tone, never directive/ordering tone. This applies to all comments regardless of severity, including comment **titles and headings** (bold text at the start of a comment). Severity controls whether the review requests changes or approves with comments, not the tone of individual comments. Use phrases like "Please consider ...", "we could", "we should", "one option might be", "what about", or a direct question ("could you add X?") instead of direct orders ("Drop line 68", "Remove X", "Add Y"). Avoid bare imperatives even in chat summaries to the reviewer when describing staged findings; the staging **Comment** text and any paraphrase shown in conversation should use the same mild suggestion tone. Avoid "Consider doing X" as well: although it sounds soft, it still reads as an instruction that the reader is expected to comply with. Bad title: "Dead branch: both paths are identical". Good title: "This conditional could probably be simplified". Bad body: "Wrap the post-send steps in try/finally", "Drop line 68 from the README". Good body: "We should probably wrap the post-send steps in try/finally here", "Please consider dropping line 68 from the README. What do you think?" This applies equally to findings about documentation and comments: propose removing, relocating, or rewriting a doc as a suggestion (for example "Please consider removing this section, or moving it to frozen docs if it still has historical value"), never as an order. Before posting or revising a batch, please audit every comment for courteous suggestion tone, enough local context to stand alone, no internal finding labels, and consistency between each comment's severity and the overall review state.
+- **No meta praise or prohibition of what the PR already does.** If head code already implements the preferred approach (for example fail-open enrichment, a named guard, or skipping a bad mapping), do not spend Comment text saying "this is intentional" or "please do not make it fail-closed." Post only the remaining actionable gap (for example add a metric). Lecturing the author about a choice they already made is noise.
 - No em dashes (the U+2014 character) anywhere in comment text. Use commas, semicolons, colons, or parentheses instead. Scan every comment body for U+2014 before posting and replace any occurrence.
-- Use globish: plain, short words a non-native speaker can follow.
+- Comment prose follows the canonical writing contract (`agent_workflow_guidelines.md` §45, 45.10); the remaining bullets here are surface-specific constraints only.
 - When suggesting integration-test changes, say what happens in plain steps, not Maven jargon alone. Bad: "gate ITs off the default test run". Good: "do not run these tests in normal `mvn test`; run them only when someone starts RocketMQ first" or "start RocketMQ automatically in the test (Testcontainers)".
 - When a fix changes one token, say so explicitly.
-- Spell out abbreviations; do not use jargon shortcuts (write "IllegalStateException", not "ISE").
 - When the staged review uses three or more non-trivial abbreviations or domain terms (for example RBAC, JWT, DLT, TOCTOU, API key, operator, tenant), add a short `## Terms` section before `## Findings`. Define each term in plain language so the staging document and any posted comment can stand alone for a reviewer who is not deep in the local vocabulary.
 
 ### 4.9 Verify Line Numbers
@@ -372,6 +376,7 @@ If the line you want is outside every hunk, either retarget to the closest hunk-
 Orchestrator-specific additions (not duplicated in severity-calibration):
 
 - **Metrics / observability asks are Low by default.** Promote per severity-calibration table; promote to High essentially never.
+- **Exception (continuous data-quality lens):** when the user priority lens is monitoring continuous event quality into a downstream system, and the PR adds or extends an intentional degrade publish path (catch-and-continue after MQ/HTTP send), treat missing dedicated success/failure (and payload-quality) meters as **High** and usually **blocking**. Do not treat an `ERR*.error(...)` / `Metrics.error(name)` side effect alone as adequate feature metrics for that path; require named or tagged feature counters at the emit site.
 
 **Metrics findings: inline placement.** When recommending new counters or Grafana alert wiring on a PR:
 - Post **new counter** proposals inline at the code path where the counter would be incremented (emit site), not only in the PR review summary.
