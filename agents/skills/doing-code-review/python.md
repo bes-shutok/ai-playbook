@@ -43,3 +43,28 @@ Additional review context for Python projects. Append to each sub-agent prompt.
 - **Logging**: use `logging` module with named loggers. Do not use `print()` for operational output.
 - **Structured logging**: prefer `structlog` or JSON formatters for production. Include correlation IDs.
 - No PII in logs. System identifiers are not PII.
+
+## Guideline trigger table (Python)
+
+The orchestrator records applied hints from this table as `Python guideline
+checks: #<rules>` in staging Metadata; a path-only `python_guidelines.md`
+listing without applied hints is not evidence of application. Rule numbers
+resolve from the `python_guidelines.md` numbered index:
+
+- Pytest structure and assertions (test names, tabular rows, `pytest.raises`
+  match): python_guidelines.md #1, #10, #11, #14.
+- Monkeypatching (module-level constants, spy-not-mock ordering, short-circuit
+  lookups, selftest module patching, from-import invisibility):
+  python_guidelines.md #4, #12, #15, #16, #22.
+- Logging and error output (per-call `getLogger`, hand-rolled stderr capture):
+  python_guidelines.md #6, #24.
+- Configuration and data shapes (typed value objects, dict key shape,
+  dataclass field ordering): python_guidelines.md #8, #13, #17.
+- Scripts and selftests (explicit guard raises, loop and test-timeout ceilings,
+  whitespace-only rejection): python_guidelines.md #21, #25.
+- Resource and mutation contracts (release flags, in-place mutation names):
+  python_guidelines.md #5, #7.
+- Dependency pins and packaging: no numbered rule exists in the corpus; apply
+  the Packaging and Dependencies checks of this overlay directly.
+- asyncio: no numbered rule exists in the corpus; apply #21 plus the Async
+  Python section of this overlay.

@@ -59,13 +59,19 @@ Before any focused selection is honored, derive risk signals from the plan's exp
 
 Precedence: when the floor is triggered, it overrides both the focused-round preference in the late-loop paragraph of `### Targeted follow-ups` and the `## Focused panels` section above; a focused panel is not valid for that round even when the fixes are narrowly scoped.
 
-Boundary: a changed normative documentation example alone (docs-only or docs-plus-scripts diffs with no code-mutation signal) escalates `contract-docs` plus `correctness-completeness` coverage but does not trigger the `risk-signal floor`, so docs-only focused panels stay valid. Within execute-plan Step 3.1 item 5, doc/skill-only plans keep grep/hygiene commands as the `testing` worker's primary evidence.
+Boundary: a changed normative documentation example alone (docs-only or docs-plus-scripts diffs with no code-mutation signal) escalates `contract-docs` plus `correctness-completeness` coverage but does not trigger the `risk-signal floor`'s worker escalation, so docs-only focused panels stay valid; a living-documentation status claim on such a diff still requires the `doing-code-review` Step 2.5 guideline checks for the changed files' overlay, without adding a `risk` worker. Within execute-plan Step 3.1 item 5, doc/skill-only plans keep grep/hygiene commands as the `testing` worker's primary evidence.
 
-Treat changed dependency coordinates, outbound service URL configuration, downstream error-response mapping, shared conversion or persistence helpers reused across callers, feature-flag and configuration wiring that gates capability readiness, and time-budget or timeout boundaries as risk signals even when the diff is small.
-They require the `risk` worker and the Java/Spring guideline checks when the
-changed files are Java or Spring configuration.
+Treat changed dependency coordinates, outbound service URL configuration, and downstream error-response mapping as risk signals even when the diff is small. The shared changed-scope trigger surfaces enumerated in the `doing-code-review` Step 2.5 mandatory-evidence rules are risk signals as well. These signals require the `risk` worker and the guideline checks of the changed files' language overlay (Java/Spring, Kotlin/Spring, or Python) per those mandatory-evidence rules.
 
 Record the detected signals in the staging Metadata `Changed-risk signals` field (comma list or `none`).
+
+### Replacement-lens selection
+
+When a material worker is unavailable after its permitted attempts, select the replacement through this declared rule, not narrative judgment. The selection record names the missing lens or lens group, why the original worker was not used again, the replacing round's worker or focused mode, and the evidence artifact and sidecar that establish completion. The replacement is a fresh worker instance with a narrowed evidence scope; it must not reuse the original worker's late or partial output, the replacement prompt is no broader than the missing lens requires, and it must not recreate the timed-out broad audit under a different name. Partial coverage is declared explicitly in the replacing round's `coverage.completed` versus its `missing`.
+
+Every attempt, retry, and replacement launch counts toward the six-launch ceiling. A replacement-lens selection launches as a separate focused review round with its own launch accounting, its own artifact, and its own sidecar pair, never as an in-round sixth worker (the escalation-worker rules are a different mechanism this plan does not use). Within a round, when no launch slot remains for further attempts the round records the lens in `missing` (outcome `degraded`, verdict `no`) and the loop proceeds to the replacement round per this section. Precedence: in a full panel the last remaining launch slot is reserved for replacement-lens selection, and worker retries may proceed only while more than one launch slot remains. Derived consequence: with five base workers launched, one slot remains and is reserved, so retries can only proceed when at least two slots remain, which in practice means focused rounds; a full-panel timeout proceeds directly to replacement-or-missing via the follow-up focused round.
+
+Linkage: the replacing round records the original round in `coverage.replacement[]` (lens, `original_artifact`, `original_sidecar`, `original_failure`). When no suitable replacement exists, the lens is recorded as missing and never silently absorbed by a nearby lens.
 
 ## Manual overrides
 
@@ -139,6 +145,7 @@ Ownership boundaries affect which worker and lens lead a dedup group, not silent
 | Missing wiring, incomplete feature, return propagation, API schema drift | `correctness-completeness` | `implementation` |
 | Layer violation or excessive structure | `design-simplicity` | `architecture` or `simplification` |
 | Missing or weak test | `testing` | `testing` |
+| Missing compatibility witness for changed direct dependency API usage (`java_guidelines` #24) | `correctness-completeness` | `implementation` |
 | Config incomplete for feature to work | `correctness-completeness` | `implementation` |
 | Cross-service, security, concurrency, or rollout failure | `risk` | closest loaded risk lens |
 | Missing user-facing docs or prose issue | `contract-docs` | `documentation` |

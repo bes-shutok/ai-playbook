@@ -49,3 +49,25 @@ Additional review context for Kotlin/Spring projects. Append to each sub-agent p
 
 - Data classes and command objects with collection parameters: verify constructors or `init {}` blocks check for null elements (relevant for Java-interop collections where `List<T>` can still contain nulls at runtime despite non-nullable type parameter). A missing guard allows NPEs to surface later in hard-to-diagnose locations.
 - Maps `quality#validate-after-assign`: prefer validating emptiness/null on inputs before `toList()` / defensive copy reassignment when post-copy checks would hide clearer failures.
+
+## Guideline trigger table (Kotlin)
+
+The orchestrator records applied hints from this table as `Kotlin guideline
+checks: #<rules>` in staging Metadata; a path-only `kotlin_guidelines.md`
+listing without applied hints is not evidence of application. Rule numbers
+resolve from the `kotlin_guidelines.md` numbered index:
+
+- Coroutine boundaries and cancellation (`suspend` functions, `GlobalScope`,
+  structured-concurrency violations, swallowed `CancellationException`):
+  kotlin_guidelines.md #4, #16; async fire-and-forget assertions: #11.
+- MockK test surfaces (relaxed mocks, `clearAllMocks`, vararg matchers, stubbed
+  Reactor/R2DBC error flows): kotlin_guidelines.md #2, #6, #9.
+- Configuration binding (`@ConfigurationProperties` init validation, Duration
+  fields, Spring Cloud Config identity keys, swallowed config failures):
+  kotlin_guidelines.md #7, #10, #14, #15.
+- Data-class and collection boundaries (null-safe chains, `forEach` misuse,
+  numbered enum slots): kotlin_guidelines.md #5, #8, #12.
+- Logging and metrics (exception object not `e.message`, boolean metric tags):
+  kotlin_guidelines.md #13, #17.
+- Batch read paths and terminal handlers (slim projections, hoisted invariant
+  checks, throwing terminal handlers): kotlin_guidelines.md #19, #20, #21.

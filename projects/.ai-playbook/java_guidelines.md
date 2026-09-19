@@ -326,9 +326,6 @@ Reconciliation in the changed branch:
 
 Review finding: the claim cannot stay "active". Either restore an executable consumer
 or correct the claim, and because the consumer is intentionally deferred this quarter,
-record a durable backlog item:
-
-  Backlog item: "Restore notification stream consumer"
-  Owner: feature team lead (named in the ticket, not in review notes)
-  Handoff: configuration keys documented as dormant; revisit before the next release note.
+record a durable backlog item with an explicit owner and handoff instead of leaving
+the deferral in review notes.
 ```
