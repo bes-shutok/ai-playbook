@@ -99,7 +99,7 @@ The plan document itself (`docs/plans/2026-09-18-maintenance-loop-residuals-occu
 
 ## Triage notes (execution)
 
-- 2026-09-19 (code review r1, F1 + contract-F1): the zcode.md REFUTED-flip verdict rewrite rode commit 0c91ceff out-of-plan; no P12 task names that span, and the commit-scope contamination is recorded here rather than repaired by history rewrite. The dispatch-ladder step 2 rewrite to delete-plus-create (with its interim pointer in step 2) is owned by the open backlog item `docs/history/backlog/2026-09-19-recycling-update-flip-refuted-delete-plus-create.md`; the ladder prose stays frozen for this plan otherwise.
+- 2026-09-19 (code review r1, F1 + contract-F1): the zcode.md REFUTED-flip verdict rewrite rode commit 0c91ceff out-of-plan; no P12 task names that span, and the commit-scope contamination is recorded here rather than repaired by history rewrite. The dispatch-ladder step 2 rewrite to delete-plus-create (the interim pointer lives in the verification section's REFUTED verdict line) is owned by the open backlog item `docs/history/backlog/2026-09-19-recycling-update-flip-refuted-delete-plus-create.md`; the ladder prose stays frozen for this plan otherwise.
 - 2026-09-19 (code review r1, contract-F2 plan-side slip): the directional error in the archived liveness plan's Deviation line ("the Task 4 quote above" for a quote sitting below the line) originates in this plan's Task 2 prescription, which dictated the Deviation sentence verbatim; the archived-plan copy was corrected in place (annotation-tier edit), and this note records the plan-side origin.
 - 2026-09-19 (code review r2, CC-2 + R2-RISK-1, five r1 remedy deviations beyond the checked-off exact-span/verbatim prescriptions, one entry per deviation, each pointing at its owning durable record):
   1. Task 1's SKILL.md replacement span gained the not-visible fail-safe carve-out ("a prompt not visible in full is not classifiable and counts as a potential child per the not-visible fail-safe (the lane is treated as busy)") beyond the plan's prescribed exact new span; this is the r1 RISK-3 remedy, owned by lesson #387 rule (3), whose containment-trade residual names the not-visible fail-safe among the surviving coverage paths.
@@ -126,6 +126,7 @@ The plan document itself (`docs/plans/2026-09-18-maintenance-loop-residuals-occu
   | r1 address RED | listing-gate sentence emitted before the consult inside Step 0, positive needle kept verbatim | `step 0 must consult the state file before the listing (state-first placement)` (exit 1; the positive step-0 pin survived) |
 
   Every scratch regression failed exactly its named pin or assertion and only that one; every GREEN run on the edited tree exited 0 (`maintenance pins: all hold`).
+- 2026-09-19 (code review r3, CONTRACT-4): commit e0ae1b05 added `docs/history/backlog/2026-09-19-scheduler-toolset-precheck-before-dispatch.md` out-of-plan (no P12 task names that path, so the addition rode the branch outside the six origins); the content is owned by its own item (the toolset-precheck capture), recorded here rather than repaired.
 
 ## Validation Commands
 

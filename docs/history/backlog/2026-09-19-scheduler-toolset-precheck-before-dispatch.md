@@ -14,7 +14,7 @@ The cost of the gap was one cadence period (2h): the designed mitigation (parked
 
 ## Suggested fix
 
-The scheduler turn asserts, before entering the dispatch ladder, that its own toolset exposes the mutating primitive the decided dispatch needs (`CronCreate`/`CronUpdate` for a clocked child, `OffPeakCreate` for the idle lane). On absence: record `turn_error: clocked-primitives-absent`, park or retain the dispatch per the existing trap rule, and stand down immediately without listing (no listing has been spent, so the loop guard stays clean and the `turn_error` reason is diagnosable at a glance. Register the behavior in the overlay's dispatch-discipline section with the dated witness.
+The scheduler turn asserts, before entering the dispatch ladder, that its own toolset exposes the mutating primitive the decided dispatch needs (`CronCreate`/`CronUpdate` for a clocked child, `OffPeakCreate` for the idle lane). On absence: record `turn_error: clocked-primitives-absent`, park or retain the dispatch per the existing trap rule, and stand down immediately without listing (no listing has been spent, so the loop guard stays clean and the `turn_error` reason is diagnosable at a glance). Register the behavior in the overlay's dispatch-discipline section with the dated witness.
 
 ## Acceptance
 

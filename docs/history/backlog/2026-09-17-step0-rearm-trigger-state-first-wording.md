@@ -82,4 +82,8 @@ darkness per the State file semantics and re-arms from state alone) and
 cannot observe an absence
 newer than that write; the escape bounds the blind window at one cadence
 period past the last successful state write, and the turn surface's own
-guard listings cover the live loop.
+guard listings cover the live loop. That bounding claim holds only while
+turns keep writing: their fresh writes are what keep the touch surface
+listing-free and their guard listings are what cover the live loop; once
+turns stop writing, the file ages past one cadence period and the same
+staleness escape re-opens the touch listing on its own.
