@@ -60,3 +60,23 @@ discriminating pin, and the archived plan's Validation gate 2 needle) had
 to move in one pass. The rewrite landed in one pass across all three coupled
 surfaces plus the zcode.md re-arm hygiene bullet added to Scope above, whose
 state-first claim becomes accurate with the Step 0 rewrite.
+
+Note (2026-09-19, code review r1 RISK-1): detection trade for the landed
+state-first trigger, mirroring Task 1's containment-trade pattern. The touch
+surface lists only when the state file cannot decide; an externally induced
+parent loss (a human deletion, or the witnessed garbled recycling update
+that lands enabled:false/completed per backlog
+2026-09-19-recycling-update-flip-refuted-delete-plus-create.md) never writes
+state trouble, so a fresh, healthy-looking state file would keep the touch
+surface listing-free forever and make touch-surface darkness undetectable.
+Remedy landed in SKILL.md Step 0 (review r1 address pass): the cannot-decide
+list gained the state-file-evaluable staleness escape (a file whose own last
+write is older than one cadence period attests no listing verification of
+the recorded parent's presence within one cadence period, so only the
+listing decides), and the three bookkeeping edits are reconciled as
+listing-derived (none applies when the state file decided and no listing
+ran). Accepted residual: a touch surface whose state file was written within
+the last cadence period performs zero listings and cannot observe an absence
+newer than that write; the escape bounds the blind window at one cadence
+period past the last successful state write, and the turn surface's own
+guard listings cover the live loop.

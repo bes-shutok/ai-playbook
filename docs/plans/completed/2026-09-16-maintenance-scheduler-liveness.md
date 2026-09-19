@@ -271,7 +271,7 @@ SUCCESSOR DISPATCH, after the final squash merge passes and before ending the se
 
 ### Task 4: rearm-on-touch surfaces (indefinite-operation FIX-2)
 
-Deviation (2026-09-18, P12): the Step 0 trigger was rewritten to state-first wording (backlog 2026-09-17-step0-rearm-trigger-state-first-wording); the Task 4 quote above is historical, and this plan's gate needle was flipped to the new sentence's discriminating needle in the same commit so this plan's gate block and the pins suite never disagree.
+Deviation (2026-09-18, P12): the Step 0 trigger was rewritten to state-first wording (backlog 2026-09-17-step0-rearm-trigger-state-first-wording); the Task 4 quote below is historical, and this plan's gate needle was flipped to the new sentence's discriminating needle in the same commit so this plan's gate block and the pins suite never disagree.
 
 Files:
 - `agents/skills/maintenance/SKILL.md` (Step 0 sentence)

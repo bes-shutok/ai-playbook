@@ -41,6 +41,32 @@ expect_absent() { # expect_absent <description> <pattern> <file>: rc 0 = fail, r
   fi
 }
 
+# --- deliberate freeze literals (review r1 RISK-4) ---
+# The expect_absent pins below freeze exact prose in files whose owning plans
+# are completed or frozen. A future legitimate edit that trips one of them is
+# a wording change to a pinned span, not a suite bug; reconcile the pin and
+# the text in the same edit and record the superseding origin. Freeze origins:
+#   'spacing window, classify its prompt:' (SKILL.md): superseded by the P12
+#       origin 1 repo-scoped widened arm (plan
+#       2026-09-18-maintenance-loop-residuals-occupancy-anchors-rearm-wording, Task 1).
+#   'when the automation listing shows no ENABLED parent' (SKILL.md):
+#       superseded by the P12 origin 4 state-first Step 0 rewrite (same plan, Task 2).
+#   'plus a path under the resolved `plans_dir` (SKILL.md Configuration;
+#       default `docs/plans/`).' (zcode.md): superseded by the same P12
+#       origin 1 containment extension of the execution-child marker.
+#   'a rollback create refusal means the child create actually succeeded: ...'
+#       (zcode.md) and 'counts as success only after one more listing confirms
+#       an ENABLED automation with that title and prompt opening is present;
+#       ...' (prompt-templates.md): pre-r4 unscoped spans extracted from git
+#       history (a4ffa82f^) by the P12 origins 2-3 discriminating-guard task.
+#   'sessions whose spawner automation has completed are not blocked'
+#       (zcode.md): superseded by the 2026-09-16 linger-model correction.
+#   'list once more immediately before the create' (prompt-templates.md):
+#       superseded by the state-first re-arm duty (liveness plan, Task 3).
+#   done-skill ordering pin (python block): freezes the pointer line
+#       'Before Step 0, in a repository that resolves the maintenance skill'
+#       above the Step 0 heading (liveness plan, Task 4; the line is
+#       prescribed unchanged in its owning plan).
 # --- SKILL.md structure ---
 pin "G1e guard present"      grep -qF 'G1e (execution lane)' "$S"
 pin "G1a guard present"      grep -qF 'G1a (authoring lane)' "$S"
@@ -51,6 +77,7 @@ pin "execution lane never idle-dispatched" grep -qF 'never dispatched through a 
 pin "state-file lane arm present" grep -qF 'State-file arm' "$S"
 pin "idle children in the lane arm" grep -qF 'null `fire_at`' "$S"
 pin "tripwire self-heal present" grep -qF 'Self-heal arm' "$S"
+pin "tripwire span shape excludes the title conjunct" grep -qF "deliberately without that rule's title conjunct" "$S"
 pin "widened-arm classification repo-scoped" grep -qF 'classify its prompt only when the prompt contains the resolved repository root' "$S"
 expect_absent "superseded unscoped widened-arm classification wording must be absent from SKILL.md" 'spacing window, classify its prompt:' "$S"
 pin "failure-cap section anchored" grep -qF '## Failure detection and the failure cap' "$S"
@@ -111,6 +138,17 @@ need(s, "### Step 1: survey"); need(s, "### Step 2")
 step1 = s.split("### Step 1: survey")[1].split("### Step 2")[0]
 if "pending_dispatch" not in step1:
     print("PIN FAIL: pending_dispatch reader missing from the Step 1 list"); sys.exit(1)
+# placement pin (review r1 T2): state-first ordering inside the Step 0
+# rearm-on-touch bullet; the consult anchor and the listing-gate anchor are
+# both fail-closed so a reworded bullet cannot pass vacuously, and the order
+# assertion catches a listing-first regression that keeps the positive needle
+step0 = s.split("### Step 0: context load")[1].split("### Step 1: survey")[0]
+a_consult = "rearm-on-touch check: consult the scheduler state file first"
+a_gate = "run the automation listing only when the state file cannot decide"
+if a_consult not in step0 or a_gate not in step0:
+    print("PIN FAIL: step 0 state-first placement anchors missing"); sys.exit(1)
+if step0.index(a_gate) < step0.index(a_consult):
+    print("PIN FAIL: step 0 must consult the state file before the listing (state-first placement)"); sys.exit(1)
 need(s, "G1e (execution lane)"); need(s, "Duplicate-parent tripwire")
 arms = s.split("G1e (execution lane)")[1].split("Duplicate-parent tripwire")[0]
 if "certification oracle" not in arms:
@@ -137,6 +175,8 @@ pin "watchdog backstop present"  grep -qF 'Watchdog backstop' "$Z"
 pin "2h cadence pinned"          grep -qF '15 */2 * * *' "$Z"
 pin "peak window UTC+8 anchor"   grep -qF '14:00-18:00 UTC+8' "$Z"
 pin "never pin local hours"      grep -qF 'never pin local hours' "$Z"
+pin "execution-child marker repo containment" grep -qF 'and the resolved repository root (the relative plans-dir substring alone' "$Z"
+expect_absent "superseded uncontained execution-child marker wording must be absent from zcode.md" 'plus a path under the resolved `plans_dir` (SKILL.md Configuration; default `docs/plans/`).' "$Z"
 pin "ladder recycling needle"    grep -qF 'update the recorded parent record into the child one-shot' "$Z"
 pin "hand-off proceed refusal bound" grep -qF "converges to the fallback's fresh-id create within the same dispatch attempt" "$Z"
 pin "verification section anchored" grep -qF '## Automation primitive verification' "$Z"
