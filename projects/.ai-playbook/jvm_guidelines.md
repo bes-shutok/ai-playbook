@@ -325,3 +325,118 @@ exception escape as an unhandled 500.
 **Verify:** unit tests for connect-refused and read-timeout paths; an
 integration test that the published status and retry header match the outcome
 class (including omit-`Retry-After` when required).
+
+## 14. Selected Failsafe after reactor install: avoid `-am` when no-match fails hard
+
+When selecting one IT (including a nested class) after `mvn -pl <module> -am ... install`,
+run the Failsafe goal with `-pl <module>` only, **or** keep `-am` and set
+`-Dfailsafe.failIfNoSpecifiedTests=false`.
+
+`-am` is correct for compiling dependencies. It is the wrong Failsafe scope when
+`failIfNoSpecifiedTests` stays true (Maven default): sibling reactor modules with
+no matching IT fail before the target class runs.
+
+After editing nested IT annotations or `@SpringBootTest(properties=...)`, run
+`test-compile` (or install) before Failsafe so the selector does not load stale
+classes.
+
+When a plan Validation block must prove only Failsafe selectors, use this Failsafe
+path after install. Do not treat a full reactor `verify` that fails on unrelated
+Surefire outside the allowlist as a Failsafe regression.
+
+## 15. Optional empty JSON columns: accept SQL NULL and `{}`
+
+When an IT asserts an optional empty JSON/jsonb (or properties) column after a
+write that omitted the map, accept both SQL `NULL` and empty-object forms
+(`{}` / equivalent binder output) unless the production contract pins one
+representation. Do not fail the suite on binder null-vs-empty drift for the
+same semantic empty value.
+
+## 16. Do not nest a blocking Awaitility await inside `untilAsserted`
+
+`Awaitility.untilAsserted` already retries its assertion lambda on a poll
+interval. Nesting another timed blocking await (for example a collection helper
+that waits up to `Duration.ofSeconds(N)` for a minimum count) inside that
+lambda multiplies timeouts, can return a partial snapshot mid-retry, and hides
+which condition actually failed.
+
+**Required pattern:**
+1. Use `untilAsserted` only for a cheap, idempotent predicate (for example
+   `assertThat(collector.count()).isGreaterThanOrEqualTo(1)`).
+2. After the outer await succeeds, call the blocking snapshot or content await
+   once outside the lambda (for example `awaitAtLeast(1, timeout)` then assert
+   payload).
+3. Prefer exact equality for expected signal counts when the scenario under test
+   is deterministic; reserve `isGreaterThanOrEqualTo` for intentionally open
+   lower bounds.
+
+**Verify:** a Failsafe or unit selector that previously nested a collection
+`awaitAtLeast` inside `untilAsserted` should fail-fast on the count predicate
+alone when empty, and should assert body or ledger content only after the count
+gate passes.
+
+## 17. Retarget migration-resource tests when DDL moves across versions
+
+When a change splits, renames, or relocates DDL from one Flyway script to
+another (for example `V3__...` to `V4__...`), every test that loads migration
+SQL via classpath resource path and asserts snippet content must be updated in
+the same change set.
+
+**Required pattern:**
+1. Point `getResourceAsStream` / resource constants at the file that now owns
+   the asserted objects (table, CHECK, column).
+2. Refresh expected snippets for the new file's whitespace and formatting; do
+   not keep padded column layouts from the previous script.
+3. When a guardrail must cover an entire module schema that spans multiple
+   scripts, load and assert each relevant migration (or concatenate explicitly),
+   not only the historically first file.
+
+**Failure mode:** AssertJ fails with the wrong file's header comments as
+"actual" while the expected CHECK or column lives in a later version. Module
+Surefire can stay green for adapters that never touch the stale resource until
+the schema-resource test runs.
+
+## 18. Floor `Duration.toMillis()` before PostgreSQL `SET LOCAL …_timeout`
+
+When a config `Duration` is rendered into PostgreSQL `SET LOCAL lock_timeout` /
+`statement_timeout` (or similar) as `'Nms'`, reject values whose
+`toMillis()` is less than `1`.
+
+`Duration.toMillis()` truncates toward zero. A positive sub-millisecond value
+(for example `1ns`) passes `isZero()` / `isNegative()` checks but becomes
+`0ms`. PostgreSQL treats `0` as unlimited for these settings, so the bound
+disappears silently.
+
+Apply the same floor to any other sink that only understands whole milliseconds
+(for example Hikari `setConnectionTimeout(long)`).
+
+**Verify:** a unit that sets `Duration.ofNanos(1)` (or any value with
+`toMillis() == 0`) must fail validation before the session opens.
+
+## 19. `-DskipTests` skips Failsafe; use `-Dsurefire.skip=true` for IT-only runs
+
+Maven's `-DskipTests` skips both Surefire and Failsafe. A command that intends
+to run only integration tests must not use `-DskipTests`.
+
+**Required pattern:**
+- Unit tests only: `mvn test` (or `-DskipITs` when verify is in the lifecycle)
+- Integration tests only after compile: `-Dsurefire.skip=true` with Failsafe
+  `-Dit.test=... verify`
+- Skip everything: `-DskipTests` (both plugins)
+
+**Failure mode:** `verify` reports `BUILD SUCCESS` with `Tests are skipped`
+under Failsafe while the selected `*IT` classes never ran.
+
+## 20. Drop perpetual "old migration path is null" asserts after a rename
+
+Extends #17. After a Flyway script is renamed or removed, a one-time
+`assertThat(getClass().getResource("/db/migration/Vold__…")).isNull()` check
+proves the rename for that PR. Leaving it in the suite forever only re-checks
+classpath absence on every Failsafe run and does not protect future renames.
+
+**Required pattern:** update applied-version and live-resource assertions in the
+same change set (#17). Do not keep absent-path null asserts as standing
+coverage.
+
+**Verify:** `FlywayIT` (or equivalent) asserts current applied versions and
+loads only live migration resources.

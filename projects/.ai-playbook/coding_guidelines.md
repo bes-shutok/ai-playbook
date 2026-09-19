@@ -603,3 +603,25 @@ When a binary layout is measured in whole bytes (envelope tag, nonce, fixed-widt
 **Example:** A probe clamps an externally supplied reset timestamp that lies beyond its maximum horizon to the horizon value. Without a marker, a scheduler treats the clamped epoch as the upstream system's genuine answer, and no report line explains why a pause was or was not armed. The fix marked the clamped record and appended a "reset clamped to horizon" reason to the report.
 
 **Distinguishing from #24:** #24 covers records absent from the output; this covers records present with falsified fields. Both share the failure signature "the output looks complete and valid; it is not".
+
+## 34. A Missing Timestamp in an Expiry Admission Check Must Refuse, Not Default to Zero
+
+**Principle:** Family B (error-policy direction: a guard's degraded input must route to the outcome whose failure is cheaper to recover from).
+
+**Shape trigger:** An admission check compares elapsed time against a lease, TTL, token expiry, or staleness horizon (`now - t >= limit`), and the timestamp is read from stored state that an interrupted or partial writer may have left missing or malformed.
+
+**Rule:** Treat a missing, non-numeric, or unparseable timestamp as failing the admission condition: not expired, action refused, resumable reason emitted. Never substitute a default. Epoch zero (or a minimal datetime) maximizes apparent age and converts missing data into an authorization grant for the privileged action; a far-future sentinel silently blocks recovery forever. Refusal is the only direction whose failure cost is a retry instead of a duplicate execution.
+
+**Example:** A runtime driver's reclaim operation releases an interrupted worker's claim only when the claim's stored timestamp is at least a fixed lease old. Reading a missing timestamp as epoch 0 would make every timestamp-less claim instantly reclaimable, so a half-written manifest could hand a live worker's task to a second worker. The shipped behavior refuses such claims with a resumable stale-claim reason and no mutation; only a real, old, numeric timestamp admits.
+
+**Distinguishing from #4:** #4 picks a numeric sentinel so absent-field arithmetic is a no-op. Inside an admission comparison no numeric sentinel is a no-op, so the absent field must fail the check itself.
+
+## 35. Do Not Duplicate Relocatable Identifiers in Comments (D)
+
+**Principle:** Family D (single source of truth)
+
+**Shape trigger:** A header comment or operator note lists versioned filenames, enum ordinals, or other identifiers that already appear in mounts, resource paths, or generated code, and a later rename updates the code path but not the comment (or the reverse).
+
+**Rule:** Prefer a pointer to the owning artifact ("migrations mounted in `docker-compose.yml`", "see the SQL file header") over copying the identifier list into a comment. Comments that restate relocatable identifiers go stale without failing CI.
+
+**Example:** A Compose header said "Segments V3 + V4" after the event-ingest script was renumbered to V5. Reviewers flagged the mismatch. The fix dropped the version inventory from the comment and pointed operators at the mount list and Layer 2 docs.

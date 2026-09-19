@@ -17,6 +17,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -29,6 +30,12 @@ CODEX_SH = HOOK_DIR / "codex.sh"
 
 sys.path.insert(0, str(HOOK_DIR))
 import budget_guard_core  # noqa: E402
+
+# The canonical shared-guard-lock contract lives in the watcher module; the
+# marker interleaving witness below proves the hook cleanup serializes on
+# the same lock file the probe writer and the watcher use.
+sys.path.insert(0, str(ROOT / "scripts"))
+import execute_plan_resume_watcher as resume_watcher  # noqa: E402
 
 # Single source of truth for the shared fixture: the ISO string is derived
 # from the same epoch, so the two can never drift apart or go stale.
@@ -45,7 +52,10 @@ REASON = (
 
 def write_flag_content(runtime: str = "zcode",
                        reset_at_epoch: int = RESET_EPOCH,
-                       reset_at_iso: str = RESET_ISO, plan: str | None = "my-plan") -> str:
+                       reset_at_iso: str = RESET_ISO, plan: str | None = "my-plan",
+                       armed_by: str | None = "probe") -> str:
+    # Default armed_by=probe mirrors the probe-written fixture flag; None
+    # omits the line entirely so the reason's unknown fallback stays pinned.
     lines = [
         "runtime={}".format(runtime),
         "reset_at_epoch={}".format(reset_at_epoch),
@@ -53,18 +63,28 @@ def write_flag_content(runtime: str = "zcode",
     ]
     if plan:
         lines.append("plan={}".format(plan))
+    if armed_by:
+        lines.append("armed_by={}".format(armed_by))
     return "\n".join(lines) + "\n"
 
 
 def write_flag(dir_path: Path, runtime: str = "zcode",
                reset_at_epoch: int = RESET_EPOCH,
                reset_at_iso: str = RESET_ISO, plan: str | None = "my-plan",
-               name: str = "budget-guard.flag") -> Path:
+               name: str = "budget-guard.flag",
+               armed_by: str | None = "probe") -> Path:
     path = dir_path / name
     path.write_text(
-        write_flag_content(runtime, reset_at_epoch, reset_at_iso, plan), encoding="utf-8"
+        write_flag_content(runtime, reset_at_epoch, reset_at_iso, plan, armed_by),
+        encoding="utf-8",
     )
     return path
+
+
+def suffix_reason(flag_path: Path, armed_by: str = "probe") -> str:
+    # The exact-envelope tail: the reason now ends with the guard flag path
+    # and armed-by attribution (Task 3, origin 1 gap 4).
+    return " Budget guard flag: {} (armed by {}).".format(flag_path, armed_by)
 
 
 def run_hook(script: Path, flag_path: Path,
@@ -94,7 +114,8 @@ class BudgetGuardHookTest(unittest.TestCase):
         flag = write_flag(self.tmp)
         result = run_hook(ZCODE_SH, flag, self.tmp / "budget-guard.fired")
         expected = json.dumps(
-            {"decision": "block", "reason": REASON.format(runtime="zcode")}
+            {"decision": "block",
+             "reason": REASON.format(runtime="zcode") + suffix_reason(flag)}
         )
         self.assertEqual(result.stdout, expected)
         self.assertEqual(result.returncode, 2)
@@ -104,7 +125,8 @@ class BudgetGuardHookTest(unittest.TestCase):
         fired = self.tmp / "budget-guard.fired"
         result = run_hook(CODEX_SH, flag, fired)
         expected = json.dumps(
-            {"permissionDecision": "deny", "reason": REASON.format(runtime="codex")}
+            {"permissionDecision": "deny",
+             "reason": REASON.format(runtime="codex") + suffix_reason(flag)}
         )
         self.assertEqual(result.stdout, expected)
         self.assertEqual(result.returncode, 0)
@@ -117,12 +139,33 @@ class BudgetGuardHookTest(unittest.TestCase):
             fired.read_text(encoding="utf-8").strip(), str(RESET_EPOCH)
         )
 
+    def test_reason_names_armed_by_manual(self) -> None:
+        # A manual drive writes armed_by=manual; the reason must attribute
+        # the arming, not assume the probe.
+        flag = write_flag(self.tmp, armed_by="manual")
+        result = run_hook(ZCODE_SH, flag, self.tmp / "budget-guard.fired")
+        expected = json.dumps(
+            {"decision": "block",
+             "reason": REASON.format(runtime="zcode") + suffix_reason(flag, "manual")}
+        )
+        self.assertEqual(result.stdout, expected)
+
+    def test_reason_names_armed_by_unknown_when_line_missing(self) -> None:
+        # A legacy flag with no armed_by line reads unknown.
+        flag = write_flag(self.tmp, armed_by=None)
+        result = run_hook(ZCODE_SH, flag, self.tmp / "budget-guard.fired")
+        expected = json.dumps(
+            {"decision": "block",
+             "reason": REASON.format(runtime="zcode") + suffix_reason(flag, "unknown")}
+        )
+        self.assertEqual(result.stdout, expected)
+
     def test_flag_runtime_wins_over_adapter_runtime(self) -> None:
         # The flag's own runtime line is the forensic truth: a codex adapter
         # reading a flag armed by zcode must name zcode in the reason.
         flag = write_flag(self.tmp, runtime="zcode")
         result = run_hook(CODEX_SH, flag, self.tmp / "budget-guard.fired")
-        self.assertIn(REASON.format(runtime="zcode"), result.stdout)
+        self.assertIn(REASON.format(runtime="zcode") + suffix_reason(flag), result.stdout)
         self.assertEqual(result.returncode, 0)
 
     def test_non_integer_reset_epoch_fails_open(self) -> None:
@@ -248,6 +291,57 @@ class BudgetGuardHookTest(unittest.TestCase):
         self.assertEqual(out.getvalue(), "")
         self.assertTrue(flag.exists())
         self.assertTrue(fired.exists())
+
+    def test_guard_cleanup_does_not_remove_replaced_marker(self) -> None:
+        # Shared guard-lock replacement interleaving on the fired marker: the
+        # stale-marker cleanup re-checks the marker content while holding the
+        # shared budget-guard.lock (the same lock the probe writer and the
+        # watcher's compare-and-delete use), so a marker re-written for the
+        # current window between the cleanup's decision and its removal
+        # survives and the hook still fires its single block for this window.
+        flag = write_flag(self.tmp)
+        fired = self.tmp / "budget-guard.fired"
+        old_marker = str(RESET_EPOCH - 5 * 86400)
+        fired.write_text(old_marker + "\n", encoding="utf-8")
+        lock_path = resume_watcher.guard_lock_path(flag)
+        self.assertEqual(lock_path.name, "budget-guard.lock")
+        self.assertEqual(lock_path.parent, flag.parent)
+        out = io.StringIO()
+        hook_outcome = {}
+
+        with resume_watcher.budget_guard_lock(flag) as held:
+            self.assertTrue(held)
+            started = threading.Event()
+
+            def hook_run() -> None:
+                started.set()
+                with contextlib.redirect_stdout(out):
+                    hook_outcome["code"] = budget_guard_core.main(
+                        ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired)]
+                    )
+
+            cleaner = threading.Thread(target=hook_run)
+            cleaner.start()
+            # The `started` marker (r1 F29) proves the thread reached its
+            # body before the blocked assertion, so scheduler starvation
+            # cannot make the blocking-half witness vacuous.
+            self.assertTrue(started.wait(5), "stale-marker cleanup witness never started")
+            cleaner.join(0.5)
+            # The hook decided to remove the stale marker and is blocked at
+            # the shared-lock removal, not past it.
+            self.assertTrue(cleaner.is_alive(), "stale-marker cleanup did not block on the shared guard lock")
+            # The replacement interleaving: the current window's marker is
+            # written while the cleanup waits (the block path's critical
+            # section holds this same lock).
+            fired.write_text(str(RESET_EPOCH) + "\n", encoding="utf-8")
+        cleaner.join(5)
+        self.assertFalse(cleaner.is_alive())
+        # The locked re-check saw the current window's marker, skipped the
+        # removal, and fell through to the single block for this window.
+        self.assertEqual(hook_outcome["code"], budget_guard_core.EXIT_BLOCK_ZCODE)
+        self.assertIn('"decision": "block"', out.getvalue())
+        self.assertTrue(fired.exists())
+        self.assertEqual(fired.read_text(encoding="utf-8").strip(), str(RESET_EPOCH))
 
     def test_core_blocks_without_any_socket(self) -> None:
         # In-process network-abstinence arm: the core's full blocking path

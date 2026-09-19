@@ -10,7 +10,10 @@ Stdlib-only; performs no network access. Ignores stdin entirely.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
+import os
 import pathlib
 import sys
 import time
@@ -19,11 +22,63 @@ REASON_TEMPLATE = (
     "Provider quota window for runtime {runtime} ends at {reset_at_iso}. "
     "Do not start new tool work. Finish the current sub-agent step, land the "
     "pending done commit if any, record the budget pause, and schedule the "
-    "resume."
+    "resume. Budget guard flag: {flag_path} (armed by {armed_by})."
 )
 
 EXIT_BLOCK_ZCODE = 2
 EXIT_OK = 0
+
+# The guard lock file shared by the probe writer, both hook adapters, the
+# standing resume watcher's compare-and-delete, and fired-marker cleanup.
+# Canonical contract: scripts/execute_plan_resume_watcher.py
+# (budget_guard_lock / compare_and_delete_flag); this core is deployed as a
+# standalone real-file copy, so it holds the same file by the same name and
+# the hermetic suites prove the interlock end to end.
+GUARD_LOCK_NAME = "budget-guard.lock"
+
+
+@contextlib.contextmanager
+def _shared_guard_lock(flag_path: pathlib.Path,
+                       timeout_seconds: float = 2.0,
+                       poll_seconds: float = 0.02):
+    """Hold the shared budget-guard lock; yields True when acquired.
+
+    The lock file lives next to the guard flag (canonical:
+    ~/.ai-playbook/runtime/budget-guard.lock) so the read, compare, and
+    unlink of every cleanup serialize against the probe writer's atomic
+    os.replace of the same flag. On lock-unavailability the caller skips the
+    removal quietly: fail-open is unchanged, and a skipped cleanup is
+    retried by the next hook invocation.
+    """
+
+    path = flag_path.parent / GUARD_LOCK_NAME
+    fd = None
+    acquired = False
+    try:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        except OSError:
+            yield False
+            return
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(poll_seconds)
+        yield acquired
+    finally:
+        if fd is not None:
+            try:
+                if acquired:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
 
 
 def parse_flag(text: str) -> dict:
@@ -51,7 +106,10 @@ def remove_quiet(path: pathlib.Path) -> None:
 
 def write_marker_best_effort(path: pathlib.Path, reset_at_epoch: int) -> None:
     # The marker records the window it fired for: a marker from an older
-    # window must not suppress the next window's single block.
+    # window must not suppress the next window's single block. Best-effort:
+    # the block is the safety effect, the marker is anti-thrash only. The
+    # caller holds the shared guard lock (flag-derived) across this write so
+    # a concurrent cleanup's locked re-check never removes the fresh marker.
     try:
         path.write_text(str(reset_at_epoch) + "\n", encoding="utf-8")
     except OSError:
@@ -85,18 +143,21 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK  # Malformed flag: fail open.
 
     if fields["reset_at_epoch"] <= int(time.time()):
-        # Expired window: clean up flag AND fired marker, then pass. Re-read
-        # before unlinking: a concurrent probe may have replaced the flag with
-        # a newer window between our read and this removal; only unlink while
-        # the on-disk epoch is still in the past. Re-read failure or a gone
-        # file skips removal quietly.
-        try:
-            current = parse_flag(flag_path.read_text(encoding="utf-8"))
-        except OSError:
-            current = None
-        if current and current["reset_at_epoch"] <= int(time.time()):
-            remove_quiet(flag_path)
-            remove_quiet(fired_path)
+        # Expired window: clean up flag AND fired marker, then pass. The
+        # read, compare, and unlink happen while the shared budget-guard
+        # lock is held (the probe writer's os.replace takes the same lock),
+        # so a flag replaced with a newer live window before this cleanup
+        # acquires the lock is seen by the locked re-read and survives; the
+        # removal decision itself is unchanged (fail-open either way).
+        with _shared_guard_lock(flag_path) as acquired:
+            if acquired:
+                try:
+                    current = parse_flag(flag_path.read_text(encoding="utf-8"))
+                except OSError:
+                    current = None
+                if current and current["reset_at_epoch"] <= int(time.time()):
+                    remove_quiet(flag_path)
+                    remove_quiet(fired_path)
         return EXIT_OK
 
     if fired_path.is_file():
@@ -109,13 +170,27 @@ def main(argv: list[str] | None = None) -> int:
             marker = None
         if marker == str(fields["reset_at_epoch"]):
             return EXIT_OK  # Already intervened once this window; anti-thrash.
-        remove_quiet(fired_path)
+        # Atomic compare-and-delete for the stale-marker cleanup: the unlink
+        # re-checks the marker content while the shared guard lock is held,
+        # so a marker re-written for the current window between the read
+        # above and this removal survives (fired-marker replacement
+        # protection; same lock file as the probe writer and the watcher).
+        with _shared_guard_lock(flag_path) as acquired:
+            if acquired:
+                try:
+                    current_marker = fired_path.read_text(encoding="utf-8").strip()
+                except OSError:
+                    current_marker = None
+                if current_marker is not None and current_marker != str(fields["reset_at_epoch"]):
+                    remove_quiet(fired_path)
 
     # Prefer the flag's own runtime line: the flag is host-global and may have
     # been armed by a different registered runtime than this adapter.
     reason = REASON_TEMPLATE.format(
         runtime=fields.get("runtime", args.runtime),
         reset_at_iso=fields["reset_at_iso"],
+        flag_path=str(flag_path),
+        armed_by=fields.get("armed_by", "unknown"),
     )
     if args.runtime == "zcode":
         envelope = {"decision": "block", "reason": reason}
@@ -124,7 +199,12 @@ def main(argv: list[str] | None = None) -> int:
         envelope = {"permissionDecision": "deny", "reason": reason}
         exit_code = EXIT_OK
     sys.stdout.write(json.dumps(envelope))
-    write_marker_best_effort(fired_path, fields["reset_at_epoch"])
+    # The marker write holds the shared guard lock (flag-derived) so a
+    # concurrent cleanup cannot remove the fresh marker mid-write.
+    with _shared_guard_lock(flag_path) as acquired:
+        if not acquired:
+            pass  # Anti-thrash only; write anyway, the block already fired.
+        write_marker_best_effort(fired_path, fields["reset_at_epoch"])
     return exit_code
 
 

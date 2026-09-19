@@ -61,7 +61,7 @@ At task start: read **`user_facts_path`**, then ownership/repo facts when scoped
 
 **Cursor hooks (optional):** versioned in `cursor/hooks/`; install to `~/.cursor/hooks/` (`cursor/hooks/README.md`). Enforces git safety (including unscoped `git clean`) and optional execute-plan / em-dash gates; contracts in skills, not duplicated here.
 
-**ai-playbook-versioned hooks:** two cross-agent hooks ship under `agents/hooks/` (symlinked into each agent's `~/` config): lessons-recall (proactive recall via `UserPromptSubmit`/`PreInvocation` injection) and skill-gate (`PreToolUse` block on gated artifacts); the marker WRITE RECIPE and wiring live in `ai-playbook/agents/hooks/skill-gate/README.md` (single source). **Install, per-agent differences, session bridge, and same-repo multi-agent behavior:** `agents/hooks/lessons-recall/README.md` (**Install (step-by-step)**, **Agent differences (v2 at a glance)**, **Session channel precedence**). v2 Cursor-only change: optional `cursor-session-bridge.sh` exports `CURSOR_SESSION_ID` per composer tab; Claude/Codex/agy wiring unchanged. Probe: `python3 scripts/hooks_probe.py --all`.
+**ai-playbook-versioned hooks:** cross-agent hooks ship under `agents/hooks/` (symlinked into each agent's `~/` config): lessons-recall (proactive recall via `UserPromptSubmit`/`PreInvocation` injection) and skill-gate (`PreToolUse` block on gated artifacts); the marker WRITE RECIPE and wiring live in `ai-playbook/agents/hooks/skill-gate/README.md` (single source). The optional Codex-specific `codex-budget-reset-guard` blocks AI-initiated usage-reset tool calls; its registration and enforcement boundary are documented in that hook's README. **Install, per-agent differences, session bridge, and same-repo multi-agent behavior:** `agents/hooks/lessons-recall/README.md` (**Install (step-by-step)**, **Agent differences (v2 at a glance)**, **Session channel precedence**). v2 Cursor-only change: optional `cursor-session-bridge.sh` exports `CURSOR_SESSION_ID` per composer tab; Claude/Codex/agy wiring unchanged. Probe: `python3 scripts/hooks_probe.py --all`.
 
 ## Hard rules (keep inline; high frequency)
 
@@ -93,7 +93,7 @@ Biases toward caution over speed; for trivial tasks, use judgment. Full detail: 
 
 ## Skill maintenance (summary)
 
-Rename skill → update front matter, title, self-refs. Shared skills → edit `~/.agents/skills/`; keep Codex-local copies separate. Skills stay language-agnostic and agent-agnostic; see `how-to-write-skills` skill and `agent_workflow_guidelines.md` #47–#48.
+Rename skill → update front matter, title, self-refs. Shared skills → edit `~/.agents/skills/`; keep Codex-local copies separate. Skills stay language-agnostic and agent-agnostic; see `how-to-write-skills` skill and `agent_workflow_guidelines.md` #47–#48. Harness-scoped rule families declare a supported set and skip outside it (`agent_workflow_guidelines.md` §14.3).
 
 ## Plans and temporary artifacts (summary)
 
@@ -109,7 +109,7 @@ Verify `git check-ignore` before staging. Never `git stash clear` when docs-bran
 |------|----------------|
 | `agent_workflow_guidelines.md` | Review triage, scope, CI interpretation, formatting detection, coding discipline (**§57**), workflow lessons (**§1–§56**) |
 | `coding_guidelines.md` | Universal coding patterns; #17 lesson tag-format spec + #17-#25 root-cause principle catalog (families A-H) |
-| `jvm_guidelines.md` | JVM/Spring conventions (e.g. #2 Duration properties, #3 Spring Cloud Config name, #6 logging, #12 prefer imports over FQNs) |
+| `jvm_guidelines.md` | JVM/Spring conventions (e.g. #2 Duration properties, #3 Spring Cloud Config name, #6 logging, #12 prefer imports over FQNs, #14 selected Failsafe after install, #15 optional empty JSON columns, #16 no nested Awaitility await inside `untilAsserted`, #17 retarget migration-resource tests when DDL moves across versions) |
 | `kotlin_guidelines.md` | Kotlin-specific (e.g. #16 `CancellationException`, #22 prefer imports → jvm #12) |
 | `java_guidelines.md` | Java-specific (e.g. #15 prefer imports → jvm #12) |
 | `python_guidelines.md` | Python-specific |
