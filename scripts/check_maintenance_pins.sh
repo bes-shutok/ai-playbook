@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mechanical pins for the maintenance scheduler skill (review r1/r2 fix rounds).
+# Mechanical pins for the maintenance scheduler skill.
 # Each pin guards an invariant the review loop or a manual edit could silently
 # regress: guard structure, lane cap wording, dispatch-slice tag integrity,
 # re-arm paragraph parity and escalation, the parent title's single creation
@@ -85,7 +85,7 @@ if not order_ok(["D1 (execute)", "D2 (author)", "D3 (no-op)"]):
 if re.search(r'Cron(Create|List|Update|Delete)|OffPeak(Create|List)', s):
     print("PIN FAIL: SKILL.md names a runtime primitive (must stay runtime-agnostic)"); sys.exit(1)
 need(s, "## State file")
-m = re.search(r"```json\n(.*?)```", s.split("## State file", 1)[1], re.S)
+m = re.search(r"```json\n(.*?)```", s.split("## State file", 1)[1].split("\n## ", 1)[0], re.S)
 if not m:
     print("PIN FAIL: state schema json block missing"); sys.exit(1)
 try:
@@ -142,6 +142,7 @@ pin "hand-off proceed refusal bound" grep -qF "converges to the fallback's fresh
 pin "verification section anchored" grep -qF '## Automation primitive verification' "$Z"
 pin "linger-deletion needle"     grep -qF 'deleting your own lingered' "$Z"
 pin "ambiguous-outcome carve-out kept" grep -qF 'treat the child as dispatched' "$Z"
+expect_absent "superseded unscoped ambiguous-outcome carve-out must be absent from zcode.md" 'a rollback create refusal means the child create actually succeeded: skip the retries, the `parent-restore-failed` record, and the memory note, treat the child as dispatched, and stop' "$Z"
 pin "idle attribution per-session" grep -qF ' sessionId matches the current session' "$Z"
 pin "pricing clear-on-success"   grep -qF 'clears the pricing-verification-failed note' "$Z"
 expect_absent "superseded completed-spawner claim must be absent from zcode.md" 'sessions whose spawner automation has completed are not blocked' "$Z"
@@ -156,12 +157,13 @@ pin "successor adopt matcher repo containment" grep -qF 'whose prompt also conta
 pin "resume rule in the execution payload" grep -qF 'this is a resume run' "$P"
 pin "rearm lingered-record deletion in blueprints" grep -qF 'deleting your own lingered' "$P"
 pin "success-via-existing confirmation" grep -qF 'counts as success only after one more listing confirms' "$P"
+expect_absent "superseded unscoped success-via-existing clause must be absent from prompt-templates.md" 'counts as success only after one more listing confirms an ENABLED automation with that title and prompt opening is present; on that success-via-existing path' "$P"
 expect_absent "superseded listing-driven rearm wording must be absent from prompt-templates.md" 'list once more immediately before the create' "$P"
 
 # --- prompt-templates.md blueprint integrity ---
-python3 - "$P" "$Z" <<'EOF'
+python3 - "$P" "$Z" "$D" <<'EOF'
 import re, sys
-p, z = open(sys.argv[1]).read(), open(sys.argv[2]).read()
+p, z, d = open(sys.argv[1]).read(), open(sys.argv[2]).read(), open(sys.argv[3]).read()
 def norm(t): return " ".join(t.split())
 def need(text, anchor):
     if anchor not in text:
@@ -206,6 +208,28 @@ if exec_ph != {"{REPO_ROOT}", "{some_plan}"}:
     print("PIN FAIL: execution inner placeholder set drifted: %s" % sorted(exec_ph)); sys.exit(1)
 if "cron expression" in paras[0]:
     print("PIN FAIL: re-arm paragraph hardcodes the cadence; creation must follow the recipe"); sys.exit(1)
+# ordering pins (region-scoped to the execution inner block): the payload must
+# chain the successor before the final compaction step, and the resume rule
+# must sit after the PRE-STEP gate; every predecessor anchor is fail-closed
+for needle in ("Finally squash merge to main", "SUCCESSOR DISPATCH", "FINAL STEP",
+               "once the gate exits 0", "this is a resume run"):
+    need(inner, needle)
+if not inner.index("Finally squash merge to main") < inner.index("SUCCESSOR DISPATCH") < inner.index("FINAL STEP"):
+    print("PIN FAIL: execution payload ordering drifted (squash merge < SUCCESSOR DISPATCH < FINAL STEP)"); sys.exit(1)
+if not inner.index("once the gate exits 0") < inner.index("this is a resume run"):
+    print("PIN FAIL: execution payload ordering drifted (resume rule must follow the PRE-STEP gate)"); sys.exit(1)
+# done-skill ordering pin: the rearm-on-touch pointer precedes the Step 0 heading
+need(d, "Before Step 0, in a repository that resolves the maintenance skill")
+need(d, "## Step 0")
+if not d.index("Before Step 0, in a repository that resolves the maintenance skill") < d.index("## Step 0"):
+    print("PIN FAIL: done-skill rearm-on-touch pointer must precede the Step 0 heading"); sys.exit(1)
+# confinement pins (origin 3 scope note): execution-only spans stay inside the
+# execution inner block, split off the blueprint headings and dispatch-slice tags
+def confined(span):
+    if p.count(span) != 1 or inner.count(span) != 1:
+        print("PIN FAIL: execution-only span left the execution inner block: %s" % span); sys.exit(1)
+confined("beyond the re-arm duty below and the single successor-dispatch duty below")
+confined("this is a resume run")
 EOF
 rc=$?
 [ "$rc" -ne 0 ] && fail=1
