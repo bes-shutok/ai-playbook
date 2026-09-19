@@ -3877,7 +3877,7 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **Distinguishing from #165 and #178:** #165 is a gate that fired and a parent overrode the compliant result; #178 is a skill loaded whose procedural gates the agent skipped as "just a doc edit." This lesson is the structural case: the producer had no gate to skip and no schema in context to follow. Fix #165/#178 by enforcing existing gates; fix this by *adding* the gate and inlining the schema.
 
-**Example (2026-07-31 playbook review skills):** A plan-review loop produced sidecars with string `"F1"` finding ids, sparse finding dicts (missing consequence/reachability/blast_radius/confidence), and no `panel_mode`/`source_digest`/`descendant_launches`, while sibling rounds from the same loop passed the validator. Root cause: the plan-review producer skill was the only staging producer without a `validate_review_staging.py --hard` gate (the branch-review, code-review, loop, and commit-time skills all gated), and it only *referenced* the sidecar JSON schema by name ("Follow `review-staging`") without inlining the field contract the validator enforces (integer `id`, full consequence fields, `panel_mode`, `source_digest`, `descendant_launches`). The sub-agent improvised a plausible sidecar from the markdown it could see; nothing checked it. Fix: inline the schema into the producer's synthesis step and add the `--hard` gate before reporting the round complete, then extend the same gate to the three other ungated producers (triage-update, confluence-review, rfc-review) in one pass. The gate already existed in four producers; adding it to the rest closed the defect class. Re-witnessed 2026-08-28 from the orchestrator side: the execute-plan parent that hand-synthesizes Phase 3 staging sidecars (no sub-agent, no inlined schema) burned four validator iterations rediscovering the same contract (integer ids, per-finding workers lists for budget bucketing, enum-restricted reachability, overflow manifest above 2 non-blocking Low per worker). Every parent-orchestrated producer needs the same gate-plus-inline treatment as sub-agent producers.
+**Example (2026-07-31 playbook review skills):** A plan-review loop produced sidecars with string `"F1"` finding ids, sparse finding dicts (missing consequence/reachability/blast_radius/confidence), and no `panel_mode`/`source_digest`/`descendant_launches`, while sibling rounds from the same loop passed the validator. Root cause: the plan-review producer skill was the only staging producer without a `validate_review_staging.py --hard` gate (the branch-review, code-review, loop, and commit-time skills all gated), and it only *referenced* the sidecar JSON schema by name ("Follow `review-staging`") without inlining the field contract the validator enforces (integer `id`, full consequence fields, `panel_mode`, `source_digest`, `descendant_launches`). The sub-agent improvised a plausible sidecar from the markdown it could see; nothing checked it. Fix: inline the schema into the producer's synthesis step and add the `--hard` gate before reporting the round complete, then extend the same gate to the three other ungated producers (triage-update, confluence-review, rfc-review) in one pass. The gate already existed in four producers; adding it to the rest closed the defect class. Re-witnessed 2026-08-28 from the orchestrator side: the execute-plan parent that hand-synthesizes Phase 3 staging sidecars (no sub-agent, no inlined schema) burned four validator iterations rediscovering the same contract (integer ids, per-finding workers lists for budget bucketing, enum-restricted reachability, overflow manifest above 2 non-blocking Low per worker). Every parent-orchestrated producer needs the same gate-plus-inline treatment as sub-agent producers. Re-witnessed 2026-09-16 (plan-review certification round): the final sidecar improvised `confidence: high` against the hypothesis/strong-evidence/verified enum and wrote list-typed `workers` as strings, because the field contract sat only in the gold source; the drift surfaced at the certification gate, so the digest-bound round absorbed the rework. Each new schema surface (e.g. the dated coverage-object requirement) re-bites this shape: inline enums and types at the write step.
 
 **Witness (gate-side drift, 2026-08-01 playbook review-skills plan, Task 4):** the inverse direction, where the *gate* itself lagged the gold source. After `review-staging/SKILL.md` renamed its Discarded-findings example-table header `| Agent |` to `| Worker | Worker severity | … |`, the validator's `validate_discarded_findings` header-skip regex (line 380) still matched only `^\|\s*Agent\s*\|`. A correctly-formatted `| Worker |` header was parsed as a data row, its `Reason` cell read as the discard code, and the gate emitted a spurious `unknown discard reason code: Reason` warning on the very shape the gold source mandates (the gate flags a compliant artifact as invalid). The canonical fixture `_current_clear_markdown` uses `None.` for the Discarded section, so the header-skip path was never exercised and the bug survived. Fix: `^\|\s*(?:Agent|Worker)\s*\|`, gated by a new RED→GREEN self-test whose discriminating assertion (no `unknown discard reason code: Reason`) fails pre-fix and passes post-fix, while a negative-twin BAD row (`not-a-real-reason`) keeps warning both phases to prove the fix does not over-skip genuine data rows. This is the third leg of the rename incident: producers lagged (#182), sibling consumers lagged (#181 witness at line 2226), and the enforcement gate lagged. See `scripts/validate_review_staging.py` and #184 (the artifact-side inverse: artifact wrong, gate right).
 
@@ -5932,6 +5932,10 @@ When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git c
 
 **Witness (same machine, 2026-09-14 trim review r3):** round 3 pinned the mirrored ordering on all three fenced paths (success checkpoint, done handoff, commit reconciliation): a foreign claim token must receive the identity failure, not the abort fence's outcome, so on each path the identity checks precede the fence; three witnesses assert the identity reason code wins and the manifest stays byte-identical, each failing when the fence is hoisted above the identity check.
 
+**Witness (same machine, 2026-09-17 execute-plan review r3, second recovery entry):** `resume()` enforced the `resume_allowed` conjunct but the batch group's continue-member recovery entry did not, so a blocked member with resume disallowed could still be relaunched through the group path; the fix applied the conjunct to the member branch of both group recovery entries and pinned the refusal on each entry plus the `resume_allowed=True` control resuming through the anchor session.
+
+**Witness (same machine, 2026-09-17 execute-plan review r5, reload-validator layer):** the r4 group-release exit taught the driver a new terminal group state (`failed`), but `validate_manifest` still enumerated only `active`/`closed` and rejected the state its own code path had just written, and startup reconciliation then quarantined the released staged members because their launch evidence resolved through the failed group's launch record; the fix admits all three states at the validator, filters released-by-failed-group members out of the quarantine scan, and pins both seams with a write-reload-continue round-trip test.
+
 **See also:** #317 (simulate the prescribed fix over every shape the criterion quantifies), #72 (guards must fail closed when input is absent).
 
 ## 322. Time-Bound Decision Inputs Must Be Partitioned Live Vs Expired Against One Injectable Now
@@ -6339,3 +6343,530 @@ When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git c
 **Distinguishing from #339:** #339 diffs a validator's error sets on the same artifact pre- and post-edit; this diffs a keyed inventory across many files and governs the join key, not the error-set comparison.
 
 **See also:** #339 (prove an edit adds no new gate errors), #346 (keep a pinned span byte-identical when rewording around it).
+
+## 350. Separate Usage Allowance From Worker Admission
+
+**Principle:** Family H (verify the real thing, not the abstraction)
+
+**Trigger:** An agent run reports remaining account allowance while a worker cannot start, or a stopped task appears to retain execution capacity.
+
+**Rule:** Treat account usage allowance and worker admission or lifecycle as independent signals. Probe and record each separately. Do not classify capacity denial as usage exhaustion, spend a usage reset, relaunch the full panel, or terminate unrelated tasks without evidence of that specific condition. Bound capacity retries, record task and release observations, and count a local fallback as equivalent only when its lens, scope, artifact lineage, sidecar, and readiness evidence match.
+
+**Why:** Allowance answers whether more consumption is permitted; admission answers whether an execution slot is available. They can disagree, and a visible task state does not prove that a worker is owned or released. Conflating them turns a capacity incident into an unnecessary reset or a destructive cleanup action.
+
+**Example:** A review panel had allowance remaining but could not admit workers. The correct outcome was a capacity-blocked record with bounded recovery, not a usage pause, reset, full-panel relaunch, or termination of another task.
+
+**See also:** #315 (probe runtime state through live interfaces), #325 (retain rate-limited lens accounting), #341 (verify the executing context's primitives before dispatch).
+
+## 351. Run Embedded Skill Scripts by Extraction, Never by Retyping
+
+**Principle:** Family H (verify the real thing, not the abstraction) cross with Family D (single source of truth). A fenced script block in a skill document is a canonical artifact; an agent-typed transcription is a fork of it with no diff review. One wrong token (variable name, flag, output path) still exits 0 and silently redirects the artifact the script produces; the failure surfaces only when a downstream step looks for the artifact at its documented location.
+
+**Trigger:** A skill step says "run this block" and the agent re-types it from reading instead of extracting it from the file. Every individual command succeeds, so nothing errors; the damage is a wrong output location or a silently skipped sub-step that no exit code reports.
+
+**Rule:**
+1. Execute an embedded canonical script by extracting it from the source file (fence-aware sed/python) or by copying the exact text from the Read output; never retype it from the rendered prose.
+2. When extraction is impossible, diff the retyped block against the source before running, and verify every path the script prints against the location the skill text promises.
+3. For an artifact-producing block, "exit 0" is not verification: confirm the artifact exists at the documented path with the documented shape before moving on.
+
+**Example (2026-09-16 done Step 0):** a retyped marker script wrote `$TMP` for `$TMP_DIR` in its relative-path branch, so the run-start marker landed at the repository root instead of `{tmp_dir}/done-session/`. The echoed path exposed it, but nothing in the script would have failed, and the next run's session-window anchor and marker sweep would have mis-anchored silently. Remedy was mechanical relocation plus this rule. See also #143 (the editing-side twin: exact-match micro-edits over full-block replacement).
+
+
+## 352. Attach Worktrees by Short Branch Name, Then Assert symbolic-ref
+
+**Principle:** Family H (verify the real thing, not the abstraction)
+
+**Trigger:** A scripted `git worktree add` whose argument is a fully-qualified ref (`refs/heads/<branch>`), followed by commits inside the worktree that must land on that branch.
+
+**Rule:** Pass the branch's short name to `git worktree add` so the worktree attaches the branch; a fully-qualified `refs/heads/<name>` argument is treated as a commit-ish and checks out DETACHED, so commits made inside are orphaned the moment the worktree is removed. After every scripted add, assert `git -C <worktree> symbolic-ref -q HEAD` succeeds before committing in it; on failure, remove the worktree and abort instead of writing to detached HEAD.
+
+**Why:** The detached form exits 0, prints normal "Preparing worktree" output, and only the bracketed ref display (`[detached HEAD ...]` vs `[<branch> ...]`) differs, so nothing fails until the branch tip silently lacks the worktree's commits.
+
+**Example (2026-09-16):** a plan-validation fixture ran `git worktree add "$wt" refs/heads/docs`, committed a witness, removed the worktree, and then found `git log refs/heads/docs` empty; re-running with the short name `docs` attached the branch and the commit landed. Caught by executing the fixture, not by reading the command.
+
+**See also:** #317 (simulate the prescribed fix against real code), #351 (execute embedded skill scripts by extraction, never by retyping).
+
+## 353. A Read-Only Entry Point Must Write Nothing (Witness Byte Identity)
+
+**Principle:** Family H (verify the real thing: non-mutation of a query path must be witnessed at the composed entrypoint, because internal method tests stay green while the real path writes)
+
+**Trigger:** a status, readiness, inspect, or report command shares stateful machinery (a driver or service object) with mutating operations, and anything downstream keys behavior on the artifact's bytes or timestamp (concurrency watchers, polling predicates, byte-identity audits).
+
+**Rule:**
+1. Shared machinery must perform zero durable writes during construction or query dispatch; writes live only behind explicit mutating operations. When construction cannot know the caller's intent, pass an explicit read-only flag and skip backfill, receipt writes, and saves on that path.
+2. Witness non-mutation at the outermost entrypoint: run the real command against an owned artifact and assert the artifact's bytes are identical before and after. A method-level "never mutates" test passes while the composed entrypoint path still writes.
+3. After the fix, re-check every watcher or predicate keyed on the artifact's update timestamp: removing the stray write is what un-trips them.
+
+**Why:** a query command that bumps the artifact's update timestamp looks like peer activity to any watcher keyed on that timestamp, so read-only invocations fabricate concurrency signals; the mutation also silently breaks byte-identity expectations, and nothing fails at the query itself.
+
+**Witness (2026-09-17, review r1, execute-plan runtime plan):** the readiness CLI constructed the runtime driver, whose initialization backfilled owner identity and rewrote the manifest, so every readiness invocation bumped `updated_at` and tripped the resume watcher's peer-resumed predicate; fixed with a read-only construction flag plus a CLI-level byte-identity witness on an owned manifest.
+
+**See also:** #80 (assert the intermediate mutation, not the restored final state), #198 (a silent no-op mutation indicts the harness, not the guard).
+
+## 354. Peer-Held Checkout: Work Detached, Preserve the Patch, Land via Guarded Script
+
+**Principle:** Family G (artifacts over memory: when the landing path is unavailable, bridge it with durable, self-verifying artifacts - a preserved diff plus a guarded apply script - instead of waiting longer or forcing the switch)
+
+**Trigger:** a change must land on branch B, but the only checkout that can carry B is held by a live peer session on its own branch, and blocking on the peer stalls this session's loop.
+
+**Rule:**
+1. Never force a branch switch under a live peer, and never answer a timed-out landing watcher by waiting longer; restructure instead.
+2. Do the work in a detached linked worktree at the target tip (it blocks no branch checkout) and run every gate there.
+3. Preserve the full diff as an in-repo gitignored patch, and pair it with a one-command landing script that refuses to run unless the shared checkout is back on the target branch with the touched files clean, then applies the patch and re-runs the gates.
+4. Do not commit inside the detached worktree as the landing path: a detached commit orphans on worktree removal (#352); the patch plus guarded script is the landing path.
+
+**Why:** forcing a switch destroys the peer's in-flight context; waiting burns this session's budget on another session's schedule; an unguarded apply can sweep foreign dirt into the landing or conflict with peer edits. The patch is the durable artifact; the guards make the deferred landing fail-closed.
+
+**Witness (2026-09-17, review r2, execute-plan runtime plan):** the address pass finished green in a detached worktree while a peer held the shared checkout on its own branch; a landing watcher timed out without a switch. The diff survived as a gitignored patch plus a guarded landing script, and the fix landed in one command once the checkout freed up - the landed commit matched the verified patch exactly.
+
+**See also:** #221 (probe peer liveness before shared-tree commits - covers a foreign modification in a shared tree; this covers the target branch itself being unavailable), #352 (detached-worktree commit orphaning - why the landing must not be a detached-worktree commit).
+
+## 355. Size-Gate Before Scan: A Bounded Read That Prefix-Scans for Evidence Fails Open
+
+**Principle:** Family G (guard fail-closed) - scoping facet: a read-limit guard must refuse over-limit inputs outright, not shrink the evidence window and pass on the visible prefix.
+
+**Trigger:** a pass/fail gate scans a file for a violation marker (an unchecked checkbox, a forbidden pattern, a missing section) but the reader is bounded for performance or safety by a line or byte read limit, and the implementation reads only the first N bytes or lines and scans that prefix.
+
+**Rule:**
+1. When the evidence for the decision may lie anywhere in the input, the gate must either read the whole input or refuse inputs over the limit; "nothing found in the prefix" is never "nothing found".
+2. Enforce the limit at read time: open and read at most limit+1 bytes (or lines) and refuse when the cap is exceeded, with evidence naming the limit; a stat-then-read gate alone leaves a check-then-read window in which the file grows past the limit after the check.
+3. Witness both arms: an over-limit file with violation evidence past the limit must be refused with the size-gate reason, and a mirror arm must prove the gate fired before any content scan (size-gate evidence present, content evidence absent).
+
+**Why:** a prefix scan converts the unread region into an implicit clean verdict: the scan genuinely finds nothing in what it read, so nothing fails, and the gate blesses the exact artifact class it exists to reject - the larger, still-violating file.
+
+**Witness (2026-09-17, review r3, execute-plan runtime plan):** `mark_terminal` bounded its read of the archived plan and scanned the prefix for unchecked-checkbox evidence; an unchecked line past `TERMINAL_PLAN_READ_LIMIT` was invisible, so terminal completion passed on a plan that still had unchecked boxes (blocking finding R3-1). Fixed by stat-gating the archived plan before any read: over-limit plans return blocked `done-pending` naming the read limit; the witness asserts the size-gate evidence is present while the checkbox evidence is absent. (r4 refinement: the stat gates were replaced by a capped read of limit+1 bytes with refusal on overflow - a stat-then-read check leaves a growth window between check and read, so the refusal now fires on the byte count actually read.)
+
+**See also:** #234 (reporting without containment - the complementary fail-open shape: verdict recorded but data unfiltered), #59 (calibrate exception handling to the cost of silent failure - a correctness-critical reader must not inherit a degrade-to-empty strategy), #88 (boundary fixtures must hold orthogonal invariants valid - keeps the at-limit arm from confounding size with content), #356 (the empty-window arm: a structurally empty artifact makes the absence verdict vacuously true).
+
+## 356. An Absence-Based Verdict Needs a Presence Precondition
+
+**Principle:** Family G (guard fail-closed) - degenerate-input facet: a gate that decides by absence of violation evidence passes vacuously when the artifact lacks the structure that makes absence meaningful.
+
+**Trigger:** a pass/fail gate scans an artifact for violation markers (unchecked boxes, cross-record disagreements, forbidden patterns) by enumerating instances of some structure (sections, tasks, entries), and the artifact can arrive byte-empty, or present with zero recognizable instances of that structure.
+
+**Rule:**
+1. Before an absence-based scan runs, require a presence precondition: the artifact must be non-empty AND contain at least one instance of the structure the scan enumerates; zero recognizable instances is a blocked outcome whose evidence names the missing structure, never a clean verdict.
+2. Route the degenerate-input refusal through the same blocked envelope as a real violation, so downstream consumers cannot read "nothing to check" as "checked and clean".
+3. Witness both arms: the empty and structurally empty artifacts must be refused with the structure reason (and no violation-scan evidence), and a populated artifact must still exercise the real scan, proving the precondition did not swallow the gate.
+
+**Why:** over an empty or structureless window, "no violations found" is vacuously true; the gate blesses exactly the artifact class least likely to be valid, and a downstream auto-continuation consumes the blessing as if the artifact had been verified.
+
+**Witness (2026-09-17, review r4, execute-plan runtime plan):** terminal completion scanned the archived plan for unchecked checkboxes, so a zero-byte archived plan passed (nothing found to be unchecked); readiness compared manifest tasks against plan sections, so a plan with zero recognizable task headings vacuously earned direct continuation (findings R4-2/R4-3). Fixed by refusing an empty archived plan and appending a "no recognizable task sections" failed condition before the scans; the witnesses pin that the sectionless plan is blocked while a populated plan still exercises the per-task comparison.
+
+**See also:** #72 (guard input absent or byte-empty must fail closed - the file-level arm of this precondition), #355 (the truncated-window arm: evidence exists past the read limit).
+
+## 357. Reconcile Non-Converging Reviews Before Relaunching
+
+**Principle:** Family H (verify the real thing: repeated review output is evidence about the workflow and invariant, not proof that another equivalent panel will converge)
+
+**Trigger:** Successive implementation reviews rediscover the same root invariant, findings stay flat or increase, workers time out, or external release gates are mixed with repository defects.
+
+**Rule:** Before launching another equivalent review, build a recurrence map by root cause, compare the blocking set with prior rounds, and classify each item as an implementation defect, evidence gap, external gate, or plan contradiction. Fix the smallest coherent in-scope set, record deferred ownership, and run one bounded verification against the new exact digest. Stop or request a decision when the result still does not converge.
+
+**Why:** Repeating a panel without changing the decision model consumes capacity while producing more labels for the same defect. It also encourages scope expansion and can mistake missing deployment evidence for unfinished application work.
+
+**Example:** A messaging implementation received several reviews that alternated between callback ownership, broker-boundary evidence, and deployment prerequisites. Reconciliation grouped the recurring findings, corrected the implementation-owned issues in one pass, and left supervisor, broker, configuration, and database rollout evidence as explicit external gates.
+
+**See also:** #338 (an interrupted review is not a completed round); #350 (separate allowance from worker admission); #351 (execute canonical workflow artifacts exactly).
+
+## 358. Verify the Source-Specific Adapter Before Applying a Downstream Schema
+
+**Principle:** Family H (verify the real thing, not the abstraction)
+
+**Trigger:** a review compares a source service's payload directly with a downstream canonical schema, while a source-specific integration document or adapter may translate names, types, timestamps, or nested properties.
+
+**Rule:** identify the actual boundary and its owning contract before calling a source representation a schema violation. Trace the source field through the documented adapter or consumer, and apply downstream names and types only after verifying that the source is required to emit them directly.
+
+**Why:** a valid source-to-canonical mapping can look like contract drift when reviewed against the downstream schema alone. That creates false blocking findings and can push an unnecessary refactor into the source service.
+
+**Example:** a producer used internal event names and source-specific enrichment keys that appeared inconsistent with the downstream catalog. The source integration contract explicitly mapped those fields to canonical names, so the contract findings were withdrawn; only independent logging, extraction-validation, and producer-test observations remained.
+
+**See also:** #126 (cite a PR-visible normative source before claiming contract drift), #245 (verify the real interface rather than a matching fake).
+
+## 359. After Rebasing Past a Sibling Squash Merge, Diff Plan Paths Against the Trunk Side
+
+**Principle:** Family H (verify the real thing, not the abstraction) - merge-result facet: a clean rebase exit proves the commit graph, not that the working tree matches trunk's lifecycle state for the same artifacts.
+
+**Trigger:** a long-lived branch is rebased onto a trunk that gained a squash merge of a sibling branch, and the sibling's squash carried lifecycle transitions (executed plans archived to a completed directory, stale revisions superseded) that the rebased branch's replayed commits still express in their pre-transition form.
+
+**Rule:**
+1. After such a rebase, diff the plan and history trees against the trunk side by path, not only by content: a replayed authoring commit resurrects an executed plan at its original top-level path even when the trunk has it archived under the completed directory, and a maintenance surveyor would then see it as executable work.
+2. Resolve each resurrected path by taking the trunk side (the post-execution lifecycle state); never keep both copies.
+3. Mirror the same fix on any orphan snapshot branch (for example a docs branch) that carries its own copy of the plan tree, since its sync does not re-derive lifecycle state from the trunk.
+
+**Why:** the rebase reports success, the suite is green, and nothing names the duplicate; the failure surfaces later when an automated plan surveyor counts the stale top-level copy as pending executable work.
+
+**Witness (2026-09-17, rebase of the review-fix-pipeline branch onto main after the integrity-quad squash):** the replayed authoring commit restored `docs/plans/2026-09-16-execute-plan-integrity-quad.md` at its pre-archive path while main held it only under `docs/plans/completed/`; both the working branch and the orphan docs branch needed the trunk-side archive state restored before the tree was lifecycle-consistent.
+
+**See also:** #352 (assert branch attachment before scripted worktree commits), #354 (peer-held checkout landing).
+
+## 360. Smoke Tests of Host-Mutating Tooling Must Fake the Daemon Boundary
+
+**Principle:** Family H (verify the real thing, not the abstraction). A smoke drive that believes it is hermetic still reaches the real host when an omitted input falls through to module defaults: defaults exist for production convenience, and inside a test they silently select the real daemon instead of the fixture.
+
+**Trigger:** invoking a CLI, adapter, or scheduler whose external-effect boundary (service-control binary, registration file, socket) is configured by module defaults, and the invocation omits or under-specifies the fixture input.
+
+**Rule:**
+1. Before any invocation that can mutate host state, fake every boundary entry point: fixture-scoped config paths AND a faked control binary (or an injected bootstrap function), so no code path can reach the real daemon.
+2. State-mutating operations must fail closed on unconfigured inputs: absent fixture config means refuse and report, never fall through to defaults.
+3. Treat a default-path defect exposed by a test incident as a production bug: fix the defaults themselves (absolute, expanded at the definition site) and pin them with a test.
+
+**Why:** the hermetic suite stays green because it never exercises the default path; the first smoke drive on an unconfigured host loads a real job into the user's service domain and litters a directory named after the unexpanded home prefix.
+
+**Witness (2026-09-17, watcher-schedule smoke drive):** a fixture omitted the job directory; module defaults held a literal tilde path that pathlib never expands, the scheduler wrote the job definition under a `./~/...` directory inside the repo, and the default bootstrap invoked the real service-control daemon, briefly loading the job into the user's gui domain. Remediation booted the job out, removed the stray directory, expanded the defaults at import, and re-ran the drive against a fixture directory with a faked bootstrap. The same defect would have broken a real default-path arm in production.
+
+**See also:** python_guidelines.md #34 (expand module default paths at import; pathlib never expands a tilde), #72 (guards fail closed on absent input), #195 (the environment is part of the reproduction command).
+
+## 361. A Reclaim Path Must Fence Live Owner Groups, Not Just Per-Lease Staleness
+
+**Principle:** Family E (temporal/ordering: recompute preconditions from the owner's current state, not from one clock) - lease expiry is evidence about the lease, not about the owner; an artifact whose lease lapsed can still be owned by a live group that parked it by design.
+
+**Trigger:** adding or reviewing a bulk reclaim/prune over claim artifacts (leases, locks, reservations) in a system where artifacts are grouped under a coordinator state (batch group, transaction, session) that has its own pause/park lifecycle.
+
+**Rule:** (1) Before a reclaim accepts a stale-by-lease artifact, resolve the artifact's owner group and refuse when that group is live, naming the group in the refusal evidence; the refusal must precede lease accounting so an expired lease can never route a live group's claim into the reclaim path. (2) Refresh member lease timestamps at every group lifecycle transition that parks or advances members (activation, advance), so a parked member's lease never reads as abandoned while the group is mid-protocol. (3) Point the operator runbook at the group's own recovery entry for members of a live group; per-artifact reclaim stays the path only for ownerless artifacts. (4) Pin both directions: refusal arms with an expired lease and a fresh lease (the refusal must not be staleness-dependent), the non-member control that still reclaims, and the group-recovery arm that proceeds through launch.
+
+**Why:** the wedge is silent and total: one reclaim of one member's "stale" claim invalidates the live group's shared state, and every later group step (launch, advance, recovery) fails on the mutilated claim set - exactly the state the pause protocol designed a recovery path for.
+
+**Witness (2026-09-17, execute-plan runtime review r3):** `reclaim` would accept a batch member claim whose lease had expired while its claim group sat pause-parked, bricking the group's designed `continue --batch` recovery; the fix refuses claims carrying a live group's `group_id` (group named, resumable stale-claim classification), refreshes member leases at activation and advance, adds the runbook carve-out row, and pins the expired-lease refusal, the non-member control, and the recovery-through-launch arm.
+
+**See also:** #321 (enumerate every consumer of a shared lifecycle guard), #221 (probe parallel-session liveness before shared-tree commits).
+
+## 362. Host-Registered Identity Must Be Run-Derived, And Destructive Service Actions Must Verify Ownership First
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a service registration found under the expected label is not proof it is yours; two concurrent runs can both be "the run that owns this plan", and the registration each finds is the other's.
+
+**Trigger:** a tool that registers durable host state (service-manager jobs, scheduled tasks, listeners) keyed by an identity derived only from inputs shared by every checkout of the same project (plan slug, app name), where two runs of the same project can overlap in time, and the tool's cleanup path can unload or delete what it finds.
+
+**Rule:** (1) Derive the registration identity (label, job path, key) from run-specific inputs - the project slug plus a repository-root digest - so two concurrent runs never share one identity; explicit-path callers keep their unkeyed identity for their own paths. (2) Before any destructive service action (bootout, unload, remove), read the existing registration and compare its identity; on mismatch refuse with a named conflict reason and continue on the non-destructive path (report-only) instead of destroying the other run's registered state. (3) Serialize the read-verify-write sequence through the tool's existing guard lock so two writers cannot interleave. (4) Pin identity derivation, keyed defaults, the label-conflict refusal, and the own-label control.
+
+**Why:** without derivation, the second run's cleanup unloads the first run's resume automation - the loss is invisible (no error, the job simply stops firing) and lands on the run that can least afford it: the one parked waiting for its scheduled resume.
+
+**Witness (2026-09-17, execute-plan runtime review r3):** concurrent schedules shared one launchd label and job path; the fix keys label, job dir, and sentinel defaults by plan slug + repo-root digest, reads the job path's existing plist label before writing, refuses a foreign job with `label-conflict` so the chain proceeds report-only, serializes write + bootout + bootstrap through the shared guard lock, and subsumes bootout-victim recording because the foreign job is never touched.
+
+**Witness (same machine, 2026-09-17 execute-plan review r5, file-unlink layer):** arm-time spent-sentinel cleanup unlinked whatever sentinel paths the scheduling arms named, with no containment check; the fix scopes the scheduler's cleanup to the sanctioned runtime directory (the directory identity resolution derives into) and refuses any arm naming a sentinel outside it, deleting nothing on refusal, so a mis-derived identity cannot route the deletion.
+
+**See also:** #323 (bind a suppression marker to the identity it fired for), #221 (probe parallel-session liveness before shared-tree commits).
+
+## 363. A Group-Member Retry Must Re-enter Through the Group's Own Continuation Primitive
+
+**Principle:** Family E (temporal/ordering: recompute preconditions from the owner's current state) crossed with budget convergence - a retry arm that treats a coordinated member like an ungrouped item bypasses every fence the group's continuation path enforces, and each bypassed retry re-spends the very budget that was supposed to force convergence.
+
+**Trigger:** adding or reviewing a retry/relaunch arm over work items that can belong to a coordinator group (batch group, saga, session) whose members have their own fenced continuation entry, where a plain arm and a group arm both decide whether a failed member may run again.
+
+**Rule:** (1) Exclude group members from the plain retry arm; membership is discoverable from the item's own or the group anchor's session state. (2) Route the member retry through the group's own continuation primitive, carrying the anchor, so the retried receipt re-enters the same fences a normal advance passes. (3) Persist the decremented retry budget owner-side at retry time and force convergence from that owner-owned value; a retry envelope that can re-supply fresh attempts converts one failure into unbounded resume recursion (reproduced live pre-fix when unforced). (4) When no legal member launch exists (no session anywhere), persist the receipt as the member's blocked state instead of launching outside the protocol. (5) Pin: no second launch, every resume carries the anchor, and budget exhaustion converges to task blocked / claim blocked / group still active.
+
+**Why:** the livelock is silent and group-fatal: every retry looks like progress, the group never advances, and an unforced budget makes the recursion unbounded.
+
+**Witness (2026-09-17, execute-plan runtime review r4):** the plain retry arm relaunched batch members outside the group fences; the fix routes retries through the member-resume continuation with a driver-owned persisted budget and blocked-state persistence, pinned by a no-second-launch test and an exact-two-resumes convergence test.
+
+**See also:** #361 (a reclaim path must fence live owner groups - the reclaim-side sibling), #321 (enumerate every consumer of a shared lifecycle guard).
+
+## 364. The Fire Phase Must Read What the Arm Phase Persisted, And Consume It
+
+**Principle:** Family E (temporal/ordering: the consuming phase reads durable machine state, not a re-derivation) - identity and consumption state established at arm time are facts about the machine; re-deriving them from defaults, or leaving the one-shot artifact pending, lets a repeat trigger act twice or act on the wrong target.
+
+**Trigger:** a two-phase automation where phase one (arm/schedule) derives an identity (sentinel path, token, marker) from configuration, and phase two (fire/consume) either re-derives that identity or reads a pending one-shot receipt it does not clear.
+
+**Rule:** (1) Key the derived identity whenever EITHER path is left at its default; only both-explicit callers keep the unkeyed form. (2) Persist the exact armed identity into the durable receipt at arm time; the consumer reads the recorded value first and derives from defaults only for legacy artifacts predating the field. (3) Acting on a one-shot receipt must consume it inside the acting operation via compare-and-swap supersede (generation bump), so a duplicate trigger is refused on machine state, never on a timestamp. (4) Pin: half-custom configuration stays keyed, a fire with no payload consumes the armed value, and the second fire is refused as stale.
+
+**Why:** a re-derived identity silently targets shared default state, and an unconsumed receipt makes the second fire a second resume - both are invisible until the wrong thing fires.
+
+**Witness (2026-09-17, execute-plan runtime review r4):** watcher fire re-derived a half-custom launchd sentinel and left the resume receipt pending, so duplicate fires double-resumed; the fix persists the armed job/sentinel into the receipt at schedule, consumes the recorded sentinel first at fire, and CAS-supersedes the receipt inside the fire operation.
+
+**See also:** #323 (a once-per-window marker is bound to the identity it fired for), #362 (run-derived registration identity with ownership verification).
+
+## 365. Authorize Batch Member Envelopes Up Front, Never Wedge The Done
+
+**Principle:** Family E (temporal/ordering: recompute preconditions before sequencing) crossed with Family H (verify the real thing, not the abstraction) - a coordinator that defers a member's launch authorization to that member's own launch turn converts a foreseeable refusal into a guaranteed wedge: the group stays active, every recovery entry refuses the member, and the done handoff sequenced behind the group closing can never run.
+
+**Trigger:** a coordinator claiming several work items into one group and launching members sequentially, where any member's launch envelope can be unauthorized at claim time or drift to unauthorized before its turn (scope shrank to zero, a network/consent flag appeared, credentials revoked), and the run's completion handoff is sequenced behind the group closing.
+
+**Rule:** (1) End the claim prefix at a member that cannot be authorized (zero-scope or consent/network-flagged); never claim an envelope no launch can satisfy. (2) At claim time authorize every claimed member's envelope BEFORE any persisted state write, so a refusal leaves the persisted state untouched. (3) An authorization failure found after the state write must run the group's failure exit inside the same locked save as a normal member completion: fail the group atomically, release still-staged members to the individual queue, and let the advance/done land; never leave the group active behind a member with no legal launch. (4) Pin: refusal in either claim position, the post-claim drift arm (done succeeds, group failed, staged released), and the released member's fresh individual launch owning the approval-required refusal.
+
+**Why:** the wedge is certain, not probabilistic: once the pointer parks on a group whose next action is a guaranteed refusal, every resumption re-derives the same refusal forever, and every retry re-spends budget on a launch that cannot happen.
+
+**Witness (2026-09-17, execute-plan runtime review r5):** the batch claim authorized member envelopes lazily per launch turn, so a two-member batch whose second task drifted to network-required committed the group state and then wedged the done handoff on a member launch that could never be authorized; the fix ends the prefix at unauthorized members, authorizes all envelopes before the state write, and fails the group atomically on post-claim drift with the released member re-entering the individual queue.
+
+**Witness (2026-09-18, execute-plan review r6, advance-path arm):** the group advance's session capture could find no session anywhere, parking the group behind a done that could never land; the advance now routes that session-less cell through the same atomic fail-release (staged claims closed, the completed member's done lands, the released member is re-claimed individually), and the transition-table exhaustiveness test drives the cell end to end.
+
+**See also:** #361 (a reclaim path must fence live owner groups), #363 (a group-member retry must re-enter through the group's continuation primitive), #321 (enumerate every terminal state and its consumers).
+
+## 366. A Cleanup Trap Killing A Background Job Must Reap It
+
+**Principle:** Family E (temporal/ordering: statement order inside a bash cleanup trap decides who reaps the killed job) - a `kill` followed by any further statement hands the shell a reap opportunity, and bash then prints a `Terminated` job-control notice into the fixture's own output stream.
+
+**Trigger:** writing or reviewing a bash test fixture whose cleanup trap kills a background helper (sleep, server, daemon), especially when the suite asserts on output shape (exact OK/FAIL lines, golden output) or the log is scanned for regressions.
+
+**Rule:**
+1. In the cleanup trap, follow `kill "$pid"` with `wait "$pid" 2>/dev/null || true`, and make that reap the trap's last statement, so the trap consumes the job status itself.
+2. Never declare a fixture's output clean from a single glance when a helper was signal-terminated: run the suite and grep the output for stray `Terminated` (or other job-control notices) before calling it green.
+3. When a noise line appears, reproduce the mechanism with a minimal two-variant diff (statement-after-kill vs wait-last) before patching; this distinguishes shell job-control noise from the helper's own output.
+
+**Why:** the notice is emitted by the shell, not the killed process, so redirection aimed at the helper never catches it; it lands in the suite's stdout, pollutes exact-match assertions, and invites flaky suppressors (`set +m`, job-control toggles) instead of the deterministic reap.
+
+**Witness (2026-09-18, done-lock selftest):** a new one-shot handoff fixture killed its `sleep` holder inside an EXIT trap; the first green run printed `sleep 120 Terminated` because a cleanup statement followed the kill (older fixtures killed as the last statement, so no notice); adding the reap silenced it deterministically.
+
+**See also:** #293 (inject the signal at the resource-creation hook to probe a trap window).
+
+## 367. Harness-Scoped Rules Declare A Supported Set And Skip Outside It
+
+**Principle:** Family D (single source of truth) - the supported-harness set is the membership contract; product-named exceptions restate the same decision in every skill and drift when a new unsupported harness appears.
+
+**Trigger:** authoring or reviewing a skill, backlog item, or shared rule that only works on some AI harnesses (quota probes, budget gates, runtime overlays), especially after a request that names one unsupported product.
+
+**Rule:** (1) Keep the rule family harness-agnostic in prose. (2) Declare the supported harness ids once. (3) Detect the live harness from session signals, then skip the whole family when the live id is outside the set. (4) Do not hardcode product-specific branches for one unsupported harness. (5) Do not infer the live harness from peer on-disk configs that can exist while another harness owns the session.
+
+**Why:** a named product skip looks local and complete, then every new unsupported harness needs another branch, and disk-path auto-detect binds the wrong quota window on a multi-harness host.
+
+**Witness (2026-09-18):** budgeting backlog drafts first said "if Cursor, ignore budgeting"; user redirected to supported-set membership with Cursor as the witness only. Captured as backlog items for harness detection and unsupported-harness budgeting skip, plus `agent_workflow_guidelines.md` §14.3.
+
+**See also:** `agent_workflow_guidelines.md` §14.2–§14.3, `how-to-write-skills` Best Practices Summary.
+
+## 368. A Supersede Must Tear Down The Outgoing Receipt's Carrier
+
+**Principle:** Family E (temporal/ordering: teardown belongs to the mutation that orphans the resource) crossed with Family H (act on the persisted receipt, not a re-derivation) - a lifecycle transition that invalidates the context in which an external artifact was registered leaves a live orphan unless the same operation tears it down, and the only safe identity for that teardown is the one recorded at arm time.
+
+**Trigger:** a state transition (supersede, replace, abort, rollover) abandons the context under which an externally registered artifact (daemon job, lock, lease, timer) was created, and the artifact's identity lives in a persisted receipt.
+
+**Rule:** (1) At every transition that orphans the carrier, tear it down in the same operation: read the outgoing receipt, and only when it records an armed or registered carrier, boot out or remove the recorded identity. (2) Never re-derive the identity at teardown; defaults drift and configuration changes between arm and supersede, so the receipt's recorded value is the source. (3) Consume paired one-shot artifacts (sentinel, fired marker) in the same operation so the orphan can neither fire nor be fired later. (4) Pin with a documented-sequence test: arm, supersede, exercise the orphan condition, then prove a later arm of the same kind succeeds because the teardown cleared the registration.
+
+**Why:** an orphaned registered artifact keeps firing on its own schedule or blocks the next registration; both surface far from the transition that created them, as wrong-state resumes or unexplained bootstrap failures no one traces back to the supersede.
+
+**Distinguishing from #364:** #364 binds the fire phase to the arm phase's record (a consumer must read and consume what was persisted); this binds every supersede-shaped phase: a transition that orphans the carrier must destroy it from that same record.
+
+**Witness (2026-09-18, execute-plan review r6):** pause supersede left the armed launchd job loaded; the orphan fired later and revived stale resume state. The fix boots out the receipt-recorded plist and consumes the recorded sentinel/fired pair at both supersede sites, receipt-only with no identity derivation, and a documented-sequence test proves a later continue re-arms cleanly.
+
+**See also:** #362 (run-derived registration identity with ownership verification), #364 (the fire phase must read what the arm phase persisted).
+
+## 369. A Stamped Intent Record Must Be Rectified To The Actual Outcome
+
+**Principle:** Family H (verify the real thing) - a record written before a fallible external call is an intent, not a fact; when the call refuses, returning with the intent still persisted makes every later reader act on machine state that does not exist.
+
+**Trigger:** a persisted record is stamped ahead of an external registration or scheduling call whose failure paths are reachable, and downstream consumers (fire phase, resume, audits) read that record as the actual state.
+
+**Rule:** (1) Keep the pre-call stamp as the crash-window-safe intent record. (2) On any refusal from the external call, rectify the persisted record to the refused outcome, with the machine-readable refusal reason, before the operation returns; fence the rectify write with compare-and-swap so a stale writer cannot resurrect the intent. (3) Do not bump any counter or boundary for the rectification. (4) Pin every reachable refusal path's record shape with a test, and keep the rectify write inside the same operation as the refusal.
+
+**Why:** intent and outcome diverge once per refusal, but the false record is read forever after; the crash window the stamp protects is narrower than the lifetime of the lie the stamp tells when a refusal goes unrectified.
+
+**Distinguishing from #364:** #364 makes the consumer read the producer's record; this makes the producer's record stay true when the outside world refuses it.
+
+**Witness (2026-09-18, execute-plan review r6):** the carrier receipt was stamped armed before the compare-and-swap, and a reachable launchd refusal (self-disable, label conflict, bootstrap failure, plist write failure) left the receipt claiming armed forever; the fix rectifies the receipt to disarmed with a refusal reason through a CAS before the schedule result returns, with all four refusal shapes pinned.
+
+**See also:** #364, #362.
+
+## 370. Verification Scratch State Lives In mktemp And Ends With Teardown
+
+**Principle:** Family E (temporal/ordering: teardown belongs to the procedure that creates the scratch state) crossed with Family H (predict how the real guard rails will treat your leftovers) - a repro, fixture, or manual verification that creates state (git init, checkouts, files) without naming where it lives and how it dies leaves an unowned artifact in the shared tree.
+
+**Shape trigger:** you are about to run or author a verification that runs git init, creates checkouts, or writes files outside `mktemp -d`.
+
+**Rule:** Before running, the procedure must name (a) placement: scratch lives under `mktemp -d`, never the repo root or any tracked tree; and (b) teardown: an explicit removal step carrying the same weight as the assertions. Ad-hoc manual verification obeys both rules exactly like a scripted gate. If teardown cannot be written, the procedure is not safe to run.
+
+**Why:** Untracked scratch is invisible to status and to every hygiene gate. Cleanup disciplines designed to protect foreign work then lock the mess in: agent lanes classify unknown paths as foreign and leave them alone, so the artifact has no owner and survives every sweep until a human trips over it. Secondary damage: GUI graph views render it as detached commits from an unrelated history, and a branch held by a forgotten worktree blocks `git worktree add` of that branch elsewhere.
+
+**Witness (2026-09-18, ai-playbook):** a manual run of a backlog item's refusal-branch recipe created two scratch repos in the repo root (fixture identity, empty init commits, orphan docs branches); they sat half a day, a pipeline launch record logged them as foreign state left untouched, and a peer lane's leftover /tmp worktree simultaneously held the target branch checked out, refusing a plain worktree add. Prevention: fixture placement and teardown discipline plus an untracked nested .git hygiene surface, both backlogged.
+
+**See also:** #368 (same family: teardown belongs to the orphaning mutation, lifecycle-transition surface); #352 (worktree attach by short branch name, the blocked-add surface).
+
+
+## 371. Pathspec Commits Drop Rename Halves; Re-check HEAD Before Amending
+
+**Principle:** Family H (verify the real thing) crossed with Family E (ordering): a commit built from a pathspec is not "the staged state I prepared" (it is HEAD plus only the named paths), and an amend rewrites whatever commit is HEAD now, not the one you created minutes ago.
+
+**Shape trigger:** you are committing staged renames with an explicit pathspec, or about to run `git commit --amend` on a branch shared with parallel sessions.
+
+**Rule:** (1) After `git mv`, a pathspec commit must name BOTH the old and the new path; naming only the new path commits the create and silently drops the staged deletion of the old path, which stays staged. When the index holds only your own staged changes, prefer committing the index state (plain `git commit`) over a pathspec, and verify with `git show --stat -M` that the commit records a rename (delete plus create, not create-only). (2) On a shared checkout, re-run `git log -1 --oneline` immediately before any `--amend`: a peer commit landing between your commands makes the amend rewrite THEIR commit (new sha under their message, your staged leftovers riding inside). If that has already happened, stop rewriting: verify the tree is correct, report the sha movement, and leave history alone. (3) The two pathspec rules are duals: a pathspec-less commit sweeps peers' staged entries in; a pathspec commit drops your staged entries out. Choose deliberately per invocation, never by habit.
+
+**Why:** both failures are silent at commit time and surface later: the dropped deletion half leaves the old path alive in HEAD (a duplicate file), and the rewritten peer commit moves a sha another session may still be referencing.
+
+**Witness (2026-09-18, ai-playbook):** a plan park used `git mv` for two files, then `git commit --only <new-paths>`; the commit recorded two creates and left both old paths tracked in HEAD. The fix-up `--amend` landed after a peer commit had been created in between, rewriting it: the peer's commit message gained the two deletions and a new sha. The tree verified correct and both commits were local and unpushed, but the amend itself was a second error stacked on the first.
+
+**See also:** #27 (verify the staged diff matches the finalized commit; its rename sub-shape covers the pre-edit-content staging trap), and the done skill's shared-checkout pathspec rule (the sweep-in dual of rule 3).
+
+## 372. Gitignored Workflow Artifact Homes Live In The Primary Checkout
+
+**Principle:** Family H (verify the real thing) - a workflow artifact home that is gitignored exists only in the checkout that created it; resolve the home from facts at the primary checkout and write there, never from the current working tree, which in a temporary worktree implies an empty or wrong location.
+
+**Shape trigger:** an execute-plan, review, or done run operating inside a temporary `git worktree` while one of its steps must write or read a gitignored artifact class (`{reviews_dir}` staging docs, `{tmp_dir}` session logs, corpus or facts files).
+
+**Rule:** (1) Resolve every artifact home from the facts document with an absolute anchor: for a gitignored path class, the resolved directory exists only under the primary checkout, so resolve the repo-relative path against the primary checkout's root, not the worktree root. (2) Write review staging docs and stats sidecars to that resolved home even when the code changes live in the worktree; the gate tooling (plan readiness validator, staging validators) reads sidecars by repo-relative path and silently sees nothing when they sit in a worktree that is about to be removed. (3) Remove the worktree only after the primary-checkout artifacts are confirmed on disk; a worktree removal is unrecoverable for anything written only inside it.
+
+**Why:** the run looks complete while its certification artifacts are stranded on a doomed path; the next gate or auditor finds no staging round for the executed plan, and the removal makes the loss permanent rather than merely misplaced.
+
+**Witness (2026-09-18, ai-playbook harness-detection-and-budgeting-skip execute-plan run):** the run executed in `/tmp` worktree off main while the primary checkout held a peer's uncommitted work; the plan's Phase 3 staging docs and sidecars had to be written into the primary checkout's gitignored `docs/reviews/` (resolved from facts), and the archive commit verified via `git show` that the committed rename destinations carried their content before the worktree was removed.
+
+**See also:** #352 (worktree attach by short branch name; blocked-add surface), #370 (verification scratch lives in mktemp and ends with teardown; the same checkout-placement discipline for scratch state).
+
+## 373. Gates Must Not Elevate Schema-Optional Fields Into Hard Requirements
+
+**Principle:** Family D (single source of truth) - the producer schema's optionality is the contract; a refusal predicate written as an unconditional value comparison silently converts an optional field into a required one, and the gate then refuses exactly the valid artifacts the schema allows.
+
+**Trigger:** an acceptance or terminal gate consumes a producer artifact whose schema marks a field optional, and the gate's refusal clause compares that field against an expected value without a presence guard.
+
+**Rule:**
+1. Guard presence before value comparison: only a PRESENT value that violates the obligation refuses; an absent optional field falls through to the fallback arm that already carries the invariant.
+2. When fixing, add the accept witness (artifact lacking the key passes and the run proceeds) next to the present-but-invalid refuse witnesses, remove the old missing-field refuse witness that pinned the over-requirement, and align contract text that documented the over-requirement.
+3. Derive requiredness from the schema, not from fail-closed caution; if the fallback arm genuinely cannot carry the invariant without the field, change the schema explicitly instead of letting the gate invent the requirement.
+
+**Why:** fail-closed instinct ("when in doubt, refuse") pushes gate authors to read absence as invalid; for an optional field absence is a valid state, and the over-strict gate blocks legitimate producer output at the worst spot (a terminal gate), turning "field omitted" into "run cannot complete".
+
+**Witness (2026-09-18, review r3, execute-plan phase3 run):** the pre-archive gate refused archival whenever the review sidecar lacked the optional verdict key; fixed by guarding presence so an absent verdict falls through to the zero-blocking-rows arm that already carries cleanliness, while a present non-yes verdict still refuses.
+
+**Distinguishing:** #226 treats an absent value as disagreement in paired-source agreement checks (the field is required in both representations, so absence is a mismatch); #356 fails closed on structurally empty input before an absence-based scan. Here the schema itself declares the field optional, so absence must fall through, not refuse.
+
+**See also:** #182 (schema inlined where consumed), #246 (inventory a field's existing gate owners before adding a gate), #376 (opposite facet: a schema-required field must refuse absence).
+
+## 374. Host Toolchain Decay Mid-Run: Bridge With Per-Command PATH Shims
+
+**Principle:** Family H (verify the real thing, not the abstraction) - environment facet: the toolchain a long-running automation relies on can decay between iterations, so tool-dependent steps re-verify their tools, and a newly broken tool is bridged, not remediated, until the run ends.
+
+**Trigger:** mid-run a previously working binary starts failing in a new way (interpreter killed by code-signature validation, VCS shim blocked by an unaccepted IDE license, tool replaced by an upgrade), while host-level remediation needs privileges or decisions the run cannot perform.
+
+**Rule:**
+1. Do not remediate the host mid-run (no privilege escalation, no profile edits, no reinstalls) and do not abort; bridge with a per-command PATH shim chain that puts a working alternate binary first (`PATH="<working-tool-dir>:$PATH"`), so documented commands keep running byte-identically.
+2. Verify each shim before relying on it: a version probe plus the smallest real operation (for a VCS, an init and a commit in a scratch directory); resolving is not working.
+3. Record the operator-level remediation (accept the license, switch the developer directory, rebuild the interpreter) as an out-of-band follow-up, and keep the shim recipe in the run log so later iterations reproduce it mechanically.
+
+**Why:** the instincts are to fix the host now (violating runtime-safety rules mid-run) or to abandon the run; both lose. A verified shim chain keeps every documented command working while the decay is fixed out-of-band.
+
+**Witness (2026-09-18, execute-plan review r3):** the host git became license-gated mid-run (exit 69 on every fixture repository init, 239 setUp errors in one suite run); a per-command PATH shim exposing the standalone Command Line Tools git, which is not license-gated, returned the suite to green with no host change; the interpreter had been bridged the same way the previous round after the package-manager python3 started being killed at launch.
+
+**See also:** #307 (mid-run component death: audit what the killed worker flushed before relaunching).
+
+## 375. A Validation Chain's Verdict Line Must Be Gated By Every Check In It
+
+**Principle:** Family H (verify the real thing) - an and-chained validation command whose final success line is separated from the checks by a semicolon (or otherwise runs unconditionally) reports success with failing gates, and the executor records a false green.
+
+**Shape trigger:** a long shell chain of grep/test/suite gates ending in `echo "ALL ... PASSED"` (or any summary line) where any earlier element is joined to the next by `;` instead of `&&`, or where the verdict echo sits after a `;`.
+
+**Rule:** (1) Join every check with `&&` so the first failure short-circuits, and make the success verdict the right-hand side of the last `&&`; a verdict that runs unconditionally is decoration, not a gate. (2) Do not treat printed PASS lines from sub-tools as proof when the chain's own exit status was never checked; capture and echo the exit code explicitly (`rc=$?`) when the chain shape cannot be purely conjunctive. (3) Re-verify any gate that a parallel reviewer disputes: re-run that single gate alone and compare exit codes before trusting either side.
+
+**Why:** the failure mode is silent and asymmetrical: every individual gate prints its own failure to a log nobody reads, while the one line the executor quotes back ("ALL VALIDATION GATES PASSED") is the only unguarded statement in the chain.
+
+**Witness (2026-09-18, execute-plan long-tail-prose-predicates run):** a Task 5 gate chain ended in `; echo "tripwire-rc=$?"` followed by an ungated `echo "ALL VALIDATION GATES PASSED"`; the case-sensitive `grep -qF "canonical writing contract"` failed (only the capitalized heading existed) yet the run recorded success, and the defect was caught by the r1 review worker's independent grep. The fix commit had to add the lowercase phrase the gate was written to require.
+
+**See also:** #374 (bridging, not remediation, for toolchain decay; the same run), #364 (verify the committed thing, not the intent).
+
+## 376. Gate Absence Polarity Follows Schema Requiredness: Required Refuses Absent, Optional Accepts Absent
+
+**Principle:** Family D (single source of truth) - complementary facet to #373: an unguarded value comparison carries one inherent absence polarity (absence reads as violation), so it is the correct shape for a schema-required field and a bug for a schema-optional one; requiredness, not predicate-writing habit, picks the polarity per field.
+
+**Trigger:** a refusal predicate validates structured producer artifacts whose fields differ in requiredness, and per-field checks are written by copying one field's shape (a defaulted map access, a presence-guarded comparison) onto fields with the opposite requiredness.
+
+**Rule:**
+1. Decide absence polarity per field from the schema before writing the clause: a required field refuses when absent (keep the value/type comparison unguarded so absence itself refuses); an optional field accepts absence (add the presence guard so absence falls through to the arm that already carries the invariant).
+2. Never implement a polarity by substituting a default for an absent value: defaulting an absent required field to validity demotes it to optional, and defaulting an absent optional field to a concrete value fabricates producer signal; compare the value that is actually present, or refuse (required) or fall through (optional) on its absence.
+3. When fixing, mirror the witness set across polarities: an accept witness for each optional field's absence beside a refuse witness for each required field's absence, and contract text that names which fields are required.
+
+**Why:** the same predicate reads oppositely under the two requiredness labels, and both wrong polarities pass every value-level test; only a test that omits the key catches a demoted required field, so the defect ships as silent acceptance at exactly the gate that exists to refuse.
+
+**Witness (2026-09-18, review r4, execute-plan phase3 run):** the pre-archive sidecar gate refused findings rows only when blocking was a "present but not boolean" value, so a row omitting the required blocking key read as clean; fixed by dropping the presence guard (`not isinstance(row.get("blocking"), bool)`, evidence "missing or non-boolean blocking value") and by refusing a payload without the top-level findings array, while the verdict stays the only optional field and keeps its accept witness.
+
+**Distinguishing:** #373 is the opposite facet: there the gate over-required a schema-optional field and the fix added a presence guard; here it under-required a schema-required field and the fix removed one. #226 and #356 cover checks over fields that are required in their representations; this lesson is about writing the predicate that actually enforces that requiredness.
+
+**See also:** #373 (same decision input, opposite polarity), #182 (schema inlined where consumed), #246 (inventory a field's existing gate owners before adding a gate).
+
+## 377. A Test Fixture Must Not Write Fixed-Name State Into the Shared Temp Root: Per-Run State Lives Inside the Per-Test Temp Directory or Under a Unique-Per-Process Name
+
+**Principle:** Family H (verify the real thing, not the abstraction: a green suite verdict is valid only for the execution conditions actually exercised; a serial run never tests parallel safety, and a fixture path that resolves into the shared temp root turns concurrent suite instances into writers on one file).
+
+**Trigger:** a fixture (setup or test body) derives per-run state (a manifest, lock, marker, cache) from the shared temp root instead of the per-test temp directory (for example `root.parent / "name.json"` or `gettempdir() / "name.json"`), or reuses one constant file name across runs, in an environment that launches suites concurrently (parallel CI shards, parallel agent sessions).
+
+**Rule:**
+1. Per-run fixture state lives inside the per-test temp directory. The only legitimate writes outside it are deliberate resolution or escape probes, and those use a unique-per-run name (uuid suffix) plus registered cleanup.
+2. When a collision is found, fix the fixture path, not the assertions; then re-verify by reproduction: two suite instances in parallel must both finish green and leave no leftovers in the shared temp root before the verdict is trusted again.
+3. Until every shared-state path is eliminated, results produced while other suites run concurrently are untrusted input, not evidence; a wrong-direction result under load (a refusal test that passes) is a shared-state suspect first, not suite flakiness.
+
+**Why:** the collision is invisible to the serial gate, and symptoms surface far from the cause: product-shaped assertion errors (a KeyError on a claim token) that read as driver bugs, or an equally plausible wrong-direction pass, so concurrent noise corrupts the verdict in both directions while every serial re-run stays green.
+
+**Witness (2026-09-18, review r5, execute-plan phase3 run):** `scripts/test_execute_plan_runtime.py:1112` placed a fixture manifest at `root.parent / "runtime_state.json"`, a fixed name in the shared TMPDIR outside the per-test temp dir; 8 concurrent pair-runs reproduced 11 failures (KeyError 'token' at :1116) and left the file behind in $TMPDIR. Separately, 4 of 8 suite runs during a concurrent peer-validation window returned success-instead-of-blocked in terminal-gate refusal tests (mechanism unconfirmed, never reproduced in ~25 serial runs). The safe pattern already existed at :3494 (uuid-suffixed decoy, addCleanup at :3496).
+
+**Distinguishing:** #133 propagates an already-established isolation discipline to sibling call sites (its witness is serial pollution of the real HOME); this lesson is the underlying path rule whose violation only parallel runs expose. #284 is the probe-side arm (verify a TMPDIR override actually redirects before trusting a leak probe); here isolation works serially and the shared-root fixed path is the defect. #221 gates commit ceremonies on parallel-writer liveness in a shared git tree, not test-state collisions.
+
+**See also:** #133 (propagate isolation disciplines to every sibling), #326 (cover every isolation axis for each new selftest arm), #284 (verify the isolation mechanism once), #221 (parallel-session liveness before shared-tree commits).
+
+## 380. Verify A Reused Tool's Scope Before Wiring It Into Prose
+
+**Principle:** Family H (verify the real thing) - a workflow step that "runs the existing tool" over a new input class can be a silent no-op when the tool hardcodes its scan scope or argument surface; the step then always passes on exactly the inputs it was added to catch.
+
+**Shape trigger:** drafting a plan task or skill step that reuses an existing script by name ("run the hygiene scanner over the draft") without first reading the script's usage block, scope constants, and exit-code contract against the intended input path.
+
+**Rule:**
+1. Before wiring a reused tool into a prose step, read its interface: modes, positional and optional arguments, hardcoded scope roots or glob excludes, and exit codes.
+2. Trace one concrete intended input path through the tool's scope filter before trusting the wiring; if the tool cannot reach that input, the fix is a tool change (a new mode or explicit-paths argument) or a different tool, not a prose sentence.
+3. State the verified invocation form in the step text (exact command shape), so the executor cannot substitute a default mode that silently skips the input.
+
+**Why:** the failure is a gate that stays green precisely where it should fire: a scope-filtered tool run in its default mode never sees the out-of-scope input, so the step reports pass with zero signal, and that false confidence is worse than having no step at all.
+
+**Witness (2026-09-19, review-records-contract split):** the redesigned backlog-capture step first said "run the existing public-hygiene scanner over the composed draft"; the scanner's default scope is two hardcoded source roots (and its changed-files mode filters to the same roots), so a draft under the history tree would always pass untouched. The plan task was corrected to add an explicit-paths mode to the same script instead of a prose-only invocation.
+
+**See also:** #375 (ungated verdict lines; same false-green family, chain-shape mechanism), #364 (verify the committed thing, not the intent).
+
+## 381. A Previously Working Tool Dying With rc 137 Is a Host Toolchain Update, Not Your Script
+
+**Principle:** Family H (verify the real thing: the executor is part of "the real thing"; an interpreter that worked minutes ago and now dies with SIGKILL is evidence about the host, not about the workload).
+
+**Shape trigger:** a binary that ran fine earlier in the session now exits 137 with no output, or git/python start failing with an unaccepted-license error, while pure-shell tools (grep, sed, jq, bash) keep working.
+
+**Rule:** (1) Diagnose the executor alone first: run `<binary> -V` by itself and check its rc before blaming the script. rc 137 on the binary itself means the host killed it; on macOS the usual causes are a homebrew formula mid-upgrade or a signature-invalid binary (AMFI kills it with SIGKILL), and an Xcode/CommandLineTools update additionally gates the CLT behind a license acceptance that fails `git` and `/usr/bin/python3` with a license error. (2) Fall down the toolchain ladder in order: the homebrew path, then `/usr/bin`, then `/Library/Developer/CommandLineTools/usr/bin`, and route EVERY subsequent invocation in the session through the first working binary (validators, probes, gate scripts included). (3) Record the defect in the run's notes and report it to the user as a host-level item (accept the license dialog or reinstall the formula); an unattended session must never try to fix the host itself.
+
+**Why:** the natural misreading is "my command is broken", which burns retries on a dead interpreter, misdiagnoses validators as crashed, and can drift into unscoped host "fixes".
+
+**Witness (2026-09-18, ai-playbook session):** `/opt/homebrew/bin/python3` (3.14) was SIGKILLed on every invocation including `python3 -V` while `skill_gate.py` had worked minutes earlier; later plain `git` and `/usr/bin/python3` began failing the unaccepted-Xcode-license gate. All gate runs were re-routed to `/Library/Developer/CommandLineTools/usr/bin/{git,python3}` for the rest of the session; one script that needs 3.10+ syntax (union types, tomllib) stays unusable until the host is fixed.
+
+## 382. A Pathspec Commit Cannot Stage Untracked Paths: Add First, Then Commit
+
+**Principle:** Family H (verify the real thing: `git commit --only <path>` resolves the pathspec against git-known files; an untracked path is unknown, so the whole command aborts before anything is committed).
+
+**Shape trigger:** a scoped commit on a shared checkout names a newly created file together with modified tracked files.
+
+**Rule:** run `git add <paths>` for the untracked members first, then `git commit --only <paths>`; the add makes every pathspec member resolvable and the commit stays scoped. Never widen the pathspec to dodge the error: the failure mode after an aborted all-or-nothing commit is retrying with a broader path (or no pathspec), which sweeps peers' staged files.
+
+**Why:** the error ("pathspec did not match any file(s) known to git") names the untracked file but not the remedy, and the abort commits nothing, so the retry pressure pushes toward unscoped commits exactly on the shared checkouts where scoping matters most.
+
+**Witness (2026-09-18, ai-playbook):** `git commit -m "..." --only <new-backlog-file> <modified-file>` failed on the untracked half; `git add` of both paths followed by the same `--only` commit landed it scoped.
+
+**See also:** #371 (the pathspec commit duals: what a pathspec drops out and what a pathspec-less commit sweeps in).
+## 383. Completion Records That State Test Counts Drift Whenever a Late Witness Lands
+
+**Principle:** Family H (verify the real thing, not the abstraction: any recorded count is a stale abstraction of the live suite) - a recorded test count is a point-in-time observation, never an invariant.
+
+A done record, plan body, or backlog item that states a suite test count is stale the moment any later change adds or removes a test definition. The corrected arithmetic belongs in the fix commit message and the lessons corpus, both of which are edited going forward; an archived plan body is frozen history per doc-hierarchy and is never edited to chase the number.
+
+Witness: the r5-trim record said 135 total tests with seventeen witnesses while the final tree ran 136 with nineteen added definitions. The count has drifted again since: the long-tail plan (2026-09-17) assumed 137 definitions at authoring time and expected a 139-test suite after its two arms, but the live suite at execution time (2026-09-18) ran 226 tests. Record live-measured counts at execution time, and treat any recorded count as a point-in-time observation, not an invariant.
+
+## 384. Unsetting GIT_* Identity Vars Does Not Force a Commit Failure: Git Auto-Detects One
+
+**Principle:** Family H (verify the real thing: the failure you are forcing must actually fail; git's identity resolution has a final auto-detection fallback that synthesizes a plausible committer from the hostname, so "no identity configured" is not a state an env-var unset can produce).
+
+**Shape trigger:** a test or fixture asserts a commit-failure branch (an identity-less commit must be refused) by unsetting `GIT_AUTHOR_*`/`GIT_COMMITTER_*` and global config.
+
+**Rule:** to make a commit fail for lack of identity, inject an EMPTY identity via git's config-count mechanism (`GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=user.name`/`GIT_CONFIG_VALUE_0=`, `GIT_CONFIG_KEY_1=user.email`/`GIT_CONFIG_VALUE_1=`) and keep the `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables unset (fixture env identity outranks injected config, so the unset clause is load-bearing). Neutralizing config files alone (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_SYSTEM=/dev/null`) does not flip the branch: git falls back to an auto-detected identity like `<user>@<hostname>.Home` and the commit succeeds.
+
+**Why:** the forced-failure assertion passes only on hosts where auto-detection is disabled; everywhere else the "refused" path silently succeeds, the coverage claim is false, and the gate goes green over the defect it exists to catch.
+
+**Witness (2026-09-19, ai-playbook plan review r2):** a plan's commit-failure probe prescribed the unset-only and /dev/null forms; a reviewer executed the real function in the fixture shape and measured the auto-detected committer on both git 2.54 and 2.55, then verified the `GIT_CONFIG_COUNT` injection returns rc 128 with the refusal message. The origin's own recipe had carried the correct hardening; the plan dropped it in the first fold.
+
+**See also:** #381 (a failing tool is a host fact; here the "host fact" is git's fallback ladder, which the probe must defeat explicitly).
+
+## 385. Diff-Artifact Lines Inside a Markdown Table Silently Shrink a Line-Oriented Parser's Row Set
+
+**Principle:** Family D (single source of truth) - a table-backed validator is only as complete as its row regex is tolerant of malformed lines, and a row that fails the regex must fail loudly, not silently drop out of the parsed set.
+
+A tool that pastes unified-diff output into a markdown table leaves rows prefixed with `+` (or `-`); a line-oriented parser whose row regex does not match those lines treats each one as table end-of-section or noise, so every row after the first malformed line drops out of the parsed set while the validator keeps reporting a healthy totals line. The corruption is invisible in the totals (the count just reads lower) and surfaces only as `unregistered` warns for files whose rows sit after the artifact - warns that are themselves easy to misread as pre-existing backlog debt.
+
+Witness: document-registry.md carried four `+| ...` rows from a diff paste (2026-09-18); doc_registry_validator.py reported 181 rows with unregistered-completed-file warns before the paste point's victims and for the artifact rows themselves; stripping the prefixes restored 190 rows and cleared the warns. Rule: when a validator's parsed count is load-bearing, assert the count of physical table rows equals the parsed count (or treat a non-matching in-table line as a hard finding), and never paste diff output into a registry table.
+
+## 386. An Ad-Hoc Worktree's Gitignored Output Dirs Die at Worktree Removal
+
+**Principle:** Family G (artifacts over memory) - a run's durable output must outlive the ephemeral checkout that produced it, and teardown gates on artifact migration, not on the merge result.
+
+**Trigger:** a session executes inside an ad-hoc `git worktree` (primary checkout busy or dirty) and writes outputs under a gitignored path (review staging docs, stats sidecars, session logs).
+
+**Rule:** a worktree materializes only tracked files, so its gitignored output dirs start empty, and `git worktree remove` destroys whatever the run wrote there. Gitignored paths never ride branch commits or the final squash merge. Before removing the worktree, move the run's artifacts to the primary checkout's same-relative path and verify them present there. If any file cannot be moved or verified, keep the worktree and report.
+
+**Why:** every gate stays green - merge tree-identical, hygiene clean - while the run's entire review record dies silently with the worktree; nothing errors because untracked files are invisible to the merge.
+
+**Witness (2026-09-18, ai-playbook execute-plan run in a dedicated worktree):** review staging docs and `.stats.json` sidecars under the gitignored reviews dir survive only if they reach the primary checkout; the constraint surfaced only post-run. The maintenance dispatch templates now carry a closeout sentence: move the run's review artifacts to the primary checkout and verify before worktree removal, keep-and-report on failure.
+
+**See also:** #352 (detached-worktree commits orphaned at removal - the tracked-content analog of the same teardown trap), #90 (gitignored docs crossing the branch boundary in the opposite direction).
