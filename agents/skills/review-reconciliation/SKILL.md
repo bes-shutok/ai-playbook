@@ -87,7 +87,7 @@ The caller must reset the recurrence counter only after that fresh review is com
 
 ## Output contract
 
-Return a concise result with these sections, and write the durable artifact when the caller's review workflow requires staging:
+Return a concise result with these sections, and write the durable artifact when the caller's review workflow requires staging. The durable staged artifact declares `record_kind: reconciliation` (mirroring the authoritative four-value enum in `review-staging`), stages the six output-contract sections below as Markdown section headings per `review-staging` (each numbered label is the required heading text), and is never eligible to certify a clean exit:
 
 1. **Trigger**: the exact non-convergence condition and affected rounds.
 2. **Recurrence map**: one row per root issue, including disposition, owner, and current status.

@@ -1,4 +1,4 @@
-Status: open
+Status: done (executed 2026-09-19 via the review-records-contract plan)
 Priority: High
 Created: 2026-09-16
 

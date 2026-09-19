@@ -2,6 +2,8 @@
 
 Origin backlog (scope of record, read fully): `docs/history/backlog/2026-09-15-maintenance-rearm-action-selection-loop.md`, `docs/history/backlog/2026-09-16-scheduler-dispatch-fallback.md`, `docs/history/backlog/2026-09-15-maintenance-authoring-lane-chaining-gap.md`, `docs/history/backlog/2026-09-15-maintenance-indefinite-operation.md`, `docs/history/backlog/2026-09-15-maintenance-paused-execution-resume.md`, `docs/history/backlog/2026-09-16-successor-chaining-after-plan-completion.md`, `docs/history/backlog/2026-09-15-maintenance-review-r4-polish-residue.md`. Queue context: `docs/tmp/future-plan-prompts-2026-09-16.md` (P1). Driving principles: repo guidelines section 64 (efficiency, token usage, simplicity, code quality, quality never priced at zero).
 
+Historical note (2026-09-18, P12): this plan is an executed historical record, archived as-is; the landed skill files (`agents/skills/maintenance/SKILL.md`, `agents/skills/maintenance/zcode.md`, `agents/skills/maintenance/prompt-templates.md`) are authoritative wherever its quotes have gone stale versus the landed r3/r4 fixes. Stale quotes: Task 1's field-semantics checkbox still names a re-arm write in the `parent_absent_since` clearer list, which the landed r4 fix dropped (the ENABLED-match clear suffices); Task 1's state-file arm still joins a pending `children[]` entry by a matching `created_at`, where the landed join is the entry's `(idle)` target marker; the idle-lane per-session attribution bullet counts only own-session tasks as lane blockers, where the landed rule adds the alternative arm for a task a pending `children[]` entry records; Task 4's Step 0 sentence is the superseded listing-first wording, annotated in place under the Task 4 heading below; and the Design Invariants writer-mode list omits the turn's hand-off refusal rearm_note write mode and describes `pending_dispatch` / `parent_absent_since` as written by non-Step-6 actors, where the landed scoping says they are written outside Step 6 by the turn's own earlier steps or by touch sessions. Also stale: the witness table's row 3 probe claim `decision_reason records the release` is not an explicit landed record duty; the duty actually landed as SKILL.md's early authoring outcome check in "Failure detection and the failure cap", which records `outcome: progress` plus `outcome_checked_at` on observe.
+
 ## Terms
 
 - **Scheduler turn / deciding turn**: one run of the maintenance skill (Steps 0-6); the deciding turn is the turn whose D1/D2 decision produced a given child.
@@ -137,7 +139,7 @@ expect_pin "checked-checkbox count" "$S"
 expect_pin '\[[xX]\]' "$S"
 expect_pin "timestamp older than one cadence period" "$S"
 expect_pin 'lifecycleStatus` is completed or `enabled` is false' "$S"
-expect_pin "rearm-on-touch check: when the automation listing shows no ENABLED parent" "$S"
+expect_pin "rearm-on-touch check: consult the scheduler state file first" "$S"
 
 # 3. oscillation ladder and fallbacks in the overlay (Task 2)
 expect_pin "update the recorded parent record into the child one-shot" "$Z"
@@ -268,6 +270,8 @@ SUCCESSOR DISPATCH, after the final squash merge passes and before ending the se
 - [x] Commit: `maintenance: state-driven rearm duty, successor chaining, resume rule in child blueprints`
 
 ### Task 4: rearm-on-touch surfaces (indefinite-operation FIX-2)
+
+Deviation (2026-09-18, P12): the Step 0 trigger was rewritten to state-first wording (backlog 2026-09-17-step0-rearm-trigger-state-first-wording); the Task 4 quote below is historical, and this plan's gate needle was flipped to the new sentence's discriminating needle in the same commit so this plan's gate block and the pins suite never disagree.
 
 Files:
 - `agents/skills/maintenance/SKILL.md` (Step 0 sentence)

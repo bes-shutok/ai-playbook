@@ -74,6 +74,8 @@ There is one canonical Markdown record and one matching sidecar for each review 
 
 If more than one matching record already exists, select one canonical record, add `Supersedes` and `Superseded by` metadata links, and mark every non-canonical record `SUPERSEDED`. A superseded record is historical only and is never eligible for posting. The canonical path must be selected before review workers launch and must remain the only path used for synthesis, triage, and posting.
 
+Selection is mechanical: before workers launch, every orchestrator runs the record selection helper (`scripts/review_record_selection.py`, subcommand `select`) with the resolved reviews directory, the artifact slug, and the digest of the bytes about to be reviewed, and writes only the paths the helper emits (decisions `new-record`, `reuse`, or `new-round`). The helper refuses (exit 1) when the existing record's sidecar `source_digest` differs from the supplied digest and no decision is supplied; resolve the refusal only with `--explicit-new-round` or the explicit archival operation, never by rewriting the prior record. Before any permitted same-pass replacement (`new-round`), invoke the helper's `backup` subcommand so a timestamped byte-identical copy pair of the prior record exists under the reviews directory, and record the printed backup path in the new record's Metadata as `Backup of prior record: <path>`. After the successor record is staged, mark the prior record with the helper's `mark-superseded` subcommand; the validator rejects a `Supersedes` link that is dangling, missing its `Superseded by` back-reference, or mismatched.
+
 Create a new suffixed record only for an explicitly requested new review round, or when the prior record is final or posted and the current review is genuinely a new round. A worker lens does not by itself justify a new primary record.
 
 ## Orchestrator recording rules
@@ -157,6 +159,7 @@ The staging doc must follow this structure exactly, including required headings:
 
 ## Metadata
 - Type: <caller-provided type label>
+- Record kind: canonical | reconciliation | worker-evidence | legacy-import *(required for records dated on or after `RECORD_KIND_SIDECAR_MIN_DATE`; see `### Record kinds (RECORD_KIND_SIDECAR_MIN_DATE)`)*
 - Date: YYYY-MM-DD
 - URL or Artifact: <caller-provided url or "<inline draft>">
 - Depth: light | full *(omit when not applicable)*
@@ -176,6 +179,9 @@ The staging doc must follow this structure exactly, including required headings:
 - Escalation reason: <required for sixth worker>
 - Findings: <staged count>
 - Status: STAGED
+- Supersedes: <prior record Markdown path, relative to this record> *(supersession rounds only; the validator resolves it against this record's directory)*
+- Superseded by: <successor record Markdown path, relative to the prior record> *(supersession rounds only; lives in the PRIOR record's Metadata and is written by the selection helper `mark-superseded`, not by hand)*
+- Backup of prior record: <backup Markdown path printed by the selection helper `backup`> *(supersession rounds only)*
 
 ## Review Statistics
 
@@ -241,7 +247,7 @@ One row per bounded worker attempt (initial launch, bounded retry, or replacemen
 
 ### Coverage sidecar contract (COVERAGE_SIDECAR_MIN_DATE)
 
-A version-1 sidecar dated on or after `COVERAGE_SIDECAR_MIN_DATE` with `source_kind` `plan` must carry a valid `coverage` object; records dated earlier are accepted-legacy and exempt, and other source kinds validate `coverage` when present and never require it (the coverage obligation applies only when source_kind is `plan`). The object schema:
+A version-1 sidecar dated on or after `COVERAGE_SIDECAR_MIN_DATE` with `source_kind` `plan` must carry a valid `coverage` object; records dated earlier are accepted-legacy and exempt, and other source kinds validate `coverage` when present and never require it (the coverage obligation applies only when source_kind is `plan`). The obligation is also canonical-only: it applies to `record_kind` `canonical` records only; `reconciliation`, `worker-evidence`, and `legacy-import` records never require `coverage` (a `coverage` object on them is still validated when present). The object schema:
 - `outcome`: one of `"clean", "replacement-covered", "degraded", "failed"`.
 - `material_lens_set`: the lenses this round owns as material; non-empty when the record's `panel[]` carries launched workers. The validator never infers materiality from lens names.
 - `completed`: lenses completed by this round; each must be evidenced by a `complete` `panel[]` row or a contributing `attempts[]` record.
@@ -256,6 +262,19 @@ Cross-field rules enforced by the validator: verdict `yes` requires `outcome` `c
 #### Legacy compatibility and rollout
 
 Records dated before `COVERAGE_SIDECAR_MIN_DATE` remain valid without a `coverage` object and may satisfy `ready=yes` under the existing gates; no historical sidecar is rewritten. The grandfathering cannot be claimed by a sidecar date backdated below the constant while the staging filename is dated on or after it (mirroring the freshness-fields fence checks). Consumers keying on `coverage.outcome` must treat its ABSENCE as not-yet-covered rather than degraded. The coverage obligation is plan-source-scoped: branch and document review producers (`doing-code-review`, `rfc-design`, `review-confluence-doc`) are unchanged post-landing and may adopt `coverage` in a follow-up (validated when present, never required for their source kinds). Rollout for in-flight reviews: a review loop straddling the landing commit records coverage only for rounds staged after landing; the grace window is intentional and matches the freshness-fields precedent, and a replacement linked to a pre-constant original is accepted on the recorded `original_failure` (the grandfathered-link rule), so a straddling loop with evidence present is not forced into degraded.
+
+### Record kinds (RECORD_KIND_SIDECAR_MIN_DATE)
+
+Every version-1 record declares its kind with the top-level sidecar field `record_kind`, mirrored as the Markdown Metadata `Record kind:` line. The field is one of `"canonical"`, `"reconciliation"`, `"worker-evidence"`, `"legacy-import"`. The kind is read from the declared field and its Metadata twin only; it is never inferred from the filename. A version-1 record whose `date` is on or after `RECORD_KIND_SIDECAR_MIN_DATE` must declare the field, and the twin line is required when the staging filename's leading date is on or after the constant (mirroring the freshness-lines fence); records dated earlier are accepted-legacy and exempt, and the grandfathering cannot be claimed by a sidecar date backdated below the constant while the staging filename is dated on or after it (both mixed-fence directions fail, mirroring the freshness-fields fence checks). A pre-fence record may declare the field voluntarily and its value is validated when present. A post-fence record without the field fails rather than silently downgrading to any kind. When both surfaces declare, they must agree; a disagreement fails.
+
+Minimum contract per kind (validator-enforced):
+
+- `canonical`: the full review-staging record shape. Every current gate applies unchanged, and `canonical` is the only kind eligible for a clean verdict or a readiness gate.
+- `reconciliation`: a reconciliation pass record. It must carry the six `review-reconciliation` output-contract sections (`Trigger`, `Recurrence map`, `Invariant and witness ledger`, `Changes made or proposed`, `Decision requests`, `Handoff`) as Markdown section headings. The canonical finding-hierarchy gates (severity groups, finding conservation, full-panel completion) and the coverage obligation do not apply.
+- `worker-evidence`: a focused or partial record carrying one worker's evidence. The sidecar carries the four top-level fields `worker`, `lens`, `status`, `source_ref` (each a non-empty string), mirrored as the Metadata lines `Worker:`, `Lens:`, `Worker status:`, and `Source:` (the `Worker status:` label avoids colliding with the template's `- Status: STAGED` line, and the anchored `Source:` label parse cannot match the template's `- Source digest:` line). The canonical finding-hierarchy gates and the coverage obligation do not apply.
+- `legacy-import`: a historical import, accepted as-is with no minimum contract beyond the kind declaration. The canonical finding-hierarchy gates and the coverage obligation do not apply.
+
+No non-canonical kind is ever eligible for a clean verdict: a `verdict: yes` sidecar or a Markdown clean-round phrase on a `reconciliation`, `worker-evidence`, or `legacy-import` record fails, and only `canonical` records certify a clean exit. Each cross-kind failure (missing twin line, wrong kind, stale digest, invalid Pattern ID) reports one actionable error naming the owning producer mapped from `source_kind` (`plan` to `review-plan`, `rfc` to `rfc-design`, `document` to `review-confluence-doc`, `code` to `doing-code-review`).
 
 ## Findings
 
@@ -454,6 +473,7 @@ Required top-level fields (all must be present; enum-typed fields use `null` whe
 | `findings` | array; each row carries `id` (unique integer; uniqueness is enforced for all current-format records, versionless and version-1 alike), `severity`, `blocking` (real boolean), `consequence`, `reachability`, `blast_radius`, `confidence`, and a canonical `pattern` |
 | `overflow` | array; never contains a Critical or blocking finding |
 | `soften_watchlist` | array; `[]` when none |
+| `record_kind` | one of `"canonical"` \| `"reconciliation"` \| `"worker-evidence"` \| `"legacy-import"`; date-fenced required field: mandatory for records dated on or after the validator constant `RECORD_KIND_SIDECAR_MIN_DATE` (`2026-09-20`), voluntary and validated on earlier records; mirrored as the Metadata `Record kind:` line (schema in `### Record kinds (RECORD_KIND_SIDECAR_MIN_DATE)` below); never inferred from the filename, and never a silent legacy downgrade (a post-fence record without the field fails, it is not re-typed as legacy) |
 
 Date-fenced top-level field: `coverage` (object; required for `source_kind` `plan` records dated on or after `COVERAGE_SIDECAR_MIN_DATE`, permitted and validated otherwise; schema in `### Coverage sidecar contract (COVERAGE_SIDECAR_MIN_DATE)` below). Optional top-level fields: `depth` (string), `domains` (list), `verdict` (string `yes` or `no`; the plan-review producer writes it alongside the `## Summary`), `extensions` (object), `usage` (shape owned by the capture module; the validator accepts the key only). Any other top-level field is rejected; future extensions belong inside the object-valued `extensions` (a non-object `extensions` value is rejected). On a `rejects unknown top-level field` validator error naming a field the current contract defines, use the validator-copy refresh recovery: refresh the installed validator copy from `scripts/validate_review_staging.py` and retry.
 
@@ -473,12 +493,12 @@ Provider skill for staged review hierarchy and statistics. Consumers **must** fo
 
 | Consumer skill | Staging path pattern | Notes |
 |----------------|---------------------|-------|
-| `review-plan` | `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` | Shared severities and blocking-aware plan actions; inlines sidecar schema (Step 3) and runs `--hard` validator gate before reporting round complete |
-| `doing-code-review` | `{reviews_dir}/YYYY-MM-DD-PR-*`, `YYYY-MM-DD-branch-review-*`, or execute-plan `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Code severities; optional `Status` per finding for PR triage |
-| `review-loop` | Same as `doing-code-review` branch / execute-plan patterns with `-r<N>` | Requires statistics every round, including clear rounds |
+| `review-plan` | `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` | Shared severities and blocking-aware plan actions; inlines sidecar schema (Step 3) and runs `--hard` validator gate before reporting round complete; declares `record_kind` (sidecar field + Metadata `Record kind:` twin) on records dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` |
+| `doing-code-review` | `{reviews_dir}/YYYY-MM-DD-PR-*`, `YYYY-MM-DD-branch-review-*`, or execute-plan `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Code severities; optional `Status` per finding for PR triage; declares `record_kind` (sidecar field + Metadata `Record kind:` twin) on records dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` |
+| `review-loop` | Same as `doing-code-review` branch / execute-plan patterns with `-r<N>` | Requires statistics every round, including clear rounds; runs the record selection helper (`scripts/review_record_selection.py select`) before workers launch |
 | `receiving-review` | Updates existing staging under `{reviews_dir}/` | Triage Status→Triage map, Triage outcomes table, matching `.stats.json` sidecar, and authorized Blocking re-evaluation (see Triage presentation freeze). A returned-for-ask record is NOT a Status or Triage value: record the literal marker `returned-for-ask` on the finding's Analysis section (with the question to relay); Status and Triage stay `pending` and the Blocking value is unchanged until the user decides. When an orchestrated run fans the address pass, fan-out attribution is parent-written: the parent (never the subset worker) writes the `Address worker: <id>` line on each fanned finding's Analysis section as parent merge discipline, not validator-checked, while the `extensions.address_fanout` sidecar extension is validator-checked, per Address fan-out accounting. |
-| `review-reconciliation` | Supplements the affected canonical record under `{reviews_dir}/` or the caller's linked note | Adds recurrence and closure evidence; never replaces immutable round findings or certifies its own refactor |
-| `rfc-design` | `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` | Shared severities; statistics section required |
-| `review-confluence-doc` | `{reviews_dir}/YYYY-MM-DD-confluence-review-<slug>.md` | Tag `[Prose]` / `[Premortem]` / `[Code]` in Source field |
-| `execute-plan` Phase 3 | `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Not `-plan-review-r`; review logs reference staging path with statistics |
+| `review-reconciliation` | Supplements the affected canonical record under `{reviews_dir}/` or the caller's linked note | Adds recurrence and closure evidence; never replaces immutable round findings or certifies its own refactor; declares `record_kind` (sidecar field + Metadata `Record kind:` twin) on the supplemental record |
+| `rfc-design` | `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` | Shared severities; statistics section required; declares `record_kind` (sidecar field; Metadata twin via the universal review-staging template) on records dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` |
+| `review-confluence-doc` | `{reviews_dir}/YYYY-MM-DD-confluence-review-<slug>.md` | Tag `[Prose]` / `[Premortem]` / `[Code]` in Source field; declares `record_kind` (sidecar field + Metadata `Record kind:` twin) on records dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` |
+| `execute-plan` Phase 3 | `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Not `-plan-review-r`; review logs reference staging path with statistics; runs the record selection helper (`scripts/review_record_selection.py select`) before workers launch |
 | `done` | Session-touched staging under `{reviews_dir}/` | Step 2.64 validates before docs-branch sync |

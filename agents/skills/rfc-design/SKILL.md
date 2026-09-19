@@ -289,7 +289,7 @@ User may request **Full** explicitly; do not default to Full without a signal.
 ### Hard gates
 
 1. **Launch the selected workers before revising the RFC.** Do not skip the pipeline because the draft "looks fine."
-2. **Write the staging review file** under `{reviews_dir}/YYYY-MM-DD-rfc-review-<rfc-slug>-<mode_or_round>.md` and the matching `.stats.json` sidecar before folding findings into the RFC. Include `## Review Statistics` per `review-staging`. Version-1 sidecars dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; see `review-staging` for the contract and the min-date fence.
+2. **Write the staging review file** under `{reviews_dir}/YYYY-MM-DD-rfc-review-<rfc-slug>-<mode_or_round>.md` and the matching `.stats.json` sidecar before folding findings into the RFC. Include `## Review Statistics` per `review-staging`. Version-1 sidecars dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; a version-1 sidecar dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` declares `record_kind: canonical`; see `review-staging` for the contract and the min-date fences.
 3. **Mechanical gate (before folding findings into the RFC):** run the review-staging validator on the staging path; do not proceed to folding until the staging doc and its `.stats.json` sidecar both pass:
    ```bash
    VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"

@@ -625,3 +625,11 @@ When a binary layout is measured in whole bytes (envelope tag, nonce, fixed-widt
 **Rule:** Prefer a pointer to the owning artifact ("migrations mounted in `docker-compose.yml`", "see the SQL file header") over copying the identifier list into a comment. Comments that restate relocatable identifiers go stale without failing CI.
 
 **Example:** A Compose header said "Segments V3 + V4" after the event-ingest script was renumbered to V5. Reviewers flagged the mismatch. The fix dropped the version inventory from the comment and pointed operators at the mount list and Layer 2 docs.
+
+## 36. A Grep Pattern Beginning With a Dash Needs an Explicit Option Separator
+
+**Shape trigger:** Any grep/ripgrep invocation whose pattern argument starts with `-` (for example matching an option-like token such as `--incoming-root` in config or script text).
+
+**Rule:** When a grep-family pattern can begin with a dash, pass it after `-e` (or `--`): `grep -nF -e '--flag "value"' file`. Without the separator, grep parses the pattern as a command-line option and exits with a usage error (rc 2), which a fail-closed gate reads as "marker missing" and a fail-open pipeline can read as success. Verify the exact command form once against the shell's real grep at authoring time; BSD and GNU grep differ in message but both refuse.
+
+**Example:** A plan's ordering gate keyed a line number on `grep -nF '--incoming-root "$VAR"'`; BSD grep exited 2 on every tree, so the gate reported "marker missing" even on a correct tree, and the plan's exit-0 done-when was unreachable. Adding `-e` restored both runnability and discrimination (a faithful tree passed, inverted and absent-marker trees failed).

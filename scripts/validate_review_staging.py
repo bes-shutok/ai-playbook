@@ -132,6 +132,66 @@ EXTENDED_SIDECAR_MIN_DATE = "2026-09-09"
 # constant with the same rationale-comment style and re-pin the V4 grep
 # literal in the same commit.
 COVERAGE_SIDECAR_MIN_DATE = "2026-09-16"
+# Record kind fence (review records contract plan, Task 1). A version-1
+# record whose ``date`` is on or after RECORD_KIND_SIDECAR_MIN_DATE must
+# declare ``record_kind`` (top-level sidecar field, mirrored as the Markdown
+# Metadata ``Record kind:`` line, which is fenced on the staging filename's
+# leading date, mirroring the freshness lines); earlier records are
+# accepted-legacy and exempt, mirroring EXTENDED_SIDECAR_MIN_DATE and
+# COVERAGE_SIDECAR_MIN_DATE. The constant is the expected day after the
+# implementing commit lands (implementation lands 2026-09-19), so same-day
+# records stay exempt. Fence-window recovery: if execution pauses across
+# the constant date between the producer and gate commits, bump this
+# constant with the same rationale-comment style and re-pin the constant
+# mention in the same commit.
+RECORD_KIND_SIDECAR_MIN_DATE = "2026-09-20"
+# The closed record-kind enum (review records contract plan, Task 1).
+# ``canonical`` keeps every current gate and is the only kind eligible for a
+# clean verdict; ``reconciliation`` requires the six output-contract labels
+# and skips the canonical finding-hierarchy and coverage gates;
+# ``worker-evidence`` requires the four top-level sidecar fields below
+# mirrored as Metadata lines and skips the same canonical gates;
+# ``legacy-import`` is accepted as historical and skips the same canonical
+# gates. None of the three non-canonical kinds ever certifies a clean
+# verdict.
+RECORD_KIND_VALUES = (
+    "canonical",
+    "reconciliation",
+    "worker-evidence",
+    "legacy-import",
+)
+# The six output-contract labels a ``reconciliation`` record must carry as
+# sections (source: the review-reconciliation Output contract).
+RECONCILIATION_REQUIRED_LABELS = (
+    "Trigger",
+    "Recurrence map",
+    "Invariant and witness ledger",
+    "Changes made or proposed",
+    "Decision requests",
+    "Handoff",
+)
+# Worker-evidence records mirror these four top-level sidecar fields (each a
+# non-empty string) as the Metadata lines ``Worker:``, ``Lens:``, ``Worker
+# status:``, and ``Source:``. The ``Worker status:`` label avoids colliding
+# with the staging template's ``- Status: STAGED`` line, and the anchored
+# ``- Source:`` label parse cannot match the template's ``- Source digest:``
+# line because the label must be followed directly by the colon.
+WORKER_EVIDENCE_REQUIRED_FIELDS = ("worker", "lens", "status", "source_ref")
+WORKER_EVIDENCE_META_MIRRORS = (
+    ("worker", "Worker"),
+    ("lens", "Lens"),
+    ("status", "Worker status"),
+    ("source_ref", "Source"),
+)
+# Owner-producer mapping for the four cross-kind errors (missing twin, wrong
+# kind, stale digest, invalid Pattern ID): the error names the producer that
+# owns the fix, mapped from the record's ``source_kind``.
+RECORD_KIND_PRODUCER_BY_SOURCE_KIND = {
+    "plan": "review-plan",
+    "rfc": "rfc-design",
+    "document": "review-confluence-doc",
+    "code": "doing-code-review",
+}
 COVERAGE_OUTCOME_VALUES = (
     "clean",
     "replacement-covered",
@@ -1397,6 +1457,337 @@ def validate_date_keyed_freshness_lines(
             )
 
 
+# Record kind fence (review records contract plan, Task 1). The helpers
+# below mirror the EXTENDED fence shape: a pure two-surface classifier, a
+# Markdown Metadata twin gate keyed on the staging filename's leading date,
+# and a version-1 sidecar field fence in validate_version1_payload.
+
+
+def _record_kind_fence(
+    staging_name: str | None, sidecar_date: object
+) -> dict[str, str | None]:
+    """Single owner of every RECORD_KIND_SIDECAR_MIN_DATE fence
+    classification (mirrors ``_freshness_fence``).
+
+    Parses the staging filename's leading ``YYYY-MM-DD`` date and the
+    sidecar ``date`` value, and classifies each surface against
+    ``RECORD_KIND_SIDECAR_MIN_DATE``: ``undated`` (no parseable leading
+    date on the filename surface; a missing or non-string sidecar date
+    classifies as undated, never silently pre-fence), ``pre-fence``
+    (grandfathered), or ``post-fence`` (the record must declare
+    ``record_kind`` on that surface). Consumers branch only on the returned
+    classifications; they re-derive no fence comparison inline.
+    """
+    name_match = (
+        re.match(r"(\d{4}-\d{2}-\d{2})", staging_name) if staging_name else None
+    )
+    name_date = name_match.group(1) if name_match else None
+    name_class = "undated"
+    sidecar_class = "undated"
+    if name_date is not None:
+        if name_date < RECORD_KIND_SIDECAR_MIN_DATE:
+            name_class = "pre-fence"
+        else:
+            name_class = "post-fence"
+    if isinstance(sidecar_date, str):
+        if sidecar_date < RECORD_KIND_SIDECAR_MIN_DATE:
+            sidecar_class = "pre-fence"
+        else:
+            sidecar_class = "post-fence"
+    return {
+        "name_date": name_date,
+        "name_class": name_class,
+        "sidecar_class": sidecar_class,
+    }
+
+
+# Public alias (r2 overflow D5): ``summarize_review_stats`` is a production
+# consumer of the fence classifier and must not import a private symbol.
+record_kind_fence = _record_kind_fence
+
+
+def _producer_note_for(source_kind: object) -> str:
+    """The owning-producer suffix for the record-kind cross-kind errors.
+
+    Maps the record's ``source_kind`` to the producer that owns the fix
+    (plan to review-plan, rfc to rfc-design, document to
+    review-confluence-doc, code to doing-code-review). An absent or
+    undeclared ``source_kind`` yields an empty note so legacy records keep
+    today's error text unchanged.
+    """
+    producer = (
+        RECORD_KIND_PRODUCER_BY_SOURCE_KIND.get(source_kind)
+        if isinstance(source_kind, str)
+        else None
+    )
+    if producer is None:
+        return ""
+    return f" (the owning producer is {producer})"
+
+
+def _add_record_kind_enum_error(
+    result: ValidationResult,
+    payload: object,
+    *,
+    version1: bool,
+) -> None:
+    """Single owner of the record_kind enum check (r2 F11).
+
+    Both record_kind-bearing surfaces (the version-1 payload gate and the
+    shared sidecar gate for versionless/legacy shapes) call this helper, so
+    the closed enum, the non-string arm, and the owning-producer tail stay
+    one rule instead of two copies kept apart by the version-1 skip guard.
+    A PRESENT value outside ``RECORD_KIND_VALUES`` (including a non-string)
+    earns exactly one error, with the producer-note tail computed from the
+    payload's ``source_kind`` so both surfaces name the fixer with the same
+    actionable grammar.
+    """
+    value = payload.get("record_kind") if isinstance(payload, dict) else None
+    if value is None or (isinstance(value, str) and value in RECORD_KIND_VALUES):
+        return
+    prefix = "version-1 sidecar field" if version1 else "sidecar field"
+    producer_note = (
+        _producer_note_for(payload.get("source_kind"))
+        if isinstance(payload, dict)
+        else ""
+    )
+    result.add_error(
+        f"{prefix} 'record_kind' must be one of "
+        f"{list(RECORD_KIND_VALUES)}; got {value!r}" + producer_note
+    )
+
+
+def _metadata_record_kind(content: str) -> tuple[bool, str | None, int]:
+    """Read the Metadata ``Record kind:`` twin line.
+
+    Returns ``(present, raw_value, match_count)``: ``(False, None, 0)``
+    when the Metadata section or the line is absent, else
+    ``(True, stripped_value, n)`` where ``n`` is the number of matching
+    lines (an empty value reads as present-but-empty so the enum gate
+    reports it; ``n > 1`` is the duplicate-label shadowing shape the twin
+    gate rejects, r3 F2). The kind is read from this line only; the
+    staging filename is never a kind source.
+    """
+    meta = _metadata_section(content)
+    if meta is None:
+        return False, None, 0
+    matches = re.findall(
+        r"^-[ \t]*Record kind[ \t]*:[ \t]*(.*)$", meta, re.MULTILINE
+    )
+    if not matches:
+        return False, None, 0
+    return True, matches[0].strip(), len(matches)
+
+
+def _metadata_label_present(meta: str | None, label: str) -> bool:
+    """True iff the Metadata section carries ``- <label>:``.
+
+    The anchored parse (r3 F2 presence shape) requires the colon to follow
+    the label directly, so ``- Source:`` cannot be satisfied by the
+    template's ``- Source digest:`` line and ``- Worker status:`` cannot be
+    satisfied by ``- Status:`` or by ``- Worker:``.
+    """
+    return bool(
+        meta
+        and re.search(
+            rf"^-[ \t]*{re.escape(label)}[ \t]*:", meta, re.MULTILINE
+        )
+    )
+
+
+def _has_unfenced_heading(content: str, label: str) -> bool:
+    """True iff ``label`` appears as an unfenced level-2 or level-3 heading.
+
+    Fence-aware via the shared ``classify_fence_lines`` classifier: a
+    fenced example heading is quoted content, never section evidence.
+    """
+    heading_re = re.compile(rf"^#{{2,3}}[ \t]*{re.escape(label)}[ \t]*$")
+    lines = content.splitlines()
+    events, _unclosed = classify_fence_lines(lines)
+    for idx, (kind, _value) in enumerate(events):
+        if kind in ("ordinary", "heading") and heading_re.match(lines[idx]):
+            return True
+    return False
+
+
+def validate_record_kind_metadata(
+    staging_name: str,
+    content: str,
+    result: ValidationResult,
+    *,
+    sidecar_payload: object = None,
+) -> None:
+    """Markdown twin of the record-kind fence (review records contract
+    plan, Task 1).
+
+    When the staging filename's leading ``YYYY-MM-DD`` date is on or after
+    ``RECORD_KIND_SIDECAR_MIN_DATE``, the Metadata section must carry the
+    ``Record kind:`` line with a value from the closed enum; filenames
+    dated earlier are grandfathered. An undated filename with a post-fence
+    sidecar date fails closed demanding the conventional dated filename
+    (r3 F11 mirror). When both surfaces declare a valid kind they must
+    agree. Each failure reports one actionable error naming the owning
+    producer mapped from the sidecar's ``source_kind``. A record whose
+    sidecar declares no valid kind is never re-typed from the Markdown
+    line or the filename.
+    """
+    payload = sidecar_payload if isinstance(sidecar_payload, dict) else {}
+    fence = _record_kind_fence(staging_name, payload.get("date"))
+    sidecar_kind = payload.get("record_kind")
+    sidecar_kind_ok = sidecar_kind in RECORD_KIND_VALUES
+    note = _producer_note_for(payload.get("source_kind"))
+    if fence["name_class"] == "undated":
+        if fence["sidecar_class"] == "post-fence":
+            result.add_error(
+                f"staging filename {staging_name!r} has no leading "
+                "YYYY-MM-DD date while the stats sidecar is dated "
+                f"{payload.get('date')!r} (on or after "
+                "RECORD_KIND_SIDECAR_MIN_DATE "
+                f"{RECORD_KIND_SIDECAR_MIN_DATE}); post-fence records must "
+                "use the conventional dated staging filename"
+            )
+        return
+    present, md_value, kind_lines = _metadata_record_kind(content)
+    # r3 F2: the twin grammar reads first-match, so a duplicated Record
+    # kind line lets two conflicting declarations shadow each other while
+    # the agreement gate blesses the first value; more than one match is
+    # the named duplicate-label error (the mirror of the Supersedes and
+    # freshness duplicate rules).
+    if kind_lines > 1:
+        result.add_error(
+            "duplicate 'Record kind:' Metadata label: "
+            f"{kind_lines} matching lines; keep exactly one Record kind "
+            "line per staging record"
+        )
+        return
+    if fence["name_class"] == "post-fence" and not present:
+        detail = (
+            " while the sidecar declares record_kind "
+            f"{sidecar_kind!r}"
+            if sidecar_kind_ok
+            else ""
+        )
+        result.add_error(
+            f"staging filename dated {fence['name_date']} (on or after "
+            "RECORD_KIND_SIDECAR_MIN_DATE "
+            f"{RECORD_KIND_SIDECAR_MIN_DATE}) is missing the Metadata "
+            f"'Record kind:' line{detail}" + note
+        )
+        return
+    if not present:
+        return
+    if md_value not in RECORD_KIND_VALUES:
+        result.add_error(
+            f"Metadata Record kind {md_value!r} must be one of "
+            f"{list(RECORD_KIND_VALUES)}" + note
+        )
+        return
+    if sidecar_kind_ok and md_value != sidecar_kind:
+        result.add_error(
+            "record kind disagreement: Metadata 'Record kind: "
+            f"{md_value!r}' and sidecar record_kind {sidecar_kind!r} "
+            "disagree; the two surfaces must agree" + note
+        )
+
+
+def validate_supersession_links(
+    path: Path, content: str, result: ValidationResult
+) -> None:
+    """Supersedes / Superseded by link integrity (review records contract
+    plan, Task 3).
+
+    Fires only when the record's Metadata carries a ``Supersedes:
+    <prior>`` line (read through the shared fence-aware Metadata section
+    grammar). The prior path resolves against the referencing record's
+    directory. Each failure reports exactly one actionable error: a
+    dangling link (the prior file does not exist), a missing
+    back-reference (the prior file exists but carries no ``Superseded
+    by:`` line), a mismatched back-reference (the prior record is marked
+    superseded by a different successor), a duplicate ``Supersedes:``
+    line (the first-match-wins shadowing shape, mirroring the freshness
+    duplicate-label rule), or a duplicate ``Superseded by:`` back-reference
+    on the prior record (r1 F7, the mirrored duplicate-label rule).
+    Records without a ``Supersedes:`` line, including the prior records
+    themselves, are never gated here.
+    """
+    meta = _metadata_section(content)
+    if meta is None:
+        return
+    refs = re.findall(
+        r"^-[ \t]*Supersedes[ \t]*:[ \t]*(\S.*?)[ \t]*$",
+        meta,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if not refs:
+        return
+    if len(refs) > 1:
+        result.add_error(
+            "duplicate 'Supersedes:' Metadata label: "
+            f"{len(refs)} matching lines; keep exactly one Supersedes link "
+            "per successor record"
+        )
+        return
+    ref = refs[0]
+    prior = Path(ref)
+    if not prior.is_absolute():
+        prior = path.parent / prior
+    if not prior.is_file():
+        result.add_error(
+            "Supersedes link is dangling: 'Supersedes: "
+            f"{ref}' resolves to {prior} which does not exist; repair the "
+            "link or restore the prior record before staging this successor"
+        )
+        return
+    try:
+        prior_content = prior.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        result.add_error(
+            f"Supersedes link cannot be checked: the prior record {prior} "
+            f"is unreadable ({exc}); repair the link or the prior record"
+        )
+        return
+    prior_meta = _metadata_section(prior_content)
+    back_refs = (
+        re.findall(
+            r"^-[ \t]*Superseded by[ \t]*:[ \t]*(\S.*?)[ \t]*$",
+            prior_meta,
+            re.MULTILINE | re.IGNORECASE,
+        )
+        if prior_meta is not None
+        else []
+    )
+    if not back_refs:
+        result.add_error(
+            "Supersedes back-reference missing: the prior record "
+            f"{prior.name} exists but carries no 'Superseded by:' Metadata "
+            "line; mark the prior record superseded by this successor "
+            "(the selection helper mark-superseded step) or repair the link"
+        )
+        return
+    if len(back_refs) > 1:
+        # r1 F7: the mirror of the successor-side duplicate check. The
+        # back-reference grammar reads first-match, so a duplicated
+        # back-reference would silently name the wrong successor; keep
+        # exactly one per prior record.
+        result.add_error(
+            "duplicate 'Superseded by:' Metadata label: the prior record "
+            f"{prior.name} carries {len(back_refs)} back-reference lines; "
+            "keep exactly one Superseded by link per prior record"
+        )
+        return
+    recorded = back_refs[0].strip()
+    recorded_path = Path(recorded)
+    if not recorded_path.is_absolute():
+        recorded_path = prior.parent / recorded_path
+    if recorded_path.resolve() != path.resolve():
+        result.add_error(
+            "Supersedes back-reference mismatched: "
+            f"{path.name} declares 'Supersedes: {ref}' but the prior "
+            f"record {prior.name} is marked 'Superseded by: {recorded}'; "
+            "the two links must name each other"
+        )
+
+
 def _witness_ledger_populated(content: str) -> bool:
     """True iff the doc carries a ``### Witness ledger`` section with at
     least one table data row (fresh-review coverage plan, Task 7).
@@ -1697,18 +2088,27 @@ def is_current_shape(payload: object) -> bool:
     return classify_sidecar_schema(payload) in CURRENT_SHAPE_LABELS
 
 
-def validate_canonical_pattern(pattern: object, where: str, result: ValidationResult) -> None:
+def validate_canonical_pattern(
+    pattern: object,
+    where: str,
+    result: ValidationResult,
+    *,
+    producer_note: str = "",
+) -> None:
     """Require a canonical ``lens#kebab-slug`` Pattern ID for ``where``.
 
     The owner must be a declared shared lens owner (plus ``consistency`` and
     ``unknown``); the historical ``prose-clarity`` owner is rejected here and
     stays readable only in legacy data. Colon body tags such as ``shrink:``
-    are presentation text, never Pattern IDs.
+    are presentation text, never Pattern IDs. ``producer_note`` appends the
+    owning-producer suffix for the record-kind cross-kind errors (empty for
+    records whose source_kind maps to no producer, keeping legacy error
+    text unchanged).
     """
     if not isinstance(pattern, str) or not CANONICAL_PATTERN_RE.match(pattern):
         result.add_error(
             f"{where}: {pattern!r} is not a canonical Pattern ID "
-            f"(expected lens#kebab-slug)"
+            f"(expected lens#kebab-slug)" + producer_note
         )
         return
     owner = pattern.split("#", 1)[0]
@@ -1716,7 +2116,8 @@ def validate_canonical_pattern(pattern: object, where: str, result: ValidationRe
         result.add_error(
             f"{where}: pattern owner {owner!r} is not a declared shared lens "
             f"owner (allowed: {sorted(SHARED_PATTERN_OWNERS)}); legacy-only "
-            f"owners such as 'prose-clarity' are invalid in version-1 sidecars"
+            f"owners such as 'prose-clarity' are invalid in version-1 "
+            f"sidecars" + producer_note
         )
 
 
@@ -3118,12 +3519,19 @@ def validate_version1_payload(
     # verdict, and null would blur absent-fallback semantics).
     if "verdict" in payload and payload["verdict"] not in VERDICT_VALUES:
         result.add_error("version-1 sidecar field 'verdict' must be 'yes' or 'no'")
+    # ``record_kind`` is always a legal top-level field (pre-fence records
+    # may declare it voluntarily; post-fence records must, per the fence
+    # below). The four worker-evidence carrier fields are legal only on a
+    # declared worker-evidence record; on any other record they stay
+    # unknown-field rejections.
     allowed = (
         set(V1_REQUIRED_TOP_LEVEL_FIELDS)
         | set(V1_OPTIONAL_TOP_LEVEL_FIELDS)
         | set(V1_EXTENDED_REQUIRED_FIELDS)
-        | {"coverage"}
+        | {"coverage", "record_kind"}
     )
+    if payload.get("record_kind") == "worker-evidence":
+        allowed |= set(WORKER_EVIDENCE_REQUIRED_FIELDS)
     for key in payload:
         if key not in allowed:
             result.add_error(
@@ -3189,14 +3597,68 @@ def validate_version1_payload(
                     f"EXTENDED_SIDECAR_MIN_DATE {EXTENDED_SIDECAR_MIN_DATE}) "
                     f"is missing extended field {field_name!r}"
                 )
+    # Record kind fence (review records contract plan, Task 1). Presence is
+    # fenced on RECORD_KIND_SIDECAR_MIN_DATE and grandfathering mirrors the
+    # EXTENDED fence: the exemption cannot be claimed by a sidecar date
+    # backdated below the constant while the staging filename is post-fence
+    # (the error strips the exemption), and the two surfaces may not
+    # straddle the constant in either direction. The enum gate runs whenever
+    # the field is present, on pre-fence records too (presence-vs-value
+    # rule, mirroring review_mode). The kind is read from the declared
+    # field only; the staging filename is never a kind source.
+    rk_fence = _record_kind_fence(staging_name, date_value)
+    record_kind_exempt = rk_fence["sidecar_class"] == "pre-fence"
+    if record_kind_exempt and rk_fence["name_class"] == "post-fence":
+        result.add_error(
+            f"version-1 sidecar dated {date_value!r} is earlier than "
+            "RECORD_KIND_SIDECAR_MIN_DATE "
+            f"{RECORD_KIND_SIDECAR_MIN_DATE} "
+            f"while the staging filename is dated {rk_fence['name_date']} "
+            "(on or after RECORD_KIND_SIDECAR_MIN_DATE); the grandfathering "
+            "exemption cannot be claimed by a backdated sidecar date"
+        )
+        record_kind_exempt = False
+    if (
+        rk_fence["name_class"] == "pre-fence"
+        and rk_fence["sidecar_class"] == "post-fence"
+    ):
+        result.add_error(
+            f"date disagreement: staging filename dated "
+            f"{rk_fence['name_date']} is earlier than "
+            "RECORD_KIND_SIDECAR_MIN_DATE "
+            f"{RECORD_KIND_SIDECAR_MIN_DATE} while the sidecar date "
+            f"{date_value!r} is on or after it; the record cannot be "
+            "grandfathered on one surface and post-fence on the other"
+        )
+    rk_producer_note = _producer_note_for(payload.get("source_kind"))
+    declared_record_kind = payload.get("record_kind")
+    # r2 F11: the enum check is one shared helper (enum + non-string arm +
+    # producer-note tail) also called from the shared sidecar gate below.
+    _add_record_kind_enum_error(result, payload, version1=True)
+    if not record_kind_exempt and "record_kind" not in payload:
+        result.add_error(
+            f"version-1 sidecar dated {date_value!r} (on or after "
+            "RECORD_KIND_SIDECAR_MIN_DATE "
+            f"{RECORD_KIND_SIDECAR_MIN_DATE}) is missing required "
+            "top-level field 'record_kind'" + rk_producer_note
+        )
     # Coverage obligation (review-runner bounded-timeout plan, Task 2).
     # Presence is fenced on COVERAGE_SIDECAR_MIN_DATE and scoped to
     # source_kind 'plan' (the only readiness-gated kind); the contract and
     # link gates run whenever coverage is present, so other producers may
-    # adopt coverage and stay validated.
+    # adopt coverage and stay validated. Canonical-only (review records
+    # contract plan, Task 1): a declared reconciliation, worker-evidence,
+    # or legacy-import record never requires coverage; the value gates
+    # still run when one is present.
     coverage_exempt = _coverage_fence_exempt(
         date_value, staging_name, result
     )
+    if (
+        declared_record_kind is not None
+        and declared_record_kind in RECORD_KIND_VALUES
+        and declared_record_kind != "canonical"
+    ):
+        coverage_exempt = True
     validate_coverage_contract(
         payload, result, coverage_exempt=coverage_exempt
     )
@@ -3274,6 +3736,7 @@ def validate_version1_payload(
     # of a silent skip or an AttributeError/TypeError traceback; missing
     # required fields are reported by the required-field loop above.
 
+    v1_pattern_note = _producer_note_for(payload.get("source_kind"))
     v1_findings = payload.get("findings")
     if not isinstance(v1_findings, list):
         v1_findings = []  # type gate already reported; never iterate
@@ -3287,7 +3750,10 @@ def validate_version1_payload(
             )
         else:
             validate_canonical_pattern(
-                finding["pattern"], f"version-1 finding {fid}", result
+                finding["pattern"],
+                f"version-1 finding {fid}",
+                result,
+                producer_note=v1_pattern_note,
             )
     v1_overflow = payload.get("overflow")
     if not isinstance(v1_overflow, list):
@@ -3295,7 +3761,10 @@ def validate_version1_payload(
     for item in v1_overflow:
         if isinstance(item, dict) and "pattern" in item:
             validate_canonical_pattern(
-                item["pattern"], "version-1 overflow item", result
+                item["pattern"],
+                "version-1 overflow item",
+                result,
+                producer_note=v1_pattern_note,
             )
     v1_discarded = payload.get("discarded")
     if not isinstance(v1_discarded, list):
@@ -3303,7 +3772,10 @@ def validate_version1_payload(
     for row in v1_discarded:
         if isinstance(row, dict) and "pattern" in row:
             validate_canonical_pattern(
-                row["pattern"], "version-1 discarded finding", result
+                row["pattern"],
+                "version-1 discarded finding",
+                result,
+                producer_note=v1_pattern_note,
             )
 
     # Markdown/sidecar pattern conservation: a version-1 finding cannot omit
@@ -3400,6 +3872,16 @@ def _validate_stats_sidecar_gates(
         validate_version1_payload(
             payload, content, result, staging_name=staging_path.name
         )
+    # r1 F8: a PRESENT record_kind is enum-checked at the shared sidecar
+    # gate regardless of the sidecar shape, so a versionless or legacy
+    # record cannot carry an undeclared kind past the version-1 gate.
+    # current-v1 records already get the same check inside
+    # validate_version1_payload; skipping here keeps exactly one error on
+    # the version-1 surface. r2 F11: both surfaces call ONE enum helper,
+    # so the enum, the non-string arm, and the producer-note tail are a
+    # single rule (no second copy kept apart by the skip guard).
+    if schema_class != "current-v1":
+        _add_record_kind_enum_error(result, payload, version1=False)
     # Address fan-out accounting (execute-plan review-fix pipeline
     # efficiency plan, Task 4): extensions.address_fanout is legal only on
     # current-v1 records; a versionless record carrying the extension fails
@@ -3472,6 +3954,20 @@ def _validate_stats_sidecar_gates(
     md_exempt = _coverage_fence_exempt(
         payload.get("date"), staging_path.name, result
     )
+    # Coverage obligation is canonical-only (review records contract plan,
+    # Task 1): a declared non-canonical record never requires the coverage
+    # twin surfaces; agreement still runs when coverage is present.
+    md_record_kind = (
+        payload.get("record_kind")
+        if isinstance(payload, dict)
+        else None
+    )
+    if (
+        md_record_kind is not None
+        and md_record_kind in RECORD_KIND_VALUES
+        and md_record_kind != "canonical"
+    ):
+        md_exempt = True
     validate_coverage_markdown_agreement(
         content, payload, result, coverage_exempt=md_exempt
     )
@@ -3606,6 +4102,78 @@ def validate_full_panel_completion(
             )
 
 
+def validate_record_kind_matrix(
+    payload: dict, content: str, result: ValidationResult
+) -> None:
+    """The per-kind minimum contracts (review records contract plan,
+    Task 1).
+
+    Arms only on a declared, valid enum ``record_kind``; an absent or
+    malformed value is reported by the version-1 fence gates and keeps
+    every current gate here. ``canonical`` records keep every current gate
+    and add nothing. A ``reconciliation`` record must carry the six
+    review-reconciliation output-contract labels as unfenced Markdown
+    sections. A ``worker-evidence`` record must carry the four top-level
+    sidecar fields (``worker``, ``lens``, ``status``, ``source_ref``, each
+    a non-empty string) mirrored as the Metadata lines ``Worker:``,
+    ``Lens:``, ``Worker status:``, and ``Source:``. ``legacy-import`` adds
+    no minimum contract. No non-canonical kind is ever eligible for a clean
+    verdict: a sidecar ``verdict: yes`` or a Markdown clean-round phrase on
+    a non-canonical record fails. Each cross-kind failure reports exactly
+    one actionable error naming the owning producer mapped from the
+    record's ``source_kind``.
+    """
+    kind = payload.get("record_kind")
+    if kind not in RECORD_KIND_VALUES:
+        return
+    note = _producer_note_for(payload.get("source_kind"))
+    if kind != "canonical" and (
+        payload.get("verdict") == "yes" or is_clean_verdict(content)
+    ):
+        result.add_error(
+            f"record kind {kind!r} is never eligible for a clean verdict; "
+            "only 'canonical' records certify one" + note
+        )
+    if kind == "reconciliation":
+        missing = [
+            label
+            for label in RECONCILIATION_REQUIRED_LABELS
+            if not _has_unfenced_heading(content, label)
+        ]
+        if missing:
+            result.add_error(
+                "reconciliation record is missing required output-contract "
+                f"section(s) {missing}; each label must appear as a "
+                "Markdown section heading" + note
+            )
+    if kind == "worker-evidence":
+        missing_fields = [
+            name
+            for name in WORKER_EVIDENCE_REQUIRED_FIELDS
+            if not (
+                isinstance(payload.get(name), str)
+                and payload.get(name).strip()
+            )
+        ]
+        if missing_fields:
+            result.add_error(
+                "worker-evidence record is missing required sidecar "
+                f"field(s) {missing_fields}; each must be a non-empty "
+                "string" + note
+            )
+        meta = _metadata_section(content)
+        missing_mirrors = [
+            label
+            for _name, label in WORKER_EVIDENCE_META_MIRRORS
+            if not _metadata_label_present(meta, label)
+        ]
+        if missing_mirrors:
+            result.add_error(
+                "worker-evidence record is missing required Metadata "
+                f"line(s) {missing_mirrors}" + note
+            )
+
+
 def validate_current_payload(
     payload: dict,
     content: str,
@@ -3616,6 +4184,20 @@ def validate_current_payload(
     schema_label: str | None = None,
 ) -> None:
     panel_mode = payload.get("panel_mode")
+    # Record-kind resolution (review records contract plan, Task 1): the
+    # per-kind gate matrix arms only on a DECLARED, valid enum record_kind;
+    # an absent or malformed value keeps every current gate (the version-1
+    # fence gates in validate_version1_payload own the absence/malfunction
+    # reporting). A declared canonical record keeps every current gate; a
+    # declared reconciliation, worker-evidence, or legacy-import record
+    # skips the canonical finding-hierarchy gates below and is never
+    # eligible for a clean verdict (validate_record_kind_matrix).
+    record_kind = payload.get("record_kind")
+    kind_noncanonical = (
+        record_kind is not None
+        and record_kind in RECORD_KIND_VALUES
+        and record_kind != "canonical"
+    )
     # The schema label is computed ONCE per validation run, in
     # ``validate_stats_sidecar``, and threaded in via ``schema_label``; the
     # internal classification below (r4 F10) exists only for direct callers
@@ -3673,6 +4255,7 @@ def validate_current_payload(
             result.add_error(
                 f"current sidecar source_digest is stale (mismatch vs expected_digest); "
                 f"reviewed artifact may have changed"
+                + _producer_note_for(payload.get("source_kind"))
             )
 
     panel = _require_array(payload, "panel", result, schema_label)
@@ -3687,7 +4270,10 @@ def validate_current_payload(
         result.add_error("sixth worker missing escalation_reason")
 
     workers = {str(row.get("worker")) for row in launched}
-    if panel_mode == "full":
+    # A declared non-canonical record skips the full-panel completion gate
+    # (canonical finding-hierarchy family): a focused reconciliation or
+    # single-worker evidence pass is not an incomplete panel.
+    if panel_mode == "full" and not kind_noncanonical:
         validate_full_panel_completion(launched, result)
 
     flattened_descendants: set[str] = set()
@@ -3719,6 +4305,11 @@ def validate_current_payload(
         result.add_error("counts.workers_launched does not match panel launches")
 
     findings = _require_array(payload, "findings", result, schema_label)
+    # Record-kind matrix (review records contract plan, Task 1): a declared
+    # non-canonical record skips the canonical finding-hierarchy gates, so
+    # its findings rows (when any) never reach the per-finding canonical
+    # shape loop below. The container presence gate above still ran.
+    gated_findings: list = [] if kind_noncanonical else findings
     # r6 F5: every finding row carries an integer id. Absence silently
     # sorts as 0 in the order check and homogeneous string ids compare
     # fine as strings, while mixed-type ids crash the order-check sort
@@ -3746,7 +4337,7 @@ def validate_current_payload(
     # deliberately NOT a (id, severity) reconciliation key — that alternative
     # would emit a no-matching-block double-report for the first row.
     duplicate_flagged_ids: set = set()
-    for i, finding in enumerate(findings):
+    for i, finding in enumerate(gated_findings):
         if not isinstance(finding, dict):
             result.add_error("current finding must be an object")
             continue
@@ -3858,15 +4449,19 @@ def validate_current_payload(
     # errors above). validate_finding_order deliberately retains its own
     # defensive dict-rows filter for direct callers.
     validate_finding_order(valid_rows, result)
-    validate_finding_budget(findings, result)
+    validate_finding_budget(gated_findings, result)
 
     overflow = _require_array(payload, "overflow", result, schema_label)
-    for item in overflow:
-        if not isinstance(item, dict):
-            result.add_error("overflow item must be an object")
-            continue
-        if item.get("severity") == "Critical" or item.get("blocking") is True:
-            result.add_error("Critical or blocking finding cannot be in overflow")
+    # A declared non-canonical record skips the canonical overflow
+    # placement gate (finding-hierarchy family); the container presence
+    # gate above still ran.
+    if not kind_noncanonical:
+        for item in overflow:
+            if not isinstance(item, dict):
+                result.add_error("overflow item must be an object")
+                continue
+            if item.get("severity") == "Critical" or item.get("blocking") is True:
+                result.add_error("Critical or blocking finding cannot be in overflow")
 
     # r4 F1: the versionless current-shape type gates now also cover
     # severity_calibration (and the remaining version-1 array fields), so a
@@ -3877,10 +4472,16 @@ def validate_current_payload(
     _require_array(payload, "deduplication_groups", result, schema_label)
     _require_array(payload, "soften_watchlist", result, schema_label)
 
-    validate_markdown_severity_groups(content, result)
-    validate_finding_conservation(
-        content, payload, result, duplicate_flagged_ids
-    )
+    # A declared non-canonical record skips the canonical Markdown severity
+    # groups and finding-conservation gates (finding-hierarchy family,
+    # review records contract plan, Task 1); its minimum contracts live in
+    # validate_record_kind_matrix below.
+    if not kind_noncanonical:
+        validate_markdown_severity_groups(content, result)
+        validate_finding_conservation(
+            content, payload, result, duplicate_flagged_ids
+        )
+    validate_record_kind_matrix(payload, content, result)
 
 
 def validate_finding_order(findings: list, result: ValidationResult) -> None:
@@ -4173,66 +4774,88 @@ def validate_staging_file(
     finding_blocks = split_finding_blocks(content)
     result.finding_sections = len(finding_blocks)
 
-    # Cross-check: Verdict claiming Medium+ cannot pair with Staged findings: 0.
-    if staged_count == 0 and medium_plus > 0:
-        result.add_error(
-            f"verdict claims {medium_plus} Medium+ but Counts/Metadata staged findings is 0"
-        )
-
-    if staged_count > 0 or medium_plus > 0:
-        effective_staged = max(staged_count, medium_plus)
-        if not re.search(r"^## Findings\s*$", content, re.MULTILINE):
-            result.add_error("verdict claims Medium+ but missing ## Findings section")
-        for idx, block in enumerate(finding_blocks, start=1):
-            has_comment, has_analysis = finding_has_comment_and_analysis(block)
-            if has_comment or has_analysis:
-                if not has_comment:
-                    result.add_error(f"finding {idx} missing #### Comment")
-                if not has_analysis:
-                    result.add_error(f"finding {idx} missing #### Analysis")
-            elif not is_legacy_finding_block(block):
-                result.add_error(
-                    f"finding {idx} missing #### Comment/Analysis (legacy blocks need "
-                    f"Status/Triage and >= {LEGACY_MIN_BLOCK_CHARS} chars)"
-                )
-        if len(finding_blocks) < effective_staged:
-            delta = effective_staged - len(finding_blocks)
-            if len(finding_blocks) == 0:
-                result.add_error(
-                    f"staged count expects {effective_staged} findings but no finding sections"
-                )
-            else:
-                result.add_error(
-                    f"staged count expects {effective_staged} findings but only "
-                    f"{len(finding_blocks)} finding sections (gap {delta})"
-                )
-        if size < STUB_BYTE_THRESHOLD and effective_staged > 0:
-            result.add_error(
-                f"stub suspected: {effective_staged} staged findings claimed but file is only "
-                f"{size} bytes (threshold {STUB_BYTE_THRESHOLD})"
-            )
-    else:
-        if "## Review Statistics" not in content:
-            result.add_error("clear round still requires ## Review Statistics")
-
-    validate_discarded_findings(content, result)
-    validate_freshness_metadata(content, result)
-    validate_verdict_heading_grammar(content, result)
-    validate_clear_round_phrase(content, result)
     # r3 F11: the dateless-filename fail-closed fence needs the sidecar
-    # date. The sidecar is read exactly once here (consolidation: the same
-    # _SidecarRead threads into the sidecar gates below), and the fence
-    # consumes it silently (a missing or malformed sidecar arms no fence
-    # error; it reports through its own gates).
+    # date, and the record-kind Markdown gates plus the per-kind
+    # finding-hierarchy skip below need the declared kind. The sidecar is
+    # read exactly once here (consolidation: the same _SidecarRead threads
+    # into the gates below), and the fences consume a missing or malformed
+    # sidecar silently (it reports through its own gates).
     sidecar_read = _read_stats_sidecar(stats_sidecar_path(path))
     sidecar_date = None
     if isinstance(sidecar_read.payload, dict) and isinstance(
         sidecar_read.payload.get("date"), str
     ):
         sidecar_date = sidecar_read.payload["date"]
+    sidecar_record_kind = (
+        sidecar_read.payload.get("record_kind")
+        if isinstance(sidecar_read.payload, dict)
+        else None
+    )
+    md_kind_noncanonical = (
+        sidecar_record_kind is not None
+        and sidecar_record_kind in RECORD_KIND_VALUES
+        and sidecar_record_kind != "canonical"
+    )
+
+    # Canonical finding-hierarchy gates (review records contract plan,
+    # Task 1): a declared non-canonical record (reconciliation,
+    # worker-evidence, legacy-import) carries no canonical finding
+    # hierarchy, so the Medium+ cross-check and the finding-section gates
+    # are skipped for it; canonical records keep every gate.
+    if not md_kind_noncanonical:
+        # Cross-check: Verdict claiming Medium+ cannot pair with Staged findings: 0.
+        if staged_count == 0 and medium_plus > 0:
+            result.add_error(
+                f"verdict claims {medium_plus} Medium+ but Counts/Metadata staged findings is 0"
+            )
+
+        if staged_count > 0 or medium_plus > 0:
+            effective_staged = max(staged_count, medium_plus)
+            if not re.search(r"^## Findings\s*$", content, re.MULTILINE):
+                result.add_error("verdict claims Medium+ but missing ## Findings section")
+            for idx, block in enumerate(finding_blocks, start=1):
+                has_comment, has_analysis = finding_has_comment_and_analysis(block)
+                if has_comment or has_analysis:
+                    if not has_comment:
+                        result.add_error(f"finding {idx} missing #### Comment")
+                    if not has_analysis:
+                        result.add_error(f"finding {idx} missing #### Analysis")
+                elif not is_legacy_finding_block(block):
+                    result.add_error(
+                        f"finding {idx} missing #### Comment/Analysis (legacy blocks need "
+                        f"Status/Triage and >= {LEGACY_MIN_BLOCK_CHARS} chars)"
+                    )
+            if len(finding_blocks) < effective_staged:
+                delta = effective_staged - len(finding_blocks)
+                if len(finding_blocks) == 0:
+                    result.add_error(
+                        f"staged count expects {effective_staged} findings but no finding sections"
+                    )
+                else:
+                    result.add_error(
+                        f"staged count expects {effective_staged} findings but only "
+                        f"{len(finding_blocks)} finding sections (gap {delta})"
+                    )
+            if size < STUB_BYTE_THRESHOLD and effective_staged > 0:
+                result.add_error(
+                    f"stub suspected: {effective_staged} staged findings claimed but file is only "
+                    f"{size} bytes (threshold {STUB_BYTE_THRESHOLD})"
+                )
+        else:
+            if "## Review Statistics" not in content:
+                result.add_error("clear round still requires ## Review Statistics")
+
+    validate_discarded_findings(content, result)
+    validate_freshness_metadata(content, result)
+    validate_verdict_heading_grammar(content, result)
+    validate_clear_round_phrase(content, result)
     validate_date_keyed_freshness_lines(
         path.name, content, result, sidecar_date=sidecar_date
     )
+    validate_record_kind_metadata(
+        path.name, content, result, sidecar_payload=sidecar_read.payload
+    )
+    validate_supersession_links(path, content, result)
     validate_release_gate_ledger(content, result)
     validate_declaration_consistency(content, result)
     validate_stats_sidecar(
@@ -11194,6 +11817,852 @@ def _coverage_md_with_ledger(outcome: str, attempt_rows: int = 0) -> str:
     return md.replace("### Deduplication groups", ledger + "### Deduplication groups", 1)
 
 
+def _selftest_record_kind_contract(root: Path, check) -> None:
+    """Family: the record_kind contract (review records contract plan,
+    Task 1). RED-first: the negative checks fail until the
+    ``RECORD_KIND_SIDECAR_MIN_DATE`` fence, the closed four-value enum, the
+    Markdown Metadata ``Record kind:`` twin, and the per-kind gate matrix
+    (canonical keeps every current gate; reconciliation requires the six
+    output-contract labels; worker-evidence requires the four mirrored
+    sidecar fields; legacy-import is accepted as historical; no
+    non-canonical kind certifies a clean verdict; coverage stays
+    canonical-only; cross-kind errors name the owning producer) exist and
+    are wired. Every fixture date derives from the imported
+    RECORD_KIND_SIDECAR_MIN_DATE constant: post-fence fixtures date on the
+    constant, pre-fence fixtures date the day before."""
+    import datetime as _datetime
+    import json as _json
+
+    fence = RECORD_KIND_SIDECAR_MIN_DATE
+    pre_fence = (
+        _datetime.date.fromisoformat(fence) - _datetime.timedelta(days=1)
+    ).isoformat()
+
+    freshness_meta = (
+        "- Review mode: targeted",
+        "- Changed-risk signals: none",
+        "- Prior findings supplied as filter: no",
+        "- Last fix commit: none",
+    )
+
+    def focused_row() -> dict:
+        return {
+            "worker": "correctness-completeness",
+            "lenses": ["quality"],
+            "parent_worker": None,
+            "descendant_launches": [],
+            "status": "complete",
+            "raw": 0,
+            "solo": 0,
+            "echo": 0,
+            "relaunch": False,
+        }
+
+    def supplemental_payload(
+        kind, *, date=None, source_kind="plan", verdict=None
+    ) -> dict:
+        payload = _json.loads(_json.dumps(_version1_payload()))
+        payload["date"] = date if date is not None else fence
+        payload["source_kind"] = source_kind
+        payload["review_mode"] = "targeted"
+        payload["risk_signals"] = []
+        payload["prior_findings_filter"] = False
+        payload["last_fix_commit"] = None
+        payload["panel_mode"] = "focused"
+        payload["selection_reason"] = "single-worker supplemental pass"
+        payload["panel"] = [focused_row()]
+        payload["counts"] = {"workers_launched": 1, "staged_findings": 0}
+        payload["findings"] = []
+        payload["overflow"] = []
+        payload["deduplication_groups"] = []
+        payload["discarded"] = []
+        payload["severity_calibration"] = []
+        payload["soften_watchlist"] = []
+        payload["triage_outcomes"] = []
+        if kind is not None:
+            payload["record_kind"] = kind
+        if verdict is not None:
+            payload["verdict"] = verdict
+        return payload
+
+    recon_body = (
+        "## Trigger",
+        "The same root issue recurred across two consecutive rounds.",
+        "## Recurrence map",
+        "| Root issue | Disposition | Owner | Status |",
+        "|---|---|---|---|",
+        "| stale digest propagation | artifact contradiction | review-loop | open |",
+        "## Invariant and witness ledger",
+        "Invariant: the reviewed digest matches the artifact bytes.",
+        "## Changes made or proposed",
+        "None made; proposed recomputing the digest before the next round.",
+        "## Decision requests",
+        "None.",
+        "## Handoff",
+        "Original orchestrator: review-loop; fresh source digest required.",
+    )
+    worker_evidence_body = (
+        "## Worker evidence",
+        "Focused correctness-completeness pass over the reviewed plan bytes.",
+    )
+    legacy_body = (
+        "## Imported record",
+        "Historical import retained for the audit trail only.",
+    )
+
+    def supplemental_md(
+        kind_line,
+        *,
+        body=legacy_body,
+        mirrors=(),
+        freshness=True,
+        extra_meta=(),
+    ) -> str:
+        meta_lines = []
+        if kind_line is not None:
+            meta_lines.append(kind_line)
+        meta_lines.extend(mirrors)
+        meta_lines.extend(extra_meta)
+        if freshness:
+            meta_lines.extend(freshness_meta)
+        return "\n".join(
+            [
+                "# Plan Review: record-kind-fixture",
+                "## Metadata",
+                "- Panel mode: focused",
+                "- Selection reason: single-worker supplemental pass",
+                *meta_lines,
+                "## Review Statistics",
+                "### Panel",
+                "| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |",
+                "|--------|--------|---------------|--------|-----|------|------|----------|",
+                "| correctness-completeness | quality | none | complete | 0 | 0 | 0 | no |",
+                "### Counts",
+                "- Workers launched: 1",
+                "- Staged findings: 0",
+                "### Triage outcomes",
+                "Pending triage.",
+                *body,
+                "",
+            ]
+        )
+
+    def stage_supplemental(name, payload, md, *, filename_date=None) -> Path:
+        return _write_staging(
+            root,
+            f"{filename_date if filename_date is not None else fence}"
+            f"-plan-review-rk-{name}-r1.md",
+            md,
+            payload,
+        )
+
+    def canonical_pair(
+        name,
+        *,
+        kind_line="- Record kind: canonical",
+        record_kind="canonical",
+        date=None,
+        filename_date=None,
+        source_kind="code",
+        pattern="testing#weak-assertion",
+        extra_md_lines=(),
+    ) -> tuple[Path, dict]:
+        date_value = date if date is not None else fence
+        payload = _json.loads(_json.dumps(_version1_payload(pattern=pattern)))
+        payload["date"] = date_value
+        payload["source_kind"] = source_kind
+        payload["review_mode"] = "targeted"
+        payload["risk_signals"] = []
+        payload["prior_findings_filter"] = False
+        payload["last_fix_commit"] = None
+        if record_kind is not None:
+            payload["record_kind"] = record_kind
+        extra_meta = [*extra_md_lines]
+        if source_kind == "plan":
+            # Coverage is canonical-only: a canonical plan record dated on
+            # or after COVERAGE_SIDECAR_MIN_DATE carries a valid coverage
+            # object and its Markdown Coverage twin line, so the
+            # exactly-one-error canaries below stay single-error.
+            payload["coverage"] = {
+                "outcome": "clean",
+                "material_lens_set": sorted(
+                    {
+                        lens
+                        for lenses in REQUIRED_PANEL_LENSES.values()
+                        for lens in lenses
+                    }
+                ),
+                "completed": sorted(
+                    {
+                        lens
+                        for lenses in REQUIRED_PANEL_LENSES.values()
+                        for lens in lenses
+                    }
+                ),
+                "missing": [],
+            }
+            extra_meta.append("- Coverage: clean")
+        block = "\n".join((*freshness_meta, *extra_meta))
+        if kind_line is not None:
+            block = f"{block}\n{kind_line}"
+        md = _version1_markdown(pattern=pattern).replace(
+            "- Panel mode: full", f"- Panel mode: full\n{block}", 1
+        )
+        path = _write_staging(
+            root,
+            f"{filename_date if filename_date is not None else date_value}"
+            f"-plan-review-rk-{name}-r1.md",
+            md,
+            payload,
+        )
+        return path, payload
+
+    # Positive: a post-fence canonical record declaring the sidecar field and
+    # the Metadata twin passes hard (canonical keeps every current gate).
+    ok_path, _ok_payload = canonical_pair("canonical-ok")
+    check(
+        "record kind: post-fence canonical record with sidecar field and "
+        "Metadata twin passes hard",
+        validate_staging_file(ok_path, hard=True).ok,
+    )
+
+    # Negative: a post-fence sidecar without record_kind fails, naming the
+    # missing field and the owning producer mapped from source_kind.
+    path, _payload = canonical_pair(
+        "missing-kind", kind_line=None, record_kind=None, source_kind="plan"
+    )
+    result = validate_staging_file(path, hard=True)
+    check(
+        "record kind: post-fence sidecar without record_kind fails naming "
+        "the producer",
+        not result.ok
+        and any(
+            "missing required top-level field 'record_kind'" in e
+            and "owning producer is review-plan" in e
+            for e in result.errors
+        ),
+    )
+
+    # Negative: a record_kind outside the four-value enum fails with exactly
+    # one producer-naming error.
+    path, _payload = canonical_pair(
+        "bad-enum", record_kind="supplement", source_kind="plan"
+    )
+    result = validate_staging_file(path, hard=True)
+    check(
+        "record kind: sidecar record_kind outside the four-value enum fails",
+        len(result.errors) == 1
+        and "must be one of" in result.errors[0]
+        and "owning producer is review-plan" in result.errors[0],
+    )
+
+    # r1 F8: the enum check is shared across sidecar shapes. A versionless
+    # legacy-panel-mode record (the version-1 gate never arms on it) with a
+    # PRESENT out-of-enum record_kind fails with exactly one error from the
+    # shared sidecar gate. r2 overflow T3: the fixture date derives from
+    # the imported fence constant, never a hardcoded literal. The fence
+    # that arms on this versionless shape is the EXTENDED freshness fence
+    # (the date-keyed Markdown gate runs on every record), so the date is
+    # the day BEFORE EXTENDED_SIDECAR_MIN_DATE: the fixture carries no
+    # freshness Metadata lines, and a post-EXTENDED-fence date would add
+    # freshness errors on top of the single enum error this case pins.
+    legacy_pre_fence = (
+        _datetime.date.fromisoformat(EXTENDED_SIDECAR_MIN_DATE)
+        - _datetime.timedelta(days=1)
+    ).isoformat()
+    legacy_payload = _json.loads(_json.dumps(_current_clear_payload()))
+    legacy_payload["record_kind"] = "supplement"
+    # r3 overflow T-F4: the fixture declares source_kind too, so the
+    # shared enum error's producer suffix is pinned on this versionless
+    # surface: code maps to doing-code-review, proving the enum-helper
+    # unification renders identical errors on both sidecar shapes. A
+    # declared source_kind also arms the hex-digest grammar for
+    # source_digest, so the placeholder digest is upgraded to a valid one
+    # and the exactly-one-error contract survives.
+    legacy_payload["source_kind"] = "code"
+    legacy_payload["source_digest"] = "a" * 64
+    legacy_path = _write_staging(
+        root,
+        f"{legacy_pre_fence}-branch-review-rk-legacy-enum-r1.md",
+        _current_clear_markdown("rk-legacy-enum"),
+        legacy_payload,
+    )
+    result = validate_staging_file(legacy_path, hard=True)
+    check(
+        "record kind: a present record_kind is enum-checked outside the "
+        "version-1 gate (shared sidecar gate)",
+        len(result.errors) == 1
+        and "must be one of" in result.errors[0]
+        and "'supplement'" in result.errors[0]
+        and "owning producer is doing-code-review" in result.errors[0],
+    )
+
+    # r3 F2: a duplicated Metadata Record kind line is the named
+    # duplicate-label error (exactly one), never the first-match twin
+    # agreement gate blessing the first value while the line contradicts
+    # itself. The two values are conflicting on purpose, and the
+    # reconciliation shell (which passes hard with one kind line, see the
+    # recon-ok case) keeps every other gate silent, so the duplicate gate
+    # must be the single reporter.
+    dup_path = stage_supplemental(
+        "rk-duplicate-twin",
+        supplemental_payload("reconciliation"),
+        supplemental_md(
+            "- Record kind: reconciliation\n- Record kind: supplement",
+            body=recon_body,
+        ),
+    )
+    result = validate_staging_file(dup_path, hard=True)
+    check(
+        "record kind: a duplicated Metadata Record kind line fails with "
+        "exactly one duplicate-label error",
+        len(result.errors) == 1
+        and "duplicate 'Record kind:' Metadata label" in result.errors[0]
+        and "2 matching lines" in result.errors[0],
+    )
+
+    # Positive: a post-fence reconciliation record without canonical finding
+    # sections passes hard (six output-contract labels, no severity groups).
+    ok_path = stage_supplemental(
+        "recon-ok",
+        supplemental_payload("reconciliation"),
+        supplemental_md("- Record kind: reconciliation", body=recon_body),
+    )
+    check(
+        "record kind: post-fence reconciliation record without canonical "
+        "finding sections passes hard",
+        validate_staging_file(ok_path, hard=True).ok,
+    )
+
+    # Negative: the same supplemental body as a canonical record still fails
+    # (canonical keeps the finding-hierarchy gates).
+    ok_path = stage_supplemental(
+        "canon-no-sections",
+        supplemental_payload("canonical"),
+        supplemental_md("- Record kind: canonical", body=recon_body),
+    )
+    result = validate_staging_file(ok_path, hard=True)
+    check(
+        "record kind: a canonical record missing the canonical finding "
+        "sections still fails",
+        not result.ok
+        and any("Critical, High, Medium, Low" in e for e in result.errors),
+    )
+
+    # Positive: a post-fence worker-evidence record carrying the four
+    # top-level sidecar fields mirrored as Metadata lines passes hard.
+    worker_payload = supplemental_payload("worker-evidence")
+    worker_payload["worker"] = "correctness-completeness"
+    worker_payload["lens"] = "quality"
+    worker_payload["status"] = "complete"
+    worker_payload["source_ref"] = "docs/plans/sample-plan.md"
+    ok_path = stage_supplemental(
+        "worker-ok",
+        worker_payload,
+        supplemental_md(
+            "- Record kind: worker-evidence",
+            body=worker_evidence_body,
+            mirrors=(
+                "- Worker: correctness-completeness",
+                "- Lens: quality",
+                "- Worker status: complete",
+                "- Source: docs/plans/sample-plan.md",
+            ),
+        ),
+    )
+    check(
+        "record kind: post-fence worker-evidence record with four sidecar "
+        "fields and Metadata mirrors passes hard",
+        validate_staging_file(ok_path, hard=True).ok,
+    )
+
+    # r1 F22 (informational uncovered arm): a worker-evidence record with a
+    # sidecar verdict yes fails the never-clean-verdict rule, mirroring the
+    # legacy-import and reconciliation verdict arms.
+    worker_payload = supplemental_payload("worker-evidence", verdict="yes")
+    worker_payload["worker"] = "correctness-completeness"
+    worker_payload["lens"] = "quality"
+    worker_payload["status"] = "complete"
+    worker_payload["source_ref"] = "docs/plans/sample-plan.md"
+    ok_path = stage_supplemental(
+        "worker-clean",
+        worker_payload,
+        supplemental_md(
+            "- Record kind: worker-evidence",
+            body=worker_evidence_body,
+            mirrors=(
+                "- Worker: correctness-completeness",
+                "- Lens: quality",
+                "- Worker status: complete",
+                "- Source: docs/plans/sample-plan.md",
+            ),
+        ),
+    )
+    result = validate_staging_file(ok_path, hard=True)
+    check(
+        "record kind: a verdict yes worker-evidence record fails",
+        not result.ok
+        and any(
+            "never eligible for a clean verdict" in e for e in result.errors
+        ),
+    )
+
+    # Negative: the same record missing the worker sidecar field fails.
+    worker_payload = supplemental_payload("worker-evidence")
+    worker_payload["lens"] = "quality"
+    worker_payload["status"] = "complete"
+    worker_payload["source_ref"] = "docs/plans/sample-plan.md"
+    ok_path = stage_supplemental(
+        "worker-missing-field",
+        worker_payload,
+        supplemental_md(
+            "- Record kind: worker-evidence",
+            body=worker_evidence_body,
+            mirrors=(
+                "- Worker: correctness-completeness",
+                "- Lens: quality",
+                "- Worker status: complete",
+                "- Source: docs/plans/sample-plan.md",
+            ),
+        ),
+    )
+    result = validate_staging_file(ok_path, hard=True)
+    check(
+        "record kind: worker-evidence record missing the worker sidecar "
+        "field fails",
+        not result.ok
+        and any(
+            "missing required sidecar field(s)" in e and "'worker'" in e
+            for e in result.errors
+        ),
+    )
+
+    # Collision canary: the template's '- Status: STAGED' line never
+    # satisfies the 'Worker status:' mirror; only the anchored label counts.
+    worker_payload = supplemental_payload("worker-evidence")
+    worker_payload["worker"] = "correctness-completeness"
+    worker_payload["lens"] = "quality"
+    worker_payload["status"] = "complete"
+    worker_payload["source_ref"] = "docs/plans/sample-plan.md"
+    ok_path = stage_supplemental(
+        "worker-status-collision",
+        worker_payload,
+        supplemental_md(
+            "- Record kind: worker-evidence",
+            body=worker_evidence_body,
+            mirrors=(
+                "- Worker: correctness-completeness",
+                "- Lens: quality",
+                "- Status: STAGED",
+                "- Source: docs/plans/sample-plan.md",
+            ),
+        ),
+    )
+    result = validate_staging_file(ok_path, hard=True)
+    check(
+        "record kind: Worker status Metadata mirror is not satisfied by the "
+        "template Status line",
+        not result.ok
+        and len(
+            [e for e in result.errors if "Metadata line(s)" in e]
+        )
+        == 1
+        and any("'Worker status'" in e for e in result.errors),
+    )
+
+    # Collision canary: the template's '- Source digest:' line never
+    # satisfies the anchored '- Source:' mirror.
+    worker_payload = supplemental_payload("worker-evidence")
+    worker_payload["worker"] = "correctness-completeness"
+    worker_payload["lens"] = "quality"
+    worker_payload["status"] = "complete"
+    worker_payload["source_ref"] = "docs/plans/sample-plan.md"
+    ok_path = stage_supplemental(
+        "worker-source-collision",
+        worker_payload,
+        supplemental_md(
+            "- Record kind: worker-evidence",
+            body=worker_evidence_body,
+            mirrors=(
+                "- Worker: correctness-completeness",
+                "- Lens: quality",
+                "- Worker status: complete",
+                "- Source digest: "
+                + "0" * 64,
+            ),
+        ),
+    )
+    result = validate_staging_file(ok_path, hard=True)
+    check(
+        "record kind: Source Metadata mirror is not satisfied by the Source "
+        "digest line",
+        not result.ok
+        and len(
+            [e for e in result.errors if "Metadata line(s)" in e]
+        )
+        == 1
+        and any("'Source'" in e for e in result.errors),
+    )
+
+    # Positive: an explicit legacy-import record is accepted as historical
+    # (no minimum contract beyond the kind declaration).
+    ok_path = stage_supplemental(
+        "legacy-ok",
+        supplemental_payload("legacy-import"),
+        supplemental_md("- Record kind: legacy-import"),
+    )
+    check(
+        "record kind: an explicit legacy-import record is accepted as "
+        "historical and passes hard",
+        validate_staging_file(ok_path, hard=True).ok,
+    )
+
+    # Negative: legacy-import is never eligible for a clean verdict.
+    ok_path = stage_supplemental(
+        "legacy-clean",
+        supplemental_payload("legacy-import", verdict="yes"),
+        supplemental_md("- Record kind: legacy-import"),
+    )
+    result = validate_staging_file(ok_path, hard=True)
+    check(
+        "record kind: legacy-import record with a clean verdict fails",
+        not result.ok
+        and any(
+            "never eligible for a clean verdict" in e for e in result.errors
+        ),
+    )
+
+    # Negative: a verdict yes reconciliation record fails the same rule.
+    ok_path = stage_supplemental(
+        "recon-clean",
+        supplemental_payload("reconciliation", verdict="yes"),
+        supplemental_md("- Record kind: reconciliation", body=recon_body),
+    )
+    result = validate_staging_file(ok_path, hard=True)
+    check(
+        "record kind: a verdict yes reconciliation record fails",
+        not result.ok
+        and any(
+            "never eligible for a clean verdict" in e for e in result.errors
+        ),
+    )
+
+    # Negative: the kind is never inferred from a filename; a record named
+    # ...-reconciliation... (in its slug) with no record_kind post-fence
+    # fails as missing-kind, not as a reconciliation record.
+    ok_path = stage_supplemental(
+        "reconciliation",
+        supplemental_payload(None),
+        supplemental_md(None, body=recon_body),
+    )
+    result = validate_staging_file(ok_path, hard=True)
+    check(
+        "record kind: the kind is never inferred from the filename",
+        not result.ok
+        and any(
+            "missing required top-level field 'record_kind'" in e
+            for e in result.errors
+        ),
+    )
+
+    # Cross-kind error family: each failure yields exactly one actionable
+    # error naming the owning producer mapped from source_kind.
+    path, _payload = canonical_pair(
+        "missing-twin", kind_line=None, source_kind="plan"
+    )
+    result = validate_staging_file(path, hard=True)
+    check(
+        "record kind: a missing Metadata Record kind twin yields exactly one "
+        "producer-naming error",
+        len(result.errors) == 1
+        and "missing the Metadata 'Record kind:' line" in result.errors[0]
+        and "owning producer is review-plan" in result.errors[0],
+    )
+
+    path, _payload = canonical_pair(
+        "twin-disagreement",
+        kind_line="- Record kind: reconciliation",
+        source_kind="plan",
+    )
+    result = validate_staging_file(path, hard=True)
+    check(
+        "record kind: a wrong-kind twin disagreement yields exactly one "
+        "producer-naming error",
+        len(result.errors) == 1
+        and "record kind disagreement" in result.errors[0]
+        and "owning producer is review-plan" in result.errors[0],
+    )
+
+    path, _payload = canonical_pair(
+        "md-bad-enum", kind_line="- Record kind: banana", source_kind="plan"
+    )
+    result = validate_staging_file(path, hard=True)
+    check(
+        "record kind: a Metadata Record kind outside the enum fails",
+        len(result.errors) == 1
+        and "Metadata Record kind" in result.errors[0]
+        and "must be one of" in result.errors[0],
+    )
+
+    path, payload = canonical_pair("stale-digest", source_kind="plan")
+    result = validate_staging_file(
+        path, hard=True, expected_digest="f" * 64
+    )
+    check(
+        "record kind: a stale digest yields exactly one producer-naming "
+        "error",
+        len(result.errors) == 1
+        and "source_digest is stale" in result.errors[0]
+        and "owning producer is review-plan" in result.errors[0],
+    )
+
+    path, _payload = canonical_pair(
+        "bad-pattern", pattern="bogus#weak-assertion", source_kind="plan"
+    )
+    result = validate_staging_file(path, hard=True)
+    check(
+        "record kind: an invalid Pattern ID yields exactly one "
+        "producer-naming error",
+        len(result.errors) == 1
+        and "is not a declared shared lens" in result.errors[0]
+        and "owning producer is review-plan" in result.errors[0],
+    )
+
+    # Grandfathering: a pre-fence record without record_kind is
+    # accepted-legacy and passes (dates derived as constant minus one day
+    # on both surfaces). The freshness Metadata lines stay required: the
+    # day before this fence is still post-fence for
+    # EXTENDED_SIDECAR_MIN_DATE. The record keeps every current canonical
+    # gate; only the record_kind declaration is exempt.
+    ok_path, _payload = canonical_pair(
+        "prefence-ok",
+        kind_line=None,
+        record_kind=None,
+        date=pre_fence,
+        filename_date=pre_fence,
+        source_kind="code",
+    )
+    check(
+        "record kind: pre-fence records without record_kind stay "
+        "accepted-legacy",
+        validate_staging_file(ok_path, hard=True).ok,
+    )
+
+    # Mirror of the freshness fence: the grandfathering exemption cannot be
+    # claimed by a sidecar date backdated below the constant while the
+    # staging filename is post-fence.
+    ok_path = stage_supplemental(
+        "backdated-sidecar",
+        supplemental_payload(None, date=pre_fence, source_kind="code"),
+        supplemental_md(None, freshness=True),
+        filename_date=fence,
+    )
+    result = validate_staging_file(ok_path, hard=True)
+    check(
+        "record kind: the grandfathering exemption cannot be claimed by a "
+        "backdated sidecar date",
+        not result.ok
+        and any(
+            "cannot be claimed by a backdated sidecar date" in e
+            for e in result.errors
+        ),
+    )
+
+    # Mirrored direction: a pre-fence filename with a post-fence sidecar
+    # date fails the date-disagreement error.
+    ok_path = stage_supplemental(
+        "straddling-filename",
+        supplemental_payload(None, date=fence, source_kind="code"),
+        supplemental_md(None, freshness=True),
+        filename_date=pre_fence,
+    )
+    result = validate_staging_file(ok_path, hard=True)
+    check(
+        "record kind: mixed-fence direction (pre-fence filename, post-fence "
+        "sidecar) fails",
+        not result.ok
+        and any("date disagreement" in e for e in result.errors),
+    )
+
+    # Coverage is canonical-only: a post-fence plan reconciliation record
+    # without a coverage object passes.
+    ok_path = stage_supplemental(
+        "recon-no-coverage",
+        supplemental_payload("reconciliation", source_kind="plan"),
+        supplemental_md("- Record kind: reconciliation", body=recon_body),
+    )
+    check(
+        "record kind: a post-fence plan reconciliation record without "
+        "coverage passes (coverage is canonical-only)",
+        validate_staging_file(ok_path, hard=True).ok,
+    )
+
+    # Coverage is canonical-only: a post-fence canonical plan record without
+    # coverage still requires it.
+    ok_path = stage_supplemental(
+        "canon-no-coverage",
+        supplemental_payload("canonical", source_kind="plan"),
+        supplemental_md("- Record kind: canonical", body=recon_body),
+    )
+    result = validate_staging_file(ok_path, hard=True)
+    check(
+        "record kind: a post-fence canonical plan record without coverage "
+        "still requires coverage",
+        not result.ok
+        and any(
+            "missing the required 'coverage' object" in e
+            for e in result.errors
+        ),
+    )
+
+
+def _selftest_supersession_links(root: Path, check) -> None:
+    """Family: the Supersedes / Superseded by link integrity gate (review
+    records contract plan, Task 3). RED-first: the checks below fail until
+    ``validate_supersession_links`` is implemented and wired into
+    ``validate_staging_file``. A record whose Metadata carries
+    ``Supersedes: <prior>`` is accepted when the prior file exists and
+    carries the matching ``Superseded by:`` back-reference; a dangling
+    link (prior file does not exist), a missing back-reference, a
+    mismatched back-reference, duplicate ``Supersedes:`` lines, and a
+    duplicate ``Superseded by:`` back-reference each yield exactly one
+    actionable error. Every fixture record otherwise validates clean: the
+    fixture date derives from the imported RECORD_KIND_SIDECAR_MIN_DATE
+    constant minus one day (r1 F19, mirroring the record-kind family's
+    fixture discipline), which stays pre-fence for the record-kind gate
+    while the extended freshness fields and Metadata lines are carried
+    because the date is post-fence for the freshness fence."""
+    import datetime as _datetime
+    import json as _json
+
+    fixture_date = (
+        _datetime.date.fromisoformat(RECORD_KIND_SIDECAR_MIN_DATE)
+        - _datetime.timedelta(days=1)
+    ).isoformat()
+    freshness_meta = (
+        "- Review mode: targeted",
+        "- Changed-risk signals: none",
+        "- Prior findings supplied as filter: no",
+        "- Last fix commit: none",
+    )
+
+    def stage(name: str, supersedes_line: str | None) -> Path:
+        md = _version1_markdown()
+        block = "\n".join(freshness_meta)
+        if supersedes_line is not None:
+            block = f"{block}\n{supersedes_line}"
+        md = md.replace("- Panel mode: full", f"- Panel mode: full\n{block}", 1)
+        payload = _json.loads(_json.dumps(_version1_payload()))
+        payload["date"] = fixture_date
+        payload["review_mode"] = "targeted"
+        payload["risk_signals"] = []
+        payload["prior_findings_filter"] = False
+        payload["last_fix_commit"] = None
+        return _write_staging(
+            root,
+            f"{fixture_date}-branch-review-v1-supersede-{name}-r1.md",
+            md,
+            payload,
+        )
+
+    def write_prior(name: str, body: str) -> Path:
+        prior = root / f"{fixture_date}-branch-review-v1-supersede-{name}.md"
+        prior.write_text(body, encoding="utf-8")
+        return prior
+
+    other_successor_name = (
+        f"{fixture_date}-branch-review-v1-supersede-other-r1.md"
+    )
+    successor_name = f"{fixture_date}-branch-review-v1-supersede-link-ok-r1.md"
+
+    # Positive: the prior file exists and carries the matching
+    # 'Superseded by:' back-reference; the record passes hard.
+    prior = write_prior(
+        "prior-ok",
+        "# Prior record\n\n## Metadata\n\n- Status: SUPERSEDED\n"
+        f"- Superseded by: {successor_name}\n",
+    )
+    ok_path = stage("link-ok", f"- Supersedes: {prior.name}")
+    check(
+        "supersession link: a matching prior back-reference passes hard",
+        validate_staging_file(ok_path, hard=True).ok,
+    )
+
+    # Negative: the link is dangling (the prior file does not exist).
+    path = stage(
+        "link-dangling",
+        "- Supersedes: "
+        + f"{fixture_date}-branch-review-v1-supersede-ghost-r1.md",
+    )
+    result = validate_staging_file(path, hard=True)
+    check(
+        "supersession link: a dangling Supersedes target yields exactly "
+        "one error",
+        len(result.errors) == 1
+        and "Supersedes link is dangling" in result.errors[0],
+    )
+
+    # Negative: the prior exists but carries no back-reference.
+    prior = write_prior(
+        "prior-silent",
+        "# Prior record\n\n## Metadata\n\n- Status: STAGED\n",
+    )
+    path = stage("link-missing", f"- Supersedes: {prior.name}")
+    result = validate_staging_file(path, hard=True)
+    check(
+        "supersession link: a missing Superseded by back-reference yields "
+        "exactly one error",
+        len(result.errors) == 1
+        and "back-reference missing" in result.errors[0]
+        and prior.name in result.errors[0],
+    )
+
+    # Negative: the prior is marked superseded by a different successor.
+    prior = write_prior(
+        "prior-mismatch",
+        "# Prior record\n\n## Metadata\n\n- Status: SUPERSEDED\n"
+        f"- Superseded by: {other_successor_name}\n",
+    )
+    path = stage("link-mismatch", f"- Supersedes: {prior.name}")
+    result = validate_staging_file(path, hard=True)
+    check(
+        "supersession link: a mismatched back-reference yields exactly "
+        "one error",
+        len(result.errors) == 1
+        and "back-reference mismatched" in result.errors[0],
+    )
+
+    # Negative: duplicate Supersedes lines are the shadowing shape; keep
+    # exactly one link per successor record.
+    path = stage("link-dup", "- Supersedes: a.md\n- Supersedes: b.md")
+    result = validate_staging_file(path, hard=True)
+    check(
+        "supersession link: duplicate Supersedes lines yield exactly one "
+        "error",
+        len(result.errors) == 1
+        and "duplicate 'Supersedes:'" in result.errors[0],
+    )
+
+    # r1 F7: the mirrored duplicate check on the prior side. A duplicated
+    # 'Superseded by:' back-reference yields exactly one duplicate-label
+    # error naming the prior record instead of first-match-wins.
+    prior = write_prior(
+        "prior-dup",
+        "# Prior record\n\n## Metadata\n\n- Status: SUPERSEDED\n"
+        f"- Superseded by: {successor_name}\n"
+        f"- Superseded by: {other_successor_name}\n",
+    )
+    path = stage("link-dup-backref", f"- Supersedes: {prior.name}")
+    result = validate_staging_file(path, hard=True)
+    check(
+        "supersession link: duplicate Superseded by back-references yield "
+        "exactly one error",
+        len(result.errors) == 1
+        and "duplicate 'Superseded by:'" in result.errors[0]
+        and prior.name in result.errors[0],
+    )
+
+
 def _selftest_replacement_and_late_results(root: Path, check) -> None:
     """Family: replacement linkage and late-result classes across the
     backlog acceptance-criterion matrix (review-runner bounded-timeout
@@ -11744,6 +13213,14 @@ def run_selftest() -> int:
             (
                 "coverage_readiness_gate",
                 _selftest_coverage_readiness_gate,
+            ),
+            (
+                "record_kind_contract",
+                _selftest_record_kind_contract,
+            ),
+            (
+                "supersession_links",
+                _selftest_supersession_links,
             ),
             (
                 "replacement_and_late_results",

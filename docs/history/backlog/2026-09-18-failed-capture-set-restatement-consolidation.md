@@ -18,3 +18,7 @@ A future plan should define the failed-capture set once in done SKILL.md (one na
 ## Why not fixed now
 
 The consolidation is a seven-surface cross-skill rewrite owned by a dedicated plan, not an in-run fix; a sibling-doc restatement converts to backlog per the receiving-review Phase 3 default (ADR-0002). (Inventory and plan-prescribed attribution corrected by review r4, 2026-09-18: five done restatement sites plus the Step 1 note contradiction plus the learn variant; only the Step 4 rewrite is plan-prescribed; no gate pins the phrasing.)
+
+## Closure (2026-09-19, P13 Task 6)
+
+The failed-capture set is defined once at done Step 4's intro (`The failed-capture set is the learn-authored artifacts whose Step 1.8 commit learn reported as failed`) replacing the inline restatement and the `covers only non-learn leftovers` contradiction; the Step 4 item 2/3 restatements and the Rules line now reference the definition; done's Step 1 note reads `Step 4 sees only non-learn leftovers plus the failed-capture set`; the frontmatter parenthetical carries the compressed reference form. Measured: `grep -c 'reported as failed'` over done + learn = 1 (definition site only, references excluded).

@@ -63,7 +63,7 @@ Before launching workers or creating a staging record:
 1. Capture `git status --short` and preserve every pre-existing change. Product source, configuration, tests, and ordinary project documentation are read-only during review. Review work may write only the resolved review staging Markdown/sidecar files and ephemeral files under `{tmp_dir}`. Applying code fixes is a separate, explicitly requested fix-mode task.
 2. Resolve `{reviews_dir}` from the repository instructions, then enumerate every existing record and sidecar for the same PR, including focused, risk, and suffixed filenames. Read their Metadata, statuses, findings, and sidecars before choosing a path.
 3. Choose exactly one canonical staging record for the current review pass. Treat existing focused or partial records as input to merge or update, not as permission to create another primary record. If multiple records exist, record `Supersedes` and `Superseded by` links, mark non-canonical records `SUPERSEDED`, and post only from the canonical record.
-4. Create a new path only when no matching record exists, the user explicitly requests a new review round, or the previous record is final and this is genuinely a new round. The canonical path decision must happen before workers launch, and the same Markdown/sidecar pair must be used for synthesis, triage, and posting.
+4. Create a new path only when no matching record exists, the user explicitly requests a new review round, or the previous record is final and this is genuinely a new round. The canonical path decision must happen before workers launch, and the same Markdown/sidecar pair must be used for synthesis, triage, and posting. Make the decision mechanical: run the record selection helper (`scripts/review_record_selection.py select`) before workers launch and write only the helper-emitted paths. On a refused selection (differing source digest, no explicit decision) never rewrite the prior record; on a `new-round` decision run the helper's `backup` subcommand first and record the printed backup path in the new record's Metadata (`Backup of prior record:`).
 5. Capture `git status --short` again after review staging and before any posting. If the review run produced a source, configuration, test, or ordinary documentation change, stop and report it; do not silently include or fix it as part of review.
 
 ### Resolve the comparison basis
@@ -252,7 +252,7 @@ Each worker returns a JSON array plus `descendant_launches`. Fully expanded find
 ]
 ```
 
-**Stats sidecar:** write `{reviews_dir}/<same-basename>.stats.json` per `review-staging` in the same pass as the staging doc. Version-1 sidecars dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; the enum values, field types, clean-verdict rules, the min-date fence (`EXTENDED_SIDECAR_MIN_DATE`), and the validator-copy refresh recovery live in `review-staging`.
+**Stats sidecar:** write `{reviews_dir}/<same-basename>.stats.json` per `review-staging` in the same pass as the staging doc. Version-1 sidecars dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; a version-1 sidecar dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` declares `record_kind: canonical`; the enum values, field types, clean-verdict rules, the min-date fences (`EXTENDED_SIDECAR_MIN_DATE`, `RECORD_KIND_SIDECAR_MIN_DATE`), and the validator-copy refresh recovery live in `review-staging`.
 
 **Conditional lenses:** load premortem and concurrency inside `risk` per `review-panel-selection.md`.
 
@@ -602,6 +602,7 @@ Write all findings to the staging document instead of posting directly. This all
 
 ## Metadata
 - Type: PR Review / Branch Review
+- Record kind: canonical
 - Date: YYYY-MM-DD
 - PR: <url> (if PR review)
 - Branch: <head> → <base> (if branch review, include plan reference if applicable)
@@ -700,6 +701,8 @@ None.
 ```
 
 Do not include `Side` in staging documents; it is always `RIGHT` for GitHub inline comments and adds noise for branch-only reviews. When posting approved findings to a PR, set `side: RIGHT` in the API payload only (not in the markdown staging file).
+
+The `- Record kind: canonical` template value stays bare: copy it verbatim, because the validator's enum gate reads the value after the colon and an annotation in the value slot fails the gate. The line is required when the staging filename's leading `YYYY-MM-DD` date is on or after `RECORD_KIND_SIDECAR_MIN_DATE` per `review-staging`; the non-canonical kinds are covered in that skill's Record kinds section.
 
 **Status values** (user or triage skill edits these):
 - `pending`: not yet triaged or still open after triage

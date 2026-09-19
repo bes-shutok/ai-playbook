@@ -1506,6 +1506,71 @@ class RuntimeWatcherIntegrationTest(unittest.TestCase):
         self.assertEqual(len(bootstrap_calls), 2, bootstrap_calls)
         self.assertEqual(self.fixture.peek_state()["resume_watcher"]["armed_launchd"]["armed"], True)
 
+    def test_pause_boundary_outcome_carries_carrier_teardown(self):
+        # P13 origin 4a: a pause-boundary supersede of an ARMED watcher
+        # computes the same teardown the direct supersede path does; the
+        # outcome must FORWARD it (carrier_teardown non-null with the
+        # expected shape), not compute-then-drop it at the outcome factory.
+        bootout_calls: list[str] = []
+
+        def fake_bootstrap(job):
+            return True, ""
+
+        def fake_bootout(job):
+            bootout_calls.append(str(job))
+            return {"job": str(job), "exited": 0}
+
+        original_bootstrap = watcher.launchctl_bootstrap
+        watcher.launchctl_bootstrap = fake_bootstrap
+        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
+        original_bootout = watcher.launchctl_bootout
+        watcher.launchctl_bootout = fake_bootout
+        self.addCleanup(setattr, watcher, "launchctl_bootout", original_bootout)
+
+        def run(operation, payload):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = runtime.main(
+                    [
+                        "--manifest", str(self.fixture.state_path),
+                        "--operation", operation,
+                        "--input", json.dumps(payload),
+                        "--plan-slug", "fixture",
+                        "--repo-root", str(self.fixture.root),
+                    ]
+                )
+            self.assertEqual(code, 0, out.getvalue())
+            return json.loads(out.getvalue())
+
+        job_dir = self.fixture.root / "p13-pause-launchd"
+        sentinel = self.fixture.root / "p13-pause" / "budget-resume.sentinel"
+        arm_payload = {
+            "probe_report": known_continue_report(3_600_000_000),
+            "plan_path": str(self.fixture.plan_path),
+            "job_dir": str(job_dir),
+            "sentinel_path": str(sentinel),
+        }
+        scheduled = run("watcher-schedule", arm_payload)
+        self.assertEqual(scheduled["status"], "success", scheduled)
+        receipt = self.fixture.peek_state()["resume_watcher"]
+        self.assertEqual(receipt["armed_launchd"]["armed"], True, receipt["armed_launchd"])
+        plist = Path(receipt["armed_launchd"]["plist_path"])
+
+        paused = run(
+            "watcher-schedule",
+            {**arm_payload, "probe_report": {**known_continue_report(3_600_000_000), "pause_decision": "pause"}},
+        )
+        self.assertEqual(paused["reason_code"], "resume-watcher-superseded", paused)
+        self.assertIsNone(self.fixture.peek_state()["resume_watcher"])
+        teardown = paused.get("carrier_teardown")
+        self.assertIsNotNone(teardown, "pause outcome dropped the computed carrier_teardown")
+        self.assertTrue(teardown["torn_down"], teardown)
+        # The pause chain bootout can reach the carrier through more than
+        # one idempotent path; the receipt asserts the teardown happened,
+        # not the call count.
+        self.assertIn(str(plist), bootout_calls, bootout_calls)
+        self.assertEqual(teardown["bootout"]["job"], str(plist))
+
     def test_watcher_fire_default_sentinel_and_flag_parent_marker(self):
         # r4 F5: the documented production payload omits sentinel_path and
         # fired_path, so the fire-time default derivation (keyed
@@ -2387,6 +2452,62 @@ class PlansAuthoringWatcherAdapterTest(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertTrue(lines[0].startswith(f"pending_resume_watcher: {receipt['watcher_id']} ("))
         self.assertIn("status=pending", lines[0])
+
+    def _installed_receipt(self):
+        result = self.boundary(known_continue_report(7_200_000_090))
+        self.assertEqual(result["boundary"], "install")
+        receipt = self.fixture.peek_state()["resume_watcher"]
+        self.assertEqual(receipt["status"], "pending")
+        return receipt
+
+    @staticmethod
+    def _re_carrier(receipt, *, generation=None, boundary_generation=None, armed_launchd=None):
+        return {
+            "action": "re-carrier",
+            "expected_watcher_id": receipt.get("watcher_id"),
+            "expected_generation": receipt.get("expected_generation") if generation is None else generation,
+            "expected_boundary_generation": receipt.get("boundary_generation") if boundary_generation is None else boundary_generation,
+            "armed_launchd": {"armed": False, "reason": "launchd-arm-outcome-refused"} if armed_launchd is None else armed_launchd,
+            "reason": "launchd-arm-outcome",
+        }
+
+    def test_authoring_cas_success_records_rectification_and_projects(self) -> None:
+        # Mirror of the runtime rectification arm: CAS success on a matching
+        # expected generation records the rectification event and projects
+        # the authoring notes state, leaving the boundary generation alone.
+        receipt = self._installed_receipt()
+        notes_before = self.fixture.note_lines()
+        result = self.fixture.adapter().compare_and_swap_carrier(self._re_carrier(receipt))
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(result["reason_code"], "resume-watcher-carrier-rectified")
+        self.assertTrue(result["cas_applied"])
+        patched = self.fixture.peek_state()["resume_watcher"]
+        self.assertEqual(patched["armed_launchd"], {"armed": False, "reason": "launchd-arm-outcome-refused"})
+        self.assertEqual(patched["boundary_generation"], receipt["boundary_generation"])
+        self.assertEqual(patched["watcher_id"], receipt["watcher_id"])
+        self.assertNotEqual(self.fixture.note_lines(), notes_before)
+
+    def test_authoring_cas_refusal_on_stale_generation_does_not_mutate(self) -> None:
+        receipt = self._installed_receipt()
+        before = self.fixture.peek_state()
+        result = self.fixture.adapter().compare_and_swap_carrier(
+            self._re_carrier(receipt, generation=receipt["expected_generation"] + 1)
+        )
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "stale-attempt")
+        self.assertFalse(result["cas_applied"])
+        self.assertEqual(self.fixture.peek_state(), before)
+
+    def test_authoring_cas_rejects_invalid_carrier_payload_without_state_change(self) -> None:
+        receipt = self._installed_receipt()
+        before = self.fixture.peek_state()
+        result = self.fixture.adapter().compare_and_swap_carrier(
+            self._re_carrier(receipt, armed_launchd={"reason": "no-armed-key"})
+        )
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "malformed-result")
+        self.assertFalse(result["cas_applied"])
+        self.assertEqual(self.fixture.peek_state(), before)
 
     def test_authoring_replacement_is_single_and_projects_each_transition(self) -> None:
         first = self.boundary(known_continue_report(7_200_000_090))

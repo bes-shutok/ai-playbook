@@ -353,6 +353,20 @@ def load_manifest(path: Path | str) -> dict[str, Any]:
         raise ValueError("unsupported runtime manifest")
     if not isinstance(value.get("tasks"), dict):
         raise ValueError("runtime manifest tasks must be a mapping")
+    if "claims" in value and not isinstance(value["claims"], dict):
+        # Claims-container shape refusal: consumer sites split two ways.
+        # Some read the container through ``.get("claims", {})``, which
+        # treats an absent key as no open claims; others index the
+        # container directly (``manifest["claims"]``), where an absent key
+        # raises ``KeyError`` that the CLI top-level handler catches and
+        # prints as a failure line. Neither rescues a present-but-
+        # non-mapping value, so a malformed shape used to crash the first
+        # iterating consumer (``_pre_archive_gate``) with an
+        # ``AttributeError`` the CLI top-level handler does not catch.
+        # Refuse here, beside the ``tasks`` check, so the operator sees the
+        # failure line; an absent key stays legal (both consumer shapes
+        # already tolerate it).
+        raise ValueError("runtime manifest claims must be a mapping")
     return value
 
 
@@ -3758,8 +3772,12 @@ class RuntimeDriver:
         missing key or non-existent directory refuses, and a supplied
         candidate that differs from the resolved destination refuses as
         ``unsupported archive destination``; (4) clean-round sidecar: the
-        sidecar path resolves through the same fail-closed path policy before
-        any open, then schema version 1, ``source_kind`` ``code``, a present
+        sidecar path resolves through the same fail-closed path policy
+        before any open, then reads through the same bounded byte-capped
+        policy as the plan read (an over-limit sidecar refuses with
+        evidence naming ``clean-round review sidecar exceeds the bounded
+        read limit``), then schema version 1, ``source_kind``
+        ``code``, a present
         verdict must be ``yes`` (the only optional field; an absent verdict
         falls through to the blocking-rows check), the findings array is
         required and every findings row must carry a boolean ``blocking``
@@ -3902,7 +3920,16 @@ class RuntimeDriver:
         if not sidecar_path.is_file():
             return blocked([f"clean-round review sidecar is missing or unreadable: {review_sidecar.strip()}"])
         try:
-            payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            # Same bounded byte-capped read as the plan read: read at most
+            # TERMINAL_PLAN_READ_LIMIT + 1 bytes and refuse len(data) over
+            # TERMINAL_PLAN_READ_LIMIT outright, so an over-limit sidecar is
+            # never parsed; a decode failure is a ValueError subclass and
+            # keeps the existing unreadable-or-invalid-JSON refusal.
+            with sidecar_path.open("rb") as stream:
+                data = stream.read(TERMINAL_PLAN_READ_LIMIT + 1)
+            if len(data) > TERMINAL_PLAN_READ_LIMIT:
+                return blocked([f"clean-round review sidecar exceeds the bounded read limit: over {TERMINAL_PLAN_READ_LIMIT} bytes"])
+            payload = json.loads(data.decode("utf-8"))
         except (OSError, ValueError):
             return blocked([f"clean-round review sidecar is unreadable or invalid JSON: {review_sidecar.strip()}"])
         if not isinstance(payload, Mapping):

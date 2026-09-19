@@ -1,6 +1,6 @@
 # Backlog: enforce new review records for explicitly requested review rounds
 
-Status: open
+Status: done (executed 2026-09-19 via the review-records-contract plan)
 Priority: high
 
 Workflow: backlog

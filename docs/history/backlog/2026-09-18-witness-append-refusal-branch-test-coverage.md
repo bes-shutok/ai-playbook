@@ -46,3 +46,7 @@ A future plan owning the gate block should also refresh the plan's Task 6 embedd
 ## Why not fixed now
 
 The G9b gate text lives inside the plan file's Validation Commands block; editing it changes the plan digest, which the addressing round for this review explicitly excluded (the plan file is frozen scope of record for the run; review finding F3 recorded disposition "backlog"). The fix belongs to a future plan that owns the gate block.
+
+## Closure (2026-09-19, P13 Task 3)
+
+Five branches covered in the archived learn-done plan's G9b block: A1 missing-branch refusal, A2 worktree-add refusal, A3 commit-failure refusal (empty identity via config injection; unsetting alone lets git fall back to a hostname-derived identity), A4 caller-trap sentinel (subshell scope keeps the caller's EXIT trap), A5 placement plus teardown of every scratch dir. A1-A3 pin the SPECIFIC refusal message so a downstream refusal cannot stand in. Discrimination witnessed 2026-09-19 by scratch-mutating a copied function per branch: each mutation flipped exactly its targeted assertion (A1 -> "missing-branch refusal message absent"; A2 -> "worktree-add refusal message absent"; A3 -> "append accepted with empty identity"; A4 -> "sentinel EXIT trap lost"); green run exits 0. The archived plan's Task 6 embedded function block was refreshed to the implemented subshell-wrapped version (diff-verified identical to the extracted function); a dated deviation note at the plan header records the extension.

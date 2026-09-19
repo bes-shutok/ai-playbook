@@ -67,6 +67,8 @@ Path pattern:
 
 `<branch-slug>`: current branch with `/` → `-`, lowercased (e.g. `PROJ-1234-segments-docs-design-rfc`).
 
+Before workers launch, run the record selection helper (`scripts/review_record_selection.py select`) to pick this round's record path and write only the helper-emitted paths (per `review-staging`; on a `new-round` decision run the helper's `backup` subcommand first and record the backup path in Metadata).
+
 Each doc **must** include (full `review-staging` hierarchy; **no stub or verdict-only files**):
 
 1. **Metadata** table (review type, base/head SHAs, round, domains, focus, `Status: STAGED`)
@@ -80,7 +82,7 @@ Each doc **must** include (full `review-staging` hierarchy; **no stub or verdict
 
 Sync gitignored staging to `docs` branch via `done` → `docs-branch` (same as other reviews).
 
-**Mechanical gate (before reporting round verdict):** run the review-staging validator on the staging path and confirm the `.stats.json` sidecar exists; do not report the round complete until both pass. The written sidecar is a version-1 record; one dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; the enum values, field types, clean-verdict rules, the min-date fence (`EXTENDED_SIDECAR_MIN_DATE`), and the validator-copy refresh recovery live in `review-staging`:
+**Mechanical gate (before reporting round verdict):** run the review-staging validator on the staging path and confirm the `.stats.json` sidecar exists; do not report the round complete until both pass. A clean exit additionally requires the round's record to be `record_kind: canonical`; a reconciliation or worker-evidence record can never certify the round (validator-enforced; the record-kind enum and the `RECORD_KIND_SIDECAR_MIN_DATE` fence live in `review-staging`). The written sidecar is a version-1 record; one dated on or after `EXTENDED_SIDECAR_MIN_DATE` must carry the freshness fields `review_mode`, `risk_signals`, `prior_findings_filter`, and `last_fix_commit`; the enum values, field types, clean-verdict rules, the min-date fence (`EXTENDED_SIDECAR_MIN_DATE`), and the validator-copy refresh recovery live in `review-staging`:
 
 ```bash
 VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"

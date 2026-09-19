@@ -13,3 +13,7 @@ Origin: r7 focused verification of the r6 fixes (docs/reviews/2026-09-18-...-cod
 
 ## Owner + trigger
 Owner: execute-plan/plans watcher machinery. Trigger: any edit to supersede_carrier_teardown, the schedule-arm outcome build, or compare_and_swap_carrier; or the first real budget pause exercising the teardown on the pause arm.
+
+## Closure (2026-09-19, P13 Task 4)
+
+Pause-arm receipt forwarding landed at the outcome factory (`carrier_teardown=boundary.get("carrier_teardown")` beside the `carrier_rectified` forwarding); the runtime contract's `watcher-schedule` envelope sentence now names the pause-arm teardown receipt. New pause-shaped test `test_pause_boundary_outcome_carries_carrier_teardown` asserts a non-null receipt with the expected shape over an armed launchd carrier (bootstrap faked for hermeticity; bootout membership asserted, the pause chain reaches the carrier through more than one idempotent path). Discrimination witnessed 2026-09-19: with the forwarding line reverted the new test fails ("pause outcome dropped the computed carrier_teardown"); full suite 68 passed with the line in place.

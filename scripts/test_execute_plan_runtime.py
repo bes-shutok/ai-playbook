@@ -1115,7 +1115,15 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             self._git("add", "tracked.txt", cwd=root)
             self._git("commit", "-qm", "base", cwd=root)
             commit = self._git_stdout("rev-parse", "HEAD", cwd=root)
-            state_path = root.parent / "runtime_state.json"
+            # The manifest stays outside the fixture git repo so the
+            # clean-worktree witness stays inert, but the name carries a uuid
+            # suffix (the sibling fixtures' pattern) so concurrent suite
+            # instances never clobber one shared fixed name in the parent of
+            # the per-test temp dir; cleanups unlink the manifest and its
+            # .lock sibling so no per-run litter survives in the shared dir.
+            state_path = root.parent / f"runtime_state-{uuid.uuid4().hex[:8]}.json"
+            self.addCleanup(state_path.unlink, missing_ok=True)
+            self.addCleanup(Path(str(state_path) + ".lock").unlink, missing_ok=True)
             runtime.create_manifest(state_path, "real-reconcile", [{"id": "task-1", "number": 1, "status": "pending"}])
             driver = runtime.RuntimeDriver(state_path, plan_slug="real-reconcile", owner="real-owner", repo_root=root)
             claim = driver.claim_next_task()
@@ -6771,74 +6779,60 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(fenced["reason_code"], "owner-mismatch")
 
 
-class ArchiveGatePreArchiveTest(unittest.TestCase):
-    """Terminal pre-archive eligibility stage (archive origin fixtures 1, 2, 3, and the pre-move half of fixture 5).
+class ArchiveGateFixtureBase(unittest.TestCase):
+    """Shared fixture scaffolding for the archive/terminal gate classes (fixture scaffolding dedup origin).
 
-    The driver's terminal operation gains a staged shape: the pre-archive
-    stage evaluates one fixed-order eligibility predicate and either refuses
-    with the first failed condition (blocked ``done-pending``, the machine
-    manifest byte-identical, the active plan still in place) or records the
-    ``archive_gate`` receipt without touching ``workflow_state`` or writing a
-    ``terminal_receipt``. The class also owns the sanctioned
-    residual-acceptance exit fixtures (origin D): an optional structured
-    ``residual_policy`` input (the named finding ids, the grant source, and
-    the recorded-at epoch) opens an OR-branch in the clean-round sidecar
-    predicate that additionally accepts the focused verification-round
-    sidecar when the policy's recorded-at predates that round's date and no
-    findings row is both ``blocking: true`` and a member of the policy's
-    finding ids; blocking rows outside the set are the backlogged residuals
-    and are permitted, a blocking row inside the set still refuses, a
-    blocking row whose id is not an integer refuses (membership against the
-    policy's integer finding ids cannot prove such a row outside the named
-    set), a present verdict must be ``yes`` or ``no`` (the sidecar verdict
-    may be ``no`` precisely because the out-of-set residuals are staged;
-    any other value refuses), and the membership rule replaces the
-    zero-blocking rule.
+    Owns exactly the members the four-class helper inventory proves shared:
+    the fixture plan text and shared path constants, the TOML-fence facts
+    writer, the completed-directory mkdir, the manifest seed from the
+    class-level task-row list, the active-plan writer, the sidecar writer
+    and clean-sidecar payload, the pre-archive stage call, and the driver
+    constructor. Single-class helpers stay local to their classes
+    (``_git``, ``complete_all_tasks``, ``seed_gate``, ``write_archived_plan``,
+    the residual helpers, the clock). The hermetic git setup is gated behind
+    ``requires_git`` so the mixin never silently grants git init to classes
+    that never prove real ancestry: only ``ArchiveGatePreArchiveTest`` opts
+    in, because its success arm proves a real ancestor-or-self commit.
     """
 
+    # Fixture plan text every archive fixture writes; the checkboxes are
+    # complete so plan-file evidence never fires unless a test overrides the
+    # plan or the manifest rows.
     PLAN_TEXT = "# fixture plan\n\n- [x] task-3\n- [x] task-4\n"
     ACTIVE_PLAN_REL = "docs/plans/fixture-plan.md"
     SIDECAR_REL = "docs/reviews/fixture-r3.stats.json"
-    ROUND_DATE = "2026-09-18"
-    ROUND_DAY_EPOCH = datetime(2026, 9, 18, tzinfo=timezone.utc).timestamp()
+    PLAN_SLUG = "fixture-plan"
+    # Manifest task rows seeded by ``seed_manifest``; a class overrides this
+    # to seed a differing completion shape (ArchiveGatePreArchiveTest seeds
+    # task-4 pending so its incompleteness refusal arms have a target).
+    TASK_ROWS = [
+        {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
+        {"id": "task-4", "number": 4, "status": "complete", "checkbox": True},
+    ]
+    # Hermetic git is opt-in; each class also pins its own owner identity.
+    requires_git = False
+    OWNER: str
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
         self.state_path = self.root / "runtime_state.json"
-        # Hermetic git: neutralize host global/system config so hooks,
-        # gpgsign, or aliases from the developer machine cannot leak into
-        # the fixture repository; identity is set repo-locally below.
-        self._git_env = dict(os.environ)
-        self._git_env["GIT_CONFIG_GLOBAL"] = "/dev/null"
-        self._git_env["GIT_CONFIG_SYSTEM"] = "/dev/null"
-        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True, env=self._git_env)
-        subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.root, check=True, env=self._git_env)
-        subprocess.run(["git", "config", "user.name", "Archive Gate Test"], cwd=self.root, check=True, env=self._git_env)
-        (self.root / ".gitignore").write_text("runtime_state.json\nruntime_state.json.lock\n", encoding="utf-8")
-        subprocess.run(["git", "add", ".gitignore"], cwd=self.root, check=True, env=self._git_env)
-        subprocess.run(["git", "commit", "-qm", "fixture"], cwd=self.root, check=True, env=self._git_env)
-        self.write_facts()
-        # The resolved destination directory exists on disk, so the
-        # lookalike-candidate refusal proves the candidate-mismatch arm and
-        # the success arm passes the destination-existence check.
-        (self.root / "docs/plans/completed").mkdir(parents=True, exist_ok=True)
-        runtime.create_manifest(
-            self.state_path,
-            "fixture-plan",
-            [
-                {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
-                {"id": "task-4", "number": 4, "status": "pending", "checkbox": False},
-            ],
-        )
-        self.write_active_plan()
+        if self.requires_git:
+            # Hermetic git: neutralize host global/system config so hooks,
+            # gpgsign, or aliases from the developer machine cannot leak into
+            # the fixture repository; identity is set repo-locally below.
+            self._git_env = dict(os.environ)
+            self._git_env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+            self._git_env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+            subprocess.run(["git", "init", "-q"], cwd=self.root, check=True, env=self._git_env)
+            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.root, check=True, env=self._git_env)
+            subprocess.run(["git", "config", "user.name", "Archive Gate Test"], cwd=self.root, check=True, env=self._git_env)
+            (self.root / ".gitignore").write_text("runtime_state.json\nruntime_state.json.lock\n", encoding="utf-8")
+            subprocess.run(["git", "add", ".gitignore"], cwd=self.root, check=True, env=self._git_env)
+            subprocess.run(["git", "commit", "-qm", "fixture"], cwd=self.root, check=True, env=self._git_env)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
-
-    def _git(self, *args) -> str:
-        completed = subprocess.run(["git", *args], cwd=self.root, env=self._git_env, capture_output=True, text=True, check=True)
-        return completed.stdout.strip()
 
     def write_facts(self) -> None:
         # The real TOML-fence facts format (this fence is the only place the
@@ -6855,6 +6849,15 @@ class ArchiveGatePreArchiveTest(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def make_completed_dir(self) -> None:
+        # The resolved destination directory exists on disk, so the
+        # lookalike-candidate refusal proves the candidate-mismatch arm and
+        # the success arm passes the destination-existence check.
+        (self.root / "docs/plans/completed").mkdir(parents=True, exist_ok=True)
+
+    def seed_manifest(self) -> None:
+        runtime.create_manifest(self.state_path, self.PLAN_SLUG, self.TASK_ROWS)
+
     def write_active_plan(self, text: str | None = None, rel: str | None = None) -> str:
         rel = rel or self.ACTIVE_PLAN_REL
         path = self.root / rel
@@ -6862,12 +6865,11 @@ class ArchiveGatePreArchiveTest(unittest.TestCase):
         path.write_text(text if text is not None else self.PLAN_TEXT, encoding="utf-8")
         return rel
 
-    def write_sidecar(self, payload: dict, rel: str | None = None) -> str:
-        rel = rel or self.SIDECAR_REL
-        path = self.root / rel
+    def write_sidecar(self, payload: dict) -> str:
+        path = self.root / self.SIDECAR_REL
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload), encoding="utf-8")
-        return rel
+        return self.SIDECAR_REL
 
     @staticmethod
     def clean_sidecar(**overrides) -> dict:
@@ -6875,23 +6877,13 @@ class ArchiveGatePreArchiveTest(unittest.TestCase):
         payload.update(overrides)
         return payload
 
-    def complete_all_tasks(self) -> None:
-        state = runtime.load_manifest(self.state_path)
-        for task in state["tasks"].values():
-            task.update({"status": "complete", "checkbox": True})
-        runtime._safe_write_json(self.state_path, state)
-
     def driver(self, **kwargs):
+        kwargs.setdefault("commit_lookup", lambda _commit: True)
         return runtime.RuntimeDriver(
             self.state_path,
-            plan_slug="fixture-plan",
-            owner="archive-gate-owner",
+            plan_slug=self.PLAN_SLUG,
+            owner=self.OWNER,
             repo_root=self.root,
-            commit_lookup=kwargs.pop("commit_lookup", lambda _commit: True),
-            # Default to the real git ancestry witness: the fixture root has a
-            # hermetic repository, so the success arm proves a real
-            # ancestor-or-self commit; individual arms stub the seam.
-            commit_ancestry=kwargs.pop("commit_ancestry", None),
             **kwargs,
         )
 
@@ -6918,6 +6910,63 @@ class ArchiveGatePreArchiveTest(unittest.TestCase):
             phase5_checklist=payload["phase5_checklist"],
             residual_policy=payload["residual_policy"],
         )
+
+
+class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
+    """Terminal pre-archive eligibility stage (archive origin fixtures 1, 2, 3, and the pre-move half of fixture 5).
+
+    The driver's terminal operation gains a staged shape: the pre-archive
+    stage evaluates one fixed-order eligibility predicate and either refuses
+    with the first failed condition (blocked ``done-pending``, the machine
+    manifest byte-identical, the active plan still in place) or records the
+    ``archive_gate`` receipt without touching ``workflow_state`` or writing a
+    ``terminal_receipt``. The class also owns the sanctioned
+    residual-acceptance exit fixtures (origin D): an optional structured
+    ``residual_policy`` input (the named finding ids, the grant source, and
+    the recorded-at epoch) opens an OR-branch in the clean-round sidecar
+    predicate that additionally accepts the focused verification-round
+    sidecar when the policy's recorded-at predates that round's date and no
+    findings row is both ``blocking: true`` and a member of the policy's
+    finding ids; blocking rows outside the set are the backlogged residuals
+    and are permitted, a blocking row inside the set still refuses, a
+    blocking row whose id is not an integer refuses (membership against the
+    policy's integer finding ids cannot prove such a row outside the named
+    set), a present verdict must be ``yes`` or ``no`` (the sidecar verdict
+    may be ``no`` precisely because the out-of-set residuals are staged;
+    any other value refuses), and the membership rule replaces the
+    zero-blocking rule.
+    """
+
+    # task-4 stays pending so the machine-completeness refusal arms have a
+    # target; every arm that needs a complete manifest calls
+    # complete_all_tasks() first.
+    TASK_ROWS = [
+        {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
+        {"id": "task-4", "number": 4, "status": "pending", "checkbox": False},
+    ]
+    ROUND_DATE = "2026-09-18"
+    ROUND_DAY_EPOCH = datetime(2026, 9, 18, tzinfo=timezone.utc).timestamp()
+    # The success arm proves a real ancestor-or-self commit, so this class
+    # alone initializes the hermetic fixture repository.
+    requires_git = True
+    OWNER = "archive-gate-owner"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write_facts()
+        self.make_completed_dir()
+        self.seed_manifest()
+        self.write_active_plan()
+
+    def _git(self, *args) -> str:
+        completed = subprocess.run(["git", *args], cwd=self.root, env=self._git_env, capture_output=True, text=True, check=True)
+        return completed.stdout.strip()
+
+    def complete_all_tasks(self) -> None:
+        state = runtime.load_manifest(self.state_path)
+        for task in state["tasks"].values():
+            task.update({"status": "complete", "checkbox": True})
+        runtime._safe_write_json(self.state_path, state)
 
     def test_refuses_lookalike_destination(self):
         # Fixture 1: a complete plan whose candidate destination is the bare
@@ -7157,6 +7206,94 @@ class ArchiveGatePreArchiveTest(unittest.TestCase):
                     self.assertTrue(any(evidence_fragment in entry for entry in result["evidence"]), result["evidence"])
                 self.assertEqual(self.state_path.read_bytes(), before)
 
+    def test_pre_archive_refuses_environment_and_shape_arms(self):
+        # Refusal-arm witnesses for the environment and input-shape arms the
+        # fixed-order predicate owned unwitnessed: (a) facts without the
+        # completed-directory key, (b) the resolved destination directory
+        # removed from disk, (c) facts resolving the destination outside the
+        # repository root, (d) a review sidecar path escaping the repository
+        # root, (e) a sidecar file of raw non-JSON text, and (f) the input
+        # shape guard over three malformed shapes. Every arm refuses blocked
+        # done-pending naming its condition and leaves the manifest
+        # byte-identical. The facts rewrites assemble the completed key from
+        # parts so the mixin's write_facts keeps the file's only TOML
+        # literal (test_mixin_membership pins that count).
+        self.complete_all_tasks()
+        driver = self.driver()
+        escape_dir = self.root.parent / f"{self.root.name}-escape-completed"
+        escape_dir.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, escape_dir, ignore_errors=True)
+        raw_sidecar_rel = "docs/reviews/raw-prose-r3.stats.json"
+
+        def write_plain_facts(body: str) -> None:
+            facts = self.root / ".ai-playbook" / "facts.md"
+            facts.write_text("```toml\n" + body + "```\n", encoding="utf-8")
+
+        def reset_standard_environment() -> None:
+            # Every case seeds from the standard setUp environment so the
+            # cases stay order-independent despite their mutations.
+            self.write_facts()
+            self.make_completed_dir()
+
+        def seed_missing_completed_key() -> None:
+            reset_standard_environment()
+            write_plain_facts('plans_dir = "docs/plans/"\n')
+
+        def seed_removed_completed_dir() -> None:
+            reset_standard_environment()
+            shutil.rmtree(self.root / "docs/plans/completed")
+
+        def seed_escaping_completed_dir() -> None:
+            reset_standard_environment()
+            completed_key = "plans_completed_dir"
+            escape_value = f"../{self.root.name}-escape-completed"
+            write_plain_facts('plans_dir = "docs/plans/"\n' + completed_key + ' = "' + escape_value + '"\n')
+
+        def seed_raw_text_sidecar() -> None:
+            reset_standard_environment()
+            path = self.root / raw_sidecar_rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("review prose, not JSON", encoding="utf-8")
+
+        cases = (
+            ("missing-facts-key", seed_missing_completed_key, {}, ("the facts TOML-fence key plans_completed_dir is missing or unresolvable",)),
+            ("completed-dir-removed", seed_removed_completed_dir, {}, ("the resolved destination directory does not exist",)),
+            ("completed-dir-escapes-root", seed_escaping_completed_dir, {}, ("the resolved destination escapes the repository root",)),
+            ("sidecar-escapes-root", reset_standard_environment, {"review_sidecar": "../escape-round.stats.json"}, ("clean-round review sidecar", "is not a safe repository-relative path under the repository root", "../escape-round.stats.json")),
+            ("sidecar-unreadable-or-invalid-json", seed_raw_text_sidecar, {"review_sidecar": raw_sidecar_rel}, ("clean-round review sidecar is unreadable or invalid JSON",)),
+        )
+        for label, seed_environment, overrides, fragments in cases:
+            with self.subTest(case=label):
+                seed_environment()
+                before = self.state_path.read_bytes()
+                result = self.pre_archive(driver, **overrides)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "done-pending")
+                for fragment in fragments:
+                    self.assertTrue(any(fragment in entry for entry in result["evidence"]), (fragment, result["evidence"]))
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+        # The input shape guard: a non-string plan path, a non-sha commit
+        # identity, and an empty Phase 5 checklist all refuse with the same
+        # required-inputs evidence before any filesystem work runs.
+        reset_standard_environment()
+        shape_cases = (
+            ("non-string-plan-path", {"plan_path": 123}),
+            ("non-sha-commit-identity", {"last_commit_sha": "nothex"}),
+            ("empty-phase5-checklist", {"phase5_checklist": []}),
+        )
+        with self.subTest(case="required-inputs-shape-guard"):
+            for shape, shape_overrides in shape_cases:
+                before = self.state_path.read_bytes()
+                result = self.pre_archive(driver, **shape_overrides)
+                self.assertEqual(result["status"], "blocked", shape)
+                self.assertEqual(result["reason_code"], "done-pending", shape)
+                self.assertTrue(
+                    any("active plan path, review sidecar, commit identity, and Phase 5 checklist are required" in entry for entry in result["evidence"]),
+                    (shape, result["evidence"]),
+                )
+                self.assertEqual(self.state_path.read_bytes(), before, shape)
+
     def test_accepts_sidecar_without_verdict_key(self):
         # Fixture 3, verdict-absent accept arm: the review-staging schema
         # makes `verdict` optional, so a code sidecar carrying schema
@@ -7167,6 +7304,49 @@ class ArchiveGatePreArchiveTest(unittest.TestCase):
         # gate records and the run stays active.
         self.complete_all_tasks()
         sidecar = self.write_sidecar({"schema_version": 1, "source_kind": "code", "findings": []})
+        result = self.pre_archive(self.driver(), review_sidecar=sidecar)
+        self.assertEqual(result["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        self.assertIn("archive_gate", state)
+        self.assertEqual(state["workflow_state"], "active")
+        self.assertNotIn("terminal_receipt", state)
+
+    def _write_padded_sidecar(self, total_bytes: int) -> str:
+        # A clean sidecar padded with JSON whitespace to exactly
+        # total_bytes bytes, so the bounded-read size arms vary only the
+        # byte count and never the payload shape.
+        text = json.dumps(self.clean_sidecar())
+        padded = text[:-1] + " " * (total_bytes - len(text)) + "}"
+        path = self.root / self.SIDECAR_REL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(padded, encoding="utf-8")
+        return self.SIDECAR_REL
+
+    def test_sidecar_read_bounded_refuses_oversize(self):
+        # Bounded sidecar read, oversize refuse arm: a valid-shape clean
+        # sidecar padded to TERMINAL_PLAN_READ_LIMIT + 1 bytes refuses as
+        # clean-round evidence failure naming the bounded-read limit, with
+        # the manifest byte-identical; the gate reads the sidecar through
+        # the same LIMIT + 1 byte-capped policy as the plan read, so an
+        # over-limit sidecar is never parsed.
+        self.complete_all_tasks()
+        sidecar = self._write_padded_sidecar(runtime.TERMINAL_PLAN_READ_LIMIT + 1)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = self.pre_archive(driver, review_sidecar=sidecar)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("clean-round review sidecar exceeds the bounded read limit" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_sidecar_read_bounded_accepts_at_limit(self):
+        # Bounded sidecar read, at-limit accept arm: the same clean sidecar
+        # sized to exactly TERMINAL_PLAN_READ_LIMIT bytes passes the cap
+        # (len(data) == LIMIT is not over it), the gate records, and the
+        # run stays active; this pins the boundary so the refusal stays
+        # strictly over the limit.
+        self.complete_all_tasks()
+        sidecar = self._write_padded_sidecar(runtime.TERMINAL_PLAN_READ_LIMIT)
         result = self.pre_archive(self.driver(), review_sidecar=sidecar)
         self.assertEqual(result["status"], "success")
         state = runtime.load_manifest(self.state_path)
@@ -7444,7 +7624,7 @@ class ArchiveGatePreArchiveTest(unittest.TestCase):
                 self.assertEqual(self.state_path.read_bytes(), before)
 
 
-class TerminalFinalStageTest(unittest.TestCase):
+class TerminalFinalStageTest(ArchiveGateFixtureBase):
     """Terminal final-stage archive safety (archive origin fixture 4 and the post-move half of fixture 5).
 
     The final terminal stage is the second half of the staged protocol: it
@@ -7457,26 +7637,14 @@ class TerminalFinalStageTest(unittest.TestCase):
     the machine state.
     """
 
-    PLAN_TEXT = "# fixture plan\n\n- [x] task-3\n- [x] task-4\n"
     ARCHIVED_REL = "docs/plans/completed/fixture-plan.md"
     SOURCE_REL = "docs/plans/fixture-plan.md"
+    OWNER = "terminal-final-owner"
 
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp_dir.name)
-        self.state_path = self.root / "runtime_state.json"
-        runtime.create_manifest(
-            self.state_path,
-            "fixture-plan",
-            [
-                {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
-                {"id": "task-4", "number": 4, "status": "complete", "checkbox": True},
-            ],
-        )
+        super().setUp()
+        self.seed_manifest()
         self.write_archived_plan(self.PLAN_TEXT)
-
-    def tearDown(self) -> None:
-        self.temp_dir.cleanup()
 
     def write_archived_plan(self, text: str, rel: str | None = None) -> str:
         rel = rel or self.ARCHIVED_REL
@@ -7484,16 +7652,6 @@ class TerminalFinalStageTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         return rel
-
-    def driver(self, **kwargs):
-        return runtime.RuntimeDriver(
-            self.state_path,
-            plan_slug="fixture-plan",
-            owner="terminal-final-owner",
-            repo_root=self.root,
-            commit_lookup=kwargs.pop("commit_lookup", lambda _commit: True),
-            **kwargs,
-        )
 
     def seed_gate(self, **overrides) -> dict:
         """Seed a conforming ``archive_gate`` receipt; overrides replace fields.
@@ -7583,6 +7741,22 @@ class TerminalFinalStageTest(unittest.TestCase):
         self.assertTrue(any("digest mismatch" in entry for entry in result["evidence"]), result["evidence"])
         self.assertEqual(self.state_path.read_bytes(), before)
 
+    def test_refuses_unknown_terminal_stage(self):
+        # The staged terminal dispatcher owns exactly two stages: a stage
+        # that is neither ``pre-archive`` nor ``final`` refuses blocked
+        # done-pending naming the unsupported stage, with the manifest
+        # byte-identical, no terminal receipt, and the run left active.
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = driver.mark_terminal(stage="mid-archive")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("unsupported terminal stage: mid-archive" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
     def test_success_records_exact_destination_and_digest(self):
         # Fixture 5: the full happy path completes the run; the receipt's
         # archived_plan_path equals the gate's declared_destination and the
@@ -7625,7 +7799,7 @@ class TerminalFinalStageTest(unittest.TestCase):
         self.assertEqual(state["workflow_state"], "active")
 
 
-class ArchiveLocationTest(unittest.TestCase):
+class ArchiveLocationTest(ArchiveGateFixtureBase):
     """Pre-archive relocation detection (archive origin fixture 7).
 
     A plan relocated under a completed-folder-like sibling that is neither
@@ -7635,66 +7809,23 @@ class ArchiveLocationTest(unittest.TestCase):
     relocated file in place for recovery.
     """
 
-    PLAN_TEXT = "# fixture plan\n\n- [x] task-3\n- [x] task-4\n"
     SIBLING_PLAN_REL = "docs/plans_completed/fixture-plan.md"
-    SIDECAR_REL = "docs/reviews/fixture-r3.stats.json"
+    OWNER = "archive-location-owner"
 
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp_dir.name)
-        self.state_path = self.root / "runtime_state.json"
-        # The real TOML-fence facts format resolving the plans directory and
-        # its completed sibling; the relocated plan sits under neither.
-        facts = self.root / ".ai-playbook" / "facts.md"
-        facts.parent.mkdir(parents=True, exist_ok=True)
-        facts.write_text(
-            "```toml\n"
-            "plans_dir = \"docs/plans/\"\n"
-            "plans_completed_dir = \"docs/plans/completed/\"\n"
-            "```\n",
-            encoding="utf-8",
-        )
-        (self.root / "docs/plans/completed").mkdir(parents=True, exist_ok=True)
-        runtime.create_manifest(
-            self.state_path,
-            "fixture-plan",
-            [
-                {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
-                {"id": "task-4", "number": 4, "status": "complete", "checkbox": True},
-            ],
-        )
-        self.write_plan(self.PLAN_TEXT, self.SIBLING_PLAN_REL)
-
-    def tearDown(self) -> None:
-        self.temp_dir.cleanup()
-
-    def write_plan(self, text: str, rel: str) -> str:
-        path = self.root / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-        return rel
-
-    def write_sidecar(self, payload: dict) -> str:
-        path = self.root / self.SIDECAR_REL
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload), encoding="utf-8")
-        return self.SIDECAR_REL
-
-    def driver(self):
-        return runtime.RuntimeDriver(
-            self.state_path,
-            plan_slug="fixture-plan",
-            owner="archive-location-owner",
-            repo_root=self.root,
-            commit_lookup=lambda _commit: True,
-        )
+        super().setUp()
+        self.write_facts()
+        self.make_completed_dir()
+        self.seed_manifest()
+        # The relocated plan sits under neither resolved directory.
+        self.write_active_plan(self.PLAN_TEXT, rel=self.SIBLING_PLAN_REL)
 
     def test_reports_unsupported_sibling_location(self):
         # Fixture 7: the sibling directory sits outside the resolved plans
         # directory, so the containment clause refuses before any identity,
         # destination, or sidecar evidence; the offending path is named and
         # nothing moves.
-        sidecar = self.write_sidecar({"schema_version": 1, "source_kind": "code", "verdict": "yes", "findings": []})
+        sidecar = self.write_sidecar(self.clean_sidecar())
         driver = self.driver()
         before = self.state_path.read_bytes()
         result = driver.mark_terminal(
@@ -7713,7 +7844,7 @@ class ArchiveLocationTest(unittest.TestCase):
         self.assertTrue((self.root / self.SIBLING_PLAN_REL).is_file())
 
 
-class TerminalResumeTest(unittest.TestCase):
+class TerminalResumeTest(ArchiveGateFixtureBase):
     """Interrupted archive run resumes without double archive (fixture 6).
 
     A run that recorded its ``archive_gate`` receipt and was interrupted
@@ -7722,34 +7853,14 @@ class TerminalResumeTest(unittest.TestCase):
     place with the identity fields stable while ``recorded_at`` advances.
     """
 
-    PLAN_TEXT = "# fixture plan\n\n- [x] task-3\n- [x] task-4\n"
-    ACTIVE_PLAN_REL = "docs/plans/fixture-plan.md"
-    SIDECAR_REL = "docs/reviews/fixture-r3.stats.json"
+    OWNER = "terminal-resume-owner"
 
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp_dir.name)
-        self.state_path = self.root / "runtime_state.json"
-        facts = self.root / ".ai-playbook" / "facts.md"
-        facts.parent.mkdir(parents=True, exist_ok=True)
-        facts.write_text(
-            "```toml\n"
-            "plans_dir = \"docs/plans/\"\n"
-            "plans_completed_dir = \"docs/plans/completed/\"\n"
-            "```\n",
-            encoding="utf-8",
-        )
-        (self.root / "docs/plans/completed").mkdir(parents=True, exist_ok=True)
-        runtime.create_manifest(
-            self.state_path,
-            "fixture-plan",
-            [
-                {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
-                {"id": "task-4", "number": 4, "status": "complete", "checkbox": True},
-            ],
-        )
-        path = self.root / self.ACTIVE_PLAN_REL
-        path.write_text(self.PLAN_TEXT, encoding="utf-8")
+        super().setUp()
+        self.write_facts()
+        self.make_completed_dir()
+        self.seed_manifest()
+        self.write_active_plan()
         # One closed claim record: the interruption happened after the work
         # landed, and the resume must leave the record exactly intact.
         state = runtime.load_manifest(self.state_path)
@@ -7763,31 +7874,8 @@ class TerminalResumeTest(unittest.TestCase):
         runtime._safe_write_json(self.state_path, state)
         self.clock_values = [1000.0]
 
-    def tearDown(self) -> None:
-        self.temp_dir.cleanup()
-
     def advance_clock(self) -> None:
         self.clock_values.append(self.clock_values[-1] + 1.0)
-
-    def driver(self):
-        return runtime.RuntimeDriver(
-            self.state_path,
-            plan_slug="fixture-plan",
-            owner="terminal-resume-owner",
-            repo_root=self.root,
-            commit_lookup=lambda _commit: True,
-            clock=lambda: self.clock_values[-1],
-        )
-
-    def pre_archive(self, driver) -> dict:
-        return driver.mark_terminal(
-            stage="pre-archive",
-            plan_path=self.ACTIVE_PLAN_REL,
-            destination="",
-            review_sidecar=self.SIDECAR_REL,
-            last_commit_sha="abcdef1",
-            phase5_checklist=["tests"],
-        )
 
     def test_interrupted_run_resumes_without_double_archive(self):
         # Fixture 6: gate recorded, no move performed. The resumed process
@@ -7796,13 +7884,7 @@ class TerminalResumeTest(unittest.TestCase):
         # pre-archive call overwrites the gate in place: identity fields
         # stable, recorded_at advanced, no terminal receipt, and the active
         # plan still in place, so no second archive transition exists.
-        sidecar_path = self.root / self.SIDECAR_REL
-        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
-        sidecar_path.write_text(
-            json.dumps({"schema_version": 1, "source_kind": "code", "verdict": "yes", "findings": []}),
-            encoding="utf-8",
-        )
-        first = self.driver()
+        first = self.driver(clock=lambda: self.clock_values[-1])
         outcome = self.pre_archive(first)
         self.assertEqual(outcome["status"], "success")
         state = runtime.load_manifest(self.state_path)
@@ -7810,7 +7892,7 @@ class TerminalResumeTest(unittest.TestCase):
         self.assertEqual(state["workflow_state"], "active")
         self.assertNotIn("terminal_receipt", state)
         self.advance_clock()
-        resumed = self.driver()
+        resumed = self.driver(clock=lambda: self.clock_values[-1])
         repeat = self.pre_archive(resumed)
         self.assertEqual(repeat["status"], "success")
         state_after = runtime.load_manifest(self.state_path)
@@ -7825,6 +7907,261 @@ class TerminalResumeTest(unittest.TestCase):
         self.assertNotIn("terminal_receipt", state_after)
         self.assertEqual(state_after["claims"]["task-3"]["state"], "closed")
         self.assertTrue((self.root / self.ACTIVE_PLAN_REL).is_file())
+
+
+class TestArchiveGateFixtureBase(unittest.TestCase):
+    """Structural witness for the ArchiveGateFixtureBase extraction (fixture scaffolding dedup origin).
+
+    The dedup contract: the mixin owns the shared archive/terminal fixture
+    scaffolding exactly once, the four rebased classes keep no local copy of
+    a mixin-owned member, and the hermetic git setup stays gated behind
+    ``requires_git`` on the single class whose success arm proves real
+    ancestor-or-self ancestry.
+    """
+
+    def test_mixin_membership(self):
+        # Given the four rebased classes, each defines no local copy of a
+        # mixin-owned member (helpers and shared constants alike), every
+        # listed member really exists on the mixin, the requires_git gate
+        # defaults off and is opted in by the pre-archive class alone, and
+        # the facts TOML literal occurs exactly once in the file (owned by
+        # the mixin's write_facts; no inline copy survives anywhere else).
+        mixin_owned = (
+            "PLAN_TEXT",
+            "ACTIVE_PLAN_REL",
+            "SIDECAR_REL",
+            "write_facts",
+            "make_completed_dir",
+            "seed_manifest",
+            "write_active_plan",
+            "write_sidecar",
+            "clean_sidecar",
+            "pre_archive",
+            "driver",
+        )
+        for name in mixin_owned:
+            self.assertTrue(hasattr(ArchiveGateFixtureBase, name), f"mixin lost member {name}")
+        rebased = (ArchiveGatePreArchiveTest, TerminalFinalStageTest, ArchiveLocationTest, TerminalResumeTest)
+        for cls in rebased:
+            self.assertTrue(issubclass(cls, ArchiveGateFixtureBase), f"{cls.__name__} is not rebased on the mixin")
+            for name in mixin_owned:
+                self.assertNotIn(name, vars(cls), f"{cls.__name__} keeps a local copy of mixin-owned {name}")
+        # Hermeticity: git init is opt-in, and only the class that proves a
+        # real ancestor-or-self commit initializes the fixture repository.
+        self.assertIs(ArchiveGateFixtureBase.requires_git, False)
+        self.assertIs(ArchiveGatePreArchiveTest.requires_git, True)
+        for cls in (TerminalFinalStageTest, ArchiveLocationTest, TerminalResumeTest):
+            self.assertIs(cls.requires_git, False, f"{cls.__name__} must not grant itself git init")
+        source = Path(__file__).read_text(encoding="utf-8")
+        # Needle assembled from parts so this assertion's own source text
+        # cannot match it; the mixin's write_facts owns the only occurrence.
+        toml_row = "plans_completed_dir " + "= "
+        self.assertEqual(source.count(toml_row), 1, "facts TOML literal must occur exactly once in the file")
+
+
+    def test_terminal_resume_driver_sites_inject_clock(self):
+        import inspect
+        src = inspect.getsource(TerminalResumeTest)
+        self.assertNotIn(
+            "self.driver()",
+            src,
+            "driver constructions in TerminalResumeTest must inject the fixture clock; "
+            "ambient time makes the recorded_at assertion order-dependent",
+        )
+
+class ClaimsContainerShapeTest(unittest.TestCase):
+    """Claims-container shape refusal at the load boundary (claims-container shape refusal origin).
+
+    ``load_manifest`` validated only ``schema_version`` and ``tasks``, so a
+    malformed claims container (null, a list, a string) sailed through to
+    the first consumer that iterates it (the open-claims completeness
+    comprehension of ``_pre_archive_gate``'s arm (1), the first
+    ``.items()`` iteration over the claims container, which runs before
+    any residual handling and fires without ``residual_policy``) and
+    crashed there with ``AttributeError`` the CLI top-level handler does
+    not catch: the operator saw a traceback instead of a failure line.
+    These canaries pin the load-time refusal for every
+    non-mapping shape and the CLI surface that must name the claims shape
+    before any driver work runs, leaving the manifest byte-identical.
+    """
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.state_path = self.root / "runtime_state.json"
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _seed_manifest_with_claims(self, claims):
+        # create_manifest cannot produce a malformed container, so the
+        # fixture seeds a producer-valid manifest and swaps the claims key
+        # by hand; every other container stays producer-valid so the canary
+        # pins the claims shape alone. Tasks are completed so the CLI
+        # pre-archive gate passes the completeness check and reaches the
+        # claims container iteration (the origin-recorded crash site).
+        manifest = runtime.create_manifest(self.state_path, "claims-shape", [{"id": "task-1", "number": 1, "status": "complete", "checkbox": True}])
+        manifest["claims"] = claims
+        self.state_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def test_load_manifest_refuses_non_mapping_claims(self):
+        for claims_shape in (None, ["task-1"], "task-1"):
+            with self.subTest(claims_shape=claims_shape):
+                self._seed_manifest_with_claims(claims_shape)
+                with self.assertRaises(ValueError) as ctx:
+                    runtime.load_manifest(self.state_path)
+                self.assertIn("claims must be a mapping", str(ctx.exception))
+
+    def test_cli_refuses_claims_container_before_driver_work(self):
+        self._seed_manifest_with_claims(None)
+        before = self.state_path.read_bytes()
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/execute_plan_runtime.py"),
+                "--manifest", str(self.state_path),
+                "--repo-root", str(self.root),
+                "--owner", "claims-shape-owner",
+                "--operation", "terminal",
+                "--input", json.dumps(
+                    {
+                        "stage": "pre-archive",
+                        "plan_path": "docs/plans/claims-shape.md",
+                        "destination": "",
+                        "review_sidecar": "",
+                        "last_commit_sha": "abcdef1",
+                        "phase5_checklist": ["tests"],
+                    }
+                ),
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(completed.returncode, 0, completed.stdout)
+        self.assertIn("claims must be a mapping", completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+
+class CheckpointRecoveryTest(unittest.TestCase):
+    """Recovery pins for the checkpoint caller envelope (blocked-claim recovery gap origin).
+
+    A first checkpoint whose worker-result envelope is malformed (missing
+    ``reason_code``) latches the claim blocked with ``resume_allowed: false``
+    through the closed malformed-result arm. These characterization pins
+    document the probed recovery boundary the runtime contract's "Checkpoint
+    caller envelope" section states: a corrected re-submission under the same
+    live claim token and generation recovers in place without lease expiry or
+    manifest recreation, while a post-launch claim without a launch record
+    refuses the corrected receipt as the drift guard's resumable stale-claim
+    outcome by design (anti-tamper; never bypassed or weakened here).
+    """
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.state_path = self.root / "runtime_state.json"
+        runtime.create_manifest(
+            self.state_path,
+            "checkpoint-recovery",
+            [{"id": "task-1", "number": 1, "status": "pending"}],
+        )
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _driver(self):
+        return runtime.RuntimeDriver(
+            self.state_path,
+            plan_slug="checkpoint-recovery",
+            owner="recovery-owner",
+            repo_root=self.root,
+            commit_lookup=lambda _commit: True,
+        )
+
+    def _seed_claim(self, *, launch_record=True, blocked=False):
+        # Seed 0: the claim generation equals the manifest generation (the
+        # create_manifest seed default), which is what lets the malformed
+        # receipt pass the _record_checkpoint_locked fence and reach the
+        # latch; a differing claim generation would refuse the malformed
+        # receipt at fencing as owner-mismatch before any latch.
+        state = runtime.load_manifest(self.state_path)
+        claim = {
+            "token": "seed-token",
+            "generation": 0,
+            "owner": "recovery-owner",
+            "state": "blocked" if blocked else "launched",
+            "task_id": "task-1",
+            "launched_at": 111.0,
+        }
+        if launch_record:
+            claim["launch_record"] = {"baseline_revision": "", "generation": 0, "launched_at": 111.0}
+        state["claims"]["task-1"] = claim
+        if blocked:
+            state["tasks"]["task-1"].update({"status": "blocked", "resume_allowed": False})
+        runtime._safe_write_json(self.state_path, state)
+
+    def _envelope(self):
+        # The caller-facing checkpoint envelope the runtime contract
+        # documents; generation is the claim generation (0 at this seed).
+        return {
+            "status": "success",
+            "reason_code": "completed",
+            "evidence": ["worker-log: task complete"],
+            "action_scope": "repository-task",
+            "checkpoint_identity": "task-1:worker-1",
+            "generation": 0,
+            "claim_token": "seed-token",
+        }
+
+    def test_corrected_checkpoint_after_malformed_receipt_recovers(self):
+        driver = self._driver()
+        self._seed_claim()
+        seeded = runtime.load_manifest(self.state_path)
+        malformed = self._envelope()
+        del malformed["reason_code"]
+        receipt = driver.record_worker_checkpoint(malformed)
+        self.assertEqual(receipt["status"], "blocked")
+        self.assertEqual(receipt["reason_code"], "malformed-result")
+        self.assertFalse(receipt["resume_allowed"])
+        latched = runtime.load_manifest(self.state_path)
+        self.assertEqual(latched["tasks"]["task-1"]["status"], "blocked")
+        self.assertEqual(latched["tasks"]["task-1"]["blocked_receipt"]["reason_code"], "malformed-result")
+        self.assertEqual(latched["claims"]["task-1"]["state"], "blocked")
+        corrected = self._envelope()
+        recovered = driver.record_worker_checkpoint(corrected)
+        self.assertEqual(recovered["status"], "success")
+        self.assertEqual(recovered["state"], "done-pending")
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-1"]["status"], "done-pending")
+        self.assertIn("task-1:worker-1", state["checkpoints"])
+        # In-place recovery under the same live claim: the token and
+        # generation survive (no reclaim, no replaced claim), the lease
+        # timestamp is never rotated, and the seeded manifest document is
+        # still the one serving the run (no recreation, no generation bump).
+        self.assertEqual(state["claims"]["task-1"]["token"], "seed-token")
+        self.assertEqual(state["claims"]["task-1"]["generation"], seeded["claims"]["task-1"]["generation"])
+        self.assertEqual(state["claims"]["task-1"]["state"], "launched")
+        self.assertEqual(state["claims"]["task-1"]["launched_at"], seeded["claims"]["task-1"]["launched_at"])
+        self.assertEqual(state["generation"], seeded["generation"])
+        self.assertEqual(state["plan_slug"], seeded["plan_slug"])
+
+    def test_drift_guard_refuses_post_launch_claim_without_launch_record(self):
+        driver = self._driver()
+        self._seed_claim(launch_record=False, blocked=True)
+        receipt = driver.record_worker_checkpoint(self._envelope())
+        self.assertEqual(receipt["status"], "blocked")
+        self.assertEqual(receipt["reason_code"], "stale-claim")
+        self.assertTrue(receipt["resume_allowed"])
+        self.assertIn("claim is in a post-launch state but has no launch record", receipt["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        # The refusal preserves the manifest: the task stays latched, the
+        # corrected checkpoint is not persisted, and no launch record is
+        # backfilled behind the guard.
+        self.assertEqual(state["tasks"]["task-1"]["status"], "blocked")
+        self.assertNotIn("task-1:worker-1", state["checkpoints"])
+        self.assertNotIn("launch_record", state["claims"]["task-1"])
 
 
 class RecordingAdapter:

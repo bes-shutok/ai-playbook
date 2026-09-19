@@ -22,3 +22,7 @@ Aggravator: the done sweep's foreign-path refusal discipline correctly protects 
 
 - Authored recipes pass review only with placement and teardown wording present.
 - A sweep of open backlog items and open plans finds zero fixture recipes missing placement plus teardown.
+
+## Closure (2026-09-19, P13 Task 2)
+
+Corpus rule landed in the plans skill (Validation Commands authoring rule 35: placement inside `mktemp -d` plus explicit teardown, equal weight with assertions; review lenses check both). Sweep result 2026-09-19 over `docs/history/backlog/2026-*.md` + `docs/plans/2026-*.md`: one offender (2026-09-18-untracked-nested-git-dir-hygiene.md, amended in place with a dated placement-plus-teardown line); the witness-append item already compliant (its item 5 carries both); all other matches compliant. The repoA/repoB leftovers were removed 2026-09-18.

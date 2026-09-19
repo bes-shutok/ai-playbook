@@ -880,3 +880,28 @@ through to the default, wrote the job file under `./~/...` inside the repo,
 and exposed that a real default-path arm on a host would have failed the
 same way. The fix expands the defaults at import and a test pins them
 absolute.
+
+## 35. A `.get` Default Rescues Only an Absent Key, Never a Present Null
+
+`d.get(key, default)` returns the stored value whenever the key exists, so
+an optional document field explicitly set to `null` yields `None`, not the
+default. Code that relies on the fallback to normalize a container
+(`doc.get("items", {})`) then crashes far from the load site
+(`AttributeError: 'NoneType' object has no attribute ...`) when a document
+carries the key with a null value.
+
+- Treat "absent" and "present but null" as different inputs: absent is
+  legal, present non-mapping is refused at load time with a named error
+  (`if "items" in doc and not isinstance(doc["items"], dict): raise
+  ValueError(...)`).
+- Validate the shape where the document is loaded, so the failure surfaces
+  at the boundary instead of deep inside a consumer iterating `.items()`.
+- The same blind spot covers `setdefault` and `value or {}` chains that
+  paper over falsy values; neither distinguishes null from absent.
+
+Witness: a plan-runtime manifest loader validated only two top-level keys
+and consumed an optional mapping later via `.get(name, {}).items()` in an
+archive gate; a manifest carrying the key with a `null` value passed
+loading and crashed the gate with `AttributeError` on `None.items()`. The
+fix added an explicit mapping check at load time while keeping the absent
+key legal, preserving the `.get` consumer idiom.

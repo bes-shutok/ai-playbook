@@ -40,3 +40,18 @@ older superseded wordings.
    added 2026-09-17 for the superseded re-arm wording.
 3. Verify the new pins are RED against a scratch copy carrying the pre-r4
    text and GREEN on the current tree before committing.
+
+Note (2026-09-18, P12 origins 2-3): T-3 finding restated inline. The two
+born-GREEN pins by name are `ambiguous-outcome carve-out kept` (zcode.md,
+needle `treat the child as dispatched`) and `success-via-existing
+confirmation` (prompt-templates.md, needle `counts as success only after one
+more listing confirms`). Their guarantee was presence-only: both pins kept
+passing when a regression reverted the surrounding sentence to its pre-r4
+unscoped form, because the spans they require pre-date the r4 scoping fixes.
+Origin: liveness r1 review, deferred by the triage; the rc-aware negative-pin
+mechanism existed from the r1 address pass. Closed by the
+maintenance-loop-residuals plan's Task 3: one `expect_absent` negative pin
+per extracted pre-r4 span (the unscoped carve-around lead-in in zcode.md,
+the success clause without the failed-confirmation escalation route and
+without repo containment in prompt-templates.md), each proven RED against a
+scratch copy carrying the pre-r4 text and GREEN on the current tree.

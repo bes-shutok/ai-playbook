@@ -18,3 +18,7 @@ Reposition the modifier next to its head (for example "...owns every other commi
 ## Why not fixed now
 
 Raised by the final review round (r5) at the run's five-round cap; a digest-mutating fix would have required a sixth round, which the run's budget forbids. Prose-clarity only; the wrong parse is domain-absurd, so no plausible misbehavior follows.
+
+## Closure (2026-09-19, P13 Task 6)
+
+learn SKILL.md line 23 rewritten: the parenthetical is now a reference to done Step 4's failed-capture-set definition, and the modifier sits next to its head: `the done skill owns every other commit, including every commit in the whole project repository, except the docs-branch skill's orphan-branch commits`. Superseded dangling phrase `including the whole project repository` appears zero times.

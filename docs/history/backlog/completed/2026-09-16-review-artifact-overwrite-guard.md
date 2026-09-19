@@ -1,6 +1,6 @@
 # Backlog: add an overwrite guard for review staging artifacts
 
-Status: open
+Status: done (executed 2026-09-19 via the review-records-contract plan)
 Priority: high
 
 Workflow: backlog

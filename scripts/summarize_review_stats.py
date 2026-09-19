@@ -1249,6 +1249,36 @@ def aggregate_legacy_worker_compat(payload: dict) -> dict:
     return norm
 
 
+def record_kind_of(payload: dict) -> str | None:
+    """Return the payload's ``record_kind`` value for a POST-FENCE record, else
+    None. The kind fence is the validator's two-surface classifier
+    (``record_kind_fence``, the public alias, imported from
+    ``validate_review_staging``; the fence constant is never re-pinned here,
+    r1 F8, and the summarizer never imports a private symbol, r2 overflow
+    D5): a record whose sidecar ``date`` classifies post-fence must declare
+    a kind; pre-fence or undated records are accepted-legacy and exempt.
+    The staging filename surface is unavailable at aggregation time, so it
+    passes as ``None`` and classifies ``undated`` (which never grants an
+    exemption by itself).
+    """
+    fence = vrs.record_kind_fence(None, payload.get("date"))
+    if fence["sidecar_class"] != "post-fence":
+        return None
+    kind = payload.get("record_kind")
+    return kind if isinstance(kind, str) else None
+
+
+def is_non_canonical_record(payload: dict) -> bool:
+    """True iff a POST-FENCE record declares a non-canonical ``record_kind``
+    (reconciliation, worker-evidence, legacy-import; the enum is owned by
+    ``review-staging`` via the validator). Such a record never folds its
+    findings into the panel-tuning aggregate and is counted separately in the
+    report output. A pre-fence record or a record without ``record_kind``
+    aggregates as today (grandfathered)."""
+    kind = record_kind_of(payload)
+    return kind is not None and kind != "canonical"
+
+
 def aggregate_sidecar(payload: dict) -> dict:
     """Classify and normalize a sidecar payload via the validator's exported
     schema classifier (the single classification authority; classified ONCE)
@@ -1258,13 +1288,32 @@ def aggregate_sidecar(payload: dict) -> dict:
     - ``legacy-worker-shaped`` -> compatibility adapter (worker/lens metrics
       preserved, legacy contract reported)
     - any other legacy label -> generic legacy normalization
+
+    Canonical-only aggregation: a post-fence record declaring a non-canonical
+    ``record_kind`` contributes zero finding-bearing totals (raw, staged,
+    dedup, discard, calibration, overflow, triage, severity) and launch
+    telemetry stays observed; the report counts the record separately from
+    ``is_non_canonical_record`` at report-build time (r1 F17: the normalized
+    dict itself carries no record_kind/non_canonical keys because no consumer
+    reads them). Pre-fence or kindless records aggregate as today.
     """
     label = vrs.classify_sidecar_schema(payload)
     if label == LEGACY_WORKER_SHAPE_LABEL:
-        return aggregate_legacy_worker_compat(payload)
-    if label in CURRENT_SHAPE_SCHEMA_LABELS:
-        return aggregate_current(payload)
-    return aggregate_legacy(payload)
+        norm = aggregate_legacy_worker_compat(payload)
+    elif label in CURRENT_SHAPE_SCHEMA_LABELS:
+        norm = aggregate_current(payload)
+    else:
+        norm = aggregate_legacy(payload)
+    if is_non_canonical_record(payload):
+        norm["raw_findings"] = 0
+        norm["staged_findings"] = 0
+        norm["dedup_count"] = 0
+        norm["discard_count"] = 0
+        norm["calibration_count"] = 0
+        norm["overflow_count"] = 0
+        norm["triage"] = {key: 0 for key in norm["triage"]}
+        norm["severity"] = {key: 0 for key in norm["severity"]}
+    return norm
 
 
 # ---- Effectiveness metric primitives (pure, for Task 3 to wire in). ---- #
@@ -1673,9 +1722,15 @@ def group_into_cohorts(
     is ``baseline`` or ``growth``. Returns a mapping ``cohort_key_tuple ->
     {period: [(normalized, payload), ...]}``. Panel mode is NOT a key, so two
     sidecars differing only in panel mode land in the same cohort.
+
+    A post-fence record declaring a non-canonical ``record_kind`` never enters a
+    cohort bucket (its payload-derived metrics must not feed panel tuning); the
+    report counts it separately in availability instead.
     """
     cohorts: dict[tuple[str, str, str, str], dict[str, list[tuple[dict, dict]]]] = {}
     for period, payload in classified_sidecars:
+        if is_non_canonical_record(payload):
+            continue
         key = cohort_key(payload)
         bucket = cohorts.setdefault(key, {"baseline": [], "growth": []})
         norm = aggregate_sidecar(payload)
@@ -1757,6 +1812,11 @@ def build_effectiveness_report(
             if c["baseline_reviews"] > 0 and c["growth_reviews"] > 0
         ),
         "skipped_malformed": skipped_malformed,
+        # Post-fence records declaring a non-canonical record_kind: excluded
+        # from the canonical-only aggregate, counted on this separate line.
+        "non_canonical_records": sum(
+            1 for _period, payload in clean if is_non_canonical_record(payload)
+        ),
     }
 
     # Observed token usage aggregation (never estimated): sum the observed
@@ -1831,6 +1891,13 @@ def serialize_effectiveness_markdown(report: dict) -> bytes:
         availability += f", {avail['skipped_malformed']} skipped malformed"
     availability += "."
     lines.append(availability)
+    # Separate non-canonical count line, only when non-zero so the normal
+    # (all-canonical) markdown stays byte-identical (determinism selftest).
+    if avail.get("non_canonical_records"):
+        lines.append(
+            "Non-canonical records excluded from aggregation: "
+            f"{avail['non_canonical_records']}"
+        )
     lines.append("")
     # Observed token usage (never estimated): totals are sums of observed
     # usage records on post-cutover sidecars; coverage is the fraction of
@@ -5217,6 +5284,143 @@ def _t_current_adapter_v1(check) -> None:
     )
 
 
+# ---- canonical_only_aggregation (record kinds contract, RED-first) ----
+@_test("summarize_review_stats#canonical_only_aggregation")
+def _t_canonical_only_aggregation(check) -> None:
+    """A post-fence record that declares a non-canonical ``record_kind`` never
+    folds its findings into the panel-tuning aggregate: a fixture directory
+    holding one canonical sidecar (two findings) and one post-fence
+    reconciliation sidecar (one finding) aggregates exactly the two canonical
+    findings, and the report output counts the non-canonical record separately.
+    A pre-fence record or a post-fence record without ``record_kind`` aggregates
+    as today (grandfathered). Fixture dates derive from the fence constant
+    imported from the validator (never hardcoded)."""
+    import datetime
+    import tempfile
+
+    fence = vrs.RECORD_KIND_SIDECAR_MIN_DATE
+    check(
+        "canonical_only_aggregation: fence constant imported from the validator",
+        isinstance(fence, str) and len(fence) == 10 and fence[4] == "-" and fence[7] == "-",
+        repr(fence),
+    )
+    post_fence_date = fence  # on/after the fence is post-fence
+    pre_fence_date = (
+        datetime.date.fromisoformat(fence) - datetime.timedelta(days=1)
+    ).isoformat()
+
+    def payload_of(record_kind: str | None, date: str, findings_count: int) -> dict:
+        payload = vrs._version1_payload()
+        payload["date"] = date
+        payload["counts"] = {
+            "workers_launched": 5,
+            "raw_findings": findings_count,
+            "staged_findings": findings_count,
+        }
+        payload["findings"] = [
+            {"id": i + 1, "severity": "Low", "triage": "fixed"}
+            for i in range(findings_count)
+        ]
+        if record_kind is None:
+            payload.pop("record_kind", None)
+        else:
+            payload["record_kind"] = record_kind
+        return payload
+
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        root = td_path / "myrepos"
+        repo = root / "kind-fence-repo"
+        (repo / ".ai-playbook").mkdir(parents=True)
+        (repo / ".ai-playbook" / "facts.md").write_text(
+            '```toml\nreviews_dir = "docs/reviews/"\n```\n', encoding="utf-8"
+        )
+        canonical = payload_of("canonical", post_fence_date, 2)
+        reconciliation = payload_of("reconciliation", post_fence_date, 1)
+        canonical_path = repo / "docs" / "reviews" / f"{post_fence_date}-code-review-r1.stats.json"
+        reconciliation_path = (
+            repo / "docs" / "reviews" / f"{post_fence_date}-code-review-reconciliation-r1.stats.json"
+        )
+        _write_private_sidecar(canonical_path, canonical)
+        _write_private_sidecar(reconciliation_path, reconciliation)
+
+        sidecars = discover_sidecars([root])
+        check(
+            "canonical_only_aggregation: both fixture sidecars discovered",
+            canonical_path.resolve() in sidecars
+            and reconciliation_path.resolve() in sidecars,
+            str(sorted(str(s) for s in sidecars)),
+        )
+
+        # Canonical-only aggregation: exactly the canonical sidecar's two
+        # findings fold into the panel-tuning totals; the reconciliation
+        # record's finding does not.
+        norms = []
+        for sidecar in sidecars:
+            parsed, _reason = parse_payload(read_byte_buffer(sidecar))
+            if parsed is not None:
+                norms.append(aggregate_sidecar(parsed))
+        total_raw = sum(n["raw_findings"] for n in norms)
+        total_staged = sum(n["staged_findings"] for n in norms)
+        total_fixed = sum(n["triage"]["fixed"] for n in norms)
+        check(
+            "canonical_only_aggregation: only canonical findings aggregate for panel tuning",
+            total_raw == 2 and total_staged == 2 and total_fixed == 2,
+            f"raw={total_raw} staged={total_staged} fixed={total_fixed}",
+        )
+
+        # Report output: the non-canonical record is counted separately.
+        classified = [("baseline", canonical), ("baseline", reconciliation)]
+        report = build_effectiveness_report(classified)
+        excluded = report["availability"].get("non_canonical_records")
+        check(
+            "canonical_only_aggregation: non-canonical record counted separately in availability",
+            excluded == 1,
+            str(report["availability"]),
+        )
+        md = serialize_effectiveness_markdown(report).decode("utf-8")
+        check(
+            "canonical_only_aggregation: markdown reports the non-canonical record on its own line",
+            "Non-canonical records excluded from aggregation: 1" in md,
+            md,
+        )
+
+    # Grandfathered: a PRE-FENCE record with a non-canonical kind aggregates as
+    # today, and so does a post-fence record without any record_kind.
+    pre_fence_norm = aggregate_sidecar(payload_of("reconciliation", pre_fence_date, 1))
+    check(
+        "canonical_only_aggregation: pre-fence reconciliation record aggregates as today (grandfathered)",
+        pre_fence_norm["raw_findings"] == 1 and pre_fence_norm["staged_findings"] == 1,
+        f"raw={pre_fence_norm['raw_findings']} staged={pre_fence_norm['staged_findings']}",
+    )
+    kindless_norm = aggregate_sidecar(payload_of(None, post_fence_date, 1))
+    check(
+        "canonical_only_aggregation: post-fence record without record_kind aggregates as today (grandfathered)",
+        kindless_norm["raw_findings"] == 1 and "non_canonical" not in kindless_norm,
+        f"raw={kindless_norm['raw_findings']}",
+    )
+    canonical_norm = aggregate_sidecar(payload_of("canonical", post_fence_date, 2))
+    check(
+        "canonical_only_aggregation: post-fence canonical record aggregates its own findings",
+        canonical_norm["raw_findings"] == 2 and "non_canonical" not in canonical_norm,
+        f"raw={canonical_norm['raw_findings']}",
+    )
+
+    # r1 F22 (informational uncovered arm): a classified list holding only
+    # non-canonical records yields ZERO cohort buckets, so no non-canonical
+    # payload-derived metric can reach panel tuning through the grouping.
+    only_non_canonical = [
+        ("baseline", payload_of("reconciliation", post_fence_date, 1)),
+        ("growth", payload_of("worker-evidence", post_fence_date, 1)),
+    ]
+    check(
+        "canonical_only_aggregation: group_into_cohorts yields zero cohorts "
+        "for a non-canonical-only classified list",
+        group_into_cohorts(only_non_canonical) == {},
+        str(group_into_cohorts(only_non_canonical)),
+    )
+
+
 # ---- accepted_unique ----
 @_test("summarize_review_stats#accepted_unique")
 def _t_accepted_unique(check) -> None:
@@ -6122,6 +6326,7 @@ _SUBSET_OF: dict[str, str] = {
     "summarize_review_stats#legacy_adapters": "aggregation",
     "summarize_review_stats#legacy_adapter_compat": "aggregation",
     "summarize_review_stats#current_adapter_v1": "aggregation",
+    "summarize_review_stats#canonical_only_aggregation": "aggregation",
     "summarize_review_stats#accepted_unique": "aggregation",
     "summarize_review_stats#cohort_key_derivation": "report",
     "summarize_review_stats#comparable_cohorts": "report",

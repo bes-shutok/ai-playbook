@@ -370,8 +370,14 @@ Required content per item (`{backlog_dir}/YYYY-MM-DD-<slug>.md`; one finding or 
 - Problem statement with evidence: what is wrong and the observed or realistic consequence
 - Exact location: file path with line or anchor, or contract/doc section
 - Suggested fix, or the options considered when the fix is a design choice
-- Severity and source reference: staging doc path, round, finding id
+- Severity and source reference: staging doc path, round, finding id, capture hygiene check verdict
 - Why not fixed now: the scope boundary or decision, and who made it
+
+Before the item counts as captured, run the public-hygiene scanner over the composed draft while it is still uncommitted (capture hygiene check):
+
+1. From the repo root, run the scanner in explicit-paths mode over the draft file: `bash scripts/scan-public-hygiene.sh --files <draft-path>` (outside the skills repo, use the runtime copy at `~/.ai-playbook/scripts/scan-public-hygiene.sh`).
+2. A nonzero verdict stops the capture: fix the draft in place and rerun until the scan passes; never widen or fork the deny-patterns file to make a draft pass. The scanner's two built-in patterns and the shared deny-patterns file stay the only rule sources.
+3. Record the passing verdict in the item's source reference (for example `capture hygiene: scan-public-hygiene --files pass`).
 
 Record the backlog item path on the finding (Analysis section or triage log) so later rounds and downstream analysis can find it.
 

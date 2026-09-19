@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mechanical pins for the maintenance scheduler skill (review r1/r2 fix rounds).
+# Mechanical pins for the maintenance scheduler skill.
 # Each pin guards an invariant the review loop or a manual edit could silently
 # regress: guard structure, lane cap wording, dispatch-slice tag integrity,
 # re-arm paragraph parity and escalation, the parent title's single creation
@@ -41,6 +41,36 @@ expect_absent() { # expect_absent <description> <pattern> <file>: rc 0 = fail, r
   fi
 }
 
+# --- deliberate freeze literals (review r1 RISK-4) ---
+# The expect_absent pins below freeze exact prose in files whose owning plans
+# are completed or frozen. A future legitimate edit that trips one of them is
+# a wording change to a pinned span, not a suite bug; reconcile the pin and
+# the text in the same edit and record the superseding origin. Freeze origins:
+#   'spacing window, classify its prompt:' (SKILL.md): superseded by the P12
+#       origin 1 repo-scoped widened arm (plan
+#       2026-09-18-maintenance-loop-residuals-occupancy-anchors-rearm-wording, Task 1).
+#   'when the automation listing shows no ENABLED parent' (SKILL.md):
+#       superseded by the P12 origin 4 state-first Step 0 rewrite (same plan, Task 2).
+#   'plus a path under the resolved `plans_dir` (SKILL.md Configuration;
+#       default `docs/plans/`).' (zcode.md): superseded by the same P12
+#       origin 1 containment extension of the execution-child marker.
+#   'a rollback create refusal means the child create actually succeeded: ...'
+#       (zcode.md) and 'counts as success only after one more listing confirms
+#       an ENABLED automation with that title and prompt opening is present;
+#       ...' (prompt-templates.md): pre-r4 unscoped spans extracted from git
+#       history (a4ffa82f^) by the P12 origins 2-3 discriminating-guard task.
+#   'sessions whose spawner automation has completed are not blocked'
+#       (zcode.md): superseded by the 2026-09-16 linger-model correction.
+#   'list once more immediately before the create' (prompt-templates.md):
+#       superseded by the state-first re-arm duty (liveness plan, Task 3).
+#   done-skill ordering pin (python block): freezes the pointer line
+#       'Before Step 0, in a repository that resolves the maintenance skill'
+#       above the Step 0 heading (liveness plan, Task 4; the line is
+#       prescribed unchanged in its owning plan).
+#   Executed RED/GREEN evidence for these pins (scratch regressions, failing
+#       pin lines, sweep rcs): plan
+#       2026-09-18-maintenance-loop-residuals-occupancy-anchors-rearm-wording,
+#       'Triage notes (execution)', entry 2026-09-19 (code review r2, TEST-R2-1).
 # --- SKILL.md structure ---
 pin "G1e guard present"      grep -qF 'G1e (execution lane)' "$S"
 pin "G1a guard present"      grep -qF 'G1a (authoring lane)' "$S"
@@ -51,6 +81,10 @@ pin "execution lane never idle-dispatched" grep -qF 'never dispatched through a 
 pin "state-file lane arm present" grep -qF 'State-file arm' "$S"
 pin "idle children in the lane arm" grep -qF 'null `fire_at`' "$S"
 pin "tripwire self-heal present" grep -qF 'Self-heal arm' "$S"
+pin "tripwire span shape excludes the title conjunct" grep -qF "deliberately without that rule's title conjunct" "$S"
+pin "widened-arm classification repo-scoped" grep -qF 'classify its prompt only when the prompt contains the resolved repository root' "$S"
+pin "widened-arm outcomes scoped to contained prompts" grep -qF 'Among contained prompts:' "$S"
+expect_absent "superseded unscoped widened-arm classification wording must be absent from SKILL.md" 'spacing window, classify its prompt:' "$S"
 pin "failure-cap section anchored" grep -qF '## Failure detection and the failure cap' "$S"
 pin "idle-time outcome arm present" grep -qF 'Idle-time children are covered too' "$S"
 pin "pricing edits stay in the state cache" grep -qF 'never edits tracked skill files' "$S"
@@ -83,7 +117,7 @@ if not order_ok(["D1 (execute)", "D2 (author)", "D3 (no-op)"]):
 if re.search(r'Cron(Create|List|Update|Delete)|OffPeak(Create|List)', s):
     print("PIN FAIL: SKILL.md names a runtime primitive (must stay runtime-agnostic)"); sys.exit(1)
 need(s, "## State file")
-m = re.search(r"```json\n(.*?)```", s.split("## State file", 1)[1], re.S)
+m = re.search(r"```json\n(.*?)```", s.split("## State file", 1)[1].split("\n## ", 1)[0], re.S)
 if not m:
     print("PIN FAIL: state schema json block missing"); sys.exit(1)
 try:
@@ -109,10 +143,32 @@ need(s, "### Step 1: survey"); need(s, "### Step 2")
 step1 = s.split("### Step 1: survey")[1].split("### Step 2")[0]
 if "pending_dispatch" not in step1:
     print("PIN FAIL: pending_dispatch reader missing from the Step 1 list"); sys.exit(1)
+# placement pin (review r1 T2): state-first ordering inside the Step 0
+# rearm-on-touch bullet; the consult anchor and the listing-gate anchor are
+# both fail-closed so a reworded bullet cannot pass vacuously, and the order
+# assertion catches a listing-first regression that keeps the positive needle
+step0 = s.split("### Step 0: context load")[1].split("### Step 1: survey")[0]
+a_consult = "rearm-on-touch check: consult the scheduler state file first"
+a_gate = "run the automation listing only when the state file cannot decide"
+if a_consult not in step0 or a_gate not in step0:
+    print("PIN FAIL: step 0 state-first placement anchors missing"); sys.exit(1)
+if step0.index(a_gate) < step0.index(a_consult):
+    print("PIN FAIL: step 0 must consult the state file before the listing (state-first placement)"); sys.exit(1)
 need(s, "G1e (execution lane)"); need(s, "Duplicate-parent tripwire")
 arms = s.split("G1e (execution lane)")[1].split("Duplicate-parent tripwire")[0]
 if "certification oracle" not in arms:
     print("PIN FAIL: lane-arm release rules missing the certification oracle needle"); sys.exit(1)
+# placement pin (review r4 RISK-1): inside the G1e region the classification
+# outcomes lead-in ("Among contained prompts: ...") must sit after the
+# containment gate sentence; both anchors are fail-closed so a deleted scope
+# marker or an outcomes-grafted-above-the-gate regression cannot pass vacuously
+a_gate = "classify its prompt only when the prompt contains the resolved repository root"
+a_scope = "Among contained prompts:"
+need(s, a_gate); need(s, a_scope)
+if a_gate not in arms or a_scope not in arms:
+    print("PIN FAIL: widened-arm containment anchors missing from the G1e region"); sys.exit(1)
+if arms.index(a_gate) > arms.index(a_scope):
+    print("PIN FAIL: widened-arm outcomes must follow the containment gate (placement)"); sys.exit(1)
 need(s, "## Failure detection and the failure cap")
 failure_region = s.split("## Failure detection and the failure cap", 1)[1].split("\n## ", 1)[0]
 if "\\[[xX]\\]" not in failure_region:
@@ -135,11 +191,15 @@ pin "watchdog backstop present"  grep -qF 'Watchdog backstop' "$Z"
 pin "2h cadence pinned"          grep -qF '15 */2 * * *' "$Z"
 pin "peak window UTC+8 anchor"   grep -qF '14:00-18:00 UTC+8' "$Z"
 pin "never pin local hours"      grep -qF 'never pin local hours' "$Z"
+pin "execution-child marker repo containment" grep -qF 'and the resolved repository root (the relative plans-dir substring alone' "$Z"
+expect_absent "superseded uncontained execution-child marker wording must be absent from zcode.md" 'plus a path under the resolved `plans_dir` (SKILL.md Configuration; default `docs/plans/`).' "$Z"
+pin "zcode tripwire shape excludes the title conjunct" grep -qF 'title conjunct is deliberately not required' "$Z"
 pin "ladder recycling needle"    grep -qF 'update the recorded parent record into the child one-shot' "$Z"
 pin "hand-off proceed refusal bound" grep -qF "converges to the fallback's fresh-id create within the same dispatch attempt" "$Z"
 pin "verification section anchored" grep -qF '## Automation primitive verification' "$Z"
 pin "linger-deletion needle"     grep -qF 'deleting your own lingered' "$Z"
 pin "ambiguous-outcome carve-out kept" grep -qF 'treat the child as dispatched' "$Z"
+expect_absent "superseded unscoped ambiguous-outcome carve-out must be absent from zcode.md" 'a rollback create refusal means the child create actually succeeded: skip the retries, the `parent-restore-failed` record, and the memory note, treat the child as dispatched, and stop' "$Z"
 pin "idle attribution per-session" grep -qF ' sessionId matches the current session' "$Z"
 pin "pricing clear-on-success"   grep -qF 'clears the pricing-verification-failed note' "$Z"
 expect_absent "superseded completed-spawner claim must be absent from zcode.md" 'sessions whose spawner automation has completed are not blocked' "$Z"
@@ -154,12 +214,13 @@ pin "successor adopt matcher repo containment" grep -qF 'whose prompt also conta
 pin "resume rule in the execution payload" grep -qF 'this is a resume run' "$P"
 pin "rearm lingered-record deletion in blueprints" grep -qF 'deleting your own lingered' "$P"
 pin "success-via-existing confirmation" grep -qF 'counts as success only after one more listing confirms' "$P"
+expect_absent "superseded unscoped success-via-existing clause must be absent from prompt-templates.md" 'counts as success only after one more listing confirms an ENABLED automation with that title and prompt opening is present; on that success-via-existing path' "$P"
 expect_absent "superseded listing-driven rearm wording must be absent from prompt-templates.md" 'list once more immediately before the create' "$P"
 
 # --- prompt-templates.md blueprint integrity ---
-python3 - "$P" "$Z" <<'EOF'
+python3 - "$P" "$Z" "$D" <<'EOF'
 import re, sys
-p, z = open(sys.argv[1]).read(), open(sys.argv[2]).read()
+p, z, d = open(sys.argv[1]).read(), open(sys.argv[2]).read(), open(sys.argv[3]).read()
 def norm(t): return " ".join(t.split())
 def need(text, anchor):
     if anchor not in text:
@@ -204,13 +265,36 @@ if exec_ph != {"{REPO_ROOT}", "{some_plan}"}:
     print("PIN FAIL: execution inner placeholder set drifted: %s" % sorted(exec_ph)); sys.exit(1)
 if "cron expression" in paras[0]:
     print("PIN FAIL: re-arm paragraph hardcodes the cadence; creation must follow the recipe"); sys.exit(1)
+# ordering pins (region-scoped to the execution inner block): the payload must
+# chain the successor before the final compaction step, and the resume rule
+# must sit after the PRE-STEP gate; every predecessor anchor is fail-closed
+for needle in ("Finally squash merge to main", "SUCCESSOR DISPATCH", "FINAL STEP",
+               "once the gate exits 0", "this is a resume run"):
+    need(inner, needle)
+if not inner.index("Finally squash merge to main") < inner.index("SUCCESSOR DISPATCH") < inner.index("FINAL STEP"):
+    print("PIN FAIL: execution payload ordering drifted (squash merge < SUCCESSOR DISPATCH < FINAL STEP)"); sys.exit(1)
+if not inner.index("once the gate exits 0") < inner.index("this is a resume run"):
+    print("PIN FAIL: execution payload ordering drifted (resume rule must follow the PRE-STEP gate)"); sys.exit(1)
+# done-skill ordering pin: the rearm-on-touch pointer precedes the Step 0 heading
+need(d, "Before Step 0, in a repository that resolves the maintenance skill")
+need(d, "## Step 0")
+if not d.index("Before Step 0, in a repository that resolves the maintenance skill") < d.index("## Step 0"):
+    print("PIN FAIL: done-skill rearm-on-touch pointer must precede the Step 0 heading"); sys.exit(1)
+# confinement pins (origin 3 scope note): execution-only spans stay inside the
+# execution inner block, split off the blueprint headings and dispatch-slice tags
+def confined(span):
+    if p.count(span) != 1 or inner.count(span) != 1:
+        print("PIN FAIL: execution-only span left the execution inner block: %s" % span); sys.exit(1)
+confined("beyond the re-arm duty below and the single successor-dispatch duty below")
+confined("this is a resume run")
 EOF
 rc=$?
 [ "$rc" -ne 0 ] && fail=1
 [ "$fail" -eq 1 ] && exit 1
 
 # --- rearm-on-touch surfaces (Task 4) ---
-pin "step 0 rearm-on-touch check" grep -qF 'rearm-on-touch check: when the automation listing shows no ENABLED parent' "$S"
+pin "step 0 rearm-on-touch check" grep -qF 'rearm-on-touch check: consult the scheduler state file first' "$S"
+expect_absent "superseded listing-first rearm-on-touch trigger must be absent from SKILL.md" 'when the automation listing shows no ENABLED parent' "$S"
 pin "done-skill rearm-on-touch pointer" grep -qF 'rearm-on-touch check defined in the maintenance skill' "$D"
 [ "$fail" -eq 1 ] && exit 1
 

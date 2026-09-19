@@ -46,6 +46,15 @@ invalid-entry rule.
 Exit 0 when clean, 1 when any violation (each printed as ``<path>: rule <N>``).
 The default scan root anchors at the git toplevel of the current directory
 and warns on stderr before falling back to the CWD when git is unavailable.
+
+The same run also carries a WARN-ONLY nested-``.git`` detection pass: entries
+named ``.git`` (directory, gitfile, or symlink) within depth 3 of the repo
+root, excluding the root ``.git`` itself, registered worktrees, submodule
+shaped gitdirs (resolving into ``GIT_COMMON_DIR/modules`` or containing
+``/modules/``), and gitignored paths. Each remaining entry prints a stderr
+warning naming the likely owner class (scratch fixture, interrupted lane,
+GUI-visible detached commits) so a human decides; nothing is ever deleted
+and the pass never affects the exit code.
 """
 
 from __future__ import annotations
@@ -389,6 +398,147 @@ def _check_home_rel(home_rel: Path) -> bool:
     return True
 
 
+def detect_nested_git(repo_root: Path) -> list[tuple[str, str]]:
+    """Warn-only nested-``.git`` detection; return (path, owner_class) pairs.
+
+    Candidates: entries named ``.git`` (real dir, gitfile, or symlink) at
+    relative depth 1..3 from the repo root, excluding the root ``.git``.
+    Silent exclusions, classified BEFORE any removal consideration and
+    never deleting anything:
+    - registered worktrees: the candidate's parent matches a
+      ``git worktree list --porcelain`` entry, or the candidate gitfile's
+      ``gitdir:`` target resolves under the main ``.git/worktrees/`` tree;
+    - submodule-shaped gitdirs: the target resolves under
+      ``GIT_COMMON_DIR/modules`` or contains a ``/modules/`` segment;
+    - gitignored paths: ``git check-ignore`` names the candidate.
+    Remaining candidates get a likely owner class by shape: a real
+    ``.git`` directory with in-progress state markers
+    (``MERGE_HEAD``/``rebase-merge``/``rebase-apply``/
+    ``CHERRY_PICK_HEAD``/``BISECT_LOG``) is an interrupted lane, any
+    other real ``.git`` directory is a scratch fixture (an inited or
+    cloned repo), and a ``.git`` file is a linked-worktree gitfile
+    (GUI-visible detached commits). Best-effort: git probe failures fail
+    open (no exclusions from that probe) since the pass is warn-only.
+    """
+    results: list[tuple[str, str]] = []
+    candidates: list[Path] = []
+    root_git = repo_root / ".git"
+    for dirpath, dirnames, filenames in os.walk(repo_root, followlinks=False):
+        rel_dir = Path(dirpath).relative_to(repo_root)
+        depth = 0 if str(rel_dir) == "." else len(rel_dir.parts)
+        if depth >= 3:
+            dirnames[:] = []
+        for name in list(dirnames) + filenames:
+            if name != ".git":
+                continue
+            entry = Path(dirpath) / name
+            if entry == root_git:
+                continue
+            if depth + 1 > 3:
+                continue
+            candidates.append(entry)
+        # Do not descend into any nested .git directory itself.
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+
+    if not candidates:
+        return results
+
+    worktree_dirs: set[Path] = set()
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"],
+            capture_output=True, check=True,
+        ).stdout.decode("utf-8", "surrogateescape")
+        for line in out.splitlines():
+            # git 2.x porcelain emits no "gitdir" lines (verified 2026-09-19);
+            # the worktree paths themselves are the carrier. Retained as a
+            # fail-open no-op for future porcelain extensions.
+            if line.startswith("worktree "):
+                worktree_dirs.add(Path(line[len("worktree "):]).resolve())
+    except (OSError, subprocess.SubprocessError):
+        pass  # fail open: warn-only pass must not raise on git problems
+
+    modules_dir = (root_git / "modules").resolve()
+
+    def gitfile_target(entry: Path) -> Path | None:
+        if entry.is_dir() or entry.is_symlink() and entry.resolve().is_dir():
+            return None
+        try:
+            text = entry.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        text = text.strip()
+        if not text.startswith("gitdir:"):
+            return None
+        raw = text[len("gitdir:"):].strip()
+        if not raw:
+            return None
+        target = Path(raw)
+        if not target.is_absolute():
+            target = entry.parent / target
+        try:
+            return target.resolve()
+        except OSError:
+            return target
+
+    ignored: set[Path] = set()
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "check-ignore", "-z", "--stdin"],
+            capture_output=True, check=True,
+            input=("\0".join(str(c) for c in candidates) + "\0").encode(
+                "utf-8", "surrogateescape"
+            ),
+        ).stdout
+        for raw in proc.split(b"\0"):
+            if raw:
+                ignored.add(
+                    Path(raw.decode("utf-8", "surrogateescape")).resolve()
+                )
+    except (OSError, subprocess.SubprocessError):
+        pass  # fail open
+
+    for entry in candidates:
+        rel = str(entry.relative_to(repo_root))
+        try:
+            resolved = entry.resolve()
+        except OSError:
+            resolved = entry
+        if resolved in ignored:
+            continue
+        if entry.parent.resolve() in worktree_dirs:
+            continue
+        target = gitfile_target(entry)
+        if target is not None:
+            target_posix = target.as_posix()
+            if (
+                target == modules_dir
+                or str(target).startswith(str(modules_dir) + os.sep)
+                or "/modules/" in target_posix
+            ):
+                continue
+            if ".git/worktrees/" in target_posix:
+                continue
+        is_real_dir = entry.is_dir() and not entry.is_symlink()
+        if is_real_dir and any(
+            (entry / marker).exists()
+            for marker in (
+                "MERGE_HEAD", "rebase-merge", "rebase-apply",
+                "CHERRY_PICK_HEAD", "BISECT_LOG",
+            )
+        ):
+            owner = "interrupted lane"
+        elif is_real_dir:
+            # A real nested .git directory is an inited/cloned repo: the
+            # scratch-fixture shape. A .git FILE is a linked-worktree
+            # gitfile (the GUI detached-checkout shape).
+            owner = "scratch fixture"
+        else:
+            owner = "GUI-visible detached commits"
+        results.append((rel, owner))
+    return results
+
+
 def scan_repo(repo_root: Path) -> list[tuple[str, int]]:
     """Scan both surfaces; return sorted (relative-path, rule) violations."""
     repo_root = repo_root.resolve()
@@ -429,6 +579,14 @@ def scan_repo(repo_root: Path) -> list[tuple[str, int]]:
         for absolute in _iter_hot_dir_files(hot_path):
             rel = os.path.relpath(absolute, repo_root)
             _record(rel, backlog_home, hot_dir_parts, violations)
+
+    # Warn-only nested-.git detection (same run; never affects exit code).
+    for rel, owner in detect_nested_git(repo_root):
+        print(
+            f"warning: nested .git ({owner}): {rel} "
+            "(warn-only; no action taken)",
+            file=sys.stderr,
+        )
 
     # Rule 2: tracked files only.
     try:
@@ -1708,6 +1866,97 @@ def _selftest_clean_tree(root: Path, check) -> None:
     )
 
 
+def _selftest_nested_git_repo(root: Path, check) -> None:
+    """Warn-only nested-``.git`` detection: four arms.
+
+    (1) nested-git-warns: an untracked nested ``.git`` directory (scratch
+    repo shape) inside the repo produces a stderr warning naming the path
+    and an owner class, with exit code unaffected; (2) worktree-silent: a
+    registered worktree's ``.git`` gitfile inside the repo is silent;
+    (3) submodule-silent: a submodule-shaped gitfile pointing into
+    ``.git/modules/`` is silent; (4) gitignore-silent: a nested ``.git``
+    matched by ``.gitignore`` is silent.
+    """
+
+    def init_fixture(name: str) -> Path:
+        repo = root / name
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        _write(
+            repo,
+            ".ai-playbook/facts.md",
+            "```toml\n"
+            'backlog_dir = "docs/history/backlog/"\n'
+            'backlog_completed_dir = "docs/history/backlog/completed/"\n'
+            "```\n",
+        )
+        _write(repo, "docs/plans/plain-notes.md")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "init")
+        return repo
+
+    # (1) untracked nested .git: warns with named path + owner class.
+    repo = init_fixture("nested-git-warns")
+    scratch = repo / "scratch-fixture" / "repoX"
+    scratch.mkdir(parents=True)
+    (scratch / ".git").mkdir()
+    (scratch / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    code, stdout, stderr = _run_script(repo)
+    check(code == 0, f"nested-git-warns: expected exit 0, got {code} (stderr: {stderr!r})")
+    check(
+        "scratch-fixture/repoX/.git" in stderr,
+        f"nested-git-warns: warning missing named path (stderr: {stderr!r})",
+    )
+    check(
+        "scratch fixture" in stderr and "warn-only" in stderr,
+        f"nested-git-warns: owner-class warn-only wording missing (stderr: {stderr!r})",
+    )
+    check(
+        "check_backlog_inbox_location: ok" in stdout,
+        f"nested-git-warns: warn-only pass changed the ok exit surface (stdout: {stdout!r})",
+    )
+
+    # (2) registered worktree inside the repo: silent.
+    repo = init_fixture("nested-git-worktree")
+    _git(repo, "worktree", "add", "-b", "wt-branch", "inner-wt")
+    code, _stdout, stderr = _run_script(repo)
+    check(code == 0, f"nested-git-worktree: expected exit 0, got {code}")
+    check(
+        "nested .git" not in stderr,
+        f"nested-git-worktree: registered worktree flagged (stderr: {stderr!r})",
+    )
+
+    # (3) submodule-shaped gitdir: gitfile pointing into .git/modules/.
+    repo = init_fixture("nested-git-submodule")
+    (repo / ".git" / "modules" / "sub").mkdir(parents=True)
+    sub = repo / "sub"
+    sub.mkdir()
+    (sub / ".git").write_text(
+        "gitdir: ../.git/modules/sub\n", encoding="utf-8"
+    )
+    code, _stdout, stderr = _run_script(repo)
+    check(code == 0, f"nested-git-submodule: expected exit 0, got {code}")
+    check(
+        "nested .git" not in stderr,
+        f"nested-git-submodule: submodule-shaped gitdir flagged (stderr: {stderr!r})",
+    )
+
+    # (4) gitignored nested .git: silent.
+    repo = init_fixture("nested-git-ignored")
+    _write(repo, ".gitignore", "runtime/nested/.git\n")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-q", "-m", "gitignore")
+    nested = repo / "runtime" / "nested"
+    nested.mkdir(parents=True)
+    (nested / ".git").mkdir()
+    code, _stdout, stderr = _run_script(repo)
+    check(code == 0, f"nested-git-ignored: expected exit 0, got {code}")
+    check(
+        "nested .git" not in stderr,
+        f"nested-git-ignored: gitignored path flagged (stderr: {stderr!r})",
+    )
+
+
 def run_selftest() -> int:
     import tempfile
 
@@ -1730,6 +1979,7 @@ def run_selftest() -> int:
             ("toplevel_anchor_repo", _selftest_toplevel_anchor_repo),
             ("git_absent_repo", _selftest_git_absent_repo),
             ("clean_tree", _selftest_clean_tree),
+            ("nested_git_repo", _selftest_nested_git_repo),
         ):
             fn(root, check)
 

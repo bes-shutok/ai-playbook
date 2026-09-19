@@ -1,5 +1,7 @@
 # Plan: learn and done workflow updates
 
+> Dated deviation note (2026-09-19, P13 plan): the G9b block below and the Task 6 embedded function block were extended on 2026-09-19 by the hygiene-sweep plan (`docs/plans/2026-09-18-hygiene-sweep-capture-contracts-fixture-discipline-registry-backfill.md`, Task 3) to add executable refusal-branch coverage; no behavior change. The surrounding task text stays historical.
+
 Backlog origins (scope of record; the items stay in place under the backlog home while this plan is open):
 
 - `docs/history/backlog/2026-09-16-learn-skill-usage-issue-backlog-capture.md`
@@ -193,29 +195,87 @@ expect_match "lesson-scope-audit: config drift: company guidelines master not fo
 expect_match "lesson-scope-audit: config drift: company guidelines master not found; company duplicate audit not run" agents/skills/docs-branch/SKILL.md
 
 # G9b: executable witness-append fixture (extract the prescribed function,
-# run it in a throwaway repo, verify refusal of a wrong prefix and the
-# greppability of a canonical line).
+# run it in a throwaway repo, verify the refusal branches and the
+# greppability of a canonical line). Extended 2026-09-19 by the P13 plan:
+# five assertions (A1 missing-branch refusal, A2 worktree-add refusal,
+# A3 commit-failure refusal, A4 caller-trap sentinel, A5 placement and
+# teardown of every scratch dir); A1-A3 pin the SPECIFIC refusal message so
+# a downstream refusal cannot stand in for the targeted branch.
 _wf="$(mktemp)"; _td="$(mktemp -d)" || fail "fixture setup failed"
+trap 'rm -f "$_wf"; rm -rf "$_td"' EXIT
 awk '/^docs_branch_witness_append\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' agents/skills/docs-branch/SKILL.md > "$_wf"
 test -s "$_wf" || fail "witness append function not extractable from docs-branch SKILL"
+CANON="lesson-scope-audit: config drift: company guidelines master not found; company duplicate audit not run"
 (
+  # Subshell-wide scratch cleanup: assertion-failure exits bypass their own
+  # rm lines, so the trap removes every scratch artifact on any exit path
+  # (A5 holds on failure paths too, not only the green run).
+  _a1err= _a2err= _a3err= _wt2=
+  trap 'rm -f "$_a1err" "$_a2err" "$_a3err"; [ -z "$_wt2" ] || git worktree remove --force "$_wt2" >/dev/null 2>&1 || rm -rf "$_wt2"' EXIT
   cd "$_td" || exit 1
   git init -q repo || exit 1
   cd repo || exit 1
   export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
   git commit -q --allow-empty -m init || exit 1
+  source "$_wf" || exit 1
+  # A1: missing-branch refusal (docs ref not created yet); asserts the
+  # SPECIFIC refusal message so the downstream worktree-add failure cannot
+  # stand in for it (discrimination).
+  _a1err="$(mktemp)" || exit 1
+  if docs_branch_witness_append "$CANON" >/dev/null 2>"$_a1err"; then
+    echo "A1: append accepted with no docs branch" >&2; exit 1
+  fi
+  grep -q "no docs branch" "$_a1err" || { echo "A1: missing-branch refusal message absent (wrong branch fired)" >&2; exit 1; }
+  rm -f "$_a1err"
   _tree="$(git mktree </dev/null)" || exit 1
   _c="$(git commit-tree "$_tree" -m "docs: init")" || exit 1
   git update-ref refs/heads/docs "$_c" || exit 1
-  source "$_wf" || exit 1
-  if docs_branch_witness_append "bogus line"; then
-    echo "VALIDATION FAIL: witness append accepted a wrong-prefix line" >&2
-    exit 1
+  # A2: worktree-add refusal (branch already checked out in a second worktree).
+  _wt2="$(mktemp -d "${TMPDIR:-/tmp}/g9b-wt2.XXXXXX")" || exit 1
+  if ! git worktree add "$_wt2" docs >/dev/null 2>&1; then
+    rm -rf "$_wt2"
+    echo "A2 setup: second worktree add failed" >&2; exit 1
   fi
-  docs_branch_witness_append "lesson-scope-audit: config drift: company guidelines master not found; company duplicate audit not run" || exit 1
-  test -n "$(git log refs/heads/docs --grep=lesson-scope-audit: --format=%H)" || exit 1
+  _a2err="$(mktemp)" || exit 1
+  if docs_branch_witness_append "$CANON" >/dev/null 2>"$_a2err"; then
+    echo "A2: append accepted while branch was checked out elsewhere" >&2; exit 1
+  fi
+  grep -q "witness worktree add failed" "$_a2err" || { echo "A2: worktree-add refusal message absent (wrong branch fired)" >&2; exit 1; }
+  rm -f "$_a2err"
+  git worktree remove --force "$_wt2" >/dev/null 2>&1 || rm -rf "$_wt2"
+  # A3: commit-failure refusal (empty identity injected: unset the ambient
+  # identity vars and pin empty user.name/user.email via config injection;
+  # measured 2026-09-19: unsetting alone lets git fall back to a
+  # hostname-derived identity, the config injection is the flipping form).
+  _a3err="$(mktemp)" || exit 1
+  if (
+    unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+    export GIT_CONFIG_COUNT=2 \
+      GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0= \
+      GIT_CONFIG_KEY_1=user.email GIT_CONFIG_VALUE_1=
+    docs_branch_witness_append "$CANON"
+  ) >/dev/null 2>"$_a3err"; then
+    echo "A3: append accepted with empty identity" >&2; exit 1
+  fi
+  grep -q "witness commit failed" "$_a3err" || { echo "A3: expected refusal message missing" >&2; exit 1; }
+  rm -f "$_a3err"
+  # A4: caller-trap sentinel survives the call and fires at caller exit
+  # (pins the subshell scope keeping the caller's traps intact).
+  _a4out="$(bash -c '
+    trap "echo SENTINEL_FIRED" EXIT
+    source "$1" || exit 1
+    docs_branch_witness_append "$2" >/dev/null 2>&1
+    echo CALLER_CONTINUED
+  ' _ "$_wf" "$CANON")"
+  case "$_a4out" in *CALLER_CONTINUED*) ;; *) echo "A4: caller did not continue past the call" >&2; exit 1 ;; esac
+  case "$_a4out" in *SENTINEL_FIRED*) ;; *) echo "A4: sentinel EXIT trap lost" >&2; exit 1 ;; esac
+  # Happy path: refusal branches cleared, canonical append lands.
+  docs_branch_witness_append "$CANON" >/dev/null 2>&1 || { echo "happy path failed" >&2; exit 1; }
+  test -n "$(git log refs/heads/docs --grep=lesson-scope-audit: --format=%H)" || { echo "witness commit not greppable" >&2; exit 1; }
 ) || fail "executable witness-append fixture failed"
-rm -f "$_wf"; rm -rf "$_td"
+# A5: placement (mktemp -d) is asserted by construction; teardown here and
+# via the EXIT trap above.
+rm -f "$_wf"; rm -rf "$_td"; trap - EXIT
 
 # G10: stale-reference sweep over the touched set (case-insensitive, regex;
 # three-way rc split so a grep tool error aborts instead of passing).
@@ -314,33 +374,41 @@ Files:
 - [x] Add a new section `## Step 3: Lesson-Scope Drift Witness Append` after Step 2 in docs-branch: when the caller holds a lesson-scope-audit drift witness line (from done Step 3 item 4a) for a corpus whose path is gitignored, the docs-branch-only path has no Step 3 commit to carry the line, so this step lands it as the body of an append-only empty commit on the docs branch. Contract: the caller passes the exact witness line as the single argument; the line must start with lesson-scope-audit: (fail loud otherwise). The canonical drift witness line this skill expects is: lesson-scope-audit: config drift: company guidelines master not found; company duplicate audit not run. Failure semantics: a missing docs branch, a failed worktree add, or a failed commit each returns non-zero with a loud message; a missing docs branch means no sync ever carried the corpus, so the append must refuse rather than overstate coverage. Run this exact block from the new section (single shell invocation, bash not zsh, worktree removed on every exit path; never push, the docs branch stays a local safety net per this skill's rules):
 
 ```bash
+# Refreshed 2026-09-19 by the P13 plan to mirror the implemented subshell-wrapped
+# version in agents/skills/docs-branch/SKILL.md (trap-based cleanup, caller-trap
+# preservation); the historical inline variant above the fence is superseded.
 docs_branch_witness_append() {
   # $1: the exact witness line; must start with lesson-scope-audit:
-  _w="$1"
-  case "$_w" in
+  case "$1" in
     lesson-scope-audit:*) ;;
     *) echo "docs-branch: witness must start with lesson-scope-audit:" >&2; return 1 ;;
   esac
-  git show-ref --verify --quiet refs/heads/docs || { echo "docs-branch: no docs branch; run a sync first" >&2; return 1; }
-  _wt="$(mktemp -d "${TMPDIR:-/tmp}/docs-branch-witness.XXXXXX")"
-  if ! git worktree add "$_wt" docs; then
-    rm -rf "$_wt"
-    echo "docs-branch: witness worktree add failed" >&2
-    return 1
-  fi
-  if ! git -C "$_wt" symbolic-ref -q HEAD >/dev/null; then
-    git worktree remove --force "$_wt" >/dev/null 2>&1 || rm -rf "$_wt"
-    echo "docs-branch: witness worktree is detached; aborting (a detached worktree would drop the witness commit)" >&2
-    return 1
-  fi
-  ( cd "$_wt" && git commit --allow-empty -m "docs: lesson-scope-audit drift witness" -m "$_w" )
-  _rc=$?
-  git worktree remove --force "$_wt" >/dev/null 2>&1 || rm -rf "$_wt"
-  if [ "$_rc" -ne 0 ]; then
-    echo "docs-branch: witness commit failed" >&2
-    return 1
-  fi
-  return 0
+  # Everything below runs inside one subshell: `trap` is shell-global, so the
+  # subshell scope keeps the caller's EXIT/INT/TERM traps (for example the done
+  # Step 0 Variant A release trap) intact, discards this cleanup trap at subshell
+  # exit (no `trap -` reset line), and keeps _w/_wt/_rc out of the caller shell.
+  # The trap is the single cleanup authority: the refusal and post-commit paths
+  # below carry no explicit worktree-removal lines.
+  (
+    _w="$1"
+    git show-ref --verify --quiet refs/heads/docs || { echo "docs-branch: no docs branch; run a sync first" >&2; exit 1; }
+    _wt="$(mktemp -d "${TMPDIR:-/tmp}/docs-branch-witness.XXXXXX")" || { echo "docs-branch: witness worktree dir failed" >&2; exit 1; }
+    trap 'git worktree remove --force "$_wt" >/dev/null 2>&1 || rm -rf "$_wt"' EXIT INT TERM
+    if ! git worktree add "$_wt" docs; then
+      echo "docs-branch: witness worktree add failed; if a prior interrupted append leaked a worktree holding docs, run: git worktree prune" >&2
+      exit 1
+    fi
+    if ! git -C "$_wt" symbolic-ref -q HEAD >/dev/null; then
+      echo "docs-branch: witness worktree is detached; aborting (a detached worktree would drop the witness commit)" >&2
+      exit 1
+    fi
+    ( cd "$_wt" && git commit --allow-empty -m "docs: lesson-scope-audit drift witness" -m "$_w" )
+    _rc=$?
+    if [ "$_rc" -ne 0 ]; then
+      echo "docs-branch: witness commit failed" >&2
+    fi
+    exit "$_rc"
+  )
 }
 ```
 

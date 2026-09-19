@@ -22,3 +22,9 @@ Add a cheap detection surface that runs at done time in the project repo, hosted
 
 - A repo holding an untracked nested `.git` produces a named warning during done.
 - Registered worktrees, submodules, and gitignored runtime dirs do not trip it.
+
+## Closure (2026-09-19, P13 Task 1)
+
+Detection landed via the shared validator `scripts/check_backlog_inbox_location.py` (the one done Step 2.645 already invokes; no done-skill re-vendor). Warn-only exit semantics preserved; owner class is named per entry (scratch fixture / interrupted lane / GUI-visible detached commits); registered worktrees, submodule-shaped gitdirs, and gitignored paths are silent; nothing auto-deletes. Four selftest arms pin the behavior; the deployed copy is already the repo file (same-inode deployment path).
+
+Placement/teardown amendment (2026-09-19, P13 Task 2 sweep): any verification recipe for this item creates its scratch fixture inside `mktemp -d` and ends with an explicit teardown (`rm -rf "$tmp"`); the executable coverage lives in the validator's `--selftest` nested-git arms, which use `tempfile.TemporaryDirectory` (teardown automatic).

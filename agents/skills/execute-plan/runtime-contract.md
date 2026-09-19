@@ -110,6 +110,9 @@ Every adapter result is translated into exactly these fields:
 no automatic retry. A natural-language request for permission to perform an
 already-authorized repository action is a `contract-violation`, not an approval
 state. Malformed results fail closed and are never treated as success.
+Two legacy hesitation reason codes, `permission-request` and
+`conversational-hesitation`, are translated to `worker-hesitation` with
+status `contract-violation` before the closed-set check.
 
 The standard reason codes are `completed`, `worker-hesitation`,
 `contract-violation`, `approval-required`, `timeout`, `dirty-worktree`,
@@ -576,7 +579,12 @@ the boundary, classification, and scheduling trail, plus the
 `resume_watcher` receipt, the full `scheduling` object with its per-scheduler
 trail, the rendered `projection`, and `manual_command` on every supersede
 outcome (the exact manual resume command, emitted because the boundary
-schedules no watcher, not only for the report-only scheduling trail));
+schedules no watcher, not only for the report-only scheduling trail); when
+the boundary is a supersede-class boundary superseding an armed watcher
+(pause, abort, complete, unknown, weekly-secondary), the outcome also carries the
+`carrier_teardown` receipt the supersede path computes (bootout plus
+sentinel consume, receipt-only, same shape as the `watcher-supersede`
+teardown receipt; null on install and stale boundaries));
 `watcher-supersede` returns the driver's compare-and-swap
 outcome (status, reason code, evidence, `resume_watcher` after the clear,
 and `cas_applied`); `watcher-fire` returns the fire decision itself
@@ -661,6 +669,54 @@ behavior documented here.
 The driver, not the shared prose or the adapter, owns these transitions. A
 reload resumes from the first incomplete step and never relaunches a
 checkpoint whose exact commit is already proven.
+
+### Checkpoint caller envelope
+
+The Normalized result schema section owns the post-normalization field list;
+this subsection documents the caller-facing checkpoint input only: the
+worker-result envelope JSON the caller passes to `--operation checkpoint
+--input`, which the driver method `record_worker_checkpoint` consumes. The
+envelope carries these required keys:
+
+| Key | Required value |
+| --- | --- |
+| `status` | One of the closed normalized statuses; a caller-supplied `approval-required` input status is translated to `blocked` with `reason_code: approval-required` before the closed-set check (see the Normalized result schema section). |
+| `reason_code` | A code from the closed reason set; a missing or unknown code is refused (two legacy hesitation aliases, `permission-request` and `conversational-hesitation`, are translated to `worker-hesitation` with status `contract-violation` before the closed-set check; see Normalized result schema). |
+| `evidence` | A non-empty list of non-blank strings. |
+| `action_scope` | A non-blank string. |
+| `checkpoint_identity` | A non-blank string whose task prefix (the part before the first `:`) selects the claim. |
+| `generation` | The CLAIM generation from the live claim record, not the manifest generation. |
+| `claim_token` | The token matching the live claim; the driver's claim-fencing input, consumed at `_record_checkpoint_locked` after normalization. |
+
+Every field except `claim_token` is checked by
+`runtime_capabilities.normalize_result`; `claim_token` never reaches
+normalization and exists only for the driver's fence. A malformed receipt
+(the envelope missing or failing any check) fails closed: the normalization
+refusal surfaces as a blocked `malformed-result` outcome carrying the
+caller's checkpoint identity and the manifest generation, so when the live
+claim matches that fence the task latches blocked with `resume_allowed:
+false`, and when the claim's generation differs from the manifest generation
+the receipt refuses as `owner-mismatch` before any latch. Recovery from a
+latched malformed receipt is in place: a corrected re-submission under the
+same live claim token and the claim's generation succeeds without lease
+expiry, claim replacement, or manifest recreation, provided the claim carries
+its launch record. A post-launch claim without a launch record refuses the
+corrected receipt as the resumable `stale-claim` outcome by design
+(anti-tamper); re-submission does not recover it. Copy-paste example
+(substitute the live claim token; `generation` is 1, the first claim's
+generation on a fresh manifest):
+
+```json
+{
+  "status": "success",
+  "reason_code": "completed",
+  "evidence": ["worker-log: task complete"],
+  "action_scope": "repository-task",
+  "checkpoint_identity": "task-1:worker-1",
+  "generation": 1,
+  "claim_token": "REPLACE_WITH_LIVE_CLAIM_TOKEN"
+}
+```
 
 ### Readiness decision
 
@@ -809,7 +865,7 @@ TOML-fence key `plans_completed_dir` through
 from a folder name; a missing key, a non-existent directory, or a resolved
 destination escaping the repository root refuses, and a candidate
 differing from the resolved destination refuses as
-`unsupported archive destination`); (4) clean-round review sidecar (schema
+`unsupported archive destination`); (4) clean-round review sidecar (the terminal gate reads the clean-round review sidecar through the same bounded policy as the plan read, and an over-limit sidecar refuses with evidence naming `clean-round review sidecar exceeds the bounded read limit`; schema
 version 1, `source_kind` `code`, a present verdict must be `yes` (an
 absent verdict falls through to the blocking-rows check; the verdict is
 the only optional field), the findings array is required, a findings row

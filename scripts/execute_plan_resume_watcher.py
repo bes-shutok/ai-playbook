@@ -1515,6 +1515,7 @@ def run_cli_watcher_operation(
             projection=boundary.get("projection"),
             manual_command=boundary.get("manual_command"),
             carrier_rectified=boundary.get("carrier_rectified"),
+            carrier_teardown=boundary.get("carrier_teardown"),
             cas_applied=boundary_name != "stale",
         )
     if kind == "supersede":

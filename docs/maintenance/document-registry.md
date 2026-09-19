@@ -5,7 +5,7 @@ prefix (*-rfc.md) take the filename minus the .md extension and
 the trailing -rfc. On collision a short MMDD date suffix is
 appended; when the date also collides (same base in
 two completed-history directories) a directory tag (plan/backlog)
-is appended too. Collided identities: backlog-inbox-location-gate, docs-branch-temp-file-hygiene, docs-branch-trap-before-restore-region, execute-plan-fresh-review-coverage-gaps, maintenance-scheduler-skill, plan-readiness-trailer-gate-r5-deferrals, plans-facts-do-not-resolve-design-ambiguity, returned-for-ask-semantics, review-panel-hermeticity-dimension, review-pointer-wiring-polish, reviewed-plan-readiness-gate, token-usage-telemetry.
+is appended too. Collided identities: backlog-inbox-location-gate, company-master-scoping-loop-residuals, docs-branch-temp-file-hygiene, docs-branch-trap-before-restore-region, execute-plan-fresh-review-coverage-gaps, learn-company-scope-placement, maintenance-scheduler-skill, plan-readiness-trailer-gate-r5-deferrals, plans-facts-do-not-resolve-design-ambiguity, returned-for-ask-semantics, review-panel-hermeticity-dimension, review-pointer-wiring-polish, reviewed-plan-readiness-gate, rfc-design-create-mode-identity-header-wiring, strengthen-jvm-review-coverage, token-usage-telemetry.
 Rows are backfilled: archived date from the filename date
 prefix. Aliases only where a genuine historical alias exists.
 Table format consumed by scripts/doc_registry_validator.py. -->
@@ -37,7 +37,7 @@ Table format consumed by scripts/doc_registry_validator.py. -->
 | backlog-inbox-location-gate-0903-plan | no | completed | 2026-09-03 | backfill | docs/plans/completed/2026-09-03-backlog-inbox-location-gate.md |  |  |  |
 | docs-branch-temp-file-hygiene-0903-plan | no | completed | 2026-09-03 | backfill | docs/plans/completed/2026-09-03-docs-branch-temp-file-hygiene.md |  |  |  |
 | reviewed-plan-readiness-gate-0903-plan | no | completed | 2026-09-03 | backfill | docs/plans/completed/2026-09-03-reviewed-plan-readiness-gate.md |  |  |  |
-| backlog-gate-hardening | no | completed | 2026-09-04 | backfill | docs/plans/completed/2026-09-04-backlog-gate-hardening.md |  |  |  |
+| backlog-gate-hardening | no | completed | 2026-09-04 | backfill | docs/plans/completed/2026-09-04-backlog-gate-hardening.md |  |  | user-approved 2026-09-19: body edit is the r5 doc-drift annotations landed in fd77a91a (2026-09-08, backlog-gate Windows-portability fixes + r5 doc-drift annotations); retroactive override minted by the stale-base check-writes witness |
 | done-deliverables-log-dedupe-and-anchors | no | completed | 2026-09-04 | backfill | docs/plans/completed/2026-09-04-done-deliverables-log-dedupe-and-anchors.md |  |  |  |
 | returned-for-ask-semantics-0904-plan | no | completed | 2026-09-04 | backfill | docs/plans/completed/2026-09-04-returned-for-ask-semantics.md |  |  |  |
 | review-pointer-wiring-polish-0904-plan | no | completed | 2026-09-04 | backfill | docs/plans/completed/2026-09-04-review-pointer-wiring-polish.md |  |  |  |
@@ -56,7 +56,7 @@ Table format consumed by scripts/doc_registry_validator.py. -->
 | token-usage-telemetry-0906-plan | no | completed | 2026-09-06 | backfill | docs/plans/completed/2026-09-06-token-usage-telemetry.md |  |  |  |
 | backlog-gate-follow-ups | no | completed | 2026-09-07 | backfill | docs/plans/completed/2026-09-07-backlog-gate-follow-ups.md |  |  |  |
 | plan-readiness-direct-fix-batch | no | completed | 2026-09-07 | backfill | docs/plans/completed/2026-09-07-plan-readiness-direct-fix-batch.md |  |  |  |
-| plans-facts-do-not-resolve-design-ambiguity-0907-plan | no | completed | 2026-09-07 | backfill | docs/plans/completed/2026-09-07-plans-facts-do-not-resolve-design-ambiguity.md |  |  |  |
+| plans-facts-do-not-resolve-design-ambiguity-0907-plan | no | completed | 2026-09-07 | backfill | docs/plans/completed/2026-09-07-plans-facts-do-not-resolve-design-ambiguity.md |  |  | user-approved 2026-09-19: body edit is the plans-facts errata block landed in 1230abc1 (2026-09-09, plan-authoring tooling polish, plans-facts errata); retroactive override minted by the stale-base check-writes witness |
 | execute-plan-fresh-review-coverage-gaps-0908-plan | no | completed | 2026-09-08 | backfill | docs/plans/completed/2026-09-08-execute-plan-fresh-review-coverage-gaps.md |  |  |  |
 | plan-authoring-tooling-polish | no | completed | 2026-09-08 | backfill | docs/plans/completed/2026-09-08-plan-authoring-tooling-polish.md |  |  |  |
 | plans-grill-answer-state-machine | no | completed | 2026-09-08 | backfill | docs/plans/completed/2026-09-08-plans-grill-answer-state-machine.md |  |  |  |
@@ -153,22 +153,22 @@ Table format consumed by scripts/doc_registry_validator.py. -->
 | validation-nomatch-rc2-hardening | no | completed | 2026-09-08 | backfill | docs/history/backlog/completed/2026-09-08-validation-nomatch-rc2-hardening.md |  |  |  |
 | token-usage-telemetry-0729-plan | no | completed | 2026-07-29 | backfill | docs/history/feature-notes/2026-07-29-token-usage-telemetry.md |  |  |  |
 | doc-ownership-lifecycle | no | completed | 2026-09-10 | plan-completed | docs/plans/completed/2026-09-08-doc-ownership-lifecycle.md |  |  |  |
-| document-ownership-and-archive-lifecycle | no | completed | 2026-09-10 | plan-completed | docs/history/backlog/completed/2026-09-08-document-ownership-and-archive-lifecycle.md |  |  | user-approved 2026-09-10: origin header Status open->done plus em dash normalization at archive completion (execute-plan Phase 4) |
+| document-ownership-and-archive-lifecycle | no | completed | 2026-09-10 | plan-completed | docs/history/backlog/completed/2026-09-08-document-ownership-and-archive-lifecycle.md |  |  |  |
 | execute-plan-driver-residuals | no | completed | 2026-09-13 | plan-completed | docs/plans/completed/2026-09-12-execute-plan-driver-residuals.md |  |  |  |
 | execute-plan-runtime-residuals | no | completed | 2026-09-12 | plan-completed | docs/plans/completed/2026-09-10-execute-plan-runtime-residuals.md |  |  | |
 | execute-plan-runtime-residuals-prose-residual-rider | no | completed | 2026-09-11 | plan-completed | docs/plans/completed/2026-09-11-execute-plan-runtime-residuals-prose-residual-rider.md |  |  |  |
-| agent-agnostic-plan-prose-accuracy-residuals | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-09-agent-agnostic-plan-prose-accuracy-residuals.md  |  |  | user-approved 2026-09-11: origin header Status open->done plus one-line disposition at archive completion (execute-plan Task 12) |
-| execute-plan-runtime-r4-deferred-findings | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-09-execute-plan-runtime-r4-deferred-findings.md  |  |  | user-approved 2026-09-11: origin header Status open->done plus one-line disposition at archive completion (execute-plan Task 12) |
-| execute-plan-runtime-r5-deferred-findings | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-09-execute-plan-runtime-r5-deferred-findings.md  |  |  | user-approved 2026-09-11: origin header Status open->done plus one-line disposition at archive completion (execute-plan Task 12) |
-| runtime-hermeticity-witness-gaps | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-09-runtime-hermeticity-witness-gaps.md  |  |  | user-approved 2026-09-11: origin header Status open->done plus one-line disposition at archive completion (execute-plan Task 12) |
+| agent-agnostic-plan-prose-accuracy-residuals | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-09-agent-agnostic-plan-prose-accuracy-residuals.md  |  |  |  |
+| execute-plan-runtime-r4-deferred-findings | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-09-execute-plan-runtime-r4-deferred-findings.md  |  |  |  |
+| execute-plan-runtime-r5-deferred-findings | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-09-execute-plan-runtime-r5-deferred-findings.md  |  |  |  |
+| runtime-hermeticity-witness-gaps | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-09-runtime-hermeticity-witness-gaps.md  |  |  |  |
 | doc-registry-freeze-move-licensing | no | completed | 2026-09-09 | backlog-completed | docs/history/backlog/completed/2026-09-09-doc-registry-freeze-move-licensing.md |  |  |  |
 | doc-registry-freeze-move-licensing-fold | no | completed | 2026-09-09 | plan-completed | docs/plans/completed/2026-09-09-doc-registry-freeze-move-licensing-fold.md |  |  |  |
 | doc-registry-follow-up-plan-orphaned-diff-channel | no | completed | 2026-09-10 | backlog-completed | docs/history/backlog/completed/2026-09-10-doc-registry-follow-up-plan-orphaned-diff-channel.md |  |  |  |
 | doc-registry-validator-argparse-cli-rewrite | no | completed | 2026-09-10 | backlog-completed | docs/history/backlog/completed/2026-09-10-doc-registry-validator-argparse-cli-rewrite.md |  |  |  |
-| execute-plan-runtime-r6-findings | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-10-execute-plan-runtime-r6-findings.md  |  |  | user-approved 2026-09-11: origin header Status open->done plus one-line disposition at archive completion (execute-plan Task 12) |
-| rfc-design-create-mode-identity-header-wiring | no | completed | 2026-09-12 | done, wiring landed in rfc-design create mode | docs/history/backlog/completed/2026-09-10-rfc-design-create-mode-identity-header-wiring.md  |  |  | user-approved 2026-09-12: origin header Status open->done plus one-line disposition at archive completion (plan Task 1, per the user work order) |
-| execute-plan-runtime-residuals-recert-nonconvergence | no | completed | 2026-09-13 | backlog-completed | docs/history/backlog/completed/2026-09-11-execute-plan-runtime-residuals-recert-nonconvergence.md  |  |  | user-approved 2026-09-13: origin of driver-residuals plan: Status open->done at archive completion (Task 1 disposition ledger all-green; review r1-r3 clean) |
-| vrs-quotepath-pin-vs-worktree-entries-reuse | no | completed | 2026-09-13 | backlog-completed | docs/history/backlog/completed/2026-09-11-vrs-quotePath-pin-vs-worktree-entries-reuse.md  |  |  | user-approved 2026-09-13: origin of driver-residuals plan: Status open->done at archive completion (Task 2 dedupe landed b4f7c97, pin 5->4; review r1-r3 clean) |
+| execute-plan-runtime-r6-findings | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-10-execute-plan-runtime-r6-findings.md  |  |  |  |
+| rfc-design-create-mode-identity-header-wiring | no | completed | 2026-09-12 | done, wiring landed in rfc-design create mode | docs/history/backlog/completed/2026-09-10-rfc-design-create-mode-identity-header-wiring.md  |  |  |  |
+| execute-plan-runtime-residuals-recert-nonconvergence | no | completed | 2026-09-13 | backlog-completed | docs/history/backlog/completed/2026-09-11-execute-plan-runtime-residuals-recert-nonconvergence.md  |  |  |  |
+| vrs-quotepath-pin-vs-worktree-entries-reuse | no | completed | 2026-09-13 | backlog-completed | docs/history/backlog/completed/2026-09-11-vrs-quotePath-pin-vs-worktree-entries-reuse.md  |  |  |  |
 | doc-registry-r7-residuals | no | completed | 2026-09-10 | backlog-completed | docs/history/backlog/completed/2026-09-10-doc-registry-r7-residuals.md |  |  |  |
 | doc-registry-fold-exit-surface-exception-coverage | no | completed | 2026-09-11 | backlog-completed | docs/history/backlog/completed/2026-09-11-doc-registry-fold-exit-surface-exception-coverage.md |  |  |  |
 | doc-registry-cli-doc-precision | no | completed | 2026-09-13 | backlog-completed | docs/history/backlog/completed/2026-09-13-doc-registry-cli-doc-precision.md |  |  |  |
@@ -210,3 +210,90 @@ Table format consumed by scripts/doc_registry_validator.py. -->
 | graphify-skill-package-version-drift | no | completed | 2026-09-18 | backlog-completed | docs/history/backlog/completed/2026-09-16-graphify-skill-package-version-drift.md |  |  |  |
 | finder-applescript-folder-reference-10006 | no | completed | 2026-09-18 | backlog-completed | docs/history/backlog/completed/2026-09-16-finder-applescript-folder-reference-10006.md |  |  |  |
 | zcode-memory-files-external-rewrites | no | completed | 2026-09-18 | backlog-completed | docs/history/backlog/completed/2026-09-16-zcode-memory-files-external-rewrites.md |  |  |  |
+| maintenance-scheduler-liveness | no | completed | 2026-09-16 | plan-completed | docs/plans/completed/2026-09-16-maintenance-scheduler-liveness.md |  |  | user-approved 2026-09-19: licenses the peer P12 documentation-consistency prose folds already landed in this archived plan (commits afa0b3be, cbfdb135); row backfilled by the done 2.648 gate, approval minted by Andrey in-session |
+| maintenance-loop-residuals-p12 | no | completed | 2026-09-19 | executed | docs/plans/completed/2026-09-18-maintenance-loop-residuals-occupancy-anchors-rearm-wording.md |  |  |  |
+| maintenance-lane-occupancy-repo-scoping | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-17-maintenance-lane-occupancy-repo-scoping.md |  |  |  |
+| maintenance-preservation-pins-discriminating-guard | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-17-maintenance-preservation-pins-discriminating-guard.md |  |  |  |
+| maintenance-intra-payload-ordering-anchors | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-17-maintenance-intra-payload-ordering-anchors.md |  |  |  |
+| step0-rearm-trigger-state-first-wording | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-17-step0-rearm-trigger-state-first-wording.md |  |  |  |
+| maintenance-darkness-detection-concurrent-done-race | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-17-maintenance-darkness-detection-concurrent-done-race.md |  |  |  |
+| maintenance-r5-doc-consistency-residuals | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-17-maintenance-r5-doc-consistency-residuals.md |  |  |  |
+| producer-template-freshness-contract | no | completed | 2026-09-08 | backfill | docs/history/backlog/completed/2026-09-08-producer-template-freshness-contract.md |  |  |  |
+| skill-prose-dedup-pointers | no | completed | 2026-09-08 | backfill | docs/history/backlog/completed/2026-09-08-skill-prose-dedup-pointers.md |  |  |  |
+| vrs-freshness-fence-single-helper | no | completed | 2026-09-08 | backfill | docs/history/backlog/completed/2026-09-08-vrs-freshness-fence-single-helper.md |  |  |  |
+| vrs-freshness-value-gate-tails | no | completed | 2026-09-08 | backfill | docs/history/backlog/completed/2026-09-08-vrs-freshness-value-gate-tails.md |  |  |  |
+| vrs-verdict-scoping-dedup | no | completed | 2026-09-08 | backfill | docs/history/backlog/completed/2026-09-08-vrs-verdict-scoping-dedup.md |  |  |  |
+| vrs-witness-twin-single-call | no | completed | 2026-09-08 | backfill | docs/history/backlog/completed/2026-09-08-vrs-witness-twin-single-call.md |  |  |  |
+| learn-company-scope-placement-0909-backlog | no | completed | 2026-09-09 | backfill | docs/history/backlog/completed/2026-09-09-learn-company-scope-placement.md |  |  |  |
+| plan-readiness-deduplicate-date-guards | no | completed | 2026-09-09 | backfill | docs/history/backlog/completed/2026-09-09-plan-readiness-deduplicate-date-guards.md |  |  |  |
+| plan-readiness-scope-category-label-grammar | no | completed | 2026-09-09 | backfill | docs/history/backlog/completed/2026-09-09-plan-readiness-scope-category-label-grammar.md |  |  |  |
+| plan-readiness-scope-token-heuristic-tail | no | completed | 2026-09-09 | backfill | docs/history/backlog/completed/2026-09-09-plan-readiness-scope-token-heuristic-tail.md |  |  |  |
+| plans-trailer-date-pointer-rewrite | no | completed | 2026-09-09 | backfill | docs/history/backlog/completed/2026-09-09-plans-trailer-date-pointer-rewrite.md |  |  |  |
+| trailer-gate-meta-guard-witness | no | completed | 2026-09-09 | backfill | docs/history/backlog/completed/2026-09-09-trailer-gate-meta-guard-witness.md |  |  |  |
+| trailer-gate-plan-r5-base-sha-scratch | no | completed | 2026-09-09 | backfill | docs/history/backlog/completed/2026-09-09-trailer-gate-plan-r5-base-sha-scratch.md |  |  |  |
+| trailer-gate-tilde-side-arm-coverage | no | completed | 2026-09-09 | backfill | docs/history/backlog/completed/2026-09-09-trailer-gate-tilde-side-arm-coverage.md |  |  |  |
+| execute-plan-quota-window-pause-resume | no | completed | 2026-09-10 | backfill | docs/history/backlog/completed/2026-09-10-execute-plan-quota-window-pause-resume.md |  |  |  |
+| execute-plan-runtime-residuals-plan-prose-residuals | no | completed | 2026-09-10 | backfill | docs/history/backlog/completed/2026-09-10-execute-plan-runtime-residuals-plan-prose-residuals.md |  |  |  |
+| flexible-predecessor-lineage-precondition | no | completed | 2026-09-10 | backfill | docs/history/backlog/completed/2026-09-10-flexible-predecessor-lineage-precondition.md |  |  |  |
+| learn-company-vs-project-placement-gate | no | completed | 2026-09-10 | backfill | docs/history/backlog/completed/2026-09-10-learn-company-vs-project-placement-gate.md |  |  |  |
+| runtime-budget-guard-hooks | no | completed | 2026-09-10 | backfill | docs/history/backlog/completed/2026-09-10-runtime-budget-guard-hooks.md |  |  |  |
+| strengthen-jvm-review-coverage-0910-backlog | no | completed | 2026-09-10 | backfill | docs/history/backlog/completed/2026-09-10-strengthen-jvm-review-coverage.md |  |  |  |
+| ambient-noise-pattern-trim-yagni | no | completed | 2026-09-11 | backfill | docs/history/backlog/completed/2026-09-11-ambient-noise-pattern-trim-yagni.md |  |  |  |
+| doc-hierarchy-duplicated-deferred-tree-line | no | completed | 2026-09-11 | backfill | docs/history/backlog/completed/2026-09-11-doc-hierarchy-duplicated-deferred-tree-line.md |  |  |  |
+| quota-probe-calibration-fallback | no | completed | 2026-09-11 | backfill | docs/history/backlog/completed/2026-09-11-quota-probe-calibration-fallback.md |  |  |  |
+| budget-gate-secondary-pause-record-wording | no | completed | 2026-09-12 | backfill | docs/history/backlog/completed/2026-09-12-budget-gate-secondary-pause-record-wording.md |  |  |  |
+| check-lesson-scope-residual-hardening | no | completed | 2026-09-12 | backfill | docs/history/backlog/completed/2026-09-12-check-lesson-scope-residual-hardening.md |  |  |  |
+| check-lesson-scope-runtime-deployment | no | completed | 2026-09-12 | backfill | docs/history/backlog/completed/2026-09-12-check-lesson-scope-runtime-deployment.md |  |  |  |
+| company-master-scoping-loop-residuals-0912 | no | completed | 2026-09-12 | backfill | docs/history/backlog/completed/2026-09-12-company-master-scoping-loop-residuals.md |  |  |  |
+| deferred-convention-em-dashes | no | completed | 2026-09-12 | backfill | docs/history/backlog/completed/2026-09-12-deferred-convention-em-dashes.md |  |  |  |
+| execute-plan-driver-residuals-plan-wording-precision | no | completed | 2026-09-12 | backfill | docs/history/backlog/completed/2026-09-12-execute-plan-driver-residuals-plan-wording-precision.md |  |  |  |
+| execute-plan-runtime-r5-remaining-residuals | no | completed | 2026-09-12 | backfill | docs/history/backlog/completed/2026-09-12-execute-plan-runtime-r5-remaining-residuals.md |  |  |  |
+| quota-probe-write-flag-exception-scope | no | completed | 2026-09-12 | backfill | docs/history/backlog/completed/2026-09-12-quota-probe-write-flag-exception-scope.md |  |  |  |
+| runtime-test-git-env-coverage | no | completed | 2026-09-12 | backfill | docs/history/backlog/completed/2026-09-12-runtime-test-git-env-coverage.md |  |  |  |
+| codex-deny-envelope-verification | no | completed | 2026-09-13 | backfill | docs/history/backlog/completed/2026-09-13-codex-deny-envelope-verification.md |  |  |  |
+| budget-guard-deployed-hook-copies | no | completed | 2026-09-14 | backfill | docs/history/backlog/completed/2026-09-14-budget-guard-deployed-hook-copies.md |  |  |  |
+| budget-probe-codex-fail-open-diagnostics-collapse | no | completed | 2026-09-14 | backfill | docs/history/backlog/completed/2026-09-14-budget-probe-codex-fail-open-diagnostics-collapse.md |  |  |  |
+| budget-probe-vacuous-resourcewarning-witness | no | completed | 2026-09-14 | backfill | docs/history/backlog/completed/2026-09-14-budget-probe-vacuous-resourcewarning-witness.md |  |  |  |
+| drift-witness-gitignored-corpus-fallback | no | completed | 2026-09-14 | backfill | docs/history/backlog/completed/2026-09-14-drift-witness-gitignored-corpus-fallback.md |  |  |  |
+| execute-plan-batched-implement-launch | no | completed | 2026-09-14 | backfill | docs/history/backlog/completed/2026-09-14-execute-plan-batched-implement-launch.md |  |  |  |
+| execute-plan-mid-round-quota-resume-watcher | no | completed | 2026-09-14 | backfill | docs/history/backlog/completed/2026-09-14-execute-plan-mid-round-quota-resume-watcher.md |  |  |  |
+| execute-plan-parallel-review-address-workers | no | completed | 2026-09-14 | backfill | docs/history/backlog/completed/2026-09-14-execute-plan-parallel-review-address-workers.md |  |  |  |
+| maintenance-clear-procedure-stale-id-remedy | no | completed | 2026-09-14 | backfill | docs/history/backlog/completed/2026-09-14-maintenance-clear-procedure-stale-id-remedy.md |  |  |  |
+| budget-gate-midrun-pause-resume | no | completed | 2026-09-15 | backfill | docs/history/backlog/completed/2026-09-15-budget-gate-midrun-pause-resume.md |  |  |  |
+| budget-gate-pause-protocol-timing | no | completed | 2026-09-15 | backfill | docs/history/backlog/completed/2026-09-15-budget-gate-pause-protocol-timing.md |  |  |  |
+| budget-gate-plan-review-exit-residue | no | completed | 2026-09-15 | backfill | docs/history/backlog/completed/2026-09-15-budget-gate-plan-review-exit-residue.md |  |  |  |
+| maintenance-authoring-lane-chaining-gap | no | completed | 2026-09-15 | backfill | docs/history/backlog/completed/2026-09-15-maintenance-authoring-lane-chaining-gap.md |  |  |  |
+| maintenance-indefinite-operation | no | completed | 2026-09-15 | backfill | docs/history/backlog/completed/2026-09-15-maintenance-indefinite-operation.md |  |  |  |
+| maintenance-paused-execution-resume | no | completed | 2026-09-15 | backfill | docs/history/backlog/completed/2026-09-15-maintenance-paused-execution-resume.md |  |  |  |
+| maintenance-rearm-action-selection-loop | no | completed | 2026-09-15 | backfill | docs/history/backlog/completed/2026-09-15-maintenance-rearm-action-selection-loop.md |  |  |  |
+| maintenance-review-r4-polish-residue | no | completed | 2026-09-15 | backfill | docs/history/backlog/completed/2026-09-15-maintenance-review-r4-polish-residue.md |  |  |  |
+| scheduler-dispatch-fallback | no | completed | 2026-09-16 | backfill | docs/history/backlog/completed/2026-09-16-scheduler-dispatch-fallback.md |  |  |  |
+| successor-chaining-after-plan-completion | no | completed | 2026-09-16 | backfill | docs/history/backlog/completed/2026-09-16-successor-chaining-after-plan-completion.md |  |  |  |
+| learn-company-scope-placement-0909-plan | no | completed | 2026-09-09 | backfill | docs/plans/completed/2026-09-09-learn-company-scope-placement.md |  |  |  |
+| plan-readiness-trailer-tail | no | completed | 2026-09-09 | backfill | docs/plans/completed/2026-09-09-plan-readiness-trailer-tail.md |  |  |  |
+| vrs-freshness-prose-dedup | no | completed | 2026-09-09 | backfill | docs/plans/completed/2026-09-09-vrs-freshness-prose-dedup.md |  |  |  |
+| strengthen-jvm-review-coverage-0910-plan | no | completed | 2026-09-10 | backfill | docs/plans/completed/2026-09-10-strengthen-jvm-review-coverage.md |  |  |  |
+| execute-plan-runtime-guardrails | no | completed | 2026-09-11 | backfill | docs/plans/completed/2026-09-11-execute-plan-runtime-guardrails.md |  |  |  |
+| check-lesson-scope-closeout | no | completed | 2026-09-12 | backfill | docs/plans/completed/2026-09-12-check-lesson-scope-closeout.md |  |  |  |
+| rfc-design-create-mode-identity-header-wiring-0912 | no | completed | 2026-09-12 | backfill | docs/plans/completed/2026-09-12-rfc-design-create-mode-identity-header-wiring.md |  |  |  |
+| budget-gate-quota-fixes | no | completed | 2026-09-13 | backfill | docs/plans/completed/2026-09-13-budget-gate-quota-fixes.md |  |  |  |
+| execute-plan-runtime-r5-residuals-yagni-trim | no | completed | 2026-09-13 | backfill | docs/plans/completed/2026-09-13-execute-plan-runtime-r5-residuals-yagni-trim.md |  |  |  |
+| budget-gate-family-residuals | no | completed | 2026-09-14 | backfill | docs/plans/completed/2026-09-14-budget-gate-family-residuals.md |  |  |  |
+| company-master-scoping-loop-residuals-0914 | no | completed | 2026-09-14 | backfill | docs/plans/completed/2026-09-14-company-master-scoping-loop-residuals.md |  |  |  |
+| execute-plan-review-fix-pipeline-efficiency | no | completed | 2026-09-15 | backfill | docs/plans/completed/2026-09-15-execute-plan-review-fix-pipeline-efficiency.md |  |  |  |
+| execute-plan-bound-review-loop-and-plan-freeze | no | completed | 2026-09-19 | backfill | docs/history/backlog/completed/2026-09-17-execute-plan-bound-review-loop-and-plan-freeze.md |  |  |  |
+| execute-plan-scope-and-release-gate-separation | no | completed | 2026-09-19 | backfill | docs/history/backlog/completed/2026-09-17-execute-plan-scope-and-release-gate-separation.md |  |  |  |
+| execute-plan-single-authority-and-ownership-validation | no | completed | 2026-09-19 | backfill | docs/history/backlog/completed/2026-09-17-execute-plan-single-authority-and-ownership-validation.md |  |  |  |
+| detect-current-ai-harness | no | completed | 2026-09-19 | backfill | docs/history/backlog/completed/2026-09-18-detect-current-ai-harness.md |  |  |  |
+| execute-plan-residual-acceptance-exit-for-review-loops | no | completed | 2026-09-19 | backfill | docs/history/backlog/completed/2026-09-18-execute-plan-residual-acceptance-exit-for-review-loops.md |  |  |  |
+| skip-unsupported-harness-budgeting | no | completed | 2026-09-19 | backfill | docs/history/backlog/completed/2026-09-18-skip-unsupported-harness-budgeting.md |  |  |  |
+| backlog-long-tail-prose-predicates-small-mechanics | no | completed | 2026-09-19 | backfill | docs/plans/completed/2026-09-17-backlog-long-tail-prose-predicates-small-mechanics.md |  |  |  |
+| budget-gate-pause-mechanics-drive | no | completed | 2026-09-19 | backfill | docs/plans/completed/2026-09-17-budget-gate-pause-mechanics-drive.md |  |  |  |
+| execute-plan-orchestration-authority-loop-bounds-release-gates | no | completed | 2026-09-19 | backfill | docs/plans/completed/2026-09-18-execute-plan-orchestration-authority-loop-bounds-release-gates.md |  |  |  |
+| harness-detection-and-budgeting-skip | no | completed | 2026-09-19 | backfill | docs/plans/completed/2026-09-18-harness-detection-and-budgeting-skip.md |  |  |  |
+| hygiene-sweep-capture-contracts-fixture-discipline-registry-backfill | no | completed | 2026-09-19 | backfill | docs/plans/completed/2026-09-18-hygiene-sweep-capture-contracts-fixture-discipline-registry-backfill.md |  |  |  |
+| review-records-contract | no | completed | 2026-09-19 | executed | docs/plans/completed/2026-09-16-review-records-contract.md |  |  |  |
+| review-record-kinds-and-sidecar-contract | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-16-review-record-kinds-and-sidecar-contract.md |  |  |  |
+| review-round-record-selection | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-16-review-round-record-selection.md |  |  |  |
+| review-artifact-overwrite-guard | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-16-review-artifact-overwrite-guard.md |  |  |  |
+| review-backlog-redaction-gate | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-16-review-backlog-redaction-gate.md |  |  |  |
