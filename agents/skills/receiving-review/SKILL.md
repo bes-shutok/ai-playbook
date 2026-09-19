@@ -326,6 +326,8 @@ When addressing review findings (staging triage or ad-hoc partner feedback):
 
 When triaging findings from a `doing-code-review` staging doc (execute-plan Phase 3, review-loop step 3):
 
+An orchestrated run may hand the pass a finding subset plus its allowed files; per-finding Fix and Triage semantics are unchanged, the subset worker does not edit the staging doc (the orchestrator merges triage outcomes) and does not commit.
+
 1. Update each finding **Status** (`done`, `drop`, `pending`, `deferred`) and matching **Triage** field per `review-staging` (`fixed`, `dropped`, `pending`, `deferred`).
 2. Recompute `## Review Statistics` → **Triage outcomes** per agent (Staged, Fixed, Dropped, Deferred, Pending). Do not rewrite synthesis tables (Panel, Discarded, Severity calibration).
 3. Update the matching `.stats.json` sidecar when present (required artifact per `review-staging`).
@@ -342,6 +344,8 @@ This gives downstream analysis a ground-truth signal for which agents produce fi
 ## Backlog capture for valid findings not fixed in scope
 
 Review-fix cycles exit on zero unresolved **blocking** findings, not zero findings. Every finding assessed **valid (worth fixing)** that is not fixed in the current work must leave a durable backlog item with all known details before the cycle is reported complete. Gitignored staging docs and chat reports are never the only record. Exception: a finding held `pending` for the fix-risk user decision (**Fix-risk triage when fixes regenerate findings**) is recorded as returned-for-ask per review-staging's receiving-review consumer row, not backlogged; once the user decides, apply this section to it (backlog if deferred, fix if directed).
+
+Scope: review findings in the current project. learn's skill-usage-issue capture (learn Step 1.8) reuses this item shape for skills-corpus defects in the skills repo's backlog home; the two sources are disjoint and neither owns the other's path.
 
 Capture an item when a valid finding ends triage as:
 
@@ -427,6 +431,8 @@ Triage updates **Triage outcomes** and finding **Triage** fields; preserves immu
 
 ### With `execute-plan` skill
 Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review`. Triage is authoritative for exit: implement valid fixes, mark `drop` or `done`, and leave only validated unresolved issues at `pending`. The orchestrator counts unresolved findings with `blocking: true`, not severity alone. Accepted fixes identify every owning or affected worker for the targeted follow-up. Phase 3 Hard Gate 23 applies **Fix-risk triage when fixes regenerate findings** before further folding; the focused verification round's worker composition follows `review-panel-selection.md`.
+
+Under the Step 3.3 fan-out contract, the orchestrator may hand the pass a finding id subset with its canonical allowed files, an opaque worker scope token, and its own per-worker log path (up to three file-affinity workers per fanned round); the subset worker does not edit the staging doc and does not commit. The parent merges the returned per-finding triage into the staging doc and sidecar, re-runs the full Validation Commands block once after all workers return, and lands one address commit per round. Contract boundary: `extensions.address_fanout` is emitted and validated only for current-v1 sidecars; versionless legacy sidecars keep the existing single-worker path and are not upgraded by receiving-review; the parent, not any subset worker, writes the sidecar extension and runs the final `--hard` validation.
 
 ### With `review-loop` skill
 Orchestration rule 4 applies **Fix-risk triage when fixes regenerate findings** in a regenerating loop; the triage classes and fix-vs-backlog decisions feed its exit report and **Backlog capture** tally.

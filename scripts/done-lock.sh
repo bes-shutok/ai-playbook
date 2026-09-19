@@ -23,7 +23,7 @@ Commands:
   status                     Show holder for current repo, or "free".
   stale-clean                Remove stale/abandoned/incomplete lock for current repo.
                              Also removes a session-fenced lock when age >= DONE_LOCK_STALE_SECS
-                             (operator escape; auto-acquire never steals a live session fence).
+                             (operator escape; auto-acquire still protects live or ambiguous holders).
   selftest                   Run built-in race/fence fixtures (exit 0 on pass).
 
 Environment:
@@ -33,9 +33,11 @@ Environment:
   DONE_LOCK_DEAD_HOLDER_GRACE_SECS
                              Minimum age before a verified dead holder may be auto-recovered (default: 5)
   DONE_LOCK_INCOMPLETE_SECS  Age before meta-less lock_dir is treated as crash leftover (default: 5)
-  DONE_LOCK_HOLDER_PID       Long-lived holder PID (default: PPID of the acquire process).
-                             Callers that `eval "$(done-lock.sh acquire)"` should leave this unset
-                             so PPID is the eval'ing shell. Do not use the acquire script PID.
+  DONE_LOCK_HOLDER_PID       For one-shot shell callers: pin this to a long-lived process
+                             so the lock survives the acquiring call's exit; leave unset
+                             when eval'ing from a persistent shell (the default stays the
+                             PPID of the eval'ing shell; do not use the acquire script's
+                             own PID).
   DONE_LOCK_DIR / DONE_LOCK_TOKEN
                              Required in env for release / release-repo. Session file is
                              fence/status only; release-repo will not source it.
@@ -148,11 +150,8 @@ is_dead_holder_lock() {
   grace_age="$(lock_age_secs)"
   [[ "$grace_age" =~ ^[0-9]+$ ]] || return 1
   [[ "$grace_age" -ge "$DEAD_HOLDER_GRACE_SECS" ]] || return 1
-  # PID dead: do not auto-steal while a matching session fence still exists.
-  # Agent Shell tool calls exit after acquire; the session file is the live hold signal.
-  if session_fence_matches_lock; then
-    return 1
-  fi
+  # A matching session fence is not a live-process witness. Once the recorded
+  # holder is independently verified dead, reclaim it after the grace period.
   return 0
 }
 
@@ -168,12 +167,10 @@ session_fence_matches_lock() {
 }
 
 is_stealable_lock() {
-  # Live session fence is never auto-stolen (including after stale TTL).
-  # Operator escape: stale-clean can still remove a fenced stale lock.
-  if session_fence_matches_lock; then
-    return 1
-  fi
+  # A verified-dead holder is reclaimable even when its session fence remains.
   is_dead_holder_lock && return 0
+  # All other states, including session-fenced live or ambiguous holders, are
+  # protected; stale-clean remains the explicit escape hatch.
   return 1
 }
 
@@ -566,7 +563,7 @@ cmd_status() {
     echo "  holder_alive: ${state}"
     if [[ "$state" == "dead" ]]; then
       if session_fence_matches_lock; then
-        echo "  session_fence: yes (PID dead but matching done-lock.session; not auto-stealable)"
+        echo "  session_fence: yes (PID dead; verified-dead recovery ignores the fence)"
       fi
     fi
   else
@@ -576,13 +573,17 @@ cmd_status() {
     if is_stale_lock; then
       echo "  stale: yes (>= ${STALE_SECS}s)"
     elif is_dead_holder_lock; then
-      echo "  abandoned: yes (holder PID not running and no session fence)"
+      if session_fence_matches_lock; then
+        echo "  abandoned: yes (holder PID not running; matching session fence is ignored)"
+      else
+        echo "  abandoned: yes (holder PID not running and no session fence)"
+      fi
     fi
     echo "  stealable: yes"
   else
     echo "  stealable: no"
     if session_fence_matches_lock && is_stale_lock; then
-      echo "  note: session-fenced and stale; auto-acquire will not steal; use stale-clean"
+      echo "  note: session-fenced and stale with no verified-dead holder; use stale-clean"
     fi
   fi
 }
@@ -662,31 +663,44 @@ cmd_selftest() {
       bash "$script_path" "$@"
   }
 
-  # 1) Session fence: dead PPID shell must not auto-steal
+  # 1) A verified-dead holder is auto-reclaimed even when its session fence remains
   (
     cd "$root"
     eval "$(run acquire --label fence)"
   )
-  if (cd "$root" && run acquire --label steal 2>/dev/null); then
-    echo "selftest FAIL: session fence did not block second acquire" >&2
+  if ! (
+    cd "$root"
+    [[ -f .ai-playbook/done-lock.session ]]
+    eval "$(DONE_LOCK_DEAD_HOLDER_GRACE_SECS=0 run acquire --label steal)"
+    run release-repo
+  ); then
+    echo "selftest FAIL: dead fenced holder was not auto-reclaimed" >&2
     fail=1
   else
-    echo "selftest OK: session fence blocks auto-steal"
+    echo "selftest OK: dead fenced holder auto-reclaimed"
   fi
 
-  # 2) Stale + fence: auto-acquire still blocked; stale-clean allowed
-  DONE_LOCK_STALE_SECS=0
-  if (cd "$root" && DONE_LOCK_STALE_SECS=0 run acquire --label stale-steal 2>/dev/null); then
-    echo "selftest FAIL: stale TTL auto-stole a fenced lock" >&2
+  # 2) A stale live holder with a session fence remains protected; stale-clean
+  # remains the explicit operator escape.
+  if ! (
+    cd "$root"
+    sleep 120 &
+    holder_pid=$!
+    trap 'kill "$holder_pid" 2>/dev/null || true' EXIT
+    eval "$(DONE_LOCK_HOLDER_PID="$holder_pid" run acquire --label stale-fence)"
+    if DONE_LOCK_STALE_SECS=0 run acquire --label stale-steal 2>/dev/null; then
+      echo "selftest FAIL: stale TTL auto-stole a fenced live lock" >&2
+      exit 1
+    fi
+    if ! DONE_LOCK_STALE_SECS=0 run stale-clean; then
+      echo "selftest FAIL: stale-clean should remove fenced stale lock" >&2
+      exit 1
+    fi
+  ); then
+    echo "selftest FAIL: fenced live lock remains protected" >&2
     fail=1
   else
-    echo "selftest OK: fenced lock not auto-stolen when stale"
-  fi
-  if ! (cd "$root" && DONE_LOCK_STALE_SECS=0 run stale-clean); then
-    echo "selftest FAIL: stale-clean should remove fenced stale lock" >&2
-    fail=1
-  else
-    echo "selftest OK: stale-clean removes fenced stale lock"
+    echo "selftest OK: fenced live lock remains protected; stale-clean removes it"
   fi
 
   # 3) Fresh acquire after clean (release in same shell so env is present)
@@ -991,6 +1005,51 @@ cmd_selftest() {
     fail=1
   else
     echo "selftest OK: no source command reads session files"
+  fi
+
+  # 17) One-shot handoff: an acquire in an exiting subshell (no trap installed,
+  # holder PID pinned to a live process) keeps the lock held across that exit;
+  # a second acquire from a fresh process is blocked; a token-fenced release
+  # re-exported from the first acquire's stdout succeeds in a later process.
+  (
+    cd "$root"
+    sleep 120 &
+    handoff_holder=$!
+    handoff_dir_file="${tmp}/handoff-dir"
+    handoff_token_file="${tmp}/handoff-token"
+    cleanup_handoff() {
+      kill "$handoff_holder" 2>/dev/null || true
+      # Reap the killed job so bash prints no job-status notice on exit.
+      wait "$handoff_holder" 2>/dev/null || true
+      rm -f "$handoff_dir_file" "$handoff_token_file"
+    }
+    trap cleanup_handoff EXIT
+    # One-shot acquire call: the acquiring subshell exits immediately and
+    # installs no trap; only the exports from its stdout outlive it.
+    (
+      eval "$(DONE_LOCK_HOLDER_PID="$handoff_holder" run acquire --label one-shot)"
+      printf '%s' "${DONE_LOCK_DIR:-}" > "$handoff_dir_file"
+      printf '%s' "${DONE_LOCK_TOKEN:-}" > "$handoff_token_file"
+    )
+    if [[ ! -s "$handoff_dir_file" || ! -s "$handoff_token_file" ]]; then
+      echo "selftest FAIL: one-shot acquire produced no handoff values" >&2
+      exit 1
+    fi
+    second_rc=0
+    # Zero the dead-holder grace for this probe: a dead holder would be
+    # stolen (rc 0), so rc=2 here can only mean the pinned holder verified alive.
+    DONE_LOCK_DEAD_HOLDER_GRACE_SECS=0 run acquire --label one-shot-second >/dev/null 2>&1 || second_rc=$?
+    if [[ "$second_rc" -ne 2 ]]; then
+      echo "selftest FAIL: lock did not survive the exiting one-shot subshell (rc=${second_rc}, want 2)" >&2
+      exit 1
+    fi
+    if ! DONE_LOCK_DIR="$(cat "$handoff_dir_file")" DONE_LOCK_TOKEN="$(cat "$handoff_token_file")" run release-repo >/dev/null 2>&1; then
+      echo "selftest FAIL: token-fenced release from re-exported handoff values failed" >&2
+      exit 1
+    fi
+  ) || fail=1
+  if [[ "$fail" -eq 0 ]]; then
+    echo "selftest OK: one-shot handoff"
   fi
 
   rm -rf "$tmp"

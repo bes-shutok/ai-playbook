@@ -20,7 +20,7 @@ Use this skill when asked to:
 - update repository docs or instruction rules from lessons learned,
 - consolidate duplicated documentation.
 
-Keep this skill scoped to documentation/instruction corpus updates. Do not use it to trigger product code or contract refactors. Do not commit changes; committing is the `done` skill's responsibility.
+Keep this skill scoped to documentation/instruction corpus updates. Do not use it to trigger product code or contract refactors. Commit boundary: `learn` commits only its own learn-authored artifacts in the skills repository (Step 1.8 and the skill-placement commit workflow); the `done` skill owns every other commit (done may stage learn-authored artifacts whose Step 1.8 commit learn reported as failed, after asking) except the docs-branch skill's orphan-branch commits, including the whole project repository.
 
 **Writing project lessons corpus:** Before each Write/Edit to the repo's project lessons file (`docs/maintenance/development_lessons.md`), refresh the skill-gate learn marker per `ai-playbook/agents/hooks/skill-gate/README.md` (learn class WRITE RECIPE: derive `project` and `session` per Terms, invoke the shared `session_channel.py` subprocess VERBATIM, then `python3 ~/.ai-playbook/scripts/skill_gate.py --write-marker learn --session-id "$SID"`). Run this on EVERY project-corpus write (create AND update). FAIL-LOUD if the marker write fails. Do NOT inline path/body/window constants here; the README is the single source (Family D).
 
@@ -199,6 +199,29 @@ This gate is the second layer of defense after the Step 1.2 generalization pass 
 
 **Self-application:** If a lesson is later found to have leaked a private identifier, that is a learn-skill output defect. Fix the lesson, then ask which layer failed: did Step 1.2 item 1c not prompt the interrogation (root cause = generalization), or did the agent skip/rationationalize the Step 1.7 review (root cause = review discipline)? Strengthen the failed layer; do not just add the new token to a list.
 
+## Step 1.8: Skill-usage issue capture
+
+While classifying session findings (Step 1), also identify skill-usage issues: gate failures rooted in skill or script bugs, wrong or ambiguous skill instructions, missing runtime deployments, trigger failures. Classify an issue as a skills-corpus defect only when the fault traces to a skill's instructions, a bundled script, a gate validator, or a missing or wrong runtime deployment; consumer-project code bugs are out of scope (they belong to the project's own workflow).
+
+**Backlog home (per issue family):** issues sharing the same root area, the same skill, and the same step form one family. For each family, resolve the skills repo from `skills_repo_path` (user facts; runtime symlink equivalent) and its resolved backlog home (`backlog_dir` from the skills repo's `.ai-playbook/facts.md` TOML; fallback `docs/history/backlog/`).
+
+**Dedupe before create:** survey open items (`Status: open`, top level of the backlog home, excluding the completed and deferred subdirectories) for an existing item on the same skill and step; when found, append the new witness details there and re-affirm its priority instead of creating a duplicate. Immediately before creating a new item, re-survey the family (the directory listing can race a parallel session's create) and fold into a match that appeared instead of creating a duplicate.
+
+**New item files:** follow `YYYY-MM-DD-<slug>.md` with `Status: open` and `Priority: high` (the corpus's top priority value, which routes the maintenance loop's authoring lane). Required contents:
+- which skill and step (file path plus step number)
+- observed versus expected behavior
+- trimmed reproduction evidence with secrets, usernames, org domains, project names, and ticket prefixes scrubbed
+- environment context (runtime, date, vendored copy versus repo copy)
+- suspected root area
+
+Follow receiving-review's "Backlog capture for valid findings not fixed in scope" for item shape, and apply done Step 2.7's sensitive-data discipline and learn Step 1.7's proper-noun review to the drafted item text before writing it. Phrase everything in skill terms so the item reads correctly without knowing which project the session ran in.
+
+**Commit rule:** stage and commit learn-authored skills-repo artifacts by explicit path (the backlog item files, skill-file edits from lessons, and learn-authored sibling catalog edits such as the skills repo's README.md row updates and projects/.ai-playbook/ entries) with a descriptive message; never a directory-wide add. Before committing, run the public hygiene scan and the em-dash scan over the drafted item text and the changed skill files; fix hits before staging, or report per the failure semantics below. Before staging each non-backlog path, verify the working-tree delta for that path is this session's own edit (review the path's diff); on foreign or unrecognizable hunks, skip staging that path and report it per the failure semantics (done Step 4's ask-first fallback carries the skipped path). Retry once when the commit fails because another process holds the git index lock file (retry after the lock clears; delete nothing) before reporting.
+
+**Failure semantics:** capture and the commit must not block learn or an enclosing done run; on failure, report the failure plus a one-line issue summary in the learn output (an enclosing done carries it into its Step 7 outcome report) as a manual follow-up.
+
+**Skill issues versus lessons:** a skill issue may also yield a lesson when it generalizes; the backlog item is the fix-tracking artifact, not a lesson replacement. A session with no skill issues creates no backlog items and reports nothing new.
+
 ## Step 2: Placement Rules
 
 **First:** Read path keys from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Use resolved paths for the rest of this run; do not invent layout.
@@ -315,7 +338,7 @@ Required outcomes:
 - no canonical docs referencing `docs/tmp/`
 - workflow-spec docs contain workflow guidance only; do not append raw command outputs unless they improve the workflow itself
 - canonical docs and normative instructions avoid brittle exact class-name references unless they are intentionally canonical or operationally necessary
-- when changing the learn workflow itself, edit `~/.agents/skills/learn/SKILL.md` and commit in the skills repository (`skills_repo_path` in `~/.ai-playbook/facts.md`)
+- when changing the learn workflow itself, edit `~/.agents/skills/learn/SKILL.md` and commit it in the skills repository (`skills_repo_path` in `~/.ai-playbook/facts.md`) by explicit path, never a directory-wide add
 
 Topic-sibling update rule:
 - When placing new content in any document, **scan all other docs in the repo** (`docs/`, instruction files, READMEs) for documents that already cover the same topic or a parent/sibling concept.
@@ -372,7 +395,7 @@ For lessons about a skill's workflow/style or output/content requirements:
 - Concrete dates/IDs → placeholders ("2025-01-13" → "<specific date>")
 - Domain-specific assets → generic concepts ("BTC/USDT" → "asset pairs")
 
-**Commit workflow:** Commit skill changes in the skills repository (`skills_repo_path` in `~/.ai-playbook/facts.md`), separately from project changes with a clear commit message.
+**Commit workflow:** Commit skill changes in the skills repository (`skills_repo_path` in `~/.ai-playbook/facts.md`), separately from project changes with a clear commit message; stage the changed files by explicit path, never a directory-wide add.
 
 Examples:
 - RFC section-content requirements belong in `rfc-design/SKILL.md` and `rfc-design/references/rfc-sections.md`
@@ -488,7 +511,7 @@ Two corpora, two gates:
 
 The project corpus IS skill-gate gated: absent or stale `learn.<project>.<session>.marker` blocks Write/Edit to `development_lessons.md` with `Invoke the learn skill before editing the project lessons corpus.` The user-level corpus is NOT skill-gate gated; it remains opt-in strict via the script gate in this step only.
 
-**Commit ownership:** `learn` writes the corpus; it does not commit. When the project corpus path is **not** gitignored, `done` Step 3 item 4b must stage it on the feature branch. Do not treat orphan `docs` sync as a substitute for that commit.
+**Commit ownership:** `learn` writes the corpora and commits only its own learn-authored skills-repo artifacts (Step 1.8; the skill-placement commit workflow); the project lessons corpus itself is committed by `done` Step 3 item 4b when it is not gitignored; do not treat orphan `docs` sync as a substitute for that commit.
 
 ### User-level lessons-corpus gate (script)
 
@@ -545,6 +568,9 @@ Before finishing, verify:
 - Step 6.6 passed: user-level `lessons_index.py <user corpus>` exits 0 (or warn-only cold-start); project corpus gated by skill-gate learn marker refresh before each Write/Edit
 - Step 1.2 item 1c applied: every proper noun/identifier in the incident was interrogated for load-bearing status and generalized to a role/category where the rule held without it
 - Step 1.7 proper-noun justification review passed: the drafted lesson was re-read, every identifier ran the load-bearing test, employer fingerprints (service/company/ticket/customer-list/person/URL/count/date) were redacted to generic roles, and the deny-pattern backstop raised no hits; only public playbook artifacts and genuinely load-bearing details remain
+- Step 1.8 ran: skill-usage issues were captured as backlog items, duplicates were folded into existing open items, or none were needed
+- every Step 1.8 backlog item text passed the scrub review (done Step 2.7 sensitive-data discipline and Step 1.7 proper-noun review) before writing
+- learn-authored skills-repo artifacts were committed by explicit path (Step 1.8 commit rule), or the failure was reported with a one-line issue summary per the failure semantics
 - incident-repo == cwd-repo verified for every `UL#N` capture (Step 1.2 item 3b), OR a deferred capture was routed to the incident repo's project corpus; AND the fork-4 project-corpus existence check (Step 2 mechanical gate) ran for every project-specific candidate  -  no project-specific incident was written into the UL corpus on the grounds that the UL file was the only corpus available in the current cwd
 - company-portability gate (Step 1.2 item 4c) ran before every project-specific placement, and the sibling search of `company_guidelines_master` ran before every full project lesson wherever required by fork (2b), item 4c, or item 5c (not run outside the company root; under the root with config drift the grep may return empty without counting against company scope, per fork (2b)); a placement receipt (item 5c), stating the residual dependency for every fork (4) placement, was emitted for every placed lesson
 - Step 6.6 concision gate passed: every new/edited lesson sits near the corpus word-count median (≤1.5×), has at most one Distinguishing subsection, and the title is ≤~12 words
@@ -563,3 +589,9 @@ Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-sk
 
 ### With `agents-best-practices` skill (provider)
 `learn` is the operational feedback loop for this playbook: it turns recurring failures into durable docs, enforceable rules, and mechanical checks. `agents-best-practices/references/agent-legibility-feedback-loops.md` describes the general harness pattern (source-of-truth artifacts, validators, garbage collection). When auditing or designing a harness, read that reference; when a concrete failure occurred in this session, run `learn`.
+
+### With `done` skill
+`done` Step 1 invokes `learn`; learn's skills-repo commit (Step 1.8 backlog items and the skill-placement commit workflow) lands during that step, before any `done` commit step. `done` Step 4 keeps only the non-learn fallback for remaining skills-repo changes.
+
+### With `receiving-review` skill
+`receiving-review`'s "Backlog capture for valid findings not fixed in scope" is the shape provider for Step 1.8's backlog items. The sources are disjoint: `receiving-review` captures review findings in the current project, learn Step 1.8 captures skills-corpus defects in the skills repo's resolved backlog home; neither owns the other's path.

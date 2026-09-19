@@ -557,6 +557,54 @@ exit "$sync_rc"
 
 > **Note:** When `docs/` is also a directory on the working branch, `git log --oneline docs` is ambiguous. Always use `git log --oneline refs/heads/docs --` to reference the branch unambiguously.
 
+## Step 3: Lesson-Scope Drift Witness Append
+
+When the caller holds a lesson-scope-audit drift witness line (from done Step 3 item 4a) for a corpus whose path is gitignored, the docs-branch-only path has no `done` Step 3 corpus commit to carry the line, so this step lands it as the body of an append-only empty commit on the docs branch.
+
+Contract: the caller passes the exact witness line as the single argument; the line must start with lesson-scope-audit: (fail loud otherwise). The canonical drift witness line this skill expects is: lesson-scope-audit: config drift: company guidelines master not found; company duplicate audit not run. Invoke the append from the audited project repository root; the skill does not resolve or verify the root (the docs-branch refusal only guards the current repo).
+
+Failure semantics: a missing docs branch, a failed worktree add, or a failed commit each returns non-zero with a loud message; a missing docs branch means no sync ever carried the corpus, so the append must refuse rather than overstate coverage.
+
+Run this block as a single shell invocation, in bash not zsh, with the worktree removed on every exit path; never push, the docs branch stays a local safety net per this skill's Rules:
+
+```bash
+docs_branch_witness_append() {
+  # $1: the exact witness line; must start with lesson-scope-audit:
+  case "$1" in
+    lesson-scope-audit:*) ;;
+    *) echo "docs-branch: witness must start with lesson-scope-audit:" >&2; return 1 ;;
+  esac
+  # Everything below runs inside one subshell: `trap` is shell-global, so the
+  # subshell scope keeps the caller's EXIT/INT/TERM traps (for example the done
+  # Step 0 Variant A release trap) intact, discards this cleanup trap at subshell
+  # exit (no `trap -` reset line), and keeps _w/_wt/_rc out of the caller shell.
+  # The trap is the single cleanup authority: the refusal and post-commit paths
+  # below carry no explicit worktree-removal lines.
+  (
+    _w="$1"
+    git show-ref --verify --quiet refs/heads/docs || { echo "docs-branch: no docs branch; run a sync first" >&2; exit 1; }
+    _wt="$(mktemp -d "${TMPDIR:-/tmp}/docs-branch-witness.XXXXXX")" || { echo "docs-branch: witness worktree dir failed" >&2; exit 1; }
+    trap 'git worktree remove --force "$_wt" >/dev/null 2>&1 || rm -rf "$_wt"' EXIT INT TERM
+    if ! git worktree add "$_wt" docs; then
+      echo "docs-branch: witness worktree add failed; if a prior interrupted append leaked a worktree holding docs, run: git worktree prune" >&2
+      exit 1
+    fi
+    if ! git -C "$_wt" symbolic-ref -q HEAD >/dev/null; then
+      echo "docs-branch: witness worktree is detached; aborting (a detached worktree would drop the witness commit)" >&2
+      exit 1
+    fi
+    ( cd "$_wt" && git commit --allow-empty -m "docs: lesson-scope-audit drift witness" -m "$_w" )
+    _rc=$?
+    if [ "$_rc" -ne 0 ]; then
+      echo "docs-branch: witness commit failed" >&2
+    fi
+    exit "$_rc"
+  )
+}
+```
+
+The witness line is byte-for-byte identical to the `done` Step 3 corpus-commit body line so one audit-note grep pattern covers both carriers.
+
 ## Recovery: Restoring Missing Gitignored Files
 
 Any manual `git checkout docs` (for history inspection, rebase, or reset) followed by `git checkout <feature-branch>` **will remove** `docs/`, `AGENTS.md`, `CLAUDE.md` and other gitignored files from disk. Git removes files that were tracked on the previous branch even when they are gitignored on the new branch.
@@ -615,3 +663,6 @@ This only works when an old `git stash push --all` run happened after the files 
 
 ### With `done` and `plans` skills (docs/tmp sweep)
 The `{tmp_dir}` sweep-eligible-root exception (Add-only sync invariant) exists to propagate `done` Step 2.62 (ownerless scratch sweep; it never touches `review-loop*`/`code-review/`/`handoff/` scratch) and `plans` **Plan Lifecycle** (plan-completion docs/tmp cleanup) deletions to the branch. Never widen the exception for other consumers.
+
+### With `done` (drift witness)
+done Step 3 items 4a and 6 invoke this step's witness append when the audited corpus is gitignored; docs-branch owns the append mechanics, done owns the witness line text.
