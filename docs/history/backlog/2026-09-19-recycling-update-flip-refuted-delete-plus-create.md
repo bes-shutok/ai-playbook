@@ -1,4 +1,4 @@
-# Backlog: recycling-update flip refuted live — migrate re-arm/successor duties to delete-plus-create
+# Backlog: recycling-update flip refuted live: migrate re-arm/successor duties to delete-plus-create
 
 Captured: 2026-09-19 (scheduler turn 05:43Z, live dispatch witness)
 Status: open
@@ -8,7 +8,7 @@ Workflow: backlog
 
 ## What was witnessed
 
-The turn reshaped the armed parent record (automation-98b59285) into the P13 execution one-shot with one `CronUpdate` (the dispatch ladder's primary recycling path, `agents/skills/maintenance/zcode.md` step 2). The call reported success ("Updated automation ...") and the echoed record took the new `recurring: false`, title, and prompt — but landed `enabled: false`, `lifecycleStatus: completed`, with the stale parent `nextRunAt` (the old cadence's next fire, 08:15 local) and the old `cronExpr`. A confirm listing verified the record could never fire. The delete-plus-create fallback then produced a correctly armed one-shot (automation-a33d3dc2, verified `enabled: true`, future `nextRunAt`).
+The turn reshaped the armed parent record (automation-98b59285) into the P13 execution one-shot with one `CronUpdate` (the dispatch ladder's primary recycling path, `agents/skills/maintenance/zcode.md` step 2). The call reported success ("Updated automation ...") and the echoed record took the new `recurring: false`, title, and prompt, but landed `enabled: false`, `lifecycleStatus: completed`, with the stale parent `nextRunAt` (the old cadence's next fire, 08:15 local) and the old `cronExpr`. A confirm listing verified the record could never fire. The delete-plus-create fallback then produced a correctly armed one-shot (automation-a33d3dc2, verified `enabled: true`, future `nextRunAt`).
 
 This refutes the parent-to-child flip direction the overlay's "Automation primitive verification" section carried as unverified since 2026-09-16 (verdict line recorded in that section). The child-to-parent direction (the re-arm duty's main restore path) is unverified and now presumed suspect by symmetry.
 

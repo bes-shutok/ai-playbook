@@ -101,6 +101,31 @@ The plan document itself (`docs/plans/2026-09-18-maintenance-loop-residuals-occu
 
 - 2026-09-19 (code review r1, F1 + contract-F1): the zcode.md REFUTED-flip verdict rewrite rode commit 0c91ceff out-of-plan; no P12 task names that span, and the commit-scope contamination is recorded here rather than repaired by history rewrite. The dispatch-ladder step 2 rewrite to delete-plus-create (with its interim pointer in step 2) is owned by the open backlog item `docs/history/backlog/2026-09-19-recycling-update-flip-refuted-delete-plus-create.md`; the ladder prose stays frozen for this plan otherwise.
 - 2026-09-19 (code review r1, contract-F2 plan-side slip): the directional error in the archived liveness plan's Deviation line ("the Task 4 quote above" for a quote sitting below the line) originates in this plan's Task 2 prescription, which dictated the Deviation sentence verbatim; the archived-plan copy was corrected in place (annotation-tier edit), and this note records the plan-side origin.
+- 2026-09-19 (code review r2, CC-2 + R2-RISK-1, five r1 remedy deviations beyond the checked-off exact-span/verbatim prescriptions, one entry per deviation, each pointing at its owning durable record):
+  1. Task 1's SKILL.md replacement span gained the not-visible fail-safe carve-out ("a prompt not visible in full is not classifiable and counts as a potential child per the not-visible fail-safe (the lane is treated as busy)") beyond the plan's prescribed exact new span; this is the r1 RISK-3 remedy, owned by lesson #387 rule (3), whose containment-trade residual names the not-visible fail-safe among the surviving coverage paths.
+  2. Task 2's cannot-decide list gained the staleness escape conjunct ("a file whose own last write is older than one cadence period ...") beyond the prescribed exact opening; r1 RISK-1 remedy, owned by the step0 backlog item's "Note (2026-09-19, code review r1 RISK-1)" in `docs/history/backlog/2026-09-17-step0-rearm-trigger-state-first-wording.md`.
+  3. Task 2's "everything from `The check runs on every touch` onward stays verbatim" prescription was violated by the listing-derived bookkeeping reconciliation clause inserted into the same bullet (the three bookkeeping edits apply only when the listing ran); same r1 RISK-1 remedy, same owning note.
+  4. r5 entry 14's prompt-templates.md `per plan Task 2` reference was repointed to `docs/plans/completed/2026-09-13-maintenance-scheduler-skill.md` instead of the archived liveness plan the entry named; the git trace showed the 2026-09-13 plan's Task 2 prescribes the field-line annotations while the liveness plan's Task 2 is zcode.md ladder work; owned by lesson #390 (its witness records this dated deviation).
+  5. r5 entry 16's tripwire single-sourcing kept the tripwire's own title-less span shape with the title conjunct explicitly not required, instead of pointing at the full Step 0 recognition rule; r1 RISK-2 remedy, owned by lesson #391.
+- 2026-09-19 (code review r2, CC-1 plan-side slip): the plan's Task 5 entry-7 prescription itself supplied `armed-child-record-conflict` as the `rearm_note` definition's example; the corpus binds that string exclusively to `turn_error` (zcode.md's armed-child stand-down), so the landed SKILL.md parenthetical was reworded in the r2 address pass so it cannot read as a `rearm_note` value, and this note records the plan-side origin.
+- 2026-09-19 (code review r2, TEST-R2-1, executed RED/GREEN evidence for the new pins; full outputs in the task implement logs under `docs/tmp/execute-plan/maintenance-loop-residuals-occupancy-anchors-rearm-wording/`, ephemeral; this entry is the durable summary):
+
+  | Proof | Scratch regression injected | Observed failing output |
+  |---|---|---|
+  | Task 1 RED | pre-Task-1 unscoped widened-arm span restored in SKILL.md | `widened-arm classification repo-scoped`; `superseded unscoped widened-arm classification wording must be absent from SKILL.md` (exit 1) |
+  | Task 2 RED | listing-first Step 0 sentence restored in SKILL.md | `step 0 rearm-on-touch check`; `superseded listing-first rearm-on-touch trigger must be absent from SKILL.md` (exit 1) |
+  | Task 3 RED 1 | pre-r4 unscoped carve-out restored in zcode.md | `superseded unscoped ambiguous-outcome carve-out must be absent from zcode.md` (exit 1) |
+  | Task 3 RED 2 | pre-r4 unscoped success clause restored in prompt-templates.md | `superseded unscoped success-via-existing clause must be absent from prompt-templates.md` (exit 1) |
+  | Task 3 RED 3 | successor paragraph moved after the FINAL STEP line | `execution payload ordering drifted (squash merge < SUCCESSOR DISPATCH < FINAL STEP)` (exit 1) |
+  | Task 3 RED 4 | execution-only carve-out span grafted into the authoring blueprint | `execution-only span left the execution inner block: beyond the re-arm duty below and the single successor-dispatch duty below` (exit 1; the presence-only pin stayed green) |
+  | Task 3 RED 5 | done-skill pointer moved below the Step 0 heading | `done-skill rearm-on-touch pointer must precede the Step 0 heading` (exit 1) |
+  | Task 3 schema A/B | State file json block replaced by prose + full-shape block under a later heading | Phase A (unbounded region): all hold, exit 0 (vacuous pass witnessed); Phase B (bounded region): `state schema json block missing`, exit 1 |
+  | Task 6 sweep | none (observation) | validation block exit 0 `validation: all hold`; section-3 sweep rcs both observed 1 (both superseded wordings absent); no missing-file line for the done-skill target; runtime-agnostic check passed |
+  | r1 address RED | recognition-rule match re-injected into the tripwire | `tripwire span shape excludes the title conjunct` (exit 1) |
+  | r1 address RED | pre-Task-1 uncontained execution-child marker span restored in zcode.md | `execution-child marker repo containment`; `superseded uncontained execution-child marker wording must be absent from zcode.md` (exit 1) |
+  | r1 address RED | listing-gate sentence emitted before the consult inside Step 0, positive needle kept verbatim | `step 0 must consult the state file before the listing (state-first placement)` (exit 1; the positive step-0 pin survived) |
+
+  Every scratch regression failed exactly its named pin or assertion and only that one; every GREEN run on the edited tree exited 0 (`maintenance pins: all hold`).
 
 ## Validation Commands
 

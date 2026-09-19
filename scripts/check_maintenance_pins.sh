@@ -67,6 +67,10 @@ expect_absent() { # expect_absent <description> <pattern> <file>: rc 0 = fail, r
 #       'Before Step 0, in a repository that resolves the maintenance skill'
 #       above the Step 0 heading (liveness plan, Task 4; the line is
 #       prescribed unchanged in its owning plan).
+#   Executed RED/GREEN evidence for these pins (scratch regressions, failing
+#       pin lines, sweep rcs): plan
+#       2026-09-18-maintenance-loop-residuals-occupancy-anchors-rearm-wording,
+#       'Triage notes (execution)', entry 2026-09-19 (code review r2, TEST-R2-1).
 # --- SKILL.md structure ---
 pin "G1e guard present"      grep -qF 'G1e (execution lane)' "$S"
 pin "G1a guard present"      grep -qF 'G1a (authoring lane)' "$S"
@@ -177,6 +181,7 @@ pin "peak window UTC+8 anchor"   grep -qF '14:00-18:00 UTC+8' "$Z"
 pin "never pin local hours"      grep -qF 'never pin local hours' "$Z"
 pin "execution-child marker repo containment" grep -qF 'and the resolved repository root (the relative plans-dir substring alone' "$Z"
 expect_absent "superseded uncontained execution-child marker wording must be absent from zcode.md" 'plus a path under the resolved `plans_dir` (SKILL.md Configuration; default `docs/plans/`).' "$Z"
+pin "zcode tripwire shape excludes the title conjunct" grep -qF 'title conjunct is deliberately not required' "$Z"
 pin "ladder recycling needle"    grep -qF 'update the recorded parent record into the child one-shot' "$Z"
 pin "hand-off proceed refusal bound" grep -qF "converges to the fallback's fresh-id create within the same dispatch attempt" "$Z"
 pin "verification section anchored" grep -qF '## Automation primitive verification' "$Z"

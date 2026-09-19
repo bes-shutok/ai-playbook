@@ -76,7 +76,10 @@ the recorded parent's presence within one cadence period, so only the
 listing decides), and the three bookkeeping edits are reconciled as
 listing-derived (none applies when the state file decided and no listing
 ran). Accepted residual: a touch surface whose state file was written within
-the last cadence period performs zero listings and cannot observe an absence
+the last cadence period performs zero listings when the file records no
+unexplained absence (an unexplained absence older than one cadence period is
+darkness per the State file semantics and re-arms from state alone) and
+cannot observe an absence
 newer than that write; the escape bounds the blind window at one cadence
 period past the last successful state write, and the turn surface's own
 guard listings cover the live loop.
