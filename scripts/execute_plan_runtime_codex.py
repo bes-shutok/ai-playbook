@@ -341,9 +341,22 @@ class CodexAdapter:
         return self._blocked("timeout" if verified else "cleanup-unverified", [f"{operation} deadline exceeded", f"owned_process={handle!r}"], generation=generation, checkpoint=checkpoint)
 
     def translate_host_result(self, host_result: Mapping[str, Any], generation: int, task_id: str) -> dict[str, Any]:
-        """Translate one final host envelope into the normalized contract."""
+        """Translate one final host envelope into the normalized contract.
+
+        An optional batch member-progress envelope (batch id, member id and
+        ordinal, attempt, anchor session id) is validated and preserved on
+        the normalized result; a partial or mistyped envelope fails closed
+        as a malformed result.
+        """
 
         raw = dict(host_result)
+        batch_progress = raw.get("batch_progress")
+        normalized_progress: dict[str, Any] | None = None
+        if batch_progress is not None:
+            try:
+                normalized_progress = capabilities.normalize_batch_progress(batch_progress)
+            except (TypeError, ValueError) as exc:
+                return self._blocked("malformed-result", [f"batch progress envelope rejected: {exc}"], generation=generation, checkpoint=f"{task_id}:malformed")
         if "evidence" not in raw:
             raw["evidence"] = ["codex host envelope"]
         elif not isinstance(raw["evidence"], list):
@@ -362,6 +375,11 @@ class CodexAdapter:
         if raw.get("status") == "approval-required":
             result["retry_policy"] = {"mode": "none", "max_attempts": 0, "attempts_remaining": 0}
             result["recovery_action"] = "preserve-and-await-approval"
+        if normalized_progress is not None:
+            result["batch_progress"] = normalized_progress
+            # The envelope's anchor session id is preserved on the result so
+            # every later member resume reuses that one session.
+            result.setdefault("session_id", normalized_progress["session_id"])
         return result
 
     def _invoke_and_translate(self, argv: list[str], deadline: float, operation: str, generation: int, task_id: str, policy_token: Mapping[str, Any] | None = None) -> dict[str, Any]:

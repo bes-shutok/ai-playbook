@@ -614,6 +614,63 @@ class RuntimeCapabilitiesTest(unittest.TestCase):
             blocked = adapter.launch({"id": "task-1"}, "implement", 1, policy_token=witness)
             self.assertEqual(blocked["reason_code"], "runtime-policy-unavailable", f"expected rejection for {label}")
 
+    def test_batch_result_and_member_policy_validation(self) -> None:
+        valid = {
+            "batch_id": "group-1",
+            "member_id": "task-2",
+            "member_ordinal": 2,
+            "attempt": 1,
+            "session_id": "sess-anchor",
+        }
+        # a valid batch progress envelope normalizes to itself
+        self.assertEqual(capabilities.normalize_batch_progress(dict(valid)), valid)
+        # an absent envelope is legitimate: the batch opt-in is optional
+        self.assertIsNone(capabilities.normalize_batch_progress(None))
+        # missing, stale-typed, and malformed partial envelopes fail closed
+        malformed_envelopes = {
+            "missing session": {k: v for k, v in valid.items() if k != "session_id"},
+            "missing attempt": {k: v for k, v in valid.items() if k != "attempt"},
+            "string ordinal": dict(valid, member_ordinal="2"),
+            "zero attempt": dict(valid, attempt=0),
+            "boolean ordinal": dict(valid, member_ordinal=True),
+            "empty batch id": dict(valid, batch_id=""),
+            "empty member id": dict(valid, member_id="  "),
+            "non-mapping": ["group-1"],
+        }
+        for label, envelope in malformed_envelopes.items():
+            with self.assertRaises(ValueError, msg=label):
+                capabilities.normalize_batch_progress(envelope)
+        # member receipt validation against expected active group state.
+        # r1 F3: the normalized envelope carries no credential, so the
+        # conforming receipt is the five-field shape WITHOUT any claim
+        # token; the outer receipt's claim token is the authorization input,
+        # verified by the driver's checkpoint fence.
+        expected = {
+            "batch_id": "group-1",
+            "member_id": "task-2",
+            "member_ordinal": 2,
+            "attempt": 1,
+        }
+        # a conforming normalized envelope (no claim token inside) validates
+        self.assertTrue(capabilities.validate_member_receipt(dict(valid), expected))
+        # a claim_token key inside the envelope is ignored, never demanded
+        self.assertTrue(capabilities.validate_member_receipt(dict(valid, claim_token="other-token"), expected))
+        # an expected token field is equally inert: the envelope check pins
+        # identity fields only
+        self.assertTrue(capabilities.validate_member_receipt(dict(valid), dict(expected, token="member-2-token")))
+        # missing, stale, mismatched, or cross-member receipts fail closed
+        receipt = dict(valid)
+        self.assertFalse(capabilities.validate_member_receipt(None, expected))
+        self.assertFalse(capabilities.validate_member_receipt({"batch_id": "group-1"}, expected))
+        stale_expected = {
+            "stale attempt": dict(expected, attempt=2),
+            "mismatched member": dict(expected, member_id="task-3"),
+            "wrong batch": dict(expected, batch_id="group-2"),
+            "wrong ordinal": dict(expected, member_ordinal=3),
+        }
+        for label, witness in stale_expected.items():
+            self.assertFalse(capabilities.validate_member_receipt(receipt, witness), f"expected rejection for {label}")
+
     def test_load_approval_receipt_requires_owner_only_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

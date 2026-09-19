@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -22,6 +23,28 @@ import warnings
 from unittest import mock
 
 import quota_window_probe as probe
+import harness_detection
+
+
+@contextlib.contextmanager
+def _scrubbed_harness_env(extra: dict = None):
+    """Scrub ZCODE_* keys and pin a hermetic ancestry for live-signal tests.
+
+    The host may carry ZCODE_* markers (this repo's own runtime), so every
+    auto-detect test scrubs them explicitly and replaces the default ps walk
+    with a canned chain; no real process tree is consulted.
+    """
+    extra = extra or {}
+    removed = {key: os.environ.pop(key) for key in list(os.environ) if key.startswith("ZCODE_")}
+    with mock.patch.object(harness_detection, "_default_ancestry", lambda: []):
+        for key, value in extra.items():
+            os.environ[key] = value
+        try:
+            yield
+        finally:
+            for key in extra:
+                os.environ.pop(key, None)
+            os.environ.update(removed)
 
 ROOT = Path(__file__).resolve().parents[1]
 QUOTA_DIR = ROOT / "scripts/testdata/quota"
@@ -32,6 +55,12 @@ CODEX_FIXTURE = QUOTA_DIR / "codex_rollout.jsonl"
 # not a reimplementation of its contract.
 sys.path.insert(0, str(ROOT / "agents/hooks/budget-guard"))
 import budget_guard_core  # noqa: E402
+
+# The canonical shared-guard-lock contract lives in the watcher module; the
+# replacement-interleaving witness below proves the probe writer, the hook
+# cleanup, and the watcher cleanup all serialize on the same lock file.
+sys.path.insert(0, str(ROOT / "scripts"))
+import execute_plan_resume_watcher as resume_watcher  # noqa: E402
 
 
 class QuotaWindowProbeTest(unittest.TestCase):
@@ -828,25 +857,65 @@ class QuotaWindowProbeTest(unittest.TestCase):
             )
 
     def test_runtime_autodetect_order(self) -> None:
+        # Live-signal auto-detect (file presence no longer consulted):
+        # documented precedence is environment first, then ancestry.
+        with _scrubbed_harness_env({"ZCODE_APP_VERSION": "3.12.3"}):
+            # Live env signal present: zcode wins even though the host also
+            # has a codex ancestry.
+            with mock.patch.object(
+                harness_detection, "_default_ancestry",
+                lambda: ["zsh", "codex exec plan X", "launchd"],
+            ):
+                self.assertEqual(probe.detect_runtime(), "zcode")
+        with _scrubbed_harness_env():
+            # Only codex present, via the ancestry chain.
+            with mock.patch.object(
+                harness_detection, "_default_ancestry",
+                lambda: ["zsh", "codex exec plan X", "launchd"],
+            ):
+                self.assertEqual(probe.detect_runtime(), "codex")
+            # Neither live signal present.
+            self.assertIsNone(probe.detect_runtime())
+
+    def test_autodetect_uses_live_env_signal(self) -> None:
+        # ZCODE_* in the environment detects zcode even with NO config file
+        # on disk (HOME pointed at an empty temp dir).
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
-            zcode_config = self._write_config(tmp)
-            sessions = tmp / "sessions"
-            sessions.mkdir()
-            # Both markers present: documented precedence picks zcode.
-            self.assertEqual(
-                probe.detect_runtime(zcode_config=zcode_config, codex_sessions=sessions),
-                "zcode",
-            )
-            # Only codex present.
-            self.assertEqual(
-                probe.detect_runtime(zcode_config=tmp / "missing.json", codex_sessions=sessions),
-                "codex",
-            )
-            # Neither present.
-            self.assertIsNone(
-                probe.detect_runtime(zcode_config=tmp / "missing.json", codex_sessions=tmp / "none")
-            )
+            empty_home = Path(tmpdir) / "home"
+            empty_home.mkdir()
+            with _scrubbed_harness_env({"ZCODE_APP_VERSION": "3.12.3"}):
+                old_home = os.environ.get("HOME")
+                os.environ["HOME"] = str(empty_home)
+                try:
+                    self.assertEqual(probe.detect_runtime(None), "zcode")
+                finally:
+                    if old_home is None:
+                        os.environ.pop("HOME", None)
+                    else:
+                        os.environ["HOME"] = old_home
+
+    def test_autodetect_ignores_file_presence(self) -> None:
+        # Mis-bind canary: the real config file exists under HOME, but with
+        # no ZCODE_* variable and no codex ancestry, auto-detect answers None.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_home = Path(tmpdir) / "home"
+            config = fake_home / ".zcode" / "cli" / "config.json"
+            config.parent.mkdir(parents=True)
+            config.write_text("{}", encoding="utf-8")
+            with _scrubbed_harness_env():
+                old_home = os.environ.get("HOME")
+                os.environ["HOME"] = str(fake_home)
+                try:
+                    self.assertIsNone(probe.detect_runtime(None))
+                finally:
+                    if old_home is None:
+                        os.environ.pop("HOME", None)
+                    else:
+                        os.environ["HOME"] = old_home
+
+    def test_explicit_runtime_still_wins(self) -> None:
+        with _scrubbed_harness_env({"ZCODE_APP_VERSION": "3.12.3"}):
+            self.assertEqual(probe.detect_runtime("codex"), "codex")
 
     def test_write_flag_writes_on_pause_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -864,6 +933,56 @@ class QuotaWindowProbeTest(unittest.TestCase):
             flag.unlink()
             probe.write_flag_if_paused(flag, "zcode", [continue_limit], "continue")
             self.assertFalse(flag.exists())
+
+    def test_main_write_flag_relays_guard_armed(self) -> None:
+        # r4 O18: the --write-flag relay must surface the arm outcome in the
+        # report itself: guard_armed True on an armed pause, and
+        # guard_armed False plus its reason line when the flag was NOT
+        # armed, so a reader trusting the JSON never assumes an armed flag
+        # from the pause-only exit code. The probe pipeline is stubbed; the
+        # flag writer and the shared guard lock are real.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            flag = Path(tmpdir) / "budget-guard.flag"
+            pause_report = {
+                "runtime": "zcode",
+                "status": "ok",
+                "binding": "primary",
+                "pause_decision": "pause",
+                "reasons": [],
+                "limits": [probe.make_limit("primary", 95.0, 1000 + 10 * 60, now=1000)],
+            }
+            original_detect = probe.detect_runtime
+            original_run = probe.run_probe
+            probe.detect_runtime = lambda *args, **kwargs: object()
+            probe.run_probe = lambda *args, **kwargs: dict(pause_report)
+            try:
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    code = probe.main(["--write-flag", str(flag), "--runtime", "zcode"])
+                self.assertEqual(code, 0)
+                report = json.loads(out.getvalue())
+                self.assertEqual(report["pause_decision"], "pause")
+                self.assertTrue(report["guard_armed"])
+                self.assertTrue(flag.exists())
+                # Not-armed arm: the guard lock held here fails the arm; the
+                # report names that instead of leaving armed assumed.
+                flag.unlink()
+                held = resume_watcher.budget_guard_lock(flag)
+                with held as acquired:
+                    self.assertTrue(acquired)
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        code = probe.main(["--write-flag", str(flag), "--runtime", "zcode"])
+                    self.assertEqual(code, 0)
+                    report = json.loads(out.getvalue())
+                    self.assertFalse(report["guard_armed"])
+                    self.assertTrue(
+                        any("guard flag not armed" in reason for reason in report["reasons"]),
+                        report["reasons"],
+                    )
+            finally:
+                probe.detect_runtime = original_detect
+                probe.run_probe = original_run
 
     def test_write_flag_plan_value_cannot_inject_flag_keys(self) -> None:
         # Review r4 F1: the plan slug is forensic metadata, never trusted
@@ -890,6 +1009,134 @@ class QuotaWindowProbeTest(unittest.TestCase):
             # parse_flag coerces reset_at_epoch to int.
             self.assertEqual(parsed["reset_at_epoch"], 1000 + 10 * 60)
             self.assertEqual(parsed["plan"], "my-plan")
+
+    def test_write_flag_expands_tilde_path(self) -> None:
+        # r1 F16: a literal-tilde argv must arm the SAME host-global flag
+        # file the hooks and the watcher read (expanded), never a
+        # "./~/..." path that silently never arms and bypasses the shared
+        # lock contract. The HOME env override keeps the case hermetic.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_home = Path(tmpdir) / "home"
+            flag = fake_home / ".ai-playbook" / "runtime" / "budget-guard.flag"
+            pausing = probe.make_limit("primary", 95.0, 1000 + 10 * 60, now=1000)
+            old_home = os.environ.get("HOME")
+            os.environ["HOME"] = str(fake_home)
+            try:
+                self.assertTrue(probe.write_flag_if_paused("~/.ai-playbook/runtime/budget-guard.flag", "zcode", [pausing], "pause"))
+            finally:
+                if old_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = old_home
+            self.assertTrue(flag.exists(), "literal-tilde argv must expanduser to the host-global flag")
+            self.assertFalse((Path(tmpdir) / "~").exists())
+
+    def test_write_flag_skips_arming_when_lock_unavailable(self) -> None:
+        # r1 F13: on lock-acquire timeout the writer must NOT arm with an
+        # unlocked replace: a concurrent locked cleanup could delete the
+        # live flag or the unlocked publish could race. Not arming (False)
+        # is the fail-open direction; the pid-unique tmp leaves no fixed
+        # shared staging file behind either.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            flag = Path(tmpdir) / "budget-guard.flag"
+            pausing = probe.make_limit("primary", 95.0, 1000 + 10 * 60, now=1000)
+            held = resume_watcher.budget_guard_lock(flag)
+            with held as acquired:
+                self.assertTrue(acquired)
+                outcome: dict = {}
+                started = threading.Event()
+
+                def blocked_writer() -> None:
+                    started.set()
+                    outcome["armed"] = probe.write_flag_if_paused(flag, "zcode", [pausing], "pause")
+
+                thread = threading.Thread(target=blocked_writer)
+                thread.start()
+                self.assertTrue(started.wait(5), "writer witness never started")
+                thread.join(5)
+                self.assertFalse(thread.is_alive())
+            # The writer returned without arming once the lock released
+            # behind it: the 2s lock timeout elapsed first.
+            self.assertFalse(outcome.get("armed", True))
+            self.assertFalse(flag.exists())
+            self.assertEqual(list(Path(tmpdir).glob("*.tmp*")), [])
+
+    def test_guard_cleanup_does_not_remove_replaced_flag(self) -> None:
+        # Shared guard-lock replacement interleaving: the hook's expired-window
+        # cleanup and the probe writer's replacement both wait on the SAME
+        # lock file (budget-guard.lock next to the flag; the watcher's
+        # compare-and-delete holds it too), so a cleanup that decided on the
+        # old window can never unlink the newer window's replacement. The
+        # lock handle below comes from the watcher module to prove the
+        # cross-module interlock on one file.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            flag = Path(tmpdir) / "budget-guard.flag"
+            fired = Path(tmpdir) / "budget-guard.fired"
+            expired_epoch = int(time.time()) - 120
+            newer_epoch = int(time.time()) + 3600
+            self.assertTrue(probe.write_flag_if_paused(
+                flag, "zcode",
+                [probe.make_limit("primary", 95.0, expired_epoch, now=int(time.time()) - 120)],
+                "pause",
+            ))
+            lock_path = resume_watcher.guard_lock_path(flag)
+            self.assertEqual(lock_path.name, "budget-guard.lock")
+            self.assertEqual(lock_path.parent, flag.parent)
+            out = io.StringIO()
+            hook_outcome = {}
+            writer_outcome = {}
+            cleaner_started = threading.Event()
+
+            def hook_cleanup() -> None:
+                cleaner_started.set()
+                with contextlib.redirect_stdout(out):
+                    hook_outcome["code"] = budget_guard_core.main(
+                        ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired)]
+                    )
+
+            def writer_replacement() -> None:
+                writer_started.set()
+                writer_outcome["armed"] = probe.write_flag_if_paused(
+                    flag, "zcode",
+                    [probe.make_limit("primary", 95.0, newer_epoch, now=int(time.time()))],
+                    "pause",
+                )
+
+            writer_started = threading.Event()
+            with resume_watcher.budget_guard_lock(flag) as held:
+                self.assertTrue(held)
+                cleaner = threading.Thread(target=hook_cleanup)
+                cleaner.start()
+                # The `started` markers (r1 F29) prove each thread reached
+                # its body before the blocked assertions, so scheduler
+                # starvation cannot make the blocking-half witnesses vacuous.
+                self.assertTrue(cleaner_started.wait(5), "hook cleanup witness never started")
+                cleaner.join(0.5)
+                self.assertTrue(cleaner.is_alive(), "hook cleanup did not block on the shared guard lock")
+                writer = threading.Thread(target=writer_replacement)
+                writer.start()
+                self.assertTrue(writer_started.wait(5), "probe writer witness never started")
+                writer.join(0.5)
+                self.assertTrue(writer.is_alive(), "probe writer did not participate in the shared guard lock")
+            cleaner.join(5)
+            writer.join(5)
+            self.assertFalse(cleaner.is_alive())
+            self.assertFalse(writer.is_alive())
+            # Whichever participant unblocked first, the newer flag survives
+            # and the expired cleanup passed without blocking.
+            self.assertTrue(writer_outcome["armed"])
+            self.assertEqual(hook_outcome["code"], budget_guard_core.EXIT_OK)
+            self.assertEqual(out.getvalue(), "")
+            self.assertTrue(flag.exists())
+            parsed = budget_guard_core.parse_flag(flag.read_text(encoding="utf-8"))
+            self.assertEqual(parsed["reset_at_epoch"], newer_epoch)
+            # The watcher's own compare-and-delete with the stale decision
+            # refuses to remove the replaced flag as well.
+            result = resume_watcher.compare_and_delete_flag(flag, expired_epoch)
+            self.assertFalse(result["removed"])
+            self.assertTrue(result["refused"])
+            self.assertEqual(result["reason"], "newer-window")
+            self.assertTrue(flag.exists())
 
     def test_secondary_binding_reports_no_schedule(self) -> None:
         early_secondary = probe.make_limit("secondary", 95.0, 1000 + 10 * 60, now=1000)
@@ -1063,6 +1310,284 @@ class QuotaWindowProbeTest(unittest.TestCase):
             report["reasons"],
         )
 
+
+
+    # --- Task 1: probe protocol-completion margin (origin 2, layer 2) ---
+
+    def test_evaluate_pause_protocol_margin_pauses_above_fixed_threshold(self) -> None:
+        # The margin fires above the fixed minutes line: 25 minutes remain,
+        # the 20-minute line is clear, but a 30-minute protocol margin means
+        # the pause protocol itself could not complete before the reset.
+        limit = probe.make_limit("primary", 10.0, 1000 + 25 * 60, now=1000)
+        decision, reasons = probe.evaluate_pause(
+            [limit], "primary",
+            minutes_threshold=20, percent_threshold=90, protocol_minutes_threshold=30,
+        )
+        self.assertEqual(decision, "pause")
+        self.assertTrue(
+            any("protocol margin" in r for r in reasons), reasons
+        )
+
+    def test_evaluate_pause_protocol_margin_default_floor_is_subsumed(self) -> None:
+        # The 10-minute default is a floor under the 20-minute line, not a
+        # second pause line at normal range: 25 minutes remaining with all
+        # defaults continues.
+        limit = probe.make_limit("primary", 10.0, 1000 + 25 * 60, now=1000)
+        decision, reasons = probe.evaluate_pause([limit], "primary")
+        self.assertEqual(decision, "continue")
+        self.assertEqual(reasons, [])
+
+    def test_evaluate_pause_protocol_margin_boundary_is_strict(self) -> None:
+        # Exactly at the margin continues, mirroring the strict `<` of the
+        # minutes line.
+        limit = probe.make_limit("primary", 10.0, 1000 + 30 * 60, now=1000)
+        decision, reasons = probe.evaluate_pause(
+            [limit], "primary",
+            minutes_threshold=20, percent_threshold=90, protocol_minutes_threshold=30,
+        )
+        self.assertEqual(decision, "continue")
+        self.assertEqual(reasons, [])
+
+    def test_secondary_binding_margin_stays_report_only(self) -> None:
+        # A weekly secondary-only limit set inside the margin pauses in the
+        # report but the flag writer refuses: the margin must not change the
+        # secondary report-only contract.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            flag = Path(tmpdir) / "budget-guard.flag"
+            limit = probe.make_limit("secondary", 10.0, 1000 + 25 * 60, now=1000)
+            report = probe.build_report(
+                "zcode", [limit], now=1000, protocol_minutes_threshold=30,
+            )
+            self.assertEqual(report["pause_decision"], "pause")
+            self.assertFalse(
+                probe.write_flag_if_paused(flag, "zcode", [limit], "pause")
+            )
+            self.assertFalse(flag.exists())
+
+    def test_cli_min_protocol_minutes_flag_pauses(self) -> None:
+        # The CLI flag threads through main() to the probe: 25 minutes
+        # remaining with --min-protocol-minutes 30 pauses with a
+        # protocol-margin reason (exit 0 = pause decision).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._write_config(Path(tmpdir))
+            now = time.time()
+            payload = {
+                "data": {
+                    "limits": [
+                        {
+                            "type": "TOKENS_LIMIT",
+                            "percentage": 50.0,
+                            "nextResetTime": int((now + 25 * 60) * 1000),
+                        }
+                    ]
+                }
+            }
+            body = json.dumps(payload)
+            out = io.StringIO()
+            with mock.patch.object(
+                probe, "urllib_transport", lambda url, headers: body
+            ), contextlib.redirect_stdout(out):
+                code = probe.main([
+                    "--runtime", "zcode",
+                    "--config", str(config),
+                    "--min-protocol-minutes", "30",
+                ])
+            self.assertEqual(code, 0)
+            report = json.loads(out.getvalue())
+            self.assertEqual(report["pause_decision"], "pause")
+            self.assertTrue(
+                any("protocol margin" in r for r in report["reasons"]),
+                report["reasons"],
+            )
+
+    def test_cli_min_protocol_minutes_rejects_negative(self) -> None:
+        # A negative margin is a usage error at the CLI (fail loud), never a
+        # silent second pause line.
+        with self.assertRaises(SystemExit) as ctx:
+            probe.main(["--runtime", "zcode", "--min-protocol-minutes", "-5"])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_cli_min_protocol_minutes_zero_disables_margin(self) -> None:
+        # 0 is accepted (margin disabled) and must not become a pause line.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._write_config(Path(tmpdir))
+            now = time.time()
+            payload = {"data": {"limits": [{"type": "TOKENS_LIMIT", "percentage": 50.0,
+                                            "nextResetTime": int((now + 25 * 60) * 1000)}]}}
+            body = json.dumps(payload)
+            out = io.StringIO()
+            with mock.patch.object(probe, "urllib_transport", lambda url, headers: body), \
+                    contextlib.redirect_stdout(out):
+                code = probe.main(["--runtime", "zcode", "--config", str(config),
+                                   "--min-protocol-minutes", "0"])
+            self.assertEqual(code, 1)
+            report = json.loads(out.getvalue())
+            self.assertEqual(report["pause_decision"], "continue")
+
+    def test_cli_plan_cost_upper_bound_boundary(self) -> None:
+        # 100 is the inclusive upper bound (accepted); just above is a usage
+        # error. A continue-decision report carries the recommendation.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._write_config(Path(tmpdir))
+            now = time.time()
+            payload = {"data": {"limits": [{"type": "TOKENS_LIMIT", "percentage": 80.0,
+                                            "nextResetTime": int((now + 120 * 60) * 1000)}]}}
+            body = json.dumps(payload)
+            out = io.StringIO()
+            with mock.patch.object(probe, "urllib_transport", lambda url, headers: body), \
+                    contextlib.redirect_stdout(out):
+                code = probe.main(["--runtime", "zcode", "--config", str(config),
+                                   "--plan-cost", "100"])
+            self.assertEqual(code, 1)
+            self.assertEqual(json.loads(out.getvalue())["wave_recommendation"], "pause")
+        with self.assertRaises(SystemExit) as ctx:
+            probe.main(["--runtime", "zcode", "--plan-cost", "100.5"])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_codex_rollout_margin_threading_reaches_build_report(self) -> None:
+        # The codex path threads protocol_minutes_threshold and
+        # plan_cost_percent into build_report; dropping either kwarg in the
+        # codex call must fail this pin.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sessions = Path(tmpdir) / "sessions"
+            (sessions / "2026/09/18").mkdir(parents=True)
+            now = time.time()
+            record = {"rate_limits": {"primary": {"used_percent": 10.0,
+                                                  "resets_at": int(now + 25 * 60)}}}
+            rollout = sessions / "2026/09/18" / "rollout-test.jsonl"
+            rollout.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            report = probe.probe_codex(sessions_dir=sessions, now=now,
+                                       protocol_minutes_threshold=30,
+                                       plan_cost_percent=40.0)
+            self.assertEqual(report["status"], "ok")
+            self.assertEqual(report["pause_decision"], "pause")
+            self.assertTrue(any("protocol margin" in r for r in report["reasons"]),
+                            report["reasons"])
+
+    def test_cli_ninety_eight_percent_pause_drill_ac2_witness(self) -> None:
+        # The origin-2 AC2 fixture drill: the pause fires at very high
+        # used-percent with wall-clock margin intact (98 percent used, 40
+        # minutes remaining, default 10-minute margin), so the protocol runs
+        # while budget, not the clock, is the binding constraint.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._write_config(Path(tmpdir))
+            now = time.time()
+            payload = {
+                "data": {
+                    "limits": [
+                        {
+                            "type": "TOKENS_LIMIT",
+                            "percentage": 98.0,
+                            "nextResetTime": int((now + 40 * 60) * 1000),
+                        }
+                    ]
+                }
+            }
+            body = json.dumps(payload)
+            out = io.StringIO()
+            with mock.patch.object(
+                probe, "urllib_transport", lambda url, headers: body
+            ), contextlib.redirect_stdout(out):
+                code = probe.main([
+                    "--runtime", "zcode",
+                    "--config", str(config),
+                    "--min-protocol-minutes", "10",
+                ])
+            self.assertEqual(code, 0)
+            report = json.loads(out.getvalue())
+            self.assertEqual(report["pause_decision"], "pause")
+            self.assertTrue(
+                any("used_percent" in r for r in report["reasons"]),
+                report["reasons"],
+            )
+
+
+    def test_write_flag_writes_armed_by_probe(self) -> None:
+        # The probe is the flag's writer: the flag must carry armed_by=probe
+        # so the hook's block reason can attribute the arming.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            flag = Path(tmpdir) / "budget-guard.flag"
+            now = time.time()
+            limit = probe.make_limit("primary", 95.0, int(now) + 30 * 60, now=now)
+            self.assertTrue(
+                probe.write_flag_if_paused(flag, "zcode", [limit], "pause")
+            )
+            content = flag.read_text(encoding="utf-8")
+            self.assertIn("armed_by=probe", content)
+
+    # --- Task 2: probe plan-cost wave recommendation (origin 1, gaps 1/5) ---
+
+    def test_build_report_plan_cost_full(self) -> None:
+        limit = probe.make_limit("primary", 50.0, 1000 + 120 * 60, now=1000)
+        report = probe.build_report("zcode", [limit], now=1000, plan_cost_percent=40.0)
+        self.assertEqual(report["wave_recommendation"], "full")
+        self.assertIsNone(report["wave_size"])
+
+    def test_build_report_plan_cost_split(self) -> None:
+        # Cost 40 > remaining 20, half-cost 20 <= remaining 20: split in
+        # waves of 2.
+        limit = probe.make_limit("primary", 80.0, 1000 + 120 * 60, now=1000)
+        report = probe.build_report("zcode", [limit], now=1000, plan_cost_percent=40.0)
+        self.assertEqual(report["wave_recommendation"], "split")
+        self.assertEqual(report["wave_size"], 2)
+
+    def test_build_report_plan_cost_pause(self) -> None:
+        # Half-cost 20 > remaining 15: not even half a panel fits.
+        limit = probe.make_limit("primary", 85.0, 1000 + 120 * 60, now=1000)
+        report = probe.build_report("zcode", [limit], now=1000, plan_cost_percent=40.0)
+        self.assertEqual(report["wave_recommendation"], "pause")
+        self.assertIsNone(report["wave_size"])
+
+    def test_build_report_plan_cost_boundary_full_at_exact_remaining(self) -> None:
+        # Cost 40 equals remaining 40: the <= boundary is inclusive.
+        limit = probe.make_limit("primary", 60.0, 1000 + 120 * 60, now=1000)
+        report = probe.build_report("zcode", [limit], now=1000, plan_cost_percent=40.0)
+        self.assertEqual(report["wave_recommendation"], "full")
+
+    def test_build_report_without_plan_cost_has_no_recommendation_fields(self) -> None:
+        # Existing report shape is unchanged for callers that omit the flag.
+        limit = probe.make_limit("primary", 50.0, 1000 + 120 * 60, now=1000)
+        report = probe.build_report("zcode", [limit], now=1000)
+        self.assertNotIn("plan_cost_percent", report)
+        self.assertNotIn("wave_recommendation", report)
+        self.assertNotIn("wave_size", report)
+
+    def test_cli_plan_cost_split_recommendation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._write_config(Path(tmpdir))
+            now = time.time()
+            payload = {
+                "data": {
+                    "limits": [
+                        {
+                            "type": "TOKENS_LIMIT",
+                            "percentage": 80.0,
+                            "nextResetTime": int((now + 120 * 60) * 1000),
+                        }
+                    ]
+                }
+            }
+            body = json.dumps(payload)
+            out = io.StringIO()
+            with mock.patch.object(
+                probe, "urllib_transport", lambda url, headers: body
+            ), contextlib.redirect_stdout(out):
+                code = probe.main([
+                    "--runtime", "zcode",
+                    "--config", str(config),
+                    "--plan-cost", "40",
+                ])
+            self.assertEqual(code, 1)
+            report = json.loads(out.getvalue())
+            self.assertEqual(report["wave_recommendation"], "split")
+            self.assertEqual(report["wave_size"], 2)
+
+    def test_cli_plan_cost_rejects_out_of_range(self) -> None:
+        for bad in ("150", "0", "-5"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(SystemExit) as ctx:
+                    probe.main(["--runtime", "zcode", "--plan-cost", bad])
+                self.assertEqual(ctx.exception.code, 2)
 
 if __name__ == "__main__":
     unittest.main()

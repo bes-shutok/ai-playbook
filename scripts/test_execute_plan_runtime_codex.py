@@ -97,6 +97,44 @@ class CodexAdapterTest(unittest.TestCase):
         self.assertEqual(approval["status"], "blocked")
         self.assertEqual(approval["retry_policy"]["mode"], "none")
 
+    def test_batch_progress_translation_and_anchor_resume(self):
+        # given: a host envelope with ordered member progress, attempt, batch
+        # id, member ordinal, and one session id
+        runner = RecordedRunner()
+        adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
+        self.assertEqual(adapter.activation_check()["status"], "success")
+        progress = {"batch_id": "group-1", "member_id": "task-1", "member_ordinal": 1, "attempt": 1, "session_id": "sess-anchor"}
+        host = {"status": "success", "reason_code": "completed", "evidence": ["member-one-checkpoint"], "batch_progress": dict(progress)}
+        translated = adapter.translate_host_result(host, 1, "task-1")
+        # expects: the normalized result preserves those fields
+        self.assertEqual(translated["status"], "success")
+        self.assertEqual(translated["batch_progress"], progress)
+        self.assertEqual(translated["session_id"], "sess-anchor")
+        # a malformed partial-progress envelope fails closed
+        malformed = adapter.translate_host_result(
+            {"status": "success", "reason_code": "completed", "evidence": ["m"], "batch_progress": {"batch_id": "group-1"}},
+            1,
+            "task-1",
+        )
+        self.assertEqual(malformed["status"], "blocked")
+        self.assertEqual(malformed["reason_code"], "malformed-result")
+        # a non-mapping progress envelope fails closed too
+        broken = adapter.translate_host_result(
+            {"status": "success", "reason_code": "completed", "evidence": ["m"], "batch_progress": ["group-1"]},
+            1,
+            "task-1",
+        )
+        self.assertEqual(broken["status"], "blocked")
+        self.assertEqual(broken["reason_code"], "malformed-result")
+        # expects: resume uses the anchor session with the active member
+        # prompt and policy token
+        member_token = {"token": "member-2", "repo_root": "/repo", "allowed_paths": ["task2.txt"], "operation_kind": "repository-task", "network": False, "generation": 1}
+        resumed = adapter.resume("sess-anchor", "implement member 2", 1, task_id="task-2", policy_token=member_token)
+        self.assertEqual(resumed["status"], "success")
+        resumed_calls = [call for call in runner.calls if isinstance(call[0], list) and call[0][:3] == ["codex", "exec", "resume"]]
+        self.assertTrue(any(call[0][:5] == ["codex", "exec", "resume", "sess-anchor", "--json"] and call[0][5] == "implement member 2" for call in resumed_calls))
+        self.assertTrue(any(call[3] is member_token for call in resumed_calls))
+
     def test_codex_timeout_cleans_descendants(self):
         runner = RecordedRunner(timeout=True, cleanup_verified=False)
         adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)

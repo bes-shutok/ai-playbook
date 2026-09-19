@@ -94,6 +94,29 @@ Every review orchestrator (plan, branch, PR, RFC, Confluence) **must** populate 
 12. **Soften watchlist:** when the review is part of a `review-loop` (or any multi-round branch review), include `### Soften watchlist` under `## Review Statistics`. Carry forward open rows from the previous round; update statuses after workers reaffirm or restage. Use `None.` when the run has no softened findings yet.
 13. **Fan-out findings:** A fan-out finding, per the fan-out policy in `review-panel-selection`, records the canonical home and the list of peer restatements in its Analysis; peers resolve by pointer conversion or one pointer-cleanup backlog item, not as independent contract bugs.
 
+### Address fan-out accounting
+
+When the orchestrator fans the address pass out (per the `execute-plan` Step 3.3 fan-out contract), fan-out address workers are not Panel rows and `never consume review-time budget or overflow`. Per-finding attribution is recorded by the parent as an `Address worker: <id>` line on the finding's Analysis section. The sidecar carries the attribution only for current-v1 records, in `extensions.address_fanout`, with shape:
+
+```json
+{"round": "<rN>", "finding_files": [{"id": 1, "files": ["repo/relative/path"]}], "workers": [{"id": "<wN>", "findings": [1], "files": ["repo/relative/path"], "attempts": [{"id": "<attempt>", "status": "success|blocked|cancelled", "reason_code": "completed|worker_error|worker_timeout|cancellation_unverified|ambiguous_patch|scope_violation|stale_attempt|parent_merge_conflict|superseded", "log": "<path>"}], "status": "complete|blocked", "fixed": N, "dropped": N, "deferred": N, "pending": N, "log": "<path>"}]}
+```
+
+The listed `reason_code` values are the closed address-fan-out enum (`completed`, `worker_error`, `worker_timeout`, `cancellation_unverified`, `ambiguous_patch`, `scope_violation`, `stale_attempt`, `parent_merge_conflict`, `superseded`). The definition site is the producer constants (`REASON_*` in `scripts/execute_plan_address_fanout.py`, r1 F21); the validator pins this subsection's list as membership only, and the producer-vs-validator set equality is asserted by the harness suite (`test_reason_code_enum_matches_validator_pins`), not by the validator at validation time (r2 F19: drift between the two sets fails the suite, not a `--hard` run). `completed` is required for a successful attempt, `worker_error` or `worker_timeout` for the corresponding worker failure, and the remaining codes are reserved for blocked or cancelled outcomes. This is a `version-1-only` extension. The validator enforces:
+
+- `round` equals the sidecar's `round` after string normalization.
+- every `finding_files` id exists exactly once in the sidecar findings.
+- every file is a non-empty repository-relative normalized path.
+- every worker's files equal the union of its finding file sets.
+- every assigned finding id occurs in exactly one worker.
+- every worker has one or two attempts and a final status.
+- each worker row's four counts sum to its findings length.
+- all assigned ids equal the exact fanned subset recorded by the parent.
+
+Synthesis-table immutability is deliberately NOT in that list (r1 F23): the validator gates one record's shape and conservation and never compares across rounds, so keeping synthesis tables (Panel, Discarded, Severity calibration) stable through a triage update is parent merge discipline per `receiving-review` (Staging doc triage outcomes; Triage presentation freeze), not a validator check.
+
+Versionless legacy sidecars reject `address_fanout` and remain on the single-worker path.
+
 ### Discard reason codes (use exactly one per discarded row)
 
 | Code | When to use |
@@ -144,6 +167,7 @@ The staging doc must follow this structure exactly, including required headings:
 - Prior findings supplied as filter: no
 - Last fix commit: <sha or none>
 - Witness ledger: <populated | N/A (no public mutators)>
+- Coverage: clean | replacement-covered | degraded | failed
 - Release-gate ledger: <rows or none>
 - Panel mode: full | focused
 - Selection reason: <required for focused>
@@ -211,6 +235,28 @@ One row per changed public mutator and each directly affected downstream boundar
 
 **Witness empty shape:** when the diff has no changed public mutator, the Metadata carries `Witness ledger: N/A (no public mutators)` instead of `### Witness ledger` rows; a post-fix round that has neither a populated `### Witness ledger` nor that N/A line fails the gate (mirroring the mutator failure-mode matrix's `N/A: no mutating APIs in this plan` and the Release-gate ledger's `none` line). `<...>` placeholder rows in the template table never count as populated evidence.
 
+### Attempt ledger
+
+One row per bounded worker attempt (initial launch, bounded retry, or replacement launch), mirrored by `coverage.attempts[]` in the sidecar; the row count must agree with `len(coverage.attempts[])`. Rows use the shape `| <attempt_id> | <worker> | <outcome> | <contributed_coverage> |` under the header `| attempt | worker | outcome | contributed_coverage |`. Omit the whole subsection (with zero rows) when `coverage.attempts[]` is absent or empty.
+
+### Coverage sidecar contract (COVERAGE_SIDECAR_MIN_DATE)
+
+A version-1 sidecar dated on or after `COVERAGE_SIDECAR_MIN_DATE` with `source_kind` `plan` must carry a valid `coverage` object; records dated earlier are accepted-legacy and exempt, and other source kinds validate `coverage` when present and never require it (the coverage obligation applies only when source_kind is `plan`). The object schema:
+- `outcome`: one of `"clean", "replacement-covered", "degraded", "failed"`.
+- `material_lens_set`: the lenses this round owns as material; non-empty when the record's `panel[]` carries launched workers. The validator never infers materiality from lens names.
+- `completed`: lenses completed by this round; each must be evidenced by a `complete` `panel[]` row or a contributing `attempts[]` record.
+- `replacement[]`: entries with `lens`, `original_artifact`, `original_sidecar`, `original_failure` linking the replaced lens to the original round.
+- `inherited_coverage[]`: entries with `lens`, `artifact`, `sidecar` linking a lens completed by a prior round of the same loop.
+- `missing`: uncovered material lenses; verdict `yes` requires it empty.
+- `attempts[]`: one record per bounded attempt with `attempt_id`, `worker`, `lenses`, `started_at`, `deadline`, `elapsed`, `outcome` (`complete`, `failed`, `timeout`, `cancelled`, `malformed-output`), `failure_class`, `usage_state`, `admission_state`, `admission_error_class`, `execution_mode`, `attempt_number`, `retry_of`, `contributed_coverage`, and the local-equivalence evidence fields `prompt_scope`, `artifact`, `sidecar`.
+- `retry_budget`: `per_attempt_timeout_minutes`, `per_worker_max`, `wall_clock_ceiling_minutes`, `exhausted`, `exhaustion_reason`.
+
+Cross-field rules enforced by the validator: verdict `yes` requires `outcome` `clean` or `replacement-covered`, an empty `missing`, and every material lens covered by `completed` union `replacement[].lens` union `inherited_coverage[].lens`; outcome `degraded` or `failed` requires verdict `no`; `clean` forbids `replacement[]` entries; `replacement-covered` requires a non-empty `replacement[]`; a `failed`/`timed-out` panel row's lenses must appear in `missing`, `replacement[].lens`, or `completed`; a `failed` or `malformed-output` attempt requires a `failure_class`; an attempt with a capacity admission blocker must not record `usage_state: exhausted`; `retry_budget.exhausted: true` requires an `exhaustion_reason` naming a retryable class; and a complete attempt for a lens already in `replacement[]` must carry `contributed_coverage: false`. Attempt telemetry must not include prompts, authentication material, provider payloads, or review content that is not already part of the staged artifact (structurally enforced: no free-form content keys exist in the schema).
+
+#### Legacy compatibility and rollout
+
+Records dated before `COVERAGE_SIDECAR_MIN_DATE` remain valid without a `coverage` object and may satisfy `ready=yes` under the existing gates; no historical sidecar is rewritten. The grandfathering cannot be claimed by a sidecar date backdated below the constant while the staging filename is dated on or after it (mirroring the freshness-fields fence checks). Consumers keying on `coverage.outcome` must treat its ABSENCE as not-yet-covered rather than degraded. The coverage obligation is plan-source-scoped: branch and document review producers (`doing-code-review`, `rfc-design`, `review-confluence-doc`) are unchanged post-landing and may adopt `coverage` in a follow-up (validated when present, never required for their source kinds). Rollout for in-flight reviews: a review loop straddling the landing commit records coverage only for rounds staged after landing; the grace window is intentional and matches the freshness-fields precedent, and a replacement linked to a pre-constant original is accepted on the recorded `original_failure` (the grandfathered-link rule), so a straddling loop with evidence present is not forced into degraded.
+
 ## Findings
 
 ### Critical
@@ -268,6 +314,7 @@ Optional; include this section only when a plan explicitly assigns a boundary to
 - the deployment mode permitted before completion
 - the exact condition that makes the future path shippable
 - the classification, exactly one of: implementation blocker, release blocker owned elsewhere, non-blocking follow-up
+- the accepted-residual rationale: why deferring the boundary is acceptable now (one sentence; per the `execute-plan` Step 3.4 clear-round gate, which requires this field)
 
 Example entry (uses the recognized line shape):
 
@@ -276,6 +323,7 @@ Example entry (uses the recognized line shape):
 - permitted deployment before completion: feature-flagged rollout only
 - shippable when: the boundary check is enforced and covered by tests
 - classification: release blocker owned elsewhere
+- accepted-residual rationale: the permissive mode is reachable only from an internal test surface, so the exposure window is bounded
 
 When no deferred boundary exists, Metadata carries `- Release-gate ledger: none`.
 ```
@@ -407,7 +455,7 @@ Required top-level fields (all must be present; enum-typed fields use `null` whe
 | `overflow` | array; never contains a Critical or blocking finding |
 | `soften_watchlist` | array; `[]` when none |
 
-Optional top-level fields: `depth` (string), `domains` (list), `verdict` (string `yes` or `no`; the plan-review producer writes it alongside the `## Summary`), `extensions` (object), `usage` (shape owned by the capture module; the validator accepts the key only). Any other top-level field is rejected; future extensions belong inside the object-valued `extensions` (a non-object `extensions` value is rejected). On a `rejects unknown top-level field` validator error naming a field the current contract defines, use the validator-copy refresh recovery: refresh the installed validator copy from `scripts/validate_review_staging.py` and retry.
+Date-fenced top-level field: `coverage` (object; required for `source_kind` `plan` records dated on or after `COVERAGE_SIDECAR_MIN_DATE`, permitted and validated otherwise; schema in `### Coverage sidecar contract (COVERAGE_SIDECAR_MIN_DATE)` below). Optional top-level fields: `depth` (string), `domains` (list), `verdict` (string `yes` or `no`; the plan-review producer writes it alongside the `## Summary`), `extensions` (object), `usage` (shape owned by the capture module; the validator accepts the key only). Any other top-level field is rejected; future extensions belong inside the object-valued `extensions` (a non-object `extensions` value is rejected). On a `rejects unknown top-level field` validator error naming a field the current contract defines, use the validator-copy refresh recovery: refresh the installed validator copy from `scripts/validate_review_staging.py` and retry.
 
 Extended-field grandfathering and cross-field rule: the four extended freshness fields (`review_mode`, `risk_signals`, `prior_findings_filter`, `last_fix_commit`) are required only on version-1 records whose `date` is on or after the validator constant `EXTENDED_SIDECAR_MIN_DATE` (`2026-09-09`, the day after this contract landed); a version-1 record dated earlier is accepted-legacy and exempt from them. The Markdown twin of this freshness fence keys on the staging filename's leading `YYYY-MM-DD` (the sidecar fence keys on the record's `date` field). The validator rejects either mixed-fence direction: a sidecar dated earlier than a post-fence staging filename cannot claim the exemption (the exemption is stripped), and a pre-fence filename with a post-fence sidecar date fails the date-disagreement error. Cross-field rule: a clean verdict with a non-null `last_fix_commit` requires `review_mode: fresh-adversarial` (a `targeted` label on a post-fix clean round bypasses the fresh-adversarial mandate), and `prior_findings_filter` must be `false` for a clean verdict; the Markdown Metadata mirrors the same freshness lines (`Review mode`, `Prior findings supplied as filter`), where a clean verdict contradicts `verification-only` mode or filter `yes`.
 
@@ -428,7 +476,7 @@ Provider skill for staged review hierarchy and statistics. Consumers **must** fo
 | `review-plan` | `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` | Shared severities and blocking-aware plan actions; inlines sidecar schema (Step 3) and runs `--hard` validator gate before reporting round complete |
 | `doing-code-review` | `{reviews_dir}/YYYY-MM-DD-PR-*`, `YYYY-MM-DD-branch-review-*`, or execute-plan `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Code severities; optional `Status` per finding for PR triage |
 | `review-loop` | Same as `doing-code-review` branch / execute-plan patterns with `-r<N>` | Requires statistics every round, including clear rounds |
-| `receiving-review` | Updates existing staging under `{reviews_dir}/` | Triage Status→Triage map, Triage outcomes table, matching `.stats.json` sidecar, and authorized Blocking re-evaluation (see Triage presentation freeze). A returned-for-ask record is NOT a Status or Triage value: record the literal marker `returned-for-ask` on the finding's Analysis section (with the question to relay); Status and Triage stay `pending` and the Blocking value is unchanged until the user decides. |
+| `receiving-review` | Updates existing staging under `{reviews_dir}/` | Triage Status→Triage map, Triage outcomes table, matching `.stats.json` sidecar, and authorized Blocking re-evaluation (see Triage presentation freeze). A returned-for-ask record is NOT a Status or Triage value: record the literal marker `returned-for-ask` on the finding's Analysis section (with the question to relay); Status and Triage stay `pending` and the Blocking value is unchanged until the user decides. When an orchestrated run fans the address pass, fan-out attribution is parent-written: the parent (never the subset worker) writes the `Address worker: <id>` line on each fanned finding's Analysis section as parent merge discipline, not validator-checked, while the `extensions.address_fanout` sidecar extension is validator-checked, per Address fan-out accounting. |
 | `review-reconciliation` | Supplements the affected canonical record under `{reviews_dir}/` or the caller's linked note | Adds recurrence and closure evidence; never replaces immutable round findings or certifies its own refactor |
 | `rfc-design` | `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` | Shared severities; statistics section required |
 | `review-confluence-doc` | `{reviews_dir}/YYYY-MM-DD-confluence-review-<slug>.md` | Tag `[Prose]` / `[Premortem]` / `[Code]` in Source field |

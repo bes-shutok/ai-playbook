@@ -854,3 +854,29 @@ mutation check deleted that `close()` on CPython 3.14 and the
 escalation-only witness stayed green (the warning died as an unraisable);
 adding the unraisablehook recorder made the same mutation fail with the
 recorded "Implicitly cleaning up" unraisable.
+
+## 34. Expand Module Default Paths at Import Because pathlib Never Expands a Tilde
+
+A `pathlib.Path` constructed from a string starting with `~` is a RELATIVE
+path whose first component is a directory literally named `~`; nothing in
+pathlib expands it. A module-level default such as
+`DEFAULT_DIR = Path("~/.cache/app")` therefore makes every consumer that
+omits an explicit path create and read `./~/.cache/app` under the process
+cwd.
+
+- Call `os.path.expanduser()` (or `Path.expanduser()`) at the single
+  definition site (module import) so every consumer inherits an absolute
+  path; do not scatter expansion across call sites.
+- Pin the defaults with a unit test asserting `is_absolute()`; a string
+  check for a leading `~` misses defaults that are relative without a
+  tilde.
+- The same blind spot applies to `$VAR`: pathlib does not expand
+  environment variables either; use `os.path.expandvars()` when that is
+  intended.
+
+Witness: a runtime watcher module defaulted its scheduler job directory to
+a literal `~` path. A smoke test that omitted the fixture directory fell
+through to the default, wrote the job file under `./~/...` inside the repo,
+and exposed that a real default-path arm on a host would have failed the
+same way. The fix expands the defaults at import and a test pins them
+absolute.

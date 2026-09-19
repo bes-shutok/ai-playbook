@@ -41,7 +41,7 @@ import validate_review_staging as vrs
 # module (vrs) that THIS validator shipped against. Checked at every launch
 # (gate, sweep, selftest) before any other work; a missing or mismatched
 # sibling value means a partially updated deployment.
-EXPECTED_SIBLING_COMPAT_VERSION = 1
+EXPECTED_SIBLING_COMPAT_VERSION = 2
 
 # Round suffix of a review artifact filename: ``-r<N>.md`` (N >= 1).
 # Case-sensitive on purpose: the discovery glob below is lowercase-only, so
@@ -87,6 +87,17 @@ DECISION_MARKER_RE = re.compile(
 # path in two categories, every task Files: path inventoried). Earlier
 # rounds are legacy and exempt (no retrofit of already-certified plans).
 REVIEW_SCOPE_MIN_DATE = "2026-09-09"
+
+# Plans reviewed on or after this date must satisfy the plan-ownership
+# static checks (plan_ownership_problem: at most one creating task per
+# new file, consumer-before-owner ordering for file paths, Files: paths
+# existing on disk or carrying the planned-new marker, at most one
+# transition-table section) and the scope-classification probe
+# (scope_classification_problem: every task checklist item carries a
+# classification tag from the four-name vocabulary, and the Ship-when-only
+# classes stay off task items). Earlier rounds are legacy and exempt (no
+# retrofit of already-certified plans).
+PLAN_STRUCTURE_MIN_DATE = "2026-09-19"
 
 # Generic default path-kind suffix tables for the Review Scope category
 # gate. These are LANGUAGE/FORMAT defaults (implementation vs
@@ -374,8 +385,8 @@ def _review_scope_path_token(item: str) -> str:
     carry trailing annotations (``- ``src/service.py`` *(new; this
     plan)*``); comparisons must see the bare path. The backticked span
     wins ONLY when it is the item's leading content (one anchored match,
-    ``re.match(r"\\s*`+([^`]+)`+", item)``, r1 F12d; a doubled-backtick
-    fence is accepted, r2 risk follow-up); any backticked span
+    ``re.match(r"\\s*`+([^`]+)`+", item)``, r1 F12d; a backtick-run opener
+    of any length is accepted, behaviorally equivalent to the pattern); any backticked span
     that is not leading content is prose, and extraction falls through to
     the first whitespace-delimited token after backtick stripping (F2:
     annotation-blind parsing made the category, duplicate, and inventory
@@ -616,6 +627,321 @@ def review_scope_problem(plan_text: str) -> str | None:
     return None
 
 
+# ``*(new)*`` is the plans template's new-file record, the planned-new marker:
+# an annotation (optionally with elaboration, e.g. ``*(new; this plan)*``) on
+# a task ``Files:`` item marks the task that CREATES the file. It is the
+# single creation record the ownership checks below read; a Files listing
+# without it is a shared or sequential edit and never claims creation.
+_PLAN_NEW_FILE_ANNOTATION_RE = re.compile(r"\*\(\s*new\b[^()]*\)\*")
+
+
+def _plan_path_shaped(token: str) -> bool:
+    """Path-shaped token, same rule as the task Files collector: a
+    separator or a doc/implementation suffix."""
+    return (
+        "/" in token
+        or token.lower().endswith(
+            REVIEW_SCOPE_DOC_SUFFIXES + REVIEW_SCOPE_IMPLEMENTATION_SUFFIXES
+        )
+    )
+
+
+def _plan_task_sections(stripped: str) -> list[tuple[str, str]]:
+    """``(heading title, body)`` for each ``###``/``####`` Task/Step
+    section, same section-boundary rule as ``_review_scope_task_files``
+    (a section ends at the next heading of level ## through ####)."""
+    sections: list[tuple[str, str]] = []
+    for match in re.finditer(
+        r"^#{3,4} (?:Task|Step).*$", stripped, re.MULTILINE
+    ):
+        title = match.group(0).lstrip("#").strip()
+        body = re.split(r"\n#{2,4} ", stripped[match.end():], maxsplit=1)[0]
+        sections.append((title, body))
+    return sections
+
+
+def _plan_task_ordinal(title: str) -> int | None:
+    """Numeric task ordinal from a Task/Step heading title, else None."""
+    match = re.search(r"\b(?:Task|Step)\s+(\d+)", title, re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def _plan_task_label(title: str) -> str:
+    """Reason-facing task name: the ordinal when present, else the
+    verbatim heading title."""
+    ordinal = _plan_task_ordinal(title)
+    return f"Task {ordinal}" if ordinal is not None else f"task section {title!r}"
+
+
+def _plan_files_items(body: str) -> list[tuple[str, bool]]:
+    """``(path token, carries the planned-new marker)`` for a task
+    section's ``Files:`` block, mirroring the ``_review_scope_task_files``
+    collection rules: an empty-payload ``files:`` line (re)opens
+    collection, a payload-bearing line closes it, the first checkbox item
+    closes it, an indented item is a nested annotation sub-bullet and is
+    skipped, and only path-shaped tokens are collected."""
+    items: list[tuple[str, bool]] = []
+    collecting = False
+    for line in body.splitlines():
+        opener = re.match(r"files:(.*)$", line, re.IGNORECASE)
+        if opener:
+            collecting = not opener.group(1).strip()
+            continue
+        if not collecting:
+            continue
+        stripped_line = line.strip()
+        if not stripped_line:
+            continue
+        if stripped_line.startswith("- ["):
+            collecting = False
+            continue
+        if stripped_line.startswith("- "):
+            if line[:1].isspace():
+                continue
+            token = _review_scope_path_token(stripped_line[2:])
+            if token and _plan_path_shaped(token):
+                items.append(
+                    (
+                        token,
+                        bool(
+                            _PLAN_NEW_FILE_ANNOTATION_RE.search(stripped_line)
+                        ),
+                    )
+                )
+        else:
+            collecting = False
+    return items
+
+
+def _plan_checklist_items(body: str) -> list[str]:
+    """Checkbox item lines (``- [ ...``) of a task section, stripped."""
+    return [
+        line.strip()
+        for line in body.splitlines()
+        if line.strip().startswith("- [")
+    ]
+
+
+def _plan_item_path_tokens(item: str) -> list[str]:
+    """Path-shaped tokens referenced by a checklist item.
+
+    Backticked spans are extracted first (a backticked span is the
+    plan's quoting convention for paths); plain tokens from the prose
+    outside spans follow. Each candidate is normalized through
+    ``_review_scope_path_token`` and must be path-shaped; anything else
+    (a test-method token, a commit-message span, a class tag) carries no
+    creation marker and is never ordered.
+    """
+    tokens: list[str] = []
+
+    def _collect(candidate: str) -> None:
+        token = _review_scope_path_token(candidate)
+        if token and _plan_path_shaped(token) and token not in tokens:
+            tokens.append(token)
+
+    for span in re.findall(r"`([^`]+)`", item):
+        _collect(f"`{span}`")
+    outside = re.sub(r"`[^`]*`", " ", item)
+    for raw in outside.split():
+        _collect(raw)
+    return tokens
+
+
+def plan_ownership_problem(plan_text: str, repo_root: Path) -> str | None:
+    """Reason when the plan's task ownership structure is inconsistent.
+
+    Fences are stripped from the WHOLE document first (same ordering as
+    the trailer and Review Scope gates); task sections are the
+    ``###``/``####`` headings starting with ``Task`` or ``Step``. Checks,
+    first problem wins:
+
+    (a) ``duplicate creating task`` - a ``Files:`` path annotated with
+        the planned-new marker in more than one task section's
+        ``Files:`` list; task identity is the section's document
+        position, not the ``Task {ordinal}`` label, so two distinct
+        sections sharing an ordinal stay distinct owners; the reason
+        names the path and both tasks. Shared listings without the
+        annotation are sequential edits of one file and never trip;
+    (b) ``consumer-before-owner`` - a task checklist item references a
+        file path whose creating task (the task carrying the planned-new
+        marker for it in its ``Files:`` list) is a later task; sections
+        order by document position, so an ordinal-less section still
+        orders; the reason names the referencing task, the path, and the
+        creating task. Referencing an already-created witness in a later
+        task passes;
+        test-method tokens are not ordered by this static check (they
+        carry no creation marker): their ownership ordering is an
+        authoring-time duty of the ownership ledger and a review-agent
+        classification duty, not a static one;
+    (c) a ``Files:`` path that does not exist under ``repo_root`` and
+        carries no planned-new marker; the reason names the task and the
+        path. Checklist-only references to nonexistent paths stay an
+        authoring and review duty and are not checked here;
+    (d) more than one section heading denoting a transition table
+        (``state transition`` or ``transition table`` in the heading);
+        the reason names the first two headings and the total count.
+    """
+    stripped = _strip_fences(plan_text)
+    sections = [
+        (_plan_task_label(title), body) for title, body in _plan_task_sections(stripped)
+    ]
+
+    # (a) one creating task per new file: the first annotated listing
+    # owns the path; a second annotated listing in a DIFFERENT section
+    # is the duplicate-creation contradiction. Section identity is the
+    # section's document position, not the Task-ordinal label, so two
+    # distinct sections sharing an ordinal stay distinct owners.
+    owners: dict[str, tuple[int, str]] = {}
+    for index, (label, body) in enumerate(sections):
+        for token, is_new in _plan_files_items(body):
+            if not is_new:
+                continue
+            previous = owners.get(token)
+            if previous is not None and previous[0] != index:
+                return (
+                    f"duplicate creating task for {token}: annotated "
+                    f"*(new)* in both {previous[1]} and {label}"
+                )
+            owners.setdefault(token, (index, label))
+
+    # (b) consumer-before-owner: a checklist item referencing a path
+    # whose creating section is a LATER section. Sections order by
+    # document position (an ordinal-less section still orders), unowned
+    # paths never trip (no creation record to order against), and an
+    # owner at or before the referencing section is the legitimate
+    # reference-after-owner shape.
+    for index, (label, body) in enumerate(sections):
+        for item in _plan_checklist_items(body):
+            for token in _plan_item_path_tokens(item):
+                owner = owners.get(token)
+                if owner is None or owner[0] <= index:
+                    continue
+                return (
+                    f"consumer-before-owner: {label} checklist references "
+                    f"{token} but its creating task is {owner[1]} (the "
+                    f"*(new)* record there)"
+                )
+
+    # (c) a Files: path must exist under the repo root unless it carries
+    # the planned-new marker (a creation record for a file this plan
+    # creates).
+    for label, body in sections:
+        for token, is_new in _plan_files_items(body):
+            if is_new or (repo_root / token).exists():
+                continue
+            return (
+                f"Files: path {token} in {label} does not exist under "
+                f"{repo_root} and carries no *(new)* annotation"
+            )
+
+    # (d) at most one section heading may denote a transition table.
+    transition_headings = [
+        match.group(1).strip()
+        for match in re.finditer(
+            r"^#{1,6}\s+(.+?)\s*$", stripped, re.MULTILINE
+        )
+        if re.search(
+            r"state transition|transition table",
+            match.group(1),
+            re.IGNORECASE,
+        )
+    ]
+    if len(transition_headings) > 1:
+        return (
+            f"more than one transition-table section: "
+            f"{transition_headings[0]!r} and {transition_headings[1]!r} "
+            f"({len(transition_headings)} headings denote a transition "
+            f"table)"
+        )
+    return None
+
+
+# Classification tag on a task checklist item: ``[class: NAME]``. The
+# tag prefix is matched case-sensitively (the plans skill authors the
+# lowercase literal shape), the captured value is compared exactly.
+_CLASSIFICATION_TAG_RE = re.compile(r"\[class:[ \t]*([^\]]*?)[ \t]*\]")
+
+# The four-name classification vocabulary. The first two names ride on
+# task checklist items; the last two are the Ship-when-only classes
+# below. The plans skill's Checklist inclusion gate owns the authoring
+# rule and the taxonomy mapping; this table is the enforcement-side
+# single owner of the membership set.
+CLASSIFICATION_VOCABULARY = (
+    "IMPLEMENTATION_REQUIRED",
+    "REPOSITORY_TEST",
+    "EXTERNAL_RELEASE_GATE",
+    "OPERATIONS_FOLLOW_UP",
+)
+
+# Classes that refine the release-condition and external-prerequisite
+# classification and are therefore written in the Ship when prose, never
+# on an executable task checklist item.
+SHIP_WHEN_ONLY_CLASSES = ("EXTERNAL_RELEASE_GATE", "OPERATIONS_FOLLOW_UP")
+
+
+def scope_classification_problem(plan_text: str) -> str | None:
+    """Reason when a task checklist item violates the classification-tag
+    rule.
+
+    The author-facing statement of the rule lives in the plans skill's
+    Checklist inclusion gate (agents/skills/plans/SKILL.md); this probe
+    owns enforcement - link there, do not restate the taxonomy. Fences
+    are stripped from the WHOLE document first (same ordering as the
+    trailer, Review Scope, and plan-ownership gates); task sections are
+    the ``###``/``####`` headings starting with ``Task`` or ``Step``
+    (shared parser ``_plan_task_sections``); Ship when prose and every
+    non-task section are exempt (only task checklist items are read).
+    Checks, first problem in document order wins:
+
+    (a) a checklist item with no ``[class: ...]`` tag at all - every task
+        checklist item must carry ``[class: IMPLEMENTATION_REQUIRED]``
+        or ``[class: REPOSITORY_TEST]``; the reason names the task and
+        quotes the item;
+    (b) an item tagged ``[class: EXTERNAL_RELEASE_GATE]`` or
+        ``[class: OPERATIONS_FOLLOW_UP]`` - those classes refine the
+        release-condition and external-prerequisite classification and
+        belong in the Ship when prose with their evidence owner and
+        closure condition, never on an executable item;
+    (c) a tag value outside the four-name vocabulary
+        (``CLASSIFICATION_VOCABULARY``). Every tag on an item is
+        checked, so a junk second tag cannot hide behind a valid first
+        one; an empty or whitespace-only tag value is a (c) violation,
+        not a missing tag.
+
+    Backticked spans are QUOTES, not declarations (the plan corpus
+    quotes the tag syntax itself, e.g. `` `[class: ...]` ``, inside
+    task-item prose): tags are matched on the text outside backtick
+    spans only, the same span-then-prose split
+    (``re.sub(r"`` `[^`]*` ``", " ", item)``) as
+    ``_plan_item_path_tokens``. An item whose only tag sits inside a
+    backticked span stays untagged (a) - fail-closed.
+    """
+    stripped = _strip_fences(plan_text)
+    for title, body in _plan_task_sections(stripped):
+        label = _plan_task_label(title)
+        for item in _plan_checklist_items(body):
+            tags = _CLASSIFICATION_TAG_RE.findall(re.sub(r"`[^`]*`", " ", item))
+            if not tags:
+                return (
+                    f"task checklist item in {label} carries no "
+                    f"[class: ...] classification tag: {item!r}"
+                )
+            for value in tags:
+                if value not in CLASSIFICATION_VOCABULARY:
+                    return (
+                        f"classification tag [class: {value}] in {label} "
+                        f"is outside the four-name vocabulary "
+                        f"({', '.join(CLASSIFICATION_VOCABULARY)})"
+                    )
+                if value in SHIP_WHEN_ONLY_CLASSES:
+                    return (
+                        f"task checklist item in {label} carries "
+                        f"[class: {value}]; external-gate and operations "
+                        f"requirements belong in the Ship when prose"
+                    )
+    return None
+
+
 def digest_failure_reason(first_error: str, round_no: int) -> str:
     """Classify a shared-gate ``source_digest`` error into a distinct reason.
 
@@ -647,7 +973,7 @@ def digest_failure_reason(first_error: str, round_no: int) -> str:
 
 # Shared gated-probe date guards (single owners): a round gates a probe only
 # when its sidecar date is exactly YYYY-MM-DD (a missing/blank/malformed date
-# is exempt, r4 F4) and sorts at or after the gate's minimum date, and both
+# is exempt, r4 F4) and sorts at or after the gate's minimum date, and all
 # gated probes report failures through the one reason format below.
 def _gate_fires(round_date: str, min_date: str) -> bool:
     return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", round_date)) and round_date >= min_date
@@ -786,6 +1112,13 @@ def evaluate_readiness(
     )
     if staging_result.errors:
         first_error = staging_result.errors[0]
+        if "missing the required 'coverage' object" in first_error:
+            # The coverage-presence error names source_kind in its text;
+            # map it to its own reason instead of the source_kind family.
+            return False, (
+                f"malformed stats sidecar (schema validation failed) for "
+                f"round r{round_no}: {first_error}"
+            )
         if "source_kind" in first_error:
             declared = payload.get("source_kind")
             return False, (
@@ -845,19 +1178,20 @@ def evaluate_readiness(
     round_date = str(payload.get("date") or "").strip()
     trailer_gated = _gate_fires(round_date, DECISION_MARKER_MIN_DATE)
     scope_gated = _gate_fires(round_date, REVIEW_SCOPE_MIN_DATE)
+    ownership_gated = _gate_fires(round_date, PLAN_STRUCTURE_MIN_DATE)
     # Decode sharing without widening the decode failure (r2 F2): the
     # plan bytes are decoded ONCE, and ONLY when at least one of the two
     # date guards fires — an undecodable plan whose round is date-exempt
     # must not newly fail. The trailer block's existing decode-failure
     # reason text is kept for that shared case; the decoded text is
     # passed to whichever probe runs below.
-    if trailer_gated or scope_gated:
+    if trailer_gated or scope_gated or ownership_gated:
         try:
             plan_text = plan_bytes.decode("utf-8")
         except UnicodeDecodeError as exc:
             return False, (
-                f"cannot read plan bytes for gated checks (trailer and/or "
-                f"Review Scope): {exc}"
+                f"cannot read plan bytes for gated checks (trailer, "
+                f"Review Scope, and/or plan ownership): {exc}"
             )
     if trailer_gated:
         problem = decision_marker_problem(plan_text)
@@ -877,6 +1211,29 @@ def evaluate_readiness(
         if problem:
             return False, _gated_probe_reason(
                 problem, REVIEW_SCOPE_MIN_DATE, round_no, round_date
+            )
+
+    # 8. Plan-structure gate (forward-looking): plans whose LATEST round
+    # is dated on or after PLAN_STRUCTURE_MIN_DATE must satisfy the
+    # plan-ownership static checks (plan_ownership_problem: at most one
+    # creating task per new file, consumer-before-owner ordering, Files:
+    # paths existing on disk or carrying the planned-new marker, at most
+    # one transition-table section) and the classification-tag probe
+    # (scope_classification_problem); earlier rounds stay exempt (no
+    # retrofit). The same malformed-or-missing-date exemption as the
+    # other gated probes applies.
+    if ownership_gated:
+        problem = plan_ownership_problem(
+            plan_text, repo_root(plans_dir.parent)
+        )
+        if problem:
+            return False, _gated_probe_reason(
+                problem, PLAN_STRUCTURE_MIN_DATE, round_no, round_date
+            )
+        problem = scope_classification_problem(plan_text)
+        if problem:
+            return False, _gated_probe_reason(
+                problem, PLAN_STRUCTURE_MIN_DATE, round_no, round_date
             )
 
     return True, None
@@ -3423,6 +3780,721 @@ def _selftest_review_scope(plans_dir: Path, reviews_dir: Path, check) -> None:
     )
     _clean_reviews_dir(reviews_dir)
 
+    # backticked_windows_separator_ok: a backslash path inside a leading
+    # backticked span must reach the shared normalization exit (leading-
+    # span branch), so a slash-form directory scope entry covers it.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Production code:**\n\n- scripts/\n",
+            tasks_body=(
+                "### Task 1: Do the thing\n\n"
+                "Files:\n\n"
+                "- `scripts\\service.py`\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/backticked_windows_separator_ok",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # doubled_backtick_span_extracted: a doubled-backtick fence with a
+    # trailing annotation extracts as the bare path via the leading-span
+    # branch; the annotation never enters the span and the path is
+    # covered by its scope entry.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Production code:**\n\n- src/service.py\n",
+            tasks_body=(
+                "### Task 1: Do the thing\n\n"
+                "Files:\n\n"
+                "- ``src/service.py`` *(new)*\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/doubled_backtick_span_extracted",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # payload_files_line_then_reopen_collects: a payload Files: line
+    # closes collection and a later bare Files: line in the same task
+    # section re-opens it (r1 F1), so the unlisted path is collected and
+    # the inventory check fails naming it. Expects-failure because an
+    # ok-arm with an in-scope path cannot detect under-collection.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Production code:**\n\n- src/service.py\n",
+            tasks_body=(
+                "### Task 1: Do the thing\n\n"
+                "Files: none new (validation only)\n\n"
+                "Files:\n\n"
+                "- src/unlisted.py\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/payload_files_line_then_reopen_collects",
+        not ok
+        and reason is not None
+        and "src/unlisted.py" in reason
+        and "Review Scope" in reason,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # second_real_files_block_unlisted_fails: two real Files: blocks in
+    # one task section; the second block's unlisted path is collected
+    # and must fail the inventory check (no first-block latch).
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Production code:**\n\n- src/service.py\n",
+            tasks_body=(
+                "### Task 1: Do the thing\n\n"
+                "Files:\n\n"
+                "- src/service.py\n\n"
+                "Files:\n\n"
+                "- src/unlisted2.py\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/second_real_files_block_unlisted_fails",
+        not ok
+        and reason is not None
+        and "src/unlisted2.py" in reason
+        and "Review Scope" in reason,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # heading_boundary_files_after_subheading_ignored: a non-Task
+    # subheading inside a task region cuts the region's tail (the
+    # #{2,4} boundary), so a Files: block under it is never collected;
+    # the arm stays ok. (A `### Step note:` subheading WOULD match the
+    # Task|Step scan and open its own collected region.)
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=rs_plan(
+            "**Production code:**\n\n- src/service.py\n",
+            tasks_body=(
+                "### Task 1: Do the thing\n\n"
+                "Files:\n\n"
+                "- src/service.py\n\n"
+                "### Notes: boundary probe\n\n"
+                "Files:\n\n"
+                "- src/unlisted.py\n"
+            ),
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/heading_boundary_files_after_subheading_ignored",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # echo_section_non_path_token_ignored: a second Review Scope echo
+    # section's stray Files: line contributes no collected path (the
+    # task scan reads only Task|Step heading regions, and the section
+    # parser returns only the first block); the arm stays ok.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=(
+            f"# P\n\n## Assumptions\n\n{trailer}\n\n"
+            "## Tasks\n\n"
+            "### Task 1: Do the thing\n\n"
+            "Files:\n\n"
+            "- src/service.py\n\n"
+            "## Review Scope\n\n"
+            "**Production code:**\n\n"
+            "- src/service.py\n\n"
+            "## Review Scope\n\n"
+            "Files:\n\n"
+            "- src/phantom.md\n"
+        ),
+        date="2026-09-09",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#review_scope/echo_section_non_path_token_ignored",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+
+def _selftest_plan_ownership(
+    root: Path, plans_dir: Path, reviews_dir: Path, check
+) -> None:
+    """Plan-ownership family: duplicate creating task (a),
+    consumer-before-owner (b), nonexistent Files path without the
+    planned-new marker (c), more than one transition-table heading (d),
+    the clean shared-edit and reference-after-owner shapes, test-method
+    tokens never ordered, per-check mutation probes, and the two
+    sidecar-date gated-wiring arms (before 2026-09-19 exempt, at
+    2026-09-19 failing with the gated reason naming the minimum date).
+
+    Direct-call arms pass ``root`` as the repo root and pre-create the
+    on-disk witnesses they need under ``root/src``; the gated arms run
+    through ``evaluate_readiness`` in the shared temp tree, where the
+    wiring's repo-root anchor (``plans_dir.parent``) resolves to ``root``
+    because no .git exists above the temp tree.
+    """
+    trailer = "Decision points requiring a grill: none remain."
+
+    def own_plan(tasks_body: str, extra_sections: str = "") -> str:
+        parts = [f"# P\n\n## Tasks\n\n{tasks_body}\n"]
+        parts.append(extra_sections)
+        return "".join(parts)
+
+    def own_gated_plan(tasks_body: str, scope_body: str) -> str:
+        return (
+            f"# P\n\n## Assumptions\n\n{trailer}\n\n"
+            f"## Tasks\n\n{tasks_body}\n\n## Review Scope\n\n{scope_body}"
+        )
+
+    # On-disk witnesses for the direct-call and gated arms: paths listed
+    # WITHOUT the planned-new marker must exist under the repo root so
+    # the existence check (c) stays silent and each arm trips only its
+    # own clause.
+    src_dir = root / "src"
+    src_dir.mkdir(exist_ok=True)
+    for rel in (
+        "src/shared.py",
+        "src/dup_owner.py",
+        "src/gated_new.py",
+    ):
+        (root / rel).write_text("# witness\n", encoding="utf-8")
+
+    # (a) duplicate creating task: the same path annotated *(new)* in two
+    # tasks' Files sections fails, naming the path and both tasks.
+    dup_plan = own_plan(
+        "### Task 1: Create the module\n\n"
+        "- [ ] Write `src/dup_owner.py`.\n\n"
+        "Files:\n\n"
+        "- src/dup_owner.py *(new)*\n\n"
+        "### Task 2: Extend the module\n\n"
+        "- [ ] Edit `src/dup_owner.py`.\n\n"
+        "Files:\n\n"
+        "- src/dup_owner.py *(new)*\n"
+    )
+    reason = plan_ownership_problem(dup_plan, root)
+    check(
+        "selftest#plan_ownership/duplicate_creating_task",
+        reason is not None
+        and "duplicate creating task" in reason
+        and "src/dup_owner.py" in reason
+        and "Task 1" in reason
+        and "Task 2" in reason,
+        f"reason={reason}",
+    )
+
+    # Mutation (a): removing the second task's *(new)* annotation leaves
+    # a sequential shared edit of an existing file; the check stops
+    # firing.
+    dup_mutated = own_plan(
+        "### Task 1: Create the module\n\n"
+        "- [ ] Write `src/dup_owner.py`.\n\n"
+        "Files:\n\n"
+        "- src/dup_owner.py *(new)*\n\n"
+        "### Task 2: Extend the module\n\n"
+        "- [ ] Edit `src/dup_owner.py`.\n\n"
+        "Files:\n\n"
+        "- src/dup_owner.py\n"
+    )
+    reason = plan_ownership_problem(dup_mutated, root)
+    check(
+        "selftest#plan_ownership/mutation_a_shared_edit_passes",
+        reason is None,
+        f"reason={reason}",
+    )
+
+    # Duplicate ordinals (r1 F6): two DISTINCT sections both numbered
+    # "Task 2" annotating the same path are distinct owners (identity is
+    # the section position, not the ordinal label), so the
+    # duplicate-creation check still fires across the ordinal collision;
+    # label-identity mutants would silently pass this shape.
+    dup_ordinal_plan = own_plan(
+        "### Task 2: Create the module\n\n"
+        "- [ ] Write `src/dup_owner.py`.\n\n"
+        "Files:\n\n"
+        "- src/dup_owner.py *(new)*\n\n"
+        "### Task 2: Extend the module\n\n"
+        "- [ ] Edit `src/dup_owner.py`.\n\n"
+        "Files:\n\n"
+        "- src/dup_owner.py *(new)*\n"
+    )
+    reason = plan_ownership_problem(dup_ordinal_plan, root)
+    check(
+        "selftest#plan_ownership/duplicate_ordinals_still_distinct_owners",
+        reason is not None
+        and "duplicate creating task" in reason
+        and "src/dup_owner.py" in reason,
+        f"reason={reason}",
+    )
+
+    # (b) consumer-before-owner: Task 1's checklist references a path
+    # whose creating task (the *(new)* record) is a later task.
+    cbo_plan = own_plan(
+        "### Task 1: Wire the checker\n\n"
+        "- [ ] Import `src/later_new.py` and call it.\n\n"
+        "Files:\n\n"
+        "- src/shared.py\n\n"
+        "### Task 2: Create the checker\n\n"
+        "- [ ] Write the module.\n\n"
+        "Files:\n\n"
+        "- src/later_new.py *(new)*\n"
+    )
+    reason = plan_ownership_problem(cbo_plan, root)
+    check(
+        "selftest#plan_ownership/consumer_before_owner",
+        reason is not None
+        and "consumer-before-owner" in reason
+        and "src/later_new.py" in reason
+        and "Task 1" in reason
+        and "Task 2" in reason,
+        f"reason={reason}",
+    )
+
+    # Mutation (b): removing the later task's creation record (the
+    # annotated Files item) leaves the checklist reference unowned;
+    # checklist-only references are not existence-checked, so the check
+    # stops firing.
+    cbo_mutated = own_plan(
+        "### Task 1: Wire the checker\n\n"
+        "- [ ] Import `src/later_new.py` and call it.\n\n"
+        "Files:\n\n"
+        "- src/shared.py\n\n"
+        "### Task 2: Create the checker\n\n"
+        "- [ ] Write the module.\n\n"
+        "Files:\n"
+    )
+    reason = plan_ownership_problem(cbo_mutated, root)
+    check(
+        "selftest#plan_ownership/mutation_b_unowned_reference_passes",
+        reason is None,
+        f"reason={reason}",
+    )
+
+    # Reference before a later UNANNOTATED listing (r1 F9): a checklist
+    # reference in Task 1 to a path that a later task lists WITHOUT the
+    # *(new)* marker passes; an unannotated listing is not a creation
+    # record, so there is no owner to order against (a marker-ignoring
+    # mutant that treats any Files listing as creation would false-trip
+    # this legitimate shared-edit shape).
+    ref_before_unannotated_plan = own_plan(
+        "### Task 1: Wire the checker\n\n"
+        "- [ ] Import `src/shared.py` and call it.\n\n"
+        "### Task 2: Touch the shared module\n\n"
+        "- [ ] Edit the module.\n\n"
+        "Files:\n\n"
+        "- src/shared.py\n"
+    )
+    reason = plan_ownership_problem(ref_before_unannotated_plan, root)
+    check(
+        "selftest#plan_ownership/reference_before_later_unannotated_listing_passes",
+        reason is None,
+        f"reason={reason}",
+    )
+
+    # Ordinal-less sections still order by position (r1 F6): an
+    # unnumbered earlier section's checklist reference to a path created
+    # in a later unnumbered section trips consumer-before-owner, so the
+    # ordering check no longer depends on the Task-ordinal label.
+    unnumbered_plan = own_plan(
+        "### Task: Wire the checker\n\n"
+        "- [ ] Import `src/later_new.py` and call it.\n\n"
+        "Files:\n\n"
+        "- src/shared.py\n\n"
+        "### Task: Create the checker\n\n"
+        "- [ ] Write the module.\n\n"
+        "Files:\n\n"
+        "- src/later_new.py *(new)*\n"
+    )
+    reason = plan_ownership_problem(unnumbered_plan, root)
+    check(
+        "selftest#plan_ownership/unnumbered_sections_order_by_position",
+        reason is not None
+        and "consumer-before-owner" in reason
+        and "src/later_new.py" in reason,
+        f"reason={reason}",
+    )
+
+    # (c) a Files: path that does not exist under the repo root and
+    # carries no *(new)* annotation fails, naming the task and path.
+    ghost_plan = own_plan(
+        "### Task 1: Touch the ghost\n\n"
+        "- [ ] Edit `src/ghost.py`.\n\n"
+        "Files:\n\n"
+        "- src/ghost.py\n"
+    )
+    reason = plan_ownership_problem(ghost_plan, root)
+    check(
+        "selftest#plan_ownership/files_path_missing_on_disk",
+        reason is not None
+        and "does not exist" in reason
+        and "src/ghost.py" in reason
+        and "Task 1" in reason,
+        f"reason={reason}",
+    )
+
+    # Mutation (c): adding the planned-new marker to the same item makes
+    # it a creation record; the existence check stops firing.
+    ghost_mutated = own_plan(
+        "### Task 1: Touch the ghost\n\n"
+        "- [ ] Edit `src/ghost.py`.\n\n"
+        "Files:\n\n"
+        "- src/ghost.py *(new)*\n"
+    )
+    reason = plan_ownership_problem(ghost_mutated, root)
+    check(
+        "selftest#plan_ownership/mutation_c_annotated_new_passes",
+        reason is None,
+        f"reason={reason}",
+    )
+
+    # (d) more than one heading denoting a transition table fails,
+    # naming the headings.
+    trans_plan = own_plan(
+        "### Task 1: Document the machine\n\n- [ ] Fill the table.\n",
+        extra_sections=(
+            "## State transition\n\nRows.\n\n"
+            "### Transition table for gates\n\nRows.\n"
+        ),
+    )
+    reason = plan_ownership_problem(trans_plan, root)
+    check(
+        "selftest#plan_ownership/multiple_transition_headings",
+        reason is not None
+        and "transition" in reason
+        and "State transition" in reason
+        and "Transition table for gates" in reason,
+        f"reason={reason}",
+    )
+
+    # Mutation (d): removing the second transition heading leaves one;
+    # the check stops firing (this also pins the single-heading pass).
+    trans_mutated = own_plan(
+        "### Task 1: Document the machine\n\n- [ ] Fill the table.\n",
+        extra_sections="## State transition\n\nRows.\n",
+    )
+    reason = plan_ownership_problem(trans_mutated, root)
+    check(
+        "selftest#plan_ownership/mutation_d_single_transition_passes",
+        reason is None,
+        f"reason={reason}",
+    )
+
+    # clean_plan_ok: the legitimate shapes all pass together - a shared
+    # edit of one existing file listed in two tasks without the marker,
+    # a reference-after-owner shape (Task 2 references Task 1's new
+    # file), and a test-method token that carries no creation marker and
+    # is never ordered.
+    clean_plan = own_plan(
+        "### Task 1: Create the module\n\n"
+        "- [ ] Write `src/new_b.py` and run `test_new_module_passes`.\n\n"
+        "Files:\n\n"
+        "- src/shared.py\n\n"
+        "- src/new_b.py *(new)*\n\n"
+        "### Task 2: Verify and extend\n\n"
+        "- [ ] Edit `src/shared.py` and re-run `src/new_b.py`.\n\n"
+        "Files:\n\n"
+        "- src/shared.py\n"
+    )
+    reason = plan_ownership_problem(clean_plan, root)
+    check(
+        "selftest#plan_ownership/clean_shared_edit_and_after_owner_ok",
+        reason is None,
+        f"reason={reason}",
+    )
+
+    # method_tokens_not_ordered: checklist references to test-method
+    # tokens never trip consumer-before-owner even when a later task
+    # creates a witness module (method tokens carry no creation marker;
+    # their ordering is an authoring and review duty, not a static one).
+    methods_plan = own_plan(
+        "### Task 1: Plan the witness\n\n"
+        "- [ ] Verify `test_new_checker_passes` and `CheckerTest::new_case`"
+        " before the module exists.\n\n"
+        "### Task 2: Create the witness module\n\n"
+        "- [ ] Write it.\n\n"
+        "Files:\n\n"
+        "- src/method_witness.py *(new)*\n"
+    )
+    reason = plan_ownership_problem(methods_plan, root)
+    check(
+        "selftest#plan_ownership/method_tokens_not_ordered",
+        reason is None,
+        f"reason={reason}",
+    )
+
+    # Gated wiring, before the minimum: the same violating plan (a) with
+    # a sidecar dated 2026-09-18 stays exempt.
+    gated_scope = "**Production code:**\n\n- src/gated_new.py\n"
+    gated_tasks = (
+        "### Task 1: Create the module\n\n"
+        "- [ ] Write `src/gated_new.py`.\n\n"
+        "Files:\n\n"
+        "- src/gated_new.py *(new)*\n\n"
+        "### Task 2: Extend the module\n\n"
+        "- [ ] Edit `src/gated_new.py` again.\n\n"
+        "Files:\n\n"
+        "- src/gated_new.py *(new)*\n"
+    )
+    gated_text = own_gated_plan(gated_tasks, gated_scope)
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=gated_text,
+        date="2026-09-18",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#plan_ownership/gated_below_min_exempt",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # Gated wiring, at the minimum: the same plan with a sidecar dated
+    # 2026-09-19 fails with the gated reason naming the minimum date.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=gated_text,
+        date="2026-09-19",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#plan_ownership/gated_at_min_fails",
+        not ok
+        and reason is not None
+        and "duplicate creating task" in reason
+        and "required for plans reviewed on or after 2026-09-19" in reason,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+
+def _selftest_scope_classification(
+    plans_dir: Path, reviews_dir: Path, check
+) -> None:
+    """Scope-classification family: an untagged task checklist item (a),
+    a Ship-when-only class tag on a task item (b), a tag value outside
+    the four-name vocabulary (c), the first-violation-only ordering, the
+    clean both-valid-tags shape with the Ship-when prose exemption, and
+    the two sidecar-date gated-wiring arms (before 2026-09-19 exempt, at
+    2026-09-19 failing with the gated reason naming the minimum date).
+
+    Direct-call arms call ``scope_classification_problem`` on plan text;
+    the gated arms run through ``evaluate_readiness`` in the shared temp
+    tree, so their fixtures carry the decision-points trailer and a
+    well-formed ## Review Scope section and stay clean under every
+    earlier gate (the fixtures carry no ``Files:`` blocks, so the
+    plan-ownership probes stay silent and each arm trips only the
+    classification clause).
+    """
+    trailer = "Decision points requiring a grill: none remain."
+
+    def classified_plan(tasks_body: str) -> str:
+        return (
+            f"# P\n\n## Assumptions\n\n{trailer}\n\n"
+            f"## Tasks\n\n{tasks_body}\n\n"
+            "## Review Scope\n\n**Production code:**\n\n"
+            "- src/classified.py\n"
+            "## Ship when\n\n"
+            "- Ships only after the vendor export lands "
+            "[class: EXTERNAL_RELEASE_GATE].\n"
+        )
+
+    # (a) untagged item: the reason names the task and the item text.
+    untagged = (
+        "### Task 1: Do the thing\n\n"
+        "- [ ] Write the module.\n"
+    )
+    reason = scope_classification_problem(classified_plan(untagged))
+    check(
+        "selftest#scope_classification/untagged_item",
+        reason is not None
+        and "no [class:" in reason
+        and "Task 1" in reason
+        and "Write the module." in reason,
+        f"reason={reason}",
+    )
+
+    # First-violation-only ordering: the FIRST violating item in document
+    # order decides; a later tagged task never surfaces instead.
+    partial = (
+        "### Task 1: Do the thing\n\n"
+        "- [ ] Write the module.\n\n"
+        "### Task 2: Verify the thing\n\n"
+        "- [ ] Add the test. [class: REPOSITORY_TEST]\n"
+    )
+    reason = scope_classification_problem(classified_plan(partial))
+    check(
+        "selftest#scope_classification/first_violation_only",
+        reason is not None
+        and "Task 1" in reason
+        and "Task 2" not in reason,
+        f"reason={reason}",
+    )
+
+    # (b) Ship-when-only classes on a task checklist item: both names
+    # fail; the reason names the tag and the Ship-when prose home.
+    for class_name in ("EXTERNAL_RELEASE_GATE", "OPERATIONS_FOLLOW_UP"):
+        ship_only = (
+            "### Task 1: Wait for the outside world\n\n"
+            f"- [ ] Confirm the export landed [class: {class_name}].\n"
+        )
+        reason = scope_classification_problem(classified_plan(ship_only))
+        check(
+            "selftest#scope_classification/"
+            f"ship_when_only_tag_{class_name.lower()}",
+            reason is not None
+            and f"[class: {class_name}]" in reason
+            and "Ship when" in reason,
+            f"reason={reason}",
+        )
+
+    # (c) a tag value outside the four-name vocabulary fails and names
+    # the offending value.
+    unknown = (
+        "### Task 1: Do the thing\n\n"
+        "- [ ] Write the module. [class: RELEASE_CHECK]\n"
+    )
+    reason = scope_classification_problem(classified_plan(unknown))
+    check(
+        "selftest#scope_classification/unknown_tag_value",
+        reason is not None
+        and "RELEASE_CHECK" in reason
+        and "vocabulary" in reason,
+        f"reason={reason}",
+    )
+
+    # Clean shape: both valid tags across two tasks pass, and the
+    # Ship-when prose carrying its class is exempt (a ## section is not
+    # a task checklist item).
+    clean = (
+        "### Task 1: Implement the thing\n\n"
+        "- [ ] Write the module. [class: IMPLEMENTATION_REQUIRED]\n\n"
+        "### Task 2: Verify the thing\n\n"
+        "- [ ] Add the test. [class: REPOSITORY_TEST]\n"
+    )
+    reason = scope_classification_problem(classified_plan(clean))
+    check(
+        "selftest#scope_classification/clean_both_valid_tags_ok",
+        reason is None,
+        f"reason={reason}",
+    )
+
+    # Backticked span = quote, not tag: a descriptive `` `[class: ...]` ``
+    # mention in an item's prose (the live plan quotes the syntax exactly
+    # this way) must not read as a tag; the item's real trailing tag
+    # decides.
+    quoted_mention = (
+        "### Task 1: Describe the convention\n\n"
+        "- [ ] Tag every item with `[class: ...]` from the vocabulary."
+        " [class: IMPLEMENTATION_REQUIRED]\n"
+    )
+    reason = scope_classification_problem(classified_plan(quoted_mention))
+    check(
+        "selftest#scope_classification/backticked_mention_is_quote_ok",
+        reason is None,
+        f"reason={reason}",
+    )
+
+    # Fail-closed mirror: a tag written INSIDE a backticked span is a
+    # quote, not a declaration, so the item stays untagged (a).
+    quoted_only = (
+        "### Task 1: Do the thing\n\n"
+        "- [ ] Write the module. `[class: IMPLEMENTATION_REQUIRED]`\n"
+    )
+    reason = scope_classification_problem(classified_plan(quoted_only))
+    check(
+        "selftest#scope_classification/backticked_tag_not_a_tag",
+        reason is not None
+        and "no [class:" in reason
+        and "IMPLEMENTATION_REQUIRED" not in reason.split(": ", 1)[0],
+        f"reason={reason}",
+    )
+
+    # Gated wiring, before the minimum: the same untagged-violation plan
+    # with a sidecar dated 2026-09-18 stays exempt.
+    violating_text = classified_plan(untagged)
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=violating_text,
+        date="2026-09-18",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#scope_classification/gated_below_min_exempt",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # Gated wiring, at the minimum: the same plan with a sidecar dated
+    # 2026-09-19 fails with the gated reason naming the minimum date.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=violating_text,
+        date="2026-09-19",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#scope_classification/gated_at_min_fails",
+        not ok
+        and reason is not None
+        and "no [class:" in reason
+        and "required for plans reviewed on or after 2026-09-19" in reason,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
+    # Clean end-to-end: the fully tagged plan passes the gate at the
+    # minimum date, so the wiring is not a blanket rejection.
+    plan, _ = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=classified_plan(clean),
+        date="2026-09-19",
+    )
+    ok, reason = evaluate_readiness(plan, plans_dir, reviews_dir)
+    check(
+        "selftest#scope_classification/clean_gated_passes",
+        ok and reason is None,
+        f"ok={ok} reason={reason}",
+    )
+    _clean_reviews_dir(reviews_dir)
+
 
 def _selftest_accepted_state(
     plans_dir: Path, reviews_dir: Path, check
@@ -3434,6 +4506,221 @@ def _selftest_accepted_state(
         "selftest#accepted_state",
         ok and reason is None,
         f"ok={ok} reason={reason}",
+    )
+
+    # coverage gate: degraded outcome with verdict yes must fail
+    # (review-runner bounded-timeout plan, Task 5). Fixtures are dated
+    # post-constant (2026-09-17) so the coverage fence arms at its real
+    # pinned value with no module-state mutation; the plan text carries
+    # the decision-points trailer and the sidecar carries the four
+    # extended freshness fields, satisfying the neighboring post-fence
+    # gates the 2026-09-16+ round date arms.
+    fixture_plan_text = (
+        "# Fixture plan\n\n"
+        "## Assumptions\n\n"
+        "Decision points requiring a grill: none remain.\n\n"
+        "Body.\n"
+    )
+
+    def _coverage_case(
+        name: str,
+        coverage: dict | None,
+        verdict: str,
+        expect_ok: bool,
+    ) -> None:
+        plan_path, review_path = _write_clean_state(
+            plans_dir,
+            reviews_dir,
+            plan_text=fixture_plan_text,
+            date="2026-09-17",
+            slug="coverage-gate-fixture",
+        )
+        sidecar = review_path.with_suffix(".stats.json")
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        # The clean-state sidecar is versionless by design; the coverage
+        # contract lives in the version-1 gates, so promote the fixture to
+        # current-v1 with minimal required fields.
+        payload["schema_version"] = 1
+        payload["review_type"] = "plan"
+        payload["artifact_slug"] = "coverage-gate-fixture"
+        payload["round"] = 1
+        payload["review_mode"] = "fresh-adversarial"
+        payload["risk_signals"] = []
+        payload["prior_findings_filter"] = False
+        payload["last_fix_commit"] = None
+        payload["findings"] = []
+        payload["overflow"] = []
+        payload["soften_watchlist"] = []
+        payload["deduplication_groups"] = []
+        payload["discarded"] = []
+        payload["severity_calibration"] = []
+        payload["triage_outcomes"] = []
+        payload["verdict"] = verdict
+        if coverage is not None and isinstance(coverage, dict):
+            material = sorted(
+                {
+                    str(lens)
+                    for row in payload.get("panel", [])
+                    if isinstance(row, dict)
+                    for lens in (
+                        row.get("lenses")
+                        or vrs.REQUIRED_PANEL_LENSES.get(
+                            row.get("worker"), []
+                        )
+                    )
+                }
+            )
+            if not coverage.get("material_lens_set"):
+                coverage["material_lens_set"] = material
+            if "completed" not in coverage:
+                coverage["completed"] = material
+            if "missing" not in coverage:
+                coverage["missing"] = []
+            payload["coverage"] = coverage
+            coverage_outcome = coverage.get("outcome")
+            review_md = review_path.read_text(encoding="utf-8")
+            if "- Coverage:" not in review_md and isinstance(
+                coverage_outcome, str
+            ):
+                review_md = review_md.replace(
+                    "## Metadata",
+                    "## Metadata\n" f"- Coverage: {coverage_outcome}",
+                    1,
+                )
+                review_path.write_text(review_md, encoding="utf-8")
+        sidecar.write_text(json.dumps(payload, indent=2))
+        ok_case, reason_case = evaluate_readiness(
+            plan_path, plans_dir, reviews_dir
+        )
+        if ok_case != expect_ok:
+            raw = vrs.ValidationResult(path=review_path)
+            vrs.validate_stats_sidecar(
+                review_path,
+                review_path.read_text(encoding="utf-8"),
+                raw,
+                expected_digest=vrs.compute_source_digest(
+                    "plan", plan_path.read_bytes()
+                ),
+                source_kind="plan",
+            )
+            name = f"{name} | raw_errors={raw.errors[:2]}"
+        check(
+            name,
+            ok_case == expect_ok,
+            f"ok={ok_case} reason={reason_case}",
+        )
+
+    _coverage_case(
+        "selftest#coverage degraded outcome with verdict yes must fail",
+        {
+            "outcome": "degraded",
+            "material_lens_set": ["quality"],
+            "completed": [],
+            "missing": ["quality"],
+        },
+        "yes",
+        False,
+    )
+    _coverage_case(
+        "selftest#coverage clean record with coverage passes",
+        {"outcome": "clean"},
+        "yes",
+        True,
+    )
+    # replacement-covered with a valid link passes end to end: stage the
+    # original as post-constant shown uncovered (timed-out panel row plus
+    # its missing list) and link the replacing round to it.
+    _orig_plan, _orig_review = _write_clean_state(
+        plans_dir,
+        reviews_dir,
+        plan_text=fixture_plan_text,
+        date="2026-09-17",
+        slug="coverage-gate-fixture-orig",
+        verdict="no",
+    )
+    _orig_payload = json.loads(
+        _orig_review.with_suffix(".stats.json").read_text(encoding="utf-8")
+    )
+    _orig_payload["schema_version"] = 1
+    _orig_payload["review_type"] = "plan"
+    _orig_payload["artifact_slug"] = "coverage-gate-fixture-orig"
+    _orig_payload["round"] = 1
+    _orig_payload["date"] = "2026-09-17"
+    _orig_payload["verdict"] = "no"
+    _orig_payload["coverage"] = {
+        "outcome": "degraded",
+        "material_lens_set": ["quality"],
+        "completed": [],
+        "missing": ["quality"],
+    }
+    _orig_panel = _orig_payload.get("panel", [])
+    if _orig_panel and isinstance(_orig_panel[0], dict):
+        _orig_panel[0]["status"] = "timed-out"
+        _orig_panel[0]["lenses"] = ["quality"]
+    _orig_review.with_suffix(".stats.json").write_text(
+        json.dumps(_orig_payload, indent=2), encoding="utf-8"
+    )
+    _coverage_case(
+        "selftest#coverage replacement-covered with a valid link passes",
+        {
+            "outcome": "replacement-covered",
+            "material_lens_set": ["quality"],
+            "completed": [],
+            "missing": [],
+            "replacement": [
+                {
+                    "lens": "quality",
+                    "original_artifact": str(_orig_review),
+                    "original_sidecar": str(
+                        _orig_review.with_suffix(".stats.json")
+                    ),
+                    "original_failure": "provider-timeout after budget",
+                }
+            ],
+        },
+        "yes",
+        True,
+    )
+    # The missing-coverage arm is asserted directly against the shared
+    # v1 gates (deterministic; the end-to-end fence behavior is witnessed
+    # by the degraded case above).
+    missing_cov_payload = json.loads(
+        json.dumps(_clear_sidecar("a" * 64, "plan"))
+    )
+    missing_cov_payload.update(
+        {
+            "schema_version": 1,
+            "review_type": "plan",
+            "artifact_slug": "fixture-feature",
+            "round": 1,
+            "date": "2026-09-17",
+            "review_mode": "fresh-adversarial",
+            "risk_signals": [],
+            "prior_findings_filter": False,
+            "last_fix_commit": None,
+            "findings": [],
+            "overflow": [],
+            "soften_watchlist": [],
+            "deduplication_groups": [],
+            "discarded": [],
+            "severity_calibration": [],
+            "triage_outcomes": [],
+            "verdict": "yes",
+        }
+    )
+    missing_cov_result = vrs.ValidationResult(Path("x"))
+    vrs.validate_version1_payload(
+        missing_cov_payload,
+        "",
+        missing_cov_result,
+        staging_name="2026-09-17-plan-review-fixture-feature-r1.md",
+    )
+    check(
+        "selftest#coverage post-constant record without coverage fails",
+        any(
+            "missing the required 'coverage' object" in e
+            for e in missing_cov_result.errors
+        ),
     )
 
 
@@ -3893,6 +5180,8 @@ def run_selftest() -> int:
         _selftest_round_selection(plans_dir, reviews_dir, check)
         _selftest_decision_marker(plans_dir, reviews_dir, check)
         _selftest_review_scope(plans_dir, reviews_dir, check)
+        _selftest_plan_ownership(root, plans_dir, reviews_dir, check)
+        _selftest_scope_classification(plans_dir, reviews_dir, check)
         _selftest_accepted_state(plans_dir, reviews_dir, check)
         _selftest_cli(root, plans_dir, reviews_dir, check)
         _selftest_sweep(root, plans_dir, reviews_dir, check)

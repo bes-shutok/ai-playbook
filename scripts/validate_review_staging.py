@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import io
 import json
+import posixpath
 import re
 import sys
 from collections.abc import Callable, Iterator
@@ -119,6 +120,154 @@ V1_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 # 2026-09-08), so same-day records stay exempt and only post-landing
 # records require the fields.
 EXTENDED_SIDECAR_MIN_DATE = "2026-09-09"
+# Coverage obligation fence (review-runner bounded-timeout plan, Task 2).
+# A version-1 record whose ``date`` is on or after COVERAGE_SIDECAR_MIN_DATE
+# must carry a valid ``coverage`` object when ``source_kind`` is ``plan``
+# (the only readiness-gated kind); earlier records and other source kinds
+# are accepted-legacy and exempt (other producers may emit ``coverage``, and
+# it is validated when present). The constant is the expected day after the
+# implementing commit lands (implementation lands 2026-09-15), so same-day
+# records stay exempt. Fence-window recovery: if execution pauses across
+# the constant date between the producer and gate commits, bump this
+# constant with the same rationale-comment style and re-pin the V4 grep
+# literal in the same commit.
+COVERAGE_SIDECAR_MIN_DATE = "2026-09-16"
+COVERAGE_OUTCOME_VALUES = (
+    "clean",
+    "replacement-covered",
+    "degraded",
+    "failed",
+)
+COVERAGE_ALLOWED_KEYS = frozenset(
+    {
+        "outcome",
+        "material_lens_set",
+        "completed",
+        "replacement",
+        "inherited_coverage",
+        "missing",
+        "attempts",
+        "retry_budget",
+    }
+)
+ATTEMPT_ALLOWED_KEYS = frozenset(
+    {
+        "attempt_id",
+        "worker",
+        "lenses",
+        "started_at",
+        "deadline",
+        "elapsed",
+        "outcome",
+        "failure_class",
+        "usage_state",
+        "admission_state",
+        "admission_error_class",
+        "execution_mode",
+        "attempt_number",
+        "retry_of",
+        "contributed_coverage",
+        "prompt_scope",
+        "artifact",
+        "sidecar",
+    }
+)
+COVERAGE_REPLACEMENT_ALLOWED_KEYS = frozenset(
+    {"lens", "original_artifact", "original_sidecar", "original_failure"}
+)
+COVERAGE_INHERITED_ALLOWED_KEYS = frozenset(
+    {"lens", "artifact", "sidecar"}
+)
+COVERAGE_RETRY_BUDGET_ALLOWED_KEYS = frozenset(
+    {
+        "per_attempt_timeout_minutes",
+        "per_worker_max",
+        "wall_clock_ceiling_minutes",
+        "exhausted",
+        "exhaustion_reason",
+    }
+)
+ATTEMPT_OUTCOME_VALUES = frozenset(
+    {"complete", "failed", "timeout", "cancelled", "malformed-output"}
+)
+ATTEMPT_USAGE_STATES = frozenset(
+    {"available", "exhausted", "near-threshold", "unknown"}
+)
+ATTEMPT_ADMISSION_STATES = frozenset(
+    {"admitted", "denied", "saturated", "unknown"}
+)
+ATTEMPT_ADMISSION_ERROR_CLASSES = frozenset(
+    {
+        "capacity-denied",
+        "concurrency-limit",
+        "provider-unavailable",
+        "stale-release-suspected",
+        "unknown",
+    }
+)
+ATTEMPT_RETRYABLE_CLASSES = frozenset(
+    {
+        "provider-timeout",
+        "provider-unavailable",
+        "orchestrator-wait-timeout",
+        "concurrency-limit",
+        "capacity-denied",
+        "worker-crash",
+    }
+)
+# Address fan-out accounting (execute-plan review-fix pipeline efficiency
+# plan, Task 4). ``extensions.address_fanout`` is a version-1-only sidecar
+# extension owned by the review-staging ``Address fan-out accounting``
+# subsection: the parent records per-finding attribution for a fanned
+# address round. The reason codes are the closed address-fan-out enum, with
+# the pinned combination rules (``completed`` required for a successful
+# attempt, ``worker_error`` / ``worker_timeout`` required for the
+# corresponding worker failure, the remaining codes reserved for blocked or
+# cancelled outcomes). A versionless (legacy) record carrying the extension
+# fails closed at the version boundary in
+# ``validate_address_fanout_contract``; current-v1 records get the full
+# shape and conservation gate there.
+ADDRESS_FANOUT_KEY = "address_fanout"
+ADDRESS_FANOUT_KEYS = frozenset({"round", "finding_files", "workers"})
+ADDRESS_FANOUT_REASON_CODES = frozenset(
+    {
+        "completed",
+        "worker_error",
+        "worker_timeout",
+        "cancellation_unverified",
+        "ambiguous_patch",
+        "scope_violation",
+        "stale_attempt",
+        "parent_merge_conflict",
+        "superseded",
+    }
+)
+ADDRESS_FANOUT_SUCCESS_REASON = "completed"
+ADDRESS_FANOUT_WORKER_FAILURE_REASONS = frozenset(
+    {"worker_error", "worker_timeout"}
+)
+ADDRESS_FANOUT_ATTEMPT_STATUSES = frozenset(
+    {"success", "blocked", "cancelled"}
+)
+ADDRESS_FANOUT_WORKER_STATUSES = frozenset({"complete", "blocked"})
+ADDRESS_FANOUT_FINDING_FILES_KEYS = frozenset({"id", "files"})
+ADDRESS_FANOUT_WORKER_KEYS = frozenset(
+    {
+        "id",
+        "findings",
+        "files",
+        "attempts",
+        "status",
+        "fixed",
+        "dropped",
+        "deferred",
+        "pending",
+        "log",
+    }
+)
+ADDRESS_FANOUT_ATTEMPT_KEYS = frozenset(
+    {"id", "status", "reason_code", "log"}
+)
 # r4 F1: the no-fix marker vocabulary. Producers spell the absent token as
 # ``none`` (the Markdown template spelling), ``null`` (the JSON sidecar
 # spelling copied into the Markdown line), or ``n/a``; all three count as
@@ -225,7 +374,7 @@ CLEAN_VERDICT_RE = re.compile(
 # Sibling compat handshake contract: consumers of this module pair against
 # the COMPAT_VERSION value they shipped with; bump it ONLY together with
 # every consumer's expected constant.
-COMPAT_VERSION = 1
+COMPAT_VERSION = 2
 SUPPORTED_SIDECAR_SCHEMA_VERSIONS = (1,)
 # Single declaration of the conforming verdict vocabulary (version-1 sidecar
 # ``verdict`` field). Consumers (e.g. scripts/plan_readiness.py
@@ -390,18 +539,28 @@ def extract_medium_plus_count(content: str) -> int:
     # the old code's fallback early return masked it to 0 (only the blob
     # scoping is preserved from the pre-helper fallback, not the early
     # return; a deliberate delta toward the true count).
-    if verdict_section is not None and CLEAN_VERDICT_RE.search(search_blob):
-        return 0
-    match = MEDIUM_PLUS_VERDICT_RE.search(search_blob)
-    if match:
-        return int(match.group(1))
+    # vrs-clean-verdict-staged-count-masking: the single counts-row search
+    # is hoisted above the clean early return so the declared count can gate
+    # it. For a clean verdict the declared counts row is authoritative: a
+    # nonzero row returns immediately, bypassing the prose-count regex,
+    # because the canonical clean shape's own `0 Medium+ findings` prose
+    # matches that regex and would re-mask the count. An absent or zero
+    # declared count keeps the historical early return of 0.
     counts_match = re.search(
         r"\|\s*Medium\+\s*staged\s*\|\s*(\d+)\s*\|",
         content,
         re.IGNORECASE,
     )
-    if counts_match:
-        return int(counts_match.group(1))
+    counts_declared = int(counts_match.group(1)) if counts_match else None
+    if verdict_section is not None and CLEAN_VERDICT_RE.search(search_blob):
+        if counts_declared:
+            return counts_declared
+        return 0
+    match = MEDIUM_PLUS_VERDICT_RE.search(search_blob)
+    if match:
+        return int(match.group(1))
+    if counts_declared is not None:
+        return counts_declared
     medium_only = re.search(
         r"(\d+)\s+Medium\s+findings\s+accepted\s+for\s+fix",
         search_blob,
@@ -835,6 +994,32 @@ def is_review_ready(content: str) -> bool:
 
 def stats_sidecar_path(staging_path: Path) -> Path:
     return staging_path.with_suffix(".stats.json")
+
+
+@dataclass(frozen=True)
+class _SidecarRead:
+    """One sidecar read outcome, computed at most once per validation run
+    (vrs-freshness-witness-sidecar-read-consolidation) and threaded into
+    both consumers of the bytes."""
+
+    payload: dict | None
+    error: Exception | None
+    exists: bool
+
+
+def _read_stats_sidecar(sidecar_path: Path) -> _SidecarRead:
+    """Read and parse the sidecar once. Not-a-file yields
+    ``(None, None, False)``; a read or parse failure yields
+    ``(None, exc, True)``; success yields ``(payload, None, True)``. The
+    captured exception is rendered by the gate that reports it, so the
+    error text stays byte-identical to the pre-consolidation gates."""
+    if not sidecar_path.is_file():
+        return _SidecarRead(payload=None, error=None, exists=False)
+    try:
+        payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return _SidecarRead(payload=None, error=exc, exists=True)
+    return _SidecarRead(payload=payload, error=None, exists=True)
 
 
 def is_clean_verdict(content: str) -> bool:
@@ -1276,8 +1461,9 @@ def validate_witness_ledger_shape(
     <sha>`` or sidecar ``last_fix_commit``) fails when it has neither a
     populated ``### Witness ledger`` nor the Metadata empty-shape line
     ``Witness ledger: N/A (no public mutators)``. The single call site in
-    ``validate_staging_file`` (vrs-witness-twin-single-call) guarantees the
-    defect is reported exactly once per record.
+    the ``validate_stats_sidecar`` wrapper (vrs-witness-twin-single-call),
+    reached from ``validate_staging_file`` with ``enforce_witness=True``,
+    guarantees the defect is reported exactly once per record.
     """
     value = str(last_fix).strip() if last_fix is not None else ""
     # r4 F1: the unified no-fix vocabulary (none/null/n/a) is absent, so a
@@ -1588,6 +1774,1238 @@ def _require_object(
     return {}
 
 
+def _coverage_link_paths(value) -> list[Path]:
+    """Resolve a coverage link value (artifact or sidecar path string)
+    against the process cwd and, when relative, also as recorded. Returns
+    the candidate paths for existence checks."""
+    if not isinstance(value, str) or not value.strip():
+        return []
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return [candidate]
+    return [candidate, Path.cwd() / candidate]
+
+
+def _coverage_artifact_exists(value) -> bool:
+    return any(p.is_file() for p in _coverage_link_paths(value))
+
+
+def _coverage_sidecar_parses(value) -> bool:
+    for candidate in _coverage_link_paths(value):
+        if candidate.is_file():
+            try:
+                parsed = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                return False
+            return isinstance(parsed, dict)
+    return False
+
+
+def _coverage_linked_round(value) -> dict | None:
+    """Load the linked original sidecar payload for a replacement or
+    inherited entry (first existing candidate that parses to a dict)."""
+    for candidate in _coverage_link_paths(value):
+        if candidate.is_file():
+            try:
+                parsed = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                return None
+            if isinstance(parsed, dict):
+                return parsed
+    return None
+
+
+def _coverage_is_post_constant(linked: dict | None) -> bool:
+    if not isinstance(linked, dict):
+        return False
+    date_value = linked.get("date")
+    return (
+        isinstance(date_value, str)
+        and bool(V1_DATE_RE.match(date_value))
+        and date_value >= COVERAGE_SIDECAR_MIN_DATE
+    )
+
+
+def _coverage_row_lenses(row: dict) -> frozenset:
+    """The lens set a panel row accounts for: the row's own lenses when
+    present and non-empty, otherwise its required lenses from
+    REQUIRED_PANEL_LENSES; a worker outside DEFAULT_PANEL_WORKERS with
+    empty lenses yields an empty set (its materiality cannot be
+    determined, which callers treat as a rule failure)."""
+    lenses = row.get("lenses")
+    if isinstance(lenses, list) and lenses:
+        return frozenset(str(v) for v in lenses)
+    worker = row.get("worker")
+    return frozenset(REQUIRED_PANEL_LENSES.get(worker, frozenset()))
+
+
+def _coverage_row_status(row: dict) -> str:
+    """Normalized panel row status: the documented Markdown spelling
+    ``timeout`` is treated as the ``timed-out`` axis value."""
+    status = row.get("status")
+    if not isinstance(status, str):
+        return ""
+    normalized = status.split(":")[0].strip().lower()
+    if normalized == "timeout":
+        return "timed-out"
+    return normalized
+
+
+def validate_replacement_links(
+    coverage: dict, result: ValidationResult
+) -> None:
+    """Link validation for ``coverage.replacement[]`` and
+    ``coverage.inherited_coverage[]`` (review-runner bounded-timeout plan,
+    Task 2). A replacement entry's linked original artifact and sidecar
+    must exist and parse; for a post-constant original the linked sidecar
+    must show the named lens as uncovered (a failed/timed-out panel row or
+    the lens in its ``missing``), while a pre-constant original is accepted
+    on the recorded ``original_failure`` plus file existence. An inherited
+    entry has its linked artifact and sidecar exist and parse, and the
+    linked round must show the named lens covered: post-constant via
+    ``completed`` or a ``replacement-covered`` replacement entry,
+    pre-constant via a complete panel row whose lenses include the lens."""
+    replacements = coverage.get("replacement")
+    for entry in replacements if isinstance(replacements, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        lens = entry.get("lens")
+        original_failure = entry.get("original_failure")
+        artifact_ok = _coverage_artifact_exists(entry.get("original_artifact"))
+        linked = _coverage_linked_round(entry.get("original_sidecar"))
+        sidecar_ok = linked is not None or _coverage_sidecar_parses(
+            entry.get("original_sidecar")
+        )
+        if not (artifact_ok and sidecar_ok):
+            result.add_error(
+                "coverage replacement entry for lens "
+                f"{lens!r} links a missing or unparseable original "
+                "artifact/sidecar pair"
+            )
+            continue
+        if not isinstance(linked, dict):
+            if not (
+                isinstance(original_failure, str) and original_failure.strip()
+            ):
+                result.add_error(
+                    "coverage replacement entry for lens "
+                    f"{lens!r} links a pre-constant original without a "
+                    "non-empty original_failure"
+                )
+            continue
+        if _coverage_is_post_constant(linked):
+            uncovered = False
+            linked_coverage = linked.get("coverage")
+            if isinstance(linked_coverage, dict):
+                missing = linked_coverage.get("missing")
+                if isinstance(missing, list) and lens in missing:
+                    uncovered = True
+            panel = linked.get("panel")
+            if isinstance(panel, list):
+                for row in panel:
+                    if (
+                        isinstance(row, dict)
+                        and _coverage_row_status(row)
+                        in INCOMPLETE_WORKER_STATUSES
+                        and lens in _coverage_row_lenses(row)
+                    ):
+                        uncovered = True
+            if not uncovered:
+                result.add_error(
+                    "coverage replacement entry for lens "
+                    f"{lens!r} links a post-constant original that does "
+                    "not show the lens uncovered"
+                )
+        elif not (
+            isinstance(original_failure, str) and original_failure.strip()
+        ):
+            result.add_error(
+                "coverage replacement entry for lens "
+                f"{lens!r} lacks a non-empty original_failure"
+            )
+    inherited = coverage.get("inherited_coverage")
+    for entry in inherited if isinstance(inherited, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        lens = entry.get("lens")
+        artifact_ok = _coverage_artifact_exists(entry.get("artifact"))
+        linked = _coverage_linked_round(entry.get("sidecar"))
+        if not (artifact_ok and linked is not None):
+            result.add_error(
+                "coverage inherited_coverage entry for lens "
+                f"{lens!r} links a missing or unparseable artifact/sidecar "
+                "pair"
+            )
+            continue
+        covered = False
+        if _coverage_is_post_constant(linked):
+            linked_coverage = linked.get("coverage")
+            if isinstance(linked_coverage, dict):
+                completed = linked_coverage.get("completed")
+                if isinstance(completed, list) and lens in completed:
+                    covered = True
+                replacements = linked_coverage.get("replacement")
+                if isinstance(replacements, list):
+                    for r_entry in replacements:
+                        if (
+                            isinstance(r_entry, dict)
+                            and r_entry.get("lens") == lens
+                            and linked_coverage.get("outcome")
+                            == "replacement-covered"
+                        ):
+                            covered = True
+        else:
+            panel = linked.get("panel")
+            if isinstance(panel, list):
+                for row in panel:
+                    if (
+                        isinstance(row, dict)
+                        and _coverage_row_status(row) == "complete"
+                        and lens in _coverage_row_lenses(row)
+                    ):
+                        covered = True
+        if not covered:
+            result.add_error(
+                "coverage inherited_coverage entry for lens "
+                f"{lens!r} links a round that does not show the lens "
+                "covered"
+            )
+
+
+def validate_coverage_contract(
+    payload: dict, result: ValidationResult, *, coverage_exempt: bool
+) -> None:
+    """The coverage contract gates (review-runner bounded-timeout plan,
+    Task 2): schema, enums, source_kind-scoped date fence, verdict
+    cross-field rules, reconciliation rules, late-result rule, the
+    capacity/usage contradiction rule, budget-exhaustion rule, attempt
+    required-field rule, and the local-equivalence rule. Presence is
+    fenced by the caller (required for ``source_kind`` ``plan`` records
+    dated on or after COVERAGE_SIDECAR_MIN_DATE; validated whenever
+    present otherwise)."""
+    coverage = payload.get("coverage")
+    source_kind = payload.get("source_kind")
+    if coverage is None:
+        if (
+            not coverage_exempt
+            and source_kind == "plan"
+        ):
+            result.add_error(
+                "version-1 sidecar dated on or after "
+                f"COVERAGE_SIDECAR_MIN_DATE {COVERAGE_SIDECAR_MIN_DATE} "
+                "with source_kind 'plan' is missing the required "
+                "'coverage' object"
+            )
+        return
+    if not isinstance(coverage, dict):
+        result.add_error("version-1 sidecar field 'coverage' must be an object")
+        return
+    for key in coverage:
+        if key not in COVERAGE_ALLOWED_KEYS:
+            result.add_error(
+                f"version-1 sidecar 'coverage' rejects unknown key {key!r}"
+            )
+    outcome = coverage.get("outcome")
+    if outcome not in COVERAGE_OUTCOME_VALUES:
+        result.add_error(
+            "coverage outcome must be one of "
+            f"{[v for v in COVERAGE_OUTCOME_VALUES]}; got {outcome!r}"
+        )
+    for key in ("material_lens_set", "completed", "missing"):
+        value = coverage.get(key)
+        if value is not None and (
+            not isinstance(value, list)
+            or any(not isinstance(v, str) or not v.strip() for v in value)
+        ):
+            result.add_error(
+                f"coverage {key!r} must be a list of non-empty lens names"
+            )
+    replacements = coverage.get("replacement")
+    if replacements is not None:
+        if not isinstance(replacements, list):
+            result.add_error("coverage 'replacement' must be a list")
+            replacements = []
+        for entry in replacements:
+            if not isinstance(entry, dict):
+                result.add_error(
+                    "coverage 'replacement' entries must be objects"
+                )
+                continue
+            for key in entry:
+                if key not in COVERAGE_REPLACEMENT_ALLOWED_KEYS:
+                    result.add_error(
+                        "coverage 'replacement' entry rejects unknown key "
+                        f"{key!r}"
+                    )
+    inherited = coverage.get("inherited_coverage")
+    if inherited is not None:
+        if not isinstance(inherited, list):
+            result.add_error("coverage 'inherited_coverage' must be a list")
+            inherited = []
+        for entry in inherited:
+            if not isinstance(entry, dict):
+                result.add_error(
+                    "coverage 'inherited_coverage' entries must be objects"
+                )
+                continue
+            for key in entry:
+                if key not in COVERAGE_INHERITED_ALLOWED_KEYS:
+                    result.add_error(
+                        "coverage 'inherited_coverage' entry rejects "
+                        f"unknown key {key!r}"
+                    )
+    attempts = coverage.get("attempts")
+    if attempts is not None and not isinstance(attempts, list):
+        result.add_error("coverage 'attempts' must be a list")
+        attempts = []
+    retry_budget = coverage.get("retry_budget")
+    if retry_budget is not None:
+        if not isinstance(retry_budget, dict):
+            result.add_error("coverage 'retry_budget' must be an object")
+            retry_budget = None
+        else:
+            for key in retry_budget:
+                if key not in COVERAGE_RETRY_BUDGET_ALLOWED_KEYS:
+                    result.add_error(
+                        "coverage 'retry_budget' rejects unknown key "
+                        f"{key!r}"
+                    )
+    if isinstance(attempts, list) and attempts:
+        if not retry_budget:
+            result.add_error(
+                "coverage attempts[] requires a non-empty retry_budget"
+            )
+            retry_budget = {}
+        else:
+            for key in ("per_attempt_timeout_minutes", "per_worker_max"):
+                value = retry_budget.get(key)
+                if not isinstance(value, (int, float)) or value <= 0:
+                    result.add_error(
+                        "coverage retry_budget requires a positive "
+                        f"{key!r} when attempts[] is non-empty"
+                    )
+    exhausted = (
+        retry_budget.get("exhausted") if isinstance(retry_budget, dict) else None
+    )
+    if exhausted is True:
+        reason = (
+            retry_budget.get("exhaustion_reason")
+            if isinstance(retry_budget, dict)
+            else None
+        )
+        if not (
+            isinstance(reason, str)
+            and reason.strip() in ATTEMPT_RETRYABLE_CLASSES
+        ):
+            result.add_error(
+                "coverage retry_budget exhausted: true requires a "
+                "non-empty exhaustion_reason naming a retryable class"
+            )
+    # Attempt records: key allowlist, required fields, enums, per-attempt
+    # rules.
+    attempt_rows = attempts if isinstance(attempts, list) else []
+    per_attempt_max = (
+        retry_budget.get("per_attempt_timeout_minutes")
+        if isinstance(retry_budget, dict)
+        else None
+    )
+    per_worker_max = (
+        retry_budget.get("per_worker_max")
+        if isinstance(retry_budget, dict)
+        else None
+    )
+    for attempt in attempt_rows:
+        if not isinstance(attempt, dict):
+            result.add_error("coverage 'attempts' entries must be objects")
+            continue
+        for key in attempt:
+            if key not in ATTEMPT_ALLOWED_KEYS:
+                result.add_error(
+                    "coverage attempt record rejects unknown key "
+                    f"{key!r} (attempt telemetry is structurally "
+                    "sanitized: no free-form content fields)"
+                )
+        for key in ("attempt_id", "started_at", "deadline", "outcome"):
+            value = attempt.get(key)
+            if not isinstance(value, str) or not value.strip():
+                result.add_error(
+                    "coverage attempt record "
+                    f"{attempt.get('attempt_id')!r} requires non-empty "
+                    f"{key!r}"
+                )
+        # Loop-local name: must NOT shadow the function-level `outcome`
+        # (coverage.outcome) read above, or the coverage-level verdict
+        # cross-checks at the end of this function would evaluate the last
+        # attempt's outcome instead of the coverage outcome.
+        attempt_outcome = attempt.get("outcome")
+        if (
+            attempt_outcome is not None
+            and attempt_outcome not in ATTEMPT_OUTCOME_VALUES
+        ):
+            result.add_error(
+                "coverage attempt outcome must be one of "
+                f"{sorted(ATTEMPT_OUTCOME_VALUES)}; got {attempt_outcome!r}"
+            )
+        failure_class = attempt.get("failure_class")
+        if attempt_outcome in ("failed", "malformed-output") and not (
+            isinstance(failure_class, str) and failure_class.strip()
+        ):
+            result.add_error(
+                "coverage attempt record "
+                f"{attempt.get('attempt_id')!r} with outcome "
+                f"{attempt_outcome!r} "
+                "requires a non-empty failure_class"
+            )
+        if attempt_outcome in ("complete", "cancelled") and failure_class is not None:
+            result.add_error(
+                "coverage attempt record "
+                f"{attempt.get('attempt_id')!r} with outcome "
+                f"{attempt_outcome!r} "
+                "must not carry a failure_class"
+            )
+        elapsed = attempt.get("elapsed")
+        if elapsed is not None:
+            if (
+                not isinstance(elapsed, (int, float))
+                or isinstance(elapsed, bool)
+                or elapsed < 0
+            ):
+                result.add_error(
+                    "coverage attempt record "
+                    f"{attempt.get('attempt_id')!r} elapsed must be a "
+                    "non-negative number"
+                )
+            elif (
+                isinstance(per_attempt_max, (int, float))
+                and elapsed > per_attempt_max
+            ):
+                result.add_error(
+                    "coverage attempt record "
+                    f"{attempt.get('attempt_id')!r} elapsed {elapsed!r} "
+                    "exceeds retry_budget per_attempt_timeout_minutes "
+                    f"{per_attempt_max!r} (no silent deadline extension)"
+                )
+        attempt_number = attempt.get("attempt_number")
+        if not isinstance(attempt_number, int) or isinstance(
+            attempt_number, bool
+        ):
+            result.add_error(
+                "coverage attempt record "
+                f"{attempt.get('attempt_id')!r} requires an integer "
+                "attempt_number"
+            )
+        elif isinstance(per_worker_max, (int, float)) and not (
+            1 <= attempt_number <= per_worker_max + 1
+        ):
+            result.add_error(
+                "coverage attempt record "
+                f"{attempt.get('attempt_id')!r} attempt_number "
+                f"{attempt_number!r} outside 1..per_worker_max+1 "
+                f"({per_worker_max!r})"
+            )
+        usage_state = attempt.get("usage_state")
+        if usage_state is not None and usage_state not in ATTEMPT_USAGE_STATES:
+            result.add_error(
+                "coverage attempt usage_state must be one of "
+                f"{sorted(ATTEMPT_USAGE_STATES)}; got {usage_state!r}"
+            )
+        admission_state = attempt.get("admission_state")
+        if (
+            admission_state is not None
+            and admission_state not in ATTEMPT_ADMISSION_STATES
+        ):
+            result.add_error(
+                "coverage attempt admission_state must be one of "
+                f"{sorted(ATTEMPT_ADMISSION_STATES)}; got "
+                f"{admission_state!r}"
+            )
+        admission_error_class = attempt.get("admission_error_class")
+        if (
+            admission_error_class is not None
+            and admission_error_class not in ATTEMPT_ADMISSION_ERROR_CLASSES
+        ):
+            result.add_error(
+                "coverage attempt admission_error_class must be one of "
+                f"{sorted(ATTEMPT_ADMISSION_ERROR_CLASSES)}; got "
+                f"{admission_error_class!r}"
+            )
+        if (
+            admission_state in ("denied", "saturated")
+            and admission_error_class
+            in {
+                "capacity-denied",
+                "concurrency-limit",
+                "provider-unavailable",
+                "stale-release-suspected",
+            }
+            and usage_state == "exhausted"
+        ):
+            result.add_error(
+                "coverage attempt record "
+                f"{attempt.get('attempt_id')!r} records usage_state "
+                "'exhausted' while a capacity admission blocker is "
+                "present; capacity blockers are recorded as capacity, "
+                "never as usage exhaustion"
+            )
+        if (
+            attempt.get("execution_mode") == "local"
+            and attempt.get("contributed_coverage") is True
+        ):
+            scope_ok = isinstance(
+                attempt.get("prompt_scope"), str
+            ) and attempt.get("prompt_scope").strip()
+            artifact_ok = _coverage_artifact_exists(attempt.get("artifact"))
+            sidecar_ok = _coverage_sidecar_parses(attempt.get("sidecar"))
+            if not (scope_ok and artifact_ok and sidecar_ok):
+                result.add_error(
+                    "coverage local-mode attempt "
+                    f"{attempt.get('attempt_id')!r} may contribute "
+                    "coverage only with prompt_scope and an existing "
+                    "artifact/.stats.json sidecar pair whose sidecar "
+                    "parses (local-execution equivalence evidence)"
+                )
+    # Verdict cross-field rules.
+    verdict = payload.get("verdict")
+    replacement_list = (
+        replacements if isinstance(replacements, list) else []
+    )
+    if outcome == "clean" and replacement_list:
+        result.add_error(
+            "coverage outcome 'clean' forbids replacement[] entries"
+        )
+    if outcome == "replacement-covered" and not replacement_list:
+        result.add_error(
+            "coverage outcome 'replacement-covered' requires a non-empty "
+            "replacement[]"
+        )
+    if outcome in ("degraded", "failed") and verdict != "no":
+        result.add_error(
+            f"coverage outcome {outcome!r} requires verdict 'no'; got "
+            f"{verdict!r}"
+        )
+    material = coverage.get("material_lens_set")
+    material_list = material if isinstance(material, list) else []
+    completed_list = coverage.get("completed")
+    completed_list = completed_list if isinstance(completed_list, list) else []
+    missing_list = coverage.get("missing")
+    missing_list = missing_list if isinstance(missing_list, list) else []
+    replacement_lenses = {
+        e.get("lens")
+        for e in replacement_list
+        if isinstance(e, dict) and isinstance(e.get("lens"), str)
+    }
+    inherited_lenses = set()
+    inherited_list = (
+        inherited if isinstance(inherited, list) else []
+    )
+    for e in inherited_list:
+        if isinstance(e, dict) and isinstance(e.get("lens"), str):
+            inherited_lenses.add(e["lens"])
+    if verdict == "yes":
+        if outcome not in ("clean", "replacement-covered"):
+            result.add_error(
+                "verdict 'yes' requires coverage outcome 'clean' or "
+                f"'replacement-covered'; got {outcome!r}"
+            )
+        if missing_list:
+            result.add_error(
+                "verdict 'yes' requires an empty coverage missing list; "
+                f"got {missing_list!r}"
+            )
+        for lens in material_list:
+            if (
+                lens not in completed_list
+                and lens not in replacement_lenses
+                and lens not in inherited_lenses
+            ):
+                result.add_error(
+                    "verdict 'yes' requires material lens "
+                    f"{lens!r} covered by completed, replacement[], or "
+                    "inherited_coverage[]"
+                )
+    # Reconciliation: the declared material set is non-empty when the
+    # record's own panel carries launched workers.
+    panel = payload.get("panel")
+    panel = panel if isinstance(panel, list) else []
+    launched_rows = [
+        row
+        for row in panel
+        if isinstance(row, dict)
+        and _coverage_row_status(row) not in ("", "skipped")
+    ]
+    if launched_rows and not material_list:
+        result.add_error(
+            "coverage material_lens_set must be non-empty when the "
+            "record's panel[] carries launched workers"
+        )
+    # Incomplete-status reconciliation: a failed/timed-out panel row's
+    # lens set must be accounted in missing, replacement, or completed.
+    for row in launched_rows:
+        status = _coverage_row_status(row)
+        if status not in INCOMPLETE_WORKER_STATUSES:
+            continue
+        lens_set = _coverage_row_lenses(row)
+        if not lens_set:
+            result.add_error(
+                "coverage reconciliation: incomplete panel row for "
+                f"worker {row.get('worker')!r} carries no lenses and the "
+                "worker has no required-lens mapping; materiality cannot "
+                "be determined"
+            )
+            continue
+        for lens in lens_set:
+            if (
+                lens not in missing_list
+                and lens not in replacement_lenses
+                and lens not in completed_list
+            ):
+                result.add_error(
+                    "coverage reconciliation: incomplete panel row "
+                    f"({status!r}) for lens {lens!r} is not recorded in "
+                    "missing, replacement[], or completed"
+                )
+    # Completed-evidence rule: each completed lens is evidenced by a
+    # complete panel row or a contributing complete attempt (with the
+    # local-equivalence evidence bar for local mode).
+    complete_row_lenses = set()
+    for row in panel:
+        if (
+            isinstance(row, dict)
+            and _coverage_row_status(row) == "complete"
+        ):
+            complete_row_lenses |= _coverage_row_lenses(row)
+    contributing_attempt_lenses = set()
+    for attempt in attempt_rows:
+        if not isinstance(attempt, dict):
+            continue
+        if (
+            attempt.get("outcome") == "complete"
+            and attempt.get("contributed_coverage") is True
+        ):
+            if attempt.get("execution_mode") == "local":
+                scope_ok = isinstance(
+                    attempt.get("prompt_scope"), str
+                ) and attempt.get("prompt_scope").strip()
+                if not (
+                    scope_ok
+                    and _coverage_artifact_exists(attempt.get("artifact"))
+                    and _coverage_sidecar_parses(attempt.get("sidecar"))
+                ):
+                    continue
+            lenses = attempt.get("lenses")
+            if isinstance(lenses, list):
+                contributing_attempt_lenses |= {
+                    str(v) for v in lenses
+                }
+    for lens in completed_list:
+        if (
+            lens not in complete_row_lenses
+            and lens not in contributing_attempt_lenses
+        ):
+            result.add_error(
+                "coverage completed lens "
+                f"{lens!r} has no complete panel row or contributing "
+                "attempt evidence"
+            )
+    # Late-result rule: a complete attempt whose lens already has a
+    # replacement entry must not contribute coverage, and clean is
+    # forbidden with replacements (checked above).
+    for attempt in attempt_rows:
+        if not isinstance(attempt, dict):
+            continue
+        if attempt.get("outcome") != "complete":
+            continue
+        lenses = attempt.get("lenses")
+        lens_values = (
+            {str(v) for v in lenses} if isinstance(lenses, list) else set()
+        )
+        if lens_values & replacement_lenses and attempt.get(
+            "contributed_coverage"
+        ) is not False:
+            result.add_error(
+                "coverage late-result rule: a complete attempt for a "
+                "lens already covered by replacement[] must record "
+                "contributed_coverage: false"
+            )
+    # Scope-coupling rule: a record with replacement[] entries declares at
+    # least those lenses (and the inherited lenses) in material_lens_set;
+    # a replacing round's material set includes the original round's
+    # missing lenses.
+    for lens in replacement_lenses | inherited_lenses:
+        if lens not in material_list:
+            result.add_error(
+                "coverage scope coupling: replacement/inherited lens "
+                f"{lens!r} must be declared in material_lens_set"
+            )
+    for entry in replacement_list:
+        if not isinstance(entry, dict):
+            continue
+        linked = _coverage_linked_round(entry.get("original_sidecar"))
+        original_missing = None
+        if _coverage_is_post_constant(linked):
+            linked_coverage = linked.get("coverage")
+            if isinstance(linked_coverage, dict):
+                original_missing = linked_coverage.get("missing")
+        if isinstance(original_missing, list):
+            for lens in original_missing:
+                if (
+                    isinstance(lens, str)
+                    and lens not in material_list
+                ):
+                    result.add_error(
+                        "coverage scope coupling: the replacing round's "
+                        "material_lens_set must include the original "
+                        f"round's missing lens {lens!r}"
+                    )
+    # Link validation runs whenever coverage is present (validated-when-
+    # present semantics, matching the extended-fields precedent).
+    validate_replacement_links(coverage, result)
+
+
+def _is_normalized_repo_relative_path(value: object) -> bool:
+    """True iff ``value`` is a non-empty, normalized, repository-relative
+    path string (no absolute or ``..``/``.`` segments, no redundant
+    separators, no trailing slash, no backslashes)."""
+    if not isinstance(value, str):
+        return False
+    if not value or value != value.strip():
+        return False
+    if "\\" in value or "\x00" in value:
+        return False
+    if value.startswith("/") or value.endswith("/"):
+        return False
+    if posixpath.normpath(value) != value:
+        return False
+    return not (
+        value in (".", "..")
+        or value.startswith("./")
+        or value.startswith("../")
+    )
+
+
+def validate_address_fanout_contract(
+    payload: dict,
+    result: ValidationResult,
+    *,
+    schema_class: str,
+) -> None:
+    """The ``extensions.address_fanout`` shape and conservation gate
+    (execute-plan review-fix pipeline efficiency plan, Task 4).
+
+    ``address_fanout`` is legal ONLY on current-v1 records: a versionless
+    (legacy) record carrying the extension fails closed with a
+    version-boundary message and never reaches the shape gate. On a
+    current-v1 record the extension must be an object with ``round``,
+    ``finding_files``, and ``workers`` of the exact pinned types, complete
+    unique id sets, canonical repository-relative file paths, worker
+    file-set equality, one-or-two attempt rows per worker, the closed
+    status and reason-code enums with their valid combinations, a final
+    worker status, required log paths, non-negative integer counts summing
+    to the row's findings length, exact round equality (after string
+    normalization), and no finding id in more than one worker row. Every
+    violation names ``address_fanout``.
+
+    ``schema_class`` is the per-run classification threaded in from
+    ``_validate_stats_sidecar_gates`` (r6 F13:
+    ``classify_sidecar_schema`` runs exactly once per validation run).
+    """
+    if not isinstance(payload, dict):
+        return
+    extensions = payload.get("extensions")
+    if not isinstance(extensions, dict) or ADDRESS_FANOUT_KEY not in extensions:
+        return
+    fanout = extensions[ADDRESS_FANOUT_KEY]
+    if schema_class != "current-v1":
+        result.add_error(
+            "extensions.address_fanout is a version-1-only extension: a "
+            f"{schema_class} record carrying it fails closed at the version "
+            "boundary; versionless legacy sidecars reject address_fanout "
+            "and remain on the single-worker address path"
+        )
+        return
+    if not isinstance(fanout, dict):
+        result.add_error(
+            "extensions.address_fanout must be an object with 'round', "
+            f"'finding_files', and 'workers'; got {type(fanout).__name__}"
+        )
+        return
+    for key in fanout:
+        if key not in ADDRESS_FANOUT_KEYS:
+            result.add_error(
+                f"extensions.address_fanout rejects unknown key {key!r}"
+            )
+
+    def _non_empty_str(where: str, value: object) -> bool:
+        if isinstance(value, str) and value.strip():
+            return True
+        result.add_error(
+            f"extensions.address_fanout {where} must be a non-empty string; "
+            f"got {value!r}"
+        )
+        return False
+
+    # Round: required string, equal to the sidecar round after string
+    # normalization.
+    if "round" not in fanout:
+        result.add_error(
+            "extensions.address_fanout is missing required key 'round'"
+        )
+    elif _non_empty_str("'round'", fanout["round"]):
+        sidecar_round = payload.get("round")
+        fanout_round = fanout["round"]
+        if str(sidecar_round) != fanout_round:
+            result.add_error(
+                "extensions.address_fanout 'round' must equal the sidecar "
+                "round after string normalization (sidecar round "
+                f"{sidecar_round!r} vs extension round {fanout_round!r})"
+            )
+
+    # finding_files rows: {id, files} objects whose ids exist exactly once
+    # in the sidecar findings and whose files are normalized repo-relative
+    # paths.
+    finding_files = fanout.get("finding_files")
+    if finding_files is None:
+        result.add_error(
+            "extensions.address_fanout is missing required key "
+            "'finding_files'"
+        )
+        finding_files = []
+    elif not isinstance(finding_files, list):
+        result.add_error(
+            "extensions.address_fanout 'finding_files' must be a list of "
+            "{id, files} rows"
+        )
+        finding_files = []
+    sidecar_findings = payload.get("findings")
+    sidecar_finding_ids = {
+        row.get("id")
+        for row in sidecar_findings
+        if isinstance(row, dict)
+    } if isinstance(sidecar_findings, list) else set()
+    declared_finding_ids: set = set()
+    files_by_finding: dict = {}
+    for row in finding_files:
+        if not isinstance(row, dict):
+            result.add_error(
+                "extensions.address_fanout 'finding_files' rows must be "
+                "objects"
+            )
+            continue
+        for key in row:
+            if key not in ADDRESS_FANOUT_FINDING_FILES_KEYS:
+                result.add_error(
+                    "extensions.address_fanout 'finding_files' row rejects "
+                    f"unknown key {key!r}"
+                )
+        fid = row.get("id")
+        if isinstance(fid, bool) or not isinstance(fid, int):
+            result.add_error(
+                "extensions.address_fanout 'finding_files' row id must be "
+                f"an integer; got {fid!r}"
+            )
+        elif fid in declared_finding_ids:
+            result.add_error(
+                f"extensions.address_fanout 'finding_files' id {fid!r} "
+                "appears more than once; every finding_files id exists "
+                "exactly once in the sidecar findings"
+            )
+        else:
+            declared_finding_ids.add(fid)
+            if fid not in sidecar_finding_ids:
+                result.add_error(
+                    f"extensions.address_fanout 'finding_files' id {fid!r} "
+                    "does not exist in the sidecar findings"
+                )
+        files = row.get("files")
+        if not isinstance(files, list) or not files:
+            result.add_error(
+                f"extensions.address_fanout 'finding_files' row for id "
+                f"{fid!r} must carry a non-empty 'files' list"
+            )
+            files = []
+        file_set = set()
+        for file_path in files:
+            if _is_normalized_repo_relative_path(file_path):
+                file_set.add(file_path)
+            else:
+                result.add_error(
+                    "extensions.address_fanout file path "
+                    f"{file_path!r} is not a non-empty repository-relative "
+                    "normalized path"
+                )
+        if isinstance(fid, int) and not isinstance(fid, bool):
+            files_by_finding.setdefault(fid, set()).update(file_set)
+
+    # Worker rows: unique ids, per-worker finding assignment, file-set
+    # equality, one-or-two attempts, closed enums with valid combinations,
+    # final status, log paths, and per-row count conservation.
+    workers = fanout.get("workers")
+    if workers is None:
+        result.add_error(
+            "extensions.address_fanout is missing required key 'workers'"
+        )
+        workers = []
+    elif not isinstance(workers, list):
+        result.add_error(
+            "extensions.address_fanout 'workers' must be a list of worker "
+            "rows"
+        )
+        workers = []
+    assigned_finding_owner: dict = {}
+    seen_worker_ids: set = set()
+    for worker in workers:
+        if not isinstance(worker, dict):
+            result.add_error(
+                "extensions.address_fanout 'workers' rows must be objects"
+            )
+            continue
+        for key in worker:
+            if key not in ADDRESS_FANOUT_WORKER_KEYS:
+                result.add_error(
+                    "extensions.address_fanout worker row rejects unknown "
+                    f"key {key!r}"
+                )
+        worker_id = worker.get("id")
+        if _non_empty_str("worker 'id'", worker_id):
+            if worker_id in seen_worker_ids:
+                result.add_error(
+                    f"extensions.address_fanout worker id {worker_id!r} "
+                    "appears more than once; worker ids must be unique"
+                )
+            else:
+                seen_worker_ids.add(worker_id)
+        findings = worker.get("findings")
+        if not isinstance(findings, list) or not findings:
+            result.add_error(
+                f"extensions.address_fanout worker {worker_id!r} must carry "
+                "a non-empty 'findings' id list"
+            )
+            findings = []
+        worker_file_union = set()
+        for fid in findings:
+            if isinstance(fid, bool) or not isinstance(fid, int):
+                result.add_error(
+                    f"extensions.address_fanout worker {worker_id!r} "
+                    f"'findings' must be integer ids; got {fid!r}"
+                )
+                continue
+            if fid in assigned_finding_owner:
+                result.add_error(
+                    f"extensions.address_fanout finding id {fid!r} is "
+                    f"assigned to both worker "
+                    f"{assigned_finding_owner[fid]!r} and worker "
+                    f"{worker_id!r}; every finding id occurs in exactly one "
+                    "worker"
+                )
+            else:
+                assigned_finding_owner[fid] = worker_id
+            if fid not in sidecar_finding_ids:
+                result.add_error(
+                    f"extensions.address_fanout worker {worker_id!r} "
+                    f"references finding id {fid!r} that does not exist in "
+                    "the sidecar findings"
+                )
+            worker_file_union |= files_by_finding.get(fid, set())
+        worker_files_raw = worker.get("files")
+        if not isinstance(worker_files_raw, list):
+            result.add_error(
+                f"extensions.address_fanout worker {worker_id!r} 'files' "
+                "must be a list of repository-relative normalized paths"
+            )
+            worker_files_raw = []
+        worker_files = set()
+        for file_path in worker_files_raw:
+            if _is_normalized_repo_relative_path(file_path):
+                worker_files.add(file_path)
+            else:
+                result.add_error(
+                    "extensions.address_fanout file path "
+                    f"{file_path!r} is not a non-empty repository-relative "
+                    "normalized path"
+                )
+        if worker_files != worker_file_union:
+            result.add_error(
+                f"extensions.address_fanout worker {worker_id!r} 'files' "
+                "must equal the union of its findings' file sets (worker "
+                f"files {sorted(worker_files)} vs finding union "
+                f"{sorted(worker_file_union)})"
+            )
+        attempts = worker.get("attempts")
+        if not isinstance(attempts, list) or not 1 <= len(attempts) <= 2:
+            shape = (
+                len(attempts)
+                if isinstance(attempts, list)
+                else type(attempts).__name__
+            )
+            result.add_error(
+                f"extensions.address_fanout worker {worker_id!r} must carry "
+                f"one or two 'attempts' rows; got {shape!r}"
+            )
+            attempts = attempts if isinstance(attempts, list) else []
+        seen_attempt_ids: set = set()
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                result.add_error(
+                    f"extensions.address_fanout worker {worker_id!r} attempt "
+                    "rows must be objects"
+                )
+                continue
+            for key in attempt:
+                if key not in ADDRESS_FANOUT_ATTEMPT_KEYS:
+                    result.add_error(
+                        "extensions.address_fanout attempt row rejects "
+                        f"unknown key {key!r}"
+                    )
+            attempt_id = attempt.get("id")
+            if _non_empty_str("attempt 'id'", attempt_id):
+                if attempt_id in seen_attempt_ids:
+                    result.add_error(
+                        f"extensions.address_fanout worker {worker_id!r} "
+                        f"attempt id {attempt_id!r} appears more than once; "
+                        "attempt ids must be unique"
+                    )
+                else:
+                    seen_attempt_ids.add(attempt_id)
+            status = attempt.get("status")
+            if status not in ADDRESS_FANOUT_ATTEMPT_STATUSES:
+                result.add_error(
+                    f"extensions.address_fanout worker {worker_id!r} attempt "
+                    f"{attempt_id!r} 'status' must be one of "
+                    f"{sorted(ADDRESS_FANOUT_ATTEMPT_STATUSES)}; got "
+                    f"{status!r}"
+                )
+            reason_code = attempt.get("reason_code")
+            if reason_code not in ADDRESS_FANOUT_REASON_CODES:
+                result.add_error(
+                    f"extensions.address_fanout worker {worker_id!r} attempt "
+                    f"{attempt_id!r} 'reason_code' must be one of the closed "
+                    "address-fan-out enum "
+                    f"{sorted(ADDRESS_FANOUT_REASON_CODES)}; got "
+                    f"{reason_code!r}"
+                )
+            # Combination rules: completed for success; worker_error /
+            # worker_timeout for the corresponding worker failure; the
+            # remaining codes reserved for blocked or cancelled outcomes.
+            if (
+                status in ADDRESS_FANOUT_ATTEMPT_STATUSES
+                and reason_code in ADDRESS_FANOUT_REASON_CODES
+            ):
+                if (
+                    status == "success"
+                    and reason_code != ADDRESS_FANOUT_SUCCESS_REASON
+                ):
+                    result.add_error(
+                        f"extensions.address_fanout worker {worker_id!r} "
+                        f"attempt {attempt_id!r} invalid status/reason "
+                        "combination: a successful attempt requires "
+                        f"reason_code "
+                        f"{ADDRESS_FANOUT_SUCCESS_REASON!r}; got "
+                        f"{reason_code!r}"
+                    )
+                if (
+                    status != "success"
+                    and reason_code == ADDRESS_FANOUT_SUCCESS_REASON
+                ):
+                    result.add_error(
+                        f"extensions.address_fanout worker {worker_id!r} "
+                        f"attempt {attempt_id!r} invalid status/reason "
+                        "combination: reason_code "
+                        f"{ADDRESS_FANOUT_SUCCESS_REASON!r} requires status "
+                        f"'success'; got {status!r}"
+                    )
+            _non_empty_str(
+                f"worker {worker_id!r} attempt {attempt_id!r} 'log'",
+                attempt.get("log"),
+            )
+        status = worker.get("status")
+        if status not in ADDRESS_FANOUT_WORKER_STATUSES:
+            result.add_error(
+                f"extensions.address_fanout worker {worker_id!r} final "
+                "'status' must be one of "
+                f"{sorted(ADDRESS_FANOUT_WORKER_STATUSES)}; got {status!r}"
+            )
+        counts_valid = True
+        counts_total = 0
+        for count_key in ("fixed", "dropped", "deferred", "pending"):
+            count_value = worker.get(count_key)
+            if (
+                isinstance(count_value, bool)
+                or not isinstance(count_value, int)
+                or count_value < 0
+            ):
+                counts_valid = False
+                result.add_error(
+                    f"extensions.address_fanout worker {worker_id!r} count "
+                    f"{count_key!r} must be a non-negative integer; got "
+                    f"{count_value!r}"
+                )
+            else:
+                counts_total += count_value
+        if counts_valid and counts_total != len(findings):
+            result.add_error(
+                f"extensions.address_fanout worker {worker_id!r} counts "
+                "fixed+dropped+deferred+pending "
+                f"({counts_total}) must sum to its findings length "
+                f"({len(findings)})"
+            )
+        _non_empty_str(
+            f"worker {worker_id!r} 'log'", worker.get("log")
+        )
+
+    # Subset conservation: the union of worker-assigned ids must equal the
+    # finding_files id set (all assigned ids equal the exact fanned subset
+    # recorded by the parent).
+    for fid in sorted(declared_finding_ids - set(assigned_finding_owner)):
+        result.add_error(
+            "extensions.address_fanout incomplete assignment: "
+            f"'finding_files' id {fid!r} is assigned to no worker; all "
+            "assigned ids must equal the exact fanned subset recorded by "
+            "the parent"
+        )
+    for fid in sorted(set(assigned_finding_owner) - declared_finding_ids):
+        result.add_error(
+            "extensions.address_fanout incomplete assignment: worker "
+            f"{assigned_finding_owner[fid]!r} references finding id "
+            f"{fid!r} that has no 'finding_files' row"
+        )
+
+
+def validate_coverage_markdown_agreement(
+    content: str,
+    payload: dict,
+    result: ValidationResult,
+    *,
+    coverage_exempt: bool,
+) -> None:
+    """Markdown/sidecar coverage agreement (review-runner bounded-timeout
+    plan, Task 2): the Markdown ``Coverage:`` line outcome equals the
+    sidecar ``coverage.outcome``, and the ``### Attempt ledger`` row count
+    equals ``len(coverage.attempts[])``. Date-fenced like the coverage
+    gate; pre-constant records are exempt."""
+    if coverage_exempt:
+        return
+    coverage = payload.get("coverage")
+    if not isinstance(coverage, dict):
+        return
+    outcome = coverage.get("outcome")
+    line_match = re.search(
+        r"^-\s*Coverage:\s*([a-z-]+)\s*$", content, re.MULTILINE
+    )
+    if line_match is None:
+        result.add_error(
+            "staging Markdown is missing the required '- Coverage:' line "
+            "for a post-constant record"
+        )
+    elif line_match.group(1) != outcome:
+        result.add_error(
+            f"coverage disagreement: Markdown Coverage line "
+            f"{line_match.group(1)!r} != sidecar outcome {outcome!r}"
+        )
+    ledger_rows = len(
+        re.findall(
+            r"^### Attempt ledger\s*$",
+            content,
+            re.MULTILINE,
+        )
+    )
+    attempts = coverage.get("attempts")
+    attempts_count = (
+        len(attempts) if isinstance(attempts, list) else 0
+    )
+    if not ledger_rows and attempts_count:
+        result.add_error(
+            "staging Markdown is missing the required '### Attempt ledger' "
+            f"section for {attempts_count} recorded coverage attempt(s)"
+        )
+    if ledger_rows:
+        ledger_section = re.search(
+            r"^### Attempt ledger\s*$\n(.*?)(?=^### |^## )",
+            content,
+            re.MULTILINE | re.DOTALL,
+        )
+        data_rows = 0
+        if ledger_section:
+            for row_line in re.findall(
+                r"^\|(.+)\|\s*$",
+                ledger_section.group(1),
+                re.MULTILINE,
+            ):
+                cell = row_line.strip().split("|")[0].strip()
+                if cell == "" or set(cell) <= set("-: "):
+                    continue
+                if cell.lower() == "attempt":
+                    continue
+                data_rows += 1
+        row_count = data_rows
+        if row_count != attempts_count:
+            result.add_error(
+                "coverage disagreement: Attempt ledger rows "
+                f"{row_count!r} != sidecar attempts[] {attempts_count!r}"
+            )
+
+
+def _coverage_fence_exempt(
+    date_value: object, staging_name: str | None, result: ValidationResult
+) -> bool:
+    """Single home of the coverage-fence exemption (review-runner
+    bounded-timeout plan): a record is coverage-exempt only when its
+    sidecar ``date`` parses and is earlier than
+    COVERAGE_SIDECAR_MIN_DATE. Grandfathering trust checks mirror the
+    EXTENDED fence (r2 F3 / r4 F7): the exemption cannot be claimed by a
+    sidecar date backdated below the constant while the staging filename
+    is post-constant (the error strips the exemption, fail-closed), and
+    the two surfaces may not straddle the constant. Both the payload-side
+    contract gates and the Markdown-agreement twin call this, so the two
+    fence computations cannot diverge."""
+    exempt = not (
+        isinstance(date_value, str)
+        and bool(V1_DATE_RE.match(date_value))
+        and date_value >= COVERAGE_SIDECAR_MIN_DATE
+    )
+    coverage_name_date = (
+        staging_name[:10]
+        if staging_name and V1_DATE_RE.match(staging_name[:10] or "")
+        else None
+    )
+    if (
+        exempt
+        and coverage_name_date is not None
+        and coverage_name_date >= COVERAGE_SIDECAR_MIN_DATE
+    ):
+        if isinstance(date_value, str) and date_value.strip():
+            result.add_error(
+                f"version-1 sidecar dated {date_value!r} is earlier than "
+                f"COVERAGE_SIDECAR_MIN_DATE {COVERAGE_SIDECAR_MIN_DATE} "
+                f"while the staging filename is dated {coverage_name_date} "
+                "(on or after COVERAGE_SIDECAR_MIN_DATE); the grandfathering "
+                "exemption cannot be claimed by a backdated sidecar date"
+            )
+        else:
+            result.add_error(
+                f"version-1 sidecar date is missing or malformed while the "
+                f"staging filename is dated {coverage_name_date} (on or "
+                f"after COVERAGE_SIDECAR_MIN_DATE "
+                f"{COVERAGE_SIDECAR_MIN_DATE}); the coverage exemption "
+                "cannot be claimed without a parseable sidecar date"
+            )
+        exempt = False
+    if (
+        coverage_name_date is not None
+        and coverage_name_date < COVERAGE_SIDECAR_MIN_DATE
+        and isinstance(date_value, str)
+        and bool(V1_DATE_RE.match(date_value))
+        and date_value >= COVERAGE_SIDECAR_MIN_DATE
+    ):
+        result.add_error(
+            f"date disagreement: staging filename dated "
+            f"{coverage_name_date} is earlier than COVERAGE_SIDECAR_MIN_DATE "
+            f"{COVERAGE_SIDECAR_MIN_DATE} while the sidecar date "
+            f"{date_value!r} is on or after it; the record cannot be "
+            "grandfathered on one surface and post-constant on the other"
+        )
+    return exempt
+
+
 def validate_version1_payload(
     payload: dict,
     content: str,
@@ -1704,6 +3122,7 @@ def validate_version1_payload(
         set(V1_REQUIRED_TOP_LEVEL_FIELDS)
         | set(V1_OPTIONAL_TOP_LEVEL_FIELDS)
         | set(V1_EXTENDED_REQUIRED_FIELDS)
+        | {"coverage"}
     )
     for key in payload:
         if key not in allowed:
@@ -1770,6 +3189,17 @@ def validate_version1_payload(
                     f"EXTENDED_SIDECAR_MIN_DATE {EXTENDED_SIDECAR_MIN_DATE}) "
                     f"is missing extended field {field_name!r}"
                 )
+    # Coverage obligation (review-runner bounded-timeout plan, Task 2).
+    # Presence is fenced on COVERAGE_SIDECAR_MIN_DATE and scoped to
+    # source_kind 'plan' (the only readiness-gated kind); the contract and
+    # link gates run whenever coverage is present, so other producers may
+    # adopt coverage and stay validated.
+    coverage_exempt = _coverage_fence_exempt(
+        date_value, staging_name, result
+    )
+    validate_coverage_contract(
+        payload, result, coverage_exempt=coverage_exempt
+    )
     # r2 F6: only PRESENCE is gated on the date fence; the type, enum, and
     # cross-field checks below run whenever a field is PRESENT, so a
     # grandfathered-dated record voluntarily carrying the extended fields
@@ -1903,20 +3333,21 @@ def validate_version1_payload(
             )
 
 
-def validate_stats_sidecar(
+def _validate_stats_sidecar_gates(
     staging_path: Path,
     content: str,
     result: ValidationResult,
     *,
     expected_digest: str | None = None,
     source_kind: str | None = None,
+    sidecar_read: _SidecarRead | None = None,
 ) -> tuple[dict | None, str | None]:
-    """Validate the stats sidecar and hand the caller the parsed payload
-    plus its ONE per-run schema classification (r6 F13 keeps
-    ``classify_sidecar_schema`` at exactly one call per validation run;
-    vrs-witness-twin-single-call threads both out so the single witness
-    call site in ``validate_staging_file`` can honor the r3 F8 scoping
-    without reclassifying). Early exits return ``(None, None)``."""
+    """The sidecar gates proper, moved verbatim from the pre-consolidation
+    ``validate_stats_sidecar`` body (vrs-freshness-witness-sidecar-read-
+    consolidation). Consumes a pre-read ``_SidecarRead`` when supplied
+    (``validate_staging_file`` threads its single pre-read down); with no
+    pre-read the read happens here, so the standalone path performs its own
+    identical single read. Early exits return ``(None, None)``."""
     staged_count = extract_staged_count(content)
     # Hard gate: never waive the sidecar when the doc claims staged findings.
     # Also never waive when the caller explicitly asked for a digest check
@@ -1932,27 +3363,33 @@ def validate_stats_sidecar(
         result.add_error(
             "Stats sidecar: skipped is not allowed when Staged findings > 0"
         )
-    sidecar = stats_sidecar_path(staging_path)
-    if not sidecar.is_file():
-        result.add_error(f"missing required stats sidecar: {sidecar.name}")
+    if sidecar_read is None:
+        sidecar_read = _read_stats_sidecar(stats_sidecar_path(staging_path))
+    if not sidecar_read.exists:
+        result.add_error(
+            f"missing required stats sidecar: "
+            f"{stats_sidecar_path(staging_path).name}"
+        )
         return None, None
-    try:
-        payload = json.loads(sidecar.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        result.add_error(f"invalid stats sidecar JSON: {exc}")
+    if sidecar_read.error is not None:
+        result.add_error(
+            f"invalid stats sidecar JSON: {sidecar_read.error}"
+        )
         return None, None
+    payload = sidecar_read.payload
     for key in ("panel", "counts"):
         if key not in payload:
             result.add_warning(f"stats sidecar missing '{key}'")
     schema_class = classify_sidecar_schema(payload)
     # The sidecar-driven witness gate twin (fresh-review coverage plan,
-    # Task 7) now lives in ``validate_staging_file`` as the single
-    # witness-gate call (vrs-witness-twin-single-call); the r3 F8 scoping
-    # (sidecar twin arms only for current-v1 payloads) is preserved there.
-    # r1 F9: the readiness gate (scripts/plan_readiness.py) calls only this
-    # function, so it no longer enforces the sidecar-surface
-    # witness-ledger shape; staging-time validation in
-    # ``validate_staging_file`` still does.
+    # Task 7) lives in the ``validate_stats_sidecar`` wrapper as the single
+    # witness-gate call (vrs-witness-twin-single-call), reached from
+    # ``validate_staging_file`` via ``enforce_witness=True``; the r3 F8
+    # scoping (sidecar twin arms only for current-v1 payloads) is
+    # preserved there. r1 F9: the readiness gate
+    # (scripts/plan_readiness.py) calls only the wrapper, which defaults
+    # ``enforce_witness`` off, so it does not enforce the sidecar-surface
+    # witness-ledger shape; staging-time validation opts in.
     if schema_class == "unsupported":
         result.add_error(
             f"unsupported stats sidecar schema_version "
@@ -1963,6 +3400,15 @@ def validate_stats_sidecar(
         validate_version1_payload(
             payload, content, result, staging_name=staging_path.name
         )
+    # Address fan-out accounting (execute-plan review-fix pipeline
+    # efficiency plan, Task 4): extensions.address_fanout is legal only on
+    # current-v1 records; a versionless record carrying the extension fails
+    # closed at the version boundary, and current-v1 records get the full
+    # shape and conservation gate. The per-run classification is threaded
+    # in (r6 F13: classify_sidecar_schema runs exactly once per run).
+    validate_address_fanout_contract(
+        payload, result, schema_class=schema_class
+    )
 
     # r3 O16: cross-surface last-fix agreement. When BOTH the Metadata
     # ``Last fix commit`` line and the sidecar ``last_fix_commit`` field
@@ -2019,6 +3465,16 @@ def validate_stats_sidecar(
             source_kind=source_kind,
             schema_label=schema_class,
         )
+    # Coverage Markdown agreement (review-runner bounded-timeout plan,
+    # Task 2): wired in the shared path so both entry points (staging-time
+    # and the readiness gate) exercise it with no second wiring site. The
+    # fence mirrors validate_version1_payload's coverage exemption.
+    md_exempt = _coverage_fence_exempt(
+        payload.get("date"), staging_path.name, result
+    )
+    validate_coverage_markdown_agreement(
+        content, payload, result, coverage_exempt=md_exempt
+    )
     discarded = _require_array(
         payload, "discarded", result, schema_class
     )
@@ -2034,6 +3490,60 @@ def validate_stats_sidecar(
                 "stats sidecar wrong-owner row missing lead ownership"
             )
     return payload, schema_class
+
+
+def validate_stats_sidecar(
+    staging_path: Path,
+    content: str,
+    result: ValidationResult,
+    *,
+    expected_digest: str | None = None,
+    source_kind: str | None = None,
+    sidecar_read: _SidecarRead | None = None,
+    enforce_witness: bool = False,
+) -> dict | None:
+    """Validate the stats sidecar and return the parsed payload only
+    (vrs-freshness-witness-sidecar-read-consolidation). The tuple return
+    and the caller-side witness selection are gone: witness resolution
+    lives here behind ``enforce_witness`` (default off) and only
+    ``validate_staging_file`` opts in, so the standalone sidecar gate --
+    the exact path ``scripts/plan_readiness.py`` uses -- never enforces
+    the witness-ledger shape (r1 F9 disposition preserved). With no
+    ``sidecar_read`` pre-read the gates read the sidecar themselves;
+    r6 F13 keeps ``classify_sidecar_schema`` at exactly one call per
+    validation run."""
+    payload, schema_class = _validate_stats_sidecar_gates(
+        staging_path,
+        content,
+        result,
+        expected_digest=expected_digest,
+        source_kind=source_kind,
+        sidecar_read=sidecar_read,
+    )
+    if not enforce_witness:
+        return payload
+    # Witness resolution moved verbatim from ``validate_staging_file``
+    # (vrs-witness-twin-single-call): the sidecar surface arms only when
+    # the payload classifies current-v1 (r3 F8 scoping: legacy,
+    # unsupported, and versionless-current payloads never arm it); under
+    # that scoping the sidecar real sha wins, else the Metadata real sha
+    # arms the gate. The single ``validate_witness_ledger_shape`` call
+    # site lives here.
+    md_last_fix = _metadata_last_fix(content)
+    sc_last_fix = None
+    if schema_class == "current-v1":
+        sc_last_fix = payload.get("last_fix_commit")
+    if _last_fix_present(sc_last_fix):
+        witness_last_fix, witness_source = sc_last_fix, "sidecar"
+    elif _last_fix_present(md_last_fix):
+        witness_last_fix, witness_source = md_last_fix, "Metadata"
+    else:
+        witness_last_fix, witness_source = None, None
+    if witness_last_fix is not None:
+        validate_witness_ledger_shape(
+            content, result, last_fix=witness_last_fix, source=witness_source
+        )
+    return payload
 
 
 def validate_full_panel_completion(
@@ -2710,53 +4220,30 @@ def validate_staging_file(
     validate_verdict_heading_grammar(content, result)
     validate_clear_round_phrase(content, result)
     # r3 F11: the dateless-filename fail-closed fence needs the sidecar
-    # date, read here best-effort (a missing or malformed sidecar reports
-    # through its own gates below).
+    # date. The sidecar is read exactly once here (consolidation: the same
+    # _SidecarRead threads into the sidecar gates below), and the fence
+    # consumes it silently (a missing or malformed sidecar arms no fence
+    # error; it reports through its own gates).
+    sidecar_read = _read_stats_sidecar(stats_sidecar_path(path))
     sidecar_date = None
-    _sidecar_file = stats_sidecar_path(path)
-    if _sidecar_file.is_file():
-        try:
-            _sidecar_payload = json.loads(
-                _sidecar_file.read_text(encoding="utf-8")
-            )
-            if isinstance(_sidecar_payload, dict) and isinstance(
-                _sidecar_payload.get("date"), str
-            ):
-                sidecar_date = _sidecar_payload["date"]
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-            sidecar_date = None
+    if isinstance(sidecar_read.payload, dict) and isinstance(
+        sidecar_read.payload.get("date"), str
+    ):
+        sidecar_date = sidecar_read.payload["date"]
     validate_date_keyed_freshness_lines(
         path.name, content, result, sidecar_date=sidecar_date
     )
-    md_last_fix = _metadata_last_fix(content)
     validate_release_gate_ledger(content, result)
     validate_declaration_consistency(content, result)
-    sidecar_payload, sidecar_schema = validate_stats_sidecar(
+    validate_stats_sidecar(
         path,
         content,
         result,
         expected_digest=expected_digest,
         source_kind=source_kind,
+        sidecar_read=sidecar_read,
+        enforce_witness=True,
     )
-    # Witness gate single call (vrs-witness-twin-single-call): the sidecar
-    # surface arms only when the parsed payload classifies current-v1 (r3
-    # F8 scoping preserved: legacy, unsupported, and versionless-current
-    # payloads never arm the sidecar twin); under that scoping the sidecar
-    # real sha wins, else the Metadata real sha arms the gate. The call
-    # sits after sidecar validation so the resolved payload is available.
-    sc_last_fix = None
-    if sidecar_schema == "current-v1":
-        sc_last_fix = sidecar_payload.get("last_fix_commit")
-    if _last_fix_present(sc_last_fix):
-        witness_last_fix, witness_source = sc_last_fix, "sidecar"
-    elif _last_fix_present(md_last_fix):
-        witness_last_fix, witness_source = md_last_fix, "Metadata"
-    else:
-        witness_last_fix, witness_source = None, None
-    if witness_last_fix is not None:
-        validate_witness_ledger_shape(
-            content, result, last_fix=witness_last_fix, source=witness_source
-        )
 
     if hard and not result.ok:
         return result
@@ -6458,6 +7945,160 @@ def _selftest_versioned_schema_and_patterns(root: Path, check) -> None:
     )
 
 
+def _selftest_address_fanout_contract(root: Path, check) -> None:
+    """Family: the ``extensions.address_fanout`` shape and conservation gate
+    (execute-plan review-fix pipeline efficiency plan, Task 4), placed next
+    to the existing extension-shape cases. The negative cases are
+    table-driven and each check label is the exact plan-pinned selftest
+    label; every failure must carry an error naming ``address_fanout`` plus
+    the case's targeted message fragment. The positive case rides a
+    well-formed ``address_fanout`` extension on a valid current-v1 sidecar
+    through ``--hard``. RED-first family: every case fails until
+    ``validate_address_fanout_contract`` exists and is wired."""
+    import copy as _copy
+
+    base_md = _version1_markdown()
+
+    def stage(idx: int, payload: dict) -> Path:
+        # Pre-fence filename date (matches the existing v1 fixture family):
+        # a post-fence name would trip the freshness and coverage fences,
+        # which are unrelated to the address_fanout gate under test.
+        return _write_staging(
+            root,
+            f"2026-07-17-branch-review-fanout-{idx:02d}-r1.md",
+            base_md,
+            payload,
+        )
+
+    def wellformed_fanout() -> dict:
+        """Well-formed extension for the version-1 base fixture (one finding
+        with id 1, integer sidecar round 1): the worker's files equal the
+        union of its finding file sets, the counts sum to the findings
+        length, the single attempt is success/completed, and both logs are
+        present."""
+        return {
+            "round": "1",
+            "finding_files": [{"id": 1, "files": ["src/sample.py"]}],
+            "workers": [
+                {
+                    "id": "w1",
+                    "findings": [1],
+                    "files": ["src/sample.py"],
+                    "attempts": [
+                        {
+                            "id": "attempt-1",
+                            "status": "success",
+                            "reason_code": "completed",
+                            "log": "docs/tmp/address-w1-attempt-1.md",
+                        }
+                    ],
+                    "status": "complete",
+                    "fixed": 1,
+                    "dropped": 0,
+                    "deferred": 0,
+                    "pending": 0,
+                    "log": "docs/tmp/address-w1.md",
+                }
+            ],
+        }
+
+    def fanned_payload() -> dict:
+        payload = _version1_payload()
+        payload["extensions"] = {
+            "example": True,
+            "address_fanout": wellformed_fanout(),
+        }
+        return payload
+
+    def first_worker(payload: dict) -> dict:
+        return payload["extensions"]["address_fanout"]["workers"][0]
+
+    def first_attempt(payload: dict) -> dict:
+        return first_worker(payload)["attempts"][0]
+
+    def _duplicate_assignment(payload: dict) -> None:
+        second = _copy.deepcopy(first_worker(payload))
+        second["id"] = "w2"
+        payload["extensions"]["address_fanout"]["workers"].append(second)
+
+    # Table-driven negative cases: (exact plan-pinned label, payload
+    # mutation, targeted message fragment).
+    cases = (
+        (
+            "selftest: address_fanout unknown finding id fails hard",
+            lambda p: p["extensions"]["address_fanout"][
+                "finding_files"
+            ].append({"id": 99, "files": ["src/other.py"]}),
+            "does not exist in the sidecar findings",
+        ),
+        (
+            "selftest: address_fanout count mismatch fails hard",
+            lambda p: first_worker(p).update({"fixed": 0}),
+            "must sum to its findings length",
+        ),
+        (
+            "selftest: address_fanout duplicate finding assignment fails hard",
+            _duplicate_assignment,
+            "every finding id occurs in exactly one worker",
+        ),
+        (
+            "selftest: address_fanout missing round fails hard",
+            lambda p: p["extensions"]["address_fanout"].pop("round"),
+            "missing required key 'round'",
+        ),
+        (
+            "selftest: address_fanout missing log fails hard",
+            lambda p: first_worker(p).pop("log"),
+            "'log' must be a non-empty string",
+        ),
+        (
+            "selftest: address_fanout malformed type fails hard",
+            lambda p: p["extensions"].__setitem__(
+                "address_fanout", "not-an-object"
+            ),
+            "must be an object with 'round'",
+        ),
+        (
+            "selftest: address_fanout incomplete assignment fails hard",
+            lambda p: first_worker(p).__setitem__("findings", []),
+            "is assigned to no worker",
+        ),
+        (
+            "selftest: address_fanout unknown reason code fails hard",
+            lambda p: first_attempt(p).update({"reason_code": "mystery-code"}),
+            "must be one of the closed",
+        ),
+        (
+            "selftest: address_fanout invalid status reason combination fails hard",
+            lambda p: first_attempt(p).update({"reason_code": "worker_error"}),
+            "invalid status/reason combination",
+        ),
+        (
+            "selftest: address_fanout versionless legacy fails hard",
+            lambda p: p.pop("schema_version"),
+            "version boundary",
+        ),
+    )
+    for idx, (label, mutate, fragment) in enumerate(cases, start=1):
+        payload = fanned_payload()
+        mutate(payload)
+        result = validate_staging_file(stage(idx, payload), hard=True)
+        targeted = [
+            e
+            for e in result.errors
+            if "address_fanout" in e and fragment in e
+        ]
+        check(label, not result.ok and bool(targeted))
+
+    # Positive: a well-formed address_fanout rides a valid current-v1
+    # sidecar through --hard with zero errors.
+    result = validate_staging_file(stage(0, fanned_payload()), hard=True)
+    check(
+        "selftest: address_fanout well-formed shape passes hard",
+        result.ok,
+    )
+
+
 def _selftest_usage_optional(root: Path, check) -> None:
     """Family: the optional version-1 top-level ``usage`` field (token-usage
     telemetry plan, Task 2). The validator accepts the key only (rationale
@@ -7859,6 +9500,154 @@ def _selftest_extended_sidecar_freshness(root: Path, check) -> None:
         == 12,
     )
 
+    # vrs-clean-verdict-staged-count-masking (count masking fix): the
+    # clean-round early return used to fire before the counts-row fallback,
+    # so a self-contradictory doc (clean verdict, nonzero | Medium+ staged |
+    # row) silently extracted 0 and cleared conservation. masking_md builds
+    # the masking shape: the row is the ONLY count signal (every count
+    # bullet is stripped).
+    def masking_md(verdict: str, counts_row=None, skip_decl=False) -> str:
+        md = _version1_markdown()
+        md = md.replace("1 Medium+ findings accepted for fix", verdict)
+        lines = md.split("\n")
+        rebuilt = []
+        in_counts = False
+        for line in lines:
+            if line.strip() == "### Counts":
+                in_counts = True
+                rebuilt.append("### Counts")
+                if counts_row is not None:
+                    rebuilt.append(f"| Medium+ staged | {counts_row} |")
+                else:
+                    rebuilt.append("- Workers launched: 5")
+                continue
+            if in_counts:
+                if line.strip() == "### Deduplication groups":
+                    in_counts = False
+                    rebuilt.append(line)
+                continue
+            rebuilt.append(line)
+        md = "\n".join(rebuilt)
+        md = re.sub(
+            r"^-[ \t]*(Findings|Staged findings):[ \t]*\d+[ \t]*$",
+            "",
+            md,
+            flags=re.MULTILINE,
+        )
+        md = md.replace(
+            "## Metadata",
+            "## Metadata\n"
+            "- Review mode: fresh-adversarial\n"
+            "- Changed-risk signals: none\n"
+            "- Prior findings supplied as filter: no\n"
+            "- Last fix commit: none",
+            1,
+        )
+        if skip_decl:
+            md = md.replace(
+                "- Panel mode: full",
+                "- Panel mode: full\n"
+                "- Stats sidecar: skipped (clear round)",
+                1,
+            )
+        return md
+
+    # RED: a dash-separated clean verdict with a nonzero counts row extracts
+    # the declared count (0 today: the early return fires first).
+    check(
+        "clean-round count masking: a dash-separated clean verdict with a nonzero | Medium+ staged | counts row extracts the declared count",
+        extract_medium_plus_count(
+            masking_md("0 unresolved blocking findings - clear round", "3")
+        )
+        == 3,
+    )
+    # RED: the canonical clean shape would STILL extract 0 under an
+    # early-return-only gate because its own `0 Medium+ findings` prose
+    # matches the prose-count regex; this canary forces the declared-count
+    # bypass.
+    check(
+        "clean-round count masking: the canonical clean shape with a nonzero | Medium+ staged | counts row extracts the declared count",
+        extract_medium_plus_count(
+            masking_md("0 Medium+ findings; clear round", "3")
+        )
+        == 3,
+    )
+    # RED: end-to-end, the contradictory doc must fail count conservation for
+    # BOTH clean separator shapes.
+    mask_failures = []
+    for label, verdict in (
+        ("canonical", "0 Medium+ findings; clear round"),
+        ("dash", "0 unresolved blocking findings - clear round"),
+    ):
+        res = validate_staging_file(
+            stage(
+                f"mask-e2e-{label}",
+                fresh_payload("2026-09-10"),
+                masking_md(verdict, "3"),
+            ),
+            hard=True,
+        )
+        mask_failures.append(
+            not res.ok and any("finding sections" in e for e in res.errors)
+        )
+    check(
+        "clean-round count masking: a clean verdict with a nonzero Medium+ staged counts row fails count conservation end-to-end",
+        all(mask_failures) and len(mask_failures) == 2,
+    )
+    # RED: the skip declaration no longer waives the sidecar when the counts
+    # row is nonzero (the staged count is now honestly 3).
+    result = validate_staging_file(
+        stage(
+            "mask-skip",
+            fresh_payload("2026-09-10"),
+            masking_md(
+                "0 unresolved blocking findings - clear round", "3",
+                skip_decl=True,
+            ),
+        ),
+        hard=True,
+    )
+    check(
+        "clean-round count masking: a stats-skip declaration no longer waives the sidecar when the counts row is nonzero",
+        not result.ok
+        and any(
+            "Stats sidecar: skipped is not allowed when Staged findings > 0"
+            in e
+            for e in result.errors
+        ),
+    )
+    # Characterization (GREEN before and after): a declared 0 row keeps the
+    # clean early return and the doc validates ok.
+    mask_zero = masking_md(
+        "0 unresolved blocking findings - clear round", "0"
+    )
+    check(
+        "clean-round count masking characterization: a counts row of 0 keeps the clean early return",
+        extract_medium_plus_count(mask_zero) == 0
+        and validate_staging_file(
+            stage("mask-zero", fresh_payload("2026-09-10"), mask_zero),
+            hard=True,
+        ).ok,
+    )
+    # Characterization (GREEN before and after): a non-clean verdict's prose
+    # count still wins over the counts row.
+    check(
+        "clean-round count masking characterization: verdict-prose count still wins over the counts row",
+        extract_medium_plus_count(
+            masking_md("2 Medium+ findings", "3")
+        )
+        == 2,
+    )
+    # Characterization (GREEN before and after): a clean verdict with no
+    # counts row still extracts 0.
+    check(
+        "clean-round count masking characterization: a dash-separated clean verdict with no counts row still extracts 0",
+        extract_medium_plus_count(
+            masking_md("0 unresolved blocking findings - clear round")
+        )
+        == 0,
+    )
+
     # vrs-freshness-value-gate-tails (Task 2): an empty-valued gated
     # Metadata label fails naming the label and the empty value (the
     # presence gate passes the line while every value gate stays silent).
@@ -8601,6 +10390,1321 @@ def _selftest_incident_shapes(root: Path, check) -> None:
     )
 
 
+def _selftest_sidecar_read_consolidation(root: Path, check) -> None:
+    """Family: one sidecar read per validation run and witness selection
+    encapsulated inside ``validate_stats_sidecar``
+    (vrs-freshness-witness-sidecar-read-consolidation).
+
+    RED-first family: the read-count fresh-doc leg and the payload-only
+    return shape fail until the consolidation lands; the missing-sidecar
+    and witness characterizations are GREEN regression pins."""
+    import json as _json
+
+    def stage(name: str, payload: dict, md: str) -> Path:
+        return _write_staging(
+            root, f"2026-07-17-branch-review-scr-{name}-r1.md", md, payload
+        )
+
+    def witness_md() -> str:
+        md = _version1_markdown()
+        md = md.replace(
+            "- Panel mode: full",
+            "- Panel mode: full\n"
+            "- Review mode: fresh-adversarial\n"
+            "- Changed-risk signals: none\n"
+            "- Prior findings supplied as filter: no\n"
+            f"- Last fix commit: {'a' * 64}",
+            1,
+        )
+        return md
+
+    def witness_payload() -> dict:
+        payload = _version1_payload()
+        payload["date"] = "2026-09-10"
+        payload["review_mode"] = "fresh-adversarial"
+        payload["risk_signals"] = []
+        payload["prior_findings_filter"] = False
+        payload["last_fix_commit"] = "a" * 64
+        return payload
+
+    def stage_postfence(name: str, payload: dict, md: str) -> Path:
+        return _write_staging(
+            root, f"2026-09-10-branch-review-scr-{name}-r1.md", md, payload
+        )
+
+    # RED: one hard run over a valid fresh doc reads and parses the sidecar
+    # exactly once (2 and 2 today: a silent fence pre-read plus the gate's
+    # own read). The skip shape already reads once; it must stay at one.
+    read_doc = stage("fresh", _version1_payload(), _version1_markdown())
+    skip_md = _version1_markdown().replace(
+        "1 Medium+ findings accepted for fix",
+        "0 Medium+ findings; clear round",
+    )
+    for bullet in ("- Findings: 1", "- Staged findings: 1"):
+        skip_md = "\n".join(
+            line
+            for line in skip_md.split("\n")
+            if line.strip() != bullet
+        )
+    skip_md = skip_md.replace(
+        "- Panel mode: full",
+        "- Panel mode: full\n- Stats sidecar: skipped (clear round)",
+        1,
+    )
+    skip_doc = stage("skip", _version1_payload(), skip_md)
+    read_counts = {}
+
+    def run_counted(path):
+        real_read = Path.read_text
+        real_loads = _json.loads
+        counts = {"reads": 0, "parses": 0}
+
+        def counting_read(self, *args, **kwargs):
+            if str(self).endswith(".stats.json"):
+                counts["reads"] += 1
+            return real_read(self, *args, **kwargs)
+
+        def counting_loads(*args, **kwargs):
+            counts["parses"] += 1
+            return real_loads(*args, **kwargs)
+
+        Path.read_text = counting_read
+        _json.loads = counting_loads
+        try:
+            return validate_staging_file(path, hard=True), counts
+        finally:
+            Path.read_text = real_read
+            _json.loads = real_loads
+
+    fresh_res, fresh_counts = run_counted(read_doc)
+    skip_res, skip_counts = run_counted(skip_doc)
+    read_counts["fresh"] = fresh_counts
+    read_counts["skip"] = skip_counts
+    check(
+        "sidecar read consolidation: one validate_staging_file run reads and parses the sidecar at most once",
+        read_counts["fresh"]["reads"] == 1
+        and read_counts["fresh"]["parses"] == 1
+        and fresh_res.ok
+        and read_counts["skip"]["reads"] == 1
+        and read_counts["skip"]["parses"] == 1
+        and skip_res.ok,
+    )
+
+    # RED (payload-shape half): the standalone gate returns the payload dict,
+    # not a (payload, schema) tuple; the invalid-JSON halves are GREEN
+    # regression pins on the named error and the no-exception contract.
+    ok_doc = stage("standalone", _version1_payload(), _version1_markdown())
+    ok_content = ok_doc.read_text(encoding="utf-8")
+    standalone_result = ValidationResult(ok_doc)
+    returned = validate_stats_sidecar(
+        ok_doc, ok_content, standalone_result
+    )
+    bad_dir = root / "scr-bad-json"
+    bad_dir.mkdir(exist_ok=True)
+    bad_doc = _write_staging(
+        bad_dir,
+        "2026-07-17-branch-review-scr-badjson-r1.md",
+        _version1_markdown(),
+        "{not json",
+    )
+    bad_result = ValidationResult(bad_doc)
+    bad_error_text = None
+    raised = False
+    try:
+        validate_stats_sidecar(
+            bad_doc,
+            _version1_markdown(),
+            bad_result,
+        )
+    except Exception:
+        raised = True
+    if bad_result.errors:
+        bad_error_text = bad_result.errors[0]
+    check(
+        "sidecar read consolidation: the standalone sidecar gate returns the payload and keeps its contract with no pre-read",
+        standalone_result.errors == []
+        and isinstance(returned, dict)
+        and not raised
+        and bad_error_text is not None
+        and "invalid stats sidecar JSON" in bad_error_text,
+    )
+
+    # Characterization (GREEN before and after): a missing sidecar reports
+    # only through its named gate; the fence stays silent (one error total).
+    # Plain fresh shape (Last fix commit: none): a Metadata real sha would
+    # arm the witness fallback and add a second error, which is today's
+    # separate contract, not this check.
+    none_md = witness_md().replace(
+        f"- Last fix commit: {'a' * 64}", "- Last fix commit: none"
+    )
+    none_payload = witness_payload()
+    none_payload["last_fix_commit"] = None
+    missing_doc = stage_postfence("missing", none_payload, none_md)
+    missing_doc.with_suffix(".stats.json").unlink(missing_ok=True)
+    missing_result = validate_staging_file(missing_doc, hard=True)
+    check(
+        "sidecar read consolidation: a missing sidecar reports only its named error",
+        len(missing_result.errors) == 1
+        and missing_result.errors[0]
+        == f"missing required stats sidecar: {missing_doc.with_suffix('.stats.json').name}",
+    )
+
+    # Characterization (GREEN before and after): the standalone gate does
+    # not enforce the witness-ledger shape (r1 F9 disposition; the
+    # readiness path depends on this exact shape).
+    witness_doc = stage_postfence("wit", witness_payload(), witness_md())
+    witness_content = witness_doc.read_text(encoding="utf-8")
+    wit_standalone = ValidationResult(witness_doc)
+    validate_stats_sidecar(witness_doc, witness_content, wit_standalone)
+    check(
+        "witness encapsulation: the standalone sidecar gate does not enforce the witness shape",
+        not any("Witness ledger" in e for e in wit_standalone.errors),
+    )
+
+    # Characterization (GREEN before and after): staging-time validation
+    # still enforces the witness shape, exactly once.
+    wit_staging = validate_staging_file(witness_doc, hard=True)
+    check(
+        "witness encapsulation: staging-time validation still enforces the witness shape exactly once",
+        not wit_staging.ok
+        and sum(
+            1 for e in wit_staging.errors if "Witness ledger" in e
+        )
+        == 1,
+    )
+
+
+def _coverage_fixture_payload(base_payload: dict, coverage: dict | None,
+                              *, verdict=None, date="2026-09-16",
+                              panel=None) -> dict:
+    payload = json.loads(json.dumps(base_payload))
+    payload["source_kind"] = "plan"
+    payload["date"] = date
+    payload["review_mode"] = "fresh-adversarial"
+    payload["risk_signals"] = []
+    payload["prior_findings_filter"] = False
+    payload["last_fix_commit"] = None
+    if panel is not None:
+        payload["panel"] = panel
+    if verdict is not None:
+        payload["verdict"] = verdict
+    if coverage is not None:
+        payload["coverage"] = coverage
+    else:
+        payload.pop("coverage", None)
+    return payload
+
+
+def _selftest_coverage_contract(root: Path, check) -> None:
+    """Family: the coverage contract gates (review-runner bounded-timeout
+    plan, Task 2). RED-first: the negative fixtures fail until
+    ``validate_coverage_contract`` and ``validate_replacement_links``
+    exist and are wired."""
+    base = _version1_payload()
+    lens_set = sorted(
+        {lens for lenses in REQUIRED_PANEL_LENSES.values() for lens in lenses}
+    )
+    clean_coverage = {
+        "outcome": "clean",
+        "material_lens_set": lens_set,
+        "completed": lens_set,
+        "missing": [],
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, clean_coverage),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: a valid post-constant clean fixture passes",
+        res.errors == [],
+    )
+
+    # Valid replacement-covered fixture: the original round is a real
+    # pre-constant sidecar on disk showing the replaced lens failed.
+    orig_md = _version1_markdown()
+    orig_payload = _coverage_fixture_payload(
+        base,
+        None,
+        date="2026-09-15",
+    )
+    orig_payload["panel"] = [
+        {
+            "worker": "testing",
+            "lenses": ["testing"],
+            "status": "timed-out",
+            "raw": 0,
+            "solo": 0,
+            "echo": 0,
+            "relaunch": "no",
+            "parent_worker": "none",
+            "descendant_launches": [],
+        }
+    ]
+    orig_path = _write_staging(
+        root,
+        "2026-09-15-branch-review-cov-orig-r1.md",
+        orig_md,
+        orig_payload,
+    )
+    remaining = [l for l in lens_set if l != "testing"]
+    repl_coverage = {
+        "outcome": "replacement-covered",
+        "material_lens_set": lens_set,
+        "completed": remaining,
+        "missing": [],
+        "replacement": [
+            {
+                "lens": "testing",
+                "original_artifact": str(orig_path),
+                "original_sidecar": str(orig_path.with_suffix(".stats.json")),
+                "original_failure": "provider-timeout after budget",
+            }
+        ],
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, repl_coverage, verdict="yes"),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: a valid replacement-covered fixture passes",
+        res.errors == [],
+    )
+
+    # Degraded outcome with verdict yes must fail.
+    res = ValidationResult(Path("x"))
+    degraded = dict(clean_coverage)
+    degraded["outcome"] = "degraded"
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, degraded, verdict="yes"),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: a degraded-outcome fixture with verdict yes fails",
+        any("verdict" in e for e in res.errors),
+    )
+
+    # Missing coverage on a post-constant plan record fails.
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, None),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: a post-constant plan record without coverage fails",
+        any("coverage" in e for e in res.errors),
+    )
+
+    # Unknown attempt key fails (structural sanitization).
+    bad_attempt = dict(clean_coverage)
+    bad_attempt["attempts"] = [
+        {
+            "attempt_id": "a1",
+            "started_at": "2026-09-16T10:00:00Z",
+            "deadline": "2026-09-16T10:15:00Z",
+            "outcome": "complete",
+            "attempt_number": 1,
+            "contributed_coverage": True,
+            "lenses": ["testing"],
+            "prompt": "leak",
+        }
+    ]
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, bad_attempt),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: an unknown attempt key fails",
+        any("unknown key" in e for e in res.errors),
+    )
+
+    # Late result flipping clean fails: a replacement entry plus a complete
+    # attempt for the same lens without contributed_coverage false.
+    late = dict(repl_coverage)
+    late["outcome"] = "clean"
+    late["attempts"] = [
+        {
+            "attempt_id": "late1",
+            "started_at": "2026-09-16T10:00:00Z",
+            "deadline": "2026-09-16T10:15:00Z",
+            "outcome": "complete",
+            "attempt_number": 1,
+            "lenses": ["testing"],
+        }
+    ]
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, late, verdict="yes"),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: a late-result complete attempt cannot flip the outcome to clean",
+        any("late-result" in e for e in res.errors)
+        and any("clean" in e and "replacement" in e for e in res.errors),
+    )
+
+    # Broken replacement link fails.
+    broken = json.loads(json.dumps(repl_coverage))
+    broken["replacement"][0]["original_artifact"] = "docs/reviews/none.md"
+    broken["replacement"][0]["original_sidecar"] = "docs/reviews/none.stats.json"
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, broken, verdict="yes"),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: a broken replacement link fails",
+        any("missing or unparseable" in e for e in res.errors),
+    )
+
+    # Under-declared material set with a timed-out panel row fails.
+    under = {
+        "outcome": "degraded",
+        "material_lens_set": ["testing"],
+        "completed": ["testing"],
+        "missing": [],
+    }
+    under_payload = _coverage_fixture_payload(
+        base,
+        under,
+        verdict="no",
+        panel=[
+            {
+                "worker": "risk",
+                "status": "timed-out",
+                "raw": 0,
+                "solo": 0,
+                "echo": 0,
+                "relaunch": "no",
+                "parent_worker": "none",
+                "descendant_launches": [],
+            }
+        ],
+    )
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(under_payload, res, coverage_exempt=False)
+    check(
+        "coverage contract: an under-declared material set with a timed-out panel row fails reconciliation",
+        any("reconciliation" in e for e in res.errors),
+    )
+
+    # Empty material set with launched workers fails.
+    empty_material = {
+        "outcome": "clean",
+        "material_lens_set": [],
+        "completed": [],
+        "missing": [],
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, empty_material),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: an empty material set with launched workers fails",
+        any("material_lens_set must be non-empty" in e for e in res.errors),
+    )
+
+    # A timed-out worker's lens placed in completed lacks evidence.
+    placed = dict(clean_coverage)
+    placed["material_lens_set"] = lens_set + ["extra-lens"]
+    placed["completed"] = lens_set + ["extra-lens"]
+    placed_payload = _coverage_fixture_payload(
+        base,
+        placed,
+        panel=[
+            {
+                "worker": "risk",
+                "status": "timed-out",
+                "raw": 0,
+                "solo": 0,
+                "echo": 0,
+                "relaunch": "no",
+                "parent_worker": "none",
+                "descendant_launches": [],
+            }
+        ],
+    )
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(placed_payload, res, coverage_exempt=False)
+    check(
+        "coverage contract: a timed-out worker lens placed in completed fails the evidence rule",
+        any("evidence" in e or "reconciliation" in e for e in res.errors),
+    )
+
+    # Mislabeled replacement-covered with an empty replacement[] fails.
+    mislabeled = dict(clean_coverage)
+    mislabeled["outcome"] = "replacement-covered"
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, mislabeled, verdict="yes"),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: a replacement-covered label with an empty replacement[] fails",
+        any("non-empty" in e for e in res.errors),
+    )
+
+    # Inherited link whose linked round shows the lens uncovered fails.
+    inh = {
+        "outcome": "clean",
+        "material_lens_set": lens_set,
+        "completed": lens_set,
+        "missing": [],
+        "inherited_coverage": [
+            {
+                "lens": "risk",
+                "artifact": str(orig_path),
+                "sidecar": str(orig_path.with_suffix(".stats.json")),
+            }
+        ],
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, inh),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: an inherited link whose linked round shows the lens uncovered fails",
+        any("inherited_coverage" in e and "covered" in e for e in res.errors),
+    )
+
+    # Replacement round narrowing the original material set fails: the
+    # original's missing lenses must survive into the replacing round's
+    # declared material set.
+    orig_missing_payload = _coverage_fixture_payload(
+        base,
+        {
+            "outcome": "degraded",
+            "material_lens_set": ["testing", "risk"],
+            "completed": [],
+            "missing": ["testing", "risk"],
+        },
+        verdict="no",
+        date="2026-09-16",
+    )
+    orig2 = _write_staging(
+        root,
+        "2026-09-16-branch-review-cov-orig2-r1.md",
+        _version1_markdown(),
+        orig_missing_payload,
+    )
+    narrowing = json.loads(json.dumps(repl_coverage))
+    narrowing["material_lens_set"] = ["testing"]
+    narrowing["completed"] = [l for l in remaining if l != "risk"]
+    narrowing["inherited_coverage"] = [
+        {
+            "lens": "risk",
+            "artifact": str(orig2),
+            "sidecar": str(orig2.with_suffix(".stats.json")),
+        }
+    ]
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, narrowing, verdict="yes"),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: a replacement round narrowing the original material set fails",
+        any("scope coupling" in e for e in res.errors),
+    )
+
+    # A panel row spelled `timeout` (documented Markdown spelling) fires
+    # the same reconciliation rule as `timed-out`.
+    spelled_payload = _coverage_fixture_payload(
+        base,
+        under,
+        verdict="no",
+        panel=[
+            {
+                "worker": "risk",
+                "status": "timeout",
+                "raw": 0,
+                "solo": 0,
+                "echo": 0,
+                "relaunch": "no",
+                "parent_worker": "none",
+                "descendant_launches": [],
+            }
+        ],
+    )
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(spelled_payload, res, coverage_exempt=False)
+    check(
+        "coverage contract: a timeout-spelled panel row fires the reconciliation rule",
+        any("reconciliation" in e for e in res.errors),
+    )
+
+    # A skipped-row focused round with its full declared material set
+    # complete passes (skipped rows never fire the reconciliation rule).
+    skipped_ok = {
+        "outcome": "clean",
+        "material_lens_set": ["testing"],
+        "completed": ["testing"],
+        "missing": [],
+        "attempts": [
+            {
+                "attempt_id": "skip1",
+                "started_at": "2026-09-16T10:00:00Z",
+                "deadline": "2026-09-16T10:15:00Z",
+                "outcome": "complete",
+                "attempt_number": 1,
+                "contributed_coverage": True,
+                "lenses": ["testing"],
+            }
+        ],
+        "retry_budget": {
+            "per_attempt_timeout_minutes": 15,
+            "per_worker_max": 2,
+        },
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(
+            base,
+            skipped_ok,
+            panel=[
+                {
+                    "worker": "testing",
+                    "lenses": ["testing"],
+                    "status": "skipped: zero accepted r2 findings owned",
+                    "raw": 0,
+                    "solo": 0,
+                    "echo": 0,
+                    "relaunch": "no",
+                    "parent_worker": "none",
+                    "descendant_launches": [],
+                }
+            ],
+        ),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: a skipped-row focused round with its full declared material set complete passes",
+        res.errors == [],
+    )
+
+    # A valid post-constant inherited link (linked round shows the lens
+    # covered in completed) passes.
+    linked_ok_payload = _coverage_fixture_payload(
+        base,
+        {
+            "outcome": "clean",
+            "material_lens_set": ["risk"],
+            "completed": ["risk"],
+            "missing": [],
+        },
+        date="2026-09-16",
+    )
+    linked_ok = _write_staging(
+        root,
+        "2026-09-16-branch-review-cov-linked-r1.md",
+        _version1_markdown(),
+        linked_ok_payload,
+    )
+    inh_ok = {
+        "outcome": "clean",
+        "material_lens_set": ["testing", "risk"],
+        "completed": ["testing"],
+        "missing": [],
+        "inherited_coverage": [
+            {
+                "lens": "risk",
+                "artifact": str(linked_ok),
+                "sidecar": str(linked_ok.with_suffix(".stats.json")),
+            }
+        ],
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, inh_ok),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: a valid post-constant inherited link passes",
+        res.errors == [],
+    )
+
+    # Straddle check (backdating arm): a sidecar dated pre-constant under a
+    # post-constant staging filename loses the exemption and the coverage
+    # obligation arms (r2 F1 regression fixtures for the fold-in checks).
+    straddle_payload = _coverage_fixture_payload(base, None, date="2026-09-15")
+    res = ValidationResult(Path("x"))
+    validate_version1_payload(
+        straddle_payload,
+        "",
+        res,
+        staging_name="2026-09-17-branch-review-cov-straddle-r1.md",
+    )
+    check(
+        "coverage contract: a backdated sidecar date under a post-constant filename loses the grandfathering exemption",
+        any("cannot be claimed by a backdated sidecar date" in e for e in res.errors)
+        and any(
+            "missing the required 'coverage' object" in e for e in res.errors
+        ),
+    )
+    # Straddle check (disagreement arm): pre-constant filename + post-constant
+    # sidecar date fails as a date disagreement.
+    res = ValidationResult(Path("x"))
+    validate_version1_payload(
+        _coverage_fixture_payload(base, clean_coverage),
+        "",
+        res,
+        staging_name="2026-09-15-branch-review-cov-straddle2-r1.md",
+    )
+    check(
+        "coverage contract: a pre-constant filename with a post-constant sidecar date fails as a date disagreement",
+        any("date disagreement" in e for e in res.errors),
+    )
+
+
+def _selftest_coverage_readiness_gate(root: Path, check) -> None:
+    """Family: the coverage gates end to end through
+    ``validate_staging_file`` (review-runner bounded-timeout plan, Task 2):
+    the readiness-facing path rejects degraded-with-yes, missing coverage,
+    and Markdown/sidecar disagreement, and accepts a clean record."""
+    base_md = _version1_markdown()
+    base = _version1_payload()
+    lens_set = sorted(
+        {lens for lenses in REQUIRED_PANEL_LENSES.values() for lens in lenses}
+    )
+    clean_coverage = {
+        "outcome": "clean",
+        "material_lens_set": lens_set,
+        "completed": lens_set,
+        "missing": [],
+    }
+
+    def fixture_md(coverage_outcome: str) -> str:
+        md = base_md.replace(
+            "- Panel mode: full",
+            "- Panel mode: full\n"
+            "- Review mode: fresh-adversarial\n"
+            "- Changed-risk signals: none\n"
+            "- Prior findings supplied as filter: no\n"
+            "- Last fix commit: none\n"
+            f"- Coverage: {coverage_outcome}",
+            1,
+        )
+        marker = "### Deduplication groups"
+        ledger = (
+            "### Attempt ledger\n\n"
+            "| attempt | worker | outcome | contributed_coverage |\n"
+            "|---|---|---|---|\n"
+        )
+        return md.replace(marker, ledger + marker, 1)
+
+    def stage_coverage(
+        name: str, coverage: dict | None, coverage_outcome: str, verdict=None
+    ) -> Path:
+        payload = _coverage_fixture_payload(
+            base, coverage, verdict=verdict, date="2026-09-16"
+        )
+        return _write_staging(
+            root,
+            f"2026-09-16-branch-review-covgate-{name}-r1.md",
+            fixture_md(coverage_outcome),
+            payload,
+        )
+
+    ok_path = stage_coverage("clean", clean_coverage, "clean")
+    res = validate_staging_file(ok_path, hard=True)
+    check(
+        "coverage readiness gate: a valid clean post-constant record passes hard",
+        res.ok,
+    )
+
+    degraded = dict(clean_coverage)
+    degraded["outcome"] = "degraded"
+    degraded["missing"] = ["risk"]
+    degraded_path = stage_coverage(
+        "degraded-yes", degraded, "degraded", verdict="yes"
+    )
+    res = validate_staging_file(degraded_path, hard=True)
+    check(
+        "coverage readiness gate: a degraded outcome with verdict yes fails hard",
+        not res.ok and any("verdict" in e for e in res.errors),
+    )
+
+    missing_path = stage_coverage("missing", None, "clean")
+    res = validate_staging_file(missing_path, hard=True)
+    check(
+        "coverage readiness gate: a post-constant plan record without coverage fails hard",
+        not res.ok
+        and any(
+            "missing the required 'coverage' object" in e
+            for e in res.errors
+        ),
+    )
+
+    disagree = json.loads(json.dumps(clean_coverage))
+    disagree["outcome"] = "degraded"
+    disagree["missing"] = ["risk"]
+    disagree_path = stage_coverage(
+        "disagree", disagree, "clean", verdict="no"
+    )
+    res = validate_staging_file(disagree_path, hard=True)
+    check(
+        "coverage readiness gate: a Markdown/sidecar coverage disagreement fails hard",
+        not res.ok
+        and any("coverage disagreement" in e for e in res.errors),
+    )
+
+
+def _coverage_stage(root: Path, name: str, payload: dict, md: str) -> Path:
+    return _write_staging(
+        root, f"2026-09-16-branch-review-cov6-{name}-r1.md", md, payload
+    )
+
+
+def _coverage_md_with_ledger(outcome: str, attempt_rows: int = 0) -> str:
+    md = _version1_markdown().replace(
+        "- Panel mode: full",
+        "- Panel mode: full\n"
+        "- Review mode: fresh-adversarial\n"
+        "- Changed-risk signals: none\n"
+        "- Prior findings supplied as filter: no\n"
+        "- Last fix commit: none\n"
+        f"- Coverage: {outcome}",
+        1,
+    )
+    rows = "".join(
+        f"| a{i} | testing | complete | yes |\n" for i in range(1, attempt_rows + 1)
+    )
+    ledger = (
+        "### Attempt ledger\n\n"
+        "| attempt | worker | outcome | contributed_coverage |\n"
+        "|---|---|---|---|\n" + rows
+    )
+    return md.replace("### Deduplication groups", ledger + "### Deduplication groups", 1)
+
+
+def _selftest_replacement_and_late_results(root: Path, check) -> None:
+    """Family: replacement linkage and late-result classes across the
+    backlog acceptance-criterion matrix (review-runner bounded-timeout
+    plan, Task 6), asserted end to end through ``validate_staging_file``."""
+    base = _version1_payload()
+    lens_set = sorted(
+        {lens for lenses in REQUIRED_PANEL_LENSES.values() for lens in lenses}
+    )
+
+    def post_constant_original(name: str, missing: list[str]) -> Path:
+        payload = _coverage_fixture_payload(
+            base,
+            {
+                "outcome": "degraded",
+                "material_lens_set": missing + ["testing"],
+                "completed": ["testing"],
+                "missing": missing,
+            },
+            verdict="no",
+            date="2026-09-16",
+            panel=[
+                {
+                    "worker": "risk",
+                    "lenses": missing,
+                    "status": "timed-out",
+                    "raw": 0,
+                    "solo": 0,
+                    "echo": 0,
+                    "relaunch": "no",
+                    "parent_worker": "none",
+                    "descendant_launches": [],
+                }
+            ],
+        )
+        return _write_staging(
+            root,
+            f"2026-09-16-branch-review-cov6-{name}-orig-r1.md",
+            _version1_markdown(),
+            payload,
+        )
+
+    def replacing_round(name: str, orig: Path, orig_missing: list[str]):
+        remaining = [l for l in lens_set if l not in orig_missing]
+        coverage = {
+            "outcome": "replacement-covered",
+            "material_lens_set": lens_set,
+            "completed": remaining,
+            "missing": [],
+            "replacement": [
+                {
+                    "lens": orig_missing[0],
+                    "original_artifact": str(orig),
+                    "original_sidecar": str(orig.with_suffix(".stats.json")),
+                    "original_failure": "provider-timeout after budget exhausted",
+                }
+            ],
+        }
+        payload = _coverage_fixture_payload(
+            base, coverage, verdict="yes", date="2026-09-16"
+        )
+        return payload, _coverage_stage(root, name, payload, _coverage_md_with_ledger("replacement-covered"))
+
+    # Exhausted timeout followed by a valid replacement round passes.
+    orig1 = post_constant_original("repl", ["security"])
+    payload, path = replacing_round("repl-ok", orig1, ["security"])
+    res = validate_staging_file(path, hard=True)
+    check(
+        "replacement and late results: an exhausted timeout followed by a valid replacement round passes",
+        res.ok,
+    )
+
+    # Timeout with no replacement records missing and degrades to verdict no.
+    degraded = {
+        "outcome": "degraded",
+        "material_lens_set": lens_set,
+        "completed": [l for l in lens_set if l != "testing"],
+        "missing": ["testing"],
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, degraded, verdict="no"),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "replacement and late results: a timeout with no replacement records missing and outcome degraded",
+        res.errors == [],
+    )
+
+    # A late original complete attempt carries contributed_coverage false
+    # and cannot flip the outcome to clean (fixture with contributing late
+    # attempt fails both the late-result rule and the clean-forbids-
+    # replacement rule).
+    late = json.loads(json.dumps(payload))
+    late["coverage"]["outcome"] = "clean"
+    late["coverage"]["attempts"] = [
+        {
+            "attempt_id": "late1",
+            "started_at": "2026-09-16T10:00:00Z",
+            "deadline": "2026-09-16T10:15:00Z",
+            "outcome": "complete",
+            "attempt_number": 1,
+            "lenses": ["security"],
+        }
+    ]
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(late, res, coverage_exempt=False)
+    check(
+        "replacement and late results: a late original complete attempt cannot flip the outcome to clean",
+        any("late-result" in e for e in res.errors)
+        and any("clean" in e and "replacement" in e for e in res.errors),
+    )
+
+    # A replacement linked to a pre-constant original is accepted on the
+    # recorded original_failure.
+    pre_orig = _write_staging(
+        root,
+        "2026-09-15-branch-review-cov6-pre-orig-r1.md",
+        _version1_markdown(),
+        _coverage_fixture_payload(base, None, date="2026-09-15"),
+    )
+    pre_coverage = {
+        "outcome": "replacement-covered",
+        "material_lens_set": lens_set,
+        "completed": [l for l in lens_set if l != "risk"],
+        "missing": [],
+        "replacement": [
+            {
+                "lens": "security",
+                "original_artifact": str(pre_orig),
+                "original_sidecar": str(pre_orig.with_suffix(".stats.json")),
+                "original_failure": "worker timed out twice (pre-constant round)",
+            }
+        ],
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, pre_coverage, verdict="yes"),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "replacement and late results: a replacement linked to a pre-constant original is accepted on the recorded original_failure",
+        res.errors == [],
+    )
+
+    # Malformed-output and deterministic parse-failure classes have a
+    # dedicated fixture: failure classes recorded, not retried.
+    malformed = {
+        "outcome": "degraded",
+        "material_lens_set": ["testing"],
+        "completed": [],
+        "missing": ["testing"],
+        "attempts": [
+            {
+                "attempt_id": "m1",
+                "started_at": "2026-09-16T10:00:00Z",
+                "deadline": "2026-09-16T10:15:00Z",
+                "outcome": "malformed-output",
+                "failure_class": "parse-failure",
+                "attempt_number": 1,
+                "lenses": ["testing"],
+                "usage_state": "available",
+                "admission_state": "admitted",
+            }
+        ],
+        "retry_budget": {
+            "per_attempt_timeout_minutes": 15,
+            "per_worker_max": 2,
+            "exhausted": False,
+        },
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, malformed, verdict="no"),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "replacement and late results: a malformed-output attempt with a recorded parse-failure class validates as degraded",
+        res.errors == [],
+    )
+
+    # Markdown/sidecar coverage disagreement fails end to end.
+    disagree = json.loads(json.dumps(payload))
+    disagree["coverage"] = {
+        "outcome": "clean",
+        "material_lens_set": lens_set,
+        "completed": lens_set,
+        "missing": [],
+    }
+    disagree_doc = _coverage_stage(
+        root, "disagree", disagree, _coverage_md_with_ledger("degraded")
+    )
+    res = validate_staging_file(disagree_doc, hard=True)
+    check(
+        "replacement and late results: a markdown/sidecar coverage disagreement fails",
+        not res.ok
+        and any("coverage disagreement" in e for e in res.errors),
+    )
+
+
+def _selftest_capacity_admission_lifecycle(root: Path, check) -> None:
+    """Family: usage-state versus admission-state separation and the
+    local-execution equivalence arm (review-runner bounded-timeout plan,
+    Task 6; backlog acceptance criterion 14)."""
+    base = _version1_payload()
+
+    def lifecycle(usage_state: str) -> dict:
+        return {
+            "outcome": "degraded",
+            "material_lens_set": ["testing"],
+            "completed": [],
+            "missing": ["testing"],
+            "attempts": [
+                {
+                    "attempt_id": "cap1",
+                    "started_at": "2026-09-16T10:00:00Z",
+                    "deadline": "2026-09-16T10:15:00Z",
+                    "outcome": "failed",
+                    "failure_class": "capacity-denied",
+                    "usage_state": usage_state,
+                    "admission_state": "denied",
+                    "admission_error_class": "capacity-denied",
+                    "attempt_number": 1,
+                    "lenses": ["testing"],
+                }
+            ],
+            "retry_budget": {
+                "per_attempt_timeout_minutes": 15,
+                "per_worker_max": 2,
+            },
+        }
+
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(
+            base, lifecycle("available"), verdict="no"
+        ),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "capacity admission lifecycle: an attempt with usage available and admission denied capacity-denied validates",
+        res.errors == [],
+    )
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(
+            base, lifecycle("exhausted"), verdict="no"
+        ),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "capacity admission lifecycle: the same record claiming usage exhausted fails the contradiction gate",
+        any("never as usage exhaustion" in e for e in res.errors),
+    )
+
+    # A stale-release-suspected lifecycle record stops at the boundary:
+    # the attempt records the class without any usage-exhaustion or
+    # release claim, and validates.
+    stale = {
+        "outcome": "degraded",
+        "material_lens_set": ["testing"],
+        "completed": [],
+        "missing": ["testing"],
+        "attempts": [
+            {
+                "attempt_id": "stale1",
+                "started_at": "2026-09-16T10:00:00Z",
+                "deadline": "2026-09-16T10:15:00Z",
+                "outcome": "failed",
+                "failure_class": "stale-release-suspected",
+                "usage_state": "unknown",
+                "admission_state": "unknown",
+                "admission_error_class": "stale-release-suspected",
+                "attempt_number": 1,
+                "lenses": ["testing"],
+            }
+        ],
+        "retry_budget": {
+            "per_attempt_timeout_minutes": 15,
+            "per_worker_max": 2,
+        },
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, stale, verdict="no"),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "capacity admission lifecycle: a stale-release-suspected lifecycle record validates without a release claim",
+        res.errors == [],
+    )
+
+    # A minimal-worker complete attempt after a full-panel capacity-blocked
+    # launch validates without attributing usage exhaustion.
+    minimal = {
+        "outcome": "clean",
+        "material_lens_set": ["testing"],
+        "completed": ["testing"],
+        "missing": [],
+        "attempts": [
+            {
+                "attempt_id": "min1",
+                "started_at": "2026-09-16T10:00:00Z",
+                "deadline": "2026-09-16T10:15:00Z",
+                "outcome": "complete",
+                "attempt_number": 1,
+                "contributed_coverage": True,
+                "lenses": ["testing"],
+                "usage_state": "available",
+                "admission_state": "admitted",
+            }
+        ],
+        "retry_budget": {
+            "per_attempt_timeout_minutes": 15,
+            "per_worker_max": 2,
+        },
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, minimal),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "capacity admission lifecycle: a minimal complete attempt after a capacity-blocked launch validates without usage attribution",
+        res.errors == [],
+    )
+
+    # Local-execution equivalence: a fully evidenced local attempt
+    # contributes coverage; one missing evidence does not.
+    local_dir = root / "cov6-local"
+    local_dir.mkdir(exist_ok=True)
+    local_doc = _write_staging(
+        local_dir,
+        "2026-09-16-branch-review-cov6-local-orig-r1.md",
+        _version1_markdown(),
+        _coverage_fixture_payload(base, None, date="2026-09-16"),
+    )
+    local_evidence = {
+        "prompt_scope": "testing lens only, narrowed evidence fields",
+        "artifact": str(local_doc),
+        "sidecar": str(local_doc.with_suffix(".stats.json")),
+    }
+    local_ok = {
+        "outcome": "clean",
+        "material_lens_set": ["testing"],
+        "completed": ["testing"],
+        "missing": [],
+        "attempts": [
+            {
+                "attempt_id": "loc1",
+                "started_at": "2026-09-16T10:00:00Z",
+                "deadline": "2026-09-16T10:15:00Z",
+                "outcome": "complete",
+                "attempt_number": 1,
+                "contributed_coverage": True,
+                "execution_mode": "local",
+                "lenses": ["testing"],
+                **local_evidence,
+            }
+        ],
+        "retry_budget": {
+            "per_attempt_timeout_minutes": 15,
+            "per_worker_max": 2,
+        },
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, local_ok),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "capacity admission lifecycle: a fully evidenced local-mode attempt contributes coverage and validates",
+        res.errors == [],
+    )
+    local_bad = json.loads(json.dumps(local_ok))
+    del local_bad["attempts"][0]["sidecar"]
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, local_bad),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "capacity admission lifecycle: a local attempt missing its sidecar evidence fails to contribute coverage",
+        any("local-mode attempt" in e for e in res.errors),
+    )
+
+
+def _selftest_prompt_scope_accounting(root: Path, check) -> None:
+    """Family: bounded-attempt accounting - per-attempt deadlines,
+    attempt_number range, budget exhaustion reason, and the required-field
+    negative arms (review-runner bounded-timeout plan, Task 6; backlog
+    acceptance criterion 11)."""
+    base = _version1_payload()
+
+    def attempts_fixture(attempts: list[dict], retry_budget: dict) -> dict:
+        return {
+            "outcome": "degraded",
+            "material_lens_set": ["testing"],
+            "completed": [],
+            "missing": ["testing"],
+            "attempts": attempts,
+            "retry_budget": retry_budget,
+        }
+
+    good_budget = {
+        "per_attempt_timeout_minutes": 15,
+        "per_worker_max": 2,
+    }
+    two_attempts = [
+        {
+            "attempt_id": "b1",
+            "started_at": "2026-09-16T10:00:00Z",
+            "deadline": "2026-09-16T10:15:00Z",
+            "outcome": "timeout",
+            "failure_class": "provider-timeout",
+            "attempt_number": 1,
+            "lenses": ["testing"],
+        },
+        {
+            "attempt_id": "n1",
+            "started_at": "2026-09-16T10:16:00Z",
+            "deadline": "2026-09-16T10:31:00Z",
+            "outcome": "complete",
+            "attempt_number": 2,
+            "contributed_coverage": False,
+            "lenses": ["testing"],
+        },
+    ]
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(
+            base,
+            attempts_fixture(two_attempts, good_budget),
+            verdict="no",
+        ),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "prompt scope accounting: two independent bounded attempts for one worker validate with per-attempt deadlines",
+        res.errors == [],
+    )
+    exhausted_no_reason = attempts_fixture(two_attempts, {
+        "per_attempt_timeout_minutes": 15,
+        "per_worker_max": 2,
+        "exhausted": True,
+    })
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(
+            base, exhausted_no_reason, verdict="no"
+        ),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "prompt scope accounting: budget exhausted true without a retryable exhaustion reason fails",
+        any("exhaustion_reason" in e for e in res.errors),
+    )
+    negative_cases = [
+        (
+            "an attempt missing its deadline fails",
+            {"attempt_id": "n1", "started_at": "2026-09-16T10:00:00Z",
+             "outcome": "timeout", "failure_class": "provider-timeout",
+             "attempt_number": 1},
+        ),
+        (
+            "an attempt_number above per_worker_max + 1 fails",
+            {"attempt_id": "n1", "started_at": "2026-09-16T10:00:00Z",
+             "deadline": "2026-09-16T10:15:00Z", "outcome": "timeout",
+             "failure_class": "provider-timeout", "attempt_number": 4},
+        ),
+        (
+            "an elapsed exceeding per_attempt_timeout_minutes fails",
+            {"attempt_id": "n1", "started_at": "2026-09-16T10:00:00Z",
+             "deadline": "2026-09-16T10:15:00Z", "elapsed": 20,
+             "outcome": "timeout", "failure_class": "provider-timeout",
+             "attempt_number": 1},
+        ),
+        (
+            "a failed outcome without a failure_class fails",
+            {"attempt_id": "n1", "started_at": "2026-09-16T10:00:00Z",
+             "deadline": "2026-09-16T10:15:00Z", "outcome": "failed",
+             "attempt_number": 1},
+        ),
+    ]
+    for title, attempt in negative_cases:
+        res = ValidationResult(Path("x"))
+        validate_coverage_contract(
+            _coverage_fixture_payload(
+                base,
+                attempts_fixture([attempt], good_budget),
+                verdict="no",
+            ),
+            res,
+            coverage_exempt=False,
+        )
+        check(
+            f"prompt scope accounting: {title}",
+            res.errors != [],
+        )
+
+
 def run_selftest() -> int:
     import tempfile
 
@@ -8622,12 +11726,37 @@ def run_selftest() -> int:
             ("source_cli", _selftest_source_cli),
             ("discarded_header_skip", _selftest_discarded_header_skip),
             ("versioned_schema_and_patterns", _selftest_versioned_schema_and_patterns),
+            (
+                "address_fanout_contract",
+                _selftest_address_fanout_contract,
+            ),
             ("usage_optional", _selftest_usage_optional),
             (
                 "extended_sidecar_freshness",
                 _selftest_extended_sidecar_freshness,
             ),
             ("incident_shapes", _selftest_incident_shapes),
+            (
+                "sidecar_read_consolidation",
+                _selftest_sidecar_read_consolidation,
+            ),
+            ("coverage_contract", _selftest_coverage_contract),
+            (
+                "coverage_readiness_gate",
+                _selftest_coverage_readiness_gate,
+            ),
+            (
+                "replacement_and_late_results",
+                _selftest_replacement_and_late_results,
+            ),
+            (
+                "capacity_admission_lifecycle",
+                _selftest_capacity_admission_lifecycle,
+            ),
+            (
+                "prompt_scope_accounting",
+                _selftest_prompt_scope_accounting,
+            ),
         ):
             fn(root, check)
 

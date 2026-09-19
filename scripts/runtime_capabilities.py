@@ -341,6 +341,58 @@ def validate_policy_token(
     return True
 
 
+def normalize_batch_progress(raw: Any) -> dict[str, Any] | None:
+    """Validate the optional batch member-progress envelope; fail closed.
+
+    A batch implement launch receipt may carry one envelope naming its
+    batch id, member id and ordinal, attempt, and anchor session id. An
+    absent envelope (``None``) is legitimate because the batch opt-in is
+    optional; anything present but partial or mistyped raises
+    ``ValueError`` so callers fail closed instead of guessing.
+    """
+
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ValueError("batch progress envelope must be a mapping")
+    progress: dict[str, Any] = {}
+    for field in ("batch_id", "member_id", "session_id"):
+        value = raw.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"batch progress {field} must be a non-empty string")
+        progress[field] = value
+    for field in ("member_ordinal", "attempt"):
+        value = raw.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"batch progress {field} must be a positive integer")
+        progress[field] = value
+    return progress
+
+
+def validate_member_receipt(receipt: Any, expected: Mapping[str, Any]) -> bool:
+    """True only when a member receipt names exactly the expected active member.
+
+    ``expected`` carries the active group state: ``batch_id``, ``member_id``,
+    ``member_ordinal``, and ``attempt``. Missing, stale, mismatched,
+    cross-member, or malformed receipts return False; only an exact
+    active-member match succeeds. The envelope carries no credential (r1
+    F3): a normalized batch_progress envelope can never carry a claim
+    token, and the outer receipt's claim token is the authorization input,
+    verified by the driver's checkpoint fence before this validator runs.
+    """
+
+    try:
+        progress = normalize_batch_progress(receipt)
+    except (TypeError, ValueError):
+        return False
+    if progress is None:
+        return False
+    for field in ("batch_id", "member_id", "member_ordinal", "attempt"):
+        if progress[field] != expected.get(field):
+            return False
+    return True
+
+
 def approval_policy_fingerprint(config_path: Path | str) -> str:
     """Compute the stable fingerprint of a recorded non-interactive approval policy.
 

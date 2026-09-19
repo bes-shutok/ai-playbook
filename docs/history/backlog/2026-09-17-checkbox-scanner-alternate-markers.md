@@ -1,0 +1,6 @@
+# Backlog: execute-plan checkbox scanner alternate GFM task-item markers
+
+Status: open
+Origin: execution review r1 (2026-09-17) of docs/plans/2026-09-16-execute-plan-integrity-quad.md, finding CC-3 (correctness lens, Low, non-blocking)
+
+The execute-plan runtime driver's two unchecked-checkbox gates (`_unchecked_checkbox_lines`, shared by the readiness plan-manifest agreement scan and the `mark_terminal` terminal predicate) recognize only `- [ ]` list items. GFM task list items may also be written with `* [ ]` or `+ [ ]` bullet markers; a plan (or archived plan) using those markers escapes both gates, so a progressed task with an unchecked `* [ ]` line reports agreement and a plan full of `* [ ]` items can pass the terminal predicate. Risk is low: the repository canon (plans skill format and every existing plan fixture) is `- [ ]`, and the line-anchored reading is plan-spec-compliant as shipped. If widened, keep the line-anchored predicate (first non-whitespace token is one of `- [ ]`, `* [ ]`, `+ [ ]`) and update both the driver scan and the contract wording (`runtime-contract.md` terminal predicate and readiness condition 3) in the same change; the sentence fragments pinned by tests (`line <N>:` evidence) must stay stable.

@@ -616,6 +616,7 @@ api-design-principles/
 - ✅ Use lowercase-with-hyphens for names
 - ✅ Place skills under the shared catalog (`agents/skills/` in `skills_repo_path`) and sync mirrors
 - ✅ Write agent-agnostic skills; describe required capabilities (WHAT) without prescribing specific tool implementations (HOW)
+- ✅ When a rule family only implements a subset of harnesses, declare the supported set and skip outside it (`agent_workflow_guidelines.md` §14.3); do not hardcode product-specific exceptions
 
 ### DON'T:
 - ❌ Write vague descriptions without triggers
@@ -627,6 +628,7 @@ api-design-principles/
 - ❌ Mix details with essentials
 - ❌ Hardcode tool references; describe capabilities instead (sub-agent execution, draft-save integration, structured user choice)
 - ❌ Name vendor-specific tools or UI (`AskQuestion`, `Task`, MCP wire names, IDE hook paths) inside skills; optional enforcement belongs in user `AGENTS.md` / IDE config, not skill bodies
+- ❌ Special-case one unsupported harness in skill or backlog prose when the real rule is "not in the supported set"
 
 ## Security Considerations
 

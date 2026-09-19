@@ -3,8 +3,11 @@ name: done
 description: >
   Finalize a development session by running the learn workflow to capture lessons, then committing
   all uncommitted changes across all repositories (project, skills, docs/facts). Use when the user
-  signals a session is complete (e.g. "done", "commit", "wrap up"). This is the only skill that
-  performs git commits, other skills (learn, review, etc.) make file changes but never commit.
+  signals a session is complete (e.g. "done", "commit", "wrap up").
+  This skill owns all git commits except learn's own learn-authored skills-repo artifacts
+  (learn Step 1.8 and the learn skill-placement commit workflow; artifacts learn reported as
+  failed may be staged by Step 4 after asking) and the docs-branch skill's
+  orphan-branch commits; other skills (review, etc.) make file changes but never commit.
 ---
 
 # Done
@@ -31,7 +34,7 @@ Before Step 0, inventory every repository touched by the task from tool activity
 
 | Key | Purpose | Fallback |
 |-----|---------|----------|
-| `skills_repo_path` | Path to the skills repository | `~/.agents/scripts/commit-skills.sh` default |
+| `skills_repo_path` | Path to the skills repository | ask the user |
 | `done_lock_script` | Per-repo done lock script | `~/.ai-playbook/scripts/done-lock.sh` |
 | `confluence_mirror_hygiene_script` | Confluence mirror validate + ephemeral tmp cleanup | `~/.ai-playbook/scripts/confluence-mirror-hygiene.sh` |
 | `doc_registry_validator_script` | Document registry integrity + immutable-path write gate | `~/.ai-playbook/scripts/doc_registry_validator.py` |
@@ -47,6 +50,8 @@ Agent wait budget for Step 0 (override for local testing):
 ```bash
 "${DONE_LOCK_AGENT_MAX_WAIT_SECS:-90}"
 ```
+
+Before Step 0, in a repository that resolves the maintenance skill, run the rearm-on-touch check defined in the maintenance skill's Step 0 and follow its darkness classification.
 
 ## Step 0: Acquire project done lock
 
@@ -77,22 +82,25 @@ Parallel agent sessions on the **same git repository** must not run `learn`, `do
    fi
    ```
 
-   Install a trap in the controlling shell immediately after the successful
-   acquire so an interrupted same-shell run attempts token-fenced release:
+   Choose the lock-holding variant by shell mode:
 
-   ```bash
-   trap 'status=$?; if [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]]; then DONE_LOCK_DIR="$DONE_LOCK_DIR" DONE_LOCK_TOKEN="$DONE_LOCK_TOKEN" "$LOCK_SCRIPT" release-repo || true; fi; exit "$status"' EXIT INT TERM
-   ```
+   - **Variant A, persistent controlling shell:** install the trap in the controlling shell immediately after the successful acquire (the existing trap snippet stays here) so an interrupted same-shell run attempts token-fenced release. The trap is a safety net, not a substitute for the explicit Step 6 release.
 
-   The trap is a safety net, not a substitute for the explicit Step 6 release.
+     ```bash
+     trap 'status=$?; if [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]]; then DONE_LOCK_DIR="$DONE_LOCK_DIR" DONE_LOCK_TOKEN="$DONE_LOCK_TOKEN" "$LOCK_SCRIPT" release-repo || true; fi; exit "$status"' EXIT INT TERM
+     ```
+
+   - **Variant B, one-shot shell calls:** never install the exit trap in the acquiring call; the acquiring shell exits when the call ends and the trap would release the lock while the workflow continues. Retain `DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` in session context from the acquire output (Step 0 item 3), and the run must reach the Step 6 release on every exit path (completion, failure, or blocked). When a long-lived process is identifiable (for example the agent runtime), pin DONE_LOCK_HOLDER_PID to a long-lived process so dead-holder recovery cannot reclaim the lock mid-run after the grace period.
+
+   **Interruption cleanup for both variants:** Variant A's trap attempts release on interrupt; in Variant B the lock intentionally survives the call, cleanup is the explicit Step 6 release from session context, and when the session itself died the operator escapes are `status` plus `stale-clean` per Step 0 item 5.
 
 3. Keep `DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` in scope when the same shell session runs multiple steps. **Across separate Shell tool calls**, re-export both values from your Step 0 acquire stdout (chat context). The file `<repo>/.ai-playbook/done-lock.session` is a **fence/status** signal only; Step 6 `release-repo` requires env vars and will **not** source that file (confused-deputy guard after stale-clean / peer acquire).
 4. If **wait-acquire** times out, run `status`, report the holder (`label`, `age_secs`, `holder_pid`, `holder_alive`, `stealable` / `abandoned`), return `blocked`, and **do not** commit. Do not bypass an active lock. Do **not** run `stale-clean` unless `status` shows the lock is stale/abandoned **and** you intend to take over; after `stale-clean`, only the chat that successfully re-acquires may release (using that acquire's token).
 5. **Stealable locks** (auto-stolen on the next `acquire` / `wait-acquire` poll):
    - **Stale:** age ≥ `DONE_LOCK_STALE_SECS` (default 1800 = 30m) permits explicit `stale-clean`; age alone does not authorize automatic takeover.
-   - **Abandoned:** lock metadata records a holder PID and process identity, independent process-table verification says that holder is dead, the `DONE_LOCK_DEAD_HOLDER_GRACE_SECS` grace period has elapsed, and there is no matching `<repo>/.ai-playbook/done-lock.session`.
+   - **Abandoned:** lock metadata records a holder PID and process identity, independent process-table verification says that holder is dead, and the `DONE_LOCK_DEAD_HOLDER_GRACE_SECS` grace period has elapsed. A matching `<repo>/.ai-playbook/done-lock.session` does not prevent reclaiming a verified-dead holder.
    - **Blocked recovery:** a live holder with a missing or invalid fence, a reused PID, or an ambiguous holder identity is never auto-stolen.
-   - **Session fence:** a dead `holder_pid` with a live matching session file is **not** auto-stealable, even after stale TTL (normal after one-shot Shell tool exits). Operator escape: `stale-clean` may remove a fenced lock when it is also stale. Step 6 releases only with the env token from **your** acquire.
+   - **Session fence:** the session file is a fence/status signal, not proof that its owner is alive. A verified-dead `holder_pid` is auto-reclaimed after the dead-holder grace period even when the matching session file remains (normal after one-shot Shell tool exits). A live or ambiguous holder remains protected, and `stale-clean` is the operator escape for stale locks without a verified-dead owner. Step 6 releases only with the env token from **your** acquire.
 6. Optional: pass a richer `--label` (plan slug, task id, review round) when the orchestrator provides context.
 
 **After the lock is acquired, immediately continue to Step 1.** Do not run learn, docs-branch, or project commits before Step 0 succeeds.
@@ -115,6 +123,8 @@ Keep the echoed marker path in chat context; Step 1.5 (anchor discrimination) an
 ## Step 1: Run Learn
 
 Invoke the `learn` skill now to extract lessons and update the documentation corpus before committing.
+
+**Learn-owned commits in this step:** learn may commit its own skills-repo artifacts during this step (its Step 1.8 backlog items and skill-placement edits); that is expected and does not double-commit, because Step 4 sees only non-learn leftovers and no-ops when clean.
 
 **If `learn` reports a blocked state** (Step 6.6 user-corpus violation: a strict-tagged `UL#N` lesson is missing its `**Principle:** Family X` tag, or the gate script returned non-zero on the adopted corpus), release the lock via Step 6 and return `blocked` WITHOUT proceeding to Step 2 commit. `learn` is invoked here as a SKILL (a sub-procedure), not as a subprocess whose exit code this step checks, so the gate's block decision lives in `learn`'s Step 6.6 text and propagates here through `learn`'s returned state. The operator fixes the user corpus out-of-band (classify the listed `UL#N` via learn/generalize, or run `lessons_adopt.py --tag-unclassified <user_corpus>` manually) before the next `done`.
 
@@ -535,7 +545,7 @@ After learn and stash steps complete:
    ```
    Gitignored files belong on the `docs` branch only (handled in Step 2), not on the working feature branch.
 4a. **Pre-commit lesson scope audit (when the project lessons corpus is touched).** If the session's staged or unstaged diff creates or substantially edits the project lessons corpus (`docs/maintenance/development_lessons.md`, or `PROJECT_CORPUS_REL` from `lessons_recall.py`), audit scope BEFORE staging it:
-   1. **Mechanical duplicate check.** First resolve the company guidelines master (`company_guidelines_master` in facts) by applying the ownership-scoping resolution test (`learn` Step 1.2 item 5d, anchored to the repo being audited): it resolves only when the repo sits under the company workspace root (`company_projects_root` in facts) and the key's path exists. Outside the company root (a repo under the personal root, or under neither workspace root) the master does not resolve and the mechanical check passes trivially: do not run the script, and print a one-line note (`company master out of scope for this repo; duplicate check skipped`). Under the company root with the key's path missing, print a one-line WARNING (`config drift: company guidelines master not found; company duplicate audit not run`); this outcome counts as passed-with-drift and does not block the Step 3 commit (the placement-evidence check below still applies); it is not a failed audit. Because the duplicate check did not run, the commit message body of the Step 3 commit that stages this corpus change carries the drift witness on its own body line, `lesson-scope-audit: config drift: company guidelines master not found; company duplicate audit not run`, so the skip decision is reconstructable from repository history alone. Otherwise (master resolved) verify the validator script file exists (e.g. `test -f` on the resolved path); if it is absent, print a one-line warning (`lesson scope validator absent; mechanical duplicate check skipped (cold-start)`) and continue with the placement-evidence check (cold-start; do not block the session on a missing optional validator). Only when the file exists, run the validator with stderr captured (with `$PROJECT_CORPUS` and `$COMPANY_MASTER` set to the resolved corpus and master paths; override the script path via `LESSON_SCOPE_SCRIPT` for local testing only):
+   1. **Mechanical duplicate check.** First resolve the company guidelines master (`company_guidelines_master` in facts) by applying the ownership-scoping resolution test (`learn` Step 1.2 item 5d, anchored to the repo being audited): it resolves only when the repo sits under the company workspace root (`company_projects_root` in facts) and the key's path exists. Outside the company root (a repo under the personal root, or under neither workspace root) the master does not resolve and the mechanical check passes trivially: do not run the script, and print a one-line note (`company master out of scope for this repo; duplicate check skipped`). Under the company root with the key's path missing, print a one-line WARNING (`config drift: company guidelines master not found; company duplicate audit not run`); this outcome counts as passed-with-drift and does not block the Step 3 commit (the placement-evidence check below still applies); it is not a failed audit. Because the duplicate check did not run, the commit message body of the Step 3 commit that stages this corpus change carries the drift witness on its own body line, `lesson-scope-audit: config drift: company guidelines master not found; company duplicate audit not run`, so the skip decision is reconstructable from repository history alone. When the project corpus path is gitignored there is no Step 3 corpus commit to carry the line: invoke the docs-branch skill's witness append (its Step 3) with the exact witness line so the docs-branch history carries the same byte-for-byte line. Otherwise (master resolved) verify the validator script file exists (e.g. `test -f` on the resolved path); if it is absent, print a one-line warning (`lesson scope validator absent; mechanical duplicate check skipped (cold-start)`) and continue with the placement-evidence check (cold-start; do not block the session on a missing optional validator). Only when the file exists, run the validator with stderr captured (with `$PROJECT_CORPUS` and `$COMPANY_MASTER` set to the resolved corpus and master paths; override the script path via `LESSON_SCOPE_SCRIPT` for local testing only):
 ```bash
 python3 "${LESSON_SCOPE_SCRIPT:-${HOME}/.ai-playbook/scripts/check_lesson_scope.py}" "$PROJECT_CORPUS" "$COMPANY_MASTER"
 ```
@@ -545,8 +555,8 @@ python3 "${LESSON_SCOPE_SCRIPT:-${HOME}/.ai-playbook/scripts/check_lesson_scope.
    3. **On exit 1 with at least one `DUPLICATE:` line (duplicate full rule):** stop before commit, release the lock per Step 6, and return blocked with the validator output; ask the user to classify the lesson (company master vs project corpus). Never move, rewrite, or duplicate lessons automatically.
    4. **Commit boundary:** the project witness and the company guidelines change are committed in the same pass ONLY when both were intentionally produced by the same workflow (`learn` placed them deliberately). done must not move or duplicate lessons to reconcile placements.
 4b. **Session-touched project lessons corpus (non-ignored):** After Step 1 (`learn`), if this session created or updated the project lessons file (`docs/maintenance/development_lessons.md`, or `PROJECT_CORPUS_REL` from `lessons_recall.py`) and `git check-ignore` does **not** match it, **stage and commit it on the feature branch** with the other session changes. Untracked (`??`) is not a skip reason. Syncing the same path to the orphan `docs` branch in Step 2 does **not** replace the feature-branch commit. Only gitignored corpora stay docs-branch-only.
-5. Stage relevant non-ignored files (including 4b when it applies). Prefer adding specific files by name; never use `git add -A` or `git add .` unless the user explicitly requests it.
-6. Write a concise commit message. If there is a story key, prefix with `[<STORY-KEY>]`; otherwise use a plain descriptive subject. Focus on the "why" not the "what". When the item 4a audit fired the drift witness, the commit body includes the `lesson-scope-audit:` body line exactly as specified in item 4a.
+5. Stage relevant non-ignored files (including 4b when it applies). Prefer adding specific files by name; never use `git add -A` or `git add .` unless the user explicitly requests it. On a shared checkout, also give the commit itself an explicit pathspec (`git commit -m "..." -- <paths>`), because a peer's staged-but-uncommitted entries sit in the shared index and a pathspec-less commit sweeps them (witnessed 2026-09-18: a learn commit naming its own two files swept a peer's staged backlog item). The inverse is equally binding: a pathspec commit builds from HEAD plus the named paths only, so it excludes your own staged changes outside the pathspec. After `git mv`, pass both the old and the new paths (or, when the index holds only your staged renames, commit the index state with a plain `git commit`) and verify the commit with `git show --stat -M` records the rename rather than a bare create. And immediately before any `--amend` on a shared branch, re-run `git log -1 --oneline`: a peer commit landing between your commands turns the amend into a rewrite of their commit (new sha under their message, your staged leftovers inside); if that happened, verify the tree and stop rewriting (witnessed 2026-09-18, see user-corpus lesson #371).
+6. Write a concise commit message. If there is a story key, prefix with `[<STORY-KEY>]`; otherwise use a plain descriptive subject. Focus on the "why" not the "what". When the item 4a audit fired the drift witness, the commit body includes the `lesson-scope-audit:` body line exactly as specified in item 4a. When the audited corpus path is gitignored (no Step 3 corpus commit exists), the witness append on the docs branch carries the line instead; the append failure is a manual follow-up reported in the Step 7 outcome report and never blocks the Step 3 commit path.
 7. Commit using a HEREDOC. **Never** add `Co-Authored-By:` or `Co-authored-by:` trailers or use `git commit --trailer` for agent attribution. See user `AGENTS.md` (Git Commit Trailer Policy). If your IDE adds co-author trailers automatically, disable agent attribution in its settings.
 8. Run `git status` after the commit to confirm success.
 
@@ -570,23 +580,20 @@ EOF
 )"
 ```
 
-## Step 4: Commit Pending Skill Changes
+## Step 4: Commit Pending Skill Changes (non-learn fallback)
 
-After committing the current project, check whether any skills were modified during this session:
+After committing the current project, check the skills repository for leftover changes beyond learn's own Step 1 commits. Learn-owned artifacts (Step 1.8 backlog items and skill-placement edits) were committed by learn during Step 1; this step is a narrowed fallback that covers only non-learn leftovers, plus learn-authored artifacts whose Step 1.8 commit learn reported as failed.
 
-```bash
-cd <skills_repo_path> && git diff --name-only -- agents/skills/
-```
+1. Resolve the skills repo from the user's facts document (key `skills_repo_path`). When unresolvable, ask the user.
+2. Check for dirty non-learn skills-repo paths (skills files, the skills repo's README.md, and its projects/.ai-playbook/ surfaces), plus any learn-authored artifacts whose Step 1.8 commit learn reported as failed. Resolve the backlog home first (`backlog_dir` from the skills repo's `.ai-playbook/facts.md` TOML; fallback `docs/history/backlog/`, per learn Step 1.8) into `backlog_home`, then:
 
-Resolve `<skills_repo_path>` from the user's facts document (key: `skills_repo_path`). If not found, check `~/.agents/scripts/commit-skills.sh` for the default path, or ask the user.
+   ```bash
+   cd <skills_repo_path> && git status --porcelain -- agents/skills/ "${backlog_home:?}" README.md projects/.ai-playbook/
+   ```
 
-If there are changes, run:
-
-```bash
-<skills_repo_path>/scripts/commit-skills.sh
-```
-
-This commits any pending skill edits in the skills repository with an auto-generated message. You may pass a custom message as the first argument if the default is not descriptive enough.
+   When clean, report "no non-learn skills-repo changes" and no-op.
+3. Classify each dirty path as session-attributed (this session's non-learn skill edits, or learn-authored artifacts whose Step 1.8 commit learn reported as failed) or foreign. Ask the user before staging each session-attributed path (same discipline as Step 3 item 0); never stage foreign or peer-session paths. For paths learn reported as skipped for foreign or unrecognizable hunks, review the path's diff and stage only after the user confirms the foreign hunks are acceptable (path-level staging stages the file as a whole); when they are not, leave the path unstaged and report it.
+4. Stage by explicit path only; never stage a whole tree with one command. Re-run the Step 2.7 sensitive-data scan over the staged content, then commit with a descriptive message.
 
 ## Step 5: Commit Pending Facts and Docs Changes
 
@@ -618,7 +625,7 @@ Do not push. These are local-only docs repositories.
 
 **Always run Step 6 before Step 7**, including when Steps 1–5 failed or returned early. This lets a waiting parallel `done` resume.
 
-From the project git root, release with **`DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` from your Step 0 acquire** (re-export from that tool output if the shell lost env). `release-repo` requires those env vars and refuses to load the shared session file. The lock session/metadata shape is token-only as of the 2026-09-11 done-lock change; no generation export is involved:
+From the project git root, release with **`DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` from your Step 0 acquire** (re-export from that tool output if the shell lost env). In Variant B environments re-export both values from your Step 0 acquire output (chat context) before releasing. `release-repo` requires those env vars and refuses to load the shared session file. The lock session/metadata shape is token-only as of the 2026-09-11 done-lock change; no generation export is involved:
 
 ```bash
 DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" \
@@ -632,7 +639,7 @@ DONE_LOCK_DIR="${DONE_LOCK_DIR:?}" DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN:?}" \
   "${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}" release
 ```
 
-If release fails (token mismatch, env missing), run `status` from the project root. When `status` shows free, your hold is already gone (peer `stale-clean` or release); do not source `.ai-playbook/done-lock.session` to “fix” env. When `status` shows `abandoned: yes` with no session fence, run `stale-clean` only if you will re-acquire; ask the user before forcing removal of an **active** lock.
+If release fails (token mismatch, env missing), run `status` from the project root. When `status` shows free, your hold is already gone (peer auto-recovery, `stale-clean`, or release); do not source `.ai-playbook/done-lock.session` to “fix” env. A verified-dead holder is reclaimed by the next acquire even if its session fence remains; use `stale-clean` only for the explicit stale-lock escape, and ask the user before forcing removal of an **active** lock.
 
 ## Step 7: Report outcome to the user
 
@@ -655,6 +662,8 @@ Invoked as a sub-agent after **each** completed plan task (per-task commit) and 
 
 Each execute-plan `done` sub-agent still runs Step 0 and Step 6. Sequential tasks in one orchestrator usually acquire immediately after the prior release; parallel chats on the same repo wait on **wait-acquire**.
 
+**Batch implement launches (Step 1.2 batch contract):** when the orchestrator launched several file-disjoint tasks as one batch, `done` still runs **per member task, in document order**, never once for the batch. Each member's `done` reads only **its own** `task-<N>-implement.log.md` as the preceding-step log, exactly as the single-task flow does. The member's done staging receipt is **member-scoped**: the driver's claim-group protocol fences the handoff to that member's own canonical allowed paths against its moving baseline (the pre-batch launch baseline for the first member; the immediately preceding member's commit for later members, r1 F27), so a member done that touches another member's file is rejected by the driver before any commit is recorded. Members between the first and the last advance only through the driver's typed `resume_member` action on the group's one anchor session; the batch never produces a batch-level commit, and the orchestrator's generic next-task claim stays suppressed until the group closes.
+
 ### With `review-staging` skill
 Step 2.64 validates session-touched staging docs under `{reviews_dir}/` before docs-branch sync. Include `*review*.md`, PR staging (`*-PR-*` / `PR-<n>-...`), and any path accepted by `is_staging_review_path` (not only `*review*.md` or `*-r*.md`). Complete Metadata, Review Statistics, and Findings with Comment/Analysis before continuing; do not sync stub staging docs.
 
@@ -671,6 +680,7 @@ Step 2.62 sweeps `{tmp_dir}` entries whose owning plan archived (plans Plan Life
 - Run Step 2.65 (Confluence mirror validate, audit-cf-out promotion gate, ephemeral `docs/tmp` cleanup) before `docs-branch` when the manifest exists or the session touched Confluence mirrors, wiki pages, or ephemeral publish snapshots.
 - Always verify that new or revised reusable docs, reference material, and explanatory artifacts added in the session are referenced from instructions or related canonical docs where future agents will need them.
 - Never stage or commit a file that is gitignored, even if it appears in `git diff` (it was previously force-tracked). Use `git rm --cached` to remove it from tracking; do not commit it on the feature branch.
+- Never stage skills-repo changes with a directory-wide add; learn-owned artifacts are committed by learn in Step 1, and Step 4 stages only session-attributed non-learn paths (plus learn-authored artifacts whose Step 1.8 commit learn reported as failed, and paths learn reported as skipped for foreign or unrecognizable hunks, staged only after the user confirms the foreign hunks are acceptable) after asking.
 - Never skip a session-touched, non-gitignored project lessons corpus (`development_lessons.md`) just because it is untracked or already synced to the orphan `docs` branch; commit it on the feature branch (Step 3 item 4b).
 - Never commit a new or substantially edited project lesson whose scope audit (Step 3 item 4a) has not passed.
 - Never add `Co-Authored-By:` or `Co-authored-by:` trailers or use `git commit --trailer` for agent attribution. See user `AGENTS.md` (Git Commit Trailer Policy). Disable automatic agent attribution in IDE settings when present.

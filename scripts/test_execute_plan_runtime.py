@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import ast
+import hashlib
 import json
 import os
 import shutil
@@ -13,10 +15,13 @@ import tempfile
 import threading
 import unittest
 import uuid
+from datetime import datetime, timezone
 from unittest import mock
 from pathlib import Path
 
+import execute_plan_address_fanout as fanout
 import execute_plan_runtime as runtime
+import validate_review_staging as vrs
 import runtime_capabilities as capabilities
 
 
@@ -89,6 +94,11 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         # neutralizes host global/system config, and the asserted exit keeps
         # fixture setup failures loud. Returns the CompletedProcess.
         return subprocess.run(["git", *args], cwd=cwd or self.root, env=self._git_env, capture_output=True, text=True, check=True)
+
+    def _git_stdout(self, *args, cwd=None):
+        # Stripped-stdout form of the hermetic git helper for fixture assertions.
+        completed = self._git(*args, cwd=cwd)
+        return completed.stdout.strip()
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -202,6 +212,26 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(second_done["actions"], [])
         self.assertEqual(runtime.load_manifest(self.state_path)["tasks"]["task-3"]["commit_identity"], "aa11bb22cc33")
 
+    def test_checkpoint_duplicate_short_circuit_requires_progressed_task(self):
+        # A stale success record under the checkpoint identity on a task
+        # whose durable status is still claimed must produce a real
+        # completion write, never a phantom done-pending duplicate with
+        # nothing persisted.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        self.rewrite_manifest(lambda state: state["checkpoints"].update({
+            "task-4:worker-seed": {"result": {"status": "success"}, "task_id": "task-4"},
+        }))
+        driver = self.driver()
+        landed = driver.record_worker_checkpoint(
+            self.worker_checkpoint(task="task-4", checkpoint_identity="task-4:worker-seed")
+        )
+        self.assertEqual(landed["status"], "success")
+        self.assertIs(landed["duplicate"], False)
+        self.assertEqual(landed["state"], "done-pending")
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-4"]["status"], "done-pending")
+        self.assertIn("recorded_at", state["checkpoints"]["task-4:worker-seed"])
+
     def test_worker_permission_request_does_not_pause_authorized_work(self):
         self.seed_claim()
         result = self.driver().record_worker_checkpoint(
@@ -307,8 +337,8 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             "owner": "test-owner",
             "state": "blocked",
             "task_id": "task-4",
-            "baseline_revision": self._git("rev-parse", "HEAD").stdout.strip(),
-            "launch_record": {"baseline_revision": self._git("rev-parse", "HEAD").stdout.strip(), "generation": 1, "launched_at": 111.0},
+            "baseline_revision": self._git_stdout("rev-parse", "HEAD"),
+            "launch_record": {"baseline_revision": self._git_stdout("rev-parse", "HEAD"), "generation": 1, "launched_at": 111.0},
             "policy_token": {"token": "policy", "repo_root": str(self.root), "allowed_paths": ["task.txt"], "operation_kind": "repository-task", "network": False, "generation": 1},
         }
         runtime._safe_write_json(self.state_path, state)
@@ -498,7 +528,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(done["status"], "success")
 
     def test_out_of_scope_worktree_change_cannot_become_success_checkpoint(self):
-        baseline = self._git("rev-parse", "HEAD").stdout.strip()
+        baseline = self._git_stdout("rev-parse", "HEAD")
         self.seed_claim(task="task-4", token="scope-token")
         state = runtime.load_manifest(self.state_path)
         state["claims"]["task-4"]["policy_token"] = {"token": "policy", "repo_root": str(self.root), "allowed_paths": ["allowed.txt"], "operation_kind": "repository-task", "network": False, "generation": 0}
@@ -514,7 +544,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(after["tasks"]["task-4"]["status"], "blocked")
 
     def _scope_claim(self, allowed):
-        baseline = self._git("rev-parse", "HEAD").stdout.strip()
+        baseline = self._git_stdout("rev-parse", "HEAD")
         self.seed_claim(task="task-4", token="scope-token")
         state = runtime.load_manifest(self.state_path)
         state["claims"]["task-4"]["policy_token"] = {"token": "policy", "repo_root": str(self.root), "allowed_paths": list(allowed), "operation_kind": "repository-task", "network": False, "generation": 0}
@@ -610,8 +640,8 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def test_done_boundary_rejects_non_descendant_commit(self):
         self._scope_claim(allowed=("task-4.txt",))
         self.driver().record_worker_checkpoint(self.worker_checkpoint(task="task-4", generation=0))
-        tree = self._git("rev-parse", "HEAD^{tree}").stdout.strip()
-        orphan = self._git("commit-tree", "-m", "orphan", tree).stdout.strip()
+        tree = self._git_stdout("rev-parse", "HEAD^{tree}")
+        orphan = self._git_stdout("commit-tree", "-m", "orphan", tree)
         done = self.driver().record_done(self.done(task="task-4", generation=0, commit_identity=orphan))
         self.assertEqual(done["status"], "blocked")
         self.assertEqual(done["reason_code"], "commit-pending")
@@ -666,7 +696,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         os.symlink("/tmp/execute-plan-escape-target", self.root / "link.txt")
         self._git("add", "link.txt")
         self._git("commit", "-qm", "committed symlink escape")
-        commit = self._git("rev-parse", "HEAD").stdout.strip()
+        commit = self._git_stdout("rev-parse", "HEAD")
         done = self.driver().record_done(self.done(task="task-4", generation=0, commit_identity=commit))
         self.assertEqual(done["status"], "blocked")
         self.assertEqual(done["reason_code"], "commit-pending")
@@ -712,12 +742,30 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(after["tasks"]["task-4"]["status"], "commit-pending")
         self.assertNotIn("task-4:commit", after["checkpoints"])
 
-    def test_post_claim_ambient_noise_stays_hard_blocked(self):
-        # Characterization pin: ambient noise appearing after the claim's
-        # launch record is indistinguishable from a worker-caused escape
-        # (mtime is forgeable), so the checkpoint witness stays hard.
+    def test_post_claim_ambient_noise_downgrades_to_resumable_cleanup(self):
+        # r1 F15: ambient noise appearing after the claim's launch record is
+        # host-generated and can never be a worker scope escape; when every
+        # out-of-scope path is ambient-shaped the checkpoint witness
+        # downgrades to the resumable cleanup-required envelope instead of
+        # the terminal contract violation that hard-wedged the task.
         self._launched_claim(allowed=("task-4.txt",))
         (self.root / ".DS_Store").write_text("ambient\n", encoding="utf-8")
+        result = self.driver().record_worker_checkpoint(self.worker_checkpoint(task="task-4", generation=0))
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "cleanup-required")
+        self.assertTrue(result["resume_allowed"])
+        self.assertIn(".DS_Store", result["evidence"][0])
+        # The claim stays live: cleanup of the ambient file and a re-checkpoint
+        # is the unwedge path (no relaunch, no terminal contract violation).
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["claims"]["task-4"]["state"], "launched")
+
+    def test_post_launch_mixed_ambient_and_escape_keeps_hard_block(self):
+        # r1 F15 hard arm: any non-ambient out-of-scope path next to the
+        # ambient noise keeps the terminal contract violation.
+        self._launched_claim(allowed=("task-4.txt",))
+        (self.root / ".DS_Store").write_text("ambient\n", encoding="utf-8")
+        (self.root / "outside-policy.txt").write_text("worker escape\n", encoding="utf-8")
         result = self.driver().record_worker_checkpoint(self.worker_checkpoint(task="task-4", generation=0))
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "contract-violation")
@@ -733,6 +781,24 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "contract-violation")
         self.assertFalse(result["resume_allowed"])
+
+    def test_post_launch_tracked_ambient_name_stays_violation(self):
+        # r2 F2: the ambient downgrade requires the porcelain-proven
+        # untracked arm, not the name shape alone. A tracked out-of-scope
+        # modification wearing an ambient name (.DS_Store) can carry
+        # arbitrary worker content, so it keeps the terminal
+        # contract-violation instead of the resumable cleanup envelope the
+        # untracked arm gets (pinned by
+        # test_post_claim_ambient_noise_downgrades_to_resumable_cleanup).
+        self._launched_claim(allowed=("task-4.txt",))
+        self.commit_file(".DS_Store", content="arbitrary content\n")
+        driver = self.driver()
+        result = driver.record_worker_checkpoint(self.worker_checkpoint(task="task-4", generation=0))
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "contract-violation")
+        self.assertFalse(result["resume_allowed"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["claims"]["task-4"]["state"], "blocked")
 
     def _prelaunch_claim(self, task="task-4"):
         state = runtime.load_manifest(self.state_path)
@@ -967,7 +1033,9 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(committed["status"], "success")
         terminal = self.driver(adapter=adapter).continue_parent()
         self.assertEqual(terminal["reason_code"], "done-pending")
-        terminal = self.driver(adapter=adapter).mark_terminal("docs/plans/completed/fixture-plan.md", "abcdef1", ["tests"])
+        self.write_archived_plan(self.CHECKED_ARCHIVED_PLAN)
+        self.seed_archive_gate()
+        terminal = self.driver(adapter=adapter).mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
         self.assertEqual(terminal["status"], "success")
         self.assertEqual(runtime.load_manifest(self.state_path)["workflow_state"], "complete")
 
@@ -1046,7 +1114,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             marker.write_text("base\n", encoding="utf-8")
             self._git("add", "tracked.txt", cwd=root)
             self._git("commit", "-qm", "base", cwd=root)
-            commit = self._git("rev-parse", "HEAD", cwd=root).stdout.strip()
+            commit = self._git_stdout("rev-parse", "HEAD", cwd=root)
             state_path = root.parent / "runtime_state.json"
             runtime.create_manifest(state_path, "real-reconcile", [{"id": "task-1", "number": 1, "status": "pending"}])
             driver = runtime.RuntimeDriver(state_path, plan_slug="real-reconcile", owner="real-owner", repo_root=root)
@@ -1066,6 +1134,31 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         with mock.patch.object(driver, "_git_worktree_dirty", side_effect=RuntimeError("status failed")):
             result = driver.reconcile_startup()
         self.assertEqual(result["reason_code"], "worktree-witness-unavailable")
+
+    def test_reconcile_startup_survives_unicode_decode_on_dirty_probe(self):
+        # Natural-path site 1: the pre-launch dirty probe itself hits a
+        # filename byte invalid in the locale encoding; the fail-closed
+        # witness outcome must replace the escaping exception.
+        driver = self.driver()
+        self.seed_claim(task="task-3")
+        with mock.patch.object(driver, "_git_worktree_dirty", side_effect=UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")):
+            result = driver.reconcile_startup()
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "worktree-witness-unavailable")
+        self.assertFalse(result["resume_allowed"])
+
+    def test_reconcile_startup_survives_unicode_decode_on_ambient_enumeration(self):
+        # Natural-path site 2: dirt is witnessed, then the ambient
+        # classification enumeration raises on an undecodable filename;
+        # the same fail-closed witness outcome applies.
+        driver = self.driver()
+        self.seed_claim(task="task-3")
+        with mock.patch.object(driver, "_git_worktree_dirty", return_value=True), \
+                mock.patch.object(driver, "_git_worktree_entries", side_effect=UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")):
+            result = driver.reconcile_startup()
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "worktree-witness-unavailable")
+        self.assertFalse(result["resume_allowed"])
 
     def test_startup_dirty_witness_failure_degrades_evidence_not_block(self):
         # Degrade-direction witness (sibling of the git-witness failure test):
@@ -1119,7 +1212,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             (root / "tracked.txt").write_text("base\n", encoding="utf-8")
             self._git("add", "tracked.txt", cwd=root)
             self._git("commit", "-qm", "base", cwd=root)
-            commit = self._git("rev-parse", "HEAD", cwd=root).stdout.strip()
+            commit = self._git_stdout("rev-parse", "HEAD", cwd=root)
             state_path = root / "runtime_state.json"
             runtime.create_manifest(state_path, "cli-plan", [{"id": "task-1", "number": 1, "status": "pending"}])
 
@@ -1135,6 +1228,24 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             self.assertEqual(checkpoint["state"], "done-pending")
             done = cli("done", {"status": "success", "action_scope": "done-handoff", "checkpoint_identity": "task-1:done", "generation": claim["generation"], "claim_token": claim["token"], "task_id": "task-1", "commit_identity": commit, "checkbox": True, "clean_state": True, "log_evidence": ["task-1.log"]})
             self.assertEqual(done["status"], "success")
+            archived = root / "docs/plans/completed/cli-plan.md"
+            archived.parent.mkdir(parents=True, exist_ok=True)
+            archived.write_text("# cli plan\n\n- [x] task-1\n", encoding="utf-8")
+            # The final stage requires the pre-archive gate receipt: seed a
+            # conforming one (declared destination equal to the archived CLI
+            # path, digest over the archived bytes, source pointing at the
+            # absent active path), mirroring seed_archive_gate semantics for
+            # this CLI-driven fixture root.
+            state = runtime.load_manifest(state_path)
+            state["archive_gate"] = {
+                "plan_path": "docs/plans/cli-plan.md",
+                "declared_destination": "docs/plans/completed/cli-plan.md",
+                "plan_digest": hashlib.sha256(archived.read_bytes()).hexdigest(),
+                "last_commit_sha": commit,
+                "phase5_checklist": ["tests"],
+                "recorded_at": 1234.0,
+            }
+            runtime._safe_write_json(state_path, state)
             self.assertEqual(cli("terminal", {"archived_plan_path": "docs/plans/completed/cli-plan.md", "last_commit_sha": commit, "phase5_checklist": ["tests"]})["status"], "success")
 
     def test_create_operation_seeds_manifest(self):
@@ -1242,6 +1353,42 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             self.assertIn("create operation tasks must be mappings with a string id", completed.stderr)
             self.assertFalse(created_path.exists())
 
+    def test_create_operation_refuses_empty_task_list(self):
+        # A zero-task manifest is never seeded: every later claim would
+        # answer a silent success no-op while readiness and terminal refuse
+        # the empty run, so create fails closed naming the missing tasks and
+        # writes no manifest file.
+        created_path = self.root / "created_empty.json"
+        for empty in ([], {}):
+            command = [
+                sys.executable,
+                str(ROOT / "scripts/execute_plan_runtime.py"),
+                "--manifest", str(created_path),
+                "--repo-root", str(self.root),
+                "--owner", "create-owner",
+                "--plan-slug", "empty-plan",
+                "--operation", "create",
+                "--input", json.dumps({"tasks": empty}),
+            ]
+            with self.subTest(shape=type(empty).__name__):
+                completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn("create operation requires at least one task", completed.stderr)
+                self.assertFalse(created_path.exists())
+
+    def test_create_manifest_refuses_empty_task_list(self):
+        # Library-level wedge guard (r4 R4-6): the CLI refusal alone left
+        # create_manifest seeding the zero-task wedge for library callers,
+        # so the seeding boundary itself now raises before writing any
+        # manifest file.
+        created_path = self.root / "created_empty_library.json"
+        for empty in ([], {}):
+            with self.subTest(shape=type(empty).__name__):
+                with self.assertRaises(ValueError) as raised:
+                    runtime.create_manifest(created_path, "empty-plan", empty)
+                self.assertIn("create requires at least one task", str(raised.exception))
+                self.assertFalse(created_path.exists())
+
     def test_evidence_and_fixtures_are_hermetic(self):
         result = capabilities.bounded_evidence(["token=secret", {"password": "nested-secret"}, "x" * 2000])
         self.assertLessEqual(sum(map(len, result)), capabilities.MAX_EVIDENCE_BYTES)
@@ -1256,12 +1403,224 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         state = runtime.load_manifest(self.state_path)
         state["tasks"]["task-4"].update({"status": "complete", "checkbox": True})
         runtime._safe_write_json(self.state_path, state)
+        self.write_archived_plan(self.CHECKED_ARCHIVED_PLAN)
+        self.seed_archive_gate()
         driver.mark_terminal("docs/plans/completed/fixture-plan.md", "abcdef1", ["tests"])
         terminal = driver.terminal_result()
         self.assertEqual(terminal["status"], "success")
         self.assertEqual(terminal["workflow_state"], "complete")
         self.assertIn("phase5_checklist", terminal)
         self.assertIn("archived_plan_path", terminal)
+
+    CHECKED_ARCHIVED_PLAN = "# fixture plan\n\n- [x] task-3\n- [x] task-4\n"
+    ARCHIVED_PLAN_REL = "docs/plans/completed/fixture-plan.md"
+
+    def complete_all_tasks(self) -> None:
+        state = runtime.load_manifest(self.state_path)
+        for task in state["tasks"].values():
+            task.update({"status": "complete", "checkbox": True})
+        runtime._safe_write_json(self.state_path, state)
+
+    def write_archived_plan(self, text: str, rel: str = ARCHIVED_PLAN_REL) -> str:
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return rel
+
+    def seed_archive_gate(self, archived_rel: str = ARCHIVED_PLAN_REL, source_rel: str = "docs/plans/fixture-plan.md", commit: str = "abcdef1") -> str:
+        """Seed a conforming ``archive_gate`` receipt for the final-stage fixtures.
+
+        Conforming means: the declared destination equals the archived
+        fixture path, the digest covers the archived bytes when the file
+        exists (the canonical checked text otherwise, so the
+        missing-archived-plan fixture still exercises the bounded-read
+        refusal after the gate clauses pass), and the recorded source path
+        points at the absent active path. Every final-stage ``mark_terminal``
+        fixture seeds it before the call.
+        """
+
+        archived = self.root / archived_rel
+        payload = archived.read_bytes() if archived.is_file() else self.CHECKED_ARCHIVED_PLAN.encode("utf-8")
+        state = runtime.load_manifest(self.state_path)
+        state["archive_gate"] = {
+            "plan_path": source_rel,
+            "declared_destination": archived_rel,
+            "plan_digest": hashlib.sha256(payload).hexdigest(),
+            "last_commit_sha": commit,
+            "phase5_checklist": ["tests"],
+            "recorded_at": 1234.0,
+        }
+        runtime._safe_write_json(self.state_path, state)
+        return archived_rel
+
+    def test_terminal_refuses_missing_archived_plan(self):
+        # Under the staged final stage the conforming gate receipt is seeded
+        # first, so the gate clauses (presence, exact destination, source
+        # absence, digest) pass and the refusal is today's bounded-read
+        # evidence for a missing path (the shared helper's exists gate):
+        # without it the test cannot distinguish the missing-file refusal
+        # from the over-limit or non-regular-file refusals.
+        self.complete_all_tasks()
+        self.seed_archive_gate()
+        result = self.driver().mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(
+            any("archived plan is missing or unreadable" in entry for entry in result["evidence"]),
+            result["evidence"],
+        )
+        self.assertFalse(any("is not readable" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertFalse(any("exceeds the bounded read limit" in entry for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
+    def test_terminal_refuses_empty_archived_plan(self):
+        # A zero-byte archived plan makes the unchecked-checkbox predicate
+        # vacuously true (r4 R4-2): the terminal gate refuses the empty
+        # artifact instead of writing a receipt for it, and the manifest
+        # stays non-terminal.
+        self.complete_all_tasks()
+        self.write_archived_plan("")
+        self.seed_archive_gate()
+        self.assertEqual((self.root / self.ARCHIVED_PLAN_REL).stat().st_size, 0)
+        result = self.driver().mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("archived plan is empty" in entry for entry in result["evidence"]), result["evidence"])
+        # The empty refusal fires before the checkbox scan: no vacuous
+        # zero-unchecked pass evidence may appear.
+        self.assertFalse(any("unchecked checkbox line" in entry for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
+    def test_terminal_refuses_unchecked_plan_checkboxes(self):
+        self.complete_all_tasks()
+        self.write_archived_plan("# fixture plan\n\n- [x] task-3\n- [ ] task-4\n")
+        self.seed_archive_gate()
+        result = self.driver().mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("checkbox" in entry for entry in result["evidence"]), result["evidence"])
+        # The evidence line number is computed during the scan: the first
+        # unchecked line of this plan is line 4.
+        self.assertTrue(any(entry.startswith("line 4:") for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
+    def test_terminal_ignores_inline_checkbox_literals(self):
+        self.complete_all_tasks()
+        self.write_archived_plan(
+            "# fixture plan\n\nProse mentions the `- [ ]` marker mid-line and even a bare - [ ] fragment after words, "
+            "but no line starts with an unchecked checkbox token.\n- [x] task-3\n- [x] task-4\n"
+        )
+        self.seed_archive_gate()
+        result = self.driver().mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(runtime.load_manifest(self.state_path)["workflow_state"], "complete")
+
+    def test_terminal_refuses_unprovable_commit(self):
+        self.complete_all_tasks()
+        self.write_archived_plan(self.CHECKED_ARCHIVED_PLAN)
+        self.seed_archive_gate()
+        result = self.driver(commit_lookup=lambda _commit: False).mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("commit" in entry for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
+    def test_terminal_accepts_verified_receipt(self):
+        self.complete_all_tasks()
+        rel = self.write_archived_plan(self.CHECKED_ARCHIVED_PLAN)
+        self.seed_archive_gate(archived_rel=rel)
+        result = self.driver().mark_terminal(rel, "abcdef1", ["tests"])
+        self.assertEqual(result["status"], "success")
+        receipt = self.driver().terminal_result()
+        self.assertEqual(receipt["workflow_state"], "complete")
+        self.assertEqual(receipt["phase5_checklist"], ["tests"])
+        self.assertEqual(receipt["archived_plan_path"], rel)
+        self.assertEqual(receipt["last_commit_sha"], "abcdef1")
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["workflow_state"], "complete")
+        self.assertEqual(state["terminal_receipt"]["workflow_state"], "complete")
+
+    def test_terminal_refuses_archived_plan_over_read_limit(self):
+        # The terminal gate reads the archived plan under the shared bounded
+        # read (r4 R4-1: open("rb") + read(LIMIT + 1), no stat size gate): a
+        # plan whose read proves it over TERMINAL_PLAN_READ_LIMIT is refused
+        # outright (blocked done-pending) instead of scanning only its first
+        # TERMINAL_PLAN_READ_LIMIT bytes, so an unchecked line past the
+        # bound can never slip through a prefix scan (flipped r3 R3-1: the
+        # previous prefix-scan acceptance here was fail-open on the gate's
+        # core promise).
+        self.complete_all_tasks()
+        filler = "- [x] filler line\n" * 60_000  # 18-byte lines: 1,080,000 bytes
+        self.write_archived_plan(filler + "- [ ] past the bounded prefix\n")
+        self.seed_archive_gate()
+        self.assertGreater(
+            (self.root / self.ARCHIVED_PLAN_REL).stat().st_size,
+            runtime.TERMINAL_PLAN_READ_LIMIT,
+        )
+        result = self.driver().mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        # The exact read-cap fragment: without it this refusal is
+        # indistinguishable from the unreadable-file fallback.
+        self.assertTrue(
+            any("archived plan exceeds the bounded read limit" in entry for entry in result["evidence"]),
+            result["evidence"],
+        )
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
+    def test_terminal_bounded_read_prefix_unchecked_still_blocks(self):
+        # Mirror arm: the same over-limit shape with the unchecked line
+        # inside what would have been the scanned prefix still refuses
+        # terminal, and the evidence names the read cap rather than the
+        # checkbox count: the bounded read refuses an over-limit plan
+        # before any scan, so the terminal gate never prefix-scans an
+        # over-limit plan (a reverted prefix-scan implementation would emit
+        # the checkbox evidence instead).
+        self.complete_all_tasks()
+        filler = "- [x] filler line\n" * 60_000
+        self.write_archived_plan("- [ ] inside the bounded prefix\n" + filler)
+        self.seed_archive_gate()
+        self.assertGreater(
+            (self.root / self.ARCHIVED_PLAN_REL).stat().st_size,
+            runtime.TERMINAL_PLAN_READ_LIMIT,
+        )
+        result = self.driver().mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("archived plan exceeds the bounded read limit" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertFalse(any("unchecked checkbox line" in entry for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
+    def test_terminal_refuses_empty_manifest(self):
+        # A manifest with no tasks makes the completeness guard vacuously
+        # true: the terminal gate refuses the empty run explicitly instead of
+        # writing a terminal receipt for it. With the gate receipt seeded,
+        # this fixture pins that the empty-manifest evidence still wins; the
+        # dedicated completeness-before-gate ordering pin is
+        # test_incomplete_gateless_manifest_refuses_on_completeness_before_gate
+        # (the incomplete AND gateless fixture).
+        self.rewrite_manifest(lambda state: state.update({"tasks": {}, "claims": {}}))
+        self.write_archived_plan(self.CHECKED_ARCHIVED_PLAN)
+        self.seed_archive_gate()
+        result = self.driver().mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("manifest carries no tasks" in entry for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
 
     def _replay_driver(self, root: Path, tasks, adapter=None, owner="replay-owner"):
         state_path = root / "runtime_state.json"
@@ -1518,7 +1877,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         driver = self.driver(adapter=FakeAdapter(spy), seed_task3=False)
         result = driver._launch_claimed_task({"task_id": "task-4", "token": "pre-launch-token", "generation": 0}, "continue", None)
         self.assertEqual(result["status"], "success")
-        baseline = self._git("rev-parse", "HEAD").stdout.strip()
+        baseline = self._git_stdout("rev-parse", "HEAD")
         claim = observed["claim"]
         # The launch record lands atomically with the claim transition: the
         # worker already observes state=launched together with the snapshot.
@@ -1533,7 +1892,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertNotIn("launched_at", claim)
 
     def _launched_claim(self, allowed=("task-4.txt",)):
-        baseline = self._git("rev-parse", "HEAD").stdout.strip()
+        baseline = self._git_stdout("rev-parse", "HEAD")
         state = runtime.load_manifest(self.state_path)
         state["claims"]["task-4"] = {
             "token": "drift-token",
@@ -1805,7 +2164,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(explicit.owner, "explicit-owner")
 
     def _resume_blocked_claim(self):
-        baseline = self._git("rev-parse", "HEAD").stdout.strip()
+        baseline = self._git_stdout("rev-parse", "HEAD")
         state = runtime.load_manifest(self.state_path)
         # Reset durable checkpoint records so each adapter-window witness
         # proves its own competing-writer transition instead of hitting the
@@ -2939,11 +3298,11 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         (self.root / target).write_text(content, encoding="utf-8")
         self._git("add", target)
         self._git("commit", "-qm", message)
-        return self._git("rev-parse", "HEAD").stdout.strip()
+        return self._git_stdout("rev-parse", "HEAD")
 
     def orphan_commit(self):
-        tree = self._git("rev-parse", "HEAD^{tree}").stdout.strip()
-        return self._git("commit-tree", "-m", "orphan", tree).stdout.strip()
+        tree = self._git_stdout("rev-parse", "HEAD^{tree}")
+        return self._git_stdout("commit-tree", "-m", "orphan", tree)
 
     def predecessors_file(self, document):
         path = self.root / f"predecessors-{uuid.uuid4().hex[:8]}.json"
@@ -2954,14 +3313,14 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         return runtime.verify_preconditions(self.root, document)
 
     def test_precondition_history_ref_verifies_rebased_history(self):
-        base = self._git("rev-parse", "HEAD").stdout.strip()
+        base = self._git_stdout("rev-parse", "HEAD")
         self._git("checkout", "-q", "-b", "work")
         original = self.commit_message("CRM-1234 predecessor feature work")
         self._git("checkout", "-q", "--detach", base)
         newer = self.commit_message("newer base unrelated to the feature")
         self._git("checkout", "-q", "work")
         self._git("rebase", "-q", newer)
-        rebased = self._git("rev-parse", "HEAD").stdout.strip()
+        rebased = self._git_stdout("rev-parse", "HEAD")
         self.assertNotEqual(rebased, original)
         result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "history-ref", "value": "CRM-1234"}]}]})
         self.assertEqual(result["status"], "success")
@@ -2975,13 +3334,13 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self._git("checkout", "-q", "-")
         self.commit_message("divergent base commit")
         self._git("cherry-pick", source)
-        picked = self._git("rev-parse", "HEAD").stdout.strip()
+        picked = self._git_stdout("rev-parse", "HEAD")
         self.assertNotEqual(picked, source)
         result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "history-ref", "value": "CRM-1234"}]}]})
         self.assertEqual(result["status"], "success")
 
     def test_precondition_history_ref_verifies_squashed_history(self):
-        base = self._git("rev-parse", "HEAD").stdout.strip()
+        base = self._git_stdout("rev-parse", "HEAD")
         self.commit_message("CRM-1234 first piece")
         self.commit_message("CRM-5678 second piece")
         self._git("reset", "-q", "--soft", base)
@@ -3189,6 +3548,863 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 joined = " ".join(str(item) for item in result["evidence"]).lower()
                 self.assertIn("malformed declaration", joined)
 
+    # ------------------------------------------------------------------
+    # Readiness decision machinery (read-only; requires --plan on the CLI).
+    # ------------------------------------------------------------------
+
+    def write_plan(self, text, name="fixture-plan.md"):
+        plan_path = self.root / name
+        plan_path.write_text(text, encoding="utf-8")
+        return plan_path
+
+    def seed_fresh_pending_manifest(self, tasks=None):
+        runtime.create_manifest(
+            self.state_path,
+            "fixture-plan",
+            tasks or [{"id": "task-1", "number": 1}, {"id": "task-2", "number": 2}],
+        )
+
+    def rewrite_manifest(self, mutate):
+        state = runtime.load_manifest(self.state_path)
+        mutate(state)
+        runtime._safe_write_json(self.state_path, state)
+
+    def test_readiness_direct_continuation_on_fresh_manifest(self):
+        # A seeded active manifest with every task pending plus an agreeing
+        # plan file: direct continuation on the provable first task.
+        self.seed_fresh_pending_manifest()
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 1: first\n- [ ] first item\n\n### Task 2: second\n- [ ] second item\n"
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["decision"], "direct-continuation")
+        self.assertEqual(result["recovery_action"], "continue-parent")
+        self.assertEqual(result["next_task_id"], "task-1")
+        self.assertEqual(result["failed_conditions"], [])
+
+    def test_readiness_observes_live_claim(self):
+        # One launched claim: observe-worker names that task; the claim token,
+        # generation, and task status stay byte-identical after the call.
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [ ] pending item\n"
+        )
+        self.seed_claim(task="task-4", token="seed-task-4")
+        self.rewrite_manifest(lambda state: state["tasks"]["task-4"].update({"status": "launched"}))
+        driver = self.driver()
+        before = runtime.load_manifest(self.state_path)
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "observe-worker")
+        # The observe arm's recovery action is pinned: a mutation to any
+        # launch-flavored recovery action survives nothing here.
+        self.assertEqual(result["recovery_action"], "observe-live-worker")
+        self.assertEqual(result["next_task_id"], "task-4")
+        self.assertTrue(any("task-4" in item for item in result["evidence"]))
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["claims"]["task-4"]["token"], "seed-task-4")
+        self.assertEqual(after["claims"]["task-4"]["generation"], before["claims"]["task-4"]["generation"])
+        self.assertEqual(after["tasks"]["task-4"]["status"], before["tasks"]["task-4"]["status"])
+        self.assertEqual(after, before)
+
+    def test_readiness_recovery_on_done_pending(self):
+        # A task in done-pending is an unresolved done handoff: recovery.
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [x] done item\n"
+        )
+        self.seed_claim(task="task-4", token="seed-task-4")
+        self.rewrite_manifest(lambda state: state["tasks"]["task-4"].update({"status": "done-pending"}))
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(any("unresolved done handoff" in item for item in result["failed_conditions"]))
+
+    def test_readiness_recovery_on_plan_manifest_disagreement(self):
+        # The manifest records task-3 complete while its plan section keeps
+        # one unchecked line: plan-manifest disagreement, the manifest wins
+        # per the seeding boundary, so the plan is corrected through the
+        # skill-gated plan-edit step.
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n- [ ] forgotten item\n\n### Task 4: fourth\n- [ ] pending item\n"
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(any("plan-manifest disagreement" in item and "task-3" in item for item in result["failed_conditions"]))
+        self.assertEqual(result["recovery_action"], "correct-plan-through-skill-gated-plan-edit")
+
+    def test_readiness_recovery_on_blocked_state(self):
+        # workflow_state blocked with no live claim: recovery naming the
+        # machine state, across varying task statuses, including an
+        # all-complete manifest that terminal-path would take on an active
+        # workflow (a blocked workflow never routes to terminal-path).
+        agreeing_plan = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [x] done item\n",
+            name="plan-agreeing.md",
+        )
+        pending_plan = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [ ] pending item\n",
+            name="plan-pending.md",
+        )
+        status_arms = (
+            (
+                "pending-tasks",
+                [
+                    {"id": "task-3", "number": 3, "status": "pending"},
+                    {"id": "task-4", "number": 4, "status": "pending", "allowed_paths": ["task-4.txt"]},
+                ],
+            ),
+            (
+                "complete-and-checkpointed",
+                [
+                    {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
+                    {"id": "task-4", "number": 4, "status": "checkpointed", "checkbox": True},
+                ],
+            ),
+        )
+        for plan_path in (pending_plan, agreeing_plan):
+            for arm, tasks in status_arms:
+                with self.subTest(plan=plan_path.name, tasks=arm):
+                    self.seed_fresh_pending_manifest(tasks)
+                    self.rewrite_manifest(lambda state: state.update({"workflow_state": "blocked"}))
+                    driver = self.driver()
+                    result = driver.readiness(plan_path)
+                    self.assertEqual(result["decision"], "recovery")
+                    self.assertTrue(any("workflow_state is 'blocked'" in item for item in result["failed_conditions"]))
+                    self.assertEqual(result["recovery_action"], "stop-or-recovery")
+
+    def test_readiness_refuses_aborted_workflow(self):
+        # workflow_state aborted with otherwise clean pending tasks: recovery
+        # naming the machine state with a stop-or-recovery action.
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [ ] pending item\n"
+        )
+        self.rewrite_manifest(lambda state: state.update({"workflow_state": "aborted"}))
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(any("workflow_state is 'aborted'" in item for item in result["failed_conditions"]))
+        self.assertEqual(result["recovery_action"], "stop-or-recovery")
+
+    def test_readiness_terminal_path_when_all_complete(self):
+        # Every task complete: terminal-path whether workflow_state is
+        # active, complete, or already terminal.
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 1: first\n- [x] done item\n\n### Task 2: second\n- [x] done item\n"
+        )
+        for workflow_state in ("active", "complete", "terminal"):
+            with self.subTest(workflow_state=workflow_state):
+                self.seed_fresh_pending_manifest(
+                    [
+                        {"id": "task-1", "number": 1, "status": "complete", "checkbox": True},
+                        {"id": "task-2", "number": 2, "status": "checkpointed", "checkbox": True},
+                    ]
+                )
+                if workflow_state != "active":
+                    self.rewrite_manifest(lambda state: state.update({"workflow_state": workflow_state}))
+                driver = self.driver()
+                result = driver.readiness(plan_path)
+                self.assertEqual(result["decision"], "terminal-path")
+                self.assertEqual(result["recovery_action"], "continue-parent")
+                self.assertEqual(result["failed_conditions"], [])
+
+    def test_readiness_cli_requires_plan(self):
+        # The CLI refuses --operation readiness without --plan: non-zero exit
+        # and the manifest bytes stay untouched.
+        before = self.state_path.read_bytes()
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/execute_plan_runtime.py"),
+                "--manifest", str(self.state_path),
+                "--repo-root", str(self.root),
+                "--owner", "cli-owner",
+                "--operation", "readiness",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("--plan is required", completed.stderr)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_readiness_missing_plan_file_fails_closed(self):
+        # A nonexistent --plan path is the fail-closed precondition block:
+        # blocked with reason precondition-unverified, the recovery decision,
+        # no provable next task, and the manifest bytes untouched (branch
+        # witness: without the named fields a caller could not route the
+        # refusal).
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        missing = self.root / "docs/plans/never-written.md"
+        self.assertFalse(missing.exists())
+        result = driver.readiness(missing)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "precondition-unverified")
+        self.assertEqual(result["decision"], "recovery")
+        self.assertIsNone(result["next_task_id"])
+        self.assertTrue(any("plan file is missing or unreadable" in item for item in result["evidence"]), result["evidence"])
+        self.assertTrue(any("plan file is missing or unreadable" in item for item in result["failed_conditions"]), result["failed_conditions"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_readiness_refuses_plan_over_read_limit(self):
+        # The readiness plan read shares the terminal gate's bounded-read
+        # helper (r4 R4-1: open("rb") + read(LIMIT + 1), no stat size gate):
+        # a plan whose read proves it over TERMINAL_PLAN_READ_LIMIT is
+        # refused as precondition-unverified instead of being read whole,
+        # and the manifest bytes stay untouched.
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        huge = self.write_plan("# Fixture plan\n" + ("filler line\n" * 110_000), name="plan-huge.md")
+        self.assertGreater(
+            (self.root / "plan-huge.md").stat().st_size,
+            runtime.TERMINAL_PLAN_READ_LIMIT,
+        )
+        result = driver.readiness(huge)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "precondition-unverified")
+        self.assertEqual(result["decision"], "recovery")
+        self.assertIsNone(result["next_task_id"])
+        self.assertTrue(any("plan file exceeds the bounded read limit" in item for item in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_readiness_refuses_non_regular_plan_file(self):
+        # Regular-file gate witness (r4 R4-1): a plan path that is not a
+        # regular file is refused before any open. A directory exercises the
+        # same is_file() gate deterministically; a FIFO (os.mkfifo) is
+        # refused through that identical gate and, unlike the directory, its
+        # blocking read would hang forever because a FIFO's stat size is 0
+        # and a size-only check cannot refuse it.
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        directory = self.root / "plan-directory"
+        directory.mkdir()
+        result = driver.readiness(directory)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "precondition-unverified")
+        self.assertEqual(result["decision"], "recovery")
+        self.assertIsNone(result["next_task_id"])
+        self.assertTrue(any("plan file is not a regular file" in item for item in result["evidence"]), result["evidence"])
+        self.assertTrue(any("plan file is not a regular file" in item for item in result["failed_conditions"]), result["failed_conditions"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_readiness_refuses_plan_without_task_sections(self):
+        # A plan text with zero '### Task <N>:' headings cannot agree or
+        # disagree per-section (r4 R4-3): the readiness decision fails the
+        # plan-shape condition instead of returning a vacuous
+        # direct-continuation for a wrong --plan file while no task has
+        # progressed.
+        self.seed_fresh_pending_manifest()
+        plan_path = self.write_plan("# Not a plan\n\nNo task sections here.\n", name="plan-foreign.md")
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(
+            any("plan carries no recognizable task sections" in item for item in result["failed_conditions"]),
+            result["failed_conditions"],
+        )
+
+    def test_readiness_blocked_while_manifest_lock_held(self):
+        # Lock-contention witness (r4 T4-2): with another owner holding the
+        # manifest lock at decision time, readiness returns the transient
+        # contention envelope (blocked, decision recovery, recovery action
+        # resumable-conflict) and the manifest bytes stay untouched.
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [ ] pending item\n"
+        )
+        driver = self.driver()  # Construction (and its owner write) precedes the foreign lock.
+        before = self.state_path.read_bytes()
+        with runtime._manifest_lock(self.state_path, "blocking-owner") as acquired:
+            self.assertTrue(acquired)
+            result = driver.readiness(plan_path)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["decision"], "recovery")
+        self.assertEqual(result["recovery_action"], "resumable-conflict")
+        self.assertIn("manifest lock is held by another owner", result["failed_conditions"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_readiness_never_mutates_manifest(self):
+        # Direct-continuation and recovery fixtures: the manifest file bytes
+        # are byte-identical before and after each readiness call.
+        driver = self.driver()
+        self.seed_fresh_pending_manifest()
+        plan_direct = self.write_plan(
+            "# Fixture plan\n\n### Task 1: first\n- [ ] first item\n\n### Task 2: second\n- [ ] second item\n",
+            name="plan-direct.md",
+        )
+        before = self.state_path.read_bytes()
+        self.assertEqual(driver.readiness(plan_direct)["decision"], "direct-continuation")
+        self.assertEqual(self.state_path.read_bytes(), before)
+        self.seed_claim(task="task-2", token="seed-task-2")
+        self.rewrite_manifest(lambda state: state["tasks"]["task-2"].update({"status": "done-pending"}))
+        plan_recovery = self.write_plan(
+            "# Fixture plan\n\n### Task 1: first\n- [x] done item\n\n### Task 2: second\n- [x] done item\n",
+            name="plan-recovery.md",
+        )
+        before = self.state_path.read_bytes()
+        self.assertEqual(driver.readiness(plan_recovery)["decision"], "recovery")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_readiness_cli_manifest_bytes_identical_on_success(self):
+        # CLI readiness on an owned manifest (success path): the read-only
+        # driver construction plus the write-free decision keep the manifest
+        # bytes identical across the whole operation.
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [ ] pending item\n"
+        )
+        self.driver()  # First construction commits the owner identity.
+        before = self.state_path.read_bytes()
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/execute_plan_runtime.py"),
+                "--manifest", str(self.state_path),
+                "--repo-root", str(self.root),
+                "--operation", "readiness",
+                "--plan", str(plan_path),
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["decision"], "direct-continuation")
+        self.assertEqual(result["next_task_id"], "task-4")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_readiness_recovery_on_blocked_claim(self):
+        # A claim in state 'blocked' is a fenced claim: recovery naming it
+        # (negative witness for the fenced-claim clause).
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [ ] pending item\n"
+        )
+        self.seed_claim(task="task-4", token="seed-task-4")
+        self.rewrite_manifest(lambda state: (
+            state["claims"]["task-4"].update({"state": "blocked"}),
+            state["tasks"]["task-4"].update({"status": "blocked", "resume_allowed": False}),
+        ))
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(any("fenced claim in state 'blocked'" in item for item in result["failed_conditions"]))
+        self.assertEqual(result["recovery_action"], "preserve-and-reconcile")
+
+    def test_readiness_recovery_on_commit_pending(self):
+        # A commit-pending task is an unresolved done handoff (negative
+        # witness for the commit-pending clause, distinct from done-pending).
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [x] done item\n"
+        )
+        self.seed_claim(task="task-4", token="seed-task-4")
+        self.rewrite_manifest(lambda state: state["tasks"]["task-4"].update({
+            "status": "commit-pending",
+            "commit_identity": "aa11bb22cc33",
+            "done_log_evidence": ["task-4-implement.log.md"],
+        }))
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(
+            any("unresolved done handoff" in item and "commit-pending" in item for item in result["failed_conditions"])
+        )
+        self.assertEqual(result["recovery_action"], "preserve-and-reconcile")
+
+    def test_readiness_recovery_on_unprovable_next_task(self):
+        # The first incomplete task in a non-claimable status is unprovable
+        # (negative witness for the next-task clause); the rotated aborted
+        # claim keeps observe-worker silent so recovery carries the failure.
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [x] done item\n"
+        )
+        self.seed_claim(task="task-4", token="seed-task-4")
+        self.rewrite_manifest(lambda state: (
+            state["claims"]["task-4"].update({"state": "aborted"}),
+            state["tasks"]["task-4"].update({"status": "aborted"}),
+        ))
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(
+            any("next incomplete task 'task-4' is not provable" in item for item in result["failed_conditions"])
+        )
+        self.assertEqual(result["recovery_action"], "preserve-and-reconcile")
+
+    def test_readiness_empty_manifest_routes_to_recovery(self):
+        # A manifest with no tasks continues nothing: recovery naming the
+        # empty manifest, never a direct-continuation with next_task_id None.
+        plan_path = self.write_plan("# Fixture plan\n")
+        self.rewrite_manifest(lambda state: state.update({"tasks": {}, "claims": {}}))
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertIsNone(result["next_task_id"])
+        self.assertTrue(any("carries no tasks" in item for item in result["failed_conditions"]))
+        self.assertEqual(result["recovery_action"], "stop-or-recovery")
+
+    def test_readiness_agreement_scan_spans_nested_subsections(self):
+        # A nested '### Notes:' subsection belongs to the task section: an
+        # unchecked line below a progressed task's checked boxes still
+        # disagrees (the section scan stops only at '## ' or the next
+        # '### Task <N>:' heading).
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n### Notes:\n- [ ] follow-up hidden under notes\n\n### Task 4: fourth\n- [ ] pending item\n"
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(
+            any("plan-manifest disagreement" in item and "task-3" in item for item in result["failed_conditions"])
+        )
+        self.assertEqual(result["recovery_action"], "correct-plan-through-skill-gated-plan-edit")
+
+    def test_readiness_agreement_scan_ignores_break_markers_inside_fence(self):
+        # A fenced code block inside the task section must not truncate the
+        # agreement scan: a '## ' line inside the fence is fenced content,
+        # never a break marker, so the unchecked checkbox AFTER the fence is
+        # still scanned and still disagrees (negative witness for the
+        # fence-aware break handling).
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n```text\n## not a heading\n```\n\n- [ ] hidden after the fence\n\n### Task 4: fourth\n- [ ] pending item\n"
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(
+            any(
+                "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unchecked" in item
+                for item in result["failed_conditions"]
+            ),
+            result["failed_conditions"],
+        )
+        self.assertEqual(result["recovery_action"], "correct-plan-through-skill-gated-plan-edit")
+
+    def test_readiness_agreement_scan_keeps_pseudo_task_heading_inside_fence(self):
+        # A literal '### Task 9:' line inside a fence is fenced content, not
+        # a section break or a foreign heading: the unchecked box after it
+        # stays inside task-3's scanned section and the disagreement names
+        # task-3's own number, never a phantom task-9.
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n```markdown\n### Task 9: fake next task\n- [ ] example box inside the fence\n```\n\n### Task 4: fourth\n- [ ] pending item\n"
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(
+            any(
+                "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unchecked" in item
+                for item in result["failed_conditions"]
+            ),
+            result["failed_conditions"],
+        )
+        self.assertFalse(any("task-9" in item for item in result["failed_conditions"]), result["failed_conditions"])
+        self.assertEqual(result["recovery_action"], "correct-plan-through-skill-gated-plan-edit")
+
+    def test_readiness_fenced_pseudo_heading_with_real_task_number_pins_current_hijack(self):
+        # Residual fence hole, pinned as documented (CommonMark-grade fence
+        # map deferred: docs/history/backlog/2026-09-17-fence-robust-checkbox-scanning.md).
+        # Unlike the pseudo-heading witness above (a number absent from the
+        # manifest), this fake heading carries a manifest-REAL task number,
+        # and the section-START search is fence-blind: the scan begins at the
+        # fenced fake heading, where fence parity restarts closed, so the
+        # fake fence's closer flips the scanner "inside" and the rest of the
+        # plan is swallowed into task-3's section. The over-inclusion
+        # disagreement therefore carries BOTH the decoy box and Task 4's
+        # pending box (2 unchecked); the terminal backstop still fails
+        # closed on the real unchecked box.
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n```text\n### Task 3: fake\n- [ ] decoy box inside the fence\n```\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [ ] pending item\n",
+            name="plan-fence-hijack.md",
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(
+            any(
+                "plan-manifest disagreement" in item and "task-3" in item and "carries 2 unchecked" in item
+                for item in result["failed_conditions"]
+            ),
+            result["failed_conditions"],
+        )
+        self.assertEqual(result["recovery_action"], "correct-plan-through-skill-gated-plan-edit")
+
+    def test_readiness_task_heading_boundary_one_vs_ten(self):
+        # The Task 1 / Task 10 heading-boundary contract: the heading match
+        # pins the number against its terminating colon, so the Task 1
+        # agreement scan never consumes Task 10's heading or content (and
+        # vice versa).
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 1: first\n- [x] done item\n\n### Task 10: tenth\n- [ ] pending item\n\n### Task 11: eleventh\n- [ ] pending item\n"
+        )
+        self.seed_fresh_pending_manifest(
+            [
+                {"id": "task-1", "number": 1, "status": "complete", "checkbox": True},
+                {"id": "task-10", "number": 10, "status": "pending"},
+                {"id": "task-11", "number": 11, "status": "pending"},
+            ]
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        # Complete task-1's section is fully checked and both pending tasks'
+        # unchecked boxes agree with the manifest: direct continuation.
+        self.assertEqual(result["decision"], "direct-continuation")
+        self.assertEqual(result["next_task_id"], "task-10")
+        # The converse: a progressed Task 10 with an unchecked line is
+        # reported under its own number, never attributed to Task 1 (the
+        # still-pending Task 11 keeps terminal-path from firing first).
+        self.rewrite_manifest(lambda state: state["tasks"]["task-10"].update({"status": "checkpointed", "checkbox": True}))
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        # The "carries 1 unchecked" discriminator: a number-pinning heading
+        # regression (a first-digit capture) would report Task 10's section
+        # as MISSING instead of scanning it, so the assertion must require
+        # the section-scanned disagreement text, not the loose "task-10"
+        # substring the missing-section message also contains.
+        self.assertTrue(
+            any("task-10" in item and "carries 1 unchecked" in item for item in result["failed_conditions"]),
+            result["failed_conditions"],
+        )
+        self.assertFalse(any("task-1'" in item for item in result["failed_conditions"]), result["failed_conditions"])
+
+    # ------------------------------------------------------------------
+    # Interrupted-claim ownership recovery (lease-gated reclaim).
+    # ------------------------------------------------------------------
+
+    FIXED_NOW = 1_000_000.0
+
+    def _expired_lease_timestamp(self):
+        return self.FIXED_NOW - runtime.CLAIM_LEASE_SECONDS - 10.0
+
+    def test_reclaim_blocked_before_lease_expiry(self):
+        # A launched claim with a fresh timestamp is inside its lease: reclaim
+        # is refused and the claim token, generation, and task status stay
+        # byte-identical. The boundary arm is the mutation discriminator: at
+        # elapsed exactly CLAIM_LEASE_SECONDS the lease has expired and the
+        # reclaim succeeds (a `<` -> `<=` comparison regression would refuse
+        # there too).
+        for arm, timestamp, expect_success in (
+            ("inside-lease", self.FIXED_NOW, False),
+            ("exactly-at-lease-boundary", self.FIXED_NOW - runtime.CLAIM_LEASE_SECONDS, True),
+        ):
+            with self.subTest(lease=arm):
+                self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+                self.rewrite_manifest(lambda state: state["claims"]["task-4"].update({"timestamp": timestamp}))
+                driver = self.driver(clock=lambda: self.FIXED_NOW)
+                before = runtime.load_manifest(self.state_path)
+                result = driver.reclaim("task-4")
+                if expect_success:
+                    self.assertEqual(result["status"], "success")
+                    self.assertEqual(result["reason_code"], "reclaimed")
+                else:
+                    self.assertEqual(result["status"], "blocked")
+                    self.assertEqual(result["reason_code"], "stale-claim")
+                    self.assertEqual(runtime.load_manifest(self.state_path), before)
+
+    def test_reclaim_releases_expired_claim(self):
+        # Past the lease the reclaim recycles the claim (the resume path's
+        # recycle pattern): task back to pending, old claim marked replaced
+        # with a rotated token and generation, checkpoints preserved, every
+        # other task and claim untouched. A subsequent claim takes the freed
+        # task and the original token no longer passes claim-identity checks.
+        self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+
+        def seed_expired(state):
+            state["claims"]["task-4"]["timestamp"] = self._expired_lease_timestamp()
+            state["checkpoints"]["task-4:worker-1"] = {"result": {"status": "success"}, "task_id": "task-4"}
+
+        self.rewrite_manifest(seed_expired)
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+        result = driver.reclaim("task-4")
+        self.assertEqual(result["status"], "success")
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-4"]["status"], "pending")
+        replacement = after["claims"]["task-4"]
+        self.assertEqual(replacement["state"], "replaced")
+        self.assertNotEqual(replacement["token"], "seed-task-4")
+        self.assertNotEqual(replacement["generation"], 0)
+        self.assertEqual(after["generation"], replacement["generation"])
+        self.assertEqual(after["checkpoints"]["task-4:worker-1"]["task_id"], "task-4")
+        # The evidence-line composition lives in a pure helper (r4 T4-1),
+        # and the pre-redaction label contract is asserted there directly:
+        # the OLD claim token is carried under replaced_token and the NEW
+        # rotated token under replacement_token, with distinct values, so a
+        # label-swap mutation flips the helper pin (the driver's returned
+        # envelope redacts both values and can only prove the labels exist).
+        lines = runtime._reclaim_evidence_lines("task-4", "seed-old-token", "rotated-new-token", 5)
+        self.assertIn("replaced_token=seed-old-token", lines)
+        self.assertIn("replacement_token=rotated-new-token", lines)
+        self.assertNotEqual("seed-old-token", "rotated-new-token")
+        self.assertIn(f"lease_seconds={runtime.CLAIM_LEASE_SECONDS}", lines)
+        self.assertIn("replaced_token=<redacted>", result["evidence"])
+        self.assertIn("replacement_token=<redacted>", result["evidence"])
+        self.assertEqual(after["tasks"]["task-3"]["status"], "complete")
+        self.assertNotIn("task-3", after["claims"])
+        claim = driver.claim_next_task()
+        self.assertTrue(claim["claimed"])
+        self.assertEqual(claim["task_id"], "task-4")
+        self.assertEqual(claim["generation"], replacement["generation"] + 1)
+        self.assertNotEqual(claim["token"], "seed-task-4")
+        late = driver.record_worker_checkpoint({
+            "status": "success",
+            "reason_code": "completed",
+            "evidence": ["late-worker-log"],
+            "action_scope": "repository-task",
+            "checkpoint_identity": "task-4:worker-late",
+            "generation": 0,
+            "claim_token": "seed-task-4",
+        })
+        self.assertEqual(late["status"], "blocked")
+        self.assertEqual(late["reason_code"], "owner-mismatch")
+
+    def test_reclaim_unknown_task_fails_closed(self):
+        # A missing task and a claimless pending task both fail closed as
+        # stale-claim with the manifest bytes untouched.
+        driver = self.driver()
+        for task_id in ("task-99", "task-4"):
+            with self.subTest(task_id=task_id):
+                before = self.state_path.read_bytes()
+                result = driver.reclaim(task_id)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "stale-claim")
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_reclaim_refuses_progressed_task(self):
+        # An expired claim on a done-pending task is the progression refusal:
+        # the task status and the checkpoint records stay untouched.
+        self.seed_claim(task="task-4", token="seed-task-4")
+        driver = self.driver(seed_task3=False, clock=lambda: self.FIXED_NOW)
+        landed = driver.record_worker_checkpoint(self.worker_checkpoint(task="task-4", checkpoint_identity="task-4:worker-1"))
+        self.assertEqual(landed["state"], "done-pending")
+        self.rewrite_manifest(lambda state: state["claims"]["task-4"].update({"timestamp": self._expired_lease_timestamp()}))
+        before = runtime.load_manifest(self.state_path)
+        result = driver.reclaim("task-4")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "stale-claim")
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-4"]["status"], "done-pending")
+        self.assertEqual(after["checkpoints"], before["checkpoints"])
+
+    def test_reclaim_refuses_aborted_workflow(self):
+        # An explicitly aborted workflow is never released, whatever the
+        # lease state: the reclaim returns the explicit-abort
+        # preserve-and-stop outcome and the manifest stays byte-identical.
+        # The fresh-lease arm is the hoist discriminator: with the abort
+        # fence below the lease check it would degrade to the stale-claim
+        # lease refusal instead.
+        for arm, timestamp in (("fresh-lease", self.FIXED_NOW), ("expired-lease", self._expired_lease_timestamp())):
+            with self.subTest(lease=arm):
+                self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+                self.rewrite_manifest(lambda state: (
+                    state["claims"]["task-4"].update({"timestamp": timestamp}),
+                    state.update({"workflow_state": "aborted"}),
+                ))
+                driver = self.driver(clock=lambda: self.FIXED_NOW)
+                before = self.state_path.read_bytes()
+                result = driver.reclaim("task-4")
+                self.assertEqual(result["status"], "aborted")
+                self.assertEqual(result["reason_code"], "explicit-abort")
+                self.assertEqual(result["recovery_action"], "preserve-and-stop")
+                self.assertFalse(result["resume_allowed"])
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_reclaim_preserves_other_claims(self):
+        # Reclaiming an expired claim on one task leaves a live claim on
+        # another task byte-identical.
+        self.seed_fresh_pending_manifest()
+        self.seed_claim(task="task-1", token="expired-task-1", generation=0)
+        live_claim = {
+            "token": "live-task-2",
+            "generation": 0,
+            "owner": "test-owner",
+            "state": "launched",
+            "task_id": "task-2",
+            "timestamp": self.FIXED_NOW,
+            "launch_record": {"baseline_revision": "", "generation": 0, "launched_at": self.FIXED_NOW},
+        }
+        self.rewrite_manifest(lambda state: state["claims"].update({"task-2": dict(live_claim)}))
+        self.rewrite_manifest(lambda state: state["claims"]["task-1"].update({"timestamp": self._expired_lease_timestamp()}))
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+        result = driver.reclaim("task-1")
+        self.assertEqual(result["status"], "success")
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["claims"]["task-2"], live_claim)
+        self.assertEqual(after["claims"]["task-1"]["state"], "replaced")
+
+    def test_reclaim_strips_dead_session_resume_fields(self):
+        # The reclaim reset strips the previous session's resume fields: a
+        # dead session_id, its resume_allowed flag, and the blocked receipt
+        # must not survive on the freed task, or a later resume could route
+        # into the dead session instead of a fresh claim.
+        self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+
+        def seed_blocked(state):
+            state["claims"]["task-4"].update({"state": "blocked", "timestamp": self._expired_lease_timestamp()})
+            state["tasks"]["task-4"].update({
+                "status": "blocked",
+                "resume_allowed": True,
+                "session_id": "dead-session",
+                "blocked_receipt": {"status": "blocked", "reason_code": "timeout"},
+            })
+
+        self.rewrite_manifest(seed_blocked)
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+        result = driver.reclaim("task-4")
+        self.assertEqual(result["status"], "success")
+        task = runtime.load_manifest(self.state_path)["tasks"]["task-4"]
+        self.assertEqual(task["status"], "pending")
+        for field in ("session_id", "resume_allowed", "blocked_receipt"):
+            self.assertNotIn(field, task)
+
+    def test_resume_recycle_strips_dead_session_resume_fields(self):
+        # The resume-path claim recycle shares the rotation helper: with no
+        # adapter, resuming a resumable blocked task recycles it to pending
+        # through the same field-stripping reset, so the dead session's
+        # session_id, resume_allowed flag, and blocked receipt never survive
+        # (the replacement launch re-blocks on the missing adapter with its
+        # own fresh receipt, not the dead session's).
+        self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+
+        def seed_resumable(state):
+            state["claims"]["task-4"].update({
+                "state": "blocked",
+                "policy_token": {"generation": 0, "allowed_paths": ["task-4.txt"]},
+            })
+            state["tasks"]["task-4"].update({
+                "status": "blocked",
+                "resume_allowed": True,
+                "session_id": "dead-session",
+                "blocked_receipt": {"status": "blocked", "reason_code": "timeout"},
+            })
+
+        self.rewrite_manifest(seed_resumable)
+        driver = self.driver()  # No adapter: the recycle path runs.
+        result = driver.resume()
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "runtime-policy-unavailable")
+        state = runtime.load_manifest(self.state_path)
+        # The recycle ran: the replaced seed claim was rotated for a fresh
+        # claim (new token, bumped generation), which then launched and
+        # re-blocked on the missing adapter.
+        self.assertNotEqual(state["claims"]["task-4"]["token"], "seed-task-4")
+        self.assertEqual(state["claims"]["task-4"]["generation"], 1)
+        self.assertEqual(state["claims"]["task-4"]["state"], "blocked")
+        task = state["tasks"]["task-4"]
+        self.assertNotIn("session_id", task)
+        self.assertIs(task.get("resume_allowed"), False)
+        receipt = task.get("blocked_receipt", {})
+        self.assertEqual(receipt.get("reason_code"), "runtime-policy-unavailable")
+        self.assertNotIn("session_id", receipt if isinstance(receipt, dict) else {})
+
+    def test_reclaim_then_continue_parent_succeeds(self):
+        # Regression: reclaim success on a launched claim must not wedge
+        # continuation. The replaced claim is reconciled by rotation, so
+        # continue_parent after the reclaim claims the freed task and lands
+        # the replacement worker's checkpoint instead of returning
+        # owner-mismatch forever.
+        self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+        self.rewrite_manifest(lambda state: state["claims"]["task-4"].update({"timestamp": self._expired_lease_timestamp()}))
+        adapter = FakeAdapter(result=lambda task, prompt, generation, deadline_seconds=None, policy_token=None: {
+            "status": "success",
+            "reason_code": "completed",
+            "evidence": ["replacement-worker-log"],
+            "action_scope": "repository-task",
+            "checkpoint_identity": f"{task['id']}:worker-replacement",
+            "generation": generation,
+        })
+        driver = self.driver(clock=lambda: self.FIXED_NOW, adapter=adapter)
+        self.assertEqual(driver.reclaim("task-4")["status"], "success")
+        outcome = driver.continue_parent()
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-4"]["status"], "done-pending")
+        self.assertEqual(state["claims"]["task-4"]["state"], "launched")
+
+    def test_reclaim_replaced_claim_reconciles_clean_startup(self):
+        # Reclaim success must not wedge startup reconciliation: the replaced
+        # claim (launch evidence retained) is reconciled by rotation, so a
+        # clean-worktree reconcile_startup proceeds with no ambiguous claim
+        # instead of quarantining the replaced claim as owner-mismatch.
+        self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+        self.rewrite_manifest(lambda state: state["claims"]["task-4"].update({"timestamp": self._expired_lease_timestamp()}))
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+        self.assertEqual(driver.reclaim("task-4")["status"], "success")
+        self.assertEqual(runtime.load_manifest(self.state_path)["claims"]["task-4"]["state"], "replaced")
+        result = driver.reconcile_startup()
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["reason_code"], "completed")
+        self.assertEqual(result["evidence"], ["no ambiguous claims"])
+
+    def test_reclaim_replaced_claim_keeps_dirty_startup_blocked(self):
+        # The dirty-worktree gate still applies after a reclaim: with the
+        # replaced claim present (launch evidence retained), real untracked
+        # dirt keeps the hard dirty-worktree block instead of rotating around
+        # it.
+        self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+        self.rewrite_manifest(lambda state: state["claims"]["task-4"].update({"timestamp": self._expired_lease_timestamp()}))
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+        self.assertEqual(driver.reclaim("task-4")["status"], "success")
+        (self.root / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+        result = driver.reconcile_startup()
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "dirty-worktree")
+        self.assertTrue(
+            any("uncommitted worktree requires explicit reconciliation" in entry for entry in result["evidence"]),
+            result["evidence"],
+        )
+        # The replaced claim survived untouched (rotation, not quarantine).
+        self.assertEqual(runtime.load_manifest(self.state_path)["claims"]["task-4"]["state"], "replaced")
+
+    def test_reclaim_cli_requires_task_id(self):
+        # The CLI refuses --operation reclaim without --task-id before any
+        # driver construction: non-zero exit and the manifest bytes stay
+        # untouched.
+        before = self.state_path.read_bytes()
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/execute_plan_runtime.py"),
+                "--manifest", str(self.state_path),
+                "--repo-root", str(self.root),
+                "--operation", "reclaim",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("--task-id is required", completed.stderr)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_reclaim_cli_releases_expired_claim(self):
+        # Happy-path CLI reclaim: the expired claim is rotated, the freed
+        # task is pending again, and the JSON envelope reports the
+        # replacement generation.
+        self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+        self.rewrite_manifest(lambda state: state["claims"]["task-4"].update({"timestamp": self._expired_lease_timestamp()}))
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/execute_plan_runtime.py"),
+                "--manifest", str(self.state_path),
+                "--repo-root", str(self.root),
+                "--operation", "reclaim",
+                "--task-id", "task-4",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["reason_code"], "reclaimed")
+        self.assertEqual(result["reclaimed_task"], "task-4")
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-4"]["status"], "pending")
+        self.assertEqual(after["claims"]["task-4"]["state"], "replaced")
+        self.assertEqual(after["generation"], result["replacement_generation"])
 
     def test_changed_paths_delegates_to_worktree_entries(self):
         baseline = self.commit_file()
@@ -3210,6 +4426,252 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(driver._git_changed_paths(baseline), ["notes.txt", "t.txt", "task-4.txt"])
         self.assertEqual(len(calls), 1)
 
+    def test_address_fanout_state_round_trip_and_projection_fence(self):
+        """runtime_state.json.address_fanout is the only live fan-out authority.
+
+        Drives the real parent driver API through a reload: lifecycle
+        transitions persist under the manifest lock, a stale attempt or
+        projection generation cannot authorize a retry, patch application,
+        or commit, and a lock-held finalization renders the manifest and
+        sidecar projections from one current machine-state snapshot.
+        """
+
+        secret = "round-trip-secret"
+        round_id = "r1"
+        tokens = {
+            worker: fanout.issue_scope_token(round_id, worker, "a1", secret)
+            for worker in ("w1", "w2")
+        }
+        digests = {worker: fanout.token_digest(token) for worker, token in tokens.items()}
+        grouping = [
+            {"worker": "w1", "findings": [1, 2], "files": ["a.txt", "b.txt"]},
+            {"worker": "w2", "findings": [3], "files": ["c.txt"]},
+        ]
+        workers = [
+            {
+                "worker": "w1",
+                "attempt": "a1",
+                "token_digest": digests["w1"],
+                "findings": [1, 2],
+                "files": ["a.txt", "b.txt"],
+                "expected_paths": ["a.txt", "b.txt"],
+                "log": "review-r1-receiving-review-w1.log.md",
+            },
+            {
+                "worker": "w2",
+                "attempt": "a1",
+                "token_digest": digests["w2"],
+                "findings": [3],
+                "files": ["c.txt"],
+                "expected_paths": ["c.txt"],
+                "log": "review-r1-receiving-review-w2.log.md",
+            },
+        ]
+
+        driver = self.driver()
+        started = driver.record_address_fanout(
+            {
+                "kind": "start",
+                "round": round_id,
+                "baseline": "head",
+                "grouping": grouping,
+                "finding_files": [
+                    {"id": 1, "files": ["a.txt"]},
+                    {"id": 2, "files": ["a.txt", "b.txt"]},
+                    {"id": 3, "files": ["c.txt"]},
+                ],
+                "workers": workers,
+            }
+        )
+        self.assertEqual(started["status"], "success")
+        self.assertEqual(started["address_fanout_generation"], 1)
+        persisted = runtime.load_manifest(self.state_path)["address_fanout"]
+        self.assertEqual(persisted["round"], round_id)
+        self.assertEqual(persisted["status"], "active")
+        self.assertEqual(persisted["workers"]["w1"]["expected_paths"], ["a.txt", "b.txt"])
+
+        # Reload: a freshly constructed driver sees the same live record and
+        # records the launches through the real parent driver API.
+        reloaded = self.driver()
+        reloaded.refresh_manifest()
+        for worker in ("w1", "w2"):
+            launched = reloaded.record_address_fanout(
+                {
+                    "kind": "attempt",
+                    "round": round_id,
+                    "worker": worker,
+                    "attempt": "a1",
+                    "token_digest": digests[worker],
+                    "generation": 1,
+                    "event": "launched",
+                }
+            )
+            self.assertEqual(launched["status"], "success")
+
+        # Active-attempt compare-and-swap: an accepted patch receipt must
+        # name the worker, round, attempt, token digest, and generation.
+        accepted = reloaded.record_address_fanout(
+            {
+                "kind": "accept",
+                "round": round_id,
+                "worker": "w1",
+                "attempt": "a1",
+                "token_digest": digests["w1"],
+                "generation": 1,
+                "changed_paths": ["a.txt"],
+                "patch_digest": "d" * 64,
+                "counts": {"fixed": 2, "dropped": 0, "deferred": 0, "pending": 0},
+            }
+        )
+        self.assertEqual(accepted["status"], "success")
+        self.assertEqual(
+            runtime.load_manifest(self.state_path)["address_fanout"]["workers"]["w1"]["accepted"]["attempt"],
+            "a1",
+        )
+
+        snapshot = runtime.load_manifest(self.state_path)
+        # A forged token digest is quarantined and cannot mutate machine state.
+        forged = reloaded.record_address_fanout(
+            {
+                "kind": "accept",
+                "round": round_id,
+                "worker": "w2",
+                "attempt": "a1",
+                "token_digest": digests["w1"],
+                "generation": 1,
+                "changed_paths": ["c.txt"],
+                "patch_digest": "e" * 64,
+            }
+        )
+        self.assertEqual(forged["status"], "blocked")
+        self.assertTrue(forged["quarantined"])
+        self.assertEqual(forged["reason_code"], fanout.REASON_STALE_ATTEMPT)
+        self.assertEqual(runtime.load_manifest(self.state_path), snapshot)
+        # A stale parent generation is quarantined the same way.
+        stale_generation = reloaded.record_address_fanout(
+            {
+                "kind": "accept",
+                "round": round_id,
+                "worker": "w2",
+                "attempt": "a1",
+                "token_digest": digests["w2"],
+                "generation": 99,
+                "changed_paths": ["c.txt"],
+                "patch_digest": "f" * 64,
+            }
+        )
+        self.assertEqual(stale_generation["status"], "blocked")
+        self.assertTrue(stale_generation["quarantined"])
+        self.assertEqual(runtime.load_manifest(self.state_path), snapshot)
+
+        # Lock-held finalization renders BOTH projections from one current
+        # snapshot with the same generation and authorizes the round's
+        # single address commit. Production run_address_fanout terminalizes
+        # every attempt before finalize; the parent cancels w2's active
+        # attempt first so the projection carries closed-enum rows only.
+        w2_cancelled = reloaded.record_address_fanout(
+            {
+                "kind": "attempt",
+                "round": round_id,
+                "worker": "w2",
+                "attempt": "a1",
+                "token_digest": digests["w2"],
+                "generation": 1,
+                "event": "cancelled-verified",
+                "reason_code": fanout.REASON_SUPERSEDED,
+            }
+        )
+        self.assertEqual(w2_cancelled["status"], "success")
+        manifest_projection = self.root / "manifest-projection.md"
+        sidecar = self.root / "stats.json"
+        finalized = reloaded.finalize_address_fanout(round_id, 1, manifest_projection, sidecar)
+        self.assertEqual(finalized["status"], "success")
+        self.assertTrue(finalized["commit_authorized"])
+        self.assertEqual(finalized["address_fanout_generation"], 1)
+        self.assertIn("round: r1", manifest_projection.read_text(encoding="utf-8"))
+        rendered = json.loads(sidecar.read_text(encoding="utf-8"))["extensions"]["address_fanout"]
+        # r1 F4: the sidecar projection is the closed three-key spec; the
+        # generation and terminal map stay in machine state.
+        self.assertEqual(set(rendered), {"round", "finding_files", "workers"})
+        self.assertEqual(rendered["round"], "r1")
+        self.assertEqual([worker["id"] for worker in rendered["workers"]], ["w1", "w2"])
+        for worker in rendered["workers"]:
+            for attempt in worker["attempts"]:
+                self.assertIn(attempt["status"], ("success", "blocked", "cancelled"))
+                self.assertIn(attempt["reason_code"], vrs.ADDRESS_FANOUT_REASON_CODES)
+
+        # Post-finalization the record is closed: a retry attempt is refused,
+        # and re-finalizing cannot advertise completion a second time.
+        post_finalize = reloaded.record_address_fanout(
+            {
+                "kind": "attempt",
+                "round": round_id,
+                "worker": "w2",
+                "attempt": "a1",
+                "token_digest": digests["w2"],
+                "generation": 1,
+                "event": "launched",
+            }
+        )
+        self.assertEqual(post_finalize["status"], "blocked")
+        finalized_snapshot = runtime.load_manifest(self.state_path)
+        again = reloaded.finalize_address_fanout(round_id, 1, manifest_projection, sidecar)
+        self.assertEqual(again["status"], "blocked")
+        self.assertFalse(again["commit_authorized"])
+        self.assertEqual(runtime.load_manifest(self.state_path), finalized_snapshot)
+
+        # A tampered sidecar projection authorizes nothing: the machine state
+        # stays the sole live authority.
+        tampered = json.loads(sidecar.read_text(encoding="utf-8"))
+        tampered["extensions"]["address_fanout"]["round"] = "rX"
+        sidecar.write_text(json.dumps(tampered), encoding="utf-8")
+        spoofed = reloaded.record_address_fanout(
+            {
+                "kind": "attempt",
+                "round": round_id,
+                "worker": "w2",
+                "attempt": "a1",
+                "token_digest": digests["w2"],
+                "generation": 99,
+                "event": "launched",
+            }
+        )
+        self.assertEqual(spoofed["status"], "blocked")
+        self.assertEqual(runtime.load_manifest(self.state_path), finalized_snapshot)
+        spoofed_finalize = reloaded.finalize_address_fanout(round_id, 99, manifest_projection, sidecar)
+        self.assertEqual(spoofed_finalize["status"], "blocked")
+        self.assertFalse(spoofed_finalize["commit_authorized"])
+
+        # A new round supersedes with a monotonic fan-out generation, and a
+        # projection-writer failure refuses to advertise completion.
+        superseding = reloaded.record_address_fanout(
+            {
+                "kind": "start",
+                "round": "r2",
+                "baseline": "head2",
+                "grouping": grouping,
+                "workers": workers,
+            }
+        )
+        self.assertEqual(superseding["status"], "success")
+        self.assertEqual(superseding["address_fanout_generation"], 2)
+        self.assertEqual(superseding["address_fanout"]["predecessor_generation"], 1)
+        broken = reloaded.finalize_address_fanout(
+            "r2",
+            2,
+            manifest_projection,
+            sidecar,
+            projection_writer=lambda path, text: (_ for _ in ()).throw(OSError("disk full")),
+        )
+        self.assertEqual(broken["status"], "blocked")
+        self.assertEqual(broken["reason_code"], "projection-failed")
+        self.assertFalse(broken["commit_authorized"])
+        self.assertEqual(runtime.load_manifest(self.state_path)["address_fanout"]["status"], "active")
+        good = reloaded.finalize_address_fanout("r2", 2, manifest_projection, sidecar)
+        self.assertEqual(good["status"], "success")
+        self.assertTrue(good["commit_authorized"])
+        self.assertEqual(json.loads(sidecar.read_text(encoding="utf-8"))["extensions"]["address_fanout"]["round"], "r2")
+
     def test_changed_paths_returns_none_when_status_witness_raises(self):
         baseline = self.commit_file()
         driver = self.driver()
@@ -3225,6 +4687,3189 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         # An unknown baseline revision makes ``git diff --name-only <baseline>``
         # exit non-zero; the method must fail closed to None, not raise.
         self.assertIsNone(driver._git_changed_paths("0" * 40))
+
+
+    # ------------------------------------------------------------------
+    # Batch implement launch claim groups (Step 1.2 batch contract)
+    # ------------------------------------------------------------------
+
+    def batch_manifest(self, tasks):
+        # Re-seed the gitignored runtime_state.json with the given pending
+        # task list; canonicalization persists through the real create path.
+        runtime.create_manifest(self.state_path, "fixture-plan", tasks, repo_root=self.root)
+        return self.state_path
+
+    def batch_driver(self, adapter=None, **kwargs):
+        return runtime.RuntimeDriver(
+            self.state_path,
+            plan_slug="fixture-plan",
+            owner=kwargs.pop("owner", "test-owner"),
+            repo_root=self.root,
+            commit_lookup=lambda _commit: True,
+            adapter=adapter,
+            **kwargs,
+        )
+
+    def disjoint_tasks(self, count, files_per_task=1, prefix="t"):
+        tasks = []
+        for n in range(1, count + 1):
+            paths = [f"./{prefix}{n}-{k}.txt" for k in range(1, files_per_task + 1)]
+            tasks.append({"id": f"task-{n}", "number": n, "status": "pending", "checkbox": False, "allowed_paths": paths})
+        return tasks
+
+    def commit_files(self, *names):
+        # Content carries a per-call revision so re-committing a previously
+        # committed file always produces a real (non-empty) commit.
+        self._commit_revision = getattr(self, "_commit_revision", 0) + 1
+        for name in names:
+            (self.root / name).write_text(f"committed change {name} r{self._commit_revision}\n", encoding="utf-8")
+        subprocess.run(["git", "add", *names], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "commit", "-qm", f"fixture commit {' '.join(names)} r{self._commit_revision}"], cwd=self.root, check=True, env=self._git_env)
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True, env=self._git_env).stdout.strip()
+
+    def live_group(self, manifest):
+        groups = [group for group in manifest.get("claim_groups", {}).values() if isinstance(group, dict)]
+        self.assertEqual(len(groups), 1)
+        return groups[0]
+
+    def member_receipt(self, task, ordinal, generation, **overrides):
+        result = {
+            "status": "success",
+            "reason_code": "completed",
+            "evidence": [f"worker-log:{task}"],
+            "action_scope": "repository-task",
+            "checkpoint_identity": f"{task}:worker",
+            "generation": generation,
+        }
+        result.update(overrides)
+        claim = runtime.load_manifest(self.state_path).get("claims", {}).get(task)
+        if claim:
+            result.setdefault("claim_token", claim["token"])
+        return result
+
+    def member_done(self, task, ordinal, commit, generation=1, **overrides):
+        result = {
+            "status": "success",
+            "reason_code": "completed",
+            "evidence": [f"done-log:{task}"],
+            "action_scope": "done-handoff",
+            "checkpoint_identity": f"{task}:done",
+            "generation": generation,
+            "task_id": task,
+            "commit_identity": commit,
+            "checkbox": True,
+            "clean_state": True,
+            "log_evidence": [f"task-{ordinal}-implement.log.md"],
+        }
+        result.update(overrides)
+        claim = runtime.load_manifest(self.state_path).get("claims", {}).get(task)
+        if claim:
+            result.setdefault("claim_token", claim["token"])
+        return result
+
+    def test_batch_claim_assembles_canonical_disjoint_prefix(self):
+        # given: three consecutive pending tasks whose manifest-seeded
+        # canonical allowed_paths are disjoint.
+        self.batch_manifest(self.disjoint_tasks(3))
+        result = self.batch_driver().claim_next_task(batch=True)
+        # expects: one group with ordered members, explicit ordinals, one
+        # generation bump, and member claims referencing that group.
+        self.assertTrue(result["claimed"])
+        self.assertEqual(result["members"], ["task-1", "task-2", "task-3"])
+        self.assertEqual(result["member_ordinals"], {"task-1": 1, "task-2": 2, "task-3": 3})
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(manifest["generation"], 1)
+        group = self.live_group(manifest)
+        self.assertEqual(group["group_id"], result["group_id"])
+        self.assertEqual(group["anchor"], "task-1")
+        self.assertEqual(group["members"], ["task-1", "task-2", "task-3"])
+        self.assertEqual(group["active_member"], "task-1")
+        self.assertEqual(group["generation"], 1)
+        self.assertEqual(group["state"], "active")
+        for member, ordinal in result["member_ordinals"].items():
+            claim = manifest["claims"][member]
+            self.assertEqual(claim["group_id"], result["group_id"])
+            self.assertEqual(claim["member_ordinal"], ordinal)
+            self.assertEqual(claim["allowed_paths"], [f"t{ordinal}-1.txt"])
+        self.assertEqual(manifest["tasks"]["task-1"]["status"], "claimed")
+        self.assertEqual(manifest["tasks"]["task-2"]["status"], "pending")
+        self.assertEqual(manifest["tasks"]["task-3"]["status"], "pending")
+
+    def test_manifest_create_persists_canonical_paths_and_document_ordinals(self):
+        (self.root / "a.txt").write_text("target\n", encoding="utf-8")
+        (self.root / "link.txt").symlink_to("a.txt")
+        # within-task duplicate after lexical alias resolution is rejected
+        with self.assertRaises(ValueError):
+            runtime.create_manifest(
+                self.root / "dup_lexical.json",
+                "fixture-plan",
+                [{"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["./a.txt", "a.txt"]}],
+                repo_root=self.root,
+            )
+        # within-task duplicate after in-repository symlink resolution is rejected
+        with self.assertRaises(ValueError):
+            runtime.create_manifest(
+                self.root / "dup_symlink.json",
+                "fixture-plan",
+                [{"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["link.txt", "a.txt"]}],
+                repo_root=self.root,
+            )
+        for candidate in ("dup_lexical.json", "dup_symlink.json"):
+            self.assertFalse((self.root / candidate).exists())
+        # canonical paths and document ordinals persist; cross-task overlap
+        # is retained for queue stopping rather than silently rewritten.
+        self.batch_manifest([
+            {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["./t1.txt"]},
+            {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["t2.txt"]},
+            {"id": "task-3", "number": 3, "status": "pending", "allowed_paths": ["t1.txt"]},
+        ])
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(manifest["tasks"]["task-1"]["allowed_paths"], ["t1.txt"])
+        self.assertEqual(manifest["tasks"]["task-2"]["allowed_paths"], ["t2.txt"])
+        self.assertEqual(manifest["tasks"]["task-3"]["allowed_paths"], ["t1.txt"])
+        self.assertEqual([manifest["tasks"][f"task-{n}"]["ordinal"] for n in (1, 2, 3)], [0, 1, 2])
+        # ordinals survive reload through real validation
+        driver = self.batch_driver()
+        validated = driver.validate_manifest()
+        self.assertEqual(validated["tasks"]["task-2"]["ordinal"], 1)
+        # the CLI create operation persists canonical paths too
+        created = self.root / "cli_created.json"
+        command = [
+            sys.executable,
+            str(ROOT / "scripts/execute_plan_runtime.py"),
+            "--manifest", str(created),
+            "--repo-root", str(self.root),
+            "--owner", "create-owner",
+            "--plan-slug", "cli-plan",
+            "--operation", "create",
+            "--input", json.dumps({"tasks": [{"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["./c1.txt"]}]}),
+        ]
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(runtime.load_manifest(created)["tasks"]["task-1"]["allowed_paths"], ["c1.txt"])
+
+    def test_batch_claim_stops_at_canonical_alias_overlap(self):
+        # lexical alias fixture: ./t1.txt and t1.txt resolve to one canonical path
+        self.batch_manifest([
+            {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["./t1.txt"]},
+            {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["t1.txt"]},
+            {"id": "task-3", "number": 3, "status": "pending", "allowed_paths": ["t3.txt"]},
+        ])
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(manifest["tasks"]["task-1"]["allowed_paths"], ["t1.txt"])
+        self.assertEqual(manifest["tasks"]["task-2"]["allowed_paths"], ["t1.txt"])
+        result = self.batch_driver().claim_next_task(batch=True)
+        self.assertTrue(result["claimed"])
+        self.assertNotIn("group_id", result)
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(manifest.get("claim_groups"), {})
+        self.assertEqual(set(manifest["claims"]), {"task-1"})
+        # symlink alias fixture: an in-repository link resolves to its target
+        (self.root / "real.txt").write_text("target\n", encoding="utf-8")
+        (self.root / "alias.txt").symlink_to("real.txt")
+        self.batch_manifest([
+            {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["alias.txt"]},
+            {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["real.txt"]},
+        ])
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(manifest["tasks"]["task-1"]["allowed_paths"], ["real.txt"])
+        result = self.batch_driver().claim_next_task(batch=True)
+        self.assertTrue(result["claimed"])
+        self.assertNotIn("group_id", result)
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(manifest.get("claim_groups"), {})
+        self.assertEqual(set(manifest["claims"]), {"task-1"})
+
+    def test_batch_claim_stops_at_overlap_and_caps(self):
+        # an overlapping second task stops the maximal prefix before it even
+        # though six later tasks are disjoint: no skipping past overlap.
+        tasks = [
+            {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["a.txt"]},
+            {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["a.txt"]},
+        ]
+        tasks.extend({"id": f"task-{n}", "number": n, "status": "pending", "allowed_paths": [f"x{n}.txt"]} for n in range(3, 9))
+        self.batch_manifest(tasks)
+        result = self.batch_driver().claim_next_task(batch=True)
+        self.assertTrue(result["claimed"])
+        self.assertNotIn("group_id", result)
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(manifest.get("claim_groups"), {})
+        # six disjoint tasks cap the prefix at four members
+        self.batch_manifest(self.disjoint_tasks(6))
+        result = self.batch_driver().claim_next_task(batch=True)
+        self.assertEqual(result["members"], ["task-1", "task-2", "task-3", "task-4"])
+        manifest = runtime.load_manifest(self.state_path)
+        group = self.live_group(manifest)
+        self.assertEqual(group["members"], ["task-1", "task-2", "task-3", "task-4"])
+        self.assertEqual(manifest["tasks"]["task-5"]["status"], "pending")
+        # combined canonical files cap at eight: 3 + 3 stops, a third 3-file
+        # member would reach nine
+        self.batch_manifest(self.disjoint_tasks(3, files_per_task=3))
+        result = self.batch_driver().claim_next_task(batch=True)
+        self.assertEqual(result["members"], ["task-1", "task-2"])
+        manifest = runtime.load_manifest(self.state_path)
+        group = self.live_group(manifest)
+        combined = sum(len(paths) for paths in group["member_paths"].values())
+        self.assertEqual(combined, 6)
+        self.assertEqual(manifest["tasks"]["task-3"]["status"], "pending")
+
+    def test_batch_claim_single_task_and_no_opt_in_are_field_free(self):
+        # one pending task: the batch opt-in still yields today's single-task
+        # result with no batch fields
+        self.batch_manifest(self.disjoint_tasks(1))
+        result = self.batch_driver().claim_next_task(batch=True)
+        self.assertTrue(result["claimed"])
+        for field in ("group_id", "members", "member_ordinals", "batch"):
+            self.assertNotIn(field, result)
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(manifest.get("claim_groups"), {})
+        # a no-flag claim keeps today's single-task result field-free
+        self.batch_manifest(self.disjoint_tasks(3))
+        result = self.batch_driver().claim_next_task()
+        self.assertTrue(result["claimed"])
+        self.assertEqual(result["task_id"], "task-1")
+        for field in ("group_id", "members", "member_ordinals", "batch"):
+            self.assertNotIn(field, result)
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(manifest.get("claim_groups"), {})
+        self.assertEqual(len(manifest["claims"]), 1)
+
+    def test_batch_group_has_one_anchor_launch_record(self):
+        self.batch_manifest(self.disjoint_tasks(3))
+        adapter = RecordingAdapter()
+        driver = self.batch_driver(adapter=adapter)
+        claim = driver.claim_next_task(batch=True)
+        self.assertTrue(claim["claimed"])
+        result = driver.launch_next_task(batch=True)
+        self.assertEqual(result["status"], "success")
+        group_id = claim["group_id"]
+        manifest = runtime.load_manifest(self.state_path)
+        group = self.live_group(manifest)
+        self.assertEqual(group["anchor"], "task-1")
+        self.assertEqual(group["active_member"], "task-1")
+        self.assertEqual(group["state"], "active")
+        self.assertEqual(group["generation"], 1)
+        self.assertIsInstance(group["launch_record"], dict)
+        self.assertEqual(group["launch_record"]["generation"], group["generation"])
+        self.assertTrue(group["launch_record"]["baseline_revision"])
+        self.assertEqual(group["anchor_session"], adapter.session_id)
+        # exactly one launch-record slot lives on the group
+        record_holders = [g["group_id"] for g in manifest["claim_groups"].values() if isinstance(g.get("launch_record"), dict)]
+        self.assertEqual(record_holders, [group_id])
+        for member in group["members"]:
+            self.assertNotIn("launch_record", manifest["claims"][member])
+        # member claims hold only their own canonical paths, member token,
+        # ordinal, and group reference
+        anchor_claim = manifest["claims"]["task-1"]
+        self.assertEqual(anchor_claim["allowed_paths"], ["t1-1.txt"])
+        self.assertEqual(anchor_claim["policy_token"]["allowed_paths"], ["t1-1.txt"])
+        self.assertEqual(anchor_claim["group_id"], group_id)
+        self.assertEqual(anchor_claim["member_ordinal"], 1)
+        self.assertEqual(anchor_claim["baseline_revision"], group["launch_record"]["baseline_revision"])
+        for member, path in (("task-2", "t2-1.txt"), ("task-3", "t3-1.txt")):
+            staged = manifest["claims"][member]
+            self.assertEqual(staged["state"], "staged")
+            self.assertEqual(staged["allowed_paths"], [path])
+            self.assertEqual(staged["group_id"], group_id)
+            self.assertNotIn("policy_token", staged)
+            self.assertNotIn("baseline_revision", staged)
+
+    def state_fingerprint(self):
+        # Driver construction refreshes updated_at under the manifest lock,
+        # so no-mutation witnesses compare state with updated_at removed.
+        state = runtime.load_manifest(self.state_path)
+        state.pop("updated_at", None)
+        return state
+
+    def test_batch_member_policy_is_scoped(self):
+        # checkpoint arm: member 1's launch hits a timeout, then its resume
+        # receipt claims success while member 2's file changed in the
+        # worktree
+        self.batch_manifest(self.disjoint_tasks(2))
+        adapter = RecordingAdapter(launch_result={"status": "blocked", "reason_code": "timeout", "evidence": ["deadline exceeded"], "resume_allowed": True})
+        driver = self.batch_driver(adapter=adapter)
+        driver.claim_next_task(batch=True)
+        launch = driver.launch_next_task(batch=True)
+        self.assertEqual(launch["status"], "blocked")
+        self.assertEqual(launch["reason_code"], "timeout")
+        (self.root / "t2-1.txt").write_text("foreign change\n", encoding="utf-8")
+        driver = self.batch_driver(adapter=RecordingAdapter())
+        resumed = driver.resume()
+        self.assertEqual(resumed["status"], "blocked")
+        self.assertEqual(resumed["reason_code"], "contract-violation")
+        self.assertTrue(any("t2-1.txt" in item for item in resumed["evidence"]))
+        manifest = runtime.load_manifest(self.state_path)
+        group = self.live_group(manifest)
+        # the witness-only union stayed on the group record and never
+        # authorized the foreign path
+        self.assertEqual(group["member_paths"], {"task-1": ["t1-1.txt"], "task-2": ["t2-1.txt"]})
+        self.assertEqual(group["member_paths"]["task-2"], ["t2-1.txt"])
+        (self.root / "t2-1.txt").unlink()
+        # done boundary arm: member 1's commit touches member 2's file
+        self.batch_manifest(self.disjoint_tasks(2))
+        driver = self.batch_driver(adapter=RecordingAdapter())
+        driver.launch_next_task(batch=True)
+        receipt = self.member_receipt("task-1", 1, 1)
+        self.assertEqual(driver.record_worker_checkpoint(receipt)["status"], "success")
+        commit = self.commit_files("t1-1.txt", "t2-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit))
+        self.assertEqual(done["status"], "blocked")
+        self.assertEqual(done["reason_code"], "commit-pending")
+        self.assertTrue(any("t2-1.txt" in item for item in done["evidence"]))
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(manifest["claims"]["task-1"]["state"], "launched")
+
+    def test_batch_member_progress_resumes_anchor_session(self):
+        self.batch_manifest(self.disjoint_tasks(3))
+        adapter = RecordingAdapter()
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        manifest = runtime.load_manifest(self.state_path)
+        group = self.live_group(manifest)
+        group_id = group["group_id"]
+        first_record = dict(group["launch_record"])
+        anchor_session = group["anchor_session"]
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        self.assertEqual(done["status"], "success")
+        action = done["actions"][0]
+        self.assertEqual(action["type"], "resume_member")
+        self.assertEqual(action["group_id"], group_id)
+        self.assertEqual(action["task_id"], "task-2")
+        self.assertEqual(action["member_ordinal"], 2)
+        self.assertEqual(action["session_id"], anchor_session)
+        self.assertEqual(action["baseline_revision"], commit1)
+        manifest = runtime.load_manifest(self.state_path)
+        group = manifest["claim_groups"][group_id]
+        self.assertEqual(group["active_member"], "task-2")
+        self.assertEqual(group["launch_record"], first_record)
+        self.assertEqual(group["anchor_session"], anchor_session)
+        attempt = group["member_attempts"]["task-2"]
+        self.assertEqual(attempt["baseline_revision"], commit1)
+        claim1 = manifest["claims"]["task-1"]
+        claim2 = manifest["claims"]["task-2"]
+        self.assertNotEqual(claim2["policy_token"]["token"], claim1["policy_token"]["token"])
+        self.assertEqual(claim2["policy_token"]["allowed_paths"], ["t2-1.txt"])
+        self.assertEqual(claim2["baseline_revision"], commit1)
+        # resume without a second launch record: the anchor session is
+        # reused with member 2's own token
+        fresh = self.batch_driver(adapter=adapter)
+        resumed = fresh.continue_parent(batch=True)
+        self.assertEqual(resumed["status"], "success")
+        self.assertEqual(len(adapter.launch_calls), 1)
+        self.assertEqual(adapter.resume_calls[0]["session_id"], anchor_session)
+        self.assertEqual(adapter.resume_calls[0]["task_id"], "task-2")
+        self.assertEqual(adapter.resume_calls[0]["policy_token"]["allowed_paths"], ["t2-1.txt"])
+        manifest = runtime.load_manifest(self.state_path)
+        holders = [g["group_id"] for g in manifest["claim_groups"].values() if isinstance(g.get("launch_record"), dict)]
+        self.assertEqual(holders, [group_id])
+        self.assertEqual(manifest["claim_groups"][group_id]["launch_record"], first_record)
+
+    def test_batch_done_returns_typed_resume_member_action(self):
+        self.batch_manifest(self.disjoint_tasks(3))
+        adapter = RecordingAdapter()
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        self.assertEqual(len(adapter.launch_calls), 1)
+        self.assertEqual(adapter.launch_calls[0]["task_id"], "task-1")
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        self.assertEqual(done["status"], "success")
+        self.assertEqual(done["actions"][0]["type"], "resume_member")
+        # generic next-claim is suppressed while the group is live
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(set(manifest["claims"]), {"task-1", "task-2", "task-3"})
+        self.assertEqual(manifest["tasks"]["task-3"]["status"], "pending")
+        # member 2 advances only through resume, never a second launch
+        driver = self.batch_driver(adapter=adapter)
+        resumed = driver.continue_parent(batch=True)
+        self.assertEqual(resumed["status"], "success")
+        self.assertEqual(len(adapter.launch_calls), 1)
+        commit2 = self.commit_files("t2-1.txt")
+        done2 = driver.record_done(self.member_done("task-2", 2, commit2))
+        self.assertEqual(done2["status"], "success")
+        self.assertEqual(done2["actions"][0]["type"], "resume_member")
+        self.assertEqual(done2["actions"][0]["member_ordinal"], 3)
+        self.assertEqual(len(adapter.launch_calls), 1)
+
+    def test_batch_member2_witnesses_from_member1_done(self):
+        self.batch_manifest(self.disjoint_tasks(4))
+        adapter = RecordingAdapter()
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        commits = {}
+        for ordinal, task in enumerate(("task-1", "task-2", "task-3", "task-4"), start=1):
+            if ordinal > 1:
+                driver = self.batch_driver(adapter=adapter)
+                advanced = driver.continue_parent(batch=True)
+                self.assertEqual(advanced["status"], "success")
+            if ordinal == 3:
+                # stale predecessor: member 3 cannot close over member 1's
+                # commit; it is not new work on member 2's baseline
+                stale = driver.record_done(self.member_done(task, ordinal, commits["task-1"]))
+                self.assertEqual(stale["status"], "blocked")
+                self.assertEqual(stale["reason_code"], "commit-pending")
+                self.assertTrue(any("not new work" in item for item in stale["evidence"]))
+            commits[task] = self.commit_files(f"t{ordinal}-1.txt")
+            done = driver.record_done(self.member_done(task, ordinal, commits[task]))
+            self.assertEqual(done["status"], "success")
+            manifest = runtime.load_manifest(self.state_path)
+            self.assertEqual(manifest["claims"][task]["state"], "closed")
+        # foreign path rejection in a fresh two-member fixture: a member's
+        # done commit may only touch its own canonical paths (a foreign
+        # commit inside a member window would poison every later diff, so
+        # this arm gets its own group)
+        self.batch_manifest(self.disjoint_tasks(2))
+        driver = self.batch_driver(adapter=RecordingAdapter())
+        driver.launch_next_task(batch=True)
+        commit1 = self.commit_files("t1-1.txt")
+        self.assertEqual(driver.record_done(self.member_done("task-1", 1, commit1))["status"], "success")
+        driver = self.batch_driver(adapter=RecordingAdapter())
+        self.assertEqual(driver.continue_parent(batch=True)["status"], "success")
+        foreign = self.commit_files("t1-1.txt")
+        rejected = driver.record_done(self.member_done("task-2", 2, foreign))
+        self.assertEqual(rejected["status"], "blocked")
+        self.assertEqual(rejected["reason_code"], "commit-pending")
+        self.assertTrue(any("out-of-scope committed change: t1-1.txt" in item for item in rejected["evidence"]))
+
+    def test_batch_mid_member_failure_preserves_prefix_and_suffix(self):
+        self.batch_manifest(self.disjoint_tasks(4))
+        adapter = RecordingAdapter(resume_result={"status": "blocked", "reason_code": "timeout", "evidence": ["resume deadline exceeded"], "resume_allowed": True})
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        manifest = runtime.load_manifest(self.state_path)
+        group = self.live_group(manifest)
+        anchor_session = group["anchor_session"]
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        self.assertEqual(done["actions"][0]["type"], "resume_member")
+        fresh = self.batch_driver(adapter=adapter)
+        resumed = fresh.continue_parent(batch=True)
+        self.assertEqual(resumed["status"], "blocked")
+        self.assertEqual(resumed["reason_code"], "timeout")
+        manifest = runtime.load_manifest(self.state_path)
+        group = manifest["claim_groups"][done["actions"][0]["group_id"]]
+        # member 1 closed, member 2 blocked with its attempt receipt, later
+        # members pending
+        self.assertEqual(manifest["claims"]["task-1"]["state"], "closed")
+        self.assertEqual(manifest["claims"]["task-2"]["state"], "blocked")
+        self.assertEqual(manifest["tasks"]["task-2"]["status"], "blocked")
+        self.assertEqual(manifest["tasks"]["task-3"]["status"], "pending")
+        self.assertEqual(manifest["tasks"]["task-4"]["status"], "pending")
+        self.assertEqual(manifest["claims"]["task-3"]["state"], "staged")
+        self.assertEqual(manifest["claims"]["task-4"]["state"], "staged")
+        attempt = group["member_attempts"]["task-2"]
+        self.assertEqual(attempt["receipt"]["reason_code"], "timeout")
+        self.assertEqual(group["active_member"], "task-2")
+        # resume selects only the first unfinished member through the anchor
+        # session
+        resume_adapter = RecordingAdapter()
+        driver = self.batch_driver(adapter=resume_adapter)
+        result = driver.resume()
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(len(resume_adapter.resume_calls), 1)
+        self.assertEqual(resume_adapter.resume_calls[0]["session_id"], anchor_session)
+        self.assertEqual(resume_adapter.resume_calls[0]["task_id"], "task-2")
+        self.assertEqual(resume_adapter.resume_calls[0]["policy_token"]["allowed_paths"], ["t2-1.txt"])
+        self.assertEqual(len(resume_adapter.launch_calls), 0)
+
+    def test_batch_done_closes_members_individually(self):
+        self.batch_manifest(self.disjoint_tasks(3))
+        adapter = RecordingAdapter()
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        for ordinal, task in enumerate(("task-1", "task-2", "task-3"), start=1):
+            if ordinal > 1:
+                driver = self.batch_driver(adapter=adapter)
+                advanced = driver.continue_parent(batch=True)
+                self.assertEqual(advanced["status"], "success")
+            commit = self.commit_files(f"t{ordinal}-1.txt")
+            done = driver.record_done(self.member_done(task, ordinal, commit))
+            self.assertEqual(done["status"], "success")
+            manifest = runtime.load_manifest(self.state_path)
+            self.assertEqual(manifest["claims"][task]["state"], "closed")
+            group = self.live_group(manifest)
+            if ordinal < 3:
+                self.assertEqual(group["state"], "active")
+            else:
+                self.assertEqual(group["state"], "closed")
+                self.assertIsNone(group["active_member"])
+
+    def test_batch_late_receipt_is_rejected(self):
+        self.batch_manifest(self.disjoint_tasks(3))
+        adapter = RecordingAdapter()
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        group_id = done["actions"][0]["group_id"]
+        anchor_session = runtime.load_manifest(self.state_path)["claim_groups"][group_id]["anchor_session"]
+        closed = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+        late_success = {
+            "status": "success",
+            "reason_code": "completed",
+            "evidence": ["late"],
+            "action_scope": "repository-task",
+            "checkpoint_identity": "task-1:worker",
+            "generation": 1,
+            "claim_token": closed["token"],
+        }
+        late_error = dict(late_success, status="error", reason_code="runtime-error", evidence=["late failure"])
+        late_done = self.member_done("task-1", 1, commit1)
+        before = self.state_fingerprint()
+        # success, error, and done receipts for a closed member are late
+        for label, receipt in (("success", late_success), ("error", late_error)):
+            outcome = self.batch_driver().record_worker_checkpoint(receipt)
+            self.assertEqual(outcome["status"], "blocked", label)
+            self.assertEqual(outcome["reason_code"], "stale-claim", label)
+            self.assertEqual(self.state_fingerprint(), before, label)
+        outcome = self.batch_driver().record_done(late_done)
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "stale-claim")
+        self.assertEqual(self.state_fingerprint(), before)
+        # old-attempt receipt: the batch progress attempt does not match the
+        # live member attempt
+        active = runtime.load_manifest(self.state_path)["claims"]["task-2"]
+        old_attempt = {
+            "status": "success",
+            "reason_code": "completed",
+            "evidence": ["stale attempt"],
+            "action_scope": "repository-task",
+            "checkpoint_identity": "task-2:worker",
+            "generation": 1,
+            "claim_token": active["token"],
+            "batch_progress": {"batch_id": group_id, "member_id": "task-2", "member_ordinal": 2, "attempt": 3, "session_id": anchor_session},
+        }
+        outcome = self.batch_driver().record_worker_checkpoint(old_attempt)
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "stale-claim")
+        self.assertEqual(self.state_fingerprint(), before)
+        # superseded member: a replaced claim is refused the same way
+        state = runtime.load_manifest(self.state_path)
+        state["claims"]["task-2"]["state"] = "replaced"
+        runtime._safe_write_json(self.state_path, state)
+        superseded_receipt = dict(old_attempt)
+        superseded_receipt["batch_progress"] = {"batch_id": group_id, "member_id": "task-2", "member_ordinal": 2, "attempt": 1, "session_id": anchor_session}
+        superseded_before = self.state_fingerprint()
+        outcome = self.batch_driver().record_worker_checkpoint(superseded_receipt)
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "stale-claim")
+        self.assertEqual(self.state_fingerprint(), superseded_before)
+        # aborted member: the receipt is a late receipt for an aborted member
+        # and fails closed as stale-claim with no state mutation
+        self.batch_manifest(self.disjoint_tasks(2))
+        driver = self.batch_driver(adapter=RecordingAdapter(launch_result={"status": "blocked", "reason_code": "timeout", "evidence": ["deadline exceeded"], "resume_allowed": True}))
+        claimed = driver.claim_next_task(batch=True)
+        driver.launch_next_task(batch=True)
+        driver.abort("task-1", claimed["token"])
+        aborted_before = self.state_fingerprint()
+        receipt = self.member_receipt("task-1", 1, 1, claim_token=claimed["token"])
+        outcome = self.batch_driver().record_worker_checkpoint(receipt)
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "stale-claim")
+        self.assertEqual(self.state_fingerprint(), aborted_before)
+
+    def test_batch_member_envelope_checkpoint_passes_member_fence(self):
+        # r1 F3: a live member checkpoint carrying the documented
+        # batch_progress envelope (the normalized shape the codex adapter
+        # emits: batch_id, member_id, member_ordinal, attempt, session_id,
+        # and no claim token inside the envelope) passes the member receipt
+        # fence and checkpoints. Pre-fix, the fence demanded claim_token
+        # inside the normalized envelope, which it can never carry, so every
+        # conforming member checkpoint was fenced stale-claim.
+        self.batch_manifest(self.disjoint_tasks(2))
+        driver = self.batch_driver(adapter=RecordingAdapter())
+        driver.launch_next_task(batch=True)
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        group_id = done["actions"][0]["group_id"]
+        anchor_session = runtime.load_manifest(self.state_path)["claim_groups"][group_id]["anchor_session"]
+        active = runtime.load_manifest(self.state_path)["claims"]["task-2"]
+        receipt = self.member_receipt("task-2", 2, active["generation"])
+        receipt["batch_progress"] = {
+            "batch_id": group_id,
+            "member_id": "task-2",
+            "member_ordinal": 2,
+            "attempt": 1,
+            "session_id": anchor_session,
+        }
+        outcome = self.batch_driver().record_worker_checkpoint(receipt)
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertEqual(outcome["state"], "done-pending")
+        state = runtime.load_manifest(self.state_path)
+        self.assertIn("task-2:worker", state["checkpoints"])
+
+    def test_batch_sessionless_timeout_wedge_recovers_through_launch(self):
+        # r2 F7: a launch-window timeout before the first receipt leaves the
+        # active member blocked with no session anywhere (no task session,
+        # no anchor session). Pre-fix, resume and continue returned
+        # stale-claim forever and only a manual abort ended the run,
+        # stranding later members. Post-fix, the member recycles through a
+        # rotated identity into a fresh launch, the group advances, and a
+        # late receipt carrying the dead attempt's claim token fences shut.
+        self.batch_manifest(self.disjoint_tasks(2))
+
+        class TimeoutAdapter:
+            def launch(self, task, prompt, generation, deadline_seconds=None, policy_token=None):
+                raise TimeoutError("launch deadline exceeded")
+
+        driver = self.batch_driver(adapter=TimeoutAdapter())
+        driver.claim_next_task(batch=True)
+        blocked = driver.launch_next_task(batch=True)
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertEqual(blocked["reason_code"], "timeout")
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-1"]["status"], "blocked")
+        self.assertTrue(state["tasks"]["task-1"]["resume_allowed"])
+        self.assertIsNone(state["tasks"]["task-1"].get("session_id"))
+        self.assertIsNone(self.live_group(state).get("anchor_session"))
+        dead_token = state["claims"]["task-1"]["token"]
+
+        # The wedge: resume (and continue) must not answer stale-claim
+        # forever; the session-less blocked member recycles into a fresh
+        # launch through the rotated identity.
+        driver = self.batch_driver(adapter=RecordingAdapter())
+        recovered = driver.resume()
+        self.assertEqual(recovered["status"], "success", recovered)
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotEqual(state["claims"]["task-1"]["token"], dead_token)
+        self.assertEqual(state["claims"]["task-1"]["attempt"], 2)
+        self.assertEqual(state["claims"]["task-1"]["state"], "launched")
+        self.assertEqual(self.live_group(state)["member_attempts"]["task-1"]["attempt"], 2)
+        self.assertIsNotNone(self.live_group(state)["anchor_session"])
+
+        # A late receipt from the dead attempt fences on the rotated identity.
+        late = self.member_receipt("task-1", 1, state["claims"]["task-1"]["generation"])
+        late["claim_token"] = dead_token
+        fenced = self.batch_driver().record_worker_checkpoint(late)
+        self.assertEqual(fenced["status"], "blocked")
+        self.assertEqual(fenced["reason_code"], "owner-mismatch")
+
+        # The recovered member completes and the group advances to member 2:
+        # the standard fix path, not a wedged batch.
+        fresh = self.batch_driver(adapter=RecordingAdapter())
+        commit1 = self.commit_files("t1-1.txt")
+        done = fresh.record_done(self.member_done("task-1", 1, commit1, generation=state["claims"]["task-1"]["generation"]))
+        self.assertEqual(done["status"], "success", done)
+        self.assertEqual(done["actions"][0]["type"], "resume_member")
+        self.assertEqual(done["actions"][0]["task_id"], "task-2")
+
+    def test_batch_member_session_fence_refuses_wrong_outer_session(self):
+        # r2 F13: the anchor-session comparison in the member receipt fence
+        # had zero coverage (deleting the comparison passed the whole suite).
+        # Negative arm: a member receipt whose translated top-level
+        # session_id (what the codex adapter copies from the worker
+        # envelope) differs from the group's anchor session is a blocked
+        # stale-claim with a byte-identical manifest; control arm: the
+        # matching anchor session checkpoints through.
+        self.batch_manifest(self.disjoint_tasks(2))
+        driver = self.batch_driver(adapter=RecordingAdapter())
+        driver.launch_next_task(batch=True)
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        group_id = done["actions"][0]["group_id"]
+        anchor_session = runtime.load_manifest(self.state_path)["claim_groups"][group_id]["anchor_session"]
+        active = runtime.load_manifest(self.state_path)["claims"]["task-2"]
+        before = self.state_path.read_bytes()
+        wrong = self.member_receipt("task-2", 2, active["generation"], session_id="sess-rogue-9")
+        # The same driver instance: a fresh construction persists its
+        # updated_at backfill, which would swamp the byte-identical
+        # fingerprint the refused receipt must leave.
+        refused = driver.record_worker_checkpoint(wrong)
+        self.assertEqual(refused["status"], "blocked")
+        self.assertEqual(refused["reason_code"], "stale-claim")
+        self.assertEqual(self.state_path.read_bytes(), before)
+        match = self.member_receipt("task-2", 2, active["generation"], session_id=anchor_session)
+        outcome = self.batch_driver().record_worker_checkpoint(match)
+        self.assertEqual(outcome["status"], "success", outcome)
+
+    def test_claim_blocked_while_batch_live(self):
+        self.batch_manifest(self.disjoint_tasks(3))
+        first = self.batch_driver().claim_next_task(batch=True)
+        self.assertTrue(first["claimed"])
+        # a second group claim retains today's blocked stale-claim outcome
+        second = self.batch_driver(owner="other-owner").claim_next_task(batch=True)
+        self.assertEqual(second["status"], "blocked")
+        self.assertEqual(second["reason_code"], "stale-claim")
+        self.assertFalse(second["claimed"])
+        self.assertEqual(second["evidence"], ["another task is already claimed"])
+        # the no-flag claim is blocked by the same single-claim invariant
+        third = self.batch_driver().claim_next_task()
+        self.assertEqual(third["status"], "blocked")
+        self.assertEqual(third["reason_code"], "stale-claim")
+
+    def test_cli_batch_opt_in_and_no_flag_control(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def create_cli(manifest_name):
+                path = root / manifest_name
+                command = [
+                    sys.executable,
+                    str(ROOT / "scripts/execute_plan_runtime.py"),
+                    "--manifest", str(path),
+                    "--repo-root", str(root),
+                    "--owner", "cli-owner",
+                    "--plan-slug", "cli-batch",
+                    "--operation", "create",
+                    "--input", json.dumps({"tasks": [
+                        {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["./b1.txt"]},
+                        {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["b2.txt"]},
+                        {"id": "task-3", "number": 3, "status": "pending", "allowed_paths": ["b3.txt"]},
+                    ]}),
+                ]
+                completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=True)
+                self.assertEqual(json.loads(completed.stdout)["status"], "success")
+                return path
+
+            def claim_cli(manifest_path, *extra):
+                command = [
+                    sys.executable,
+                    str(ROOT / "scripts/execute_plan_runtime.py"),
+                    "--manifest", str(manifest_path),
+                    "--repo-root", str(root),
+                    "--owner", "cli-owner",
+                    "--operation", "claim",
+                    *extra,
+                ]
+                return json.loads(subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=True).stdout)
+
+            batch_manifest = create_cli("batch_state.json")
+            result = claim_cli(batch_manifest, "--batch")
+            self.assertTrue(result["claimed"])
+            self.assertEqual(result["members"], ["task-1", "task-2", "task-3"])
+            manifest = runtime.load_manifest(batch_manifest)
+            self.assertEqual(len(manifest["claim_groups"]), 1)
+            self.assertEqual(manifest["generation"], 1)
+            group = next(iter(manifest["claim_groups"].values()))
+            self.assertEqual(group["member_ordinals"], {"task-1": 1, "task-2": 2, "task-3": 3})
+            self.assertEqual(manifest["tasks"]["task-1"]["allowed_paths"], ["b1.txt"])
+            # the no-flag entrypoint persists one task only
+            single_manifest = create_cli("single_state.json")
+            result = claim_cli(single_manifest)
+            self.assertTrue(result["claimed"])
+            self.assertNotIn("group_id", result)
+            manifest = runtime.load_manifest(single_manifest)
+            self.assertEqual(manifest.get("claim_groups"), {})
+            self.assertEqual(len(manifest["claims"]), 1)
+            self.assertEqual(manifest["generation"], 1)
+
+    def test_batch_wrapper_opt_in_and_no_flag_control(self):
+        self.batch_manifest(self.disjoint_tasks(3))
+        adapter = RecordingAdapter()
+        # launch_next_task(batch=True) claims and launches the group
+        result = self.batch_driver(adapter=adapter).launch_next_task(batch=True)
+        self.assertEqual(result["status"], "success")
+        manifest = runtime.load_manifest(self.state_path)
+        group_id = self.live_group(manifest)["group_id"]
+        commit1 = self.commit_files("t1-1.txt")
+        done = self.batch_driver().record_done(self.member_done("task-1", 1, commit1))
+        self.assertEqual(done["actions"][0]["type"], "resume_member")
+        # continue_parent(batch=True) resumes the group's active member
+        resumed = self.batch_driver(adapter=adapter).continue_parent(batch=True)
+        self.assertEqual(resumed["status"], "success")
+        self.assertEqual(adapter.resume_calls[0]["task_id"], "task-2")
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertIn(group_id, manifest["claim_groups"])
+        # both no-flag calls preserve today's single-task behavior
+        self.batch_manifest(self.disjoint_tasks(2))
+        single = RecordingAdapter()
+        single_result = self.batch_driver(adapter=single).launch_next_task()
+        self.assertEqual(single_result["status"], "success")
+        self.assertNotIn("group_id", single_result)
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(manifest.get("claim_groups"), {})
+        self.assertEqual(single.launch_calls[0]["task_id"], "task-1")
+        continued = self.batch_driver(adapter=single).continue_parent()
+        self.assertEqual(continued["status"], "blocked")
+        self.assertEqual(continued["reason_code"], "done-pending")
+        self.assertTrue(any("awaiting the done handoff" in item for item in continued["evidence"]))
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertEqual(manifest.get("claim_groups"), {})
+
+    def test_cli_continue_batch_opt_in_and_no_flag_control(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._git("init", "-q", cwd=root)
+            self._git("config", "user.email", "test@example.invalid", cwd=root)
+            self._git("config", "user.name", "Runtime Test", cwd=root)
+            (root / ".gitignore").write_text("runtime_state.json\nruntime_state.json.lock\n", encoding="utf-8")
+            self._git("add", ".gitignore", cwd=root)
+            self._git("commit", "-qm", "base", cwd=root)
+            state = root / "runtime_state.json"
+            runtime.create_manifest(state, "cli-batch", [
+                {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["c1.txt"]},
+                {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["c2.txt"]},
+            ], repo_root=root)
+            adapter = RecordingAdapter(session_id="sess-cli-anchor")
+            driver = runtime.RuntimeDriver(state, plan_slug="cli-batch", owner="cli-owner", repo_root=root, commit_lookup=lambda _commit: True, adapter=adapter)
+            driver.launch_next_task(batch=True)
+            (root / "c1.txt").write_text("one\n", encoding="utf-8")
+            commit1 = subprocess.run(["git", "add", "c1.txt"], cwd=root, env=self._git_env, check=True).returncode
+            self.assertEqual(commit1, 0)
+            subprocess.run(["git", "commit", "-qm", "member one"], cwd=root, env=self._git_env, check=True)
+            commit1 = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True, env=self._git_env).stdout.strip()
+            done = driver.record_done({
+                "status": "success",
+                "reason_code": "completed",
+                "evidence": ["done-log:task-1"],
+                "action_scope": "done-handoff",
+                "checkpoint_identity": "task-1:done",
+                "generation": 1,
+                "task_id": "task-1",
+                "claim_token": runtime.load_manifest(state)["claims"]["task-1"]["token"],
+                "commit_identity": commit1,
+                "checkbox": True,
+                "clean_state": True,
+                "log_evidence": ["task-1-implement.log.md"],
+            })
+            anchor_session = done["actions"][0]["session_id"]
+            self.assertEqual(anchor_session, "sess-cli-anchor")
+
+            def continue_cli(*extra):
+                command = [
+                    sys.executable,
+                    str(ROOT / "scripts/execute_plan_runtime.py"),
+                    "--manifest", str(state),
+                    "--repo-root", str(root),
+                    "--operation", "continue",
+                    *extra,
+                ]
+                completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=True)
+                return json.loads(completed.stdout)
+
+            # the real --batch entrypoint resolves the active member and the
+            # anchor session; with no adapter configured it fails closed
+            # naming both instead of relaunching
+            result = continue_cli("--batch")
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["active_member"], "task-2")
+            self.assertEqual(result["anchor_session"], anchor_session)
+            manifest = runtime.load_manifest(state)
+            self.assertEqual(manifest["claims"]["task-2"]["state"], "claimed")
+            self.assertEqual(manifest["claim_groups"][done["actions"][0]["group_id"]]["anchor_session"], anchor_session)
+            # the no-flag entrypoint keeps the single-task continuation and
+            # never names the anchor session
+            control = continue_cli()
+            self.assertEqual(control["status"], "blocked")
+            self.assertNotIn("anchor_session", control)
+            self.assertNotIn("active_member", control)
+            self.assertTrue(any("resume" in item for item in control["evidence"]))
+            manifest = runtime.load_manifest(state)
+            self.assertEqual(manifest["claims"]["task-2"]["state"], "claimed")
+
+    def test_reclaim_refuses_live_group_member_and_non_member_still_reclaims(self):
+        # r3 F1: an expired claim on a member of a live batch group is
+        # refused with the resumable stale-claim outcome naming the group,
+        # whatever its lease state (a group parked at a budget pause is
+        # EXPECTED to be lease-expired, so the refusal precedes lease
+        # accounting); the manifest stays byte-identical because the group
+        # protocol owns the member. The control arm proves reclaim still
+        # works for a non-member expired claim, and the recovery arm proves
+        # the group path the refusal points at actually advances the group.
+        self.batch_manifest(self.disjoint_tasks(5))
+        # The batch cap packs task-1..task-4 into the group; task-5 stays
+        # pending with no claim.
+        claim = self.batch_driver().claim_next_task(batch=True)
+        self.assertTrue(claim["claimed"])
+        group_id = claim["group_id"]
+        expired = self.FIXED_NOW - runtime.CLAIM_LEASE_SECONDS - 10.0
+
+        def expire_members(state):
+            for member in claim["members"]:
+                state["claims"][member]["timestamp"] = expired
+
+        self.rewrite_manifest(expire_members)
+        driver = self.batch_driver(clock=lambda: self.FIXED_NOW)
+        before = self.state_path.read_bytes()
+        refused = driver.reclaim("task-1")
+        self.assertEqual(refused["status"], "blocked")
+        self.assertEqual(refused["reason_code"], "stale-claim")
+        self.assertTrue(any(group_id in item for item in refused["evidence"]), refused["evidence"])
+        self.assertTrue(any("continue --batch" in item for item in refused["evidence"]))
+        self.assertEqual(self.state_path.read_bytes(), before)
+        # A fresh lease on the same member refuses through the same fence.
+        self.rewrite_manifest(lambda state: state["claims"]["task-1"].update({"timestamp": self.FIXED_NOW}))
+        fresh = self.batch_driver(clock=lambda: self.FIXED_NOW).reclaim("task-1")
+        self.assertEqual(fresh["reason_code"], "stale-claim")
+        self.assertTrue(any(group_id in item for item in fresh["evidence"]))
+        # Control arm: an expired non-member claim reclaims normally.
+        def seed_expired_non_member(state):
+            state["claims"]["task-5"] = {
+                "token": "seed-task-5",
+                "generation": 0,
+                "owner": "test-owner",
+                "timestamp": expired,
+                "state": "launched",
+                "task_id": "task-5",
+            }
+
+        self.rewrite_manifest(seed_expired_non_member)
+        released = self.batch_driver(clock=lambda: self.FIXED_NOW).reclaim("task-5")
+        self.assertEqual(released["status"], "success")
+        self.assertEqual(released["reason_code"], "reclaimed")
+        self.assertEqual(runtime.load_manifest(self.state_path)["claims"]["task-5"]["state"], "replaced")
+        # Recovery arm: the group path the refusal names still advances the
+        # group (the active member launches through the anchor protocol).
+        adapter = RecordingAdapter()
+        recovered = self.batch_driver(adapter=adapter).continue_parent(batch=True)
+        self.assertEqual(recovered["status"], "success", recovered)
+        self.assertEqual(adapter.launch_calls[0]["task_id"], "task-1")
+
+    def test_batch_member_lease_refreshes_at_activation(self):
+        # r3 F1: the member lease timestamp measures liveness from the
+        # moment the member became active, not from the group claim: the
+        # anchor launch refreshes it, and a later member's activation at
+        # the done boundary refreshes it again, so a group parked past the
+        # lease never carries claim-time-frozen leases that invite reclaim.
+        now = {"value": self.FIXED_NOW}
+
+        def clock():
+            return now["value"]
+
+        self.batch_manifest(self.disjoint_tasks(2))
+        driver = self.batch_driver(clock=clock, adapter=RecordingAdapter())
+        driver.launch_next_task(batch=True)
+        self.assertEqual(runtime.load_manifest(self.state_path)["claims"]["task-1"]["timestamp"], now["value"])
+        now["value"] += runtime.CLAIM_LEASE_SECONDS + 60
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        self.assertEqual(done["status"], "success", done)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["claims"]["task-2"]["timestamp"], now["value"])
+        self.assertEqual(state["claims"]["task-1"]["timestamp"], self.FIXED_NOW)
+
+    def test_continue_batch_refuses_non_resumable_blocked_member(self):
+        # r3 F2: a blocked member whose receipt forbids continuation (a
+        # foreign-path contract violation, resume_allowed=False) is refused
+        # by BOTH group recovery entries exactly like resume() hard-filters
+        # it; resuming it through the batch continuation would give the
+        # caught scope violator a second turn that launders the violation
+        # into an acceptance. The control arm proves resume_allowed=True
+        # still resumes through the anchor session.
+        self.batch_manifest(self.disjoint_tasks(2))
+        adapter = RecordingAdapter()
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        group_id = done["actions"][0]["group_id"]
+        anchor_session = runtime.load_manifest(self.state_path)["claim_groups"][group_id]["anchor_session"]
+
+        def block_member2(resume_allowed):
+            def mutate(state):
+                state["claims"]["task-2"]["state"] = "blocked"
+                state["tasks"]["task-2"]["status"] = "blocked"
+                state["tasks"]["task-2"]["resume_allowed"] = resume_allowed
+                state["tasks"]["task-2"]["session_id"] = anchor_session
+            return mutate
+
+        self.rewrite_manifest(block_member2(False))
+        blocked_driver = self.batch_driver(adapter=RecordingAdapter())
+        refused = blocked_driver.continue_parent(batch=True)
+        self.assertEqual(refused["status"], "blocked")
+        self.assertEqual(refused["reason_code"], "stale-claim")
+        self.assertTrue(any("not resumable" in item for item in refused["evidence"]), refused["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-2"]["status"], "blocked")
+        self.assertFalse(state["tasks"]["task-2"]["resume_allowed"])
+        self.assertEqual(state["claims"]["task-2"]["state"], "blocked")
+        # resume() refuses the same member (the entry points agree).
+        resume_refused = self.batch_driver(adapter=RecordingAdapter()).resume()
+        self.assertEqual(resume_refused["status"], "blocked")
+        self.assertEqual(resume_refused["reason_code"], "stale-claim")
+        self.assertTrue(any("no resumable blocked task" in item for item in resume_refused["evidence"]))
+        # Control arm: resume_allowed=True resumes through the anchor.
+        self.rewrite_manifest(block_member2(True))
+        control_adapter = RecordingAdapter()
+        resumed = self.batch_driver(adapter=control_adapter).continue_parent(batch=True)
+        self.assertEqual(resumed["status"], "success", resumed)
+        self.assertEqual(control_adapter.resume_calls[0]["task_id"], "task-2")
+        self.assertEqual(control_adapter.resume_calls[0]["session_id"], anchor_session)
+
+    def test_batch_member_retryable_error_lands_through_anchor_resume(self):
+        # r4 F1 (blocking): a batch member's retryable error receipt never
+        # takes the plain driver relaunch - that launch bypasses the group
+        # fences and its fresh session then always fails the member receipt
+        # fence's session pin (the group anchor is already captured), so the
+        # group livelocks on contradictory durable state. The member retry
+        # is the group's own continuation primitive instead: an
+        # anchor-session resume whose receipt re-enters every member fence
+        # and lands. tasks[].status never disagrees with claims[].state
+        # across the retry window, the anchor identity never changes, and
+        # the driver-owned retry budget decrements exactly once.
+        self.batch_manifest(self.disjoint_tasks(2))
+
+        class ScriptedAdapter:
+            """Two-call resume script: first receipt errors, retry lands."""
+
+            def __init__(self):
+                self.launch_calls = []
+                self.resume_calls = []
+
+            @staticmethod
+            def _receipt(task_id, generation, session_id, status, remaining=None):
+                result = {
+                    "status": status,
+                    "reason_code": "completed" if status == "success" else "runtime-error",
+                    "evidence": ["batch-worker-log"],
+                    "action_scope": "repository-task",
+                    "checkpoint_identity": f"{task_id}:worker",
+                    "generation": generation,
+                    "session_id": session_id,
+                }
+                if remaining is not None:
+                    result["retry_policy"] = {"mode": "bounded", "max_attempts": 1, "attempts_remaining": remaining}
+                return result
+
+            def launch(self, task, prompt, generation, deadline_seconds=None, policy_token=None):
+                self.launch_calls.append(task["id"])
+                return self._receipt(task["id"], generation, "sess-anchor-1", "success")
+
+            def resume(self, session_id, prompt, generation, task_id=None, deadline_seconds=None, policy_token=None):
+                self.resume_calls.append({"session_id": session_id, "task_id": task_id})
+                if len(self.resume_calls) == 1:
+                    return self._receipt(task_id, generation, session_id, "error", remaining=1)
+                return self._receipt(task_id, generation, session_id, "success")
+
+        adapter = ScriptedAdapter()
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        self.assertEqual(done["status"], "success")
+        group_id = done["actions"][0]["group_id"]
+        anchor_session = runtime.load_manifest(self.state_path)["claim_groups"][group_id]["anchor_session"]
+
+        advanced = driver.continue_parent(batch=True)
+        self.assertEqual(advanced["status"], "success", advanced)
+        self.assertEqual(advanced["state"], "done-pending")
+        # No driver relaunch: the anchor's launch stays the only one, and
+        # both member resumes carried the anchor session (the retry
+        # re-entered the member fences instead of fencing forever).
+        self.assertEqual(adapter.launch_calls, ["task-1"])
+        self.assertEqual([call["session_id"] for call in adapter.resume_calls], [anchor_session, anchor_session])
+        self.assertEqual([call["task_id"] for call in adapter.resume_calls], ["task-2", "task-2"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-2"]["status"], "done-pending")
+        self.assertEqual(state["claims"]["task-2"]["state"], "launched")
+        self.assertEqual(state["claim_groups"][group_id]["anchor_session"], anchor_session)
+        self.assertIn("task-2:worker#attempt-1", state["checkpoints"])
+        self.assertTrue(any(
+            entry.get("event") == "worker-retry" and entry.get("task_id") == "task-2"
+            for entry in state["history"]
+        ))
+
+    def test_batch_member_retry_budget_exhaustion_blocks_consistently(self):
+        # r4 F1 recovery arm: with the retry budget spent the member
+        # converges to a consistent blocked state through the same
+        # anchor-session resume - exactly two resumes (the window and the
+        # one budgeted retry), no livelock, no driver relaunch, and
+        # tasks[].status agrees with claims[].state for every task.
+        self.batch_manifest(self.disjoint_tasks(2))
+        adapter = RecordingAdapter(
+            resume_result={
+                "status": "error",
+                "reason_code": "runtime-error",
+                "evidence": ["persistent worker error"],
+                "action_scope": "repository-task",
+                "retry_policy": {"mode": "bounded", "max_attempts": 1, "attempts_remaining": 1},
+            }
+        )
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        self.assertEqual(done["status"], "success")
+        group_id = done["actions"][0]["group_id"]
+        anchor_session = runtime.load_manifest(self.state_path)["claim_groups"][group_id]["anchor_session"]
+
+        advanced = driver.continue_parent(batch=True)
+        self.assertEqual(advanced["status"], "error", advanced)
+        self.assertEqual(len(adapter.resume_calls), 2)
+        self.assertEqual([call["session_id"] for call in adapter.resume_calls], [anchor_session, anchor_session])
+        self.assertEqual(len(adapter.launch_calls), 1)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-2"]["status"], "blocked")
+        self.assertEqual(state["claims"]["task-2"]["state"], "blocked")
+        self.assertTrue(state["tasks"]["task-2"]["resume_allowed"])
+        self.assertEqual(state["tasks"]["task-2"]["session_id"], anchor_session)
+        self.assertEqual(state["claim_groups"][group_id]["state"], "active")
+        self.assertEqual(state["tasks"]["task-1"]["status"], "checkpointed")
+        self.assertEqual(state["claims"]["task-1"]["state"], "closed")
+
+    def test_batch_member_retry_without_session_persists_blocked(self):
+        # r5 F12: the no-session arm of the r4 F1 member-retry primitive. A
+        # retryable member receipt with NO session anywhere (the member's own
+        # task record and the group anchor both carry none) has nothing to
+        # resume and no legal member launch, so the receipt persists as the
+        # member's blocked state: no retry window, no budget spend, no
+        # relaunch, and the operator recovers through the group path.
+        self.batch_manifest(self.disjoint_tasks(2))
+        adapter = RecordingAdapter()
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        self.assertEqual(done["status"], "success")
+        group_id = done["actions"][0]["group_id"]
+
+        def strip_sessions(state):
+            # Drift shape: a manifest written before the session contract
+            # carries no anchor session and no member task session.
+            state["claim_groups"][group_id]["anchor_session"] = None
+            state["tasks"]["task-2"].pop("session_id", None)
+
+        self.rewrite_manifest(strip_sessions)
+        state = runtime.load_manifest(self.state_path)
+        claim2 = state["claims"]["task-2"]
+        error_receipt = {
+            "status": "error",
+            "reason_code": "runtime-error",
+            "evidence": ["persistent member error"],
+            "action_scope": "repository-task",
+            "checkpoint_identity": "task-2:worker",
+            "generation": claim2["generation"],
+            "claim_token": claim2["token"],
+            "retry_policy": {"mode": "bounded", "max_attempts": 1, "attempts_remaining": 1},
+        }
+        result = driver.record_worker_checkpoint(error_receipt)
+        self.assertEqual(result["status"], "error", result)
+        # Persisted, not retried: no adapter window opened and the retry
+        # budget was not spent.
+        self.assertEqual(adapter.resume_calls, [])
+        self.assertEqual([call["task_id"] for call in adapter.launch_calls], ["task-1"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-2"]["status"], "blocked")
+        self.assertEqual(state["claims"]["task-2"]["state"], "blocked")
+        self.assertTrue(state["tasks"]["task-2"]["resume_allowed"])
+        self.assertFalse(any(key.startswith("task-2:worker#attempt-") for key in state["checkpoints"]))
+        self.assertFalse(any(
+            entry.get("event") == "worker-retry" and entry.get("task_id") == "task-2"
+            for entry in state["history"]
+        ))
+
+    def test_batch_claim_refuses_unauthorizable_members_up_front(self):
+        # r5 F3: a member whose envelope can never be authorized (a network
+        # flag, or zero scope) is excluded from the batch prefix, so the
+        # batch claim refuses up front - the reproduced two-member
+        # network:true scenario ends in a single-task fallback instead of a
+        # group wedged at its advance.
+        tasks = self.disjoint_tasks(2)
+        tasks[1]["network"] = True
+        self.batch_manifest(tasks)
+        adapter = RecordingAdapter()
+        launched = self.batch_driver(adapter=adapter).launch_next_task(batch=True)
+        # The prefix ends at the network-flagged member: no group exists,
+        # and the claim fell back to the single-task path, which launched
+        # the authorizable anchor task.
+        manifest = runtime.load_manifest(self.state_path)
+        self.assertFalse(manifest.get("claim_groups"), manifest.get("claim_groups"))
+        self.assertNotIn("batch", launched)
+        self.assertEqual(launched["status"], "success", launched)
+        self.assertEqual([call["task_id"] for call in adapter.launch_calls], ["task-1"])
+        self.assertEqual(manifest["tasks"]["task-2"]["status"], "pending")
+
+        # A network-flagged FIRST member empties the prefix entirely: the
+        # single-task claim takes it and its launch path owns the refusal.
+        tasks = self.disjoint_tasks(2)
+        tasks[0]["network"] = True
+        self.batch_manifest(tasks)
+        blocked = self.batch_driver(adapter=RecordingAdapter()).launch_next_task(batch=True)
+        self.assertEqual(blocked["status"], "blocked", blocked)
+        self.assertEqual(blocked["reason_code"], "approval-required")
+        self.assertFalse(runtime.load_manifest(self.state_path).get("claim_groups"))
+
+        # A zero-scope member is excluded the same way.
+        tasks = self.disjoint_tasks(2)
+        tasks[1]["allowed_paths"] = []
+        self.batch_manifest(tasks)
+        launched = self.batch_driver(adapter=RecordingAdapter()).launch_next_task(batch=True)
+        self.assertFalse(runtime.load_manifest(self.state_path).get("claim_groups"))
+        self.assertEqual(launched["status"], "success", launched)
+
+    def test_batch_advance_authorization_failure_fails_group_and_completes_done(self):
+        # r5 F3 belt: when the NEXT member's envelope cannot be authorized
+        # at the advance (here the task is drifted to network:true after the
+        # claim-time authorization passed), the group fails atomically in
+        # the done handoff's locked save and the completed member's done
+        # lands. The pre-fix behavior returned the authorization outcome as
+        # the done's blocked result, so the done was refused forever - every
+        # retry re-failed the same authorization - and the group wedged
+        # with no exit.
+        self.batch_manifest(self.disjoint_tasks(2))
+        driver = self.batch_driver(adapter=RecordingAdapter())
+        driver.launch_next_task(batch=True)
+        commit1 = self.commit_files("t1-1.txt")
+
+        def drift_network(state):
+            state["tasks"]["task-2"]["network"] = True
+
+        self.rewrite_manifest(drift_network)
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        self.assertEqual(done["status"], "success", done)
+        state = runtime.load_manifest(self.state_path)
+        group = self.live_group(state)
+        self.assertEqual(group["state"], "failed")
+        self.assertIsNone(group["active_member"])
+        self.assertEqual(state["tasks"]["task-1"]["status"], "checkpointed")
+        self.assertEqual(state["claims"]["task-1"]["state"], "closed")
+        # The staged member's claim was released (the history event names
+        # it) and its task re-entered the individual queue: the done's
+        # attached generic next-claim already took it as a fresh individual
+        # claim with no group reference.
+        self.assertTrue(any(
+            entry.get("event") == "batch-group-failed" and entry.get("member") == "task-2"
+            and "task-2" in (entry.get("released_members") or [])
+            for entry in state["history"]
+        ))
+        self.assertEqual(state["tasks"]["task-2"]["status"], "claimed")
+        self.assertTrue(any(
+            action.get("type") == "launch-task" and action.get("task_id") == "task-2"
+            for action in done.get("actions", [])
+        ), done.get("actions"))
+        # The released member's fresh individual claim has no group
+        # reference, and its single-task launch path owns the authorization
+        # refusal (blocked, persisted) instead of any group wedge.
+        fresh_claim = runtime.load_manifest(self.state_path)["claims"]["task-2"]
+        self.assertNotIn("group_id", fresh_claim)
+        refused = driver._launch_claimed_task(fresh_claim, "continue execute-plan", None)
+        self.assertEqual(refused["status"], "blocked", refused)
+        self.assertEqual(refused["reason_code"], "approval-required")
+        self.assertEqual(runtime.load_manifest(self.state_path)["tasks"]["task-2"]["status"], "blocked")
+
+    def test_reclaim_non_resumable_member_fails_group_and_releases_staged(self):
+        # r4 F2 wedge + exit: a blocked member whose receipt forbids
+        # continuation has no group path left (continue --batch and resume
+        # both refuse it and nothing else closes a group), and before the
+        # exit its reclaim was refused too, so only a hand edit could
+        # recover the run. The exit: reclaiming that member is allowed
+        # through (no lease wait: the durable non-resumable receipt is
+        # terminal) and atomically fails the group in the same locked CAS -
+        # the member rotates back to pending, the staged members close back
+        # onto the pending queue, and a fresh individual claim proceeds.
+        self.batch_manifest(self.disjoint_tasks(3))
+        driver = self.batch_driver(adapter=RecordingAdapter())
+        driver.launch_next_task(batch=True)
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        self.assertEqual(done["status"], "success")
+        group_id = done["actions"][0]["group_id"]
+        anchor_session = runtime.load_manifest(self.state_path)["claim_groups"][group_id]["anchor_session"]
+
+        def wedge_member2(state):
+            state["claims"]["task-2"]["state"] = "blocked"
+            state["tasks"]["task-2"]["status"] = "blocked"
+            state["tasks"]["task-2"]["resume_allowed"] = False
+            state["tasks"]["task-2"]["session_id"] = anchor_session
+
+        self.rewrite_manifest(wedge_member2)
+        # The wedge: both group recovery entries refuse the member forever.
+        refused_continue = self.batch_driver(adapter=RecordingAdapter()).continue_parent(batch=True)
+        self.assertEqual(refused_continue["status"], "blocked")
+        self.assertTrue(any("not resumable" in item for item in refused_continue["evidence"]), refused_continue["evidence"])
+        refused_resume = self.batch_driver(adapter=RecordingAdapter()).resume()
+        self.assertEqual(refused_resume["status"], "blocked")
+        # The exit: reclaiming the wedged member succeeds and fails the
+        # group in the same CAS.
+        released = self.batch_driver(adapter=RecordingAdapter()).reclaim("task-2")
+        self.assertEqual(released["status"], "success", released)
+        self.assertEqual(released["reason_code"], "reclaimed")
+        self.assertTrue(any(f"group_failed={group_id}" in item for item in released["evidence"]), released["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["claim_groups"][group_id]["state"], "failed")
+        self.assertIsNone(state["claim_groups"][group_id]["active_member"])
+        self.assertEqual(state["claims"]["task-2"]["state"], "replaced")
+        self.assertEqual(state["tasks"]["task-2"]["status"], "pending")
+        self.assertNotIn("resume_allowed", state["tasks"]["task-2"])
+        self.assertNotIn("session_id", state["tasks"]["task-2"])
+        self.assertEqual(state["claims"]["task-3"]["state"], "closed")
+        self.assertEqual(state["tasks"]["task-3"]["status"], "pending")
+        self.assertTrue(any(entry.get("event") == "batch-group-failed" for entry in state["history"]))
+        # r5 F1 round-trip: the failed group state must survive the
+        # authoritative validator and a full validating continuation. The
+        # original witness read the state with a bare load_manifest, which
+        # masked the defect where validate_manifest (active/closed only)
+        # raised ValueError on every validating entrypoint after the exit.
+        reread = self.batch_driver(adapter=RecordingAdapter()).refresh_manifest()
+        self.assertEqual(reread["claim_groups"][group_id]["state"], "failed")
+        # The continuation claims and launches the released member itself,
+        # so the post-exit snapshot is restored afterwards and the next
+        # witness re-runs on the same durable state.
+        post_exit = runtime.load_manifest(self.state_path)
+        continued = self.batch_driver(adapter=RecordingAdapter()).continue_parent()
+        self.assertEqual(continued["status"], "success", continued)
+        self.rewrite_manifest(lambda state: state.update(post_exit))
+        # The queue moved on: a fresh individual claim proceeds past the
+        # failed group.
+        next_claim = self.batch_driver(adapter=RecordingAdapter()).claim_next_task()
+        self.assertTrue(next_claim["claimed"], next_claim)
+
+    def test_batch_group_lifecycle_transition_table_is_exhaustive(self):
+        # G1 reconciliation: the group state x operation table is normative in
+        # the runtime contract's batch claim groups section, and this test
+        # drives it cell by cell. Every operation runs from every group state
+        # ({active, closed, failed}); every cell has a defined outcome (no
+        # state is wedged: active always keeps an executable group action or
+        # the reclaim exit, closed and failed are documented terminals whose
+        # only forward motion is the individual queue), and after every
+        # operation every task status agrees with its claim state.
+        AGREEMENT = {
+            # task status -> claim states that agree with it. `pending`
+            # admits the staged member shape plus the documented release
+            # shapes (closed staged claims and the replaced claim of a
+            # reclaimed member) whose tasks re-enter the individual queue.
+            "pending": {"staged", "closed", "replaced"},
+            "claimed": {"claimed"},
+            "launched": {"launched"},
+            "blocked": {"blocked"},
+            "done-pending": {"launched"},
+            "commit-pending": {"launched"},
+            "checkpointed": {"closed"},
+            "complete": {"closed"},
+            "aborted": {"aborted"},
+        }
+
+        def assert_agreement():
+            state = runtime.load_manifest(self.state_path)
+            for task_id, task in state["tasks"].items():
+                claim = state["claims"].get(task_id)
+                if claim is None:
+                    self.assertEqual(task["status"], "pending", task_id)
+                    continue
+                self.assertIn(
+                    claim["state"],
+                    AGREEMENT.get(task["status"], set()),
+                    (task_id, task["status"], claim["state"]),
+                )
+
+        def group_record():
+            state = runtime.load_manifest(self.state_path)
+            groups = [g for g in state.get("claim_groups", {}).values() if isinstance(g, dict)]
+            if not groups:
+                return None
+            self.assertEqual(len(groups), 1)
+            return groups[0]
+
+        def assert_group_state(expected_state):
+            group = group_record()
+            self.assertIsNotNone(group)
+            self.assertEqual(group["state"], expected_state)
+            self.assertIn(group["state"], runtime.BATCH_GROUP_STATES)
+
+        def block_member(member, anchor_session, resume_allowed, expired=False):
+            def mutate(state):
+                state["claims"][member]["state"] = "blocked"
+                if expired:
+                    state["claims"][member]["timestamp"] = self.FIXED_NOW - runtime.CLAIM_LEASE_SECONDS - 10.0
+                state["tasks"][member]["status"] = "blocked"
+                state["tasks"][member]["resume_allowed"] = resume_allowed
+                state["tasks"][member]["session_id"] = anchor_session
+            return mutate
+
+        def reactivate_member(member):
+            # Rewind a member the previous arm parked at done-pending or
+            # blocked back to the live claimed seat, so the next arm drives
+            # the same active state from a fresh start.
+            def mutate(state):
+                state["claims"][member]["state"] = "claimed"
+                state["tasks"][member]["status"] = "claimed"
+                state["tasks"][member]["resume_allowed"] = True
+            return mutate
+
+        def late_member_receipt(member, **overrides):
+            # A late receipt carries the closed member's own (stale) token.
+            receipt = self.member_receipt(member, 1, 1)
+            receipt.update(overrides)
+            return receipt
+
+        LATE_RECEIPT_ARMS = (
+            {},
+            {"status": "blocked", "reason_code": "approval-required"},
+            {"status": "error", "reason_code": "runtime-error", "retry_policy": {"mode": "bounded", "max_attempts": 1, "attempts_remaining": 1}},
+        )
+
+        # ------------------------------------------------------------------
+        # active: every operation has a defined, executable outcome.
+        # ------------------------------------------------------------------
+
+        # claim from active: blocked stale-claim, the group holds the launch.
+        self.batch_manifest(self.disjoint_tasks(3))
+        self.batch_driver().claim_next_task(batch=True)
+        refused_claim = self.batch_driver().claim_next_task()
+        self.assertEqual(refused_claim["status"], "blocked")
+        self.assertEqual(refused_claim["reason_code"], "stale-claim")
+        self.assertFalse(refused_claim["claimed"])
+
+        # launch from active (unlaunched): the anchor's first launch through
+        # the group path arms the ONE group launch record; with the anchor
+        # already at its done boundary the same call routes to the member
+        # continuation instead of a second launch.
+        self.batch_manifest(self.disjoint_tasks(3))
+        launch_adapter = RecordingAdapter()
+        launch_driver = self.batch_driver(adapter=launch_adapter)
+        launch_driver.claim_next_task(batch=True)
+        launched = launch_driver.launch_next_task(batch=True)
+        self.assertEqual(launched["status"], "success", launched)
+        self.assertEqual(launch_adapter.launch_calls[0]["task_id"], "task-1")
+        self.assertIsInstance(group_record()["launch_record"], dict)
+        launch_commit1 = self.commit_files("t1-1.txt")
+        self.assertEqual(launch_driver.record_done(self.member_done("task-1", 1, launch_commit1))["status"], "success")
+        relaunch_adapter = RecordingAdapter()
+        relaunched = self.batch_driver(adapter=relaunch_adapter).launch_next_task(batch=True)
+        self.assertEqual(relaunched["status"], "success", relaunched)
+        self.assertEqual(relaunch_adapter.resume_calls[0]["task_id"], "task-2")
+        assert_group_state("active")
+        assert_agreement()
+
+        # Main fixture: the anchor landed (auto-checkpoint at launch), its
+        # done advanced the group, and member-2 is the active seat (claimed).
+        self.batch_manifest(self.disjoint_tasks(3))
+        adapter = RecordingAdapter()
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        commit1 = self.commit_files("t1-1.txt")
+        done1 = driver.record_done(self.member_done("task-1", 1, commit1))
+        self.assertEqual(done1["actions"][0]["type"], "resume_member")
+        group_id = done1["actions"][0]["group_id"]
+        anchor_session = runtime.load_manifest(self.state_path)["claim_groups"][group_id]["anchor_session"]
+        assert_group_state("active")
+        self.assertEqual(group_record()["active_member"], "task-2")
+        assert_agreement()
+
+        # checkpoint success from active: the named active member lands
+        # done-pending; the group is unchanged.
+        receipt = self.member_receipt("task-2", 2, 1, session_id=anchor_session)
+        landed = driver.record_worker_checkpoint(receipt)
+        self.assertEqual(landed["status"], "success", landed)
+        self.assertEqual(landed["state"], "done-pending")
+        assert_group_state("active")
+        self.assertEqual(group_record()["active_member"], "task-2")
+        assert_agreement()
+
+        # checkpoint blocked from active: the member persists blocked through
+        # the shared blocked-persist tail; the group stays active.
+        self.rewrite_manifest(reactivate_member("task-2"))
+        blocked_receipt = self.member_receipt(
+            "task-2", 2, 1, session_id=anchor_session,
+            status="blocked", reason_code="approval-required",
+        )
+        blocked = driver.record_worker_checkpoint(blocked_receipt)
+        self.assertEqual(blocked["status"], "blocked", blocked)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-2"]["status"], "blocked")
+        self.assertEqual(state["claims"]["task-2"]["state"], "blocked")
+        assert_group_state("active")
+        assert_agreement()
+
+        # retryable-error receipt from active: the member retry runs through
+        # the group's own continuation primitive (the anchor-session window),
+        # never the plain driver relaunch, and the retry receipt lands.
+        self.rewrite_manifest(reactivate_member("task-2"))
+        retry_receipt = self.member_receipt(
+            "task-2", 2, 1, session_id=anchor_session,
+            status="error", reason_code="runtime-error",
+            retry_policy={"mode": "bounded", "max_attempts": 1, "attempts_remaining": 1},
+        )
+        retry_adapter = RecordingAdapter()
+        retried = self.batch_driver(adapter=retry_adapter).record_worker_checkpoint(retry_receipt)
+        self.assertEqual(retried["status"], "success", retried)
+        self.assertEqual([call["task_id"] for call in retry_adapter.resume_calls], ["task-2"])
+        self.assertEqual([call["session_id"] for call in retry_adapter.resume_calls], [anchor_session])
+        # No plain driver relaunch: the fresh adapter records no launch call.
+        self.assertEqual(retry_adapter.launch_calls, [])
+        assert_group_state("active")
+        assert_agreement()
+
+        # done from active: the member closes and the group advances to the
+        # next member under the same lock.
+        commit2 = self.commit_files("t2-1.txt")
+        done2 = driver.record_done(self.member_done("task-2", 2, commit2))
+        self.assertEqual(done2["status"], "success", done2)
+        self.assertEqual(done2["actions"][0]["type"], "resume_member")
+        self.assertEqual(done2["actions"][0]["task_id"], "task-3")
+        assert_group_state("active")
+        self.assertEqual(group_record()["active_member"], "task-3")
+        assert_agreement()
+
+        # done from active, session-less cell (r6 F2, with r6 F1): an
+        # adapter whose receipts carry no session id anywhere reaches the
+        # same cell, so the exhaustiveness claim must cover it. The advance
+        # fails the group atomically (the r5 F3 release shape), the done
+        # lands, and the released staged member is re-claimed individually:
+        # a state from which an entrypoint proceeds, never a wedge.
+        main_fixture = json.loads(self.state_path.read_text(encoding="utf-8"))
+        main_head = self._git_stdout("rev-parse", "HEAD")
+        self.batch_manifest(self.disjoint_tasks(2))
+        sessionless_driver = self.batch_driver(adapter=SessionlessRecordingAdapter())
+        sessionless_driver.launch_next_task(batch=True)
+        sessionless_commit = self.commit_files("t1-1.txt")
+        sessionless_done = sessionless_driver.record_done(self.member_done("task-1", 1, sessionless_commit))
+        self.assertEqual(sessionless_done["status"], "success", sessionless_done)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(self.live_group(state)["state"], "failed")
+        self.assertIsNone(self.live_group(state)["active_member"])
+        self.assertEqual(state["tasks"]["task-1"]["status"], "checkpointed")
+        self.assertEqual(state["claims"]["task-2"]["state"], "claimed")
+        self.assertNotIn("group_id", state["claims"]["task-2"])
+        assert_agreement()
+        # Restore the main fixture - manifest and git HEAD together, so the
+        # next arm's done-boundary witnesses diff against the baselines the
+        # fixture recorded - and it drives the same active seat (task-3)
+        # the earlier arms left.
+        self._git("reset", "-q", "--hard", main_head)
+        self.rewrite_manifest(lambda state: state.update(main_fixture))
+        assert_group_state("active")
+        self.assertEqual(group_record()["active_member"], "task-3")
+
+        # resume from active: selects only the active member and resumes the
+        # anchor session.
+        self.rewrite_manifest(block_member("task-3", anchor_session, resume_allowed=True))
+        resume_adapter = RecordingAdapter()
+        resumed = self.batch_driver(adapter=resume_adapter).resume()
+        self.assertEqual(resumed["status"], "success", resumed)
+        self.assertEqual(resume_adapter.resume_calls[0]["task_id"], "task-3")
+        self.assertEqual(resume_adapter.resume_calls[0]["session_id"], anchor_session)
+        assert_group_state("active")
+        assert_agreement()
+
+        # continue --batch from active: advances through the active member.
+        self.rewrite_manifest(reactivate_member("task-3"))
+        continue_adapter = RecordingAdapter()
+        continued = self.batch_driver(adapter=continue_adapter).continue_parent(batch=True)
+        self.assertEqual(continued["status"], "success", continued)
+        self.assertEqual(continue_adapter.resume_calls[0]["task_id"], "task-3")
+        assert_group_state("active")
+        assert_agreement()
+
+        # reclaim (resumable member) from active: refused naming the group,
+        # whatever the lease state; the manifest stays byte-identical.
+        self.rewrite_manifest(block_member("task-3", anchor_session, resume_allowed=True, expired=True))
+        reclaim_driver = self.batch_driver(clock=lambda: self.FIXED_NOW)
+        before = self.state_path.read_bytes()
+        reclaim_refused = reclaim_driver.reclaim("task-3")
+        self.assertEqual(reclaim_refused["status"], "blocked")
+        self.assertEqual(reclaim_refused["reason_code"], "stale-claim")
+        self.assertTrue(any(group_id in item for item in reclaim_refused["evidence"]), reclaim_refused["evidence"])
+        self.assertTrue(any("continue --batch" in item for item in reclaim_refused["evidence"]))
+        self.assertEqual(self.state_path.read_bytes(), before)
+        assert_agreement()
+
+        # reclaim (non-resumable member) from active: the one executable
+        # exit - the member rotates back to pending and the group fails
+        # atomically in the same locked compare-and-swap. Already-closed
+        # members stay closed history; no staged member remains here.
+        self.rewrite_manifest(block_member("task-3", anchor_session, resume_allowed=False))
+        released = self.batch_driver(clock=lambda: self.FIXED_NOW).reclaim("task-3")
+        self.assertEqual(released["status"], "success", released)
+        self.assertTrue(any(f"group_failed={group_id}" in item for item in released["evidence"]), released["evidence"])
+        assert_group_state("failed")
+        self.assertIsNone(group_record()["active_member"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["claims"]["task-3"]["state"], "replaced")
+        self.assertEqual(state["tasks"]["task-3"]["status"], "pending")
+        self.assertEqual(state["claims"]["task-1"]["state"], "closed")
+        self.assertEqual(state["claims"]["task-2"]["state"], "closed")
+        assert_agreement()
+
+        # group release from active: reached only through the exit above or
+        # the advance-time authorization belt; both are covered here and by
+        # test_batch_advance_authorization_failure_fails_group_and_completes_done.
+
+        # ------------------------------------------------------------------
+        # closed: the documented terminal; every operation has a defined
+        # no-mutation or queue-continuation outcome.
+        # ------------------------------------------------------------------
+        self.batch_manifest(self.disjoint_tasks(3))
+        close_adapter = RecordingAdapter()
+        close_driver = self.batch_driver(adapter=close_adapter)
+        close_driver.launch_next_task(batch=True)
+        closed_commit1 = self.commit_files("t1-1.txt")
+        self.assertEqual(close_driver.record_done(self.member_done("task-1", 1, closed_commit1))["status"], "success")
+        self.assertEqual(close_driver.continue_parent(batch=True)["status"], "success")
+        closed_commit2 = self.commit_files("t2-1.txt")
+        self.assertEqual(close_driver.record_done(self.member_done("task-2", 2, closed_commit2))["status"], "success")
+        self.assertEqual(close_driver.continue_parent(batch=True)["status"], "success")
+        closed_commit3 = self.commit_files("t3-1.txt")
+        self.assertEqual(close_driver.record_done(self.member_done("task-3", 3, closed_commit3))["status"], "success")
+        assert_group_state("closed")
+        self.assertIsNone(group_record()["active_member"])
+        assert_agreement()
+        closed_snapshot = json.loads(self.state_path.read_text(encoding="utf-8"))
+
+        def rewind_closed():
+            self.rewrite_manifest(lambda state: state.update(json.loads(json.dumps(closed_snapshot))))
+
+        # claim from closed: the queue is drained (defined claimed: false).
+        drained = self.batch_driver().claim_next_task()
+        self.assertEqual(drained["status"], "success")
+        self.assertFalse(drained["claimed"])
+        assert_agreement()
+
+        # launch from closed: no live group and a drained queue: the defined
+        # claimed-false envelope, never an undefined error.
+        end_drained = self.batch_driver(adapter=RecordingAdapter()).launch_next_task(batch=True)
+        self.assertEqual(end_drained["status"], "success")
+        self.assertFalse(end_drained["claimed"])
+        assert_agreement()
+
+        # checkpoint success/blocked/retryable from closed: late member
+        # receipts fence as stale-claim with no mutation.
+        for overrides in LATE_RECEIPT_ARMS:
+            rewind_closed()
+            fence_driver = self.batch_driver(adapter=RecordingAdapter())
+            before_closed = self.state_path.read_bytes()
+            fenced = fence_driver.record_worker_checkpoint(late_member_receipt("task-1", **overrides))
+            self.assertEqual(fenced["status"], "blocked", (overrides, fenced))
+            self.assertEqual(fenced["reason_code"], "stale-claim")
+            self.assertEqual(self.state_path.read_bytes(), before_closed)
+        assert_agreement()
+
+        # done from closed: a late done replay is unfenced done evidence.
+        rewind_closed()
+        done_driver = self.batch_driver()
+        before_closed = self.state_path.read_bytes()
+        late_done = done_driver.record_done(self.member_done("task-1", 1, closed_commit1))
+        self.assertEqual(late_done["status"], "blocked")
+        # The member fence refuses before any commit work: a terminal group
+        # routes no member action.
+        self.assertEqual(late_done["reason_code"], "stale-claim")
+        self.assertEqual(self.state_path.read_bytes(), before_closed)
+        assert_agreement()
+
+        # resume from closed: no resumable blocked task (defined block).
+        no_resume = self.batch_driver(adapter=RecordingAdapter()).resume()
+        self.assertEqual(no_resume["status"], "blocked")
+        self.assertEqual(no_resume["reason_code"], "stale-claim")
+        assert_agreement()
+
+        # continue --batch from closed: no live group; the defined
+        # terminal-evidence block (the run is at its documented end).
+        closed_continued = self.batch_driver(adapter=RecordingAdapter()).continue_parent(batch=True)
+        self.assertEqual(closed_continued["status"], "blocked")
+        self.assertEqual(closed_continued["reason_code"], "done-pending")
+        assert_agreement()
+
+        # reclaim (either member shape) from closed: closed claims are
+        # outside the reclaimable set; refused, no mutation.
+        for member in ("task-1", "task-2"):
+            rewind_closed()
+            reclaim_driver = self.batch_driver(clock=lambda: self.FIXED_NOW)
+            before_closed = self.state_path.read_bytes()
+            reclaim_closed = reclaim_driver.reclaim(member)
+            self.assertEqual(reclaim_closed["status"], "blocked")
+            self.assertEqual(reclaim_closed["reason_code"], "stale-claim")
+            self.assertEqual(self.state_path.read_bytes(), before_closed)
+        assert_agreement()
+
+        # group release from closed: not reachable (both release arms are
+        # guarded by the live-group fence); no operation above mutated the
+        # terminal record.
+
+        # ------------------------------------------------------------------
+        # failed: the documented terminal whose forward motion is the
+        # released individual queue.
+        # ------------------------------------------------------------------
+        self.batch_manifest(self.disjoint_tasks(3))
+        fail_driver = self.batch_driver(adapter=RecordingAdapter())
+        fail_driver.launch_next_task(batch=True)
+        failed_commit1 = self.commit_files("t1-1.txt")
+        self.assertEqual(fail_driver.record_done(self.member_done("task-1", 1, failed_commit1))["status"], "success")
+        failed_group_id = runtime.load_manifest(self.state_path)["claims"]["task-2"]["group_id"]
+        failed_anchor = runtime.load_manifest(self.state_path)["claim_groups"][failed_group_id]["anchor_session"]
+        self.rewrite_manifest(block_member("task-2", failed_anchor, resume_allowed=False))
+        exit_outcome = self.batch_driver(clock=lambda: self.FIXED_NOW).reclaim("task-2")
+        self.assertEqual(exit_outcome["status"], "success", exit_outcome)
+        assert_group_state("failed")
+        assert_agreement()
+        failed_snapshot = json.loads(self.state_path.read_text(encoding="utf-8"))
+
+        def rewind_failed():
+            self.rewrite_manifest(lambda state: state.update(json.loads(json.dumps(failed_snapshot))))
+
+        # claim from failed: the queue re-took a released task individually.
+        retook = self.batch_driver().claim_next_task()
+        self.assertTrue(retook["claimed"], retook)
+        self.assertNotIn("group_id", retook)
+        fresh = runtime.load_manifest(self.state_path)["claims"][retook["task_id"]]
+        self.assertNotIn("group_id", fresh)
+        assert_agreement()
+
+        # launch from failed: the individual claim launches through the
+        # single-task path, no batch fields, no member action. task-1 is
+        # complete history; the released queue re-enters at task-2.
+        rewind_failed()
+        relaunch_adapter = RecordingAdapter()
+        relaunched = self.batch_driver(adapter=relaunch_adapter).launch_next_task()
+        self.assertEqual(relaunched["status"], "success", relaunched)
+        self.assertNotIn("batch", relaunched)
+        self.assertEqual(relaunch_adapter.launch_calls[0]["task_id"], "task-2")
+        assert_agreement()
+
+        # continue --batch from failed: no live group routes the continuation,
+        # so the fresh batch opt-in may assemble a NEW group from the
+        # released tasks; the failed record stays terminal, never revived.
+        rewind_failed()
+        rebatch_adapter = RecordingAdapter()
+        rebatched = self.batch_driver(adapter=rebatch_adapter).continue_parent(batch=True)
+        self.assertEqual(rebatched["status"], "success", rebatched)
+        self.assertEqual(rebatch_adapter.launch_calls[0]["task_id"], "task-2")
+        state = runtime.load_manifest(self.state_path)
+        states_seen = [g["state"] for g in state.get("claim_groups", {}).values() if isinstance(g, dict)]
+        self.assertEqual(states_seen.count("failed"), 1, states_seen)
+        self.assertEqual(states_seen.count("active"), 1, states_seen)
+        assert_agreement()
+
+        # checkpoint success/blocked/retryable from failed: late member
+        # receipts fence as stale-claim with no mutation.
+        for overrides in LATE_RECEIPT_ARMS:
+            rewind_failed()
+            fence_driver = self.batch_driver(adapter=RecordingAdapter())
+            before_failed = self.state_path.read_bytes()
+            fenced = fence_driver.record_worker_checkpoint(late_member_receipt("task-3", **overrides))
+            self.assertEqual(fenced["status"], "blocked", (overrides, fenced))
+            self.assertEqual(fenced["reason_code"], "stale-claim")
+            self.assertEqual(self.state_path.read_bytes(), before_failed)
+        assert_agreement()
+
+        # done from failed: a late done replay from the released
+        # never-launched staged member (claim closed) is unfenced done
+        # evidence; a late replay from the progressed member (checkpointed,
+        # its own closed claim) is fenced by the member receipt fence.
+        for member, expected_reason in (("task-3", "done-pending"), ("task-1", "stale-claim")):
+            rewind_failed()
+            done_driver = self.batch_driver()
+            before_failed = self.state_path.read_bytes()
+            failed_done = done_driver.record_done(self.member_done(member, 3, failed_commit1))
+            self.assertEqual(failed_done["status"], "blocked")
+            self.assertEqual(failed_done["reason_code"], expected_reason, (member, failed_done))
+            self.assertEqual(self.state_path.read_bytes(), before_failed)
+        assert_agreement()
+
+        # resume from failed: the released members sit pending or closed, so
+        # the defined no-resumable-task block stands.
+        rewind_failed()
+        failed_resume = self.batch_driver(adapter=RecordingAdapter()).resume()
+        self.assertEqual(failed_resume["status"], "blocked")
+        self.assertEqual(failed_resume["reason_code"], "stale-claim")
+        assert_agreement()
+
+        # reclaim (either member shape) from failed: the exit already ran
+        # (the member claim is replaced, the staged claims closed); refused,
+        # no mutation.
+        for member in ("task-2", "task-3"):
+            rewind_failed()
+            reclaim_driver = self.batch_driver(clock=lambda: self.FIXED_NOW)
+            before_failed = self.state_path.read_bytes()
+            reclaim_failed = reclaim_driver.reclaim(member)
+            self.assertEqual(reclaim_failed["status"], "blocked")
+            self.assertEqual(reclaim_failed["reason_code"], "stale-claim")
+            self.assertEqual(self.state_path.read_bytes(), before_failed)
+        assert_agreement()
+
+        # group release from failed: not reachable; `failed` is terminal and
+        # no operation above re-released or revived the group record.
+
+    def test_group_state_writes_route_through_the_single_choke_point(self):
+        # r6 F11, the group-lifecycle analog of the G2 receipt-identity
+        # structural pin: the contract's single choke point invariant ("no
+        # site other than the primitive writes group state") is pinned by an
+        # AST walk over the driver source, so a future direct
+        # claim_groups-record write ships red instead of green. Claim-record
+        # writes (a claim variable, or a subscript chain through
+        # manifest["claims"]) and the authoritative top-level
+        # manifest["progress_revision"] counter stay outside the invariant;
+        # a direct claim_groups-record write or a bare group-record variable
+        # written anywhere but _set_group_state fails.
+        source = (ROOT / "scripts/execute_plan_runtime.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        parents = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                parents[child] = node
+
+        def enclosing_function(node):
+            while node is not None:
+                node = parents.get(node)
+                if isinstance(node, ast.FunctionDef):
+                    return node
+            return None
+
+        def base_of(target):
+            # Strip nested subscripts off the store target's base: return
+            # the constant keys seen on the way and the root expression.
+            keys = []
+            value = target
+            while isinstance(value, ast.Subscript):
+                if isinstance(value.slice, ast.Constant):
+                    keys.append(value.slice.value)
+                value = value.value
+            return keys, value
+
+        GROUP_KEYS = {"state", "active_member", "progress_revision"}
+        choke_writes = []
+        offenders = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AugAssign):
+                targets = [node.target]
+            else:
+                continue
+            for target in targets:
+                if not isinstance(target, ast.Subscript) or not isinstance(target.slice, ast.Constant):
+                    continue
+                if target.slice.value not in GROUP_KEYS:
+                    continue
+                keys, root = base_of(target.value)
+                owner = enclosing_function(node)
+                owner_name = owner.name if owner is not None else "<module>"
+                if "claim_groups" in keys:
+                    # A direct claim_groups-record write: never allowed,
+                    # not even inside the primitive (which writes through
+                    # its own group reference).
+                    offenders.append((owner_name, target.slice.value, "direct claim_groups write"))
+                elif "claims" in keys:
+                    # A claim-record write through the claims collection:
+                    # claim state is not group state.
+                    pass
+                elif isinstance(root, ast.Name) and root.id not in {"claim", "manifest"}:
+                    # A bare group-record variable write.
+                    if owner_name == "_set_group_state":
+                        choke_writes.append((owner_name, target.slice.value))
+                    else:
+                        offenders.append((owner_name, target.slice.value, "bare group-record write"))
+        self.assertEqual(
+            sorted(choke_writes),
+            sorted([
+                ("_set_group_state", "state"),
+                ("_set_group_state", "active_member"),
+                ("_set_group_state", "progress_revision"),
+            ]),
+            choke_writes,
+        )
+        self.assertEqual(offenders, [], offenders)
+
+    def test_startup_group_member_launch_evidence_resolves_through_group(self):
+        # r3 F5: member claims never carry launch records (the ONE record
+        # lives on the group), so the ambient discriminator that classifies
+        # pre-launch versus launched claims must resolve member evidence
+        # through claim_groups[group_id]['launch_record']. A launched
+        # member wearing ambient dirt keeps the hard dirty-worktree block
+        # (post-launch dirt is worker-shaped); a merely-claimed group keeps
+        # the resumable cleanup-required classification.
+        self.batch_manifest(self.disjoint_tasks(2))
+        self.batch_driver(adapter=RecordingAdapter()).launch_next_task(batch=True)
+        (self.root / ".DS_Store").write_text("ambient\n", encoding="utf-8")
+        launched = self.batch_driver().reconcile_startup()
+        self.assertEqual(launched["reason_code"], "dirty-worktree")
+        self.assertFalse(launched["resume_allowed"])
+
+        self.batch_manifest(self.disjoint_tasks(2))
+        self.batch_driver().claim_next_task(batch=True)
+        (self.root / ".DS_Store").write_text("ambient\n", encoding="utf-8")
+        claimed = self.batch_driver().reconcile_startup()
+        self.assertEqual(claimed["reason_code"], "cleanup-required")
+        self.assertTrue(claimed["resume_allowed"])
+
+    def _ordinal_tasks(self, count):
+        # Non-lexicographic probe: ids task-1..task-12 with NO number field;
+        # only the persisted document ordinal carries the plan order, so a
+        # number-based sort degenerates to lexicographic order
+        # (task-1, task-10, task-11, ...).
+        return [
+            {"id": f"task-{n}", "status": "pending", "checkbox": False, "allowed_paths": [f"./o{n}.txt"]}
+            for n in range(1, count + 1)
+        ]
+
+    def test_document_order_ordinal_selection_across_claim_batch_and_readiness(self):
+        # r3 F6: the persisted document ordinal is the canonical queue order
+        # and every selection site consumes it - single claims walk the plan
+        # in document order (never lexicographic id order), the batch prefix
+        # assembles in document order so member ordinals agree with the
+        # plan, and the readiness decision names the provable next task in
+        # document order.
+        document_order = [f"task-{n}" for n in range(1, 13)]
+        self.batch_manifest(self._ordinal_tasks(12))
+        driver = self.batch_driver()
+        claimed_order = []
+        for _ in document_order:
+            claim = driver.claim_next_task()
+            self.assertTrue(claim["claimed"])
+            claimed_order.append(claim["task_id"])
+
+            def close_claim(task_id):
+                def mutate(state):
+                    state["claims"].pop(task_id, None)
+                    state["tasks"][task_id]["status"] = "complete"
+                    state["tasks"][task_id]["checkbox"] = True
+                return mutate
+
+            self.rewrite_manifest(close_claim(claim["task_id"]))
+        self.assertEqual(claimed_order, document_order)
+
+        # The batch prefix inherits document order.
+        self.batch_manifest(self._ordinal_tasks(12))
+        batch = self.batch_driver().claim_next_task(batch=True)
+        self.assertTrue(batch["claimed"])
+        self.assertEqual(batch["members"], document_order[:4])
+        self.assertEqual(batch["member_ordinals"], {f"task-{n}": n for n in range(1, 5)})
+
+        # The readiness decision's provable next task follows document
+        # order: with task-1 complete, the next task is task-2, never the
+        # lexicographic task-10.
+        self.batch_manifest(self._ordinal_tasks(12))
+        self.rewrite_manifest(lambda state: (
+            state["tasks"]["task-1"].update({"status": "complete", "checkbox": True}),
+        ))
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n"
+            + "".join(f"### Task {n}: title\n- [ ] item {n}\n\n" for n in range(1, 13))
+        )
+        readiness = self.batch_driver().readiness(plan_path)
+        self.assertEqual(readiness["next_task_id"], "task-2", readiness["failed_conditions"])
+
+    def test_batch_member_done_without_anchor_session_falls_back_to_task_session(self):
+        # r3 F15: the anchor capture is receipt-driven, so a group whose
+        # receipts never captured the anchor wedged at the first member
+        # done: the advance refused for the missing anchor session, the
+        # done-pending member refused relaunch, and a later done failed on
+        # the same missing session. The advance now falls back to the
+        # completed task's own session and captures it; only when no
+        # session exists anywhere does the refusal stand.
+        self.batch_manifest(self.disjoint_tasks(2))
+        adapter = RecordingAdapter()
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        group_id = done["actions"][0]["group_id"]
+        task_session = runtime.load_manifest(self.state_path)["tasks"]["task-1"]["session_id"]
+        self.assertTrue(task_session)
+
+        # Strip the captured anchor: the group has no anchor session, the
+        # done envelope carries none, and only the task still holds one.
+        def strip_anchor(state):
+            state["claim_groups"][group_id]["anchor_session"] = None
+            state["tasks"]["task-2"]["status"] = "done-pending"  # undone below
+        self.rewrite_manifest(strip_anchor)
+        # Redo the advance for real: member-1 is already checkpointed and
+        # its done was consumed, so re-drive the wedge by reverting member-1
+        # to done-pending with its claim live and re-running the handoff.
+        def rewind_to_done_pending(state):
+            group = state["claim_groups"][group_id]
+            group["active_member"] = "task-1"
+            group["state"] = "active"
+            state["tasks"]["task-1"]["status"] = "done-pending"
+            state["tasks"]["task-1"].pop("complete", None)
+            state["claims"]["task-1"]["state"] = "launched"
+            # task-2 stays a staged pending member with its claim.
+            state["tasks"]["task-2"]["status"] = "pending"
+            state["claims"]["task-2"].pop("policy_token", None)
+            state["checkpoints"].pop("task-1:done", None)
+
+        self.rewrite_manifest(rewind_to_done_pending)
+        wedged_driver = self.batch_driver(adapter=adapter)
+        commit1b = self.commit_files("t1-1.txt")
+        retried = wedged_driver.record_done(self.member_done("task-1", 1, commit1b))
+        self.assertEqual(retried["status"], "success", retried)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["claim_groups"][group_id]["anchor_session"], task_session)
+        self.assertEqual(retried["actions"][0]["type"], "resume_member")
+        self.assertEqual(retried["actions"][0]["session_id"], task_session)
+        # The captured anchor pins the fence: a member receipt whose
+        # session matches neither the anchor nor the task session is fenced.
+        active = state["claims"]["task-2"]
+        wrong = self.member_receipt("task-2", 2, active["generation"], session_id="sess-rogue")
+        fenced = self.batch_driver().record_worker_checkpoint(wrong)
+        self.assertEqual(fenced["status"], "blocked")
+        self.assertEqual(fenced["reason_code"], "stale-claim")
+
+    def test_batch_sessionless_advance_fails_group_and_lands_done(self):
+        # r6 F1 repro: a schema-legal success adapter whose receipts carry
+        # no session id anywhere leaves the group without an anchor session,
+        # and the advance-time capture used to refuse the done forever
+        # (blocked done-pending). That wedged the group with no exit: done
+        # replay, continue --batch, resume, reclaim (done-pending is a
+        # progressed status), and claim_next_task (live group) all refuse.
+        # The advance now fails the group atomically in the r5 F3 release
+        # shape: the completed member's done lands, the staged member is
+        # released to the pending queue, and the generic next-claim proceeds
+        # from the failed terminal.
+        self.batch_manifest(self.disjoint_tasks(2))
+        adapter = SessionlessRecordingAdapter()
+        driver = self.batch_driver(adapter=adapter)
+        driver.launch_next_task(batch=True)
+        state = runtime.load_manifest(self.state_path)
+        self.assertIsNone(self.live_group(state)["anchor_session"])
+        self.assertNotIn("session_id", state["tasks"]["task-1"])
+        commit1 = self.commit_files("t1-1.txt")
+        done = driver.record_done(self.member_done("task-1", 1, commit1))
+        # The done itself lands (pre-fix: blocked done-pending, the wedge).
+        self.assertEqual(done["status"], "success", done)
+        state = runtime.load_manifest(self.state_path)
+        # Exactly one group record remains and it is the failed terminal.
+        self.assertEqual(self.live_group(state)["state"], "failed")
+        failed = self.live_group(state)
+        self.assertIsNone(failed["active_member"])
+        self.assertTrue(any(
+            entry.get("event") == "batch-group-failed"
+            and entry.get("member") == "task-2"
+            and "session" in str(entry.get("reason", ""))
+            and "task-2" in (entry.get("released_members") or [])
+            for entry in state["history"]
+        ), state["history"][-3:])
+        self.assertEqual(state["tasks"]["task-1"]["status"], "checkpointed")
+        self.assertEqual(state["claims"]["task-1"]["state"], "closed")
+        # The group reached a state from which an entrypoint proceeds: the
+        # released staged member re-entered the queue and the done's
+        # attached generic next-claim already took it as a fresh individual
+        # claim with no group reference.
+        self.assertTrue(any(
+            action.get("type") == "launch-task" and action.get("task_id") == "task-2"
+            for action in done.get("actions", [])
+        ), done.get("actions"))
+        fresh_claim = state["claims"]["task-2"]
+        self.assertEqual(fresh_claim["state"], "claimed")
+        self.assertNotIn("group_id", fresh_claim)
+        self.assertEqual(state["tasks"]["task-2"]["status"], "claimed")
+
+    def test_batch_sessionless_timeout_wedge_recovers_through_continue(self):
+        # r3 O13 (the r2 F7 recovery arm's continue entry): the
+        # session-less blocked anchor wedge recovers through
+        # continue_parent(batch=True) as well as resume(): exactly one
+        # launch call rotates the member to attempt 2, the group attempt
+        # record re-arms, and a late receipt carrying the dead attempt's
+        # claim token fences as owner-mismatch.
+        self.batch_manifest(self.disjoint_tasks(2))
+
+        class TimeoutAdapter:
+            def launch(self, task, prompt, generation, deadline_seconds=None, policy_token=None):
+                raise TimeoutError("launch deadline exceeded")
+
+        driver = self.batch_driver(adapter=TimeoutAdapter())
+        driver.claim_next_task(batch=True)
+        blocked = driver.launch_next_task(batch=True)
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertEqual(blocked["reason_code"], "timeout")
+        state = runtime.load_manifest(self.state_path)
+        dead_token = state["claims"]["task-1"]["token"]
+
+        recovery_adapter = RecordingAdapter()
+        recovered = self.batch_driver(adapter=recovery_adapter).continue_parent(batch=True)
+        self.assertEqual(recovered["status"], "success", recovered)
+        self.assertEqual(len(recovery_adapter.launch_calls), 1)
+        self.assertEqual(recovery_adapter.launch_calls[0]["task_id"], "task-1")
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotEqual(state["claims"]["task-1"]["token"], dead_token)
+        self.assertEqual(state["claims"]["task-1"]["attempt"], 2)
+        self.assertEqual(self.live_group(state)["member_attempts"]["task-1"]["attempt"], 2)
+        late = self.member_receipt("task-1", 1, state["claims"]["task-1"]["generation"])
+        late["claim_token"] = dead_token
+        fenced = self.batch_driver().record_worker_checkpoint(late)
+        self.assertEqual(fenced["status"], "blocked")
+        self.assertEqual(fenced["reason_code"], "owner-mismatch")
+
+
+class ArchiveGatePreArchiveTest(unittest.TestCase):
+    """Terminal pre-archive eligibility stage (archive origin fixtures 1, 2, 3, and the pre-move half of fixture 5).
+
+    The driver's terminal operation gains a staged shape: the pre-archive
+    stage evaluates one fixed-order eligibility predicate and either refuses
+    with the first failed condition (blocked ``done-pending``, the machine
+    manifest byte-identical, the active plan still in place) or records the
+    ``archive_gate`` receipt without touching ``workflow_state`` or writing a
+    ``terminal_receipt``. The class also owns the sanctioned
+    residual-acceptance exit fixtures (origin D): an optional structured
+    ``residual_policy`` input (the named finding ids, the grant source, and
+    the recorded-at epoch) opens an OR-branch in the clean-round sidecar
+    predicate that additionally accepts the focused verification-round
+    sidecar when the policy's recorded-at predates that round's date and no
+    findings row is both ``blocking: true`` and a member of the policy's
+    finding ids; blocking rows outside the set are the backlogged residuals
+    and are permitted, a blocking row inside the set still refuses, a
+    blocking row whose id is not an integer refuses (membership against the
+    policy's integer finding ids cannot prove such a row outside the named
+    set), a present verdict must be ``yes`` or ``no`` (the sidecar verdict
+    may be ``no`` precisely because the out-of-set residuals are staged;
+    any other value refuses), and the membership rule replaces the
+    zero-blocking rule.
+    """
+
+    PLAN_TEXT = "# fixture plan\n\n- [x] task-3\n- [x] task-4\n"
+    ACTIVE_PLAN_REL = "docs/plans/fixture-plan.md"
+    SIDECAR_REL = "docs/reviews/fixture-r3.stats.json"
+    ROUND_DATE = "2026-09-18"
+    ROUND_DAY_EPOCH = datetime(2026, 9, 18, tzinfo=timezone.utc).timestamp()
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.state_path = self.root / "runtime_state.json"
+        # Hermetic git: neutralize host global/system config so hooks,
+        # gpgsign, or aliases from the developer machine cannot leak into
+        # the fixture repository; identity is set repo-locally below.
+        self._git_env = dict(os.environ)
+        self._git_env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        self._git_env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "config", "user.name", "Archive Gate Test"], cwd=self.root, check=True, env=self._git_env)
+        (self.root / ".gitignore").write_text("runtime_state.json\nruntime_state.json.lock\n", encoding="utf-8")
+        subprocess.run(["git", "add", ".gitignore"], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "commit", "-qm", "fixture"], cwd=self.root, check=True, env=self._git_env)
+        self.write_facts()
+        # The resolved destination directory exists on disk, so the
+        # lookalike-candidate refusal proves the candidate-mismatch arm and
+        # the success arm passes the destination-existence check.
+        (self.root / "docs/plans/completed").mkdir(parents=True, exist_ok=True)
+        runtime.create_manifest(
+            self.state_path,
+            "fixture-plan",
+            [
+                {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
+                {"id": "task-4", "number": 4, "status": "pending", "checkbox": False},
+            ],
+        )
+        self.write_active_plan()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _git(self, *args) -> str:
+        completed = subprocess.run(["git", *args], cwd=self.root, env=self._git_env, capture_output=True, text=True, check=True)
+        return completed.stdout.strip()
+
+    def write_facts(self) -> None:
+        # The real TOML-fence facts format (this fence is the only place the
+        # directory keys live; the markdown table-row parser cannot read
+        # them), resolving the plans directory and its completed sibling
+        # exactly like the production facts file.
+        facts = self.root / ".ai-playbook" / "facts.md"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text(
+            "```toml\n"
+            "plans_dir = \"docs/plans/\"\n"
+            "plans_completed_dir = \"docs/plans/completed/\"\n"
+            "```\n",
+            encoding="utf-8",
+        )
+
+    def write_active_plan(self, text: str | None = None, rel: str | None = None) -> str:
+        rel = rel or self.ACTIVE_PLAN_REL
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text if text is not None else self.PLAN_TEXT, encoding="utf-8")
+        return rel
+
+    def write_sidecar(self, payload: dict, rel: str | None = None) -> str:
+        rel = rel or self.SIDECAR_REL
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return rel
+
+    @staticmethod
+    def clean_sidecar(**overrides) -> dict:
+        payload = {"schema_version": 1, "source_kind": "code", "verdict": "yes", "findings": []}
+        payload.update(overrides)
+        return payload
+
+    def complete_all_tasks(self) -> None:
+        state = runtime.load_manifest(self.state_path)
+        for task in state["tasks"].values():
+            task.update({"status": "complete", "checkbox": True})
+        runtime._safe_write_json(self.state_path, state)
+
+    def driver(self, **kwargs):
+        return runtime.RuntimeDriver(
+            self.state_path,
+            plan_slug="fixture-plan",
+            owner="archive-gate-owner",
+            repo_root=self.root,
+            commit_lookup=kwargs.pop("commit_lookup", lambda _commit: True),
+            # Default to the real git ancestry witness: the fixture root has a
+            # hermetic repository, so the success arm proves a real
+            # ancestor-or-self commit; individual arms stub the seam.
+            commit_ancestry=kwargs.pop("commit_ancestry", None),
+            **kwargs,
+        )
+
+    def pre_archive(self, driver, **overrides) -> dict:
+        payload = {
+            "plan_path": self.ACTIVE_PLAN_REL,
+            "destination": "",
+            "review_sidecar": "",
+            "last_commit_sha": "abcdef1",
+            "phase5_checklist": ["tests"],
+            "residual_policy": None,
+        }
+        payload.update(overrides)
+        if not payload["review_sidecar"]:
+            # Default clean sidecar, written only when the caller did not
+            # supply one: a supplied path is never clobbered by a rewrite.
+            payload["review_sidecar"] = self.write_sidecar(self.clean_sidecar())
+        return driver.mark_terminal(
+            stage="pre-archive",
+            plan_path=payload["plan_path"],
+            destination=payload["destination"],
+            review_sidecar=payload["review_sidecar"],
+            last_commit_sha=payload["last_commit_sha"],
+            phase5_checklist=payload["phase5_checklist"],
+            residual_policy=payload["residual_policy"],
+        )
+
+    def test_refuses_lookalike_destination(self):
+        # Fixture 1: a complete plan whose candidate destination is the bare
+        # lookalike folder name is refused by the fail-closed safe-path
+        # guard, which rejects directory and trailing-slash destination
+        # forms before any candidate equality runs; the manifest bytes plus
+        # the active plan file stay exactly where they were.
+        self.complete_all_tasks()
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = self.pre_archive(driver, destination="plans_completed/")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("unsupported archive destination" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assertTrue((self.root / self.ACTIVE_PLAN_REL).is_file())
+
+    def test_accepts_declared_full_path_destination(self):
+        # Destination-candidate equality, accept arm: passing the echoed
+        # declared full-file path (resolved completed directory plus the
+        # plan filename) satisfies the candidate equality exactly and the
+        # gate records that same declared destination.
+        self.complete_all_tasks()
+        result = self.pre_archive(self.driver(), destination="docs/plans/completed/fixture-plan.md")
+        self.assertEqual(result["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["archive_gate"]["declared_destination"], "docs/plans/completed/fixture-plan.md")
+        self.assertEqual(state["workflow_state"], "active")
+
+    def test_refuses_resolved_directory_form_destination(self):
+        # Directory-form refuse arm: the resolved completed directory alone
+        # (without the plan filename) is rejected by the fail-closed
+        # safe-path guard, which refuses directory and trailing-slash
+        # destination forms before any candidate equality runs, naming
+        # unsupported archive destination, with the manifest untouched.
+        self.complete_all_tasks()
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = self.pre_archive(driver, destination="docs/plans/completed/")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("unsupported archive destination" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertTrue(any("docs/plans/completed/" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_refuses_non_equal_file_destination(self):
+        # Destination-candidate equality, file-valued refuse arm: a safe
+        # repository-relative file path that is simply not the declared
+        # destination refuses naming the facts-resolved destination, with
+        # the manifest bytes untouched.
+        self.complete_all_tasks()
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = self.pre_archive(driver, destination="docs/plans/completed/other-plan.md")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("unsupported archive destination" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertTrue(any("the facts-resolved destination is docs/plans/completed/fixture-plan.md" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_refuses_unchecked_plan_checkbox(self):
+        # Fixture 2: the machine tasks are all complete but the active plan
+        # still carries one unchecked line; the refusal names the checkbox
+        # and its line number, and the manifest stays byte-identical.
+        self.complete_all_tasks()
+        self.write_active_plan("# fixture plan\n\n- [x] task-3\n- [ ] task-4\n")
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = self.pre_archive(driver)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("unchecked checkbox line" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertTrue(any(entry.startswith("line 4:") for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_refuses_incomplete_machine_tasks(self):
+        # Fixture 2, machine half: one task still pending is refused first,
+        # naming the incomplete task, before any plan-file or destination
+        # evidence can run (machine completeness precedes them in the fixed
+        # order).
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = self.pre_archive(driver)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("task-4" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertFalse(any("unsupported archive" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertFalse(any("unchecked checkbox" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_refuses_open_claim_record(self):
+        # Machine completeness, claims arm: every task complete but a claim
+        # record not in the closed state refuses naming the open claim,
+        # before any plan-file or destination evidence can run, with the
+        # manifest byte-identical. Both row shapes refuse: a Mapping row
+        # whose state is not closed and a row that is not a Mapping at all
+        # (fail-closed on the malformed shape).
+        self.complete_all_tasks()
+        for claims in ({"task-4": {"state": "open"}}, {"task-4": "open"}):
+            with self.subTest(claims=claims):
+                state = runtime.load_manifest(self.state_path)
+                state["claims"] = claims
+                runtime._safe_write_json(self.state_path, state)
+                driver = self.driver()
+                before = self.state_path.read_bytes()
+                result = self.pre_archive(driver)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "done-pending")
+                self.assertTrue(any("claim records must be closed before archival" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertTrue(any("task-4" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertFalse(any("unchecked checkbox" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_refuses_pending_done_handoff(self):
+        # Machine completeness, handoff arm: a task whose checkbox is true
+        # but whose status is still a pending handoff value passes the
+        # completeness helper (the checkbox counts) and reaches the handoff
+        # arm, which refuses naming the pending done handoff, with the
+        # manifest byte-identical. Both pending sub-values refuse:
+        # done-pending and commit-pending.
+        for status in ("done-pending", "commit-pending"):
+            with self.subTest(status=status):
+                state = runtime.load_manifest(self.state_path)
+                state["tasks"]["task-4"]["status"] = status
+                state["tasks"]["task-4"]["checkbox"] = True
+                runtime._safe_write_json(self.state_path, state)
+                driver = self.driver()
+                before = self.state_path.read_bytes()
+                result = self.pre_archive(driver)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "done-pending")
+                self.assertTrue(any("pending done handoff must land before archival" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertTrue(any("task-4" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertFalse(any("incomplete tasks" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_refuses_foreign_plan_path(self):
+        # Backlog origin Required behavior 1, source-binding guard: a
+        # complete, checkbox-clean plan sitting under the resolved plans
+        # directory but named for another run is refused on the plan identity
+        # mismatch with the manifest plan_slug.
+        self.complete_all_tasks()
+        foreign = self.write_active_plan(self.PLAN_TEXT, rel="docs/plans/other-plan.md")
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = self.pre_archive(driver, plan_path=foreign)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("identity mismatch" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertTrue(any("fixture-plan" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertFalse(any("unsupported archive destination" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_refuses_mismatched_watcher_plan_path(self):
+        # The resume watcher's recorded canonical plan path is part of the
+        # plan identity: a watcher record naming a different path refuses
+        # with the identity-mismatch evidence even though the filename
+        # matches the manifest plan_slug, and the manifest stays
+        # byte-identical.
+        self.complete_all_tasks()
+        state = runtime.load_manifest(self.state_path)
+        state["resume_watcher"] = {"plan_path": "docs/plans/other-plan.md"}
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = self.pre_archive(driver)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("identity mismatch" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertTrue(any("resume watcher" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertFalse(any("unsupported archive destination" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_accepts_conforming_watcher_plan_path(self):
+        # Mirror arm: a watcher record whose canonical plan path equals the
+        # supplied active plan path passes the identity clause, and the
+        # recorded gate receipt names the same plan path while the run
+        # stays active; both path forms pass, the relative form and the
+        # absolute form (the driver canonicalizes the recorded path against
+        # the repository root before comparing).
+        self.complete_all_tasks()
+        for watcher_plan in (
+            self.ACTIVE_PLAN_REL,
+            str((self.root / self.ACTIVE_PLAN_REL).resolve()),
+        ):
+            with self.subTest(watcher_plan=watcher_plan):
+                state = runtime.load_manifest(self.state_path)
+                state["resume_watcher"] = {"plan_path": watcher_plan}
+                runtime._safe_write_json(self.state_path, state)
+                result = self.pre_archive(self.driver())
+                self.assertEqual(result["status"], "success")
+                state = runtime.load_manifest(self.state_path)
+                self.assertEqual(state["archive_gate"]["plan_path"], self.ACTIVE_PLAN_REL)
+                self.assertEqual(state["workflow_state"], "active")
+
+    def test_refuses_missing_or_unclean_review_sidecar(self):
+        # Fixture 3: ten unclean-sidecar shapes, all refused with the
+        # clean-round review sidecar evidence condition named and the manifest
+        # byte-identical: a missing sidecar path, a present non-"yes" verdict
+        # ("no" and "maybe"), a blocking findings row, a version-1 sidecar of
+        # the plan-review sibling kind, the missing-key shape (no
+        # schema_version; an absent verdict is not a refusal, it falls
+        # through to the blocking-rows check and is covered by the
+        # verdict-absent accept test), a payload without the required
+        # findings key, a findings row whose blocking value is present but
+        # not a boolean, and a findings row without a blocking key at all
+        # (fail-closed on the malformed row; blocking is required per row,
+        # unlike the verdict); the malformed shape pins its evidence in
+        # three arms, a truthy string, a falsy 0 row, and a row with no
+        # blocking key.
+        self.complete_all_tasks()
+        driver = self.driver()
+        cases = (
+            ("missing", None, None),
+            ("verdict-no", self.clean_sidecar(verdict="no"), None),
+            ("verdict-maybe", self.clean_sidecar(verdict="maybe"), None),
+            ("blocking-finding", self.clean_sidecar(findings=[{"id": "R1", "blocking": True}]), None),
+            ("plan-source-kind", self.clean_sidecar(source_kind="plan"), None),
+            ("missing-schema-version", {"source_kind": "code", "verdict": "yes", "findings": []}, None),
+            ("missing-findings", {"schema_version": 1, "source_kind": "code", "verdict": "yes"}, "missing the required findings array"),
+            ("non-boolean-blocking", self.clean_sidecar(findings=[{"id": "R9", "blocking": "yes"}]), "non-boolean blocking value"),
+            ("falsy-non-boolean-blocking", self.clean_sidecar(findings=[{"id": "R10", "blocking": 0}]), "first malformed finding: R10"),
+            ("absent-blocking-key", self.clean_sidecar(findings=[{"id": "R11"}]), "first malformed finding: R11"),
+        )
+        for label, payload, evidence_fragment in cases:
+            with self.subTest(case=label):
+                if payload is None:
+                    sidecar = "docs/reviews/absent-round.stats.json"
+                else:
+                    sidecar = self.write_sidecar(payload)
+                before = self.state_path.read_bytes()
+                result = self.pre_archive(driver, review_sidecar=sidecar)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "done-pending")
+                self.assertTrue(any("clean-round review sidecar" in entry for entry in result["evidence"]), result["evidence"])
+                if evidence_fragment is not None:
+                    self.assertTrue(any(evidence_fragment in entry for entry in result["evidence"]), result["evidence"])
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_accepts_sidecar_without_verdict_key(self):
+        # Fixture 3, verdict-absent accept arm: the review-staging schema
+        # makes `verdict` optional, so a code sidecar carrying schema
+        # version 1, source_kind "code", and zero blocking findings but no
+        # verdict key is a clean round: the verdict clause refuses only a
+        # present non-"yes" verdict, an absent verdict falls through to the
+        # blocking-rows check, and the empty findings list passes it; the
+        # gate records and the run stays active.
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar({"schema_version": 1, "source_kind": "code", "findings": []})
+        result = self.pre_archive(self.driver(), review_sidecar=sidecar)
+        self.assertEqual(result["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        self.assertIn("archive_gate", state)
+        self.assertEqual(state["workflow_state"], "active")
+        self.assertNotIn("terminal_receipt", state)
+
+    def test_refuses_stale_last_fix_commit(self):
+        # Fixture 3, freshness half: a clean sidecar whose last_fix_commit is
+        # not an ancestor-or-self of HEAD refuses with the review freshness
+        # condition; the ancestry check runs through an injectable seam so a
+        # fixture root without a git repository can stub it.
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.clean_sidecar(last_fix_commit="1234567890abcdef"))
+        driver = self.driver(commit_ancestry=lambda _commit: False)
+        before = self.state_path.read_bytes()
+        result = self.pre_archive(driver, review_sidecar=sidecar)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("last_fix_commit" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertTrue(any("ancestor-or-self of HEAD" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_success_writes_gate_receipt_and_stays_active(self):
+        # Fixture 5, pre-move half: the passing predicate records archive_gate
+        # with the facts-resolved declared destination, the plan sha256
+        # digest, the commit identity, the checklist, and a timestamp, while
+        # workflow_state stays active and no terminal receipt exists yet.
+        self.complete_all_tasks()
+        head = self._git("rev-parse", "HEAD")
+        sidecar = self.write_sidecar(self.clean_sidecar(last_fix_commit=head))
+        driver = self.driver()
+        result = self.pre_archive(driver, last_commit_sha="abcdef1", review_sidecar=sidecar)
+        self.assertEqual(result["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        gate = state["archive_gate"]
+        self.assertEqual(gate["plan_path"], self.ACTIVE_PLAN_REL)
+        self.assertEqual(gate["declared_destination"], "docs/plans/completed/fixture-plan.md")
+        self.assertEqual(gate["plan_digest"], hashlib.sha256((self.root / self.ACTIVE_PLAN_REL).read_bytes()).hexdigest())
+        self.assertEqual(gate["last_commit_sha"], "abcdef1")
+        self.assertEqual(gate["phase5_checklist"], ["tests"])
+        self.assertIn("recorded_at", gate)
+        self.assertEqual(state["workflow_state"], "active")
+        self.assertNotIn("terminal_receipt", state)
+
+
+    def residual_sidecar(self, **overrides) -> dict:
+        # The focused verification-round sidecar: verdict "no" precisely
+        # because the out-of-set residuals are staged, one out-of-set
+        # blocking row carrying the backlogged residual, and the round date
+        # the ordering proof reads.
+        payload = {
+            "schema_version": 1,
+            "source_kind": "code",
+            "verdict": "no",
+            "date": self.ROUND_DATE,
+            "findings": [
+                {"id": 1, "blocking": False},
+                {"id": 2, "blocking": True},
+            ],
+        }
+        payload.update(overrides)
+        return payload
+
+    @staticmethod
+    def residual_policy(recorded_at: float, finding_ids: list[int] | None = None) -> dict:
+        return {
+            "finding_ids": [3, 7] if finding_ids is None else finding_ids,
+            "grant_source": "user standing instruction recorded in manifest.md",
+            "recorded_at": recorded_at,
+        }
+
+    def test_accepts_residual_policy_exit(self):
+        # Residual-acceptance exit, accept arm: the focused-round sidecar
+        # with verdict "no" and one out-of-set blocking row, plus the policy
+        # input whose recorded-at predates the round date, archives: the
+        # OR-branch applies, the verdict sub-check does not, and the
+        # membership rule permits the out-of-set blocking row as the
+        # backlogged residual; the gate records and the run stays active
+        # with no terminal receipt yet.
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.residual_sidecar())
+        policy = self.residual_policy(recorded_at=self.ROUND_DAY_EPOCH - 86400)
+        result = self.pre_archive(self.driver(), review_sidecar=sidecar, residual_policy=policy)
+        self.assertEqual(result["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        self.assertIn("archive_gate", state)
+        self.assertEqual(state["archive_gate"]["declared_destination"], "docs/plans/completed/fixture-plan.md")
+        self.assertEqual(state["workflow_state"], "active")
+        self.assertNotIn("terminal_receipt", state)
+
+    def test_refuses_residual_sidecar_without_policy_input(self):
+        # Input-gated refuse arm: the same focused-round sidecar without the
+        # residual_policy input still refuses, so the exit cannot ride an
+        # unrecorded policy; the landed verdict sub-check fires on the
+        # present "no" verdict and the manifest stays byte-identical.
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.residual_sidecar())
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = self.pre_archive(driver, review_sidecar=sidecar)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any('verdict must be "yes" when present' in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_refuses_blocking_finding_inside_residual_set(self):
+        # Membership refuse arm: a blocking row whose integer id is a member
+        # of the policy's finding_ids refuses even under the recorded policy,
+        # because the named set must reach fixed or dropped before the exit;
+        # the refusal names the in-set finding and leaves the manifest
+        # byte-identical.
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.residual_sidecar(findings=[{"id": 3, "blocking": True}]))
+        policy = self.residual_policy(recorded_at=self.ROUND_DAY_EPOCH - 86400, finding_ids=[3, 7])
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = self.pre_archive(driver, review_sidecar=sidecar, residual_policy=policy)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("inside the recorded residual policy set" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertTrue(any("first in-set blocking finding: 3" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_refuses_policy_recorded_after_verification_round(self):
+        # Ordering refuse arm: a policy whose recorded-at postdates the
+        # sidecar's round date refuses, because the policy must be recorded
+        # BEFORE the verification round runs; the day-precision proof is
+        # strict, so a policy recorded exactly at the round-day boundary is
+        # not predating either and refuses the same way.
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.residual_sidecar())
+        for recorded_at in (self.ROUND_DAY_EPOCH + 86400, self.ROUND_DAY_EPOCH):
+            with self.subTest(recorded_at=recorded_at):
+                policy = self.residual_policy(recorded_at=recorded_at)
+                driver = self.driver()
+                before = self.state_path.read_bytes()
+                result = self.pre_archive(driver, review_sidecar=sidecar, residual_policy=policy)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "done-pending")
+                self.assertTrue(any("does not predate" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertTrue(any(self.ROUND_DATE in entry for entry in result["evidence"]), result["evidence"])
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_refuses_nonfinite_recorded_at_policy(self):
+        # Shape-guard refuse arm (r1 F1): JSON parses NaN and the infinities
+        # as numbers, but a non-finite recorded-at poisons the ordering
+        # proof (NaN compares False against every round-day epoch, so a NaN
+        # policy would "predate" every round); the shape guard refuses the
+        # policy before any filesystem work and the manifest stays
+        # byte-identical (nothing archives).
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.residual_sidecar())
+        for recorded_at in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(recorded_at=recorded_at):
+                policy = self.residual_policy(recorded_at=recorded_at)
+                driver = self.driver()
+                before = self.state_path.read_bytes()
+                result = self.pre_archive(driver, review_sidecar=sidecar, residual_policy=policy)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "done-pending")
+                self.assertTrue(any("residual_policy.recorded_at must be a finite epoch timestamp" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_refuses_non_integer_blocking_id_under_policy(self):
+        # Membership refuse arm (r1 F2): a blocking row whose id is not an
+        # integer can never prove itself outside the policy's named integer
+        # set, so under the branch it refuses instead of silently
+        # reclassifying as a permitted out-of-set residual; the evidence
+        # names the row and the integer-id requirement and the manifest
+        # stays byte-identical.
+        self.complete_all_tasks()
+        for row_id in ("3", 3.0):
+            with self.subTest(row_id=row_id):
+                sidecar = self.write_sidecar(self.residual_sidecar(findings=[{"id": row_id, "blocking": True}]))
+                policy = self.residual_policy(recorded_at=self.ROUND_DAY_EPOCH - 86400, finding_ids=[3, 7])
+                driver = self.driver()
+                before = self.state_path.read_bytes()
+                result = self.pre_archive(driver, review_sidecar=sidecar, residual_policy=policy)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "done-pending")
+                self.assertTrue(any("whose id is not an integer under the residual policy branch" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertTrue(any(f"first non-integer blocking id: {row_id!r}" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertTrue(any("requires an integer id matching the policy's integer finding ids" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_refuses_junk_verdict_under_policy(self):
+        # Verdict-slot refuse arm (r1 F7): under the branch the verdict slot
+        # narrows to the yes/no pair instead of applying the landed
+        # clean-round sub-check; "no" is legitimate because the out-of-set
+        # residuals are staged, and any other present value (a junk verdict
+        # such as "maybe", or an empty string) refuses with the branch's
+        # evidence naming the accepted pair.
+        self.complete_all_tasks()
+        for verdict in ("maybe", ""):
+            with self.subTest(verdict=verdict):
+                sidecar = self.write_sidecar(self.residual_sidecar(verdict=verdict))
+                policy = self.residual_policy(recorded_at=self.ROUND_DAY_EPOCH - 86400)
+                driver = self.driver()
+                before = self.state_path.read_bytes()
+                result = self.pre_archive(driver, review_sidecar=sidecar, residual_policy=policy)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "done-pending")
+                self.assertTrue(any('verdict under the residual policy branch must be "yes" or "no" when present' in entry for entry in result["evidence"]), result["evidence"])
+                self.assertTrue(any(f"supplied {verdict!r}" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_accepts_in_set_non_blocking_row_under_policy(self):
+        # Fixed-member accept arm (r1 F8): a row whose integer id IS a
+        # member of the policy set but carries blocking false (the finding
+        # was fixed or dropped) archives, pinning the blocking conjunct of
+        # the membership rule: membership refuses only blocking rows, so a
+        # fixed member never wedges the sanctioned exit; the gate records
+        # and the run stays active.
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.residual_sidecar(findings=[{"id": 3, "blocking": False}]))
+        policy = self.residual_policy(recorded_at=self.ROUND_DAY_EPOCH - 86400, finding_ids=[3, 7])
+        result = self.pre_archive(self.driver(), review_sidecar=sidecar, residual_policy=policy)
+        self.assertEqual(result["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        self.assertIn("archive_gate", state)
+        self.assertEqual(state["workflow_state"], "active")
+        self.assertNotIn("terminal_receipt", state)
+
+    def test_normalize_residual_policy_malformed_inputs_refuse(self):
+        # Shape-guard refusal coverage (r1 F10): every fail-closed branch of
+        # the policy normalizer keeps its documented evidence string, and
+        # the one valid shape still normalizes (grant source trimmed).
+        cases = (
+            ("non-mapping", "policy", "residual_policy must be a JSON object when present"),
+            ("empty-finding-ids", {"finding_ids": [], "grant_source": "user grant", "recorded_at": 1.0}, "residual_policy.finding_ids must be a non-empty list"),
+            ("non-int-member", {"finding_ids": [3, "7"], "grant_source": "user grant", "recorded_at": 1.0}, "residual_policy.finding_ids must be integers matching the sidecar's integer finding ids"),
+            ("bool-member", {"finding_ids": [3, True], "grant_source": "user grant", "recorded_at": 1.0}, "residual_policy.finding_ids must be integers matching the sidecar's integer finding ids"),
+            ("empty-grant-source", {"finding_ids": [3], "grant_source": "   ", "recorded_at": 1.0}, "residual_policy.grant_source must be a non-empty string"),
+            ("bool-grant-source", {"finding_ids": [3], "grant_source": True, "recorded_at": 1.0}, "residual_policy.grant_source must be a non-empty string"),
+            ("missing-recorded-at", {"finding_ids": [3], "grant_source": "user grant"}, "residual_policy.recorded_at must be an epoch timestamp"),
+            ("bool-recorded-at", {"finding_ids": [3], "grant_source": "user grant", "recorded_at": True}, "residual_policy.recorded_at must be an epoch timestamp"),
+            ("nan-recorded-at", {"finding_ids": [3], "grant_source": "user grant", "recorded_at": float("nan")}, "residual_policy.recorded_at must be a finite epoch timestamp"),
+        )
+        for label, policy, expected_fragment in cases:
+            with self.subTest(case=label):
+                normalized, error = runtime._normalize_residual_policy(policy)
+                self.assertIsNone(normalized)
+                self.assertIsNotNone(error)
+                self.assertIn(expected_fragment, error)
+        normalized, error = runtime._normalize_residual_policy({"finding_ids": [3, 7], "grant_source": "  user grant  ", "recorded_at": 5.0})
+        self.assertIsNone(error)
+        self.assertEqual(normalized["finding_ids"], [3, 7])
+        self.assertEqual(normalized["grant_source"], "user grant")
+        self.assertEqual(normalized["recorded_at"], 5.0)
+
+    def test_refuses_residual_sidecar_missing_or_malformed_round_date(self):
+        # Round-date guard refuse arms (r1 F10): under the branch the
+        # ordering proof reads the sidecar date, so a sidecar without a
+        # usable date value refuses with the missing-date evidence and a
+        # non-ISO date refuses with the format evidence; the manifest stays
+        # byte-identical in both.
+        self.complete_all_tasks()
+        missing = self.residual_sidecar()
+        missing.pop("date")
+        malformed = self.residual_sidecar(date="18-09-2026")
+        policy = self.residual_policy(recorded_at=self.ROUND_DAY_EPOCH - 86400)
+        for label, payload, evidence_fragment in (
+            ("missing-date", missing, "missing the round date the residual policy ordering proof requires"),
+            ("malformed-date", malformed, "round date is not an ISO YYYY-MM-DD date: 18-09-2026"),
+        ):
+            with self.subTest(case=label):
+                sidecar = self.write_sidecar(payload)
+                driver = self.driver()
+                before = self.state_path.read_bytes()
+                result = self.pre_archive(driver, review_sidecar=sidecar, residual_policy=policy)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "done-pending")
+                self.assertTrue(any(evidence_fragment in entry for entry in result["evidence"]), result["evidence"])
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+
+class TerminalFinalStageTest(unittest.TestCase):
+    """Terminal final-stage archive safety (archive origin fixture 4 and the post-move half of fixture 5).
+
+    The final terminal stage is the second half of the staged protocol: it
+    refuses as blocked ``done-pending`` unless the ``archive_gate`` receipt
+    exists, the supplied archived path equals the gate's
+    ``declared_destination`` exactly, the gate-recorded source plan path is
+    absent from the filesystem, and the archived bytes still hash to the
+    gate's ``plan_digest``; only then do today's archived-plan checks run
+    and the terminal receipt gain the gate digest. Every refusal preserves
+    the machine state.
+    """
+
+    PLAN_TEXT = "# fixture plan\n\n- [x] task-3\n- [x] task-4\n"
+    ARCHIVED_REL = "docs/plans/completed/fixture-plan.md"
+    SOURCE_REL = "docs/plans/fixture-plan.md"
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.state_path = self.root / "runtime_state.json"
+        runtime.create_manifest(
+            self.state_path,
+            "fixture-plan",
+            [
+                {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
+                {"id": "task-4", "number": 4, "status": "complete", "checkbox": True},
+            ],
+        )
+        self.write_archived_plan(self.PLAN_TEXT)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def write_archived_plan(self, text: str, rel: str | None = None) -> str:
+        rel = rel or self.ARCHIVED_REL
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return rel
+
+    def driver(self, **kwargs):
+        return runtime.RuntimeDriver(
+            self.state_path,
+            plan_slug="fixture-plan",
+            owner="terminal-final-owner",
+            repo_root=self.root,
+            commit_lookup=kwargs.pop("commit_lookup", lambda _commit: True),
+            **kwargs,
+        )
+
+    def seed_gate(self, **overrides) -> dict:
+        """Seed a conforming ``archive_gate`` receipt; overrides replace fields.
+
+        Conforming means: the declared destination equals the archived
+        fixture path, the digest covers the archived bytes, and the recorded
+        source plan path is the absent active path.
+        """
+
+        state = runtime.load_manifest(self.state_path)
+        gate = {
+            "plan_path": self.SOURCE_REL,
+            "declared_destination": self.ARCHIVED_REL,
+            "plan_digest": hashlib.sha256((self.root / self.ARCHIVED_REL).read_bytes()).hexdigest(),
+            "last_commit_sha": "abcdef1",
+            "phase5_checklist": ["tests"],
+            "recorded_at": 1234.0,
+        }
+        gate.update(overrides)
+        state["archive_gate"] = gate
+        runtime._safe_write_json(self.state_path, state)
+        return gate
+
+    def mark_terminal(self, driver, **overrides) -> dict:
+        payload = {"archived_plan_path": self.ARCHIVED_REL, "last_commit_sha": "abcdef1", "phase5_checklist": ["tests"]}
+        payload.update(overrides)
+        return driver.mark_terminal(payload["archived_plan_path"], payload["last_commit_sha"], payload["phase5_checklist"])
+
+    def test_refuses_without_gate_receipt(self):
+        # Fixture 4: the plan already sits at the destination but no
+        # archive_gate receipt exists (the move happened without the
+        # pre-archive stage); the final stage refuses naming the missing
+        # pre-archive gate and the run stays active for recovery.
+        driver = self.driver()
+        result = self.mark_terminal(driver)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("pre-archive gate" in entry for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
+    def test_refuses_archived_path_mismatch(self):
+        # The supplied archived path must equal the gate's declared
+        # destination exactly: a plan parked at any other path is refused
+        # naming the destination mismatch, never terminal.
+        self.seed_gate(declared_destination="docs/plans/completed/other-plan.md")
+        driver = self.driver()
+        result = self.mark_terminal(driver)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(
+            any("does not equal" in entry and "declared_destination" in entry for entry in result["evidence"]),
+            result["evidence"],
+        )
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
+    def test_refuses_source_still_present(self):
+        # Fixture 5, post-move half: the gate-recorded source plan path is
+        # still on the filesystem after the supposed move, so the archive
+        # move never happened; the final stage refuses naming the
+        # source-present condition with the recorded path.
+        self.write_archived_plan(self.PLAN_TEXT, rel=self.SOURCE_REL)
+        self.seed_gate()
+        driver = self.driver()
+        result = self.mark_terminal(driver)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("still present" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertTrue(any(self.SOURCE_REL in entry for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
+    def test_refuses_archived_content_drift(self):
+        # The archived bytes must still hash to the gate's plan digest: a
+        # drifted archive is refused done-pending naming the digest mismatch
+        # and the manifest bytes stay exactly as they were.
+        self.seed_gate(plan_digest=hashlib.sha256(b"drifted plan bytes").hexdigest())
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = self.mark_terminal(driver)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("digest mismatch" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_success_records_exact_destination_and_digest(self):
+        # Fixture 5: the full happy path completes the run; the receipt's
+        # archived_plan_path equals the gate's declared_destination and the
+        # receipt carries the gate digest, but only after the final stage
+        # re-verified the archived bytes hash to it.
+        gate = self.seed_gate()
+        driver = self.driver()
+        result = self.mark_terminal(driver)
+        self.assertEqual(result["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["workflow_state"], "complete")
+        receipt = state["terminal_receipt"]
+        self.assertEqual(receipt["archived_plan_path"], gate["declared_destination"])
+        self.assertEqual(receipt["plan_digest"], gate["plan_digest"])
+        reread = self.driver().terminal_result()
+        self.assertEqual(reread["status"], "success")
+        self.assertEqual(reread["plan_digest"], gate["plan_digest"])
+
+    def test_incomplete_gateless_manifest_refuses_on_completeness_before_gate(self):
+        # Ordering pin for the migrated fixtures: an incomplete AND gateless
+        # manifest is refused with the machine-completeness evidence before
+        # any gate clause, so the prescribed order cannot be silently
+        # inverted (gate checks hoisted above completeness) to keep the old
+        # refusal assertions green.
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"].update({"status": "pending", "checkbox": False})
+        runtime._safe_write_json(self.state_path, state)
+        self.assertNotIn("archive_gate", runtime.load_manifest(self.state_path))
+        driver = self.driver()
+        result = self.mark_terminal(driver)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(
+            any("all tasks must be complete before terminal state" in entry for entry in result["evidence"]),
+            result["evidence"],
+        )
+        self.assertFalse(any("gate" in entry for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
+
+class ArchiveLocationTest(unittest.TestCase):
+    """Pre-archive relocation detection (archive origin fixture 7).
+
+    A plan relocated under a completed-folder-like sibling that is neither
+    the resolved plans directory nor the resolved completed directory is
+    refused by the pre-archive stage naming ``unsupported archive location``
+    with the offending path, leaving the machine manifest untouched and the
+    relocated file in place for recovery.
+    """
+
+    PLAN_TEXT = "# fixture plan\n\n- [x] task-3\n- [x] task-4\n"
+    SIBLING_PLAN_REL = "docs/plans_completed/fixture-plan.md"
+    SIDECAR_REL = "docs/reviews/fixture-r3.stats.json"
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.state_path = self.root / "runtime_state.json"
+        # The real TOML-fence facts format resolving the plans directory and
+        # its completed sibling; the relocated plan sits under neither.
+        facts = self.root / ".ai-playbook" / "facts.md"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text(
+            "```toml\n"
+            "plans_dir = \"docs/plans/\"\n"
+            "plans_completed_dir = \"docs/plans/completed/\"\n"
+            "```\n",
+            encoding="utf-8",
+        )
+        (self.root / "docs/plans/completed").mkdir(parents=True, exist_ok=True)
+        runtime.create_manifest(
+            self.state_path,
+            "fixture-plan",
+            [
+                {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
+                {"id": "task-4", "number": 4, "status": "complete", "checkbox": True},
+            ],
+        )
+        self.write_plan(self.PLAN_TEXT, self.SIBLING_PLAN_REL)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def write_plan(self, text: str, rel: str) -> str:
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return rel
+
+    def write_sidecar(self, payload: dict) -> str:
+        path = self.root / self.SIDECAR_REL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return self.SIDECAR_REL
+
+    def driver(self):
+        return runtime.RuntimeDriver(
+            self.state_path,
+            plan_slug="fixture-plan",
+            owner="archive-location-owner",
+            repo_root=self.root,
+            commit_lookup=lambda _commit: True,
+        )
+
+    def test_reports_unsupported_sibling_location(self):
+        # Fixture 7: the sibling directory sits outside the resolved plans
+        # directory, so the containment clause refuses before any identity,
+        # destination, or sidecar evidence; the offending path is named and
+        # nothing moves.
+        sidecar = self.write_sidecar({"schema_version": 1, "source_kind": "code", "verdict": "yes", "findings": []})
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        result = driver.mark_terminal(
+            stage="pre-archive",
+            plan_path=self.SIBLING_PLAN_REL,
+            destination="",
+            review_sidecar=sidecar,
+            last_commit_sha="abcdef1",
+            phase5_checklist=["tests"],
+        )
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("unsupported archive location" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertTrue(any(self.SIBLING_PLAN_REL in entry for entry in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assertTrue((self.root / self.SIBLING_PLAN_REL).is_file())
+
+
+class TerminalResumeTest(unittest.TestCase):
+    """Interrupted archive run resumes without double archive (fixture 6).
+
+    A run that recorded its ``archive_gate`` receipt and was interrupted
+    before the move stays active with its claims intact; the resumed
+    process re-runs the pre-archive stage and the receipt is overwritten in
+    place with the identity fields stable while ``recorded_at`` advances.
+    """
+
+    PLAN_TEXT = "# fixture plan\n\n- [x] task-3\n- [x] task-4\n"
+    ACTIVE_PLAN_REL = "docs/plans/fixture-plan.md"
+    SIDECAR_REL = "docs/reviews/fixture-r3.stats.json"
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.state_path = self.root / "runtime_state.json"
+        facts = self.root / ".ai-playbook" / "facts.md"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text(
+            "```toml\n"
+            "plans_dir = \"docs/plans/\"\n"
+            "plans_completed_dir = \"docs/plans/completed/\"\n"
+            "```\n",
+            encoding="utf-8",
+        )
+        (self.root / "docs/plans/completed").mkdir(parents=True, exist_ok=True)
+        runtime.create_manifest(
+            self.state_path,
+            "fixture-plan",
+            [
+                {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
+                {"id": "task-4", "number": 4, "status": "complete", "checkbox": True},
+            ],
+        )
+        path = self.root / self.ACTIVE_PLAN_REL
+        path.write_text(self.PLAN_TEXT, encoding="utf-8")
+        # One closed claim record: the interruption happened after the work
+        # landed, and the resume must leave the record exactly intact.
+        state = runtime.load_manifest(self.state_path)
+        state["claims"]["task-3"] = {
+            "token": "resume-token",
+            "generation": 0,
+            "owner": "resume-owner",
+            "state": "closed",
+            "task_id": "task-3",
+        }
+        runtime._safe_write_json(self.state_path, state)
+        self.clock_values = [1000.0]
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def advance_clock(self) -> None:
+        self.clock_values.append(self.clock_values[-1] + 1.0)
+
+    def driver(self):
+        return runtime.RuntimeDriver(
+            self.state_path,
+            plan_slug="fixture-plan",
+            owner="terminal-resume-owner",
+            repo_root=self.root,
+            commit_lookup=lambda _commit: True,
+            clock=lambda: self.clock_values[-1],
+        )
+
+    def pre_archive(self, driver) -> dict:
+        return driver.mark_terminal(
+            stage="pre-archive",
+            plan_path=self.ACTIVE_PLAN_REL,
+            destination="",
+            review_sidecar=self.SIDECAR_REL,
+            last_commit_sha="abcdef1",
+            phase5_checklist=["tests"],
+        )
+
+    def test_interrupted_run_resumes_without_double_archive(self):
+        # Fixture 6: gate recorded, no move performed. The resumed process
+        # (a fresh driver over the same manifest) finds workflow_state still
+        # active with the closed claim record intact, and its repeated
+        # pre-archive call overwrites the gate in place: identity fields
+        # stable, recorded_at advanced, no terminal receipt, and the active
+        # plan still in place, so no second archive transition exists.
+        sidecar_path = self.root / self.SIDECAR_REL
+        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        sidecar_path.write_text(
+            json.dumps({"schema_version": 1, "source_kind": "code", "verdict": "yes", "findings": []}),
+            encoding="utf-8",
+        )
+        first = self.driver()
+        outcome = self.pre_archive(first)
+        self.assertEqual(outcome["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        gate_before = state["archive_gate"]
+        self.assertEqual(state["workflow_state"], "active")
+        self.assertNotIn("terminal_receipt", state)
+        self.advance_clock()
+        resumed = self.driver()
+        repeat = self.pre_archive(resumed)
+        self.assertEqual(repeat["status"], "success")
+        state_after = runtime.load_manifest(self.state_path)
+        gate_after = state_after["archive_gate"]
+        self.assertEqual(gate_after["plan_path"], gate_before["plan_path"])
+        self.assertEqual(gate_after["declared_destination"], gate_before["declared_destination"])
+        self.assertEqual(gate_after["plan_digest"], gate_before["plan_digest"])
+        self.assertEqual(gate_after["last_commit_sha"], gate_before["last_commit_sha"])
+        self.assertEqual(gate_after["phase5_checklist"], gate_before["phase5_checklist"])
+        self.assertGreater(gate_after["recorded_at"], gate_before["recorded_at"])
+        self.assertEqual(state_after["workflow_state"], "active")
+        self.assertNotIn("terminal_receipt", state_after)
+        self.assertEqual(state_after["claims"]["task-3"]["state"], "closed")
+        self.assertTrue((self.root / self.ACTIVE_PLAN_REL).is_file())
+
+
+class RecordingAdapter:
+    """Batch-aware fake adapter recording launch and resume calls."""
+
+    def __init__(self, launch_result=None, resume_result=None, session_id="sess-anchor-1"):
+        self.launch_calls = []
+        self.resume_calls = []
+        self.session_id = session_id
+        self.launch_result = dict(launch_result or {})
+        self.resume_result = dict(resume_result or {})
+
+    def _base(self, task_id, generation):
+        return {
+            "status": "success",
+            "reason_code": "completed",
+            "evidence": ["batch-worker-log"],
+            "action_scope": "repository-task",
+            "checkpoint_identity": f"{task_id}:worker",
+            "generation": generation,
+            "session_id": self.session_id,
+        }
+
+    def launch(self, task, prompt, generation, deadline_seconds=None, policy_token=None):
+        self.launch_calls.append({"task_id": task["id"], "generation": generation, "prompt": prompt, "policy_token": policy_token})
+        result = self._base(task["id"], generation)
+        result.update(self.launch_result)
+        return result
+
+    def resume(self, session_id, prompt, generation, task_id=None, deadline_seconds=None, policy_token=None):
+        self.resume_calls.append({"session_id": session_id, "task_id": task_id, "generation": generation, "prompt": prompt, "policy_token": policy_token})
+        result = self._base(task_id or "unknown", generation)
+        result.update(self.resume_result)
+        return result
+
+
+class SessionlessRecordingAdapter(RecordingAdapter):
+    """The r6 F1 adapter shape: schema-legal success receipts that carry no
+    session id at all (the codex adapter sets the field only when the
+    envelope has one), so no anchor session is ever captured."""
+
+    def _base(self, task_id, generation):
+        result = super()._base(task_id, generation)
+        result.pop("session_id", None)
+        return result
 
 
 if __name__ == "__main__":

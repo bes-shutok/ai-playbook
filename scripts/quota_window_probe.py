@@ -10,6 +10,8 @@ behind injectable interfaces on top of this module.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import math
 import os
@@ -17,9 +19,17 @@ from datetime import datetime
 import pathlib
 import sys
 import time
-from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Optional, Sequence
 import urllib.error
 import urllib.request
+
+# Shared detection seam (harness-detection-and-budgeting-skip plan): the auto
+# path of detect_runtime consults this module attribute at call time so the
+# validation canaries can patch the seam at the module boundary.
+_SCRIPTS_DIR = str(pathlib.Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import harness_detection  # noqa: E402
 
 # Z.ai limit entry type -> window kind. Kind calibration (do not skip
 # silently): cross-check each type's nextResetTime against the observed
@@ -39,6 +49,13 @@ ZCODE_KIND_MAP = {
 
 DEFAULT_MINUTES_THRESHOLD = 20
 DEFAULT_PERCENT_THRESHOLD = 90
+# Protocol-completion margin (origin 2, layer 2): pause when the binding
+# window's remaining minutes fall below the time the boundary's remaining
+# work plus the pause protocol itself needs, so a late pause decision still
+# leaves the protocol time to complete. Facts key
+# budget_pause_min_protocol_minutes; a floor under the 20-minute line, not
+# a second pause line at normal range.
+DEFAULT_PROTOCOL_MINUTES_THRESHOLD = 10
 
 # Provider-reported resets beyond this horizon are clamped (review r1 F2):
 # the widest legitimate window observed is the monthly-scale secondary reset
@@ -256,7 +273,8 @@ def select_binding(limits: Sequence[Mapping]) -> Optional[str]:
 
 def evaluate_pause(limits: Sequence[Mapping], binding: Optional[str],
                    minutes_threshold: int = DEFAULT_MINUTES_THRESHOLD,
-                   percent_threshold: float = DEFAULT_PERCENT_THRESHOLD) -> tuple[str, list[str]]:
+                   percent_threshold: float = DEFAULT_PERCENT_THRESHOLD,
+                   protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD) -> tuple[str, list[str]]:
     binding_limit = next((limit for limit in limits if limit["kind"] == binding), None)
     if binding_limit is None:
         return "continue", []
@@ -273,13 +291,21 @@ def evaluate_pause(limits: Sequence[Mapping], binding: Optional[str],
                 binding_limit["used_percent"], percent_threshold
             )
         )
+    if binding_limit["minutes_remaining"] < protocol_minutes_threshold:
+        reasons.append(
+            "minutes_remaining {} below protocol margin {}".format(
+                binding_limit["minutes_remaining"], protocol_minutes_threshold
+            )
+        )
     return ("pause" if reasons else "continue"), reasons
 
 
 def build_report(runtime: str, limits: Sequence[Mapping],
                  minutes_threshold: int = DEFAULT_MINUTES_THRESHOLD,
                  percent_threshold: float = DEFAULT_PERCENT_THRESHOLD,
-                 now: Optional[float] = None) -> dict:
+                 now: Optional[float] = None,
+                 protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD,
+                 plan_cost_percent: Optional[float] = None) -> dict:
     """Evaluate only live windows; an all-expired limit set fails open.
 
     A limit whose ``reset_at_epoch`` is at or before ``now`` describes a
@@ -303,6 +329,7 @@ def build_report(runtime: str, limits: Sequence[Mapping],
         live, binding,
         minutes_threshold=minutes_threshold,
         percent_threshold=percent_threshold,
+        protocol_minutes_threshold=protocol_minutes_threshold,
     )
     # An engaged horizon clamp is observable (review r2 F7): a clamped
     # limit's reset time is a bound, not the provider's real reset.
@@ -314,7 +341,7 @@ def build_report(runtime: str, limits: Sequence[Mapping],
                 MAX_RESET_HORIZON_SECONDS // 86400
             )
         )
-    return {
+    report = {
         "runtime": runtime,
         "limits": list(live),
         "binding": binding,
@@ -322,6 +349,23 @@ def build_report(runtime: str, limits: Sequence[Mapping],
         "reasons": reasons,
         "status": "ok",
     }
+    if plan_cost_percent is not None:
+        binding_limit = next((limit for limit in live if limit["kind"] == binding), None)
+        # Forward-looking wave sizing (origin 1, gaps 1 and 5): compare the
+        # loop's expected window cost against the binding limit's remaining
+        # budget. Full beats split beats pause; the boundary is inclusive
+        # (cost exactly equal to remaining launches at full width).
+        remaining = 100.0 - binding_limit["used_percent"]
+        if plan_cost_percent <= remaining:
+            recommendation, wave_size = "full", None
+        elif plan_cost_percent / 2 <= remaining:
+            recommendation, wave_size = "split", 2
+        else:
+            recommendation, wave_size = "pause", None
+        report["plan_cost_percent"] = plan_cost_percent
+        report["wave_recommendation"] = recommendation
+        report["wave_size"] = wave_size
+    return report
 
 
 # --- Task 2: transports, runtime discovery, fail-open, flag write ---
@@ -403,7 +447,9 @@ def probe_zcode(config_path: os.PathLike | str = DEFAULT_ZCODE_CONFIG,
                 transport: Optional[Transport] = None,
                 now: Optional[float] = None,
                 minutes_threshold: int = DEFAULT_MINUTES_THRESHOLD,
-                percent_threshold: float = DEFAULT_PERCENT_THRESHOLD) -> dict:
+                percent_threshold: float = DEFAULT_PERCENT_THRESHOLD,
+                protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD,
+                plan_cost_percent: Optional[float] = None) -> dict:
     """Fetch Z.ai limits via the transport; fail open on any failure."""
     if transport is None:
         transport = urllib_transport
@@ -420,7 +466,9 @@ def probe_zcode(config_path: os.PathLike | str = DEFAULT_ZCODE_CONFIG,
         return _unknown_report("zcode", ["zcode quota response carried no usable limits"])
     return build_report("zcode", limits,
                         minutes_threshold=minutes_threshold,
-                        percent_threshold=percent_threshold, now=now)
+                        percent_threshold=percent_threshold, now=now,
+                        protocol_minutes_threshold=protocol_minutes_threshold,
+                        plan_cost_percent=plan_cost_percent)
 
 
 def discover_codex_rollout(sessions_dir: os.PathLike | str) -> Optional[pathlib.Path]:
@@ -435,7 +483,9 @@ def discover_codex_rollout(sessions_dir: os.PathLike | str) -> Optional[pathlib.
 def probe_codex(sessions_dir: os.PathLike | str = DEFAULT_CODEX_SESSIONS,
                 now: Optional[float] = None,
                 minutes_threshold: int = DEFAULT_MINUTES_THRESHOLD,
-                percent_threshold: float = DEFAULT_PERCENT_THRESHOLD) -> dict:
+                percent_threshold: float = DEFAULT_PERCENT_THRESHOLD,
+                protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD,
+                plan_cost_percent: Optional[float] = None) -> dict:
     """Parse the newest Codex rollout tail; fail open on absence."""
     rollout = discover_codex_rollout(sessions_dir)
     if rollout is None:
@@ -463,20 +513,30 @@ def probe_codex(sessions_dir: os.PathLike | str = DEFAULT_CODEX_SESSIONS,
         return _unknown_report("codex", ["rollout carried no rate_limits record"])
     return build_report("codex", limits,
                         minutes_threshold=minutes_threshold,
-                        percent_threshold=percent_threshold, now=now)
+                        percent_threshold=percent_threshold, now=now,
+                        protocol_minutes_threshold=protocol_minutes_threshold,
+                        plan_cost_percent=plan_cost_percent)
 
 
 def detect_runtime(explicit: Optional[str] = None,
                    zcode_config: os.PathLike | str = DEFAULT_ZCODE_CONFIG,
                    codex_sessions: os.PathLike | str = DEFAULT_CODEX_SESSIONS) -> Optional[str]:
-    """Explicit override wins; documented autodetect precedence is zcode then codex."""
+    """Explicit override wins; auto-detect answers only from a live signal.
+
+    The auto path consults the shared detection seam (harness_detection) at the
+    module-attribute boundary so validation can patch the seam. Host file
+    presence is deliberately NOT consulted: the old file-presence rules
+    auto-bound a foreign runtime's quota window (the mis-bind defect of
+    record). zcode_config and codex_sessions remain in the signature only for
+    caller compatibility; within this function they are unused (the explicit
+    probe paths take their config directly from main()). Deploy the shared
+    helper together with this script: a stale probe without harness_detection
+    fails at import.
+    """
     if explicit in ("zcode", "codex"):
         return explicit
-    if pathlib.Path(zcode_config).exists():
-        return "zcode"
-    if pathlib.Path(codex_sessions).is_dir():
-        return "codex"
-    return None
+    harness, _method = harness_detection.detect_harness()
+    return harness
 
 
 def add_secondary_report_only_reason(report: dict) -> dict:
@@ -488,10 +548,76 @@ def add_secondary_report_only_reason(report: dict) -> dict:
     return report
 
 
+@contextlib.contextmanager
+def _shared_guard_lock(flag_path: os.PathLike | str,
+                       timeout_seconds: float = 2.0,
+                       poll_seconds: float = 0.02) -> Iterator[bool]:
+    """Acquire the host-global guard lock shared by every flag participant.
+
+    The lock file lives next to the guard flag (canonical:
+    ``~/.ai-playbook/runtime/budget-guard.lock``) so the probe writer's
+    ``os.replace``, both budget-guard hook adapters' cleanup, the standing
+    resume watcher's compare-and-delete, and fired-marker cleanup serialize
+    on one file. The canonical contract lives in
+    ``scripts/execute_plan_resume_watcher.py`` (``budget_guard_lock`` and
+    ``compare_and_delete_flag``); this module cannot import that script in
+    every deployment layout, so it holds the same file by the same name, and
+    the hermetic suites prove the interlock end to end.
+
+    Yields True when the lock was acquired (``used with ... as acquired``).
+    On lock-unavailability the writer caller skips the arming entirely (not
+    arming is the fail-open direction, r1 F13: an unlocked replace could
+    delete or corrupt a live flag), and cleanups skip removal quietly.
+    """
+
+    path = pathlib.Path(os.path.expanduser(str(flag_path))).parent / "budget-guard.lock"
+    fd = None
+    acquired = False
+    try:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        except OSError:
+            yield False
+            return
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(poll_seconds)
+        yield acquired
+    finally:
+        if fd is not None:
+            try:
+                if acquired:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+
 def write_flag_if_paused(flag_path: os.PathLike | str, runtime: str,
                          limits: Sequence[Mapping], decision: str,
                          plan: Optional[str] = None) -> bool:
-    """Atomically write the guard flag (mode 0o600) only on a pause decision."""
+    """Atomically write the guard flag (mode 0o600) only on a pause decision.
+
+    The final ``os.replace`` participates in the shared guard lock
+    (``budget-guard.lock`` next to the flag): a concurrent expired-window
+    cleanup can therefore never interleave a re-read plus unlink between
+    this writer's decision and its replacement. When the shared lock cannot
+    be acquired the writer does NOT arm (returns False): an unlocked
+    replace could be deleted by a concurrent locked cleanup or publish a
+    truncated tmp over a live window, so skipping the arming is the
+    fail-open direction (r1 F13). The tmp file is pid-unique so two
+    writers never truncate each other's staged bytes, and the flag path is
+    expanduser'd so a literal-tilde argv arms the same host-global file the
+    hooks and the watcher read (r1 F16).
+    """
+
     if decision != "pause":
         return False
     binding = select_binding(limits)
@@ -523,12 +649,25 @@ def write_flag_if_paused(flag_path: os.PathLike | str, runtime: str,
         first_line = plan.splitlines()[0] if plan.splitlines() else ""
         if first_line:
             lines.append("plan={}".format(first_line))
-    path = pathlib.Path(flag_path)
+    # Armed-by attribution (origin 1, gap 4): the probe is this flag's
+    # writer; manual drives write armed_by=manual. The hook's block reason
+    # names the value (unknown when the line is missing), so the host can
+    # tell a probe pause from a live-acceptance drive.
+    lines.append("armed_by=probe")
+    path = pathlib.Path(os.path.expanduser(str(flag_path)))
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    # Pid-unique staged tmp (r1 F13): two concurrent writers must never
+    # truncate each other's staged bytes on one fixed tmp path.
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    with _shared_guard_lock(path) as acquired:
+        if not acquired:
+            # Lock unavailable: never arm with an unlocked replace (r1 F13).
+            # Not arming is the fail-open direction; the next probe retry
+            # arms under the lock.
+            return False
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
     return True
 
 
@@ -550,15 +689,21 @@ def run_probe(runtime: str,
               transport: Optional[Transport] = None,
               now: Optional[float] = None,
               minutes_threshold: int = DEFAULT_MINUTES_THRESHOLD,
-              percent_threshold: float = DEFAULT_PERCENT_THRESHOLD) -> dict:
+              percent_threshold: float = DEFAULT_PERCENT_THRESHOLD,
+              protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD,
+              plan_cost_percent: Optional[float] = None) -> dict:
     if runtime == "zcode":
         report = probe_zcode(config_path=config_path, url=url, transport=transport, now=now,
                              minutes_threshold=minutes_threshold,
-                             percent_threshold=percent_threshold)
+                             percent_threshold=percent_threshold,
+                             protocol_minutes_threshold=protocol_minutes_threshold,
+                             plan_cost_percent=plan_cost_percent)
     else:
         report = probe_codex(sessions_dir=sessions_dir, now=now,
                              minutes_threshold=minutes_threshold,
-                             percent_threshold=percent_threshold)
+                             percent_threshold=percent_threshold,
+                             protocol_minutes_threshold=protocol_minutes_threshold,
+                             plan_cost_percent=plan_cost_percent)
     return add_secondary_report_only_reason(report)
 
 
@@ -579,12 +724,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--runtime", choices=("zcode", "codex"))
     parser.add_argument("--minutes-before", type=int, default=DEFAULT_MINUTES_THRESHOLD)
     parser.add_argument("--max-percent", type=float, default=DEFAULT_PERCENT_THRESHOLD)
+    parser.add_argument("--min-protocol-minutes", type=int, default=DEFAULT_PROTOCOL_MINUTES_THRESHOLD)
+    parser.add_argument("--plan-cost", type=float, default=None)
     parser.add_argument("--write-flag")
     parser.add_argument("--config", default=str(DEFAULT_ZCODE_CONFIG))
     parser.add_argument("--sessions-dir", default=str(DEFAULT_CODEX_SESSIONS))
     parser.add_argument("--url", default=ZCODE_QUOTA_URL)
     parser.add_argument("--plan")
     args = parser.parse_args(argv)
+    if args.min_protocol_minutes < 0:
+        parser.error("--min-protocol-minutes must be >= 0")
+    if args.plan_cost is not None and not (0 < args.plan_cost <= 100):
+        parser.error("--plan-cost must be within (0, 100]")
     try:
         runtime = detect_runtime(
             args.runtime, zcode_config=args.config, codex_sessions=args.sessions_dir
@@ -600,21 +751,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         else:
             report = run_probe(runtime, config_path=args.config, sessions_dir=args.sessions_dir,
                                url=args.url, minutes_threshold=args.minutes_before,
-                               percent_threshold=args.max_percent)
+                               percent_threshold=args.max_percent,
+                               protocol_minutes_threshold=args.min_protocol_minutes,
+                               plan_cost_percent=args.plan_cost)
     if args.write_flag:
+        # r2 F10: the boolean is no longer discarded fire-and-forget. A
+        # False return on a pause decision means the guard backstop was
+        # NOT armed for a live window (lock unavailable, secondary binding,
+        # or a horizon-clamped limit); the report must surface that so a
+        # reader trusting the JSON never assumes an armed flag from a
+        # pause-only exit code.
+        armed = False
         try:
-            # Review r4 F4: the boolean return is deliberately not relayed
-            # into reasons here. Every main()-reachable False arm is
-            # excluded by construction (both parsers clamp every limit to
-            # the horizon before main() sees it, and an empty limit set
-            # cannot carry a pause decision); the writer-level horizon
-            # check stays as genuine defense in depth for direct callers.
-            write_flag_if_paused(args.write_flag, report["runtime"], report["limits"],
-                                 report["pause_decision"], plan=args.plan)
+            armed = write_flag_if_paused(args.write_flag, report["runtime"], report["limits"],
+                                         report["pause_decision"], plan=args.plan)
         except OSError as exc:
             # Fail-open: a failed flag write never masks the JSON report.
             report = dict(report)
             report["reasons"] = list(report["reasons"]) + ["flag write failed: {}".format(exc)]
+        if report.get("pause_decision") == "pause" and not armed:
+            report = dict(report)
+            report["reasons"] = list(report["reasons"]) + ["guard flag not armed (lock unavailable or report-only binding)"]
+            report["guard_armed"] = False
+        elif report.get("pause_decision") == "pause":
+            report = dict(report)
+            report["guard_armed"] = True
     json.dump(report, sys.stdout, indent=2)
     sys.stdout.write("\n")
     return 0 if report["pause_decision"] == "pause" else 1

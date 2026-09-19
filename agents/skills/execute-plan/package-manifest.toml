@@ -14,7 +14,7 @@ commit_owner = "existing done workflow"
 [adapters.codex]
 entrypoint = "scripts/execute_plan_runtime_codex.py:CodexAdapter"
 adapter_version = "1.0"
-launch_deadline_seconds = 30
+launch_deadline_seconds = 900
 wait_deadline_seconds = 300
 approval_mode = "verified-host-policy-only"
 launch_command = ["codex", "exec", "--json", "-C", "<repo-root>"]

@@ -3,6 +3,9 @@
 - **Date:** 2026-09-15
 - **Status:** open
 - **Workflow:** backlog
+- **Plan note (2026-09-18):** the review-records-contract plan no longer
+  carries this item (approved scope split); it stays a standalone
+  churn-reduction origin.
 
 ## Problem
 
