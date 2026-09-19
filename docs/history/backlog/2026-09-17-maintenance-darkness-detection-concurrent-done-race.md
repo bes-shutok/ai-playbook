@@ -94,3 +94,55 @@ family (darkness with a fail-safe aftermath, never a runaway loop), same
 candidate fix family (a self-contained detector that does not depend on the
 loop it detects, or a touch-session read-back that re-arms before it
 decides).
+
+## Corpus note (2026-09-18, P12 origin 5 re-affirmation)
+
+Re-affirmed accepted-by-design as of 2026-09-18. The r5 inventory
+(2026-09-17-maintenance-r5-doc-consistency-residuals, entry 15) asked that
+the r1 finding text be restated inline, so it is: the R-5 finding from the
+2026-09-16-maintenance-scheduler-liveness r1 review (deferred to backlog by
+the triage as accepted-by-design) is the concurrent-done double-create
+window. Two done sessions starting concurrently in a repository whose
+parent is dark can both run the rearm-on-touch check before either takes
+the done lock, both classify darkness, and both create a recurring parent.
+The aftermath is fail-safe, not fail-alive: the duplicate-parent tripwire
+flags both lane guards, records the `duplicate-parent-candidate` turn error
+in the state file, and stops scheduling until a human collapses the
+duplicates; no runaway loop occurs, and the residual stays the human toil
+plus one wasted automation record. The rejected alternative remains
+rejected: an external launchd heartbeat (a self-contained detector outside
+any session) was deferred by the liveness plan's decision grill ("launchd
+external heartbeat (indefinite-op FIX-3 variant 1): deferred, the existing
+idle-time watchdog plus rearm-on-touch cover the detector gap without new
+launchd infrastructure"); no heartbeat and no lock machinery is planned.
+
+Evidence (the three acceptance probes re-run 2026-09-18 against the current
+text; all three pass):
+
+1. The duplicate-parent tripwire with its `duplicate-parent-candidate` turn
+   error is present in agents/skills/maintenance/SKILL.md Step 2, including
+   the self-heal arm that adopts a sole live span match and clears the turn
+   error.
+2. The Step 1 memory-note read-back that adopts a live ENABLED recognition
+   match is present in agents/skills/maintenance/SKILL.md Step 1 ("adopt
+   its id into `parent_automation_id` with the Step 0 adoption guards, clear
+   the note, and skip the re-arm").
+3. No launchd-based re-arm heartbeat and no dedicated re-arm lock exists on
+   the maintenance loop's surfaces: grep for launchd/heartbeat/re-arm lock
+   returns zero hits on agents/skills/maintenance/SKILL.md,
+   agents/skills/maintenance/zcode.md,
+   agents/skills/maintenance/prompt-templates.md, and
+   agents/skills/done/SKILL.md (whose only loop text is the Step 0 pointer
+   line deferring to the maintenance skill's check), and the state-file
+   writers are the five sanctioned writer classes defined inside
+   agents/skills/maintenance/SKILL.md's State file section, so no separate
+   writer surface exists to grep. The repo's launchd-based
+   scripts/execute_plan_resume_watcher.py is an authoring/execution resume
+   carrier, not a darkness detector, and is out of scope for this probe.
+
+The same-day confirmation also covered all four members of this accepted
+family (the original race above and the r2/r3/r4 corpus notes): each still
+carries its accepted-family mitigation shape unchanged in the current skill
+files (the duplicate-parent tripwire, the already-exists confirmation
+route, the six-hour ghost-entry horizon, and the `successor-chain-failed`
+read-back surfacing).
