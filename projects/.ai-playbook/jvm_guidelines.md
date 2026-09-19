@@ -293,6 +293,11 @@ constructor or type references in production and test code. Do not write
 `@org.springframework.stereotype.Component`, `@lombok.RequiredArgsConstructor`,
 or `new com.example.Foo(...)` when a simple-name import is possible.
 
+Prefer `import static` (or Kotlin static import) for enum constants and fixed
+named constants when the simple name is used repeatedly in the file, for example
+`CONSUME_FROM_FIRST_OFFSET` or `SINGLE_MESSAGE_CONSUME_BATCH_SIZE`. Keep the
+type import when the enum is still used as a type.
+
 When review or self-check fixes one fully qualified name, scan every **PR-touched**
 source file for the same pattern (FQN annotations and FQN `new` / type uses for
 types this change introduced or already imports elsewhere) and fix them in the
@@ -300,8 +305,9 @@ same change set.
 
 Keep fully qualified names only when intentional: `package-info` / module
 metadata, or avoiding a simple-name clash (for example generated wire enums vs
-domain enums with the same short name). Do not rewrite pre-existing FQN style
-outside the PR diff just for uniformity.
+domain enums with the same short name, or two nested enums that share constant
+names such as `Operation.NATIVE_SEND_BACK` vs `OperationKind.NATIVE_SEND_BACK`).
+Do not rewrite pre-existing FQN style outside the PR diff just for uniformity.
 
 Unused-import scanners do not catch this: both forms compile. Treat it as style
 hygiene next to unused-import cleanup, not as the same check.
