@@ -51,6 +51,8 @@ pin "execution lane never idle-dispatched" grep -qF 'never dispatched through a 
 pin "state-file lane arm present" grep -qF 'State-file arm' "$S"
 pin "idle children in the lane arm" grep -qF 'null `fire_at`' "$S"
 pin "tripwire self-heal present" grep -qF 'Self-heal arm' "$S"
+pin "widened-arm classification repo-scoped" grep -qF 'classify its prompt only when the prompt contains the resolved repository root' "$S"
+expect_absent "superseded unscoped widened-arm classification wording must be absent from SKILL.md" 'spacing window, classify its prompt:' "$S"
 pin "failure-cap section anchored" grep -qF '## Failure detection and the failure cap' "$S"
 pin "idle-time outcome arm present" grep -qF 'Idle-time children are covered too' "$S"
 pin "pricing edits stay in the state cache" grep -qF 'never edits tracked skill files' "$S"
