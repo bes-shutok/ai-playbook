@@ -118,7 +118,7 @@ The standard reason codes are `completed`, `worker-hesitation`,
 `contract-violation`, `approval-required`, `timeout`, `dirty-worktree`,
 `cleanup-required`, `cleanup-unverified`, `malformed-result`, `owner-mismatch`,
 `stale-claim`, `explicit-abort`, `runtime-policy-unavailable`,
-`runtime-error`, and `precondition-unverified`. The
+`runtime-error`, `precondition-unverified`, and `capacity-unavailable`. The
 reference driver and adapter additionally emit `authorized` (envelope
 authorization success), `activation-verified` (adapter activation success),
 `worktree-witness-unavailable` (broken git scope witness), and the boundary
@@ -150,22 +150,40 @@ non-escaping, shell-marker-free under the repository root) to a non-empty
 regular file read under the 1,000,000-byte bounded read (an archived plan
 over that bound is refused outright as `done-pending` rather than
 prefix-scanned, a FIFO or other non-regular file is refused before any open,
-and a zero-byte plan is refused as empty) and carries zero unchecked
-checkbox lines over its whole
-length under the line-anchored reading (a mid-prose mention of the marker
-does not count), and `commit_lookup` proves the commit identity.
+an empty or whitespace-only plan is refused as empty, and a plan with zero
+recognizable `### Task <N>:` task headings is refused naming the missing
+task sections) and carries zero unchecked checkbox lines over its whole
+length under the line-anchored reading (a line counts only when its first
+non-whitespace token is an unchecked task-list marker, one of `- [ ]`,
+`* [ ]`, or `+ [ ]`; a mid-prose mention of the marker does not count), and
+`commit_lookup` proves the commit identity.
 Any missed check returns the `done-pending` block with evidence
 naming the failed check and preserves the manifest unchanged (non-terminal,
 no receipt written); the run stays continuable once the failed check passes
 (`done-pending` is not a resumable reason, so this block never resumes
-automatically). The `mark_terminal` state save is best-effort best-order:
-single-machine-source reads dominate, and no lock is held across the whole
-check-then-save window over the external archived-plan and commit artifacts
-the checks consult, so a refused terminal call is simply re-run once the
-named check passes. The terminal checkbox scan is line-anchored over the whole
+automatically). The manifest lock fences the machine manifest only: it
+does not fence the external archived-plan and commit artifacts the checks
+consult, so a refused terminal call is re-run once the named check passes. The terminal checkbox scan is line-anchored over the whole
 file and fence-blind by spec in the fail-closed direction: a
 `- [ ]` marker inside a fenced code block in the archived plan still refuses
 terminal.
+A capacity receipt (reason code `capacity-unavailable`) parks a single-task
+claim in the `waiting-capacity` state instead of the blocked shape: the claim
+keeps its token, generation, and launch record and carries the bounded retry
+policy (`mode: bounded-resume`, `max_attempts: 3`, `attempts_remaining: 3`).
+The first capacity receipt parks with the full budget, each successive
+capacity receipt consumes one attempt, and the receipt that arrives with the
+budget exhausted transitions the claim to `blocked`, the reclaimable lease
+state whose standard recovery machinery then applies. While the budget
+remains, recovery is the in-place resume: a continue relaunches the same
+claim under the same token and generation (no second claim row, no reclaim
+rotation), and reclaim refuses a parked claim with evidence naming
+`waiting-capacity` while the retry policy is live. A `waiting-capacity` claim
+at the queue head routes the readiness decision to `recovery` with
+`preserve-and-reconcile` through the unprovable-next-task condition (the
+parked task is not claimable; the condition text is unchanged). A capacity
+receipt on a live batch-group member never parks: it keeps the existing
+blocked shape under the group path, and the group fences are untouched.
 The durable claim record contains `token`, `generation`, `owner`, and
 `timestamp`. The driver writes the claim before launch and revalidates the
 generation before any mutation and before commit handoff. When no owner is
@@ -188,11 +206,17 @@ Reclaim refuses closed with the resumable `stale-claim` outcome (manifest
 untouched) before expiry, on unknown tasks, on closed, replaced, or aborted
 claims, and on any task in the progressed set (`done-pending`,
 `commit-pending`, `checkpointed`, `complete`); the CLI refuses
-`--operation reclaim` without `--task-id` before any driver construction. An
-explicitly aborted workflow is never released: for a reclaimable claim on a
-task outside the progressed set, the reclaim returns the `explicit-abort`
-preserve-and-stop outcome before any lease accounting instead of the
-stale-claim refusal; a progressed-task refusal still returns `stale-claim`.
+`--operation reclaim` without `--task-id` before any driver construction. A
+workflow in the closed non-active set is never released: for a reclaimable
+claim on a task outside the progressed set, a machine `workflow_state` of
+`aborted`, `complete`, or `terminal` returns the preserve-and-stop outcome
+before any lease accounting instead of the stale-claim refusal; the envelope
+reason code is `explicit-abort` for all three closed states (the shared abort
+envelope, so the status is `aborted` and `resume_allowed` false), and the
+evidence names the finished state ("workflow was explicitly aborted before
+the reclaim" under `aborted`; "workflow_state is '<state>'; the workflow
+already finished" under `complete` and `terminal`); a progressed-task
+refusal still returns `stale-claim`.
 A claim that belongs to a live batch claim group is refused with the same
 resumable `stale-claim` outcome naming the group (r3 F1), whatever its lease
 state: a group parked at a budget pause is expected to be lease-expired, and
@@ -400,6 +424,9 @@ enforced by the done-boundary clean-state witness instead.
 
 ## Transition table
 
+Each outcome in the table names exactly one next action: take that one
+action, then re-classify the state.
+
 | Event or condition | Required evidence | Claim handling | Retry budget | Resulting state | Recovery action |
 | --- | --- | --- | --- | --- | --- |
 | `started` | Claim record and launch receipt | Create token and generation before launch | 0 | `launched` | Wait for a bounded result. |
@@ -410,10 +437,11 @@ enforced by the done-boundary clean-state witness instead.
 | `aborted` | Explicit stop receipt and owner | Release only the matching claim | 0 | `aborted` | Do not resume without a new explicit run. |
 | `error` | Runtime error code and bounded evidence | Preserve generation for reconciliation | Numeric profile budget | `blocked` or terminal after budget exhaustion | Reconcile, then retry only within the numeric budget. |
 | `timeout` | Deadline, operation, and cancellation evidence | Do not take over an ambiguous live claim | 0 | `blocked`, `resume_allowed: true` | Verify process cleanup before any later claim. |
+| `capacity-unavailable` | Capacity receipt with bounded evidence, on a single-task claim (a live batch-group member keeps the existing blocked shape) | Claim parks `waiting-capacity` keeping token, generation, and launch record, with the bounded retry policy on the claim; the receipt arriving with the budget exhausted moves the claim to `blocked` | bounded-resume (`attempts_remaining: 3`) | `waiting-capacity`, then `blocked` after exhaustion | Resume the same claim with `continue` (same token and generation, no second claim row); reclaim refuses the parked state while the budget is live; after exhaustion the blocked-state recovery applies. |
 | `dirty-worktree` | Paths and clean-state evidence | Preserve claim and quarantine generation | 0 | `blocked`, `resume_allowed: false` | Require explicit reconciliation before relaunch. |
 | `cleanup-required` | Ambient noise paths on the pre-launch startup path | Preserve claim and quarantine generation | 0 | `blocked`, `resume_allowed: true` | Remove allowlisted ambient entries or resume after cleanup. |
 | `cleanup-unverified` | Owned process and failed termination evidence | Preserve claim; never take over | 0 | `blocked`, `resume_allowed: false` | Require operator cleanup verification; do not retry. |
-| `reclaimed` | Expired claim lease (at least `CLAIM_LEASE_SECONDS`) on a claim in `claimed`, `launched`, or `blocked`, with the task outside the progressed set and the claim not a member of a live batch claim group (a live-group member is refused with the resumable `stale-claim` outcome naming the group, r3 F1; the one exit, r4 F2: a live-group member whose task is blocked with `resume_allowed` false reclaims through with no lease wait, and the same compare-and-swap fails its group) | Replace generation and token, mark the old claim `replaced`, reset the task to `pending` with the previous session's resume fields stripped, recorded checkpoints preserved as evidence; on the r4 F2 exit the group is also marked `failed` with its active member cleared and the still-staged member claims closed | 0 | `pending` task under the `replaced` claim; the next claim takes the freed task under a fresh generation; on the r4 F2 exit the staged members' pending tasks also re-enter the individual queue | Re-claim and relaunch the freed task; a post-reclaim checkpoint or launch receipt from the replaced owner fails fenced as `owner-mismatch`, while a late done handoff refuses as unfenced done evidence; the replaced claim is reconciled by rotation and never quarantined at startup; an explicitly aborted workflow returns `explicit-abort` and is never released. |
+| `reclaimed` | Expired claim lease (at least `CLAIM_LEASE_SECONDS`) on a claim in `claimed`, `launched`, or `blocked`, with the task outside the progressed set, with the machine `workflow_state` outside the closed non-active set (`aborted`, `complete`, `terminal` - a finished-workflow reclaim is refused with the `explicit-abort` preserve-and-stop envelope before any lease accounting, its evidence naming the finished state), and the claim not a member of a live batch claim group (a live-group member is refused with the resumable `stale-claim` outcome naming the group, r3 F1; the one exit, r4 F2: a live-group member whose task is blocked with `resume_allowed` false reclaims through with no lease wait, and the same compare-and-swap fails its group) | Replace generation and token, mark the old claim `replaced`, reset the task to `pending` with the previous session's resume fields stripped, recorded checkpoints preserved as evidence; on the r4 F2 exit the group is also marked `failed` with its active member cleared and the still-staged member claims closed | 0 | `pending` task under the `replaced` claim; the next claim takes the freed task under a fresh generation; on the r4 F2 exit the staged members' pending tasks also re-enter the individual queue | Re-claim and relaunch the freed task; a post-reclaim checkpoint or launch receipt from the replaced owner fails fenced as `owner-mismatch`, while a late done handoff refuses as unfenced done evidence; the replaced claim is reconciled by rotation and never quarantined at startup; a workflow in the closed non-active set returns `explicit-abort` (preserve-and-stop; the evidence names the finished state) and is never released. |
 | `commit-pending` | Started receipt and task identity | Keep claim fenced during reconciliation | 0 | `blocked`, `checkpointed`, or `aborted` (the wedged-claim abort exit) | Inspect the exact commit before deciding whether work is complete. Abort with the current token is permitted when the recorded commit provably does not exist (the wedged-claim runtime exit; preserve-and-stop). |
 | `done-pending` | Worker checkpoint plus done handoff evidence | Keep claim until done boundary closes | 0 | `blocked` or `checkpointed` | Do not launch the next task until commit, checkbox, clean state, and log evidence exist. |
 | `committed` | Commit identity, checkbox, clean state, and log evidence | Close matching claim | 0 | `checkpointed` | Record the commit and continue once, idempotently. |
@@ -470,6 +498,27 @@ startup reconciliation may complete the checkpoint only after an injected
 repository lookup proves the exact commit identity. Ambiguous live workers,
 owner mismatches, claim-before-launch interruptions, and uncommitted dirty
 worktrees remain quarantined and are never relaunched automatically.
+
+## Live-session discovery ladder
+
+The shared skill's Live-session discovery ladder section (`agents/skills/execute-plan/SKILL.md`) owns the rung order, the stop-at-the-first-resolving-rung rule, the rung-3 report wording, and the manifest-only deviation note; this section pins only the concrete mechanism behind each rung for the driver boundary, the way the maintenance
+overlay (`agents/skills/maintenance/zcode.md`) pins scheduling primitives.
+
+- Driver claim check (rung 1): the executable driver is
+  `scripts/execute_plan_runtime.py`; the claim check consults the machine
+  manifest `{tmp_dir}/execute-plan/<plan-slug>/runtime_state.json` through the
+  read-only `readiness` operation (`--operation readiness --plan <plan-path>`).
+  Rung 1 exists for a run only when that `runtime_state.json` exists for its
+  plan slug.
+- Session-manifest heartbeat (rung 2): the orchestrator-maintained audit
+  receipt `{tmp_dir}/execute-plan/<plan-slug>/manifest.md`; its heartbeat
+  signals are fresh within the Step 3.1 20-minute window. The expected
+  staging doc (`{reviews_dir}/...-code-review-r<N>.md`) counts as a heartbeat
+  signal only by presence AND mtime inside that same window: presence alone
+  is not a heartbeat signal (a doc left stale by a dead run proves nothing
+  about liveness).
+- Process scan (rung 3, last): permitted only when neither repo-scoped
+  signal exists, per the shared skill's stop rule and report wording.
 
 ## Action envelope and policy token
 
@@ -554,6 +603,7 @@ are:
 | `watcher-fire` | `fire_watcher` over `RuntimeResumeWatcherAdapter` (the automation prompt's fire entry: evaluates the fences and four stand-down checks, clears the guard flag and fired marker only on a resume decision, and consumes the launchd one-shot carrier from the receipt alone) |
 | `readiness` | `readiness` (via `_operation_readiness`; read-only decision, requires `--plan`; `persist_construction=False` construction, the operation writes nothing) |
 | `reclaim` | `reclaim` (via `_operation_reclaim`; lease-gated interrupted-claim recovery, requires `--task-id`; the one lease-waived exit reclaims a non-resumable live-group member and atomically fails its group, r4 F2; `persist_construction=False` construction, the claim compare-and-swap is the operation's single write) |
+| `diagnose` | `diagnose` (via `_operation_diagnose`; read-only first-failed-transition report; `persist_construction=False` construction, the operation writes nothing) |
 
 The address fan-out parent surface is a separate executable boundary (r2
 F9): `python3 scripts/execute_plan_address_fanout.py --operation <op>
@@ -581,7 +631,7 @@ trail, the rendered `projection`, and `manual_command` on every supersede
 outcome (the exact manual resume command, emitted because the boundary
 schedules no watcher, not only for the report-only scheduling trail); when
 the boundary is a supersede-class boundary superseding an armed watcher
-(pause, abort, complete, unknown, weekly-secondary), the outcome also carries the
+(pause, wait-for-reset, abort, complete, unknown, weekly-secondary), the outcome also carries the
 `carrier_teardown` receipt the supersede path computes (bootout plus
 sentinel consume, receipt-only, same shape as the `watcher-supersede`
 teardown receipt; null on install and stale boundaries));
@@ -741,9 +791,12 @@ independent of that enumeration: `terminal-path` first, then
 `observe-worker`, then `recovery`, then `direct-continuation`; the first
 decision whose predicate holds is returned:
 
-- `terminal-path` fires only when every task is complete or checkpointed
-  (or carrying `checkbox: true`) and the machine `workflow_state` is
-  `active`, `complete`, or `terminal`; an
+- `terminal-path` fires only when the machine manifest carries at least one
+  task, every task is complete or checkpointed
+  (or carrying `checkbox: true`), and the machine `workflow_state` is
+  `active`, `complete`, or `terminal`; an empty manifest never lands here
+  (matching `mark_terminal`'s empty-manifest refusal, it routes to recovery
+  instead), while an
   already complete manifest lands here rather than in recovery. The
   `terminal-path` outcome reports an empty failed-conditions list by
   design; advisory condition failures evaluated before it are dropped.
@@ -754,7 +807,8 @@ decision whose predicate holds is returned:
   status are byte-identical after the call.
 - `recovery` fires when any failed condition remains. Each failed condition
   names its witness, and the outcome carries one recovery action:
-  `stop-or-recovery` for a machine state that is not `active`,
+  `stop-or-recovery` for a machine state that is not `active` and for a
+  plan with zero recognizable task sections,
   `preserve-and-reconcile` for an unresolved handoff, a fenced claim, or an
   unprovable next task, and `correct-plan-through-skill-gated-plan-edit` for
   plan-manifest disagreement. When several conditions fail, the outcome
@@ -762,12 +816,15 @@ decision whose predicate holds is returned:
   order: an empty manifest, then machine state, then unresolved handoff or
   fenced claim, then plan shape or plan-manifest disagreement, then
   unprovable next task.
-  One envelope-level outcome sits outside that failed-condition enumeration:
-  when the manifest lock is held by another owner at decision time, the
-  operation returns the `recovery` decision with recovery action
-  `resumable-conflict`, a transient contention envelope whose reading is to
-  retry the readiness call after the lock is released; nothing is blocked
-  durably and the manifest is unchanged.
+One envelope-level outcome sits outside that failed-condition enumeration:
+when the manifest lock is held by another owner at decision time, the
+operation returns the `recovery` decision with recovery action
+`resumable-conflict`, a transient contention envelope whose reading is to
+retry the readiness call after the lock is released; nothing is blocked
+durably and the manifest is unchanged. Transient contention is scoped
+exactly like the driver's other contention outcomes: the envelope carries
+reason code `stale-claim` with recovery action `resumable-conflict`, and
+the decision itself is carried in the outcome's `decision` field.
 - `direct-continuation` fires when all five conditions pass.
 
 The five machine-owned conditions:
@@ -785,24 +842,31 @@ The five machine-owned conditions:
 4. Plan-manifest agreement. For each manifest task recorded in the
    progressed set (`done-pending`, `commit-pending`, `checkpointed`,
    `complete`), the plan's matching `### Task <N>:` section contains no
-   unchecked checkbox line. A plan with zero recognizable `### Task <N>:`
+   unchecked checkbox line under the line-anchored reading (a line counts
+   only when its first non-whitespace token is an unchecked task-list
+   marker, one of `- [ ]`, `* [ ]`, or `+ [ ]`; a mid-prose mention of the
+   marker does not count). A plan with zero recognizable `### Task <N>:`
    headings fails the plan condition outright ("plan carries no
    recognizable task sections"), so a wrong `--plan` file cannot produce a
    vacuous direct-continuation while no task has progressed. The task
    number is the id suffix after `task-`;
    the heading line matches `### Task <N>:` with the number terminated by
    its colon, so the Task 1 section never scans Task 10's heading or
-   content. The section scan is fence-aware for single-level triple-backtick
-   fences: a `## ` or `### Task <N>:` line inside one such fence is fenced
-   content, not a break marker, so a fenced example cannot truncate the
-   section and hide an unchecked checkbox after it. Residual fence shapes
-   (tilde fences, indented fence-lookalikes, nested fences of different
-   widths, unclosed fences, or a
-   fenced pseudo-heading before the real task heading) can still truncate or
-   shift the mid-run readiness scan and degrade that detection to the
-   terminal backstop, which scans the whole archived plan fence-blind and
-   fails closed (residual tracked as
-   `docs/history/backlog/2026-09-17-fence-robust-checkbox-scanning.md`).
+   content. The heading search and the section scan share one
+   CommonMark-grade fence map computed once over the whole plan's lines
+   (whole-plan parity, no per-section restart): backtick and tilde fences;
+   an opener is a run of three or more marker characters with an optional
+   info string; a closing line uses the same character at an equal or
+   greater width and is bare; fence lines carry a zero-to-three-space
+   indent tolerance, so a fence-lookalike indented four or more spaces is
+   literal text that toggles nothing; nested widths of different sizes keep
+   parity until the matching closer (a shorter run inside a longer fence
+   does not close it); an unclosed fence stays open to end of file, so a
+   task heading inside it binds no section and this condition fails closed
+   naming that task instead of scanning fenced content as prose. A fenced
+   pseudo-heading before the real task heading is fenced content and never
+   hijacks the section start. The terminal backstop still scans the whole
+   archived plan fence-blind and fails closed.
    Any unchecked line in a
    progressed task's section is disagreement, and the manifest wins per the
    seeding boundary: the plan is corrected through the skill-gated
@@ -845,8 +909,11 @@ finding ids as integers matching the version-1 sidecar's integer finding
 ids, the grant source, and the recorded-at epoch); the policy is omitted on
 a blocking-clean exit. Its eligibility predicate evaluates in one fixed order
 and returns the `first failed condition` only, as a blocked `done-pending`
-outcome that leaves the machine manifest untouched (no manifest state
-beyond construction-time manifest writes (owner, receipts, updated_at)): (1) machine
+outcome that leaves the machine manifest untouched apart from the refusal
+tail's evidence write (each stage refusal appends one `terminal-refused`
+event to the append-only `history` after the outcome is composed; the
+append never changes the outcome, and no other manifest state beyond
+construction-time manifest writes (owner, receipts, updated_at) moves): (1) machine
 completeness (non-empty task map, every task complete, every claim record
 closed, no pending done handoff); (2) input shape guard and active-plan
 integrity and identity (a non-empty `plan_path`, `review_sidecar`, and
@@ -857,8 +924,10 @@ and a path under any other directory is refused as `unsupported archive
 location` naming the offending path before any read; its filename matches
 the manifest `plan_slug`, and when a resume watcher record with a
 canonical plan path exists, that recorded path must equal the plan path
-too; then the file reads under the bounded-read policy, an empty plan
-refuses, and zero line-anchored unchecked checkbox lines are required); (3)
+too; then the file reads under the bounded-read policy, an empty or
+whitespace-only plan refuses, and zero line-anchored unchecked checkbox
+lines (first non-whitespace token one of `- [ ]`, `* [ ]`, `+ [ ]`) are
+required); (3)
 destination (the completed directory resolves only from the facts
 TOML-fence key `plans_completed_dir` through
 `facts_paths.resolve_toml_key_raw` anchored at the repository root, never
@@ -910,14 +979,64 @@ archived path must equal `archive_gate.declared_destination` exactly, and
 the gate-recorded source plan path must be absent from the filesystem; (3)
 the archived-plan checks in order: the shape guard, the fail-closed
 bounded read, the digest recompute over the archived bytes (refusing when
-it differs from `archive_gate.plan_digest`), the empty-plan refusal, zero
-unchecked checkbox lines, and the provable commit identity.
+it differs from `archive_gate.plan_digest`), the empty-plan refusal (empty
+or whitespace-only), the at-least-one-task-heading requirement (a plan
+with zero recognizable `### Task <N>:` headings refuses naming the missing
+task sections), zero unchecked checkbox lines (first non-whitespace token
+one of `- [ ]`, `* [ ]`, `+ [ ]`), and the provable commit identity.
 The terminal receipt gains `plan_digest` from the gate record only after
-that equality held. Every refusal preserves the manifest (no manifest
-state beyond construction-time manifest writes (owner, receipts, updated_at)) and leaves
-`workflow_state` non-terminal.
+that equality held. Every refusal composes the blocked `done-pending`
+outcome first and then appends one `terminal-refused` evidence event to
+the append-only `history` (the append never changes the outcome); apart
+from that event and the write timestamp the manifest is preserved and
+`workflow_state` stays non-terminal.
 
 Sidecar boundary: the sidecar boundary is owned by the readiness section's sentence above.
+
+### Diagnose operation
+
+The `diagnose` operation is the read-only first-failed-transition report.
+Like readiness, it is read-only by construction: the driver loads and
+validates the manifest under the manifest lock, releases the lock, and
+returns without any write path, and the CLI operation constructs its driver
+with `persist_construction=False`, so the manifest bytes are identical
+before and after the operation. The walk takes the earliest classifiable
+failure event in `history` order whose subject has not since reached the
+progressed terminal state: a task-scoped event is superseded when its
+task's current status is `complete`, and a workflow-scoped event (one that
+carries no task) is superseded when the machine `workflow_state` is
+`complete` or `terminal`.
+
+The classification enum is fixed: `timeout`, `capacity-unavailable`,
+`worker-failure`, `stale-evidence`, `inclusion`, `terminal-gate`,
+`user-interruption`, `none`. Each class keys on its producing history
+evidence:
+
+- `timeout`: a `worker-blocked` receipt with reason code `timeout`.
+- `capacity-unavailable`: a `worker-blocked` receipt with reason code
+  `capacity-unavailable`.
+- `worker-failure`: a `worker-blocked` receipt with reason code
+  `malformed-result`, `runtime-error`, `runtime-policy-unavailable`, or
+  `cleanup-unverified` (the adapter's non-resumable unverified-kill arm
+  included).
+- `stale-evidence`: a `worker-blocked` receipt with reason code
+  `stale-claim`.
+- `inclusion`: a `worker-blocked` receipt with reason code
+  `precondition-unverified`.
+- `terminal-gate`: the `terminal-refused` event the terminal refusal tail
+  appends.
+- `user-interruption`: the `user-interrupt-recorded` event.
+- `none`: no classifiable failure survives the selection rule; the outcome
+  names `first_failed_transition` null.
+
+Cancellation is not a separate class: a cancelled worker's receipts already
+carry the `timeout`, `malformed-result`, or `cleanup-unverified` codes, and
+unverified cleanup classifies under its receipt's `worker-failure` code.
+The outcome names the event as `first_failed_transition` with its
+`classification`; a `none` report is a `success` outcome, a named failure
+is a `blocked` outcome with recovery action `preserve-and-reconcile`. The
+enum is a fixed map: a new recurring gate is a backlog decision, never a
+silent extension of the table.
 
 ### Seeding boundary and resume reconciliation
 
@@ -1044,11 +1163,15 @@ codex exec resume <session-id> --json [<prompt>]
 Launch always pins the repository root with `-C <repo-root>`; `wait` resumes a
 session without appending a prompt, while `resume` appends one.
 
-Launch is bounded to 30 seconds and wait/resume to 300 seconds by default.
+The cross-runtime deadline baseline is `launch_deadline_seconds = 900` and `wait_deadline_seconds = 1500`,
+pinned in the shipped package manifest. The in-code adapter defaults equal
+this baseline and apply only when a manifest omits the deadline keys.
 Profiles may lower or raise those values only when the resulting deadline is
-finite and positive. The shipped package manifest pins the cross-runtime
-baseline `launch_deadline_seconds = 900` (wait 300); the in-code defaults
-apply only when a manifest omits the key (r3 F20). A timed-out operation
+finite and positive. The wait baseline is sized to cover a legitimate
+20-minute worker body of work (the same per-worker budget the driver's claim
+lease is sized against), finite and bounded, so an ordinary long worker or
+review panel completes inside the baseline instead of being terminated at an
+arbitrary short default. A timed-out operation
 cancels its owned process tree and
 must verify termination; failed verification becomes
 `cleanup-unverified` with no retry or claim takeover.

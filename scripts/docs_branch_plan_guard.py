@@ -15,6 +15,11 @@ Two subcommands with two distinct postures (never swapped):
   leg, witness each restored plan file; a file whose bytes do not match the
   certification digest prints a warn line and the command always exits 0.
 
+Both subcommands treat an unreadable plan file (an OSError from the
+per-file digest read) as skip-and-warn: the file is named on stderr and
+the run continues without the digest check for it. Only a readable
+downgrade can trip the fail-closed refusal.
+
 The certification digest is the ``source_digest`` of the latest sidecar
 under the reviews dir whose ``source_kind`` is ``plan`` and whose
 ``artifact_slug`` equals the plan's feature slug (the basename sans
@@ -49,6 +54,15 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(65536), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def warn_unreadable_plan(path: Path) -> None:
+    """Named skip-and-warn for a plan file whose digest read raised OSError."""
+    print(
+        f"WARN: unreadable plan file: {path}; sync proceeds without the "
+        f"digest check for it",
+        file=sys.stderr,
+    )
 
 
 def digest_matches(byte_digest: str, sidecar_digest: str) -> bool:
@@ -144,8 +158,16 @@ def cmd_guard(args: argparse.Namespace) -> int:
     for name in shared:
         branch_plan = branch_plans_dir / name
         incoming_plan = incoming_plans_dir / name
-        branch_digest = sha256_file(branch_plan)
-        incoming_digest = sha256_file(incoming_plan)
+        try:
+            branch_digest = sha256_file(branch_plan)
+        except OSError:
+            warn_unreadable_plan(branch_plan)
+            continue
+        try:
+            incoming_digest = sha256_file(incoming_plan)
+        except OSError:
+            warn_unreadable_plan(incoming_plan)
+            continue
         if branch_digest == incoming_digest:
             continue
         certified = latest_certified_sidecar(sidecars, feature_slug(name))
@@ -191,7 +213,12 @@ def cmd_check_restored(args: argparse.Namespace) -> int:
             continue
         sidecar_path, sidecar_data = certified
         cert_digest = str(sidecar_data.get("source_digest") or "")
-        if not digest_matches(sha256_file(path), cert_digest):
+        try:
+            file_digest = sha256_file(path)
+        except OSError:
+            warn_unreadable_plan(path)
+            continue
+        if not digest_matches(file_digest, cert_digest):
             print(
                 f"WARN: restored plan {path} does not match the certified digest "
                 f"{cert_digest} (sidecar {sidecar_path.name})"
@@ -218,7 +245,6 @@ def build_parser() -> argparse.ArgumentParser:
         "check-restored", help="warn-only witness for restored plan files"
     )
     restored_parser.add_argument("--reviews-dir", required=True)
-    restored_parser.add_argument("--plans-dir", required=True)
     restored_parser.add_argument("files", nargs="+")
     restored_parser.set_defaults(func=cmd_check_restored)
 

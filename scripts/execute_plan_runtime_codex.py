@@ -16,8 +16,15 @@ import runtime_capabilities as capabilities
 from runtime_capabilities import bounded_evidence
 
 
-DEFAULT_LAUNCH_DEADLINE = 30.0
-DEFAULT_WAIT_DEADLINE = 300.0
+# In-code default deadlines: they equal the contract baseline pinned in
+# agents/skills/execute-plan/package-manifest.toml and apply only when a
+# manifest omits the deadline keys. The wait default covers a legitimate
+# 20-minute worker body of work (the same budget the driver's claim-lease
+# comment sizes against) while staying finite and bounded. No environment
+# variable or CLI flag overrides these: the package manifest is the only
+# configuration surface.
+DEFAULT_LAUNCH_DEADLINE = 900.0
+DEFAULT_WAIT_DEADLINE = 1500.0
 DANGEROUS_FLAGS = {"--approve-for-me", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"}
 SAFE_ENV_KEYS = {"PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR"}
 

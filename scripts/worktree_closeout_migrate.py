@@ -4,10 +4,16 @@
 Subcommands:
   capture  Write a JSON baseline (path plus SHA-256) of the configured
            review dirs, relative to the current working directory.
+           Dangling symlinks are skipped with a warning and recorded
+           under a "skipped" list instead of crashing the capture.
   migrate  Copy files that are new or modified versus the baseline from a
            source worktree into a target worktree, verifying every copy by
            re-read checksum. Never moves: on any verification failure the
            source file is still present and the exit code is non-zero.
+           Dangling symlinks in the source are skipped with a warning and
+           recorded as manifest skip entries. The manifest is written even
+           when the run aborts mid-loop (an "incomplete" marker names the
+           error), so already-copied files stay in the audit record.
 """
 
 from __future__ import annotations
@@ -33,6 +39,16 @@ def _sha256(path: Path) -> str:
 
 def _configured_dirs(raw: str) -> list[str]:
     return [part for part in raw.split() if part]
+
+
+def _is_dangling_symlink(path: Path) -> bool:
+    """True for exactly the dangling-symlink shape: a symlink whose target is missing.
+
+    Containment-scope guard (r1 F4): only this shape may be contained as a
+    skip-and-warn. Every other OSError (unreadable regular file, permission
+    denied, ...) propagates loudly and unchanged.
+    """
+    return path.is_symlink() and not path.exists()
 
 
 def _iter_configured_files(root: Path, dirs: list[str]) -> list[Path]:
@@ -94,12 +110,28 @@ def cmd_capture(args: argparse.Namespace) -> int:
     dirs = _configured_dirs(args.dirs)
     root = Path.cwd()
     files: dict[str, str] = {}
+    skipped: list[dict] = []
     for path in _iter_configured_files(root, dirs):
-        files[path.relative_to(root).as_posix()] = _sha256(path)
+        rel = path.relative_to(root).as_posix()
+        if _is_dangling_symlink(path):
+            print(f"WARN: skipping dangling symlink: {path}", file=sys.stderr)
+            skipped.append(
+                {
+                    "path": rel,
+                    "reason": "dangling symlink; target missing; excluded from baseline",
+                }
+            )
+            continue
+        files[rel] = _sha256(path)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
-        json.dumps({"dirs": dirs, "files": files}, indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            {"dirs": dirs, "files": files, "skipped": skipped},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     print(f"Captured {len(files)} file(s) under {len(dirs)} dir(s) into {out}.")
@@ -149,57 +181,85 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     renamed: list[dict] = []
     skipped: list[dict] = []
     failed: list[dict] = []
-    for src in _iter_configured_files(source, dirs):
-        rel = src.relative_to(source).as_posix()
-        if rel in baseline_files and _sha256(src) == baseline_files[rel]:
-            continue
-        dst = target / rel
-        if dst.exists() or dst.is_symlink():
-            if _same_content(dst, src):
+    # Manifest durability: the four sections accumulate in memory and the
+    # manifest is written in a finally block, so a mid-loop abort still
+    # records every entry earned so far, plus an incomplete marker naming
+    # the error, before the failure propagates.
+    aborted: BaseException | None = None
+    try:
+        for src in _iter_configured_files(source, dirs):
+            rel = src.relative_to(source).as_posix()
+            if _is_dangling_symlink(src):
+                print(f"WARN: skipping dangling symlink: {src}", file=sys.stderr)
                 skipped.append(
                     {
                         "source": rel,
-                        "destination": dst.as_posix(),
-                        "reason": "target byte-identical; skipped without rename or rewrite",
-                        "verified": True,
+                        "reason": "dangling symlink; target missing; skipped without copying",
                     }
                 )
                 continue
-            candidate = dst.with_name(dst.stem + f".wt-{args.suffix}" + dst.suffix)
-            bump = 2
-            while candidate.exists() or candidate.is_symlink():
-                candidate = dst.with_name(
-                    dst.stem + f".wt-{args.suffix}-{bump}" + dst.suffix
-                )
-                bump += 1
-            dst = candidate
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        _copy_file(src, dst)
-        if _verify_copy(src, dst):
-            entry = {
-                "source": rel,
-                "destination": dst.as_posix(),
-                "verified": True,
-            }
-            if dst.name != Path(rel).name:
-                entry["collision_renamed"] = True
-                renamed.append(entry)
-            else:
-                migrated.append(entry)
-        else:
-            failed.append(
-                {
+            if rel in baseline_files and _sha256(src) == baseline_files[rel]:
+                continue
+            dst = target / rel
+            if dst.exists() or dst.is_symlink():
+                if _same_content(dst, src):
+                    skipped.append(
+                        {
+                            "source": rel,
+                            "destination": dst.as_posix(),
+                            "reason": "target byte-identical; skipped without rename or rewrite",
+                            "verified": True,
+                        }
+                    )
+                    continue
+                candidate = dst.with_name(dst.stem + f".wt-{args.suffix}" + dst.suffix)
+                bump = 2
+                while candidate.exists() or candidate.is_symlink():
+                    candidate = dst.with_name(
+                        dst.stem + f".wt-{args.suffix}-{bump}" + dst.suffix
+                    )
+                    bump += 1
+                dst = candidate
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            _copy_file(src, dst)
+            if _verify_copy(src, dst):
+                entry = {
                     "source": rel,
                     "destination": dst.as_posix(),
-                    "verified": False,
-                    "error": "checksum mismatch after copy",
+                    "verified": True,
                 }
-            )
-
-    _append_manifest(
-        manifest_path,
-        {"migrated": migrated, "renamed": renamed, "skipped": skipped, "failed": failed},
-    )
+                if dst.name != Path(rel).name:
+                    entry["collision_renamed"] = True
+                    renamed.append(entry)
+                else:
+                    migrated.append(entry)
+            else:
+                failed.append(
+                    {
+                        "source": rel,
+                        "destination": dst.as_posix(),
+                        "verified": False,
+                        "error": "checksum mismatch after copy",
+                    }
+                )
+    except BaseException as exc:
+        aborted = exc
+        raise
+    finally:
+        sections: dict[str, list[dict]] = {
+            "migrated": migrated,
+            "renamed": renamed,
+            "skipped": skipped,
+            "failed": failed,
+        }
+        if aborted is not None:
+            sections["incomplete"] = [
+                {
+                    "error": f"{type(aborted).__name__}: {aborted}",
+                    "note": "migration aborted mid-loop; entries recorded above are durable",
+                }
+            ]
+        _append_manifest(manifest_path, sections)
     for entry in failed:
         print(
             f"ERROR: verification failed for {entry['source']} -> {entry['destination']}: {entry['error']}",

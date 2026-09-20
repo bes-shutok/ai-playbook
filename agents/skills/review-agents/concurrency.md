@@ -26,7 +26,7 @@ Without this trace, the finding cannot be validated. Verify the race window is a
 ## Locking and Synchronization
 
 1. Optimistic locking: version column or conditional UPDATE used for concurrent modifications
-2. A conditional UPDATE producing 0 rows IS an optimistic lock — do not flag it as missing
+2. A conditional UPDATE producing 0 rows IS an optimistic lock - do not flag it as missing
 3. Pessimistic locking: held for minimum duration, no nested locks (deadlock risk)
 4. Distributed locks: TTL set, release in finally block, handle lock acquisition failure
 
@@ -65,3 +65,34 @@ Before flagging a multi-step state machine as unprotected, trace the full guard 
 
 
 Report problems only. No positive observations.
+
+## Ownership and decision matrix
+
+For asynchronous callbacks, message consumers, shutdown, deadlines, or
+terminal routing, build a path matrix before declaring lifecycle safety:
+
+1. Enumerate normal success, retry, terminal, admission-rejected, unexpected
+   failure, timeout, cancellation, mixed-batch, and shutdown paths.
+2. For each path record acquisition, task completion, enclosing broker-decision
+   completion, and release. Task completion and decision completion differ when
+   a callback returns a result that still needs inspection.
+3. Require the same completion witness and idempotent release gate on every
+   terminal path, including paths that bypass normal admission.
+4. Treat an unenumerated path as incomplete review coverage and stage
+   `security#lifecycle-ownership-path-unchecked` when the matrix cannot be
+   completed from code and tests.
+
+## Persistent state-machine race matrix
+
+For compare-and-set updates, deduplication, reconciliation, or job queues:
+
+1. Enumerate every state and legal transition, including evidence-bearing or
+   operator-only states. Generic updates must not bypass stricter paths.
+2. Trace stale-worker, duplicate-key, failed-update, and idempotent-retry
+   interleavings. After a zero-row or conflict result, re-read the complete
+   persisted identity tuple, not a stale snapshot or only the state column.
+3. Treat merging into `CLAIMED` work as a lost-wakeup risk. Require a version,
+   dirty bit, invalidation, or requeue rule that guarantees a new payload gets a
+   worker turn.
+4. Verify first-write-wins audit semantics; after evidence is recorded, only an
+   identical retry may succeed.

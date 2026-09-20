@@ -63,6 +63,23 @@ Boundary: a changed normative documentation example alone (docs-only or docs-plu
 
 Treat changed dependency coordinates, outbound service URL configuration, and downstream error-response mapping as risk signals even when the diff is small. The shared changed-scope trigger surfaces enumerated in the `doing-code-review` Step 2.5 mandatory-evidence rules are risk signals as well. These signals require the `risk` worker and the guideline checks of the changed files' language overlay (Java/Spring, Kotlin/Spring, or Python) per those mandatory-evidence rules.
 
+### Boundary-contract coverage floor
+
+When changed scope touches an asynchronous lifecycle, transaction manager,
+database mapper, configuration provenance or security setting, logging filter,
+migration, dependency coordinate, or test runner/manifest, review metadata must
+include a boundary-contract checklist. It names the applicable witness layer
+for lifecycle ownership, effective configuration source and value, persistence
+state and representation, fail-closed logging render surfaces,
+framework/dependency availability, migration/runner parity, and an enabled
+assertion-bearing safety-boundary test.
+
+The worker may record `not applicable` only after scanning changed files and
+direct call paths. A representative happy-path test or source-level import is
+not evidence for the family. If an applicable family has no witness or explicit
+not-applicable record, coverage is degraded and the round cannot be reported
+clear.
+
 Record the detected signals in the staging Metadata `Changed-risk signals` field (comma list or `none`).
 
 ### Per-task intermediate review selection

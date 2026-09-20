@@ -50,10 +50,11 @@ ZCODE_KIND_MAP = {
 
 DEFAULT_MINUTES_THRESHOLD = 20
 DEFAULT_PERCENT_THRESHOLD = 90
-# Protocol-completion margin (origin 2, layer 2): pause when the binding
-# window's remaining minutes fall below the time the boundary's remaining
-# work plus the pause protocol itself needs, so a late pause decision still
-# leaves the protocol time to complete. Facts key
+# Protocol-completion margin (origin 2, layer 2): routes a pause candidate
+# to wait-for-reset when the binding window's remaining minutes fall below
+# the time the boundary's remaining work plus the pause protocol itself
+# needs. The margin never produces a pause by itself (a structural floor:
+# it only diverts candidates to wait-for-reset). Facts key
 # budget_pause_min_protocol_minutes; a floor under the 20-minute line, not
 # a second pause line at normal range.
 DEFAULT_PROTOCOL_MINUTES_THRESHOLD = 10
@@ -275,30 +276,64 @@ def select_binding(limits: Sequence[Mapping]) -> Optional[str]:
 def evaluate_pause(limits: Sequence[Mapping], binding: Optional[str],
                    minutes_threshold: int = DEFAULT_MINUTES_THRESHOLD,
                    percent_threshold: float = DEFAULT_PERCENT_THRESHOLD,
-                   protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD) -> tuple[str, list[str]]:
+                   protocol_minutes_threshold: int = DEFAULT_PROTOCOL_MINUTES_THRESHOLD,
+                   plan_cost_percent: Optional[float] = None) -> tuple[str, list[str]]:
+    """Usage gate first; wait-for-reset is the in-session ride-through.
+
+    A pause candidate only when the binding window's usage is at or above
+    the max-percent threshold, or the next wave's ``plan_cost_percent``
+    cannot fit the remaining quota (with no plan_cost the fit arm is
+    inert). Clock proximity with low usage is continue, always (the
+    witnessed misfire: a lane must never idle across a reset minutes away).
+
+    For a pause candidate, an imminent reset (``minutes_remaining``
+    strictly below the minutes-before threshold) or a remainder below the
+    protocol margin resolves ``wait-for-reset`` with
+    ``wait_minutes = minutes_remaining + 2`` (the floor's sub-minute
+    remainder means the re-probe lands at least one whole minute past the
+    flip): the gate stalls in-session, then re-probes on the fresh window.
+    Wait-for-reset writes no guard flag, no watcher, and no pause record.
+    A non-imminent candidate with the protocol margin intact resolves
+    ``pause`` - the only flag-arming and only exit-0 decision. Everything
+    else continues.
+    """
     binding_limit = next((limit for limit in limits if limit["kind"] == binding), None)
     if binding_limit is None:
         return "continue", []
-    reasons = []
-    if binding_limit["minutes_remaining"] < minutes_threshold:
+    used_percent = binding_limit["used_percent"]
+    minutes_remaining = binding_limit["minutes_remaining"]
+    reasons: list[str] = []
+    if used_percent >= percent_threshold:
         reasons.append(
-            "minutes_remaining {} below {}".format(
-                binding_limit["minutes_remaining"], minutes_threshold
+            "used_percent {} at or above {}".format(used_percent, percent_threshold)
+        )
+    # The fit comparison tolerates IEEE-754 residue (review r1 F1): a wave
+    # that exactly fits the true remaining quota (78.2 + 21.8 = 100.0)
+    # must continue, so the margin 1e-9 absorbs the float residue of
+    # 100.0 - used_percent; the semantics stays strictly-greater, cost
+    # genuinely above the remaining quota still pauses.
+    if plan_cost_percent is not None and plan_cost_percent > (100.0 - used_percent) + 1e-9:
+        reasons.append(
+            "plan_cost_percent {} does not fit remaining quota {}".format(
+                plan_cost_percent, 100.0 - used_percent
             )
         )
-    if binding_limit["used_percent"] >= percent_threshold:
+    if not reasons:
+        # Usage gate first: clock proximity with low usage never pauses.
+        return "continue", []
+    if minutes_remaining < minutes_threshold or minutes_remaining < protocol_minutes_threshold:
         reasons.append(
-            "used_percent {} at or above {}".format(
-                binding_limit["used_percent"], percent_threshold
+            "wait-for-reset ride-through: minutes_remaining {} below the "
+            "max({}, {}) threshold; waiting {} minutes then re-probing the "
+            "fresh window".format(
+                minutes_remaining,
+                minutes_threshold,
+                protocol_minutes_threshold,
+                minutes_remaining + 2,
             )
         )
-    if binding_limit["minutes_remaining"] < protocol_minutes_threshold:
-        reasons.append(
-            "minutes_remaining {} below protocol margin {}".format(
-                binding_limit["minutes_remaining"], protocol_minutes_threshold
-            )
-        )
-    return ("pause" if reasons else "continue"), reasons
+        return "wait-for-reset", reasons
+    return "pause", reasons
 
 
 def build_report(runtime: str, limits: Sequence[Mapping],
@@ -331,6 +366,7 @@ def build_report(runtime: str, limits: Sequence[Mapping],
         minutes_threshold=minutes_threshold,
         percent_threshold=percent_threshold,
         protocol_minutes_threshold=protocol_minutes_threshold,
+        plan_cost_percent=plan_cost_percent,
     )
     # An engaged horizon clamp is observable (review r2 F7): a clamped
     # limit's reset time is a bound, not the provider's real reset.
@@ -350,14 +386,28 @@ def build_report(runtime: str, limits: Sequence[Mapping],
         "reasons": reasons,
         "status": "ok",
     }
+    # One binding lookup feeds both the wait-for-reset carry and the wave
+    # sizing below (review r1 F10 hoist); fail loud on regression: a
+    # wait-for-reset report must always carry wait_minutes, never silently
+    # omit it.
+    binding_limit = next((limit for limit in live if limit["kind"] == binding), None)
+    assert binding_limit is not None
+    if decision == "wait-for-reset":
+        # The ride-through carry: minutes remaining plus the two-minute
+        # buffer, so the in-session re-probe lands past the reset flip.
+        # Added on wait-for-reset only; continue and pause reports carry
+        # no wait_minutes key.
+        report["wait_minutes"] = binding_limit["minutes_remaining"] + 2
     if plan_cost_percent is not None:
-        binding_limit = next((limit for limit in live if limit["kind"] == binding), None)
         # Forward-looking wave sizing (origin 1, gaps 1 and 5): compare the
         # loop's expected window cost against the binding limit's remaining
         # budget. Full beats split beats pause; the boundary is inclusive
-        # (cost exactly equal to remaining launches at full width).
+        # (cost exactly equal to remaining launches at full width), so the
+        # comparison carries the fit arm's 1e-9 margin: it absorbs the
+        # float residue of 100.0 - used_percent, keeping an exact-fit wave
+        # on full instead of splitting.
         remaining = 100.0 - binding_limit["used_percent"]
-        if plan_cost_percent <= remaining:
+        if plan_cost_percent <= remaining + 1e-9:
             recommendation, wave_size = "full", None
         elif plan_cost_percent / 2 <= remaining:
             recommendation, wave_size = "split", 2
@@ -412,23 +462,59 @@ def _split_peak_window(value: str) -> tuple[str, str]:
     return left, right
 
 
+def _fire_at_window_start_day(fire_local: datetime, start_minutes: int,
+                              straddle_minutes: int) -> datetime:
+    """The local day whose peak-window start the fire instant prices against.
+
+    F9: the fire instant's own day plus one day ONLY when the fire sits in
+    the pre-midnight tail band before a midnight-crossing start
+    (``start - straddle < 0`` and ``minute_of_day >= 1440 - (straddle -
+    start)``); every other instant, including post-midnight morning fires in
+    ``[00:00, start)`` before a same-day midnight-crossing start, keeps the
+    fire's own day (the wrapped negative band bound makes those peak, and
+    this helper must not drop that arm).
+    """
+    minute_of_day = fire_local.hour * 60 + fire_local.minute
+    if (start_minutes - straddle_minutes < 0
+            and minute_of_day >= 1440 - (straddle_minutes - start_minutes)):
+        return fire_local + timedelta(days=1)
+    return fire_local
+
+
 def _fire_at_is_peak(fire_local: datetime, start_minutes: int, end_minutes: int,
                      straddle_minutes: int) -> bool:
-    """Peak when the weekday is Mon-Fri and start <= t < end (end exclusive).
+    """Peak when the window-start day is Mon-Fri and the instant prices peak.
 
-    ``straddle_minutes`` extends the window backwards: a fire time within N
-    minutes before a weekday window start counts as peak too (the execution
-    lane's straddle margin).
+    The window-start day (see ``_fire_at_window_start_day``) is the fire
+    instant's own day, plus one day only for a pre-midnight fire in the
+    straddle tail band before a midnight-crossing window start.
+    ``straddle_minutes`` extends the window backwards (the execution lane's
+    straddle margin); a midnight-crossing start is peak through either of
+    two arms: the wrapped band bound ``(start - straddle) <= minute_of_day
+    < end`` (end exclusive), which keeps the post-midnight morning arm, or
+    the pre-midnight tail-band condition.
     """
-    if fire_local.weekday() > 4:  # Monday == 0 .. Sunday == 6
+    if _fire_at_window_start_day(
+        fire_local, start_minutes, straddle_minutes
+    ).weekday() > 4:  # Monday == 0 .. Sunday == 6
         return False
     minute_of_day = fire_local.hour * 60 + fire_local.minute
-    return (start_minutes - straddle_minutes) <= minute_of_day < end_minutes
+    in_existing_band = (start_minutes - straddle_minutes) <= minute_of_day < end_minutes
+    in_tail_band = (start_minutes - straddle_minutes < 0
+                    and minute_of_day >= 1440 - (straddle_minutes - start_minutes))
+    return in_existing_band or in_tail_band
 
 
-def _fire_at_peak_window_end(fire_local: datetime, end_minutes: int) -> int:
-    """Epoch of the pricing window's end on the fire instant's local day."""
-    end_local = fire_local.replace(
+def _fire_at_peak_window_end(fire_local: datetime, start_minutes: int,
+                             end_minutes: int, straddle_minutes: int) -> int:
+    """Epoch of the pricing window's end on the window-start day (F9).
+
+    A pre-midnight tail-band fire anchors on the next day's window end; a
+    post-midnight morning fire (or any other non-tail instant) anchors on
+    the same day's end.
+    """
+    anchor = _fire_at_window_start_day(fire_local, start_minutes, straddle_minutes)
+    end_local = anchor.replace(
         hour=end_minutes // 60, minute=end_minutes % 60, second=0, microsecond=0
     )
     return int(end_local.timestamp())
@@ -521,7 +607,9 @@ def evaluate_fire_at(fire_epoch: int, now: Optional[float] = None,
     if need_minutes is None:
         # Pure pricing: wall-clock derived only, no window data consulted.
         if peak:
-            defer_epoch = _fire_at_peak_window_end(fire_local, end_minutes)
+            defer_epoch = _fire_at_peak_window_end(
+                fire_local, start_minutes, end_minutes, straddle_minutes
+            )
             return _fire_at_verdict(
                 "ok", fire_iso, "defer-peak", True, None, None, defer_epoch, tz
             )
@@ -560,7 +648,9 @@ def evaluate_fire_at(fire_epoch: int, now: Optional[float] = None,
     # Peak and fitting: the deferred slot at the pricing window's end is
     # fit-checked before the deferral is blessed - never a blessed-unfit
     # exit 2.
-    slot_epoch = _fire_at_peak_window_end(fire_local, end_minutes)
+    slot_epoch = _fire_at_peak_window_end(
+        fire_local, start_minutes, end_minutes, straddle_minutes
+    )
     slot_minutes = (window_end(slot_epoch) - slot_epoch) // 60
     if slot_minutes < need_minutes:
         return _fire_at_verdict(
@@ -996,7 +1086,8 @@ def main(argv: Optional[Sequence[str]] = None,
     parser = argparse.ArgumentParser(
         description=(
             "Quota window probe (stdlib only). Default mode exit codes: 0 = "
-            "pause decision, 1 = continue (including status unknown). Parse "
+            "pause decision, 1 = continue, wait-for-reset, or status "
+            "unknown. Parse "
             "pause_decision from the stdout JSON report, not from the exit "
             "code. With --fire-at the probe instead prices and fit-checks a "
             "proposed fire time: exit 0 = fire as planned (off-peak and "

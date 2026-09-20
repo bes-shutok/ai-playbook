@@ -5,15 +5,19 @@ prefix (*-rfc.md) take the filename minus the .md extension and
 the trailing -rfc. On collision a short MMDD date suffix is
 appended; when the date also collides (same base in
 two completed-history directories) a directory tag (plan/backlog)
-is appended too. Collided identities: backlog-inbox-location-gate, company-master-scoping-loop-residuals, docs-branch-temp-file-hygiene, docs-branch-trap-before-restore-region, execute-plan-fresh-review-coverage-gaps, learn-company-scope-placement, maintenance-scheduler-skill, plan-readiness-trailer-gate-r5-deferrals, plans-facts-do-not-resolve-design-ambiguity, returned-for-ask-semantics, review-panel-hermeticity-dimension, review-pointer-wiring-polish, reviewed-plan-readiness-gate, rfc-design-create-mode-identity-header-wiring, strengthen-jvm-review-coverage, token-usage-telemetry.
+is appended too. Collided identities: backlog-inbox-location-gate, company-master-scoping-loop-residuals, context-budget-and-telemetry-long-running-skills, docs-branch-temp-file-hygiene, docs-branch-trap-before-restore-region, execute-plan-fresh-review-coverage-gaps, learn-company-scope-placement, maintenance-scheduler-skill, plan-readiness-trailer-gate-r5-deferrals, plans-facts-do-not-resolve-design-ambiguity, returned-for-ask-semantics, review-panel-hermeticity-dimension, review-pointer-wiring-polish, reviewed-plan-readiness-gate, rfc-design-create-mode-identity-header-wiring, strengthen-jvm-review-coverage, token-usage-telemetry.
 Rows are backfilled: archived date from the filename date
 prefix. Aliases only where a genuine historical alias exists.
 Table format consumed by scripts/doc_registry_validator.py. -->
 
 | identity | sot | state | archived | reason | src | successor | aliases | audit |
 |---|---|---|---|---|---|---|---|---|
-| context-budget-and-telemetry-long-running-skills | no | completed | 2026-09-20 | executed | docs/plans/completed/2026-09-19-context-budget-and-telemetry-long-running-skills.md |  |  |  |
-| context-budget-and-telemetry-long-running-skills | no | completed | 2026-09-20 | backfill | docs/history/backlog/completed/2026-09-18-context-budget-and-telemetry-long-running-skills.md |  |  | plan/backlog |
+| scheduler-ops-lanes-durability | no | completed | 2026-09-21 | executed | docs/plans/completed/2026-09-19-scheduler-ops-lanes-durability.md |  |  |  |
+| authoring-lane-claim-check-gap | no | completed | 2026-09-21 | executed | docs/history/backlog/completed/2026-09-18-authoring-lane-claim-check-gap.md |  |  |  |
+| maintenance-quota-aware-lane-decisions | no | completed | 2026-09-21 | executed | docs/history/backlog/completed/2026-09-18-maintenance-quota-aware-lane-decisions.md |  |  |  |
+| execute-plan-live-session-check-runtime-ambiguity | no | completed | 2026-09-21 | executed | docs/history/backlog/completed/2026-09-19-execute-plan-live-session-check-runtime-ambiguity.md |  |  |  |
+| context-budget-and-telemetry-long-running-skills-0919-plan | no | completed | 2026-09-20 | executed | docs/plans/completed/2026-09-19-context-budget-and-telemetry-long-running-skills.md |  |  |  |
+| context-budget-and-telemetry-long-running-skills-0918-backlog | no | completed | 2026-09-20 | backfill | docs/history/backlog/completed/2026-09-18-context-budget-and-telemetry-long-running-skills.md |  |  |  |
 | repo-ai-playbook-facts | no | completed | 2026-06-13 | backfill | docs/plans/completed/2026-06-13-repo-ai-playbook-facts.md |  |  |  |
 | lessons-recall-hook | no | completed | 2026-07-01 | backfill | docs/plans/completed/2026-07-01-lessons-recall-hook.md |  |  |  |
 | agent-hooks-workflow-v2 | no | completed | 2026-07-04 | backfill | docs/plans/completed/2026-07-04-agent-hooks-workflow-v2.md |  |  |  |
@@ -302,3 +306,5 @@ Table format consumed by scripts/doc_registry_validator.py. -->
 | scheduler-operations-discipline-quota-peaks-locks | no | completed | 2026-09-20 | plan-completed | docs/plans/completed/2026-09-19-scheduler-operations-discipline-quota-peaks-locks.md |  |  |  |
 | peak-window-dispatch-discipline | no | completed | 2026-09-20 | executed | docs/history/backlog/completed/2026-09-16-peak-window-dispatch-discipline.md |  |  |  |
 | quota-aware-fire-time | no | completed | 2026-09-20 | executed | docs/history/backlog/completed/2026-09-16-quota-aware-fire-time.md |  |  |  |
+| execute-plan-intermediate-task-reviews | no | completed | 2026-09-20 | plan-completed | docs/plans/completed/2026-09-20-execute-plan-intermediate-task-reviews.md |  |  |  |
+| execute-plan-mechanics-deadlines-interruption-scanner | no | completed | 2026-09-20 | plan-completed | docs/plans/completed/2026-09-20-execute-plan-mechanics-deadlines-interruption-scanner.md |  |  |  |

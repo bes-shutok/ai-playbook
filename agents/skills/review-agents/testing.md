@@ -45,6 +45,14 @@ When building or reviewing a mutator / failure-mode matrix (or equivalent covera
 2. Mark the claim unchecked, or stage `testing#coverage-claim-unchecked`, until a full-context harness proof exists per Harness Fidelity above.
 3. When a sibling component in the same repo already has a full-context harness test, cite that sibling path as the expected pattern; still resolve naming from the Guideline Pack, not from this catalog.
 
+## Plan gate-needle discrimination (doc/skill-only plans)
+
+When the artifact under review is a plan whose tasks carry grep-style gate needles (`grep -q "<span>" file || fail`), verify both discrimination directions by measurement, never by reading the plan's own provenance claims:
+
+1. **GREEN before implementation**: run every new-string needle against its target file today; a needle already satisfied before its task lands cannot fail, so it witnesses nothing (an unrelated pre-existing sentence matching the span is the usual cause). Default Medium; blocking when the plan's gate-provenance paragraph claims all needles RED on the current digest. Pattern: `testing#non-discriminating-pin`.
+2. **Unreachable needle (RED forever)**: confirm each needle is a contiguous span of the task's PRESCRIBED LANDING TEXT (the file content the task tells the implementer to write), not merely of the bullet's instruction prose or a case/hyphen variant of it; a needle no faithful implementation produces guarantees a failing gate at first validation and forces improvised or watered text. Default Low (fail-closed direction). Pattern: `testing#needle-unreachable-from-prescribed-text`.
+3. **Partial-coverage pins**: when a consequence names N spans (e.g. three checkpoint placements) and the gate block pins fewer, the unpinned spans stay an unwitnessed failure path; sweep a faithful-but-partial landing text through all gates to prove the omission passes, and check Done-when/Witness prose for over-claims relative to what the greps actually quote. Default Low. Pattern: `testing#missing-gate-needle`.
+
 ## Test Quality
 
 1. Tests verify behavior, not implementation details
@@ -117,3 +125,31 @@ When a finding proposes a concrete test or production code change (any severity)
 3. Point at an existing test in the repo as a pattern when one exists (for example a sibling IT with `ArgumentCaptor`).
 
 Report problems only. No positive observations.
+
+## Safety-boundary and runner witness requirements
+
+When a diff changes a lifecycle gate, persistence state machine, migration,
+configuration boundary, or test runner hook:
+
+1. A disabled, empty, skipped, or unit-only test is not evidence. Require an
+   enabled, assertion-bearing production-equivalent harness for the live
+   boundary.
+2. Assert both the positive result and the fail-closed result. For timeouts and
+   asynchronous work, assert lifecycle state, ownership or receipt state, and
+   the forbidden side effect. For migrations, exercise a fresh schema and every
+   shared classpath consumer that validates the version.
+3. Exercise adversarial equivalence classes: mixed retry counts, null and
+   omitted values, precision boundaries, conflicting duplicate identity,
+   higher-precedence overrides, and non-cooperative callbacks.
+4. Verify targeted commands separately from full-suite commands. A verifier
+   that always requires a full manifest is a runner defect, not a reason to
+   weaken test selection. Stage `testing#runner-contract-unverified` when the
+   selector and verifier populations differ.
+
+## Changed-code family inventory
+
+For related source, configuration, migration, documentation, and test files,
+search sibling surfaces for repeated version labels, property aliases, mapper
+parameters, lifecycle exits, and dependency fan-out before accepting a single
+representative test. Record an explicit not-applicable result when no family
+exists; do not infer family coverage from one happy-path test.

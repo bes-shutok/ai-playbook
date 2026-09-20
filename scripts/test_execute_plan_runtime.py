@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -743,7 +746,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertNotIn("task-4:commit", after["checkpoints"])
 
     def test_post_claim_ambient_noise_downgrades_to_resumable_cleanup(self):
-        # r1 F15: ambient noise appearing after the claim's launch record is
+        # Ambient noise appearing after the claim's launch record is
         # host-generated and can never be a worker scope escape; when every
         # out-of-scope path is ambient-shaped the checkpoint witness
         # downgrades to the resumable cleanup-required envelope instead of
@@ -761,7 +764,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(state["claims"]["task-4"]["state"], "launched")
 
     def test_post_launch_mixed_ambient_and_escape_keeps_hard_block(self):
-        # r1 F15 hard arm: any non-ambient out-of-scope path next to the
+        # Hard arm: any non-ambient out-of-scope path next to the
         # ambient noise keeps the terminal contract violation.
         self._launched_claim(allowed=("task-4.txt",))
         (self.root / ".DS_Store").write_text("ambient\n", encoding="utf-8")
@@ -783,7 +786,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertFalse(result["resume_allowed"])
 
     def test_post_launch_tracked_ambient_name_stays_violation(self):
-        # r2 F2: the ambient downgrade requires the porcelain-proven
+        # The ambient downgrade requires the porcelain-proven
         # untracked arm, not the name shape alone. A tracked out-of-scope
         # modification wearing an ambient name (.DS_Store) can carry
         # arbitrary worker content, so it keeps the terminal
@@ -1238,7 +1241,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             self.assertEqual(done["status"], "success")
             archived = root / "docs/plans/completed/cli-plan.md"
             archived.parent.mkdir(parents=True, exist_ok=True)
-            archived.write_text("# cli plan\n\n- [x] task-1\n", encoding="utf-8")
+            archived.write_text("# cli plan\n\n### Task 1: first\n\n- [x] task-1\n", encoding="utf-8")
             # The final stage requires the pre-archive gate receipt: seed a
             # conforming one (declared destination equal to the archived CLI
             # path, digest over the archived bytes, source pointing at the
@@ -1385,7 +1388,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 self.assertFalse(created_path.exists())
 
     def test_create_manifest_refuses_empty_task_list(self):
-        # Library-level wedge guard (r4 R4-6): the CLI refusal alone left
+        # Library-level wedge guard: the CLI refusal alone left
         # create_manifest seeding the zero-task wedge for library callers,
         # so the seeding boundary itself now raises before writing any
         # manifest file.
@@ -1420,7 +1423,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertIn("phase5_checklist", terminal)
         self.assertIn("archived_plan_path", terminal)
 
-    CHECKED_ARCHIVED_PLAN = "# fixture plan\n\n- [x] task-3\n- [x] task-4\n"
+    CHECKED_ARCHIVED_PLAN = "# fixture plan\n\n### Task 3: third\n### Task 4: fourth\n\n- [x] task-3\n- [x] task-4\n"
     ARCHIVED_PLAN_REL = "docs/plans/completed/fixture-plan.md"
 
     def complete_all_tasks(self) -> None:
@@ -1485,7 +1488,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
 
     def test_terminal_refuses_empty_archived_plan(self):
         # A zero-byte archived plan makes the unchecked-checkbox predicate
-        # vacuously true (r4 R4-2): the terminal gate refuses the empty
+        # vacuously true: the terminal gate refuses the empty
         # artifact instead of writing a receipt for it, and the manifest
         # stays non-terminal.
         self.complete_all_tasks()
@@ -1503,9 +1506,51 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertNotIn("terminal_receipt", state)
         self.assertEqual(state["workflow_state"], "active")
 
+    def test_terminal_refuses_whitespace_only_archived_plan(self):
+        # Whitespace-only bytes are the empty artifact for the gate: the
+        # emptiness predicate is strip-based (not plan_text.strip()), so a
+        # plan of only spaces, tabs, and newlines is refused exactly like
+        # the zero-byte plan (the unchecked-checkbox predicate would be
+        # vacuously true over it). RED before the strip-based widening: the
+        # truthy whitespace text used to pass the terminal gate.
+        self.complete_all_tasks()
+        self.write_archived_plan("   \n\t\n")
+        self.seed_archive_gate()
+        self.assertGreater((self.root / self.ARCHIVED_PLAN_REL).stat().st_size, 0)
+        result = self.driver().mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("archived plan is empty" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertFalse(any("unchecked checkbox line" in entry for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
+    def test_terminal_refuses_archived_plan_without_task_sections(self):
+        # At-least-one-task-heading requirement (mirroring the readiness
+        # shape guard): a non-empty archived plan with zero recognizable
+        # '### Task <N>:' headings makes the per-section scans vacuous and
+        # proves the wrong file was archived, so the terminal gate refuses
+        # it naming the missing task sections. RED before this task: the
+        # sectionless plan used to pass the terminal gate.
+        self.complete_all_tasks()
+        self.write_archived_plan("# fixture plan\n\n- [x] all items\n\nNo task sections here.\n")
+        self.seed_archive_gate()
+        result = self.driver().mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(
+            any("archived plan carries no recognizable task sections" in entry for entry in result["evidence"]),
+            result["evidence"],
+        )
+        self.assertFalse(any("unchecked checkbox line" in entry for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
     def test_terminal_refuses_unchecked_plan_checkboxes(self):
         self.complete_all_tasks()
-        self.write_archived_plan("# fixture plan\n\n- [x] task-3\n- [ ] task-4\n")
+        self.write_archived_plan("# fixture plan\n### Task 4: fourth\n- [x] task-3\n- [ ] task-4\n")
         self.seed_archive_gate()
         result = self.driver().mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
         self.assertEqual(result["status"], "blocked")
@@ -1521,7 +1566,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def test_terminal_ignores_inline_checkbox_literals(self):
         self.complete_all_tasks()
         self.write_archived_plan(
-            "# fixture plan\n\nProse mentions the `- [ ]` marker mid-line and even a bare - [ ] fragment after words, "
+            "# fixture plan\n\n### Task 3: third\n\nProse mentions the `- [ ]` marker mid-line and even a bare - [ ] fragment after words, "
             "but no line starts with an unchecked checkbox token.\n- [x] task-3\n- [x] task-4\n"
         )
         self.seed_archive_gate()
@@ -1558,11 +1603,11 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
 
     def test_terminal_refuses_archived_plan_over_read_limit(self):
         # The terminal gate reads the archived plan under the shared bounded
-        # read (r4 R4-1: open("rb") + read(LIMIT + 1), no stat size gate): a
-        # plan whose read proves it over TERMINAL_PLAN_READ_LIMIT is refused
+        # read (open + read(LIMIT + 1), no stat size gate): a
+        # plan whose read proves it over PLAN_READ_LIMIT is refused
         # outright (blocked done-pending) instead of scanning only its first
-        # TERMINAL_PLAN_READ_LIMIT bytes, so an unchecked line past the
-        # bound can never slip through a prefix scan (flipped r3 R3-1: the
+        # PLAN_READ_LIMIT bytes, so an unchecked line past the
+        # bound can never slip through a prefix scan (the
         # previous prefix-scan acceptance here was fail-open on the gate's
         # core promise).
         self.complete_all_tasks()
@@ -1571,7 +1616,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.seed_archive_gate()
         self.assertGreater(
             (self.root / self.ARCHIVED_PLAN_REL).stat().st_size,
-            runtime.TERMINAL_PLAN_READ_LIMIT,
+            runtime.PLAN_READ_LIMIT,
         )
         result = self.driver().mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
         self.assertEqual(result["status"], "blocked")
@@ -1600,7 +1645,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.seed_archive_gate()
         self.assertGreater(
             (self.root / self.ARCHIVED_PLAN_REL).stat().st_size,
-            runtime.TERMINAL_PLAN_READ_LIMIT,
+            runtime.PLAN_READ_LIMIT,
         )
         result = self.driver().mark_terminal(self.ARCHIVED_PLAN_REL, "abcdef1", ["tests"])
         self.assertEqual(result["status"], "blocked")
@@ -1610,6 +1655,42 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         state = runtime.load_manifest(self.state_path)
         self.assertNotIn("terminal_receipt", state)
         self.assertEqual(state["workflow_state"], "active")
+
+    def test_read_limit_boundary_pair_terminal(self):
+        # Regression pin (classification already correct today): an archived
+        # plan of exactly PLAN_READ_LIMIT bytes passes the
+        # bounded-read gate (the +1-byte read window admits it whole, so the
+        # terminal gate reaches the success receipt) while limit+1 is
+        # refused with the over-limit evidence. A boundary drift in either
+        # direction flips one arm.
+        header = "# fixture plan\n\n### Task 4: fourth\n\n"
+        for size, expect_success in ((runtime.PLAN_READ_LIMIT, True), (runtime.PLAN_READ_LIMIT + 1, False)):
+            with self.subTest(size=size):
+                self.complete_all_tasks()
+                # Each arm starts from a non-terminal manifest: the accepted
+                # arm writes a terminal receipt and workflow_state complete,
+                # and that residue would leak into the refused arm's
+                # non-terminal byte-identity assertions.
+                self.rewrite_manifest(lambda state: (
+                    state.pop("terminal_receipt", None),
+                    state.__setitem__("workflow_state", "active"),
+                ))
+                text = header + "x" * (size - len(header))
+                self.assertEqual(len(text.encode("utf-8")), size)
+                rel = self.write_archived_plan(text, rel=f"docs/plans/completed/boundary-{size}.md")
+                self.seed_archive_gate(archived_rel=rel)
+                result = self.driver().mark_terminal(rel, "abcdef1", ["tests"])
+                if expect_success:
+                    self.assertEqual(result["status"], "success")
+                    self.assertFalse(any("exceeds the bounded read limit" in entry for entry in result["evidence"]), result["evidence"])
+                    self.assertEqual(runtime.load_manifest(self.state_path)["workflow_state"], "complete")
+                else:
+                    self.assertEqual(result["status"], "blocked")
+                    self.assertEqual(result["reason_code"], "done-pending")
+                    self.assertTrue(any("exceeds the bounded read limit" in entry for entry in result["evidence"]), result["evidence"])
+                    state = runtime.load_manifest(self.state_path)
+                    self.assertNotIn("terminal_receipt", state)
+                    self.assertEqual(state["workflow_state"], "active")
 
     def test_terminal_refuses_empty_manifest(self):
         # A manifest with no tasks makes the completeness guard vacuously
@@ -3641,6 +3722,43 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertTrue(any("plan-manifest disagreement" in item and "task-3" in item for item in result["failed_conditions"]))
         self.assertEqual(result["recovery_action"], "correct-plan-through-skill-gated-plan-edit")
 
+    def test_agreement_reports_star_marker_disagreement(self):
+        # GFM task-list widening witness: a progressed task whose plan
+        # section keeps one unchecked '* [ ]' line disagrees exactly like
+        # the dash form. RED before the widening: the dash-only predicate
+        # read no disagreement for star lines, so this routed
+        # direct-continuation. The readiness path emits count-only evidence
+        # for its plan-manifest condition (line pins live on the terminal
+        # and pre-archive scans), so no line-number fragment may appear.
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n* [ ] forgotten star item\n\n### Task 4: fourth\n- [ ] pending item\n"
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(
+            any(
+                "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unchecked" in item
+                for item in result["failed_conditions"]
+            ),
+            result["failed_conditions"],
+        )
+        self.assertFalse(any("line " in item for item in result["failed_conditions"]), result["failed_conditions"])
+        self.assertEqual(result["recovery_action"], "correct-plan-through-skill-gated-plan-edit")
+
+    def test_mid_prose_mention_still_ignored(self):
+        # Regression pin for the line-anchored reading under the widened
+        # predicate: a mid-line prose mention of the asterisk or plus
+        # marker form does not start its line and never counts, so the
+        # progressed task's section agrees and the run continues directly.
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\nProse mentions * [ ] mid-line and even a bare + [ ] fragment after words, but no line starts with an unchecked marker token.\n\n### Task 4: fourth\n- [ ] pending item\n"
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "direct-continuation")
+        self.assertEqual(result["failed_conditions"], [])
+
     def test_readiness_recovery_on_blocked_state(self):
         # workflow_state blocked with no live claim: recovery naming the
         # machine state, across varying task statuses, including an
@@ -3758,8 +3876,8 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
 
     def test_readiness_refuses_plan_over_read_limit(self):
         # The readiness plan read shares the terminal gate's bounded-read
-        # helper (r4 R4-1: open("rb") + read(LIMIT + 1), no stat size gate):
-        # a plan whose read proves it over TERMINAL_PLAN_READ_LIMIT is
+        # helper (open + read(LIMIT + 1), no stat size gate):
+        # a plan whose read proves it over PLAN_READ_LIMIT is
         # refused as precondition-unverified instead of being read whole,
         # and the manifest bytes stay untouched.
         driver = self.driver()
@@ -3767,7 +3885,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         huge = self.write_plan("# Fixture plan\n" + ("filler line\n" * 110_000), name="plan-huge.md")
         self.assertGreater(
             (self.root / "plan-huge.md").stat().st_size,
-            runtime.TERMINAL_PLAN_READ_LIMIT,
+            runtime.PLAN_READ_LIMIT,
         )
         result = driver.readiness(huge)
         self.assertEqual(result["status"], "blocked")
@@ -3777,8 +3895,33 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertTrue(any("plan file exceeds the bounded read limit" in item for item in result["evidence"]), result["evidence"])
         self.assertEqual(self.state_path.read_bytes(), before)
 
+    def test_read_limit_boundary_pair_readiness(self):
+        # Regression pin (classification already correct today): the
+        # readiness --plan read admits a plan of exactly
+        # PLAN_READ_LIMIT bytes through the bounded-read gate (the
+        # +1-byte read window) and refuses limit+1 with the over-limit
+        # evidence. A boundary drift in either direction (an off-by-one
+        # refusal at the limit, or a prefix scan at limit+1) flips one arm.
+        self.seed_fresh_pending_manifest()
+        driver = self.driver()
+        header = "# Fixture plan\n\n### Task 1: first\n- [ ] only item\n\n"
+        for size, expect_accepted in ((runtime.PLAN_READ_LIMIT, True), (runtime.PLAN_READ_LIMIT + 1, False)):
+            with self.subTest(size=size):
+                text = header + "x" * (size - len(header))
+                self.assertEqual(len(text.encode("utf-8")), size)
+                plan_path = self.root / f"plan-boundary-{size}.md"
+                plan_path.write_text(text, encoding="utf-8")
+                result = driver.readiness(plan_path)
+                if expect_accepted:
+                    self.assertNotIn("exceeds the bounded read limit", " ".join(result["evidence"]), result["evidence"])
+                    self.assertEqual(result["decision"], "direct-continuation")
+                else:
+                    self.assertEqual(result["status"], "blocked")
+                    self.assertEqual(result["reason_code"], "precondition-unverified")
+                    self.assertTrue(any("plan file exceeds the bounded read limit" in item for item in result["evidence"]), result["evidence"])
+
     def test_readiness_refuses_non_regular_plan_file(self):
-        # Regular-file gate witness (r4 R4-1): a plan path that is not a
+        # Regular-file gate witness: a plan path that is not a
         # regular file is refused before any open. A directory exercises the
         # same is_file() gate deterministically; a FIFO (os.mkfifo) is
         # refused through that identical gate and, unlike the directory, its
@@ -3797,9 +3940,99 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertTrue(any("plan file is not a regular file" in item for item in result["failed_conditions"]), result["failed_conditions"])
         self.assertEqual(self.state_path.read_bytes(), before)
 
+    def test_read_plan_bounded_opens_nonblocking_and_fstats(self):
+        # RED gate for the nonblocking open rewrite: the shared bounded read
+        # must open with O_RDONLY | O_NONBLOCK | O_CLOEXEC, fstat the open
+        # descriptor, require a regular file (stat.S_ISREG), and only then
+        # wrap the descriptor and read. The nonblocking flag guarantees the
+        # open itself cannot block on a FIFO with no writer, and classifying
+        # the open descriptor removes the check-then-open window entirely
+        # (no exists/is_file pre-check). The spies wrap the real primitives;
+        # the read spy rides an fdopen seam instead of patching
+        # io.BufferedReader.read because that type is immutable on modern
+        # Pythons. The current Path.open implementation never calls the
+        # patched os.open/os.fstat/os.fdopen or stat.S_ISREG, so the
+        # ordering assertion fails pre-rewrite with an empty event log.
+        plan_dir = self.root / "docs" / "plans"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        plan_path = plan_dir / "spy-plan.md"
+        plan_path.write_text("# spy plan\n", encoding="utf-8")
+        events = []
+        real_open, real_fstat, real_fdopen, real_isreg = os.open, os.fstat, os.fdopen, stat.S_ISREG
+
+        def spy_open(path, flags, *args, **kwargs):
+            fd = real_open(path, flags, *args, **kwargs)
+            events.append(("open", os.fspath(path), flags, fd))
+            return fd
+
+        def spy_fstat(fd):
+            result = real_fstat(fd)
+            events.append(("fstat", fd))
+            return result
+
+        def spy_isreg(mode):
+            events.append(("s-isreg",))
+            return real_isreg(mode)
+
+        class RecordingStream:
+            # Minimal wrapper over the real buffered stream: it records the
+            # read size and closes the underlying stream so the descriptor
+            # ownership semantics of the code under test stay real.
+            def __init__(self, stream):
+                self._stream = stream
+
+            def read(self, size=-1):
+                events.append(("read", size))
+                return self._stream.read(size)
+
+            def close(self):
+                self._stream.close()
+
+        def spy_fdopen(fd, mode="r", *args, **kwargs):
+            events.append(("fdopen", fd))
+            return RecordingStream(real_fdopen(fd, mode, *args, **kwargs))
+
+        with mock.patch.object(runtime.os, "open", side_effect=spy_open), \
+                mock.patch.object(runtime.os, "fstat", side_effect=spy_fstat), \
+                mock.patch.object(stat, "S_ISREG", side_effect=spy_isreg), \
+                mock.patch.object(runtime.os, "fdopen", side_effect=spy_fdopen):
+            text, error = runtime._read_plan_bounded(None, plan_path, require_safe_path=False)
+        self.assertIsNone(error)
+        # The helper strips the decoded text once (both empty-refusal sites
+        # and the readiness decision consume the stripped form), so the
+        # trailing newline of the file is gone from the returned text.
+        self.assertEqual(text, "# spy plan")
+        opens = [event for event in events if event[0] == "open"]
+        self.assertEqual(len(opens), 1, events)
+        _, opened_path, flags, fd = opens[0]
+        self.assertEqual(opened_path, str(plan_path))
+        self.assertEqual(flags, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        self.assertEqual([event for event in events if event[0] == "fstat"], [("fstat", fd)], events)
+        self.assertEqual([event[0] for event in events], ["open", "fstat", "s-isreg", "fdopen", "read"], events)
+        self.assertEqual(events[-1], ("read", runtime.PLAN_READ_LIMIT + 1), events)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "os.mkfifo is unavailable on this platform")
+    def test_read_plan_bounded_refuses_fifo_without_open(self):
+        # Refusal pin (green on the unfixed tree and must stay green after
+        # the nonblocking rewrite): a FIFO is refused with the identical
+        # not-a-regular-file fragment BEFORE any blocking read. The pre-open
+        # is_file() gate refuses it today; the post-rewrite fstat S_ISREG
+        # gate refuses it identically. A regression to a blocking read would
+        # hang this test instead of passing it.
+        fifo_dir = tempfile.mkdtemp()
+        try:
+            fifo_path = os.path.join(fifo_dir, "plan.fifo")
+            os.mkfifo(fifo_path)
+            text, error = runtime._read_plan_bounded(None, fifo_path, require_safe_path=False)
+            self.assertIsNone(text)
+            self.assertIsNotNone(error)
+            self.assertIn("is not a regular file", error)
+        finally:
+            shutil.rmtree(fifo_dir, ignore_errors=True)
+
     def test_readiness_refuses_plan_without_task_sections(self):
         # A plan text with zero '### Task <N>:' headings cannot agree or
-        # disagree per-section (r4 R4-3): the readiness decision fails the
+        # disagree per-section: the readiness decision fails the
         # plan-shape condition instead of returning a vacuous
         # direct-continuation for a wrong --plan file while no task has
         # progressed.
@@ -3809,13 +4042,17 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         result = driver.readiness(plan_path)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["decision"], "recovery")
+        # The zero-section shape failure routes stop-or-recovery (the same
+        # pairing the readiness decision emits for a finished workflow): the
+        # wrong --plan file is not a resumable condition.
+        self.assertEqual(result["recovery_action"], "stop-or-recovery")
         self.assertTrue(
             any("plan carries no recognizable task sections" in item for item in result["failed_conditions"]),
             result["failed_conditions"],
         )
 
     def test_readiness_blocked_while_manifest_lock_held(self):
-        # Lock-contention witness (r4 T4-2): with another owner holding the
+        # Lock-contention witness: with another owner holding the
         # manifest lock at decision time, readiness returns the transient
         # contention envelope (blocked, decision recovery, recovery action
         # resumable-conflict) and the manifest bytes stay untouched.
@@ -4010,21 +4247,43 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertFalse(any("task-9" in item for item in result["failed_conditions"]), result["failed_conditions"])
         self.assertEqual(result["recovery_action"], "correct-plan-through-skill-gated-plan-edit")
 
-    def test_readiness_fenced_pseudo_heading_with_real_task_number_pins_current_hijack(self):
-        # Residual fence hole, pinned as documented (CommonMark-grade fence
-        # map deferred: docs/history/backlog/2026-09-17-fence-robust-checkbox-scanning.md).
-        # Unlike the pseudo-heading witness above (a number absent from the
-        # manifest), this fake heading carries a manifest-REAL task number,
-        # and the section-START search is fence-blind: the scan begins at the
-        # fenced fake heading, where fence parity restarts closed, so the
-        # fake fence's closer flips the scanner "inside" and the rest of the
-        # plan is swallowed into task-3's section. The over-inclusion
-        # disagreement therefore carries BOTH the decoy box and Task 4's
-        # pending box (2 unchecked); the terminal backstop still fails
-        # closed on the real unchecked box.
+    def test_fence_map_tilde_fence_hides_break_marker(self):
+        # CommonMark-grade fence map witness: a tilde-fenced block is a real
+        # fence, so a '## ' line inside it is fenced content, never a break
+        # marker, and the unchecked checkbox AFTER the block is still scanned
+        # and still disagrees. RED before the fence map: the single-level
+        # backtick parity toggle ignored tildes, so the tilde block's inner
+        # '## ' line truncated task-3's section and the box after it was
+        # missed (direct-continuation instead of recovery).
         plan_path = self.write_plan(
-            "# Fixture plan\n\n```text\n### Task 3: fake\n- [ ] decoy box inside the fence\n```\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [ ] pending item\n",
-            name="plan-fence-hijack.md",
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n~~~text\n## not a heading\n~~~\n\n- [ ] hidden after the tildes\n\n### Task 4: fourth\n- [ ] pending item\n",
+            name="plan-tilde-fence.md",
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(
+            any(
+                "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unchecked" in item
+                for item in result["failed_conditions"]
+            ),
+            result["failed_conditions"],
+        )
+        self.assertEqual(result["recovery_action"], "correct-plan-through-skill-gated-plan-edit")
+
+    def test_fence_map_nested_shorter_fence_does_not_close(self):
+        # Nested-width witness: inside a four-backtick fence, a shorter
+        # three-backtick line and a tilde line are fenced content; parity
+        # holds until the matching four-backtick closer, so only the decoy
+        # and the box after the closer are scanned and the next task heading
+        # still breaks the section (no task-4 condition). RED before the
+        # fence map: the single-level toggle closed the wide fence on the
+        # inner three-backtick line and reopened on the wide closer, so
+        # Task 4's heading was swallowed into task-3's section and its
+        # pending box joined the disagreement (3 unchecked, not 2).
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n````text\n```\n~~~ closer-looking line\n- [ ] decoy inside the wide fence\n````\n\n- [ ] hidden after the wide fence\n\n### Task 4: fourth\n- [ ] pending item\n",
+            name="plan-nested-fence.md",
         )
         driver = self.driver()
         result = driver.readiness(plan_path)
@@ -4036,7 +4295,124 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             ),
             result["failed_conditions"],
         )
+        self.assertFalse(any("task-4" in item for item in result["failed_conditions"]), result["failed_conditions"])
         self.assertEqual(result["recovery_action"], "correct-plan-through-skill-gated-plan-edit")
+
+    def test_fence_map_unclosed_fence_fails_closed_for_later_sections(self):
+        # Behavior pin for the fail-closed direction: an unclosed fence in
+        # task-1's body stays open to end of file under whole-plan parity, so
+        # Task 2's heading inside it binds no section and the readiness
+        # condition fails closed naming task-2, never silently scanning the
+        # fenced content as prose. RED before the fence map: the fence-blind
+        # heading search bound the fenced heading and per-section parity
+        # restarted closed, so the fenced pending box was scanned as prose
+        # (a task-2 unchecked disagreement instead of the missing section).
+        self.seed_fresh_pending_manifest()
+        self.rewrite_manifest(lambda state: state["tasks"]["task-2"].update({"status": "checkpointed"}))
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 1: first\n- [x] done item\n\n```text\nunclosed fence swallows the rest\n\n### Task 2: second\n- [ ] pending item\n",
+            name="plan-unclosed-fence.md",
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(
+            any(
+                "task-2" in item and "its plan section '### Task 2:' is missing" in item
+                for item in result["failed_conditions"]
+            ),
+            result["failed_conditions"],
+        )
+        self.assertFalse(
+            any("task-2" in item and "unchecked" in item for item in result["failed_conditions"]),
+            result["failed_conditions"],
+        )
+
+    def test_fence_map_indent_tolerance(self):
+        # Zero-to-three-space indent tolerance, both arms. Arm A: a fence
+        # opener indented three spaces opens a real fence (its indented
+        # '## ' content is fenced and the box after the closer is scanned);
+        # this arm is green before the fence map because the pre-fix toggle
+        # stripped indent too. Arm B (RED before the fence map): a
+        # fence-lookalike line indented four spaces is literal text that
+        # toggles nothing, so the REAL backtick fence after it still opens,
+        # hides its inner '## ' line, and the box after it is scanned;
+        # pre-fix the lookalike toggled the single-level parity, the real
+        # opener mis-closed, and the inner '## ' line broke task-3's section
+        # before the box (direct-continuation instead of recovery).
+        plans = {
+            "three-space-opener": (
+                "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n   ```text\n   ## not a heading\n   ```\n\n- [ ] hidden after the indented fence\n\n### Task 4: fourth\n- [ ] pending item\n",
+                "plan-indent-three.md",
+            ),
+            "four-space-lookalike": (
+                "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n    ```text\n    literal lookalike, four spaces\n\n```text\n## not a heading\n```\n\n- [ ] hidden after the real fence\n\n### Task 4: fourth\n- [ ] pending item\n",
+                "plan-indent-four.md",
+            ),
+        }
+        for arm, (text, name) in plans.items():
+            with self.subTest(arm=arm):
+                plan_path = self.write_plan(text, name=name)
+                driver = self.driver()
+                result = driver.readiness(plan_path)
+                self.assertEqual(result["decision"], "recovery")
+                self.assertTrue(
+                    any(
+                        "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unchecked" in item
+                        for item in result["failed_conditions"]
+                    ),
+                    result["failed_conditions"],
+                )
+                self.assertEqual(result["recovery_action"], "correct-plan-through-skill-gated-plan-edit")
+
+    def test_fence_map_whole_plan_parity_not_per_section(self):
+        # Whole-plan parity witness: a fence opened in task-1's body and
+        # closed after task-2's heading keeps task-2's heading fenced under
+        # whole-plan parity (parity never restarts at a section start), so
+        # task-2's extraction fails closed with the missing-section
+        # condition. RED before the fence map: per-section parity restarted
+        # closed at the fenced heading, the box after the closer was scanned
+        # as prose, and the disagreement named task-2's unchecked box
+        # instead of the missing section.
+        self.seed_fresh_pending_manifest()
+        self.rewrite_manifest(lambda state: state["tasks"]["task-2"].update({"status": "checkpointed"}))
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n### Task 1: first\n- [x] done item\n\n```text\nfence opened in task 1\n\n### Task 2: second\n```\n- [ ] pending item\n",
+            name="plan-whole-plan-parity.md",
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertTrue(
+            any(
+                "task-2" in item and "its plan section '### Task 2:' is missing" in item
+                for item in result["failed_conditions"]
+            ),
+            result["failed_conditions"],
+        )
+        self.assertFalse(
+            any("task-2" in item and "unchecked" in item for item in result["failed_conditions"]),
+            result["failed_conditions"],
+        )
+
+    def test_fence_map_fenced_pseudo_heading_does_not_hijack(self):
+        # The documented residual becomes fixed behavior: a fenced
+        # pseudo-heading carrying a manifest-REAL task number ahead of the
+        # real heading no longer hijacks the section start; the heading
+        # search skips fenced lines and binds the real unfenced heading, so
+        # task-3's scanned section is its own body (zero unchecked boxes)
+        # and the decision is the plain direct continuation. Rewrites the
+        # witness that pinned the hijack (the fenced fake heading started
+        # the section, parity restarted closed, and the rest of the plan was
+        # swallowed into a 2-unchecked disagreement).
+        plan_path = self.write_plan(
+            "# Fixture plan\n\n```text\n### Task 3: fake\n- [ ] decoy box inside the fence\n```\n\n### Task 3: third\n- [x] done item\n\n### Task 4: fourth\n- [ ] pending item\n",
+            name="plan-fence-hijack.md",
+        )
+        driver = self.driver()
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "direct-continuation")
+        self.assertEqual(result["failed_conditions"], [])
 
     def test_readiness_task_heading_boundary_one_vs_ten(self):
         # The Task 1 / Task 10 heading-boundary contract: the heading match
@@ -4134,7 +4510,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertNotEqual(replacement["generation"], 0)
         self.assertEqual(after["generation"], replacement["generation"])
         self.assertEqual(after["checkpoints"]["task-4:worker-1"]["task_id"], "task-4")
-        # The evidence-line composition lives in a pure helper (r4 T4-1),
+        # The evidence-line composition lives in a pure helper,
         # and the pre-redaction label contract is asserted there directly:
         # the OLD claim token is carried under replaced_token and the NEW
         # rotated token under replacement_token, with distinct values, so a
@@ -4143,8 +4519,15 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         lines = runtime._reclaim_evidence_lines("task-4", "seed-old-token", "rotated-new-token", 5)
         self.assertIn("replaced_token=seed-old-token", lines)
         self.assertIn("replacement_token=rotated-new-token", lines)
-        self.assertNotEqual("seed-old-token", "rotated-new-token")
+        # Swap detector: the OLD token must never appear under the NEW
+        # token's label, so a label-swap mutation flips this pin instead of
+        # silently exchanging the two identities (the literal equality of
+        # the two fixture tokens proves nothing and is deliberately absent).
+        self.assertNotIn("replacement_token=seed-old-token", lines)
         self.assertIn(f"lease_seconds={runtime.CLAIM_LEASE_SECONDS}", lines)
+        # The returned envelope redacts BOTH token values to <redacted>, and
+        # this redaction must never change: the durable evidence can prove
+        # the labels exist but must never carry a live token value.
         self.assertIn("replaced_token=<redacted>", result["evidence"])
         self.assertIn("replacement_token=<redacted>", result["evidence"])
         self.assertEqual(after["tasks"]["task-3"]["status"], "complete")
@@ -4216,6 +4599,36 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 self.assertEqual(result["recovery_action"], "preserve-and-stop")
                 self.assertFalse(result["resume_allowed"])
                 self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_reclaim_refused_under_complete_and_terminal_workflows(self):
+        # The workflow-state fence covers the full closed non-active set:
+        # an expired lease claim on a non-progressed task under a finished
+        # workflow (complete, then terminal) is refused with the same
+        # preserve-and-stop shape the abort fence returns, evidence naming
+        # the finished state, and the manifest byte-identical. RED before
+        # this task: the fence admitted only 'aborted', so a finished run's
+        # claim was rotated by the reclaim.
+        for arm in ("complete", "terminal"):
+            with self.subTest(workflow=arm):
+                self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+                self.rewrite_manifest(lambda state, name=arm: (
+                    state["claims"]["task-4"].update({"timestamp": self._expired_lease_timestamp()}),
+                    state.update({"workflow_state": name}),
+                ))
+                driver = self.driver(clock=lambda: self.FIXED_NOW)
+                before = self.state_path.read_bytes()
+                result = driver.reclaim("task-4")
+                self.assertEqual(result["status"], "aborted")
+                self.assertEqual(result["recovery_action"], "preserve-and-stop")
+                self.assertFalse(result["resume_allowed"])
+                self.assertTrue(
+                    any(f"workflow_state is '{arm}'" in entry for entry in result["evidence"]),
+                    result["evidence"],
+                )
+                self.assertEqual(self.state_path.read_bytes(), before)
+                after = runtime.load_manifest(self.state_path)
+                self.assertEqual(after["claims"]["task-4"]["token"], "seed-task-4")
+                self.assertEqual(after["claims"]["task-4"]["state"], "launched")
 
     def test_reclaim_preserves_other_claims(self):
         # Reclaiming an expired claim on one task leaves a live claim on
@@ -4304,6 +4717,70 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         receipt = task.get("blocked_receipt", {})
         self.assertEqual(receipt.get("reason_code"), "runtime-policy-unavailable")
         self.assertNotIn("session_id", receipt if isinstance(receipt, dict) else {})
+
+    def test_timeout_recovery_reconciles_without_duplicate_claim(self):
+        # Regression pin (green before and after the deadline baseline
+        # change): a session-less launch-deadline expiry (the worker died in
+        # the launch window, so no session id exists anywhere) is reconciled
+        # through the claim machinery exactly once. The resume recycle marks
+        # the dead attempt's claim replaced and rotates the identity one
+        # time; the recovery continuation re-claims the freed task as
+        # exactly one live claim row (never a duplicate), and a late receipt
+        # carrying the dead attempt's token fences as owner-mismatch instead
+        # of resurrecting a second claim.
+        self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+
+        def seed_dead_attempt(state):
+            state["claims"]["task-4"].update({
+                "state": "blocked",
+                "policy_token": {"generation": 0, "allowed_paths": ["task-4.txt"]},
+            })
+            state["tasks"]["task-4"].update({
+                "status": "blocked",
+                "resume_allowed": True,
+                "blocked_receipt": {"status": "blocked", "reason_code": "timeout", "evidence": ["launch deadline exceeded"]},
+            })
+
+        self.rewrite_manifest(seed_dead_attempt)
+
+        def replacement_launch(task, prompt, generation, deadline_seconds=None, policy_token=None):
+            return self.worker_checkpoint(
+                task=task["id"],
+                generation=generation,
+                checkpoint_identity=f"{task['id']}:worker-replacement",
+                evidence=["replacement-worker-log"],
+            )
+
+        driver = self.driver(adapter=FakeAdapter(result=replacement_launch))
+        recovered = driver.resume()
+        self.assertEqual(recovered["status"], "success", recovered)
+        state = runtime.load_manifest(self.state_path)
+        # Rotated exactly once: one fresh identity whose generation bumped
+        # once from the dead attempt's generation 0, held by exactly one
+        # claim row for the task.
+        rows = [claim for claim in state["claims"].values() if claim.get("task_id") == "task-4"]
+        self.assertEqual(len(rows), 1, state["claims"])
+        replacement = rows[0]
+        self.assertNotEqual(replacement["token"], "seed-task-4")
+        self.assertEqual(replacement["generation"], 1)
+        self.assertEqual(replacement["state"], "launched")
+        # Exactly one resume rotation event and one replacement launch in
+        # history: the dead attempt was never re-registered as a second
+        # claim or a second launch record.
+        self.assertEqual(len([item for item in state["history"] if item.get("event") == "resume"]), 1)
+        self.assertEqual(len([item for item in state["history"] if item.get("event") == "started"]), 1)
+        # The replacement worker's receipt landed on the freed task.
+        self.assertEqual(state["tasks"]["task-4"]["status"], "done-pending")
+        # The dead attempt's identity fences: its token claims nothing.
+        late = self.worker_checkpoint(task="task-4", generation=0, checkpoint_identity="task-4:worker-dead", evidence=["dead-attempt-log"])
+        late["claim_token"] = "seed-task-4"
+        fenced = self.driver().record_worker_checkpoint(late)
+        self.assertEqual(fenced["status"], "blocked")
+        self.assertEqual(fenced["reason_code"], "owner-mismatch")
+        state = runtime.load_manifest(self.state_path)
+        rows = [claim for claim in state["claims"].values() if claim.get("task_id") == "task-4"]
+        self.assertEqual(len(rows), 1, state["claims"])
+        self.assertNotEqual(rows[0]["token"], "seed-task-4")
 
     def test_reclaim_then_continue_parent_succeeds(self):
         # Regression: reclaim success on a launched claim must not wedge
@@ -4413,6 +4890,191 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(after["tasks"]["task-4"]["status"], "pending")
         self.assertEqual(after["claims"]["task-4"]["state"], "replaced")
         self.assertEqual(after["generation"], result["replacement_generation"])
+
+    # ------------------------------------------------------------------
+    # waiting-capacity durable state (capacity receipt parking).
+    # ------------------------------------------------------------------
+
+    WAITING_CAPACITY_PLAN = (
+        "# Fixture plan\n\n### Task 3: third\n- [x] done item\n\n"
+        "### Task 4: fourth\n- [ ] pending item\n"
+    )
+
+    def capacity_receipt(self, task="task-4", generation=0, **overrides):
+        result = {
+            "status": "blocked",
+            "reason_code": "capacity-unavailable",
+            "evidence": ["provider at capacity"],
+            "action_scope": "repository-task",
+            "checkpoint_identity": f"{task}:worker-1",
+            "generation": generation,
+        }
+        result.update(overrides)
+        claim = runtime.load_manifest(self.state_path).get("claims", {}).get(task)
+        if claim:
+            result.setdefault("claim_token", claim["token"])
+        return result
+
+    def seed_parked_claim(self, task="task-4", token="seed-task-4", generation=0, timestamp=111.0):
+        # Seed the durable parked shape directly: the claim state, the
+        # standard bounded retry policy on the claim, and the blocked task
+        # fields the parking branch writes.
+        self.seed_claim(task=task, token=token, generation=generation)
+        self.rewrite_manifest(lambda state: (
+            state["claims"][task].update({
+                "state": "waiting-capacity",
+                "timestamp": timestamp,
+                "retry_policy": {"mode": "bounded-resume", "max_attempts": 3, "attempts_remaining": 3},
+            }),
+            state["tasks"][task].update({
+                "status": "blocked",
+                "resume_allowed": False,
+                "blocked_receipt": {"status": "blocked", "reason_code": "capacity-unavailable"},
+            }),
+        ))
+
+    def test_capacity_receipt_parks_claim_waiting_capacity(self):
+        # A capacity receipt on a single-task claim parks the claim in
+        # waiting-capacity carrying the standard retry-policy shape; the
+        # outcome carries the resume action in recovery_action (never a
+        # next_action key) and history records the worker-blocked event with
+        # the capacity reason code.
+        self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+        self.rewrite_manifest(lambda state: state["tasks"]["task-4"].update({"status": "launched"}))
+        outcome = self.driver().record_worker_checkpoint(self.capacity_receipt())
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "capacity-unavailable")
+        self.assertEqual(outcome["recovery_action"], "resume-same-claim")
+        self.assertNotIn("next_action", outcome)
+        state = runtime.load_manifest(self.state_path)
+        claim = state["claims"]["task-4"]
+        self.assertEqual(claim["state"], "waiting-capacity")
+        self.assertEqual(claim["retry_policy"], {"mode": "bounded-resume", "max_attempts": 3, "attempts_remaining": 3})
+        self.assertEqual(claim["token"], "seed-task-4")
+        self.assertEqual(claim["generation"], 0)
+        self.assertEqual(state["tasks"]["task-4"]["status"], "blocked")
+        self.assertEqual(state["tasks"]["task-4"]["resume_allowed"], False)
+        self.assertEqual(state["tasks"]["task-4"]["blocked_receipt"]["reason_code"], "capacity-unavailable")
+        blocked_events = [
+            event for event in state["history"]
+            if event.get("event") == "worker-blocked" and event.get("task_id") == "task-4"
+        ]
+        self.assertEqual([event.get("reason_code") for event in blocked_events], ["capacity-unavailable"])
+
+    def test_waiting_capacity_claim_resumes_in_place(self):
+        # A continue on a parked claim with retry budget remaining relaunches
+        # the SAME claim: the new launch carries the same token and
+        # generation, there is exactly one claim row, and no reclaim
+        # rotation ran. The adapter returns another capacity receipt, so the
+        # claim re-parks with one attempt consumed.
+        self.seed_parked_claim()
+        adapter = RecordingAdapter(launch_result={
+            "status": "blocked",
+            "reason_code": "capacity-unavailable",
+            "evidence": ["provider at capacity"],
+        })
+        outcome = self.driver(adapter=adapter).continue_parent()
+        self.assertEqual(outcome["reason_code"], "capacity-unavailable")
+        self.assertEqual(outcome["recovery_action"], "resume-same-claim")
+        self.assertEqual([call["generation"] for call in adapter.launch_calls], [0])
+        state = runtime.load_manifest(self.state_path)
+        claim = state["claims"]["task-4"]
+        self.assertEqual(claim["state"], "waiting-capacity")
+        self.assertEqual(claim["token"], "seed-task-4")
+        self.assertEqual(claim["generation"], 0)
+        self.assertEqual(claim["retry_policy"]["attempts_remaining"], 2)
+        self.assertEqual(len(state["claims"]), 1)
+        self.assertNotIn("claim-reclaimed", [event.get("event") for event in state["history"]])
+        self.assertIn("started", [event.get("event") for event in state["history"]])
+
+    def test_capacity_retry_exhaustion_moves_claim_to_blocked(self):
+        # Successive capacity receipts consume the parked budget one attempt
+        # at a time; the receipt that arrives once the budget is exhausted
+        # transitions the claim to blocked, the existing reclaimable lease
+        # state, under the same claim identity.
+        self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+        self.rewrite_manifest(lambda state: state["tasks"]["task-4"].update({"status": "launched"}))
+        driver = self.driver()
+        driver.record_worker_checkpoint(self.capacity_receipt())
+        for expected_remaining in (2, 1, 0):
+            driver.record_worker_checkpoint(self.capacity_receipt())
+            claim = runtime.load_manifest(self.state_path)["claims"]["task-4"]
+            self.assertEqual(claim["state"], "waiting-capacity")
+            self.assertEqual(claim["retry_policy"]["attempts_remaining"], expected_remaining)
+        driver.record_worker_checkpoint(self.capacity_receipt())
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["claims"]["task-4"]["state"], "blocked")
+        self.assertIn(state["claims"]["task-4"]["state"], runtime.RECLAIMABLE_CLAIM_STATES)
+        self.assertEqual(state["claims"]["task-4"]["token"], "seed-task-4")
+        self.assertEqual(state["tasks"]["task-4"]["status"], "blocked")
+
+    def test_waiting_capacity_claim_refuses_lease_reclaim(self):
+        # A parked claim older than the claim lease is still refused: the
+        # state is deliberately outside RECLAIMABLE_CLAIM_STATES while its
+        # retry policy is live, the refusal names waiting-capacity, and the
+        # manifest stays byte-identical.
+        self.seed_parked_claim(timestamp=self._expired_lease_timestamp())
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+        before = runtime.load_manifest(self.state_path)
+        result = driver.reclaim("task-4")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "stale-claim")
+        self.assertTrue(any("waiting-capacity" in item for item in result["evidence"]))
+        self.assertEqual(runtime.load_manifest(self.state_path), before)
+
+    def test_manifest_validator_accepts_waiting_capacity_state(self):
+        # The manifest validator's claim-state set includes waiting-capacity:
+        # a parked claim passes schema validation instead of failing it.
+        self.seed_parked_claim()
+        validated = self.driver().refresh_manifest()
+        self.assertEqual(validated["claims"]["task-4"]["state"], "waiting-capacity")
+
+    def test_group_member_capacity_receipt_keeps_blocked_shape(self):
+        # A capacity receipt on a live batch-group member never parks: the
+        # member's claim takes the existing blocked shape with the capacity
+        # reason code recorded on the group, and the group stays active (the
+        # group path owns member recovery and the group fences stay
+        # untouched). The receipt rides the member launch, mirroring the
+        # batch timeout shape.
+        self.batch_manifest(self.disjoint_tasks(2))
+        adapter = RecordingAdapter(launch_result={
+            "status": "blocked",
+            "reason_code": "capacity-unavailable",
+            "evidence": ["provider at capacity"],
+        })
+        driver = self.batch_driver(adapter=adapter)
+        launch = driver.launch_next_task(batch=True)
+        self.assertEqual(launch["reason_code"], "capacity-unavailable")
+        state = runtime.load_manifest(self.state_path)
+        claim = state["claims"]["task-1"]
+        self.assertEqual(claim["state"], "blocked")
+        self.assertNotEqual(claim.get("retry_policy", {}).get("mode"), "bounded-resume")
+        group = self.live_group(state)
+        self.assertEqual(group["state"], "active")
+        self.assertEqual(group["member_attempts"]["task-1"]["receipt"]["reason_code"], "capacity-unavailable")
+        blocked_events = [
+            event for event in state["history"]
+            if event.get("event") == "worker-blocked" and event.get("task_id") == "task-1"
+        ]
+        self.assertEqual([event.get("reason_code") for event in blocked_events], ["capacity-unavailable"])
+
+    def test_readiness_routes_waiting_capacity_to_recovery(self):
+        # A parked claim at the queue head is an unprovable next task: the
+        # readiness decision is recovery with preserve-and-reconcile through
+        # the existing unprovable-next-task condition, and the read-only
+        # decision leaves the manifest byte-identical.
+        self.seed_parked_claim()
+        plan_path = self.write_plan(self.WAITING_CAPACITY_PLAN)
+        driver = self.driver()
+        before = runtime.load_manifest(self.state_path)
+        result = driver.readiness(plan_path)
+        self.assertEqual(result["decision"], "recovery")
+        self.assertEqual(result["recovery_action"], "preserve-and-reconcile")
+        self.assertTrue(
+            any("next incomplete task 'task-4' is not provable" in item for item in result["failed_conditions"])
+        )
+        self.assertEqual(result["next_task_id"], "task-4")
+        self.assertEqual(runtime.load_manifest(self.state_path), before)
 
     def test_changed_paths_delegates_to_worktree_entries(self):
         baseline = self.commit_file()
@@ -4598,7 +5260,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(finalized["address_fanout_generation"], 1)
         self.assertIn("round: r1", manifest_projection.read_text(encoding="utf-8"))
         rendered = json.loads(sidecar.read_text(encoding="utf-8"))["extensions"]["address_fanout"]
-        # r1 F4: the sidecar projection is the closed three-key spec; the
+        # The sidecar projection is the closed three-key spec; the
         # generation and terminal map stay in machine state.
         self.assertEqual(set(rendered), {"round", "finding_files", "workers"})
         self.assertEqual(rendered["round"], "r1")
@@ -5278,7 +5940,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(self.state_fingerprint(), aborted_before)
 
     def test_batch_member_envelope_checkpoint_passes_member_fence(self):
-        # r1 F3: a live member checkpoint carrying the documented
+        # A live member checkpoint carrying the documented
         # batch_progress envelope (the normalized shape the codex adapter
         # emits: batch_id, member_id, member_ordinal, attempt, session_id,
         # and no claim token inside the envelope) passes the member receipt
@@ -5308,7 +5970,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertIn("task-2:worker", state["checkpoints"])
 
     def test_batch_sessionless_timeout_wedge_recovers_through_launch(self):
-        # r2 F7: a launch-window timeout before the first receipt leaves the
+        # A launch-window timeout before the first receipt leaves the
         # active member blocked with no session anywhere (no task session,
         # no anchor session). Pre-fix, resume and continue returned
         # stale-claim forever and only a manual abort ended the run,
@@ -5363,7 +6025,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(done["actions"][0]["task_id"], "task-2")
 
     def test_batch_member_session_fence_refuses_wrong_outer_session(self):
-        # r2 F13: the anchor-session comparison in the member receipt fence
+        # The anchor-session comparison in the member receipt fence
         # had zero coverage (deleting the comparison passed the whole suite).
         # Negative arm: a member receipt whose translated top-level
         # session_id (what the codex adapter copies from the worker
@@ -5567,7 +6229,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             self.assertEqual(manifest["claims"]["task-2"]["state"], "claimed")
 
     def test_reclaim_refuses_live_group_member_and_non_member_still_reclaims(self):
-        # r3 F1: an expired claim on a member of a live batch group is
+        # An expired claim on a member of a live batch group is
         # refused with the resumable stale-claim outcome naming the group,
         # whatever its lease state (a group parked at a budget pause is
         # EXPECTED to be lease-expired, so the refusal precedes lease
@@ -5625,7 +6287,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(adapter.launch_calls[0]["task_id"], "task-1")
 
     def test_batch_member_lease_refreshes_at_activation(self):
-        # r3 F1: the member lease timestamp measures liveness from the
+        # The member lease timestamp measures liveness from the
         # moment the member became active, not from the group claim: the
         # anchor launch refreshes it, and a later member's activation at
         # the done boundary refreshes it again, so a group parked past the
@@ -5648,7 +6310,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(state["claims"]["task-1"]["timestamp"], self.FIXED_NOW)
 
     def test_continue_batch_refuses_non_resumable_blocked_member(self):
-        # r3 F2: a blocked member whose receipt forbids continuation (a
+        # A blocked member whose receipt forbids continuation (a
         # foreign-path contract violation, resume_allowed=False) is refused
         # by BOTH group recovery entries exactly like resume() hard-filters
         # it; resuming it through the batch continuation would give the
@@ -5696,7 +6358,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(control_adapter.resume_calls[0]["session_id"], anchor_session)
 
     def test_batch_member_retryable_error_lands_through_anchor_resume(self):
-        # r4 F1 (blocking): a batch member's retryable error receipt never
+        # Blocking arm: a batch member's retryable error receipt never
         # takes the plain driver relaunch - that launch bypasses the group
         # fences and its fresh session then always fails the member receipt
         # fence's session pin (the group anchor is already captured), so the
@@ -5769,7 +6431,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         ))
 
     def test_batch_member_retry_budget_exhaustion_blocks_consistently(self):
-        # r4 F1 recovery arm: with the retry budget spent the member
+        # Recovery arm: with the retry budget spent the member
         # converges to a consistent blocked state through the same
         # anchor-session resume - exactly two resumes (the window and the
         # one budgeted retry), no livelock, no driver relaunch, and
@@ -5807,7 +6469,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(state["claims"]["task-1"]["state"], "closed")
 
     def test_batch_member_retry_without_session_persists_blocked(self):
-        # r5 F12: the no-session arm of the r4 F1 member-retry primitive. A
+        # The no-session arm of the member-retry primitive. A
         # retryable member receipt with NO session anywhere (the member's own
         # task record and the group anchor both carry none) has nothing to
         # resume and no legal member launch, so the receipt persists as the
@@ -5858,7 +6520,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         ))
 
     def test_batch_claim_refuses_unauthorizable_members_up_front(self):
-        # r5 F3: a member whose envelope can never be authorized (a network
+        # A member whose envelope can never be authorized (a network
         # flag, or zero scope) is excluded from the batch prefix, so the
         # batch claim refuses up front - the reproduced two-member
         # network:true scenario ends in a single-task fallback instead of a
@@ -5897,7 +6559,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(launched["status"], "success", launched)
 
     def test_batch_advance_authorization_failure_fails_group_and_completes_done(self):
-        # r5 F3 belt: when the NEXT member's envelope cannot be authorized
+        # Authorization belt: when the NEXT member's envelope cannot be authorized
         # at the advance (here the task is drifted to network:true after the
         # claim-time authorization passed), the group fails atomically in
         # the done handoff's locked save and the completed member's done
@@ -5947,7 +6609,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(runtime.load_manifest(self.state_path)["tasks"]["task-2"]["status"], "blocked")
 
     def test_reclaim_non_resumable_member_fails_group_and_releases_staged(self):
-        # r4 F2 wedge + exit: a blocked member whose receipt forbids
+        # Wedge + exit: a blocked member whose receipt forbids
         # continuation has no group path left (continue --batch and resume
         # both refuse it and nothing else closes a group), and before the
         # exit its reclaim was refused too, so only a hand edit could
@@ -5994,7 +6656,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(state["claims"]["task-3"]["state"], "closed")
         self.assertEqual(state["tasks"]["task-3"]["status"], "pending")
         self.assertTrue(any(entry.get("event") == "batch-group-failed" for entry in state["history"]))
-        # r5 F1 round-trip: the failed group state must survive the
+        # Round-trip: the failed group state must survive the
         # authoritative validator and a full validating continuation. The
         # original witness read the state with a bare load_manifest, which
         # masked the defect where validate_manifest (active/closed only)
@@ -6200,10 +6862,10 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(group_record()["active_member"], "task-3")
         assert_agreement()
 
-        # done from active, session-less cell (r6 F2, with r6 F1): an
+        # done from active, session-less cell: an
         # adapter whose receipts carry no session id anywhere reaches the
         # same cell, so the exhaustiveness claim must cover it. The advance
-        # fails the group atomically (the r5 F3 release shape), the done
+        # fails the group atomically (the release shape), the done
         # lands, and the released staged member is re-claimed individually:
         # a state from which an entrypoint proceeds, never a wedge.
         main_fixture = json.loads(self.state_path.read_text(encoding="utf-8"))
@@ -6479,7 +7141,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         # no operation above re-released or revived the group record.
 
     def test_group_state_writes_route_through_the_single_choke_point(self):
-        # r6 F11, the group-lifecycle analog of the G2 receipt-identity
+        # The group-lifecycle analog of the G2 receipt-identity
         # structural pin: the contract's single choke point invariant ("no
         # site other than the primitive writes group state") is pinned by an
         # AST walk over the driver source, so a future direct
@@ -6559,7 +7221,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(offenders, [], offenders)
 
     def test_startup_group_member_launch_evidence_resolves_through_group(self):
-        # r3 F5: member claims never carry launch records (the ONE record
+        # Member claims never carry launch records (the ONE record
         # lives on the group), so the ambient discriminator that classifies
         # pre-launch versus launched claims must resolve member evidence
         # through claim_groups[group_id]['launch_record']. A launched
@@ -6591,7 +7253,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         ]
 
     def test_document_order_ordinal_selection_across_claim_batch_and_readiness(self):
-        # r3 F6: the persisted document ordinal is the canonical queue order
+        # The persisted document ordinal is the canonical queue order
         # and every selection site consumes it - single claims walk the plan
         # in document order (never lexicographic id order), the batch prefix
         # assembles in document order so member ordinals agree with the
@@ -6638,7 +7300,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(readiness["next_task_id"], "task-2", readiness["failed_conditions"])
 
     def test_batch_member_done_without_anchor_session_falls_back_to_task_session(self):
-        # r3 F15: the anchor capture is receipt-driven, so a group whose
+        # The anchor capture is receipt-driven, so a group whose
         # receipts never captured the anchor wedged at the first member
         # done: the advance refused for the missing anchor session, the
         # done-pending member refused relaunch, and a later done failed on
@@ -6694,13 +7356,13 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(fenced["reason_code"], "stale-claim")
 
     def test_batch_sessionless_advance_fails_group_and_lands_done(self):
-        # r6 F1 repro: a schema-legal success adapter whose receipts carry
+        # The schema-legal success adapter whose receipts carry
         # no session id anywhere leaves the group without an anchor session,
         # and the advance-time capture used to refuse the done forever
         # (blocked done-pending). That wedged the group with no exit: done
         # replay, continue --batch, resume, reclaim (done-pending is a
         # progressed status), and claim_next_task (live group) all refuse.
-        # The advance now fails the group atomically in the r5 F3 release
+        # The advance now fails the group atomically in the release
         # shape: the completed member's done lands, the staged member is
         # released to the pending queue, and the generic next-claim proceeds
         # from the failed terminal.
@@ -6743,7 +7405,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(state["tasks"]["task-2"]["status"], "claimed")
 
     def test_batch_sessionless_timeout_wedge_recovers_through_continue(self):
-        # r3 O13 (the r2 F7 recovery arm's continue entry): the
+        # The recovery arm's continue entry: the
         # session-less blocked anchor wedge recovers through
         # continue_parent(batch=True) as well as resume(): exactly one
         # launch call rotates the member to attempt 2, the group attempt
@@ -6798,7 +7460,7 @@ class ArchiveGateFixtureBase(unittest.TestCase):
     # Fixture plan text every archive fixture writes; the checkboxes are
     # complete so plan-file evidence never fires unless a test overrides the
     # plan or the manifest rows.
-    PLAN_TEXT = "# fixture plan\n\n- [x] task-3\n- [x] task-4\n"
+    PLAN_TEXT = "# fixture plan\n\n### Task 3: third\n### Task 4: fourth\n\n- [x] task-3\n- [x] task-4\n"
     ACTIVE_PLAN_REL = "docs/plans/fixture-plan.md"
     SIDECAR_REL = "docs/reviews/fixture-r3.stats.json"
     PLAN_SLUG = "fixture-plan"
@@ -6886,6 +7548,30 @@ class ArchiveGateFixtureBase(unittest.TestCase):
             repo_root=self.root,
             **kwargs,
         )
+
+    def assert_refusal_preserves_manifest(self, before: bytes, context: str = "") -> None:
+        """A terminal refusal may append only its terminal-refused event.
+
+        The refusal tail's history append is the one allowed evidence write
+        after a refusal (the outcome is composed first and the append never
+        changes it), so this pin holds every manifest field outside the
+        appended history tail and the write timestamp byte-stable, requires
+        each appended event to be exactly a terminal-refused record, and
+        requires the timestamp to have advanced with the save.
+        """
+
+        before_state = json.loads(before)
+        after_state = json.loads(self.state_path.read_bytes())
+        before_stamp = before_state.pop("updated_at")
+        after_stamp = after_state.pop("updated_at")
+        self.assertIsInstance(after_stamp, (int, float), context)
+        self.assertGreaterEqual(after_stamp, before_stamp, context)
+        prefix = before_state.pop("history", [])
+        suffix = after_state.pop("history", [])
+        self.assertEqual(suffix[: len(prefix)], prefix, context)
+        for event in suffix[len(prefix):]:
+            self.assertEqual(event.get("event"), "terminal-refused", context)
+        self.assertEqual(after_state, before_state, context)
 
     def pre_archive(self, driver, **overrides) -> dict:
         payload = {
@@ -6981,7 +7667,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "done-pending")
         self.assertTrue(any("unsupported archive destination" in entry for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
         self.assertTrue((self.root / self.ACTIVE_PLAN_REL).is_file())
 
     def test_accepts_declared_full_path_destination(self):
@@ -7010,7 +7696,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertEqual(result["reason_code"], "done-pending")
         self.assertTrue(any("unsupported archive destination" in entry for entry in result["evidence"]), result["evidence"])
         self.assertTrue(any("docs/plans/completed/" in entry for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_non_equal_file_destination(self):
         # Destination-candidate equality, file-valued refuse arm: a safe
@@ -7025,7 +7711,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertEqual(result["reason_code"], "done-pending")
         self.assertTrue(any("unsupported archive destination" in entry for entry in result["evidence"]), result["evidence"])
         self.assertTrue(any("the facts-resolved destination is docs/plans/completed/fixture-plan.md" in entry for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_unchecked_plan_checkbox(self):
         # Fixture 2: the machine tasks are all complete but the active plan
@@ -7040,7 +7726,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertEqual(result["reason_code"], "done-pending")
         self.assertTrue(any("unchecked checkbox line" in entry for entry in result["evidence"]), result["evidence"])
         self.assertTrue(any(entry.startswith("line 4:") for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_incomplete_machine_tasks(self):
         # Fixture 2, machine half: one task still pending is refused first,
@@ -7055,7 +7741,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertTrue(any("task-4" in entry for entry in result["evidence"]), result["evidence"])
         self.assertFalse(any("unsupported archive" in entry for entry in result["evidence"]), result["evidence"])
         self.assertFalse(any("unchecked checkbox" in entry for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_open_claim_record(self):
         # Machine completeness, claims arm: every task complete but a claim
@@ -7078,7 +7764,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
                 self.assertTrue(any("claim records must be closed before archival" in entry for entry in result["evidence"]), result["evidence"])
                 self.assertTrue(any("task-4" in entry for entry in result["evidence"]), result["evidence"])
                 self.assertFalse(any("unchecked checkbox" in entry for entry in result["evidence"]), result["evidence"])
-                self.assertEqual(self.state_path.read_bytes(), before)
+                self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_pending_done_handoff(self):
         # Machine completeness, handoff arm: a task whose checkbox is true
@@ -7101,7 +7787,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
                 self.assertTrue(any("pending done handoff must land before archival" in entry for entry in result["evidence"]), result["evidence"])
                 self.assertTrue(any("task-4" in entry for entry in result["evidence"]), result["evidence"])
                 self.assertFalse(any("incomplete tasks" in entry for entry in result["evidence"]), result["evidence"])
-                self.assertEqual(self.state_path.read_bytes(), before)
+                self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_foreign_plan_path(self):
         # Backlog origin Required behavior 1, source-binding guard: a
@@ -7118,7 +7804,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertTrue(any("identity mismatch" in entry for entry in result["evidence"]), result["evidence"])
         self.assertTrue(any("fixture-plan" in entry for entry in result["evidence"]), result["evidence"])
         self.assertFalse(any("unsupported archive destination" in entry for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_mismatched_watcher_plan_path(self):
         # The resume watcher's recorded canonical plan path is part of the
@@ -7138,7 +7824,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertTrue(any("identity mismatch" in entry for entry in result["evidence"]), result["evidence"])
         self.assertTrue(any("resume watcher" in entry for entry in result["evidence"]), result["evidence"])
         self.assertFalse(any("unsupported archive destination" in entry for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
 
     def test_accepts_conforming_watcher_plan_path(self):
         # Mirror arm: a watcher record whose canonical plan path equals the
@@ -7204,7 +7890,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
                 self.assertTrue(any("clean-round review sidecar" in entry for entry in result["evidence"]), result["evidence"])
                 if evidence_fragment is not None:
                     self.assertTrue(any(evidence_fragment in entry for entry in result["evidence"]), result["evidence"])
-                self.assertEqual(self.state_path.read_bytes(), before)
+                self.assert_refusal_preserves_manifest(before)
 
     def test_pre_archive_refuses_environment_and_shape_arms(self):
         # Refusal-arm witnesses for the environment and input-shape arms the
@@ -7271,7 +7957,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
                 self.assertEqual(result["reason_code"], "done-pending")
                 for fragment in fragments:
                     self.assertTrue(any(fragment in entry for entry in result["evidence"]), (fragment, result["evidence"]))
-                self.assertEqual(self.state_path.read_bytes(), before)
+                self.assert_refusal_preserves_manifest(before)
 
         # The input shape guard: a non-string plan path, a non-sha commit
         # identity, and an empty Phase 5 checklist all refuse with the same
@@ -7292,7 +7978,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
                     any("active plan path, review sidecar, commit identity, and Phase 5 checklist are required" in entry for entry in result["evidence"]),
                     (shape, result["evidence"]),
                 )
-                self.assertEqual(self.state_path.read_bytes(), before, shape)
+                self.assert_refusal_preserves_manifest(before, shape)
 
     def test_accepts_sidecar_without_verdict_key(self):
         # Fixture 3, verdict-absent accept arm: the review-staging schema
@@ -7324,29 +8010,29 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
 
     def test_sidecar_read_bounded_refuses_oversize(self):
         # Bounded sidecar read, oversize refuse arm: a valid-shape clean
-        # sidecar padded to TERMINAL_PLAN_READ_LIMIT + 1 bytes refuses as
+        # sidecar padded to PLAN_READ_LIMIT + 1 bytes refuses as
         # clean-round evidence failure naming the bounded-read limit, with
         # the manifest byte-identical; the gate reads the sidecar through
         # the same LIMIT + 1 byte-capped policy as the plan read, so an
         # over-limit sidecar is never parsed.
         self.complete_all_tasks()
-        sidecar = self._write_padded_sidecar(runtime.TERMINAL_PLAN_READ_LIMIT + 1)
+        sidecar = self._write_padded_sidecar(runtime.PLAN_READ_LIMIT + 1)
         driver = self.driver()
         before = self.state_path.read_bytes()
         result = self.pre_archive(driver, review_sidecar=sidecar)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "done-pending")
         self.assertTrue(any("clean-round review sidecar exceeds the bounded read limit" in entry for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
 
     def test_sidecar_read_bounded_accepts_at_limit(self):
         # Bounded sidecar read, at-limit accept arm: the same clean sidecar
-        # sized to exactly TERMINAL_PLAN_READ_LIMIT bytes passes the cap
+        # sized to exactly PLAN_READ_LIMIT bytes passes the cap
         # (len(data) == LIMIT is not over it), the gate records, and the
         # run stays active; this pins the boundary so the refusal stays
         # strictly over the limit.
         self.complete_all_tasks()
-        sidecar = self._write_padded_sidecar(runtime.TERMINAL_PLAN_READ_LIMIT)
+        sidecar = self._write_padded_sidecar(runtime.PLAN_READ_LIMIT)
         result = self.pre_archive(self.driver(), review_sidecar=sidecar)
         self.assertEqual(result["status"], "success")
         state = runtime.load_manifest(self.state_path)
@@ -7368,7 +8054,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertEqual(result["reason_code"], "done-pending")
         self.assertTrue(any("last_fix_commit" in entry for entry in result["evidence"]), result["evidence"])
         self.assertTrue(any("ancestor-or-self of HEAD" in entry for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
 
     def test_success_writes_gate_receipt_and_stays_active(self):
         # Fixture 5, pre-move half: the passing predicate records archive_gate
@@ -7451,7 +8137,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "done-pending")
         self.assertTrue(any('verdict must be "yes" when present' in entry for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_blocking_finding_inside_residual_set(self):
         # Membership refuse arm: a blocking row whose integer id is a member
@@ -7469,7 +8155,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertEqual(result["reason_code"], "done-pending")
         self.assertTrue(any("inside the recorded residual policy set" in entry for entry in result["evidence"]), result["evidence"])
         self.assertTrue(any("first in-set blocking finding: 3" in entry for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_policy_recorded_after_verification_round(self):
         # Ordering refuse arm: a policy whose recorded-at postdates the
@@ -7489,10 +8175,10 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
                 self.assertEqual(result["reason_code"], "done-pending")
                 self.assertTrue(any("does not predate" in entry for entry in result["evidence"]), result["evidence"])
                 self.assertTrue(any(self.ROUND_DATE in entry for entry in result["evidence"]), result["evidence"])
-                self.assertEqual(self.state_path.read_bytes(), before)
+                self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_nonfinite_recorded_at_policy(self):
-        # Shape-guard refuse arm (r1 F1): JSON parses NaN and the infinities
+        # Shape-guard refuse arm: JSON parses NaN and the infinities
         # as numbers, but a non-finite recorded-at poisons the ordering
         # proof (NaN compares False against every round-day epoch, so a NaN
         # policy would "predate" every round); the shape guard refuses the
@@ -7509,10 +8195,10 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
                 self.assertEqual(result["status"], "blocked")
                 self.assertEqual(result["reason_code"], "done-pending")
                 self.assertTrue(any("residual_policy.recorded_at must be a finite epoch timestamp" in entry for entry in result["evidence"]), result["evidence"])
-                self.assertEqual(self.state_path.read_bytes(), before)
+                self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_non_integer_blocking_id_under_policy(self):
-        # Membership refuse arm (r1 F2): a blocking row whose id is not an
+        # Membership refuse arm: a blocking row whose id is not an
         # integer can never prove itself outside the policy's named integer
         # set, so under the branch it refuses instead of silently
         # reclassifying as a permitted out-of-set residual; the evidence
@@ -7531,10 +8217,10 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
                 self.assertTrue(any("whose id is not an integer under the residual policy branch" in entry for entry in result["evidence"]), result["evidence"])
                 self.assertTrue(any(f"first non-integer blocking id: {row_id!r}" in entry for entry in result["evidence"]), result["evidence"])
                 self.assertTrue(any("requires an integer id matching the policy's integer finding ids" in entry for entry in result["evidence"]), result["evidence"])
-                self.assertEqual(self.state_path.read_bytes(), before)
+                self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_junk_verdict_under_policy(self):
-        # Verdict-slot refuse arm (r1 F7): under the branch the verdict slot
+        # Verdict-slot refuse arm: under the branch the verdict slot
         # narrows to the yes/no pair instead of applying the landed
         # clean-round sub-check; "no" is legitimate because the out-of-set
         # residuals are staged, and any other present value (a junk verdict
@@ -7552,10 +8238,10 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
                 self.assertEqual(result["reason_code"], "done-pending")
                 self.assertTrue(any('verdict under the residual policy branch must be "yes" or "no" when present' in entry for entry in result["evidence"]), result["evidence"])
                 self.assertTrue(any(f"supplied {verdict!r}" in entry for entry in result["evidence"]), result["evidence"])
-                self.assertEqual(self.state_path.read_bytes(), before)
+                self.assert_refusal_preserves_manifest(before)
 
     def test_accepts_in_set_non_blocking_row_under_policy(self):
-        # Fixed-member accept arm (r1 F8): a row whose integer id IS a
+        # Fixed-member accept arm: a row whose integer id IS a
         # member of the policy set but carries blocking false (the finding
         # was fixed or dropped) archives, pinning the blocking conjunct of
         # the membership rule: membership refuses only blocking rows, so a
@@ -7572,7 +8258,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertNotIn("terminal_receipt", state)
 
     def test_normalize_residual_policy_malformed_inputs_refuse(self):
-        # Shape-guard refusal coverage (r1 F10): every fail-closed branch of
+        # Shape-guard refusal coverage: every fail-closed branch of
         # the policy normalizer keeps its documented evidence string, and
         # the one valid shape still normalizes (grant source trimmed).
         cases = (
@@ -7599,7 +8285,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertEqual(normalized["recorded_at"], 5.0)
 
     def test_refuses_residual_sidecar_missing_or_malformed_round_date(self):
-        # Round-date guard refuse arms (r1 F10): under the branch the
+        # Round-date guard refuse arms: under the branch the
         # ordering proof reads the sidecar date, so a sidecar without a
         # usable date value refuses with the missing-date evidence and a
         # non-ISO date refuses with the format evidence; the manifest stays
@@ -7621,7 +8307,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
                 self.assertEqual(result["status"], "blocked")
                 self.assertEqual(result["reason_code"], "done-pending")
                 self.assertTrue(any(evidence_fragment in entry for entry in result["evidence"]), result["evidence"])
-                self.assertEqual(self.state_path.read_bytes(), before)
+                self.assert_refusal_preserves_manifest(before)
 
 
 class TerminalFinalStageTest(ArchiveGateFixtureBase):
@@ -7739,7 +8425,70 @@ class TerminalFinalStageTest(ArchiveGateFixtureBase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "done-pending")
         self.assertTrue(any("digest mismatch" in entry for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
+
+    def test_terminal_refuses_star_and_plus_markers(self):
+        # GFM task-list widening witness for the terminal predicate: an
+        # archived plan whose unchecked line uses the '*' marker and then
+        # one using the '+' marker are refused exactly like the dash form,
+        # each with the line-anchored 'line <N>:' evidence for the marker
+        # line. RED before the widening: the dash-only predicate ignored
+        # both marker lines, so the gate wrote the terminal receipt.
+        for marker in ("*", "+"):
+            with self.subTest(marker=marker):
+                self.write_archived_plan(f"# fixture plan\n### Task 4: fourth\n- [x] task-3\n{marker} [ ] task-4\n")
+                self.seed_gate()
+                driver = self.driver()
+                result = self.mark_terminal(driver)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["reason_code"], "done-pending")
+                self.assertTrue(any("unchecked checkbox line" in entry for entry in result["evidence"]), result["evidence"])
+                self.assertTrue(any(entry.startswith("line 4:") for entry in result["evidence"]), result["evidence"])
+                state = runtime.load_manifest(self.state_path)
+                self.assertNotIn("terminal_receipt", state)
+                self.assertEqual(state["workflow_state"], "active")
+
+    def test_widened_marker_evidence_line_numbers_stable(self):
+        # Evidence-pin stability under the widened predicate: the first
+        # unchecked marker of this fixture is the '* [ ]' line at line 5
+        # (the dash-only predicate ignored it, so pre-widening the first
+        # pinned line was the dash line at line 6); the pin carries the
+        # unchanged 'line <N>:' prefix form, numbered by the scan helper's
+        # walk, and the later dash line never displaces the first pin.
+        self.write_archived_plan(
+            "# fixture plan\n\n### Task 4: fourth\n- [x] task-3\n* [ ] first unchecked star line\n- [ ] later dash line\n"
+        )
+        self.seed_gate()
+        driver = self.driver()
+        result = self.mark_terminal(driver)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any(entry.startswith("line 5:") for entry in result["evidence"]), result["evidence"])
+        self.assertFalse(any(entry.startswith("line 6:") for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
+
+    def test_terminal_backstop_stays_fence_blind(self):
+        # Regression pin for the terminal backstop's fence-blind spec: an
+        # unchecked checkbox inside a fenced block in the archived plan still
+        # refuses terminal with the line-anchored evidence (the readiness
+        # fence map is scoped to the section extractor and the heading
+        # search; the terminal whole-file scan never consumes it). Green
+        # before and after the fence map by spec.
+        self.write_archived_plan(
+            "# fixture plan\n\n### Task 3: third\n### Task 4: fourth\n\n```text\n- [ ] fenced unchecked box\n```\n\n- [x] task-3\n- [x] task-4\n"
+        )
+        self.seed_gate()
+        driver = self.driver()
+        result = self.mark_terminal(driver)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("unchecked checkbox line" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertTrue(any(entry.startswith("line 7:") for entry in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("terminal_receipt", state)
+        self.assertEqual(state["workflow_state"], "active")
 
     def test_refuses_unknown_terminal_stage(self):
         # The staged terminal dispatcher owns exactly two stages: a stage
@@ -7840,7 +8589,7 @@ class ArchiveLocationTest(ArchiveGateFixtureBase):
         self.assertEqual(result["reason_code"], "done-pending")
         self.assertTrue(any("unsupported archive location" in entry for entry in result["evidence"]), result["evidence"])
         self.assertTrue(any(self.SIBLING_PLAN_REL in entry for entry in result["evidence"]), result["evidence"])
-        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assert_refusal_preserves_manifest(before)
         self.assertTrue((self.root / self.SIBLING_PLAN_REL).is_file())
 
 
@@ -8164,6 +8913,178 @@ class CheckpointRecoveryTest(unittest.TestCase):
         self.assertNotIn("launch_record", state["claims"]["task-1"])
 
 
+class DiagnoseOperationTest(unittest.TestCase):
+    """Witnesses for the read-only first-failed-transition diagnose operation.
+
+    The fixtures hand-write the history events the classifier keys on, with
+    one exception: the terminal-gate witness drives a real final-stage
+    terminal refusal so the terminal-refused producer is proven end to end.
+    """
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.state_path = self.root / "runtime_state.json"
+        self.seed_manifest()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def seed_manifest(self) -> None:
+        runtime.create_manifest(
+            self.state_path,
+            "fixture-plan",
+            [
+                {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
+                {"id": "task-4", "number": 4, "status": "pending", "checkbox": False, "allowed_paths": ["task-4.txt"]},
+            ],
+        )
+
+    def diagnose_driver(self) -> runtime.RuntimeDriver:
+        # persist_construction=False mirrors the CLI diagnose construction:
+        # no owner backfill or receipt write may precede a read-only report.
+        return runtime.RuntimeDriver(
+            self.state_path,
+            plan_slug="fixture-plan",
+            owner="test-owner",
+            repo_root=self.root,
+            persist_construction=False,
+        )
+
+    def append_history(self, events) -> None:
+        state = runtime.load_manifest(self.state_path)
+        state.setdefault("history", []).extend(events)
+        runtime._safe_write_json(self.state_path, state)
+
+    def seed_terminal_receipt(self) -> None:
+        state = runtime.load_manifest(self.state_path)
+        state["workflow_state"] = "complete"
+        state["terminal_receipt"] = {
+            "workflow_state": "complete",
+            "phase5_checklist": ["phase 5 complete"],
+            "archived_plan_path": "docs/plans/completed/fixture-plan.md",
+            "last_commit_sha": "a" * 40,
+            "plan_digest": "b" * 64,
+        }
+        runtime._safe_write_json(self.state_path, state)
+
+    def test_diagnose_names_first_failed_timeout(self):
+        self.append_history([
+            {"event": "started", "task_id": "task-4", "generation": 0},
+            {"event": "worker-blocked", "task_id": "task-4", "reason_code": "timeout"},
+        ])
+        outcome = self.diagnose_driver().diagnose()
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["classification"], "timeout")
+        self.assertEqual(
+            outcome["first_failed_transition"],
+            {"event": "worker-blocked", "task_id": "task-4", "reason_code": "timeout"},
+        )
+
+    def test_diagnose_classifies_capacity(self):
+        self.append_history([
+            {"event": "started", "task_id": "task-4", "generation": 0},
+            {"event": "worker-blocked", "task_id": "task-4", "reason_code": "capacity-unavailable"},
+        ])
+        outcome = self.diagnose_driver().diagnose()
+        self.assertEqual(outcome["classification"], "capacity-unavailable")
+        self.assertEqual(outcome["first_failed_transition"]["event"], "worker-blocked")
+
+    def test_diagnose_classifies_worker_failure_and_stale_evidence(self):
+        # malformed-result and cleanup-unverified (the adapter's
+        # non-resumable unverified-kill arm) classify worker-failure;
+        # stale-claim classifies stale-evidence.
+        for reason, expected in (
+            ("malformed-result", "worker-failure"),
+            ("stale-claim", "stale-evidence"),
+            ("cleanup-unverified", "worker-failure"),
+        ):
+            with self.subTest(reason_code=reason):
+                self.state_path.unlink(missing_ok=True)
+                self.seed_manifest()
+                self.append_history([
+                    {"event": "started", "task_id": "task-4", "generation": 0},
+                    {"event": "worker-blocked", "task_id": "task-4", "reason_code": reason},
+                ])
+                outcome = self.diagnose_driver().diagnose()
+                self.assertEqual(outcome["classification"], expected)
+                self.assertEqual(outcome["first_failed_transition"]["reason_code"], reason)
+
+    def test_diagnose_classifies_inclusion(self):
+        self.append_history([
+            {"event": "started", "task_id": "task-4", "generation": 0},
+            {"event": "worker-blocked", "task_id": "task-4", "reason_code": "precondition-unverified"},
+        ])
+        outcome = self.diagnose_driver().diagnose()
+        self.assertEqual(outcome["classification"], "inclusion")
+        self.assertEqual(outcome["first_failed_transition"]["reason_code"], "precondition-unverified")
+
+    def test_diagnose_classifies_terminal_gate(self):
+        driver = self.diagnose_driver()
+        refusal = driver.mark_terminal(
+            archived_plan_path="docs/plans/completed/fixture-plan.md",
+            last_commit_sha="a" * 40,
+            phase5_checklist=["phase 5 complete"],
+        )
+        # The final stage refuses on machine completeness (task-4 is
+        # pending) before any gate or filesystem clause.
+        self.assertEqual(refusal["status"], "blocked")
+        self.assertEqual(refusal["reason_code"], "done-pending")
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["workflow_state"], "active")
+        refused = [event for event in state["history"] if event.get("event") == "terminal-refused"]
+        self.assertEqual(len(refused), 1)
+        self.assertEqual(refused[0]["stage"], "final")
+        # The appended evidence is the composed refusal's evidence: the
+        # append never changes the outcome.
+        self.assertEqual(refused[0]["evidence"], refusal["evidence"])
+        outcome = self.diagnose_driver().diagnose()
+        self.assertEqual(outcome["classification"], "terminal-gate")
+        self.assertEqual(outcome["first_failed_transition"], refused[0])
+
+    def test_diagnose_classifies_user_interruption(self):
+        # task-3 is complete, so its earlier timeout failure has since
+        # reached the progressed terminal state and must be skipped: the
+        # user-interrupt-recorded event is the earliest uncompleted failure.
+        self.append_history([
+            {"event": "started", "task_id": "task-3", "generation": 0},
+            {"event": "worker-blocked", "task_id": "task-3", "reason_code": "timeout"},
+            {"event": "user-interrupt-recorded", "user_interrupt": "2026-09-20T10:00:00+00:00"},
+        ])
+        outcome = self.diagnose_driver().diagnose()
+        self.assertEqual(outcome["classification"], "user-interruption")
+        self.assertEqual(
+            outcome["first_failed_transition"],
+            {"event": "user-interrupt-recorded", "user_interrupt": "2026-09-20T10:00:00+00:00"},
+        )
+
+    def test_diagnose_clean_terminal_reports_none(self):
+        self.seed_terminal_receipt()
+        outcome = self.diagnose_driver().diagnose()
+        self.assertEqual(outcome["status"], "success")
+        self.assertIsNone(outcome["first_failed_transition"])
+        self.assertEqual(outcome["classification"], "none")
+
+    def test_diagnose_is_read_only(self):
+        self.append_history([
+            {"event": "worker-blocked", "task_id": "task-4", "reason_code": "runtime-error"},
+        ])
+        before = hashlib.sha256(self.state_path.read_bytes()).hexdigest()
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            exit_code = runtime.main([
+                "--manifest", str(self.state_path),
+                "--operation", "diagnose",
+                "--plan-slug", "fixture-plan",
+                "--owner", "test-owner",
+                "--repo-root", str(self.root),
+            ])
+        self.assertEqual(exit_code, 0)
+        outcome = json.loads(buffer.getvalue().strip().splitlines()[-1])
+        self.assertEqual(outcome["classification"], "worker-failure")
+        self.assertEqual(hashlib.sha256(self.state_path.read_bytes()).hexdigest(), before)
+
+
 class RecordingAdapter:
     """Batch-aware fake adapter recording launch and resume calls."""
 
@@ -8199,7 +9120,7 @@ class RecordingAdapter:
 
 
 class SessionlessRecordingAdapter(RecordingAdapter):
-    """The r6 F1 adapter shape: schema-legal success receipts that carry no
+    """Schema-legal success receipts that carry no
     session id at all (the codex adapter sets the field only when the
     envelope has one), so no anchor session is ever captured."""
 
@@ -8207,6 +9128,123 @@ class SessionlessRecordingAdapter(RecordingAdapter):
         result = super()._base(task_id, generation)
         result.pop("session_id", None)
         return result
+
+
+class ContractContentParityTest(unittest.TestCase):
+    """Durable probes for the runtime contract's documented obligations.
+
+    Reads agents/skills/execute-plan/runtime-contract.md once and asserts
+    each required content obligation as a whitespace-normalized fragment
+    scoped to the paragraph block that anchors it, so deleting the span
+    fails the probe even when the same words survive elsewhere in the file.
+    """
+
+    CONTRACT = ROOT / "agents/skills/execute-plan/runtime-contract.md"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.raw = cls.CONTRACT.read_text(encoding="utf-8")
+        cls.blocks = [" ".join(block.split()) for block in cls.raw.split("\n\n")]
+
+    def block_containing(self, *anchors):
+        matches = [block for block in self.blocks if all(anchor in block for anchor in anchors)]
+        self.assertTrue(
+            matches,
+            "no runtime-contract paragraph contains all anchors: " + " | ".join(anchors),
+        )
+        return matches[0]
+
+    def test_contention_envelope_pairs_stale_claim_with_resumable_conflict(self):
+        block = self.block_containing("resumable-conflict")
+        self.assertIn("reason code `stale-claim` with recovery action `resumable-conflict`", block)
+        self.assertIn("the decision itself is carried in the outcome's `decision` field", block)
+
+    def test_terminal_path_bullet_requires_at_least_one_task(self):
+        block = self.block_containing("`terminal-path` fires only when")
+        self.assertIn("carries at least one task, every task is complete or checkpointed", block)
+
+    def test_stop_or_recovery_covers_zero_task_sections(self):
+        block = self.block_containing("`stop-or-recovery` for a machine state that is not `active`")
+        self.assertIn("for a plan with zero recognizable task sections", block)
+
+    def test_transition_preamble_names_exactly_one_next_action(self):
+        block = self.block_containing("Each outcome in the table names exactly one next action")
+        self.assertIn("take that one action, then re-classify the state", block)
+
+    def test_transition_table_pins_capacity_unavailable_and_reclaimed_rows(self):
+        table = self.block_containing(
+            "Claim parks `waiting-capacity` keeping token, generation, and launch record",
+            "a finished-workflow reclaim is refused with the `explicit-abort` preserve-and-stop envelope before any lease accounting",
+        )
+        self.assertIn("bounded-resume (`attempts_remaining: 3`)", table)
+        self.assertIn(
+            "Resume the same claim with `continue` (same token and generation, no second claim row)",
+            table,
+        )
+        self.assertIn("the machine `workflow_state` outside the closed non-active set", table)
+        self.assertIn(
+            "a workflow in the closed non-active set returns `explicit-abort` (preserve-and-stop; the evidence names the finished state)",
+            table,
+        )
+
+    def test_terminal_predicate_names_three_markers_whitespace_and_headings(self):
+        block = self.block_containing(
+            "empty or whitespace-only plan is refused as empty",
+            "task headings is refused naming the missing task sections",
+        )
+        self.assertIn("one of `- [ ]`, `* [ ]`, or `+ [ ]`", block)
+
+    def test_readiness_condition4_names_three_markers(self):
+        block = self.block_containing("Plan-manifest agreement")
+        self.assertIn("one of `- [ ]`, `* [ ]`, or `+ [ ]`", block)
+
+    def test_readiness_fence_paragraph_names_fence_rules(self):
+        block = self.block_containing("CommonMark-grade fence map")
+        self.assertIn("backtick and tilde fences", block)
+        self.assertIn("zero-to-three-space indent tolerance", block)
+        self.assertIn("keep parity until the matching closer", block)
+        self.assertIn("unclosed fence stays open to end of file", block)
+
+    def test_stale_scanner_reference_is_gone(self):
+        self.assertNotIn("2026-09-17-fence-robust-checkbox-scanning", self.raw)
+
+    def test_waiting_capacity_paragraph_carries_retry_resume_and_group_shape(self):
+        block = self.block_containing("parks a single-task claim in the `waiting-capacity` state")
+        self.assertIn("`mode: bounded-resume`, `max_attempts: 3`, `attempts_remaining: 3`", block)
+        self.assertIn("the receipt that arrives with the budget exhausted transitions the claim to `blocked`", block)
+        self.assertIn("recovery is the in-place resume", block)
+        self.assertIn("A capacity receipt on a live batch-group member never parks", block)
+
+    def test_reason_code_list_contains_capacity_unavailable(self):
+        block = self.block_containing("The standard reason codes are")
+        self.assertIn("`capacity-unavailable`", block)
+
+    def test_diagnose_subsection_names_enum_and_read_only_rule(self):
+        enum_block = self.block_containing("The classification enum is fixed")
+        for code in (
+            "timeout",
+            "capacity-unavailable",
+            "worker-failure",
+            "stale-evidence",
+            "inclusion",
+            "terminal-gate",
+            "user-interruption",
+            "none",
+        ):
+            self.assertIn(f"`{code}`", enum_block)
+        read_only = self.block_containing("The `diagnose` operation is the read-only first-failed-transition report")
+        self.assertIn("returns without any write path", read_only)
+
+    def test_deadline_paragraph_names_both_baselines(self):
+        block = self.block_containing("cross-runtime deadline baseline")
+        self.assertIn("`launch_deadline_seconds = 900` and `wait_deadline_seconds = 1500`", block)
+
+    def test_reclaim_finished_workflow_fence_is_documented(self):
+        block = self.block_containing("workflow was explicitly aborted before")
+        self.assertIn("a machine `workflow_state` of `aborted`, `complete`, or `terminal`", block)
+        self.assertIn("the envelope reason code is `explicit-abort` for all three closed states", block)
+        self.assertIn("the evidence names the finished state", block)
+        self.assertIn("\"workflow_state is '<state>'; the workflow already finished\" under `complete` and `terminal`", block)
 
 
 if __name__ == "__main__":

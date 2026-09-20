@@ -3,6 +3,7 @@
 Captured: 2026-09-19 (source: cross-session friction audit - 7 days of app logs, 117k tool_usage rows, 5.4k sessions mined)
 Status: open
 Priority: low
+Disposition: 2026-09-19 (annotated 2026-09-21 via docs/plans/2026-09-19-scheduler-ops-lanes-durability.md Task 7): the FK-ordering fix or the write's removal is ZCode application code, an external prerequisite release-gated under that plan's Ship when; the repo keeps the item open as the signal's record.
 
 Workflow: backlog
 

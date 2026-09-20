@@ -87,6 +87,29 @@ class WorktreeCloseoutTest(unittest.TestCase):
                 hashlib.sha256(b"scratch pad\n").hexdigest(),
             )
 
+    def test_capture_warns_and_skips_dangling_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "docs/reviews/real.md", b"real review notes\n")
+            os.symlink("missing-target.md", root / "docs/reviews/dangling.md")
+            baseline = root / "baseline.json"
+            code, _stdout, stderr = _run_cli("capture", "--out", str(baseline), cwd=root)
+            self.assertEqual(code, 0, stderr)
+            self.assertIn("WARN: skipping dangling symlink:", stderr)
+            self.assertIn("dangling.md", stderr)
+            data = json.loads(baseline.read_text(encoding="utf-8"))
+            self.assertIn("docs/reviews/real.md", data["files"])
+            self.assertEqual(
+                data["files"]["docs/reviews/real.md"],
+                hashlib.sha256(b"real review notes\n").hexdigest(),
+            )
+            skipped = {entry["path"]: entry for entry in data["skipped"]}
+            self.assertIn("docs/reviews/dangling.md", skipped)
+            self.assertIn(
+                "dangling symlink",
+                skipped["docs/reviews/dangling.md"]["reason"],
+            )
+
     def test_migrate_copies_new_and_modified_with_checksum_verify(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -186,6 +209,176 @@ class WorktreeCloseoutTest(unittest.TestCase):
             self.assertEqual(os.readlink(dst_link), "real.md")
             self.assertTrue((target / "docs/reviews/real.md").is_file())
 
+    def test_migrate_skips_dangling_symlink_in_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            _write(source / "docs/reviews/kept.md", b"kept v1\n")
+            baseline = root / "baseline.json"
+            _capture_baseline(source, baseline)
+            _write(source / "docs/reviews/kept.md", b"kept v2\n")
+            _write(source / "docs/reviews/fresh.md", b"fresh file\n")
+            os.symlink("missing-target.md", source / "docs/reviews/dangling.md")
+            manifest = root / "manifest.json"
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = _migrate(source, target, baseline, manifest)
+            self.assertEqual(code, 0)
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            migrated = {entry["source"] for entry in data["migrated"]}
+            self.assertEqual(
+                migrated,
+                {"docs/reviews/kept.md", "docs/reviews/fresh.md"},
+                "dangling symlink was migrated instead of skipped",
+            )
+            skipped = {entry["source"]: entry for entry in data["skipped"]}
+            self.assertIn("docs/reviews/dangling.md", skipped)
+            self.assertIn(
+                "dangling symlink",
+                skipped["docs/reviews/dangling.md"]["reason"],
+            )
+            err = stderr.getvalue()
+            self.assertNotIn("Traceback", err)
+            self.assertIn("WARN: skipping dangling symlink:", err)
+            self.assertIn("dangling.md", err)
+            self.assertFalse((target / "docs/reviews/dangling.md").exists())
+            self.assertFalse((target / "docs/reviews/dangling.md").is_symlink())
+
+    def test_unreadable_regular_file_still_fails_the_run(self):
+        # Regression guard for the containment scope: the skip-and-warn must be
+        # scoped to exactly the dangling-symlink shape (path is a symlink whose
+        # target is missing). A PermissionError on a regular file is an OSError
+        # of a different shape and must propagate loudly, never be recorded as
+        # a dangling-symlink skip. Seam patching (never chmod), in-process via
+        # MODULE.main, per r2 F5.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            _write(source / "docs/reviews/readable.md", b"readable v1\n")
+            baseline = root / "baseline.json"
+            _capture_baseline(source, baseline)
+            _write(source / "docs/reviews/readable.md", b"readable v2\n")
+            _write(source / "docs/reviews/unreadable.md", b"secret\n")
+            manifest = root / "manifest.json"
+            original_sha = MODULE._sha256
+
+            def failing_sha(path):
+                if Path(path).name == "unreadable.md":
+                    raise PermissionError(f"simulated unreadable regular file: {path}")
+                return original_sha(path)
+
+            MODULE._sha256 = failing_sha
+            try:
+                # capture: the OSError is not a dangling symlink; it propagates.
+                previous_cwd = os.getcwd()
+                os.chdir(source)
+                try:
+                    stderr = io.StringIO()
+                    with contextlib.redirect_stderr(stderr):
+                        with self.assertRaises(PermissionError):
+                            MODULE.main(
+                                [
+                                    "capture",
+                                    "--out",
+                                    str(root / "baseline2.json"),
+                                    "--dirs",
+                                    "docs/reviews",
+                                ]
+                            )
+                finally:
+                    os.chdir(previous_cwd)
+                self.assertFalse(
+                    (root / "baseline2.json").exists(),
+                    "baseline was written despite the hashing failure",
+                )
+                # migrate: same containment scope; the error must propagate.
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    with self.assertRaises(PermissionError):
+                        _migrate(source, target, baseline, manifest)
+            finally:
+                MODULE._sha256 = original_sha
+            # Unconditional (r1 F12): manifest durability writes the manifest
+            # in a finally block even when the walk aborts, so the file must
+            # exist here; the guard this replaces could hide a durability
+            # regression by skipping the assertion.
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertNotIn(
+                "unreadable.md",
+                json.dumps(data.get("skipped", [])),
+                "unreadable regular file was misrecorded as a dangling-symlink skip",
+            )
+
+    def test_migrate_manifest_survives_midloop_exception(self):
+        # The manifest must be durable: when the copy loop aborts after some
+        # files were already copied and verified, the manifest must already
+        # carry those migrated entries plus an incomplete marker naming the
+        # failure, so no copied file is orphaned from the audit record. The
+        # copy seam is tampered inside a child interpreter so the failure
+        # surfaces as a real CLI non-zero exit (uncaught exception traceback).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            _write(source / "docs/reviews/first.md", b"first v1\n")
+            _write(source / "docs/reviews/second.md", b"second v1\n")
+            baseline = root / "baseline.json"
+            _capture_baseline(source, baseline)
+            _write(source / "docs/reviews/first.md", b"first v2\n")
+            _write(source / "docs/reviews/second.md", b"second v2\n")
+            manifest = root / "manifest.json"
+            driver = root / "copy_crash_driver.py"
+            driver.write_text(
+                "import importlib.util\n"
+                "import pathlib\n"
+                "import sys\n"
+                "spec = importlib.util.spec_from_file_location('wcm_driver', sys.argv[1])\n"
+                "module = importlib.util.module_from_spec(spec)\n"
+                "sys.modules[spec.name] = module\n"
+                "spec.loader.exec_module(module)\n"
+                "original_copy = module._copy_file\n"
+                "def crashing_copy(src, dst):\n"
+                "    if pathlib.Path(src).name == 'second.md':\n"
+                "        raise RuntimeError('simulated copy crash')\n"
+                "    original_copy(src, dst)\n"
+                "module._copy_file = crashing_copy\n"
+                "sys.exit(module.main(sys.argv[2:]))\n",
+                encoding="utf-8",
+            )
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(driver),
+                    str(SCRIPT_PATH),
+                    "migrate",
+                    "--baseline",
+                    str(baseline),
+                    "--source",
+                    str(source),
+                    "--target",
+                    str(target),
+                    "--manifest",
+                    str(manifest),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("RuntimeError", proc.stderr)
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            migrated = {entry["source"] for entry in data["migrated"]}
+            self.assertEqual(migrated, {"docs/reviews/first.md"})
+            first_entry = next(
+                entry for entry in data["migrated"] if entry["source"] == "docs/reviews/first.md"
+            )
+            self.assertTrue(first_entry["verified"])
+            self.assertEqual((target / "docs/reviews/first.md").read_bytes(), b"first v2\n")
+            incomplete = data["incomplete"]
+            self.assertTrue(incomplete, "no incomplete marker after a mid-loop abort")
+            self.assertIn("RuntimeError", incomplete[0]["error"])
+
     def test_migrate_missing_baseline_fails_loud(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -232,30 +425,49 @@ class WorktreeCloseoutTest(unittest.TestCase):
             root = Path(tmp)
             source = root / "source"
             target = root / "target"
+            _write(source / "docs/reviews/untouched.md", b"untouched\n")
             _write(source / "docs/reviews/victim.md", b"original bytes\n")
             baseline = root / "baseline.json"
             _capture_baseline(source, baseline)
             _write(source / "docs/reviews/victim.md", b"modified bytes\n")
             manifest = root / "manifest.json"
-            original_copy = MODULE._copy_file
+            original_verify = MODULE._verify_copy
 
-            def tampered_copy(src, dst):
-                dst.write_bytes(b"tampered bytes\n")
+            def refused_verify(src, dst):
+                return False
 
-            MODULE._copy_file = tampered_copy
+            MODULE._verify_copy = refused_verify
             try:
                 stderr = io.StringIO()
                 with contextlib.redirect_stderr(stderr):
                     code = _migrate(source, target, baseline, manifest)
             finally:
-                MODULE._copy_file = original_copy
+                MODULE._verify_copy = original_verify
             self.assertNotEqual(code, 0)
             self.assertIn("verification failed", stderr.getvalue())
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            failed = {entry["source"]: entry for entry in data["failed"]}
+            self.assertIn("docs/reviews/victim.md", failed)
+            self.assertFalse(failed["docs/reviews/victim.md"]["verified"])
+            self.assertIn(
+                "checksum mismatch after copy",
+                failed["docs/reviews/victim.md"]["error"],
+            )
+            self.assertEqual(
+                data["migrated"],
+                [],
+                "a verify-refused file was recorded as migrated",
+            )
+            # Copy-never-move, asserted against real copy semantics: the copy
+            # path is unpatched, so the refused copy still landed on the
+            # target while every source file remains in place.
             self.assertEqual(
                 (source / "docs/reviews/victim.md").read_bytes(),
                 b"modified bytes\n",
                 "source file was moved instead of copied",
             )
+            self.assertTrue((source / "docs/reviews/untouched.md").is_file())
+            self.assertEqual((target / "docs/reviews/victim.md").read_bytes(), b"modified bytes\n")
 
     def test_migrate_noop_when_source_equals_target(self):
         with tempfile.TemporaryDirectory() as tmp:

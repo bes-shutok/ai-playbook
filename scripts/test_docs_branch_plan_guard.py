@@ -3,14 +3,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT_PATH = Path(__file__).resolve().parent / "docs_branch_plan_guard.py"
 
@@ -117,7 +120,6 @@ class CertifiedPlanGuardTest(unittest.TestCase):
         return _run(
             "check-restored",
             "--reviews-dir", str(self.reviews),
-            "--plans-dir", str(PLANS_REL),
             *files,
         )
 
@@ -293,6 +295,33 @@ class CertifiedPlanGuardTest(unittest.TestCase):
         self.assertIn("WARN:", out)
         self.assertIn(str(restored), out)
 
+    def test_check_restored_rejects_plans_dir_flag(self) -> None:
+        # The check-restored subparser never read --plans-dir; accepting it
+        # let callers pass a dead argument. The flag must now be rejected
+        # (SystemExit from argparse) while the guard subcommand keeps its.
+        restored = self._write_plan(self.branch, CERTIFIED_TEXT)
+        with contextlib.redirect_stderr(io.StringIO()):  # silence argparse usage
+            with self.assertRaises(SystemExit):
+                GUARD_MODULE.build_parser().parse_args(
+                    [
+                        "check-restored",
+                        "--plans-dir", str(PLANS_REL),
+                        "--reviews-dir", str(self.reviews),
+                        str(restored),
+                    ]
+                )
+        # The guard subcommand still accepts --plans-dir (unchanged posture).
+        parsed = GUARD_MODULE.build_parser().parse_args(
+            [
+                "guard",
+                "--incoming-root", str(self.incoming),
+                "--branch-root", str(self.branch),
+                "--plans-dir", str(PLANS_REL),
+                "--reviews-dir", str(self.reviews),
+            ]
+        )
+        self.assertEqual(parsed.plans_dir, str(PLANS_REL))
+
     def test_check_restored_silent_on_match_or_missing_sidecar(self) -> None:
         restored = self._write_plan(self.branch, CERTIFIED_TEXT)
         sidecar = self._write_sidecar(
@@ -310,6 +339,65 @@ class CertifiedPlanGuardTest(unittest.TestCase):
         code, out, _err = self._run_check_restored(str(restored))
         self.assertEqual(code, 0)
         self.assertNotIn("WARN:", out)
+
+    # ------------------------------------------------------------------
+    # OSError containment: unreadable plan files skip-and-warn
+    # ------------------------------------------------------------------
+
+    def test_guard_warns_and_skips_unreadable_plan(self) -> None:
+        # A plan file whose bytes cannot be read must degrade to a named
+        # skip-and-warn on stderr, never an accidental fail-closed traceback
+        # (guard) or crash (check-restored). The seam is sha256_file itself,
+        # patched to raise OSError; the guard arm keeps its refusal posture
+        # for readable downgrades (covered by the other tests).
+        self._write_plan(self.branch, CERTIFIED_TEXT)
+        self._write_plan(self.incoming, OLDER_TEXT)
+        self._write_sidecar(
+            f"2026-09-19-plan-review-{FEATURE}-r1.stats.json",
+            slug=FEATURE,
+            round_="r1",
+            digest=self.cert_digest,
+        )
+        branch_plan = self.branch / PLANS_REL / PLAN_NAME
+
+        def _raise(path: Path) -> str:
+            raise OSError(f"unreadable for test: {path}")
+
+        def _invoke(*argv: str) -> tuple[int, str, str]:
+            out, err = io.StringIO(), io.StringIO()
+            with (
+                mock.patch.object(GUARD_MODULE, "sha256_file", _raise),
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(err),
+            ):
+                code = GUARD_MODULE.main(list(argv))
+            return code, out.getvalue(), err.getvalue()
+
+        # guard: exit 0, warn line naming the unreadable path, no refusal.
+        code, out, err = _invoke(
+            "guard",
+            "--incoming-root", str(self.incoming),
+            "--branch-root", str(self.branch),
+            "--plans-dir", str(PLANS_REL),
+            "--reviews-dir", str(self.reviews),
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("REFUSE:", out)
+        self.assertIn("unreadable plan file", err)
+        self.assertIn(str(branch_plan), err)
+        self.assertNotIn("Traceback", err)
+
+        # check-restored: same containment, warn-and-continue with exit 0.
+        code, out, err = _invoke(
+            "check-restored",
+            "--reviews-dir", str(self.reviews),
+            str(branch_plan),
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("REFUSE:", out)
+        self.assertIn("unreadable plan file", err)
+        self.assertIn(str(branch_plan), err)
+        self.assertNotIn("Traceback", err)
 
 
 if __name__ == "__main__":

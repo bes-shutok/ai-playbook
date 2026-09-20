@@ -99,6 +99,7 @@ Task: ### Task <TASK_NUM>: <TASK_TITLE>
 6. Do NOT commit; the orchestrator launches `done` after verification.
 7. Do NOT edit the plan file; the orchestrator marks checkboxes.
 8. **Update execution log** at `<IMPLEMENT_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). Include commands run, decisions, errors, and full return payload.
+9. **No silent gate-satisfying rewrites of human-authored prose:** when a gate or validator fails on prose the user authored, do not rewrite the passage wholesale and do not silently substitute its wording, punctuation, or structure. Make only the narrowly-scoped edit the gate actually requires, only inside the lines this run's own change touches (the hunks this run edited, not merely the same file), and report the edit in the return or commit summary; when the failures reach untouched user prose, or no minimal edit exists, stop and surface the conflict for the user to adjudicate (returned-for-ask shape: name the gate, the failing lines, and the options). Whole-file rewording of user-authored text is out of scope for any worker, always. Restoring the user's original text outranks a green gate. Text you authored this run is yours to fix freely; this pin never applies to it and never excuses stopping for routine fixable failures.
 
 ## Return format
 
@@ -169,6 +170,7 @@ Implement log path: <TASK_2_IMPLEMENT_LOG_PATH>
 5. Before the session advances past a member, write that member's execution log into its own task-<N>-implement.log.md at that member's implement log path (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md): commands run, decisions, errors, that task's RED/GREEN evidence, and the member checkpoint below.
 6. Return the machine-readable member checkpoint BEFORE the session advances; only after the checkpoint, resume the same session for the next member using the fresh member policy token and moving baseline the orchestrator supplies.
 7. Fix ALL test failures of the active member before checkpointing; a member you cannot complete returns `blocked` for that member and stops the batch advance.
+8. **No silent gate-satisfying rewrites of human-authored prose:** when a gate or validator fails on prose the user authored, do not rewrite the passage wholesale and do not silently substitute its wording, punctuation, or structure. Make only the narrowly-scoped edit the gate actually requires, only inside the lines this run's own change touches (the hunks this run edited, not merely the same file), and report the edit in the return or commit summary; when the failures reach untouched user prose, or no minimal edit exists, stop and surface the conflict for the user to adjudicate (returned-for-ask shape: name the gate, the failing lines, and the options). Whole-file rewording of user-authored text is out of scope for any worker, always. Restoring the user's original text outranks a green gate. Text you authored this run is yours to fix freely; this pin never applies to it and never excuses stopping for routine fixable failures.
 
 ## Member checkpoint (machine-readable; one per member, before the session advances)
 

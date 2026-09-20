@@ -3,6 +3,7 @@
 Captured: 2026-09-19 (source: cross-session friction audit - 7 days of app logs, 117k tool_usage rows, 5.4k sessions mined)
 Status: open
 Priority: medium
+Disposition: 2026-09-19 (annotated 2026-09-21 via docs/plans/2026-09-19-scheduler-ops-lanes-durability.md Task 7): the persist-before-teardown ordering, hydrate retry, and resume-guard fixes are ZCode application code, external prerequisites release-gated under that plan's Ship when; the repo-side watch is the maintenance runtime overlay's store-level darkness-triage witness (agents/skills/maintenance/zcode.md), so the item stays open until the external gates land.
 
 Workflow: backlog
 

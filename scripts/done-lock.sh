@@ -1,13 +1,47 @@
 #!/usr/bin/env bash
-# Per-git-repo exclusive lock for the done workflow (learn → docs-branch → commit).
+# Per-git-repo exclusive locks: the done workflow (learn → docs-branch → commit)
+# and merge/landing critical sections. One lock lifecycle, two command families
+# (done-* and merge-*); the mode selects the root env var, the session-file
+# name, and the export names, so a holder may hold both locks at once.
 # Agent-agnostic: invoked from done/SKILL.md Step 0 and Step 6.
 set -euo pipefail
 
-LOCK_ROOT="${DONE_LOCK_ROOT:-${HOME}/.ai-playbook/locks/done}"
-POLL_SECS="${DONE_LOCK_POLL_SECS:-30}"
-STALE_SECS="${DONE_LOCK_STALE_SECS:-1800}"
-INCOMPLETE_SECS="${DONE_LOCK_INCOMPLETE_SECS:-5}"
-DEAD_HOLDER_GRACE_SECS="${DONE_LOCK_DEAD_HOLDER_GRACE_SECS:-5}"
+# The mode derives from the command prefix. Everything downstream reads only
+# the resolved names below; it never touches DONE_LOCK_* / MERGE_LOCK_* again.
+LOCK_MODE="done"
+case "${1:-}" in
+  merge-*) LOCK_MODE="merge" ;;
+esac
+
+if [[ "$LOCK_MODE" == "merge" ]]; then
+  PROG="merge-lock"
+  WORKFLOW_NOUN="landing workflow"
+  SESSION_NAME="merge-lock.session"
+  LOCK_ROOT="${MERGE_LOCK_ROOT:-${HOME}/.ai-playbook/locks/merge}"
+  POLL_SECS="${MERGE_LOCK_POLL_SECS:-30}"
+  STALE_SECS="${MERGE_LOCK_STALE_SECS:-600}"
+  INCOMPLETE_SECS="${MERGE_LOCK_INCOMPLETE_SECS:-5}"
+  DEAD_HOLDER_GRACE_SECS="${MERGE_LOCK_DEAD_HOLDER_GRACE_SECS:-5}"
+  LOCK_HOLDER_PID="${MERGE_LOCK_HOLDER_PID:-}"
+  LOCK_DIR_ENV="${MERGE_LOCK_DIR:-}"
+  LOCK_TOKEN_ENV="${MERGE_LOCK_TOKEN:-}"
+  ENV_PREFIX="MERGE_LOCK"
+else
+  PROG="done-lock"
+  WORKFLOW_NOUN="done workflow"
+  SESSION_NAME="done-lock.session"
+  LOCK_ROOT="${DONE_LOCK_ROOT:-${HOME}/.ai-playbook/locks/done}"
+  POLL_SECS="${DONE_LOCK_POLL_SECS:-30}"
+  STALE_SECS="${DONE_LOCK_STALE_SECS:-1800}"
+  INCOMPLETE_SECS="${DONE_LOCK_INCOMPLETE_SECS:-5}"
+  DEAD_HOLDER_GRACE_SECS="${DONE_LOCK_DEAD_HOLDER_GRACE_SECS:-5}"
+  LOCK_HOLDER_PID="${DONE_LOCK_HOLDER_PID:-}"
+  LOCK_DIR_ENV="${DONE_LOCK_DIR:-}"
+  LOCK_TOKEN_ENV="${DONE_LOCK_TOKEN:-}"
+  ENV_PREFIX="DONE_LOCK"
+fi
+DIR_VAR="${ENV_PREFIX}_DIR"
+TOKEN_VAR="${ENV_PREFIX}_TOKEN"
 META_FILE="meta.env"
 
 usage() {
@@ -26,6 +60,22 @@ Commands:
                              (operator escape; auto-acquire still protects live or ambiguous holders).
   selftest                   Run built-in race/fence fixtures (exit 0 on pass).
 
+Merge landing lock (merge-* commands; same semantics and exit codes as the
+done commands above, over a separate namespace: default root
+~/.ai-playbook/locks/merge, session file .ai-playbook/merge-lock.session in
+the checkout that holds the git common dir (the primary checkout), MERGE_LOCK_DIR / MERGE_LOCK_TOKEN exports; a holder may hold both the done
+lock and the merge lock at once). Merge locks are keyed per-REPOSITORY: any
+linked worktree of one repo acquires and observes the same lock (the key
+derives from the resolved git common dir); done-mode locks stay keyed
+per-worktree on --show-toplevel.
+  merge-acquire [--label TEXT]
+  merge-wait-acquire [--label TEXT] [--max-wait SECS]
+  merge-release              Token-fenced release from MERGE_LOCK_* env.
+  merge-release-repo         Same as merge-release; requires env (no session load).
+  merge-status               Show merge holder for current repo, or "free".
+  merge-stale-clean          Remove stale/abandoned/incomplete merge lock
+                             (operator escape at MERGE_LOCK_STALE_SECS age).
+
 Environment:
   DONE_LOCK_ROOT             Lock parent directory (default: ~/.ai-playbook/locks/done)
   DONE_LOCK_POLL_SECS        Poll interval for wait-acquire (default: 30)
@@ -41,6 +91,17 @@ Environment:
   DONE_LOCK_DIR / DONE_LOCK_TOKEN
                              Required in env for release / release-repo. Session file is
                              fence/status only; release-repo will not source it.
+  MERGE_LOCK_ROOT            Merge lock parent directory (default: ~/.ai-playbook/locks/merge)
+  MERGE_LOCK_POLL_SECS       Poll interval for merge-wait-acquire (default: 30)
+  MERGE_LOCK_STALE_SECS      Age before merge-stale-clean may remove a fenced lock (default: 600)
+  MERGE_LOCK_DEAD_HOLDER_GRACE_SECS
+                             Minimum age before a verified dead merge-lock holder
+                             may be auto-recovered (default: 5)
+  MERGE_LOCK_INCOMPLETE_SECS Age before a meta-less merge lock_dir is treated as
+                             crash leftover (default: 5)
+  MERGE_LOCK_HOLDER_PID      Merge-mode equivalent of DONE_LOCK_HOLDER_PID.
+  MERGE_LOCK_DIR / MERGE_LOCK_TOKEN
+                             Required in env for merge-release / merge-release-repo.
 
 Exit codes:
   0 success
@@ -51,8 +112,39 @@ EOF
 
 require_git_repo() {
   if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-    echo "done-lock: not inside a git repository" >&2
+    echo "${PROG}: not inside a git repository" >&2
     exit 1
+  fi
+  if [[ "$LOCK_MODE" == "merge" ]]; then
+    # Merge mode keys the lock per-REPOSITORY, not per-worktree: every linked
+    # worktree of one repo shares the git common dir, so the repo identity is
+    # derived from the resolved common dir. Keying choice (documented): hash
+    # the resolved common dir with a trailing /.git stripped, i.e. the primary
+    # checkout root; `repo_root` becomes that shared root, so the session
+    # fence also lands in the primary checkout's .ai-playbook/ where every
+    # worktree of the repo sees it. `git rev-parse --git-common-dir` may be
+    # relative (it is ".git" in the primary checkout); --path-format=absolute
+    # needs git 2.31+, so the value is resolved with cd + pwd -P instead
+    # (bash 3.2 compatible, and pwd -P keeps the same physical path git
+    # itself reports in worktrees). The physicalization is UNCONDITIONAL
+    # (r2 CF1): an absolute common dir can still be a LOGICAL spelling of the
+    # same directory (a symlinked path, e.g. an exported GIT_DIR named via
+    # /tmp on a host where /tmp is a symlink to /private/tmp), and every
+    # spelling of one repo must key the same lock. Done mode keeps
+    # per-worktree keying on --show-toplevel, byte-identical.
+    local common_dir
+    if ! common_dir="$(git rev-parse --git-common-dir 2>/dev/null)"; then
+      echo "${PROG}: not inside a git repository" >&2
+      exit 1
+    fi
+    common_dir="$(cd "$common_dir" 2>/dev/null && pwd -P)" || {
+      echo "${PROG}: cannot resolve the git common dir: ${common_dir}" >&2
+      exit 1
+    }
+    case "$common_dir" in
+      */.git) repo_root="${common_dir%/.git}" ;;
+      *) repo_root="$common_dir" ;;
+    esac
   fi
   repo_id="$(printf '%s' "$repo_root" | shasum -a 256 | cut -c1-16)"
   lock_dir="${LOCK_ROOT}/${repo_id}"
@@ -159,8 +251,8 @@ session_fence_matches_lock() {
   local session_file s_dir s_token
   session_file="$(lock_session_file)"
   [[ -f "$session_file" ]] || return 1
-  s_dir="$(grep -E '^DONE_LOCK_DIR=' "$session_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
-  s_token="$(grep -E '^DONE_LOCK_TOKEN=' "$session_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
+  s_dir="$(grep -E "^${DIR_VAR}=" "$session_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
+  s_token="$(grep -E "^${TOKEN_VAR}=" "$session_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
   [[ -n "$s_dir" && -n "$s_token" ]] || return 1
   load_lock_meta || return 1
   [[ "$s_dir" == "$lock_dir" && "$s_token" == "$lock_meta_token" ]]
@@ -176,8 +268,8 @@ is_stealable_lock() {
 
 resolve_holder_pid() {
   # Prefer explicit long-lived PID; else PPID (eval'ing / waiting shell), never $$.
-  if [[ -n "${DONE_LOCK_HOLDER_PID:-}" ]]; then
-    printf '%s' "$DONE_LOCK_HOLDER_PID"
+  if [[ -n "$LOCK_HOLDER_PID" ]]; then
+    printf '%s' "$LOCK_HOLDER_PID"
   else
     printf '%s' "$PPID"
   fi
@@ -188,7 +280,7 @@ force_remove_lock() {
   local reason="${1:-abandoned}"
   if [[ -d "$lock_dir" ]]; then
     rm -rf "$lock_dir"
-    echo "done-lock: removed ${reason} lock at ${lock_dir}" >&2
+    echo "${PROG}: removed ${reason} lock at ${lock_dir}" >&2
   fi
 }
 
@@ -223,7 +315,7 @@ steal_remove_if_unchanged() {
     return 1
   fi
   rm -rf "$tomb"
-  echo "done-lock: removed ${reason} lock at ${lock_dir}" >&2
+  echo "${PROG}: removed ${reason} lock at ${lock_dir}" >&2
   return 0
 }
 
@@ -234,7 +326,7 @@ write_meta() {
   # A newline or carriage return in the label could forge later identity
   # fields (meta_field reads first match); reject instead of escaping.
   if [[ "$label" == *$'\n'* || "$label" == *$'\r'* ]]; then
-    echo "done-lock: --label must not contain newline or carriage return" >&2
+    echo "${PROG}: --label must not contain newline or carriage return" >&2
     return 1
   fi
   started="$(now_epoch)"
@@ -271,12 +363,12 @@ EOF
 
 print_exports() {
   local token="$1"
-  printf 'export DONE_LOCK_DIR=%q\n' "$lock_dir"
-  printf 'export DONE_LOCK_TOKEN=%q\n' "$token"
+  printf 'export %s=%q\n' "$DIR_VAR" "$lock_dir"
+  printf 'export %s=%q\n' "$TOKEN_VAR" "$token"
 }
 
 lock_session_file() {
-  echo "${repo_root}/.ai-playbook/done-lock.session"
+  echo "${repo_root}/.ai-playbook/${SESSION_NAME}"
 }
 
 clear_lock_session_if_token() {
@@ -287,13 +379,13 @@ clear_lock_session_if_token() {
   session_file="$(lock_session_file)"
   [[ -f "$session_file" ]] || return 0
   [[ -n "$expected_token" ]] || return 0
-  s_token="$(grep -E '^DONE_LOCK_TOKEN=' "$session_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
+  s_token="$(grep -E "^${TOKEN_VAR}=" "$session_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
   [[ "$s_token" == "$expected_token" ]] || return 0
   tomb="${session_file}.clearing.$$.$RANDOM"
   if ! mv "$session_file" "$tomb" 2>/dev/null; then
     return 0
   fi
-  t_token="$(grep -E '^DONE_LOCK_TOKEN=' "$tomb" 2>/dev/null | head -n1 | cut -d= -f2-)"
+  t_token="$(grep -E "^${TOKEN_VAR}=" "$tomb" 2>/dev/null | head -n1 | cut -d= -f2-)"
   if [[ "$t_token" != "$expected_token" ]]; then
     if [[ ! -f "$session_file" ]]; then
       mv "$tomb" "$session_file" 2>/dev/null || rm -f "$tomb"
@@ -313,8 +405,8 @@ write_lock_session() {
   [[ ! -d "$session_file" ]] || return 1
   tmp="${session_file}.tmp.$$.$RANDOM"
   if ! cat >"${tmp}" <<EOF
-DONE_LOCK_DIR=${lock_dir}
-DONE_LOCK_TOKEN=${token}
+${DIR_VAR}=${lock_dir}
+${TOKEN_VAR}=${token}
 EOF
   then
     rm -f "$tmp"
@@ -355,7 +447,7 @@ remove_incomplete_lock_dir() {
     return 1
   fi
   rm -rf "$tomb"
-  echo "done-lock: removed incomplete lock at ${lock_dir}" >&2
+  echo "${PROG}: removed incomplete lock at ${lock_dir}" >&2
   return 0
 }
 
@@ -412,7 +504,7 @@ try_acquire() {
 
 require_label_value() {
   if [[ $# -eq 0 || -z "${1:-}" ]]; then
-    echo "done-lock: --label requires a value" >&2
+    echo "${PROG}: --label requires a value" >&2
     exit 1
   fi
 }
@@ -428,7 +520,7 @@ cmd_acquire() {
         shift
         ;;
       *)
-        echo "done-lock: unknown argument: $1" >&2
+        echo "${PROG}: unknown argument: $1" >&2
         exit 1
         ;;
     esac
@@ -437,7 +529,7 @@ cmd_acquire() {
   if try_acquire "$label"; then
     exit 0
   fi
-  echo "done-lock: held by another done workflow for ${repo_root}" >&2
+  echo "${PROG}: held by another ${WORKFLOW_NOUN} for ${repo_root}" >&2
   cmd_status >&2
   exit 2
 }
@@ -459,7 +551,7 @@ cmd_wait_acquire() {
         shift
         ;;
       *)
-        echo "done-lock: unknown argument: $1" >&2
+        echo "${PROG}: unknown argument: $1" >&2
         exit 1
         ;;
     esac
@@ -471,40 +563,40 @@ cmd_wait_acquire() {
       exit 0
     fi
     if [[ "$(now_epoch)" -ge "$deadline" ]]; then
-      echo "done-lock: timed out after ${max_wait}s waiting for lock on ${repo_root}" >&2
+      echo "${PROG}: timed out after ${max_wait}s waiting for lock on ${repo_root}" >&2
       cmd_status >&2
       exit 2
     fi
-    echo "done-lock: waiting for lock on ${repo_root} (poll ${POLL_SECS}s)..." >&2
+    echo "${PROG}: waiting for lock on ${repo_root} (poll ${POLL_SECS}s)..." >&2
     cmd_status >&2
     sleep "$POLL_SECS"
   done
 }
 
 cmd_release() {
-  local dir="${DONE_LOCK_DIR:-}"
-  local token="${DONE_LOCK_TOKEN:-}"
+  local dir="${LOCK_DIR_ENV:-}"
+  local token="${LOCK_TOKEN_ENV:-}"
   # Same confused-deputy guard as release-repo: never adopt the shared session file.
   if [[ -z "$dir" || -z "$token" ]]; then
-    echo "done-lock: release requires DONE_LOCK_DIR and DONE_LOCK_TOKEN in env" >&2
-    echo "done-lock: re-export them from your acquire Step 0 output; refusing shared session load" >&2
+    echo "${PROG}: release requires ${DIR_VAR} and ${TOKEN_VAR} in env" >&2
+    echo "${PROG}: re-export them from your acquire Step 0 output; refusing shared session load" >&2
     exit 1
   fi
   local meta="${dir}/${META_FILE}"
   if [[ ! -d "$dir" ]]; then
-    echo "done-lock: lock already released (${dir})" >&2
+    echo "${PROG}: lock already released (${dir})" >&2
     require_git_repo 2>/dev/null && clear_lock_session_if_token "$token" || true
     exit 0
   fi
   if [[ ! -f "$meta" ]]; then
-    echo "done-lock: lock directory missing metadata; refusing unsafe release" >&2
+    echo "${PROG}: lock directory missing metadata; refusing unsafe release" >&2
     exit 1
   fi
   local meta_token meta_epoch released_for
   meta_token="$(meta_field "$meta" lock_token)"
   meta_epoch="$(meta_field "$meta" started_epoch)"
   if [[ "$token" != "$meta_token" ]]; then
-    echo "done-lock: token mismatch; not releasing ${dir}" >&2
+    echo "${PROG}: token mismatch; not releasing ${dir}" >&2
     exit 1
   fi
   released_for="$(meta_field "$meta" repo_root)"
@@ -512,24 +604,24 @@ cmd_release() {
   # CAS remove: refuse if another waiter replaced the lock after our token check.
   lock_dir="$dir"
   if ! steal_remove_if_unchanged "$meta_token" "$meta_epoch" "released"; then
-    echo "done-lock: lock changed under us; not releasing ${dir}" >&2
+    echo "${PROG}: lock changed under us; not releasing ${dir}" >&2
     exit 1
   fi
   require_git_repo 2>/dev/null && clear_lock_session_if_token "$token" || true
-  echo "done-lock: released lock for ${released_for}"
+  echo "${PROG}: released lock for ${released_for}"
 }
 
 cmd_release_repo() {
   require_git_repo
   # Confused-deputy guard: do not adopt the shared session file when env is empty.
   # After stale-clean + peer acquire, session names the new holder; sourcing it would
-  # let an overthrown chat CAS-release the live lock. Callers must reuse DONE_LOCK_*
-  # from their acquire exports (same shell or re-exported from Step 0 output).
-  if [[ -z "${DONE_LOCK_DIR:-}" || -z "${DONE_LOCK_TOKEN:-}" ]]; then
-    echo "done-lock: release-repo requires DONE_LOCK_DIR and DONE_LOCK_TOKEN in env" >&2
-    echo "done-lock: re-export them from your acquire Step 0 output; refusing shared session load" >&2
+  # let an overthrown chat CAS-release the live lock. Callers must reuse the
+  # ${ENV_PREFIX}_* exports from their acquire output (same shell or re-exported).
+  if [[ -z "$LOCK_DIR_ENV" || -z "$LOCK_TOKEN_ENV" ]]; then
+    echo "${PROG}: release-repo requires ${DIR_VAR} and ${TOKEN_VAR} in env" >&2
+    echo "${PROG}: re-export them from your acquire Step 0 output; refusing shared session load" >&2
     if [[ -f "$(lock_session_file)" ]]; then
-      echo "done-lock: hint: session file exists for status/fence only; not used for release-repo" >&2
+      echo "${PROG}: hint: session file exists for status/fence only; not used for release-repo" >&2
     fi
     exit 1
   fi
@@ -539,18 +631,18 @@ cmd_release_repo() {
 cmd_status() {
   require_git_repo
   if [[ ! -d "$lock_dir" ]]; then
-    echo "done-lock: free (${repo_root})"
+    echo "${PROG}: free (${repo_root})"
     return 0
   fi
   local meta="${lock_dir}/${META_FILE}"
   if [[ ! -f "$meta" ]]; then
-    echo "done-lock: held (${lock_dir}); metadata missing"
+    echo "${PROG}: held (${lock_dir}); metadata missing"
     return 0
   fi
   load_lock_meta
   local age
   age="$(lock_age_secs)"
-  echo "done-lock: held (${repo_root})"
+  echo "${PROG}: held (${repo_root})"
   echo "  lock_dir: ${lock_dir}"
   echo "  label: ${lock_meta_label:-}"
   echo "  started_at: ${lock_meta_started_at:-unknown}"
@@ -592,11 +684,11 @@ cmd_stale_clean() {
   require_git_repo
   if [[ -d "$lock_dir" ]] && [[ ! -f "${lock_dir}/${META_FILE}" ]]; then
     if ! remove_incomplete_lock_dir; then
-      echo "done-lock: incomplete lock is too new; refusing unsafe cleanup" >&2
+      echo "${PROG}: incomplete lock is too new; refusing unsafe cleanup" >&2
       exit 2
     fi
     clear_lock_session_if_token "${lock_meta_token:-}" || true
-    echo "done-lock: free (${repo_root})"
+    echo "${PROG}: free (${repo_root})"
     return 0
   fi
   # Operator escape: allow removing a fenced lock only when it is also stale.
@@ -616,24 +708,33 @@ cmd_stale_clean() {
     expected_epoch="${lock_meta_started_epoch}"
     if [[ "$allow_fenced_stale" -eq 1 ]]; then
       reason="stale-fenced"
-    elif [[ "$allow_operator_stale" -eq 1 && "$(holder_state)" != "dead" ]]; then
-      reason="operator-stale"
+    elif [[ "$allow_operator_stale" -eq 1 ]]; then
+      local operator_holder_state
+      operator_holder_state="$(holder_state)"
+      if [[ "$operator_holder_state" != "dead" ]]; then
+        reason="operator-stale"
+        # Merge mode only: warn before evicting a lock whose holder process
+        # is still alive (done-mode selftest output stays byte-identical).
+        if [[ "$LOCK_MODE" == "merge" ]]; then
+          echo "${PROG}: WARNING: holder_state=${operator_holder_state}; holder process alive; evicting anyway" >&2
+        fi
+      fi
     elif is_dead_holder_lock; then
       reason="abandoned"
     fi
     if ! steal_remove_if_unchanged "$expected_token" "$expected_epoch" "$reason"; then
-      echo "done-lock: lock changed under us; still active (${repo_root})" >&2
+      echo "${PROG}: lock changed under us; still active (${repo_root})" >&2
       cmd_status
       exit 2
     fi
     clear_lock_session_if_token "$expected_token" || true
-    echo "done-lock: free (${repo_root})"
+    echo "${PROG}: free (${repo_root})"
   elif [[ -d "$lock_dir" ]]; then
-    echo "done-lock: still active (${repo_root})"
+    echo "${PROG}: still active (${repo_root})"
     cmd_status
     exit 2
   else
-    echo "done-lock: free (${repo_root})"
+    echo "${PROG}: free (${repo_root})"
   fi
 }
 
@@ -660,6 +761,19 @@ cmd_selftest() {
       DONE_LOCK_HOLDER_PID="${DONE_LOCK_HOLDER_PID-}" \
       DONE_LOCK_DIR="${DONE_LOCK_DIR-}" \
       DONE_LOCK_TOKEN="${DONE_LOCK_TOKEN-}" \
+      bash "$script_path" "$@"
+  }
+
+  local mlock_root="${tmp}/merge-locks"
+  mkdir -p "$mlock_root"
+
+  mrun() {
+    MERGE_LOCK_ROOT="$mlock_root" \
+      MERGE_LOCK_STALE_SECS="${MERGE_LOCK_STALE_SECS:-600}" \
+      MERGE_LOCK_DEAD_HOLDER_GRACE_SECS="${MERGE_LOCK_DEAD_HOLDER_GRACE_SECS:-5}" \
+      MERGE_LOCK_HOLDER_PID="${MERGE_LOCK_HOLDER_PID-}" \
+      MERGE_LOCK_DIR="${MERGE_LOCK_DIR-}" \
+      MERGE_LOCK_TOKEN="${MERGE_LOCK_TOKEN-}" \
       bash "$script_path" "$@"
   }
 
@@ -1052,12 +1166,323 @@ cmd_selftest() {
     echo "selftest OK: one-shot handoff"
   fi
 
+  # ---- Merge landing lock family (merge-* commands) ----
+
+  # M1) merge_acquire_creates_lock_and_exports: a fresh merge-acquire exits 0,
+  # keys a lock dir under the merge root by the repo hash, writes the
+  # .ai-playbook/merge-lock.session fence in the repo, and prints the
+  # MERGE_LOCK_DIR / MERGE_LOCK_TOKEN exports on stdout.
+  if ! (
+    cd "$root"
+    merge_out="$(mrun merge-acquire --label merge-exports)"
+    if [[ "$merge_out" != *"export MERGE_LOCK_DIR="* || "$merge_out" != *"export MERGE_LOCK_TOKEN="* ]]; then
+      echo "selftest FAIL: merge-acquire printed no MERGE_LOCK_DIR/MERGE_LOCK_TOKEN exports" >&2
+      exit 1
+    fi
+    merge_repo_id="$(printf '%s' "$(git rev-parse --show-toplevel)" | shasum -a 256 | cut -c1-16)"
+    [[ -d "${mlock_root}/${merge_repo_id}" ]] || { echo "selftest FAIL: merge lock dir not under merge root keyed by repo hash" >&2; exit 1; }
+    [[ -f .ai-playbook/merge-lock.session ]] || { echo "selftest FAIL: .ai-playbook/merge-lock.session missing" >&2; exit 1; }
+    eval "$merge_out"
+    mrun merge-release-repo >/dev/null
+    [[ ! -d "${mlock_root}/${merge_repo_id}" ]] || { echo "selftest FAIL: merge-release-repo did not remove the merge lock dir" >&2; exit 1; }
+  ); then
+    echo "selftest FAIL: merge_acquire_creates_lock_and_exports" >&2
+    fail=1
+  else
+    echo "selftest OK: merge-acquire creates lock, fence, and exports"
+  fi
+
+  # M2) merge_second_acquire_held: a second merge-acquire against a lock held
+  # by another live holder exits 2 and leaves the first holder's lock intact.
+  if ! (
+    cd "$root"
+    sleep 120 &
+    merge_holder=$!
+    trap 'kill "$merge_holder" 2>/dev/null || true' EXIT
+    eval "$(MERGE_LOCK_HOLDER_PID="$merge_holder" mrun merge-acquire --label merge-first-holder)"
+    [[ -n "${MERGE_LOCK_DIR:-}" && -n "${MERGE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: first merge-acquire produced no exports" >&2; exit 1; }
+    first_dir="$MERGE_LOCK_DIR"
+    first_token="$MERGE_LOCK_TOKEN"
+    second_rc=0
+    mrun merge-acquire --label merge-second-holder 2>/dev/null || second_rc=$?
+    if [[ "$second_rc" -ne 2 ]]; then
+      echo "selftest FAIL: second merge-acquire rc=${second_rc}, want 2" >&2
+      exit 1
+    fi
+    [[ -d "$first_dir" ]] || { echo "selftest FAIL: first holder merge lock removed" >&2; exit 1; }
+    first_meta_token="$(grep -E '^lock_token=' "${first_dir}/meta.env" | head -n1 | cut -d= -f2-)"
+    [[ "$first_meta_token" == "$first_token" ]] || { echo "selftest FAIL: first holder merge token changed" >&2; exit 1; }
+    [[ -f .ai-playbook/merge-lock.session ]] || { echo "selftest FAIL: first holder merge fence cleared" >&2; exit 1; }
+    # Assertions done; release so later merge fixtures start from a free repo.
+    mrun merge-release-repo >/dev/null
+  ); then
+    echo "selftest FAIL: merge_second_acquire_held" >&2
+    fail=1
+  else
+    echo "selftest OK: second merge-acquire blocked; first holder intact"
+  fi
+
+  # M3) merge_release_token_fenced: a wrong token refuses and the lock
+  # survives; the right token removes lock and fence.
+  if ! (
+    cd "$root"
+    eval "$(mrun merge-acquire --label merge-fenced)"
+    [[ -n "${MERGE_LOCK_DIR:-}" && -n "${MERGE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: merge-acquire produced no exports" >&2; exit 1; }
+    held_dir="$MERGE_LOCK_DIR"
+    held_token="$MERGE_LOCK_TOKEN"
+    wrong_rc=0
+    MERGE_LOCK_DIR="$held_dir" MERGE_LOCK_TOKEN="not-the-merge-token" mrun merge-release 2>/dev/null || wrong_rc=$?
+    if [[ "$wrong_rc" -eq 0 ]]; then
+      echo "selftest FAIL: merge-release accepted a wrong token" >&2
+      exit 1
+    fi
+    [[ -d "$held_dir" ]] || { echo "selftest FAIL: wrong-token merge-release removed the lock" >&2; exit 1; }
+    [[ -f .ai-playbook/merge-lock.session ]] || { echo "selftest FAIL: wrong-token merge-release cleared the fence" >&2; exit 1; }
+    if ! MERGE_LOCK_DIR="$held_dir" MERGE_LOCK_TOKEN="$held_token" mrun merge-release-repo >/dev/null 2>&1; then
+      echo "selftest FAIL: token-fenced merge-release-repo failed" >&2
+      exit 1
+    fi
+    [[ ! -d "$held_dir" ]] || { echo "selftest FAIL: merge lock survived the correct release" >&2; exit 1; }
+    [[ ! -f .ai-playbook/merge-lock.session ]] || { echo "selftest FAIL: merge fence survived the correct release" >&2; exit 1; }
+  ); then
+    echo "selftest FAIL: merge_release_token_fenced" >&2
+    fail=1
+  else
+    echo "selftest OK: merge-release token-fenced; right token removes lock and fence"
+  fi
+
+  # M3b) merge-release-repo without env refuses the shared session fence.
+  (
+    cd "$root"
+    eval "$(mrun merge-acquire --label merge-release-env-guard)"
+  ) || true
+  if (cd "$root" && unset MERGE_LOCK_DIR MERGE_LOCK_TOKEN && mrun merge-release-repo 2>/dev/null); then
+    echo "selftest FAIL: merge-release-repo without env adopted session" >&2
+    fail=1
+  else
+    echo "selftest OK: merge-release-repo without env refuses session load"
+  fi
+  (
+    cd "$root"
+    eval "$(grep -E '^MERGE_LOCK_' .ai-playbook/merge-lock.session | sed 's/^/export /')"
+    mrun merge-release-repo >/dev/null
+  ) || true
+
+  # M4) merge_and_done_locks_independent: a held merge lock never blocks the
+  # done lock and a held done lock never blocks merge-acquire.
+  if ! (
+    cd "$root"
+    eval "$(mrun merge-acquire --label indep-merge-hold)"
+    [[ -n "${MERGE_LOCK_DIR:-}" && -n "${MERGE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: merge-acquire produced no exports" >&2; exit 1; }
+    eval "$(run acquire --label indep-done-takes)"
+    [[ -n "${DONE_LOCK_DIR:-}" && -n "${DONE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: done acquire produced no exports" >&2; exit 1; }
+    held_merge_dir="$MERGE_LOCK_DIR"
+    held_merge_token="$MERGE_LOCK_TOKEN"
+    MERGE_LOCK_DIR="$held_merge_dir" MERGE_LOCK_TOKEN="$held_merge_token" mrun merge-release-repo >/dev/null
+    eval "$(mrun merge-acquire --label indep-merge-takes)"
+    mrun merge-release-repo >/dev/null
+    run release-repo >/dev/null
+  ); then
+    echo "selftest FAIL: merge_and_done_locks_independent" >&2
+    fail=1
+  else
+    echo "selftest OK: merge and done locks are independent"
+  fi
+
+  # M5) merge_status_and_stale_clean: merge-status reports the holder label;
+  # with the stale threshold overridden to a tiny value, merge-stale-clean
+  # removes the lock and merge-status reports free.
+  if ! (
+    cd "$root"
+    sleep 120 &
+    merge_status_holder=$!
+    trap 'kill "$merge_status_holder" 2>/dev/null || true' EXIT
+    eval "$(MERGE_LOCK_HOLDER_PID="$merge_status_holder" mrun merge-acquire --label merge-status-holder)"
+    merge_st="$(mrun merge-status)"
+    if [[ "$merge_st" != *"label: merge-status-holder"* ]]; then
+      echo "selftest FAIL: merge-status missing holder label" >&2
+      exit 1
+    fi
+    if ! MERGE_LOCK_STALE_SECS=0 mrun merge-stale-clean >/dev/null 2>&1; then
+      echo "selftest FAIL: merge-stale-clean refused a stale merge lock" >&2
+      exit 1
+    fi
+    merge_st="$(mrun merge-status)"
+    if [[ "$merge_st" != *"merge-lock: free"* ]]; then
+      echo "selftest FAIL: merge-status not free after merge-stale-clean" >&2
+      exit 1
+    fi
+  ); then
+    echo "selftest FAIL: merge_status_and_stale_clean" >&2
+    fail=1
+  else
+    echo "selftest OK: merge-status holder label; merge-stale-clean frees"
+  fi
+
+  # M6) cross_worktree_mutual_exclusion (r1 F1; r2 F13/CF1): a linked worktree
+  # of the fixture repo and the primary checkout key the SAME merge lock (the
+  # key derives from the resolved git common dir, not --show-toplevel): a hold
+  # from the worktree blocks merge-acquire from the primary (exit 2),
+  # merge-status from the primary sees the worktree holder label, and the
+  # session fence lands in the shared primary checkout. The mirror direction
+  # (hold from the primary, blocked from the worktree) holds too, and a
+  # GIT_DIR-exported leg (r2 CF1) acquires through the .git path spelling
+  # mktemp produced (a LOGICAL symlinked path when the temp parent is a
+  # symlink) and must hit the same physical lock dir. Every inner subshell's
+  # status is load-bearing (r2 F13): under `if !` errexit is suppressed for
+  # the whole compound, whose status is the LAST inner subshell's, so an
+  # unchained inner failure is swallowed and a revert to per-worktree keying
+  # would still exit 0; each inner subshell therefore chains `|| exit 1`,
+  # the setup (worktree add) subshell included.
+  root_merge_id="$(printf '%s' "$(cd "$root" && git rev-parse --show-toplevel)" | shasum -a 256 | cut -c1-16)"
+  if ! (
+    wt="${tmp}/linked-wt"
+    (
+      cd "$root" || exit 1
+      git worktree add -b wt-branch "$wt" >/dev/null 2>&1 || exit 1
+    ) || exit 1
+    (
+      cd "$wt" || exit 1
+      sleep 120 &
+      wt_holder=$!
+      trap 'kill "$wt_holder" 2>/dev/null || true' EXIT
+      eval "$(MERGE_LOCK_HOLDER_PID="$wt_holder" mrun merge-acquire --label wt-holder)"
+      [[ -n "${MERGE_LOCK_DIR:-}" && -n "${MERGE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: worktree merge-acquire produced no exports" >&2; exit 1; }
+      [[ "$MERGE_LOCK_DIR" == "${mlock_root}/${root_merge_id}" ]] || { echo "selftest FAIL: worktree merge lock not keyed by the shared repo root (${MERGE_LOCK_DIR})" >&2; exit 1; }
+      primary_rc=0
+      (cd "$root" && MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-acquire --label primary-blocked 2>/dev/null) || primary_rc=$?
+      [[ "$primary_rc" -eq 2 ]] || { echo "selftest FAIL: primary merge-acquire rc=${primary_rc} over a worktree hold, want 2" >&2; exit 1; }
+      primary_status="$(cd "$root" && mrun merge-status)"
+      [[ "$primary_status" == *"label: wt-holder"* ]] || { echo "selftest FAIL: primary merge-status does not see the worktree holder: ${primary_status}" >&2; exit 1; }
+      [[ -f "$root/.ai-playbook/merge-lock.session" ]] || { echo "selftest FAIL: merge fence did not land in the shared primary checkout" >&2; exit 1; }
+      mrun merge-release-repo >/dev/null
+    ) || exit 1
+    (
+      cd "$root" || exit 1
+      sleep 120 &
+      p_holder=$!
+      trap 'kill "$p_holder" 2>/dev/null || true' EXIT
+      eval "$(MERGE_LOCK_HOLDER_PID="$p_holder" mrun merge-acquire --label primary-holder)"
+      wt_rc=0
+      (cd "$wt" && MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-acquire --label wt-blocked 2>/dev/null) || wt_rc=$?
+      [[ "$wt_rc" -eq 2 ]] || { echo "selftest FAIL: worktree merge-acquire rc=${wt_rc} over a primary hold, want 2" >&2; exit 1; }
+      mrun merge-release-repo >/dev/null
+    ) || exit 1
+    (
+      # GIT_DIR-exported leg (r2 CF1): the same repo addressed only through
+      # the logical .git spelling of the shared checkout; the acquire must
+      # resolve the common dir (here an absolute but possibly logical path,
+      # which is exactly the branch the unconditional physicalization covers)
+      # to the same physical lock dir a plain in-checkout acquire keys.
+      cd "$root" || exit 1
+      sleep 120 &
+      g_holder=$!
+      trap 'kill "$g_holder" 2>/dev/null || true' EXIT
+      eval "$(MERGE_LOCK_HOLDER_PID="$g_holder" GIT_DIR="${root}/.git" mrun merge-acquire --label gitdir-holder)"
+      [[ -n "${MERGE_LOCK_DIR:-}" && -n "${MERGE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: GIT_DIR-exported merge-acquire produced no exports" >&2; exit 1; }
+      [[ "$MERGE_LOCK_DIR" == "${mlock_root}/${root_merge_id}" ]] || { echo "selftest FAIL: GIT_DIR-exported acquire keyed ${MERGE_LOCK_DIR}, want ${mlock_root}/${root_merge_id}" >&2; exit 1; }
+      mrun merge-release-repo >/dev/null
+    ) || exit 1
+  ); then
+    echo "selftest FAIL: cross_worktree_mutual_exclusion" >&2
+    fail=1
+  else
+    echo "selftest OK: cross-worktree holds share one merge lock"
+  fi
+
+  # M7) operator_stale_clean_warns_on_live_holder (r1 F11): merge-stale-clean
+  # on a stale lock whose holder process is verified alive prints the
+  # alive-holder warning (with the holder state) before the operator eviction.
+  if ! (
+    cd "$root"
+    sleep 120 &
+    evict_holder=$!
+    trap 'kill "$evict_holder" 2>/dev/null || true' EXIT
+    eval "$(MERGE_LOCK_HOLDER_PID="$evict_holder" mrun merge-acquire --label live-operator)"
+    rm -f .ai-playbook/merge-lock.session
+    evict_err="$(MERGE_LOCK_STALE_SECS=0 mrun merge-stale-clean 2>&1 1>/dev/null)"
+    case "$evict_err" in
+      *"holder process alive; evicting anyway"*) ;;
+      *) echo "selftest FAIL: live-holder operator eviction printed no alive-holder warning: ${evict_err}" >&2; exit 1 ;;
+    esac
+    [[ ! -d "${mlock_root}/${root_merge_id}" ]] || { echo "selftest FAIL: operator stale-clean did not remove the live holder's lock" >&2; exit 1; }
+  ); then
+    echo "selftest FAIL: operator_stale_clean_warns_on_live_holder" >&2
+    fail=1
+  else
+    echo "selftest OK: operator stale-clean warns before evicting a live holder"
+  fi
+
+  # M8) merge_wait_acquire_releases (r1 F7): merge-wait-acquire with a tiny
+  # poll interval stays blocked while the lock is held, then acquires with
+  # exit 0 and the exports once the holder releases; the waiter's own
+  # token-fenced release then removes lock and fence.
+  if ! (
+    cd "$root"
+    sleep 120 &
+    wa_holder=$!
+    cleanup_wa() { kill "$wa_holder" 2>/dev/null || true; }
+    trap cleanup_wa EXIT
+    eval "$(MERGE_LOCK_HOLDER_PID="$wa_holder" mrun merge-acquire --label wa-blocker)"
+    (
+      cd "$root"
+      MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= MERGE_LOCK_POLL_SECS=1 \
+        mrun merge-wait-acquire --label wa-waiter --max-wait 15 >"${tmp}/wa-out" 2>/dev/null
+    ) &
+    waiter=$!
+    sleep 2
+    # Mid-hold observation (r2 T15a): before the holder releases, the waiter
+    # must still be blocked -- it has produced nothing on stdout (the exports
+    # print only at acquisition) and the lock dir is still present. Without
+    # this observation the release leg cannot prove a blocked-to-acquired
+    # transition; an early-acquiring lock would look identical to a waiter
+    # that waited.
+    [[ -d "${mlock_root}/${root_merge_id}" ]] || { echo "selftest FAIL: merge lock dir vanished while the holder still holds it (pre-release)" >&2; exit 1; }
+    [[ ! -s "${tmp}/wa-out" ]] || { echo "selftest FAIL: waiter produced output before the holder released (no mid-hold block)" >&2; exit 1; }
+    mrun merge-release-repo >/dev/null
+    wait "$waiter" || { echo "selftest FAIL: merge-wait-acquire did not acquire after release" >&2; exit 1; }
+    wa_out="$(cat "${tmp}/wa-out")"
+    case "$wa_out" in
+      *"export MERGE_LOCK_DIR="*"export MERGE_LOCK_TOKEN="*) ;;
+      *) echo "selftest FAIL: merge-wait-acquire printed no exports on success" >&2; exit 1 ;;
+    esac
+    eval "$wa_out"
+    mrun merge-release-repo >/dev/null
+    [[ ! -f .ai-playbook/merge-lock.session ]] || { echo "selftest FAIL: fence survived the waiter's release" >&2; exit 1; }
+  ); then
+    echo "selftest FAIL: merge_wait_acquire_releases" >&2
+    fail=1
+  else
+    echo "selftest OK: merge-wait-acquire acquires after release"
+  fi
+
+  # M9) merge_wait_acquire_zero_wait_times_out (r1 F7): --max-wait 0 against
+  # a held lock exits 2 immediately and prints no exports on stdout.
+  if ! (
+    cd "$root"
+    sleep 120 &
+    m0_holder=$!
+    trap 'kill "$m0_holder" 2>/dev/null || true' EXIT
+    eval "$(MERGE_LOCK_HOLDER_PID="$m0_holder" mrun merge-acquire --label m0-blocker)"
+    m0_out="$(MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-wait-acquire --label m0-waiter --max-wait 0 2>/dev/null)" && {
+      echo "selftest FAIL: merge-wait-acquire --max-wait 0 acquired a held lock" >&2
+      exit 1
+    }
+    [[ -z "$m0_out" ]] || { echo "selftest FAIL: merge-wait-acquire printed exports on timeout" >&2; exit 1; }
+    mrun merge-release-repo >/dev/null
+  ); then
+    echo "selftest FAIL: merge_wait_acquire_zero_wait_times_out" >&2
+    fail=1
+  else
+    echo "selftest OK: merge-wait-acquire --max-wait 0 times out with exit 2"
+  fi
+
   rm -rf "$tmp"
   if [[ "$fail" -ne 0 ]]; then
-    echo "done-lock: selftest FAILED" >&2
+    echo "${PROG}: selftest FAILED" >&2
     exit 1
   fi
-  echo "done-lock: selftest passed"
+  echo "${PROG}: selftest passed"
 }
 
 main() {
@@ -1070,10 +1495,16 @@ main() {
     release-repo) cmd_release_repo ;;
     status) cmd_status ;;
     stale-clean) cmd_stale_clean ;;
+    merge-acquire) cmd_acquire "$@" ;;
+    merge-wait-acquire) cmd_wait_acquire "$@" ;;
+    merge-release) cmd_release ;;
+    merge-release-repo) cmd_release_repo ;;
+    merge-status) cmd_status ;;
+    merge-stale-clean) cmd_stale_clean ;;
     selftest) cmd_selftest ;;
     -h|--help|help|"") usage ;;
     *)
-      echo "done-lock: unknown command: ${cmd}" >&2
+      echo "${PROG}: unknown command: ${cmd}" >&2
       usage >&2
       exit 1
       ;;

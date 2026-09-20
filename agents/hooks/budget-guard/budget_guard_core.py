@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime
 import fcntl
 import json
 import os
@@ -35,6 +36,27 @@ EXIT_OK = 0
 # standalone real-file copy, so it holds the same file by the same name and
 # the hermetic suites prove the interlock end to end.
 GUARD_LOCK_NAME = "budget-guard.lock"
+
+# The rate-limited decision log: JSON lines recording what each invocation
+# decided. Block decisions and errors always append; allow decisions append
+# at most one heartbeat line per hook per day (the first invocation of the
+# day). Best-effort only: the log never changes the hook's decision or exit
+# code. Overridable with --hook-outcomes-log.
+HOOK_OUTCOMES_LOG_PATH = pathlib.Path(
+    "~/.ai-playbook/runtime/hook-outcomes.log"
+)
+
+# Module-level date source for the heartbeat rate check (is today's
+# heartbeat line already logged). The test suite overrides this to freeze
+# the day, the same seam style as scripts/review_record_selection.py's
+# DATE_SOURCE (module-level date callable, frozen by its suite).
+DATE_SOURCE = datetime.date.today
+
+# Fault-injection seam for the decision path, in the same seam style as the
+# day source above: when set to a callable, the decision path invokes it
+# right after entry and the callable raises, so the suite can induce the
+# erroring invocation through main()'s exception guard. None in production.
+DECISION_FAULT_SOURCE = None
 
 
 @contextlib.contextmanager
@@ -116,7 +138,108 @@ def write_marker_best_effort(path: pathlib.Path, reset_at_epoch: int) -> None:
         pass  # Anti-thrash only; the block is the safety effect.
 
 
+def _heartbeat_logged_today(log_path: pathlib.Path, hook_id: str) -> bool:
+    """Whether the log already holds today's heartbeat line for this hook.
+
+    The caller holds the shared guard lock, so the read and the append that
+    may follow it cannot interleave a same-day duplicate. A missing,
+    unreadable, corrupted (undecodable bytes), or malformed log counts as
+    not-logged: the worst case is a duplicate heartbeat line, never a
+    changed decision or an escaped error-line flood.
+    """
+    today = DATE_SOURCE().isoformat()
+    try:
+        with log_path.open("r", encoding="utf-8") as handle:
+            text = handle.read()
+    except (OSError, ValueError):
+        # ValueError covers UnicodeDecodeError from a corrupted (non-UTF-8)
+        # log: treating it as not-logged lets the heartbeat be written
+        # instead of raising into main()'s guard and self-flooding the log
+        # with one error line per invocation.
+        return False
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if (record.get("event") == "heartbeat"
+                and record.get("hook") == hook_id
+                and isinstance(record.get("ts"), str)
+                and record["ts"][:10] == today):
+            return True
+    return False
+
+
+def _append_outcome_line(log_path: pathlib.Path, hook_id: str, event: str,
+                         decision: str, started: float,
+                         **extra) -> None:
+    """Append one JSON outcome line; the caller holds the shared guard lock.
+
+    The write is best-effort and swallows every OSError: a logging failure
+    never changes the hook's own decision or exit code. Error lines carry
+    the failure kind, the message text, and the exit code the invocation
+    returns (the fail-open 0) via the extra keyword fields.
+    """
+    record = {
+        "ts": datetime.datetime.now().astimezone().isoformat(),
+        "hook": hook_id,
+        "event": event,
+        "decision": decision,
+        "duration_ms": int((time.monotonic() - started) * 1000),
+    }
+    record.update(extra)
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record) + "\n")
+    except OSError:
+        pass  # Best-effort forensics; the decision stands either way.
+
+
+def _log_allow_heartbeat(flag_path: pathlib.Path, log_path: pathlib.Path,
+                         hook_id: str, started: float) -> None:
+    """Append the day's single allow heartbeat for this hook.
+
+    The already-today rate check and the append share one critical section
+    on the shared guard lock so a same-day second invocation cannot
+    interleave a duplicate heartbeat line or a doubled rate check. A
+    lock-acquisition failure skips the log line; the allow decision is
+    unchanged (fail-open).
+    """
+    with _shared_guard_lock(flag_path) as acquired:
+        if not acquired:
+            return  # Skipped log line; the decision is unchanged.
+        if _heartbeat_logged_today(log_path, hook_id):
+            return
+        _append_outcome_line(log_path, hook_id, "heartbeat", "allow", started)
+
+
+def _log_error_under_guard_lock(flag_path: pathlib.Path,
+                                log_path: pathlib.Path, hook_id: str,
+                                started: float, error_kind: str,
+                                error_message: str, exit_code: int) -> None:
+    """Append the error line for an unexpected decision-path exception.
+
+    The append runs under the shared guard lock like every other outcome
+    line; a lock-acquisition failure skips the line, and the fail-open exit
+    code passed by the caller stands either way.
+    """
+    with _shared_guard_lock(flag_path) as acquired:
+        if not acquired:
+            return  # Skipped log line; the decision is unchanged.
+        _append_outcome_line(log_path, hook_id, "error", "allow", started,
+                             error_kind=error_kind,
+                             error_message=error_message,
+                             exit_code=exit_code)
+
+
 def main(argv: list[str] | None = None) -> int:
+    started = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime", required=True, choices=("zcode", "codex"))
     parser.add_argument(
@@ -125,6 +248,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Guard flag path; defaults to the host-global runtime location.",
     )
     parser.add_argument("--fired-path", default=None)
+    parser.add_argument(
+        "--hook-outcomes-log",
+        default=str(HOOK_OUTCOMES_LOG_PATH),
+        help="Decision log path (JSON lines); defaults to the host-global "
+             "runtime location.",
+    )
     args = parser.parse_args(argv)
 
     flag_path = pathlib.Path(args.flag_path).expanduser()
@@ -133,13 +262,44 @@ def main(argv: list[str] | None = None) -> int:
         if args.fired_path is not None
         else flag_path.parent / "budget-guard.fired"
     )
+    log_path = pathlib.Path(args.hook_outcomes_log).expanduser()
+
+    try:
+        return _decide(args, flag_path, fired_path, log_path, started)
+    except Exception as exc:
+        # Unexpected exception on the decision path: append the error line
+        # (best-effort, under the shared guard lock) and fail open exactly
+        # as the invocation would have; the log write never changes the
+        # decision or the exit code.
+        try:
+            _log_error_under_guard_lock(
+                flag_path, log_path, args.runtime, started,
+                error_kind=type(exc).__name__,
+                error_message=str(exc),
+                exit_code=EXIT_OK,
+            )
+        except Exception:
+            pass  # The error line is best-effort; fail-open stands either way.
+        return EXIT_OK
+
+
+def _decide(args: argparse.Namespace, flag_path: pathlib.Path,
+            fired_path: pathlib.Path, log_path: pathlib.Path,
+            started: float) -> int:
+    # The decision path, wrapped by main()'s exception guard. The
+    # fault-injection seam fires here so an induced failure travels through
+    # the guard and produces the error line with the fail-open exit code.
+    if DECISION_FAULT_SOURCE is not None:
+        DECISION_FAULT_SOURCE()
 
     try:
         fields = parse_flag(flag_path.read_text(encoding="utf-8"))
     except OSError:
+        _log_allow_heartbeat(flag_path, log_path, args.runtime, started)
         return EXIT_OK  # Unreadable flag: fail open, never block.
 
     if not fields:
+        _log_allow_heartbeat(flag_path, log_path, args.runtime, started)
         return EXIT_OK  # Malformed flag: fail open.
 
     if fields["reset_at_epoch"] <= int(time.time()):
@@ -158,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
                 if current and current["reset_at_epoch"] <= int(time.time()):
                     remove_quiet(flag_path)
                     remove_quiet(fired_path)
+        _log_allow_heartbeat(flag_path, log_path, args.runtime, started)
         return EXIT_OK
 
     if fired_path.is_file():
@@ -169,6 +330,7 @@ def main(argv: list[str] | None = None) -> int:
         except OSError:
             marker = None
         if marker == str(fields["reset_at_epoch"]):
+            _log_allow_heartbeat(flag_path, log_path, args.runtime, started)
             return EXIT_OK  # Already intervened once this window; anti-thrash.
         # Atomic compare-and-delete for the stale-marker cleanup: the unlink
         # re-checks the marker content while the shared guard lock is held,
@@ -205,6 +367,12 @@ def main(argv: list[str] | None = None) -> int:
         if not acquired:
             pass  # Anti-thrash only; write anyway, the block already fired.
         write_marker_best_effort(fired_path, fields["reset_at_epoch"])
+        if acquired:
+            # Block outcomes always append. A lock-acquisition failure skips
+            # the line quietly: the block is already on stdout, and the log
+            # never changes the decision or the exit code.
+            _append_outcome_line(log_path, args.runtime, "block", "block",
+                                 started)
     return exit_code
 
 

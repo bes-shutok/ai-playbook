@@ -502,6 +502,8 @@ Before committing, scan touched prose and instruction files for em dash (U+2014)
 2. The script scans `*.md`, `*.mdc`, and instruction entrypoint filenames among touched paths. Fix every reported line: use a comma, colon, semicolon, period, or parentheses instead of a long dash.
 3. Re-run until exit code 0.
 
+No silent gate-satisfying rewrites of human-authored prose: when a gate or validator fails on prose the user authored, do not rewrite the passage wholesale and do not silently substitute its wording, punctuation, or structure. Make only the narrowly-scoped edit the gate actually requires, only inside the lines this run's own change touches (the hunks this run edited, not merely the same file), and report the edit in the return or commit summary; when the failures reach untouched user prose, or no minimal edit exists, stop and surface the conflict for the user to adjudicate (returned-for-ask shape: name the gate, the failing lines, and the options). Whole-file rewording of user-authored text is out of scope for any worker, always. Restoring the user's original text outranks a green gate. Text you authored this run is yours to fix freely; this pin never applies to it and never excuses stopping for routine fixable failures. When the stop-and-surface clause of this paragraph fires, it overrides the surrounding imperatives: do not re-run the scan for exit code 0, leave the failing prose unstaged, and do not continue to Step 2.8 until the user adjudicates.
+
 Do not stage prose or instruction files while the scan fails.
 
 **After Step 2.76 completes, immediately continue to Step 2.8.**
@@ -650,6 +652,13 @@ If release fails (token mismatch, env missing), run `status` from the project ro
 - Lock: confirm `status` shows **free** after Step 6.
 - If `blocked` at Step 0, learn, or the Step 3 item 4a lesson scope audit: state why and what the user should run (`stale-clean`, fix corpus, classify the duplicated lesson, retry).
 
+When the session used a passive review workflow, distinguish local finalization from
+review finalization. Before reporting completion, re-check the live review state and
+report the disposition of every tracked thread: verified reply, explicit deferral, or
+blocked. A local commit does not replace a required reviewer reply, and a reply does
+not imply that the branch was pushed. Keep push authorization separate from permission
+to reply to review feedback.
+
 ## Integration Points
 
 ### With `bootstrap-ai-playbook` skill
@@ -689,3 +698,4 @@ Step 2.62 sweeps `{tmp_dir}` entries whose owning plan archived (plans Plan Life
 - Never commit secrets, PII files (`.env`, credential files), or personal/org-specific information into public repositories.
 - Never hardcode personal paths, org domains, or project-specific identifiers in skill files; externalize those to facts documents. Portable workflow policy and numeric thresholds stay in the skill (see `learn` Step 2, Facts vs skill configuration).
 - If the branch has no story key, use a plain descriptive commit message on branches such as `main` or `master`; ask only when the repository convention is unclear.
+- No silent gate-satisfying rewrites of human-authored prose: when a gate or validator fails on prose the user authored, do not rewrite the passage wholesale and do not silently substitute its wording, punctuation, or structure. Make only the narrowly-scoped edit the gate actually requires, only inside the lines this run's own change touches (the hunks this run edited, not merely the same file), and report the edit in the return or commit summary; when the failures reach untouched user prose, or no minimal edit exists, stop and surface the conflict for the user to adjudicate (returned-for-ask shape: name the gate, the failing lines, and the options). Whole-file rewording of user-authored text is out of scope for any worker, always. Restoring the user's original text outranks a green gate. Text you authored this run is yours to fix freely; this pin never applies to it and never excuses stopping for routine fixable failures.

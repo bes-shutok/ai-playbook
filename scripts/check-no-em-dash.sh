@@ -3,6 +3,8 @@
 # Agent-agnostic: use from done, pre-commit, CI, or any shell workflow.
 set -euo pipefail
 
+EM_DASH=$'\xe2\x80\x94'
+
 usage() {
   cat <<'EOF'
 Usage: check-no-em-dash.sh <command> [args...]
@@ -12,10 +14,19 @@ Commands:
   paths <path>...      Same as file (alias)
   staged               Scan git-staged paths (added/copied/modified)
   touched              Scan unstaged + staged + untracked paths in current repo
+  added-lines [--base REF] [paths...]
+                       Scan git-diff added lines only (git diff -U0 against the
+                       base; all extensions) and report file:new-file-line per
+                       hit. The default base is HEAD, so the mode gates
+                       working-tree insertions at authoring time; re-scanning
+                       already-committed insertions is out of scope by design.
+                       Git failures (exit status 2 or worse) abort non-zero
+                       instead of reading as clean.
   stdin                Read file list from stdin (one path per line)
 
 Prose paths scanned by default: *.md, *.mdc, AGENTS.md, CLAUDE.md, GEMINI.md, COPILOT.md
 Use CHECK_NO_EM_DASH_ALL=1 to scan every path argument regardless of extension.
+The added-lines command scans every extension regardless of this prose filter.
 
 Exit 0 when clean; exit 1 when em dash found (prints paths and line numbers).
 EOF
@@ -58,6 +69,114 @@ scan_paths() {
   return "$found"
 }
 
+# Scan only the added lines of a git diff. New-file line numbers come from the
+# hunk headers (the start line of each added run) and advance per added or
+# context line; deleted lines never move the counter.
+scan_added_lines() {
+  local base="HEAD"
+  local -a paths=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --base)
+        if [[ $# -lt 2 || -z "$2" ]]; then
+          echo "check-no-em-dash: --base requires a REF argument" >&2
+          exit 2
+        fi
+        base="$2"
+        shift 2
+        ;;
+      --base=*)
+        base="${1#--base=}"
+        if [[ -z "$base" ]]; then
+          echo "check-no-em-dash: --base requires a REF argument" >&2
+          exit 2
+        fi
+        shift
+        ;;
+      --)
+        shift
+        while [[ $# -gt 0 ]]; do
+          paths+=("$1")
+          shift
+        done
+        ;;
+      --*)
+        echo "check-no-em-dash: unknown option: $1" >&2
+        exit 2
+        ;;
+      *)
+        paths+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  local git_status=0
+  local diff_text=""
+  if [[ ${#paths[@]} -gt 0 ]]; then
+    diff_text="$(git diff -U0 "$base" -- "${paths[@]}")" || git_status=$?
+  else
+    diff_text="$(git diff -U0 "$base")" || git_status=$?
+  fi
+  if (( git_status >= 2 )); then
+    echo "check-no-em-dash: git diff against $base failed (exit $git_status); aborting" >&2
+    exit "$git_status"
+  fi
+
+  local found=0
+  local in_hunk=0
+  local file=""
+  local new_line=0
+  local line
+  local hunk_re='^@@[[:space:]]-[0-9]+(,[0-9]+)?[[:space:]]\+([0-9]+)'
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      "diff --git "*)
+        in_hunk=0
+        ;;
+      "+++ "*)
+        if [[ "$in_hunk" -eq 0 ]]; then
+          file="${line#+++ }"
+          if [[ "$file" == b/* ]]; then
+            file="${file#b/}"
+          fi
+        else
+          # Inside a hunk this is an added line whose content starts with '++'.
+          if [[ "$line" == *"$EM_DASH"* ]]; then
+            found=1
+            printf '%s:%s:%s\n' "$file" "$new_line" "${line#+}"
+          fi
+          new_line=$((new_line + 1))
+        fi
+        ;;
+      "@@"*)
+        if [[ "$line" =~ $hunk_re ]]; then
+          new_line="${BASH_REMATCH[2]}"
+          in_hunk=1
+        fi
+        ;;
+      "+"*)
+        if [[ "$line" == *"$EM_DASH"* ]]; then
+          found=1
+          printf '%s:%s:%s\n' "$file" "$new_line" "${line#+}"
+        fi
+        new_line=$((new_line + 1))
+        ;;
+      "-"*)
+        # Deleted line: the new-file counter does not move.
+        ;;
+      " "*)
+        new_line=$((new_line + 1))
+        ;;
+      *)
+        # Headers (index, mode, Binary files, \ No newline...) carry no added
+        # content lines; ignore them.
+        ;;
+    esac
+  done <<<"$diff_text"
+  return "$found"
+}
+
 cmd="${1:-}"
 shift || true
 
@@ -87,6 +206,9 @@ case "$cmd" in
     )
     [[ ${#files[@]} -eq 0 ]] && exit 0
     scan_paths "${files[@]}"
+    ;;
+  added-lines)
+    scan_added_lines "$@"
     ;;
   stdin)
     files=()

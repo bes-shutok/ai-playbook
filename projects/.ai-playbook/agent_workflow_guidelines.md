@@ -1102,3 +1102,17 @@ Treat agent memory files (for example the host's persistent memory index and top
 - Re-read a memory file immediately before every edit to it; never rely on read-state from earlier in the session.
 - Prefer one full-file write per turn over successive edits when several sections must change.
 - On a modified-since-read failure, re-read, diff the fresh content against the intended change, and retry once. Never rewrite blind, and never assume the earlier edit was lost and duplicate it.
+
+## 67. Transcription and Data-Entry Writes: Cross-Check Before Write
+
+**Load trigger:** transcription-shaped tasks: any task that writes extracted values into forms, invoices, records, or summaries over extracted data (tax-reporting, medical-data, and personal-finance workflows are the recurring cases). The three clauses below run before any such write lands.
+
+**Rule:**
+
+67.1. **Dedupe before write.** Before any write, dedupe source-identical entries on the schema-equivalent identity key (for line items: amount+date+merchant). Entries that agree on the identity key are one source entry until the source itself shows two of them; write it once.
+
+67.2. **Verify at write time from the source, not from memory.** Verify each written field against its source region by re-reading the source at write time, never from memory of the source. A value carried from earlier in the session, from a screenshot, or from a previous extraction is unverified until the source region is re-read at the moment of the write.
+
+67.3. **Canonical values live in the facts document.** For repeated workflows, persist canonical values in the project facts document and copy from there instead of re-deriving them on every pass. Copying a persisted canonical value removes the re-derivation step where transcription errors are born.
+
+**Why this matters:** the 2026-09-19 corrections-mining pass over 1,776 typed prompts (2026-07-17 to 09-19) names data-entry accuracy as the highest-stakes correction class: about 8 corrections between Jul 25 and Sep 13, all in transcription-shaped work. Witnesses recorded in `docs/history/backlog/2026-09-19-transcription-cross-check-before-write.md`: the same residency form section filled twice with swapped and shifted fields ("country and id are now filled twice... the name again in the lower part where the date should be"), the same invoice listed twice as two line items (`2026-09-10_bcp_dd_proof_46.82_a` and `..._b`), and a wrong amount carried into a summary ("sorry, not 37, the one of 32.9"). The same pass showed personal-admin repos run roughly twice the correction rate of the skill repo (7.5-10.3% vs 4.4-4.7%): extraction-and-transcription is where the agent is least reliable without a cross-check.

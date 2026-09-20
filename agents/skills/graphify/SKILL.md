@@ -50,7 +50,7 @@ Drop any folder of code, docs, papers, images, or video into graphify and get a 
 
 If the user invoked `/graphify --help` or `/graphify -h` (with no other arguments), print the contents of the `## Usage` section above verbatim and stop. Do not run any commands, do not detect files, do not default the path to `.`. Just print the Usage block and return.
 
-**Fast path — existing graph:** Before doing anything else, check whether `graphify-out/graph.json` exists. The expected location is `graphify-out/graph.json` relative to the **current working directory** (i.e. the project root where you are running commands). If it exists AND the user's request is a natural-language question about the codebase (e.g. "How does X work?", "What calls Y?", "Trace the data flow through Z") and NOT an explicit rebuild command (`--update`, `--cluster-only`, or a bare path/URL that implies fresh extraction): **run the Step 1 version-compat preflight first (on the drift warning, follow the Step 1 refresh or fallback before querying), then skip Steps 1–5 and jump straight to `## For /graphify query`.** Run `graphify query "<question>"` immediately. Do not run detect. Do not check corpus size. Do not ask the user to narrow. The graph is already built — use it.
+**Fast path — existing graph:** Before doing anything else, check whether `graphify-out/graph.json` exists. The expected location is `graphify-out/graph.json` relative to the **current working directory** (i.e. the project root where you are running commands). If it exists AND the user's request is a natural-language question about the codebase (e.g. "How does X work?", "What calls Y?", "Trace the data flow through Z") and NOT an explicit rebuild command (`--update`, `--cluster-only`, or a bare path/URL that implies fresh extraction): **skip Steps 1–5 entirely and jump straight to `## For /graphify query`.** Run `graphify query "<question>"` immediately. Do not run detect. Do not check corpus size. Do not ask the user to narrow. The graph is already built — use it.
 
 If no path was given, use `.` (current directory). Do not ask the user for a path.
 
@@ -63,22 +63,6 @@ Follow these steps in order. Do not skip steps.
 Only when the path is one or more `https://github.com/...` URLs, or several local subfolders to merge. See `references/github-and-merge.md` for the clone, cross-repo merge, and monorepo flow, then continue with the resolved local path. A plain local path skips this step.
 
 ### Step 1 - Ensure graphify is installed
-
-**Version-compat preflight (run before anything else in this step).** Run `graphify --version`. A warning of the shape:
-
-```
-warning: skill is from graphify <skill-version>, package is <package-version>. Run 'graphify install' to update.
-```
-
-is a **blocking preflight result**: the vendored skill guidance and the installed package have drifted, and this workflow's build, query, path, and explain steps must not run on mismatched guidance. On the warning, stop the workflow and refresh first:
-
-1. Run `graphify install --platform agents` (the agents platform maps to this repo's `agents/skills/` runtime layout).
-2. Verify `git status` in the skills repo that owns `agents/skills/graphify/` shows changes confined to `agents/skills/graphify/`. If the diff reaches anywhere else, abort the refresh and use the fallback below.
-3. Diff-review the refreshed files and carry forward any repo-local edits per the vendored-sync rules (full bidirectional sync, hygiene scan before commit).
-4. Run the public-hygiene scan, then commit the refresh in the skills repo as its own commit: `feat: refresh vendored graphify skill to match package`.
-5. Re-run `graphify --version` and continue only once the warning is gone.
-
-**Fallback (refresh cannot run: offline host, hostile diff, unsupported platform):** print the actionable mismatch with both versions, then continue only with flag guidance derived from `--help` output of the installed package for the steps whose flags may have drifted; say explicitly that you are running fallback guidance because of the version drift.
 
 ```bash
 # Detect the correct Python interpreter (handles uv tool, pipx, venv, system installs)
@@ -268,19 +252,16 @@ Load files from `graphify-out/.graphify_uncached.txt`. Split into chunks of 20-2
 
 **Step B2 - Dispatch ALL subagents in a single message**
 
-Call the Agent tool multiple times IN THE SAME RESPONSE - one call per chunk. This is the only way they run in parallel. If you make one Agent call, wait, then make another, you are doing it sequentially and defeating the purpose.
+> Uses the `Task` tool for parallel subagent dispatch.
+> Call `Task` once per chunk — ALL in the same response so they run in parallel.
 
-**IMPORTANT - subagent type:** Always use `subagent_type="general-purpose"`. Do NOT use `Explore` - it is read-only and cannot write chunk files to disk, which silently drops extraction results. General-purpose has Write and Bash access which the subagent needs.
+Pass the extraction prompt as the task description:
 
-Concrete example for 3 chunks:
 ```
-[Agent tool call 1: files 1-15, subagent_type="general-purpose"]
-[Agent tool call 2: files 16-30, subagent_type="general-purpose"]
-[Agent tool call 3: files 31-45, subagent_type="general-purpose"]
+Task(description="Your task is to perform the following. Follow the instructions below exactly.\n\n<agent-instructions>\n[extraction prompt, with FILE_LIST, CHUNK_NUM, TOTAL_CHUNKS, DEEP_MODE substituted]\n</agent-instructions>\n\nExecute this now. Output ONLY the structured JSON response.")
 ```
-All three in one message. Not three separate messages.
 
-Each subagent receives this exact prompt (substitute FILE_LIST, CHUNK_NUM, TOTAL_CHUNKS, DEEP_MODE, and CHUNK_PATH).
+Each subagent writes its result to its own `graphify-out/.graphify_chunk_NN.json`. Collect results as each `Task` completes and parse each as JSON.
 
 CHUNK_PATH must be an **absolute** path — derive it before dispatching:
 ```bash
@@ -290,7 +271,7 @@ PROJECT_ROOT=$(pwd)  # cwd — where Part C globs graphify-out/ (NOT .graphify_r
 
 Subagent prompt template:
 
-See `references/extraction-spec.md` for the exact subagent prompt (JSON schema, node-ID rules, confidence rubric, frontmatter, hyperedge, and vision rules). Load it only here, only when at least one chunk holds a doc, paper, or image; a pure-code corpus has skipped Part B and never reads it. Pass each subagent that prompt verbatim with FILE_LIST, CHUNK_NUM, TOTAL_CHUNKS, DEEP_MODE, and CHUNK_PATH substituted, and have it write the result to CHUNK_PATH.
+See `references/extraction-spec.md` for the exact subagent prompt (JSON schema, node-ID rules, confidence rubric, hyperedge, and vision rules). Load it only here, only when at least one chunk holds a doc, paper, or image; a pure-code corpus has skipped Part B and never reads it. Pass each subagent that prompt verbatim with FILE_LIST, CHUNK_NUM, TOTAL_CHUNKS, DEEP_MODE, and CHUNK_PATH substituted, and have it write the result to CHUNK_PATH.
 
 **Step B3 - Collect, cache, and merge**
 
@@ -714,9 +695,9 @@ Neither is part of the default build. When the user runs `/graphify add <url>` t
 
 ---
 
-## For the commit hook and native CLAUDE.md integration
+## For the commit hook and native AGENTS.md integration
 
-When the user asks to install the post-commit auto-rebuild hook or wire graphify into a project's CLAUDE.md, see `references/hooks.md`.
+When the user asks to install the post-commit auto-rebuild hook or wire graphify into a project's AGENTS.md, see `references/hooks.md`.
 
 ---
 

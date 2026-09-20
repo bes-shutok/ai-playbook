@@ -25,3 +25,7 @@ Add a git-diff-based mode (for example `check-no-em-dash.sh added-lines [--base 
 ## Why not fixed now
 
 It is a tooling enhancement, not a defect in current behavior; the exclusion is documented in the consuming plan's Validation Commands scope note, and new scripts are already covered whole by the all-files mode.
+
+## Additional witness
+
+Witnessed 2026-09-20 (Tasks 2-4 of the merge-landing-lock-grouping plan): the `touched` mode scans whole modified files, so it failed on 12 pre-existing em dashes (11 in `agents/skills/maintenance/SKILL.md`, 1 in `prompt-templates.md`, all present at HEAD and none introduced by the session); the plan's Validation Commands required the scan to exit 0, forcing punctuation-only normalization of pre-existing prose lines inside the batch's allowed file set (deviation-logged, not silent). The behavioral contract for such gate-driven rewrites is tracked separately in 2026-09-19-gate-driven-silent-prose-edits; the mechanical gap remains this item's insertion-scoped mode.

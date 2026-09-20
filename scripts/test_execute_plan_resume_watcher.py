@@ -397,6 +397,80 @@ class WatcherStateMachineTest(unittest.TestCase):
             self.assertEqual(result["classification"], kind)
             self.assertIsNone(self.adapter.read_state()["resume_watcher"])
 
+    def test_classify_boundary_wait_for_reset_is_non_schedulable(self) -> None:
+        # A wait-for-reset boundary is a supersede-and-clear class: even
+        # with status ok and a trusted binding reset epoch it never
+        # installs a watcher (a watcher firing at reset+1min would
+        # double-head a lane that is alive and waiting in-session), and any
+        # pending watcher is cleared through the supersede operation.
+        self.assertEqual(
+            watcher.classify_boundary(
+                {**known_continue_report(5_400_000_150), "pause_decision": "wait-for-reset"}
+            ),
+            "wait-for-reset",
+        )
+        installed = self.boundary(known_continue_report(5_400_000_090))
+        self.assertEqual(installed["boundary"], "install")
+        automation_calls_before = len(self.automation_calls)
+        waiting = {
+            **known_continue_report(5_400_000_150),
+            "pause_decision": "wait-for-reset",
+        }
+        result = self.boundary(waiting)
+        self.assertEqual(result["boundary"], "supersede")
+        self.assertEqual(result["classification"], "wait-for-reset")
+        self.assertEqual(result["superseded_watcher_id"], installed["watcher_id"])
+        self.assertIsNone(result["scheduling"])
+        self.assertIsNone(self.adapter.read_state()["resume_watcher"])
+        # The ride-through boundary schedules nothing at all.
+        self.assertEqual(len(self.automation_calls), automation_calls_before)
+
+    def test_classify_boundary_regression_fence(self) -> None:
+        # No existing classification changes: pause classifies pause, a
+        # known continue with a trusted binding epoch installs, an unknown
+        # status is unknown, and the weekly secondary binding is
+        # weekly-secondary.
+        self.assertEqual(
+            watcher.classify_boundary(
+                {**known_continue_report(5_400_000_090), "pause_decision": "pause"}
+            ),
+            "pause",
+        )
+        self.assertEqual(
+            watcher.classify_boundary(known_continue_report(5_400_000_090)),
+            "install",
+        )
+        self.assertEqual(
+            watcher.classify_boundary(probe._unknown_report("fixture", ["no data"])),
+            "unknown",
+        )
+        self.assertEqual(
+            watcher.classify_boundary(known_continue_report(5_400_000_090, binding="secondary")),
+            "weekly-secondary",
+        )
+        # Precedence fence (review r1 F11): the decision check runs before
+        # the status and binding checks, so a wait-for-reset decision
+        # classifies wait-for-reset even on a weekly-secondary binding or
+        # an unknown status (both non-schedulable anyway).
+        self.assertEqual(
+            watcher.classify_boundary(
+                {
+                    **known_continue_report(5_400_000_090, binding="secondary"),
+                    "pause_decision": "wait-for-reset",
+                }
+            ),
+            "wait-for-reset",
+        )
+        self.assertEqual(
+            watcher.classify_boundary(
+                {
+                    **probe._unknown_report("fixture", ["no data"]),
+                    "pause_decision": "wait-for-reset",
+                }
+            ),
+            "wait-for-reset",
+        )
+
     def test_watcher_replacement_is_single_and_fenced(self) -> None:
         first = self.boundary(known_continue_report(5_400_000_090))
         second = self.boundary(known_continue_report(5_400_000_150))
@@ -913,7 +987,8 @@ class RuntimeWatcherIntegrationTest(unittest.TestCase):
         self.clock.advance(30)
         archived = self.fixture.root / "docs/plans/completed/fixture.md"
         archived.parent.mkdir(parents=True, exist_ok=True)
-        archived.write_text("# fixture\n\n- [x] checklist item\n")
+        # The ### Task 1 heading exists because the runtime's terminal gate requires at least one recognizable task section.
+        archived.write_text("# fixture\n\n### Task 1: done\n\n- [x] checklist item\n")
         # Staged terminal: the final stage requires a conforming pre-archive
         # gate receipt, so the fixture seeds one with the same shape as the
         # runtime suite's seed_archive_gate helper (declared destination
@@ -2305,8 +2380,11 @@ class RuntimeWatcherIntegrationTest(unittest.TestCase):
         def hook_cleanup() -> None:
             cleaner_started.set()
             with contextlib.redirect_stdout(out):
+                # Hermeticity: point the decision log into the fixture tmp
+                # dir instead of the host-global hook-outcomes.log.
                 hook_outcome["code"] = budget_guard_core.main(
-                    ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired)]
+                    ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired),
+                     "--hook-outcomes-log", str(flag.parent / "hook-outcomes.log")]
                 )
 
         with watcher.budget_guard_lock(flag) as held:

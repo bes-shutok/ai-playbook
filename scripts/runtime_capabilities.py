@@ -86,6 +86,7 @@ REASON_CODES = {
     "commit-pending",
     "cleanup-required",
     "precondition-unverified",
+    "capacity-unavailable",
 }
 # Reason codes whose blocked receipt may resume automatically.
 RESUMABLE_REASONS = {"approval-required", "timeout", "runtime-error", "stale-claim", "cleanup-required", "precondition-unverified"}

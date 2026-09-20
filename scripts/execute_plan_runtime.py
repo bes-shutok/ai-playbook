@@ -17,6 +17,7 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -35,7 +36,7 @@ STATUSES = {"success", "contract-violation", "blocked", "aborted", "error"}
 SCHEMA_VERSION = 1
 
 # Standing resume watcher receipt schema: the workflow-neutral watcher module
-# owns it (r1 F18; dependency direction runtime -> watcher, never reverse).
+# owns it (dependency direction runtime -> watcher, never reverse).
 # The names below re-point there lazily so a layout staged without the
 # watcher module keeps importing this driver.
 WORKFLOW_STATES = {"active", "blocked", "complete", "terminal", "aborted"}
@@ -55,10 +56,16 @@ CLAIM_LEASE_SECONDS = 14400
 # Claim states the reclaim operation admits (the live set plus a claim fenced
 # by a blocked receipt whose worker is gone).
 RECLAIMABLE_CLAIM_STATES = {"claimed", "launched", "blocked"}
+# Budget of the waiting-capacity parking policy: a capacity receipt parks a
+# single-task claim with this many resumptions on the claim's retry policy,
+# each successive capacity receipt consumes one, and the receipt that arrives
+# with the budget at zero moves the claim to `blocked`. Driver-owned code: no
+# environment variable or CLI flag overrides it.
+WAITING_CAPACITY_RETRY_ATTEMPTS = 3
 # The closed batch claim-group state set (the manifest validator and the
 # group-state mutation primitive share it): `failed` is the terminal state the
-# reclaim-time group release (r4 F2) and the advance-time group-failure belt
-# (r5 F3) write; every consumer keys on == "active", so a failed group routes
+# reclaim-time group release and the advance-time group-failure belt
+# write; every consumer keys on == "active", so a failed group routes
 # no member action.
 BATCH_GROUP_STATES = {"active", "closed", "failed"}
 # The terminal gate bounds its archived-plan read at 1,000,000 bytes: a plan
@@ -66,7 +73,33 @@ BATCH_GROUP_STATES = {"active", "closed", "failed"}
 # entire file), and a plan over the bound is refused outright instead of
 # prefix-scanned. The readiness operation applies the same bound to its plan
 # read.
-TERMINAL_PLAN_READ_LIMIT = 1_000_000
+PLAN_READ_LIMIT = 1_000_000
+# The diagnose classification map: the fixed, closed mapping from a history
+# failure event to the first-failed-transition classification. The worker-failure
+# class covers the whole non-resumable worker-failure family including
+# cleanup-unverified; stale-claim receipts are stale evidence, and
+# precondition-unverified receipts are inclusion failures. Cancellation is
+# deliberately absent as a class: a cancelled worker's receipts already carry
+# the timeout, malformed-result, or cleanup-unverified codes and classify under
+# those. Driver-owned code: a new recurring gate is a backlog decision, never a
+# silent extension of this table.
+DIAGNOSE_REASON_CLASSIFICATIONS = {
+    "timeout": "timeout",
+    "capacity-unavailable": "capacity-unavailable",
+    "malformed-result": "worker-failure",
+    "runtime-error": "worker-failure",
+    "runtime-policy-unavailable": "worker-failure",
+    "cleanup-unverified": "worker-failure",
+    "stale-claim": "stale-evidence",
+    "precondition-unverified": "inclusion",
+}
+# Workflow-scoped failure events that carry no reason code: the terminal
+# refusal tail's evidence write and the user interruption fence.
+DIAGNOSE_EVENT_CLASSIFICATIONS = {
+    "terminal-refused": "terminal-gate",
+    "user-interrupt-recorded": "user-interruption",
+}
+
 
 ALLOWED_OPERATION_KINDS = {
     "repository-task",
@@ -86,8 +119,8 @@ SHELL_MARKERS = (";", "&&", "||", "|", "`", "$(", "${", "\n", "\r")
 # Ambient worktree noise tolerated by name shape: pre-launch (nothing proves
 # the noise was worker-caused) a purely ambient dirty worktree blocks
 # resumably for cleanup; post-launch, the worktree scope witness consults
-# the same allowlist only to DOWNGRADE its verdict (r1 F15, untracked arm
-# tightened by r2 F2): when every out-of-scope path is porcelain-proven
+# the same allowlist only to DOWNGRADE its verdict (untracked arm
+# tightened by the later review): when every out-of-scope path is porcelain-proven
 # untracked AND ambient-shaped the blocked outcome is the resumable
 # cleanup-required envelope, and any tracked out-of-scope modification or
 # non-ambient out-of-scope path keeps the terminal contract-violation. A
@@ -155,28 +188,42 @@ def _read_plan_bounded(
     path: Path | str,
     require_safe_path: bool,
 ) -> tuple[str | None, str | None]:
-    """Read a plan file under one shared bounded-read policy (r4 R4-1/DS4-1).
+    """Read a plan file under one shared bounded-read policy.
 
     Returns ``(text, error)`` with exactly one of the two ``None``; each
     error is a predicate fragment the caller prefixes with its own subject
     ("archived plan" / "plan file") to build its refusal envelope. The
-    policy is identical for both call sites (terminal gate and readiness):
+    policy is identical for every call site (terminal gate, pre-archive
+    mirror, and readiness):
 
-    - with ``require_safe_path`` (terminal gate) the path must first resolve
-      through the fail-closed path policy (repository-relative,
-      non-escaping, shell-marker-free) under ``repo_root``;
-    - the target must be a regular file: ``is_file()`` refuses FIFOs,
-      devices, and directories before any open, so a named pipe (whose stat
-      size is 0 and whose blocking read would hang forever) is refused
-      immediately and deterministically;
+    - with ``require_safe_path`` (terminal gate and pre-archive mirror) the
+      path must first resolve through the fail-closed path policy
+      (repository-relative, non-escaping, shell-marker-free) under
+      ``repo_root``;
+    - the target must be a regular file, proven on the open descriptor
+      itself: the file is opened with
+      ``os.open(O_RDONLY | O_NONBLOCK | O_CLOEXEC)`` (the nonblocking flag
+      makes the open itself unable to block on a FIFO with no writer) and
+      ``os.fstat`` classifies that descriptor through ``stat.S_ISREG``
+      before any byte is read. There is no check-then-open window at all:
+      the file cannot be swapped between a pre-open classification and the
+      read, because the classified object IS the read object. A named pipe
+      (whose stat size is 0 and whose blocking read would hang forever),
+      a device, and a directory are all refused through this one gate;
     - the read is bounded without any stat size gate (a stat-then-read
-      window lets the file grow past the checked size):
-      ``open("rb")`` reads at most ``TERMINAL_PLAN_READ_LIMIT + 1`` bytes
-      and ``len(data)`` over ``TERMINAL_PLAN_READ_LIMIT`` refuses the plan
-      outright, so the whole-file scan promise is proven at read time and an
-      over-limit plan is never prefix-scanned.
+      window lets the file grow past the checked size): the descriptor is
+      wrapped with ``os.fdopen`` and the stream reads at most
+      ``PLAN_READ_LIMIT + 1`` bytes and ``len(data)`` over
+      ``PLAN_READ_LIMIT`` refuses the plan outright, so the
+      whole-file scan promise is proven at read time and an over-limit plan
+      is never prefix-scanned.
 
     Decoding uses ``errors="replace"`` so hostile bytes cannot crash a gate.
+    The decoded text is stripped here, once, so every consumer (the two
+    empty-refusal sites and the readiness decision) shares one text and an
+    empty-or-whitespace-only artifact is a plain falsy check downstream;
+    callers that split the text into lines number them from the stripped
+    form, so leading or trailing blank lines shift no interior number.
     """
 
     if require_safe_path:
@@ -190,26 +237,44 @@ def _read_plan_bounded(
     else:
         plan_path = Path(path)
     try:
-        if not plan_path.exists():
-            return None, f"is missing or unreadable: {plan_path}"
-        if not plan_path.is_file():
-            # Regular-file gate before any open: a FIFO passes every size
-            # check (its stat size is 0) and would hang a blocking read
-            # forever; is_file() refuses FIFOs, devices, and directories
-            # without opening anything. A directory path exercises this same
-            # gate deterministically in the tests, standing in for the FIFO
-            # case (os.mkfifo on the same gate is refused identically).
-            return None, f"is not a regular file: {plan_path}"
-        with plan_path.open("rb") as stream:
-            data = stream.read(TERMINAL_PLAN_READ_LIMIT + 1)
+        fd = os.open(plan_path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
     except OSError as exc:
         return None, f"is missing or unreadable: {plan_path}: {exc}"
-    if len(data) > TERMINAL_PLAN_READ_LIMIT:
+    stream = None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            # Regular-file gate on the open descriptor: a FIFO passes every
+            # size check (its stat size is 0) and would hang a blocking read
+            # forever; O_NONBLOCK already made the open itself non-blocking,
+            # and S_ISREG refuses FIFOs, devices, and directories before any
+            # byte is read. The classification is of the very descriptor the
+            # read would consume, so nothing can slip in between the check
+            # and the open.
+            return None, f"is not a regular file: {plan_path}"
+        stream = os.fdopen(fd, "rb")
+        data = stream.read(PLAN_READ_LIMIT + 1)
+    except OSError as exc:
+        return None, f"is missing or unreadable: {plan_path}: {exc}"
+    finally:
+        # The descriptor has exactly one closer: before os.fdopen succeeds
+        # the raw fd is ours to close; afterwards the stream owns it, and
+        # closing the stream closes the fd. Either way the descriptor never
+        # leaks on a refusal or a read error.
+        if stream is None:
+            os.close(fd)
+        else:
+            stream.close()
+    if len(data) > PLAN_READ_LIMIT:
         # The +1 read replaces a stat size gate: len(data) over the limit
         # proves, at read time and without any stat-then-read window, that
         # the whole-file scan promise cannot be kept.
-        return None, f"exceeds the bounded read limit: over {TERMINAL_PLAN_READ_LIMIT} bytes"
-    return data.decode("utf-8", errors="replace"), None
+        return None, f"exceeds the bounded read limit: over {PLAN_READ_LIMIT} bytes"
+    # Strip once here so every consumer shares one text: the empty-refusal
+    # sites check plain falsiness, and the readiness decision scans the same
+    # stripped form the refusal sites saw. A checkbox line is never
+    # whitespace, so the strip can only drop blank edge lines, never a
+    # scannable marker line.
+    return data.decode("utf-8", errors="replace").strip(), None
 
 
 def _resolved_facts_dir(repo_root: Path, key: str) -> Path | None:
@@ -245,7 +310,7 @@ def _resolved_facts_dir(repo_root: Path, key: str) -> Path | None:
 
 
 def _sha256_capped(path: Path) -> tuple[str | None, str | None]:
-    """sha256 digest over at most ``TERMINAL_PLAN_READ_LIMIT`` bytes.
+    """sha256 digest over at most ``PLAN_READ_LIMIT`` bytes.
 
     Returns ``(digest, error)`` with exactly one of the two ``None``. The
     byte digest, not a digest over the decoded text, is what the staged
@@ -255,10 +320,10 @@ def _sha256_capped(path: Path) -> tuple[str | None, str | None]:
 
     try:
         with path.open("rb") as stream:
-            data = stream.read(TERMINAL_PLAN_READ_LIMIT + 1)
+            data = stream.read(PLAN_READ_LIMIT + 1)
     except OSError:
         return None, "is unreadable"
-    if len(data) > TERMINAL_PLAN_READ_LIMIT:
+    if len(data) > PLAN_READ_LIMIT:
         return None, "exceeds the bounded read limit"
     return hashlib.sha256(data).hexdigest(), None
 
@@ -395,7 +460,7 @@ def create_manifest(
     else:
         task_items = [(str(task["id"]), task) for task in tasks]
     if not task_items:
-        # Library-callers wedge guard (r4 R4-6): a zero-task manifest would
+        # Library-callers wedge guard: a zero-task manifest would
         # answer every later claim with a silent success no-op while
         # readiness and terminal refuse the empty run, so the seeding
         # boundary itself refuses it (the CLI create operation refuses
@@ -545,7 +610,7 @@ class _RetryRelaunch:
 class _AdapterWindow:
     """Marker: the adapter resume runs after the manifest lock is released.
 
-    ``retry_policy`` rides only on the batch-member retry window (r4 F1):
+    ``retry_policy`` rides only on the batch-member retry window:
     the driver-owned decremented budget the resumed receipt is forced to,
     so a hostile envelope cannot re-supply attempts each round. The plain
     resume-selection window leaves it None.
@@ -595,7 +660,7 @@ def _stale_claim_outcome(
 def _reclaim_evidence_lines(task_id: str, replaced_token: str, replacement_token: str, replaced_generation: int) -> list[str]:
     """Compose the reclaim success evidence lines (pure; no I/O).
 
-    Pins the pre-redaction label contract (r4 T4-1): the OLD claim token is
+    Pins the pre-redaction label contract: the OLD claim token is
     carried under ``replaced_token=`` and the NEW rotated token under
     ``replacement_token=``. The durable envelope redacts both values, so the
     returned evidence alone cannot prove which token each label carries;
@@ -691,7 +756,7 @@ def _pending_sort_key(task: Mapping[str, Any]) -> tuple[int, str]:
 
     The persisted document ordinal (``create_manifest`` seeds it) is the
     canonical queue order; ``number`` then ``id`` remain the legacy fallback
-    for manifests that predate ordinals. One owner for the key (r3 F6): a
+    for manifests that predate ordinals. One owner for the key: a
     divergent or number-based key at any selection site breaks document
     order on ordinary 10+ task plans (ids sort lexicographically) and makes
     the batch member ordinals disagree with the plan.
@@ -713,6 +778,67 @@ def _plan_task_number(task_id: str) -> int | None:
     return int(suffix) if suffix.isdigit() else None
 
 
+def _plan_fence_opener(line: str) -> tuple[str, int] | None:
+    """The ``(character, width)`` fence opener when the line opens a fence.
+
+    CommonMark opening rule: zero to three leading spaces, then a run of
+    three or more backticks or tildes, then an optional info string; a
+    backtick opener's info string carries no backtick, so a line like
+    `` ```a`b `` opens nothing. Indent beyond three spaces (including a
+    leading tab) makes the line literal text, never a fence.
+    """
+
+    indent = len(line) - len(line.lstrip(" "))
+    if indent > 3:
+        return None
+    body = line[indent:]
+    for character in ("`", "~"):
+        width = 0
+        while width < len(body) and body[width] == character:
+            width += 1
+        if width >= 3:
+            if character == "`" and "`" in body[width:]:
+                return None
+            return character, width
+    return None
+
+
+def _plan_fence_map(lines: Sequence[str]) -> list[bool]:
+    """Per-line fence-state table over the WHOLE plan's lines (pure; no I/O).
+
+    ``fenced[i]`` is True when ``lines[i]`` belongs to a fenced code block:
+    its opener line, its content lines, and its closer line. CommonMark
+    rules: an opener is ``_plan_fence_opener``'s run of three or more
+    backticks or tildes with an optional info string; a closing line uses
+    the same character at an equal or greater width and is bare (zero to
+    three leading spaces, nothing after the run); nested fences of
+    different widths do not close a wider fence early; an unclosed fence
+    stays open to end of file. The map is computed once over the whole
+    plan's lines, so fence parity never restarts at a section boundary: a
+    fence opened in one task's body keeps every later heading inside it
+    fenced until its matching closer appears.
+    """
+
+    fenced: list[bool] = []
+    open_character = ""
+    open_width = 0
+    for line in lines:
+        if open_character:
+            fenced.append(True)
+            indent = len(line) - len(line.lstrip(" "))
+            body = line[indent:] if indent <= 3 else ""
+            if len(body) >= open_width and body == open_character * len(body):
+                open_character, open_width = "", 0
+            continue
+        opener = _plan_fence_opener(line)
+        if opener is not None:
+            open_character, open_width = opener
+            fenced.append(True)
+        else:
+            fenced.append(False)
+    return fenced
+
+
 def _plan_task_section_lines(lines: Sequence[str], number: int) -> list[str] | None:
     """Extract one plan task section from pre-split plan lines.
 
@@ -721,15 +847,21 @@ def _plan_task_section_lines(lines: Sequence[str], number: int) -> list[str] | N
     spans from its heading line to the next ``## `` heading line or the next
     ``### Task <N>:`` heading line, or end of file. A nested ``###`` subsection
     (for example ``### Notes:``) belongs to the task section, so lower
-    unchecked checkboxes stay visible to the agreement scan. Fence tracking
-    starts at the task heading line: while a ``` fence is open, ``## `` and
-    ``### Task <N>:`` lines are fenced content, never break markers, so a
-    fenced example cannot truncate the section and hide an unchecked checkbox
-    after it. Returns None when the lines carry no such section.
+    unchecked checkboxes stay visible to the agreement scan. Both the heading
+    search and the section walk consume ``_plan_fence_map`` computed once over
+    the whole plan's lines: a fenced ``## `` or ``### Task <N>:`` line is
+    fenced content, never a heading or a break marker, so a fenced example
+    cannot truncate the section or hijack the section start; parity never
+    restarts at the section start, and an unclosed fence keeps every later
+    heading unfound so the caller fails closed on the missing section.
+    Returns None when the lines carry no unfenced section for ``number``.
     """
 
+    fenced = _plan_fence_map(lines)
     start: int | None = None
     for index, line in enumerate(lines):
+        if fenced[index]:
+            continue
         match = _TASK_SECTION_HEADING.match(line)
         if match is not None and int(match.group(1)) == number:
             start = index + 1
@@ -737,11 +869,9 @@ def _plan_task_section_lines(lines: Sequence[str], number: int) -> list[str] | N
     if start is None:
         return None
     section: list[str] = []
-    inside_fence = False
-    for line in lines[start:]:
-        if line.lstrip().startswith("```"):
-            inside_fence = not inside_fence
-        elif not inside_fence and (line.startswith("## ") or _TASK_SECTION_HEADING.match(line)):
+    for index in range(start, len(lines)):
+        line = lines[index]
+        if not fenced[index] and (line.startswith("## ") or _TASK_SECTION_HEADING.match(line)):
             break
         section.append(line)
     return section
@@ -750,17 +880,28 @@ def _plan_task_section_lines(lines: Sequence[str], number: int) -> list[str] | N
 def _unchecked_checkbox_pairs(lines: Sequence[str]) -> list[tuple[int, str]]:
     """``(1-based line number, line)`` pairs for unchecked checkbox lines.
 
-    The line-anchored reading: a mid-prose mention of the marker does not
-    start its line and never counts. One scan computes the number during the
-    walk, so a duplicated line is never resolved through an ambiguous text
-    search and the helper has no dead no-match path.
+    The line-anchored reading: a line counts only when its first
+    non-whitespace token is an unchecked GFM task-list marker, one of
+    ``- [ ]``, ``* [ ]``, or ``+ [ ]``; a mid-prose mention of the marker
+    does not start its line and never counts. One scan computes the number
+    during the walk, so a duplicated line is never resolved through an
+    ambiguous text search and the helper has no dead no-match path.
+    Evidence line numbers are positions in the sequence the caller passes,
+    which is always ``str.splitlines()`` output: they count ``splitlines()``
+    boundaries, which differ from a plain ``\\n`` split where Unicode line
+    separators (``\\u2028``, ``\\u2029``, ``\\x85``, ``\\v``, ``\\f``) occur.
     """
 
-    return [(index, line) for index, line in enumerate(lines, start=1) if line.strip().startswith("- [ ]")]
+    return [
+        (index, line)
+        for index, line in enumerate(lines, start=1)
+        if line.strip().startswith(("- [ ]", "* [ ]", "+ [ ]"))
+    ]
 
 
 def _unchecked_checkbox_lines(lines: Sequence[str]) -> list[str]:
-    """Lines whose first non-whitespace token is an unchecked checkbox."""
+    """Lines whose first non-whitespace token is an unchecked checkbox
+    (``- [ ]``, ``* [ ]``, or ``+ [ ]``)."""
 
     return [line for _number, line in _unchecked_checkbox_pairs(lines)]
 
@@ -902,7 +1043,7 @@ class RuntimeDriver:
             if field in value and (isinstance(value[field], bool) or not isinstance(value[field], int) or value[field] < 0):
                 raise ValueError(f"manifest {field} must be a non-negative integer")
         if "resume_watcher" in value and value["resume_watcher"] is not None:
-            # Schema owner: execute_plan_resume_watcher (r1 F18). A layout
+            # Schema owner: execute_plan_resume_watcher. A layout
             # missing that module fails closed as a ValueError, never an
             # uncaught ImportError.
             try:
@@ -916,7 +1057,7 @@ class RuntimeDriver:
         if not isinstance(value.get("generation"), int) or value["generation"] < 0:
             raise ValueError("manifest generation must be non-negative")
         task_states = {"pending", "claimed", "launched", "blocked", "done-pending", "commit-pending", "checkpointed", "complete", "aborted"}
-        claim_states = {"claimed", "launched", "blocked", "closed", "aborted", "replaced", "staged"}
+        claim_states = {"claimed", "launched", "blocked", "waiting-capacity", "closed", "aborted", "replaced", "staged"}
         for task_id, task in value["tasks"].items():
             if not isinstance(task, Mapping) or task.get("id", task_id) != task_id:
                 raise ValueError("task identity does not match manifest key")
@@ -935,7 +1076,7 @@ class RuntimeDriver:
                     raise ValueError("batch group identity does not match manifest key")
                 # `failed` is the terminal state documented in
                 # BATCH_GROUP_STATES; refusing it here used to make every
-                # validating entrypoint raise after the exit (r5 F1).
+                # validating entrypoint raise after the exit.
                 if group.get("state") not in BATCH_GROUP_STATES:
                     raise ValueError(f"unknown batch group state: {group.get('state')}")
                 members = group.get("members")
@@ -1249,7 +1390,7 @@ class RuntimeDriver:
             return stale(["member attempt does not match the group attempt record"])
         progress = raw.get("batch_progress") if isinstance(raw, Mapping) else None
         if progress is not None:
-            # The normalized envelope carries no credential (r1 F3): the
+            # The normalized envelope carries no credential: the
             # outer receipt's claim token was already verified against the
             # live claim before this fence ran, so the envelope check pins
             # only the identity fields it can actually carry.
@@ -1261,7 +1402,7 @@ class RuntimeDriver:
             }
             if not capabilities.validate_member_receipt(progress, expected):
                 return stale(["batch member receipt does not match active group state"])
-        # The session pin (r3 F15) resolves the expected session through the
+        # The session pin resolves the expected session through the
         # group anchor first, then the member's own task session: a receipt
         # carrying a session that matches neither the anchor nor the live
         # task session is fenced even when the anchor has not been captured
@@ -1306,7 +1447,7 @@ class RuntimeDriver:
             retry_raw.setdefault("claim_token", outcome.claim["token"])
             return self.record_worker_checkpoint(retry_raw)
         if isinstance(outcome, _AdapterWindow):
-            # A batch-member retry (r4 F1): the relaunch is the group's own
+            # A batch-member retry: the relaunch is the group's own
             # continuation primitive - an anchor-session resume through the
             # shared member window. The resume runs outside the lock and its
             # receipt re-enters record_worker_checkpoint, where the
@@ -1384,7 +1525,7 @@ class RuntimeDriver:
         member_retry_session: str | None = None
         if retryable and retry.get("attempts_remaining", 0) > 0 and self.adapter is not None and task is not None:
             if claim.get("group_id"):
-                # r4 F1: a batch member never takes the plain driver relaunch.
+                # A batch member never takes the plain driver relaunch.
                 # That relaunch bypasses the group fences (launch refusal,
                 # attempt rotation, member_attempts re-arm), and its fresh
                 # session then always fails ``_member_receipt_fence``'s
@@ -1399,7 +1540,7 @@ class RuntimeDriver:
                 # (``_member_launch_refusal`` refuses a launched member), so
                 # the receipt persists as the member's blocked state and the
                 # operator recovers through the group path
-                # (``continue --batch``; the r2 F7 recycle shape for the
+                # (``continue --batch``; the recycle shape for the
                 # anchor).
                 member_retry_session = self._member_session(manifest, task, claim, anchor_first=False)
             if member_retry_session is not None or not claim.get("group_id"):
@@ -1445,9 +1586,79 @@ class RuntimeDriver:
                 result["generation"],
                 ["claim already progressed past this receipt"],
             )
+        if (
+            task is not None
+            and not self._task_complete(task)
+            and result["reason_code"] == "capacity-unavailable"
+            and not claim.get("group_id")
+        ):
+            # A capacity receipt proves the worker never ran, so a
+            # single-task claim parks in place instead of taking the blocked
+            # shape: parking keeps the claim identity live for the in-place
+            # resume. A group member never parks here (the group path owns
+            # member recovery) and falls through to the shared persist below.
+            return self._park_waiting_capacity_locked(manifest, task_id, claim, result, raw)
         if task and not self._task_complete(task):
             self._apply_blocked(manifest, task_id, result, resume_allowed=result["reason_code"] in capabilities.RESUMABLE_REASONS, session_id=raw.get("session_id"))
             self._save(manifest)
+        return result
+
+    def _park_waiting_capacity_locked(
+        self,
+        manifest: dict[str, Any],
+        task_id: str,
+        claim: Mapping[str, Any],
+        result: dict[str, Any],
+        raw: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Park a single-task claim in ``waiting-capacity`` under a bounded retry policy.
+
+        Caller holds the manifest lock. A capacity receipt proves the worker
+        never ran, so there is no dead session to fence and no rotation to
+        pay: the claim keeps its token, generation, and launch record and
+        carries the standard-shape bounded retry policy. The first capacity
+        receipt parks with the full budget; each successive capacity receipt
+        consumes one attempt; the receipt that arrives with the budget at
+        zero ends the parked state through the shared blocked-persist tail
+        (claim ``blocked``, the reclaimable lease state). The budget lives on
+        the claim and is driver-owned: a worker- or adapter-supplied policy
+        never re-supplies attempts.
+        """
+
+        prior = claim.get("retry_policy")
+        if isinstance(prior, Mapping) and prior.get("mode") == "bounded-resume":
+            remaining = int(prior.get("attempts_remaining", 0))
+            if remaining <= 0:
+                # Budget exhausted: the parked state ends and the claim takes
+                # the existing blocked shape, whose standard recovery
+                # machinery (resume fencing, lease-gated reclaim) applies.
+                self._apply_blocked(manifest, task_id, result, resume_allowed=result["reason_code"] in capabilities.RESUMABLE_REASONS, session_id=raw.get("session_id"))
+                self._save(manifest)
+                return result
+            policy = {
+                "mode": "bounded-resume",
+                "max_attempts": int(prior.get("max_attempts", WAITING_CAPACITY_RETRY_ATTEMPTS)),
+                "attempts_remaining": remaining - 1,
+            }
+        else:
+            policy = {
+                "mode": "bounded-resume",
+                "max_attempts": WAITING_CAPACITY_RETRY_ATTEMPTS,
+                "attempts_remaining": WAITING_CAPACITY_RETRY_ATTEMPTS,
+            }
+        task = manifest["tasks"].get(task_id)
+        result["recovery_action"] = "resume-same-claim"
+        if task is not None:
+            task["status"] = "blocked"
+            task["resume_allowed"] = False
+            task["blocked_receipt"] = dict(result)
+            session_id = raw.get("session_id")
+            if session_id:
+                task["session_id"] = str(session_id)
+        claim["state"] = "waiting-capacity"
+        claim["retry_policy"] = policy
+        manifest["history"].append({"event": "worker-blocked", "task_id": task_id, "reason_code": result.get("reason_code", "malformed-result")})
+        self._save(manifest)
         return result
 
     @staticmethod
@@ -1458,7 +1669,7 @@ class RuntimeDriver:
         *,
         anchor_first: bool,
     ) -> str | None:
-        """The one member-session resolution (r5 F8), two explicit orders.
+        """The one member-session resolution, two explicit orders.
 
         Consolidates the four former spellings. Both precedence orders are
         semantic, not accidental:
@@ -1530,7 +1741,7 @@ class RuntimeDriver:
             return _outcome("blocked", "worktree-witness-unavailable", ["git diff scope witness failed"], "repository-task", identity, result["generation"], "preserve-and-reconcile", resume_allowed=False)
         if verdict == "cleanup":
             # Every out-of-scope path is porcelain-proven untracked and
-            # ambient-shaped (r1 F15, untracked arm tightened by r2 F2):
+            # ambient-shaped (untracked arm tightened by the later review):
             # the same resumable cleanup envelope the pre-launch path
             # uses, never the terminal contract violation that would
             # hard-wedge the task on host-generated untracked noise. A
@@ -1694,12 +1905,12 @@ class RuntimeDriver:
         if group.get("state") == "active" and task_id in members:
             index = members.index(task_id)
             if index + 1 < len(members):
-                # Anchor-session resolution (r3 F15): the anchor capture is
+                # Anchor-session resolution: the anchor capture is
                 # receipt-driven, so a member whose receipts carried no
                 # session id leaves the group without one and the advance
                 # could not resume the next member. Fall back to the
                 # completed task's own session and capture it before giving
-                # up; only when no session exists anywhere does the r6 F1
+                # up; only when no session exists anywhere does the
                 # release below stand.
                 completed_task = manifest["tasks"].get(task_id) or {}
                 anchor_session = self._member_session(manifest, completed_task, claim, anchor_first=True)
@@ -1712,13 +1923,13 @@ class RuntimeDriver:
                     })
                 next_id = members[index + 1]
                 if not anchor_session:
-                    # r6 F1: no session exists anywhere (a schema-legal
+                    # No session exists anywhere (a schema-legal
                     # adapter whose receipts carry none). Refusing the done
                     # instead wedged the group forever: done replay,
                     # continue --batch, resume, and reclaim all refuse a
                     # done-pending member of a live group, so no entrypoint
                     # could ever leave the state. Fail the group atomically
-                    # in the same r5 F3 release shape the authorization
+                    # in the same release shape the authorization
                     # belt uses: the completed member's done lands below
                     # and the staged members re-enter the individual queue.
                     self._fail_group_release_locked(
@@ -1743,10 +1954,10 @@ class RuntimeDriver:
                 )
                 authorization = self.authorize_envelope(envelope, int(group.get("generation", 0)))
                 if authorization["status"] != "success":
-                    # r5 F3 belt: claim-time authorization and the prefix
+                    # Authorization belt: claim-time authorization and the prefix
                     # exclusion make this arm unreachable for a well-formed
                     # group, so it fires only on drifted state. Failing the
-                    # group atomically here (the r4 F2 release shape) lets
+                    # group atomically here (the release shape) lets
                     # the completed member's done land and releases the
                     # staged members back to the individual queue; refusing
                     # the done instead would wedge the group forever, because
@@ -1763,7 +1974,7 @@ class RuntimeDriver:
                     )
                     return None, True, None
                 policy_token = authorization["policy_token"]
-                # The lease timestamp refreshes at activation (r3 F1): the
+                # The lease timestamp refreshes at activation: the
                 # claim lease measures member liveness from the moment the
                 # member became active, so a group parked at a budget pause
                 # does not age into reclaimable-looking leases (reclaim
@@ -1903,8 +2114,8 @@ class RuntimeDriver:
         Every group lifecycle transition routes through this helper and no
         other site writes ``claim_groups[group_id]["state"]`` or
         ``active_member``: activate (claim creation and the anchor launch
-        re-arm), advance (member done handoff), fail (the r4 F2 reclaim-time
-        release and the r5 F3 advance-time belt), and close (the last
+        re-arm), advance (member done handoff), fail (the reclaim-time
+        release and the advance-time belt), and close (the last
         member's done). The semantic progress revision mirror rides every
         transition so the group never carries a second progress counter.
         Unknown states fail closed; a missing group record returns None and
@@ -1933,7 +2144,7 @@ class RuntimeDriver:
         members: Sequence[str],
         reason: str,
     ) -> list[str]:
-        """The advance-time group release (r5 F3 shape, shared by its arms).
+        """The advance-time group release, one shape shared by its arms.
 
         Caller holds the manifest lock and the group is live with the
         completed member still holding its seat. One save shape: the
@@ -1946,7 +2157,7 @@ class RuntimeDriver:
         released claims, and the reason. Refusing the done instead would
         wedge the group forever. Arms: the next member's envelope
         authorization failing (a state drift) and no member session existing
-        anywhere for the anchor resume (r6 F1).
+        anywhere for the anchor resume.
         """
 
         released = [
@@ -1969,11 +2180,11 @@ class RuntimeDriver:
     def _compute_batch_prefix(self, pending: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
         """Maximal file-disjoint prefix of the pending queue for one batch.
 
-        Canonical document order (the persisted ordinal, r3 F6; the prefix is
+        Canonical document order (the persisted ordinal; the prefix is
         re-sorted so a caller's ordering can never leak task-number order
         into the batch queue), no skipping past an overlapping task,
         member cap four, combined canonical file cap eight. A zero-scope or
-        network-flagged pending task ends the prefix (r5 F3): its envelope
+        network-flagged pending task ends the prefix: its envelope
         can never be authorized, so the batch contract never stages it as a
         member and its single-task launch path owns the authorization
         refusal.
@@ -2012,7 +2223,7 @@ class RuntimeDriver:
         starts live and later members stay staged (tasks pending) until the
         group advances to them. The group's policy union is recorded for
         diagnostics only; it never authorizes actions. Every member's
-        envelope is authorized here, before any state write (r5 F3): a
+        envelope is authorized here, before any state write: a
         member whose envelope cannot be authorized refuses the batch claim
         cheaply and leaves the manifest untouched, instead of staging a
         member whose advance-time authorization is guaranteed to fail and
@@ -2110,7 +2321,7 @@ class RuntimeDriver:
             pending.sort(key=_pending_sort_key)
             if not pending:
                 return {"status": "success", "claimed": False, "actions": [], "generation": manifest.get("generation", 0)}
-            existing_claim = next((claim for claim in manifest["claims"].values() if claim.get("state") in {"claimed", "launched"}), None)
+            existing_claim = next((claim for claim in manifest["claims"].values() if claim.get("state") in {"claimed", "launched", "waiting-capacity"}), None)
             if existing_claim:
                 return _outcome("blocked", "stale-claim", ["another task is already claimed"], "repository-task", existing_claim.get("token", "claim"), manifest.get("generation", 0), "resumable-conflict", claimed=False)
             live_group = self._live_group(manifest)
@@ -2147,8 +2358,11 @@ class RuntimeDriver:
             not current_claim
             or current_claim.get("token") != claim["token"]
             or current_claim.get("generation") != claim["generation"]
-            or current_claim.get("state") not in {"claimed", "launched"}
+            or current_claim.get("state") not in {"claimed", "launched", "waiting-capacity"}
         ):
+            # The launch fence also admits a parked claim: the capacity
+            # resume relaunches the SAME claim in place (token and generation
+            # unchanged, no second claim row, no reclaim rotation).
             return _outcome("blocked", "owner-mismatch", ["claim changed before launch"], "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile")
         baseline_revision = self._git_head_revision()
         if not baseline_revision:
@@ -2207,7 +2421,7 @@ class RuntimeDriver:
             "baseline_revision": baseline_revision,
             "launched_at": self.clock(),
         }
-        # The lease timestamp refreshes at activation (r3 F1): the anchor
+        # The lease timestamp refreshes at activation: the anchor
         # claim's lease measures liveness from the launch, not the claim.
         current_claim.update({"state": "launched", "policy_token": policy_token, "baseline_revision": baseline_revision, "timestamp": self.clock()})
         manifest["tasks"][task_id]["status"] = "launched"
@@ -2327,7 +2541,7 @@ class RuntimeDriver:
         """
 
         # Resume-path re-entry: a scheduled watcher stands down on this
-        # (r1 F11 peer fence).
+        # (the peer fence).
         self._mark_peer_resumed()
         manifest = self.refresh_manifest()
         if manifest.get("workflow_state") == "aborted":
@@ -2345,7 +2559,7 @@ class RuntimeDriver:
             if group is not None:
                 return self._continue_group_member(manifest, group, prompt, deadline_seconds)
         existing_claim = next(
-            (claim for claim in manifest["claims"].values() if claim.get("state") in {"claimed", "launched"}),
+            (claim for claim in manifest["claims"].values() if claim.get("state") in {"claimed", "launched", "waiting-capacity"}),
             None,
         )
         if existing_claim:
@@ -2367,6 +2581,9 @@ class RuntimeDriver:
                     int(existing_claim.get("generation", 0)),
                     "preserve-and-reconcile",
                 )
+            # A parked claim reaches the same relaunch as a live one: the
+            # launch fence relaunches it in place (the capacity resume), so
+            # the parked state never routes to a second claim.
             result = self._launch_claimed_task(existing_claim, prompt, deadline_seconds)
             self.refresh_manifest()
             return result
@@ -2412,7 +2629,7 @@ class RuntimeDriver:
         if claim.get("state") not in {"claimed", "launched", "blocked"}:
             return _stale_claim_outcome(str(claim.get("token", active_id)), int(claim.get("generation", 0)), ["active batch member claim is not live"])
         if claim.get("state") == "blocked" and task.get("resume_allowed") is not True:
-            # resume_allowed conjunct on the session branch (r3 F2): a
+            # resume_allowed conjunct on the session branch: a
             # blocked member whose receipt forbids continuation (a foreign-
             # path contract violation) is refused on both group recovery
             # entries exactly like resume() hard-filters it; resuming it
@@ -2441,7 +2658,7 @@ class RuntimeDriver:
             return self._resume_member_window(dict(task, session_id=str(session_id)), dict(claim), prompt, deadline_seconds)
         # No anchor session yet: only the anchor's initial launch is legal.
         # A session-less blocked member (a launch-window timeout, launch
-        # exception, or activation failure before the first receipt, r2 F7)
+        # exception, or activation failure before the first receipt)
         # recovers through the same initial-launch branch with a rotated
         # member identity instead of wedging the group on a permanent
         # stale-claim loop: there is no session to resume, the dead
@@ -2468,7 +2685,7 @@ class RuntimeDriver:
 
     @staticmethod
     def _sessionless_member_recycle_shape(group: Mapping[str, Any], task: Mapping[str, Any], claim: Mapping[str, Any], task_id: str) -> bool:
-        """The r2 F7 wedge shape shared by both group recovery entries (r3 O9).
+        """The wedge shape shared by both group recovery entries.
 
         A live group's ANCHOR member is blocked with no session anywhere
         (no task session, no anchor session) and its receipt permits
@@ -2491,7 +2708,7 @@ class RuntimeDriver:
 
     @_locked_mutation
     def _release_blocked_member_for_launch(self, claim: Mapping[str, Any], task_id: str) -> dict[str, Any] | None:
-        """Recycle a session-less blocked member for a fresh launch (r2 F7).
+        """Recycle a session-less blocked member for a fresh launch.
 
         The launch window timed out, the launch raised, or activation
         failed before the worker produced a receipt, so the claim is
@@ -2519,7 +2736,7 @@ class RuntimeDriver:
 
     @staticmethod
     def _rotate_member_identity_locked(manifest: dict[str, Any], task_id: str, claim: Mapping[str, Any]) -> int | None:
-        """Rotate a session-less blocked member's identity for relaunch (r2 F7).
+        """Rotate a session-less blocked member's identity for relaunch.
 
         Callers hold the manifest lock and have verified the wedge shape
         (live group, anchor member, no anchor session, resumable blocked
@@ -2574,7 +2791,7 @@ class RuntimeDriver:
         """
 
         # Resume-path re-entry: a scheduled watcher stands down on this
-        # (r1 F11 peer fence).
+        # (the peer fence).
         self._mark_peer_resumed()
         with _manifest_lock(self.manifest_path, self.owner) as acquired:
             if not acquired:
@@ -2594,7 +2811,7 @@ class RuntimeDriver:
         continuation: the adapter call runs with the manifest lock released,
         the lock is re-acquired afterwards with the manifest re-read and
         checked for drift before any nested checkpoint write. A member retry
-        window (r4 F1) passes the driver-owned decremented ``retry_policy``
+        window passes the driver-owned decremented ``retry_policy``
         the resumed receipt is forced to, mirroring the plain relaunch arm's
         budget override.
         """
@@ -2675,14 +2892,14 @@ class RuntimeDriver:
                 return _stale_claim_outcome(str(claim.get("token", f"{task['id']}:resume")), int(claim.get("generation", manifest.get("generation", 0))), ["resume does not name the active batch member"])
             session_id = self._member_session(manifest, task, claim, anchor_first=False)
             if not session_id:
-                # r2 F7: a session-less blocked anchor member (a launch-window
+                # A session-less blocked anchor member (a launch-window
                 # timeout, launch exception, or activation failure before the
                 # first receipt) recycles into a fresh launch instead of
                 # wedging the group forever: the identity rotation fences the
                 # dead attempt, the returned continuation relaunches the
                 # member through the standard launch fences, and later
                 # members run. The wedge shape is the one shared predicate
-                # (r3 O9) also used by the batch continuation; non-resumable
+                # also used by the batch continuation; non-resumable
                 # receipts (contract violations) and non-anchor shapes keep
                 # the refusal.
                 if (
@@ -2840,7 +3057,7 @@ class RuntimeDriver:
             worktree_evidence.append(f"... and {len(entries) - 20} more entries")
         examined = [
             (task_id, claim) for task_id, claim in launch_evidence_claims
-            if claim.get("state") != "replaced"
+            if claim.get("state") not in {"replaced", "waiting-capacity"}
             and manifest["tasks"].get(task_id, {}).get("status")
             not in {"done-pending", "checkpointed", "complete"}
             and not self._claim_owned_by_live_group(manifest, claim)
@@ -2873,7 +3090,7 @@ class RuntimeDriver:
                 # indistinguishable from worker-caused dirt and keeps the hard
                 # dirty-worktree block (launch-record presence, not mtime, is
                 # the discriminator). Member claims resolve their evidence
-                # through the group record (r3 F5): a launched batch member
+                # through the group record: a launched batch member
                 # carries no launch record of its own.
                 if ambient_entries is not None and self._claim_launch_evidence(manifest, claim) is None:
                     return cleanup_outcome(claim.get("token", "claim"), claim.get("generation", 0))
@@ -2891,7 +3108,7 @@ class RuntimeDriver:
         """True when the claim belongs to an active (live) claim group.
 
         The group protocol owns every member claim, not only the active
-        member (r3 F5): startup reconciliation never quarantines any of
+        member: startup reconciliation never quarantines any of
         them as an ambiguous live worker (the dirty-worktree gates above
         still fire through the launch-evidence list, discriminated by the
         group-resolved launch record), and the batch continuation resolves
@@ -2906,10 +3123,10 @@ class RuntimeDriver:
 
     @staticmethod
     def _claim_released_by_failed_group(manifest: Mapping[str, Any], claim: Mapping[str, Any]) -> bool:
-        """True when the claim's group is terminally failed (r5 F1 round-trip).
+        """True when the claim's group is terminally failed.
 
         A failed group owns no live work: its member claims were closed by
-        the release itself (the r4 F2 reclaim-time release or the r5 F3
+        the release itself (the reclaim-time release or the
         advance-time group failure), and late receipts fence as stale
         against those closed or rotated identities. Their launch evidence
         still resolves through the group record, so without this predicate
@@ -2929,7 +3146,7 @@ class RuntimeDriver:
     def _claim_launch_evidence(manifest: Mapping[str, Any], claim: Mapping[str, Any]) -> Mapping[str, Any] | None:
         """A claim's launch record, resolved through its group for members.
 
-        Group member claims never carry launch records of their own (r3 F5):
+        Group member claims never carry launch records of their own:
         the ONE launch record lives on the group, so the ambient-dirt
         discriminator that classifies pre-launch versus launched claims must
         resolve member evidence through ``claim_groups[group_id]
@@ -3295,7 +3512,7 @@ class RuntimeDriver:
         ``ok``; a recorded baseline with an empty scope, or a broken witness,
         fails closed. When every out-of-scope path is porcelain-proven
         untracked AND ambient-shaped (the ``AMBIENT_NOISE_PATTERNS``
-        allowlist, r1 F15, tightened by r2 F2), the verdict is the resumable
+        allowlist, tightened by the later review), the verdict is the resumable
         ``cleanup`` envelope instead of the terminal ``violation`` that
         would hard-wedge the task on host-generated untracked noise; any
         tracked out-of-scope modification, even one wearing an ambient
@@ -3321,7 +3538,7 @@ class RuntimeDriver:
     def _ambient_untracked_witness(self, paths: Sequence[str]) -> bool:
         """True when every path is proven untracked-and-ambient by porcelain.
 
-        r2 F2: the post-launch ambient downgrade needs the untracked arm,
+        The post-launch ambient downgrade needs the untracked arm,
         not just the name shape. A tracked out-of-scope modification can
         wear an ambient name (``.DS_Store``), and the name check alone
         would downgrade an arbitrary content escape to a resumable
@@ -3518,6 +3735,10 @@ class RuntimeDriver:
         ``workflow_state`` or writing a ``terminal_receipt``. The final-stage
         checks live in ``_final_terminal_stage``, keeping this operation a
         small dispatcher. An unknown stage refuses as blocked ``done-pending``.
+        Each stage refusal composes its blocked outcome first and then appends
+        one ``terminal-refused`` evidence event to the append-only history (the
+        append never changes the outcome); the unknown-stage dispatch refusal
+        writes no event because no stage ran to refuse.
         """
 
         manifest = load_manifest(self.manifest_path)
@@ -3534,6 +3755,29 @@ class RuntimeDriver:
         if stage != "final":
             return _outcome("blocked", "done-pending", [f"unsupported terminal stage: {stage}"], "parent-continuation", "runtime:terminal", manifest.get("generation", 0), "preserve-and-reconcile")
         return self._final_terminal_stage(manifest, archived_plan_path=archived_plan_path, last_commit_sha=last_commit_sha, phase5_checklist=phase5_checklist)
+
+    def _terminal_refusal_tail(self, manifest: dict[str, Any], stage: str, evidence: list[str]) -> dict[str, Any]:
+        """Compose the stage refusal, then append its terminal-refused event.
+
+        The blocked outcome is composed FIRST and the history append never
+        changes it: this is the one evidence write allowed after a refusal,
+        and it is ordered strictly after the outcome exists. The caller
+        already holds the manifest lock (the terminal operation is a locked
+        mutation), and history stays append-only: the event records the
+        refusal, it never rewrites one. This event is the history producer
+        the diagnose operation's terminal-gate class keys on.
+        """
+
+        outcome = _outcome("blocked", "done-pending", evidence, "parent-continuation", "runtime:terminal", manifest.get("generation", 0), "preserve-and-reconcile")
+        manifest.setdefault("history", []).append(
+            {
+                "event": "terminal-refused",
+                "stage": stage,
+                "evidence": bounded_evidence(list(outcome["evidence"])),
+            }
+        )
+        self._save(manifest)
+        return outcome
 
     def _final_terminal_stage(
         self,
@@ -3556,89 +3800,71 @@ class RuntimeDriver:
         path must equal ``archive_gate.declared_destination`` exactly, and
         the gate-recorded source plan path (``archive_gate.plan_path``) must
         be absent from the filesystem; (3) today's archived-plan checks in
-        order: the shape guard, the fail-closed bounded read
-        (``_read_plan_bounded``: the regular-file gate refuses FIFOs,
-        devices, and directories before any open; the ``read(LIMIT + 1)``
-        byte cap plus the ``len(data) > TERMINAL_PLAN_READ_LIMIT`` refusal
-        proves the bound at read time with no stat-then-read window, so an
-        archived plan over the bound is refused outright, never
-        prefix-scanned), the digest recompute over the archived bytes
-        against ``archive_gate.plan_digest``, the empty-plan refusal (a
-        zero-byte plan makes the unchecked-checkbox predicate vacuously
-        true), zero line-anchored unchecked
+        order: the shape guard, the fail-closed bounded read (the shared
+        ``_read_plan_bounded`` policy; see that helper's docstring), the
+        digest recompute over the archived bytes
+        against ``archive_gate.plan_digest``, the empty-plan refusal (an
+        empty or whitespace-only plan makes the unchecked-checkbox
+        predicate vacuously true), the at-least-one-task-heading
+        requirement (a plan with zero recognizable '### Task <N>:' headings
+        mirrors the readiness plan-shape guard and proves the wrong file
+        was archived), zero line-anchored unchecked
         checkboxes over the whole file, and ``commit_lookup`` proving the
         supplied commit identity. The terminal receipt gains ``plan_digest``
         from the gate record only after the digest equality held. Any miss
         returns the retriable ``done-pending`` block with evidence naming
-        the failed check and leaves the manifest untouched (non-terminal).
+        the failed check; the refusal composes first and then appends one
+        ``terminal-refused`` history evidence event (the append never
+        changes the outcome), and apart from that append-only event the
+        manifest stays untouched (non-terminal).
         """
 
         if not manifest["tasks"]:
-            return _outcome("blocked", "done-pending", ["manifest carries no tasks"], "parent-continuation", "runtime:terminal", manifest.get("generation", 0), "preserve-and-reconcile")
+            return self._terminal_refusal_tail(manifest, "final", ["manifest carries no tasks"])
         if not all(self._task_complete(task) for task in manifest["tasks"].values()):
-            return _outcome("blocked", "done-pending", ["all tasks must be complete before terminal state"], "parent-continuation", "runtime:terminal", manifest.get("generation", 0), "preserve-and-reconcile")
+            return self._terminal_refusal_tail(manifest, "final", ["all tasks must be complete before terminal state"])
         # (2) The pre-archive gate receipt is the prerequisite of the final
         # stage: no archive without the pre-move eligibility proof, the
         # archived plan exactly at the declared destination, the source gone,
         # and the archived bytes still hashing to the recorded digest.
         gate = manifest.get("archive_gate")
         if not isinstance(gate, Mapping):
-            return _outcome(
-                "blocked",
-                "done-pending",
+            return self._terminal_refusal_tail(
+                manifest,
+                "final",
                 [
                     "pre-archive gate receipt is required before the final terminal stage",
                     "no archive_gate record is present; run the terminal pre-archive stage before the move",
                 ],
-                "parent-continuation",
-                "runtime:terminal",
-                manifest.get("generation", 0),
-                "preserve-and-reconcile",
             )
         declared_destination = gate.get("declared_destination")
         supplied_path = archived_plan_path.strip() if isinstance(archived_plan_path, str) else archived_plan_path
         if not isinstance(declared_destination, str) or not declared_destination or supplied_path != declared_destination:
-            return _outcome(
-                "blocked",
-                "done-pending",
+            return self._terminal_refusal_tail(
+                manifest,
+                "final",
                 [f"archived plan path {archived_plan_path!r} does not equal the archive gate declared_destination {declared_destination!r}; the move must land exactly at the declared destination"],
-                "parent-continuation",
-                "runtime:terminal",
-                manifest.get("generation", 0),
-                "preserve-and-reconcile",
             )
         recorded_source = gate.get("plan_path")
         if not isinstance(recorded_source, str) or not recorded_source.strip():
-            return _outcome(
-                "blocked",
-                "done-pending",
+            return self._terminal_refusal_tail(
+                manifest,
+                "final",
                 ["archive gate receipt does not record a source plan path"],
-                "parent-continuation",
-                "runtime:terminal",
-                manifest.get("generation", 0),
-                "preserve-and-reconcile",
             )
         try:
             source_relative = _safe_relative_path(self.repo_root, recorded_source.strip())
         except ValueError:
-            return _outcome(
-                "blocked",
-                "done-pending",
+            return self._terminal_refusal_tail(
+                manifest,
+                "final",
                 [f"archive gate receipt records an unsafe source plan path: {recorded_source.strip()}"],
-                "parent-continuation",
-                "runtime:terminal",
-                manifest.get("generation", 0),
-                "preserve-and-reconcile",
             )
         if (self.repo_root / source_relative).exists():
-            return _outcome(
-                "blocked",
-                "done-pending",
+            return self._terminal_refusal_tail(
+                manifest,
+                "final",
                 [f"gate-recorded source plan path {recorded_source.strip()} is still present; the archive move did not happen"],
-                "parent-continuation",
-                "runtime:terminal",
-                manifest.get("generation", 0),
-                "preserve-and-reconcile",
             )
         if (
             not isinstance(archived_plan_path, str)
@@ -3649,17 +3875,13 @@ class RuntimeDriver:
             or not phase5_checklist
             or not all(isinstance(item, str) and item.strip() for item in phase5_checklist)
         ):
-            return _outcome("blocked", "done-pending", ["archived plan, commit identity, and Phase 5 checklist are required"], "parent-continuation", "runtime:terminal", manifest.get("generation", 0), "preserve-and-reconcile")
+            return self._terminal_refusal_tail(manifest, "final", ["archived plan, commit identity, and Phase 5 checklist are required"])
         plan_text, plan_error = _read_plan_bounded(self.repo_root, archived_plan_path.strip(), require_safe_path=True)
         if plan_error is not None:
-            return _outcome(
-                "blocked",
-                "done-pending",
+            return self._terminal_refusal_tail(
+                manifest,
+                "final",
                 [f"archived plan {plan_error}"],
-                "parent-continuation",
-                "runtime:terminal",
-                manifest.get("generation", 0),
-                "preserve-and-reconcile",
             )
         # The archived bytes must still hash to the gate's recorded digest:
         # the recompute runs through the same bounded byte policy over the
@@ -3671,59 +3893,55 @@ class RuntimeDriver:
         except ValueError:
             archived_digest, digest_error = None, "is not a safe repository-relative path under the repository root"
         if digest_error is not None:
-            return _outcome(
-                "blocked",
-                "done-pending",
+            return self._terminal_refusal_tail(
+                manifest,
+                "final",
                 [f"archived plan digest mismatch: the archived bytes could not be re-hashed ({digest_error})"],
-                "parent-continuation",
-                "runtime:terminal",
-                manifest.get("generation", 0),
-                "preserve-and-reconcile",
             )
         if archived_digest != gate.get("plan_digest"):
-            return _outcome(
-                "blocked",
-                "done-pending",
+            return self._terminal_refusal_tail(
+                manifest,
+                "final",
                 [f"archived plan digest mismatch: recomputed sha256 {archived_digest} does not equal the gate receipt plan_digest {gate.get('plan_digest')}"],
-                "parent-continuation",
-                "runtime:terminal",
-                manifest.get("generation", 0),
-                "preserve-and-reconcile",
             )
         if not plan_text:
-            # A zero-byte plan makes the unchecked-checkbox predicate
-            # vacuously true: refuse the empty artifact instead of letting
-            # it pass the terminal gate (r4 R4-2).
-            return _outcome(
-                "blocked",
-                "done-pending",
+            # An empty plan (the helper already stripped whitespace-only
+            # bytes) makes the unchecked-checkbox predicate vacuously true:
+            # refuse the empty artifact instead of letting it pass the
+            # terminal gate.
+            return self._terminal_refusal_tail(
+                manifest,
+                "final",
                 ["archived plan is empty"],
-                "parent-continuation",
-                "runtime:terminal",
-                manifest.get("generation", 0),
-                "preserve-and-reconcile",
             )
         plan_lines = plan_text.splitlines()
+        if not any(_TASK_SECTION_HEADING.match(line) for line in plan_lines):
+            # At-least-one-task-heading requirement, mirroring the readiness
+            # plan-shape guard: a non-empty plan with zero recognizable
+            # '### Task <N>:' headings makes every per-section scan vacuous
+            # and proves the wrong file was archived, so the terminal gate
+            # refuses it instead of accepting a sectionless artifact.
+            return self._terminal_refusal_tail(
+                manifest,
+                "final",
+                ["archived plan carries no recognizable task sections"],
+            )
         unchecked = _unchecked_checkbox_pairs(plan_lines)
         if unchecked:
             # The evidence line number comes from the scan helper, never
             # from re-searching the line text: a duplicated line would make
             # a text search ambiguous.
             first_number, first = unchecked[0]
-            return _outcome(
-                "blocked",
-                "done-pending",
+            return self._terminal_refusal_tail(
+                manifest,
+                "final",
                 [
                     f"archived plan still has {len(unchecked)} unchecked checkbox line(s)",
                     f"line {first_number}: {first.strip()}",
                 ],
-                "parent-continuation",
-                "runtime:terminal",
-                manifest.get("generation", 0),
-                "preserve-and-reconcile",
             )
         if not self.commit_lookup(last_commit_sha.strip()):
-            return _outcome("blocked", "done-pending", [f"commit identity is not provable: {last_commit_sha.strip()}"], "parent-continuation", "runtime:terminal", manifest.get("generation", 0), "preserve-and-reconcile")
+            return self._terminal_refusal_tail(manifest, "final", [f"commit identity is not provable: {last_commit_sha.strip()}"])
         manifest["workflow_state"] = "complete"
         manifest["terminal_receipt"] = {
             "workflow_state": "complete",
@@ -3751,8 +3969,10 @@ class RuntimeDriver:
 
         The predicate owns the archive origin's gate-before-move ordering and
         returns exactly the FIRST failed condition as a blocked
-        ``done-pending`` outcome that leaves the machine manifest untouched;
-        every refusal evidence names its condition:
+        ``done-pending`` outcome; every refusal evidence names its condition.
+        The refusal composes first and then appends one ``terminal-refused``
+        history evidence event (the append never changes the outcome); apart
+        from that append-only event the manifest stays untouched:
 
         (1) machine completeness: a non-empty task map, every task complete
         through the existing completeness helper, every claim record closed,
@@ -3760,8 +3980,9 @@ class RuntimeDriver:
         the plan path resolves under the resolved plans directory through the
         fail-closed path policy, its filename matches the manifest
         ``plan_slug`` (and the resume watcher's recorded plan path when one
-        exists), and the file reads under the shared bounded-read policy with
-        zero line-anchored unchecked checkbox lines; a path under any other
+        exists), and the file reads under the shared ``_read_plan_bounded``
+        policy (see that helper's docstring) with zero line-anchored
+        unchecked checkbox lines; a path under any other
         directory refuses as ``unsupported archive location``; a present
         ``residual_policy`` input must be well-formed here (non-empty
         integer finding ids, a non-empty grant source, a finite numeric
@@ -3812,7 +4033,7 @@ class RuntimeDriver:
         """
 
         def blocked(evidence: list[str]) -> dict[str, Any]:
-            return _outcome("blocked", "done-pending", evidence, "parent-continuation", "runtime:terminal", manifest.get("generation", 0), "preserve-and-reconcile")
+            return self._terminal_refusal_tail(manifest, "pre-archive", evidence)
 
         # (1) Machine completeness, before any filesystem or destination work.
         tasks: Mapping[str, Any] = manifest["tasks"]
@@ -3879,7 +4100,8 @@ class RuntimeDriver:
         if plan_error is not None:
             return blocked([f"active plan {plan_error}"])
         if not plan_text:
-            # Same empty-artifact refusal as the final gate: a zero-byte plan
+            # Same empty-artifact refusal as the final gate: an empty plan
+            # (the shared helper already stripped whitespace-only bytes)
             # makes the unchecked-checkbox predicate vacuously true.
             return blocked(["active plan is empty"])
         unchecked = _unchecked_checkbox_pairs(plan_text.splitlines())
@@ -3921,14 +4143,14 @@ class RuntimeDriver:
             return blocked([f"clean-round review sidecar is missing or unreadable: {review_sidecar.strip()}"])
         try:
             # Same bounded byte-capped read as the plan read: read at most
-            # TERMINAL_PLAN_READ_LIMIT + 1 bytes and refuse len(data) over
-            # TERMINAL_PLAN_READ_LIMIT outright, so an over-limit sidecar is
+            # PLAN_READ_LIMIT + 1 bytes and refuse len(data) over
+            # PLAN_READ_LIMIT outright, so an over-limit sidecar is
             # never parsed; a decode failure is a ValueError subclass and
             # keeps the existing unreadable-or-invalid-JSON refusal.
             with sidecar_path.open("rb") as stream:
-                data = stream.read(TERMINAL_PLAN_READ_LIMIT + 1)
-            if len(data) > TERMINAL_PLAN_READ_LIMIT:
-                return blocked([f"clean-round review sidecar exceeds the bounded read limit: over {TERMINAL_PLAN_READ_LIMIT} bytes"])
+                data = stream.read(PLAN_READ_LIMIT + 1)
+            if len(data) > PLAN_READ_LIMIT:
+                return blocked([f"clean-round review sidecar exceeds the bounded read limit: over {PLAN_READ_LIMIT} bytes"])
             payload = json.loads(data.decode("utf-8"))
         except (OSError, ValueError):
             return blocked([f"clean-round review sidecar is unreadable or invalid JSON: {review_sidecar.strip()}"])
@@ -4069,6 +4291,124 @@ class RuntimeDriver:
             return None
         return _outcome("success", "completed", ["machine manifest is complete"], "parent-continuation", "runtime:terminal", manifest.get("generation", 0), "continue-parent", workflow_state="complete", phase5_checklist=receipt.get("phase5_checklist", []), archived_plan_path=receipt.get("archived_plan_path", ""), last_commit_sha=receipt.get("last_commit_sha", ""), plan_digest=receipt.get("plan_digest", ""))
 
+    def diagnose(self) -> dict[str, Any]:
+        """Report the first failed transition from one locked manifest snapshot.
+
+        Read-only by construction: the manifest is loaded and validated under
+        the manifest lock, the lock is released before the classification
+        returns, and the method contains no write path. The CLI operation
+        constructs its driver with ``persist_construction=False`` (like
+        readiness), so construction persists no owner backfill or receipt
+        write either and the manifest is byte-identical across the whole
+        operation. The walk takes the EARLIEST classifiable failure event in
+        history order whose subject has not since reached the progressed
+        terminal state (a task-scoped event's task status ``complete``; a
+        workflow-scoped event's ``workflow_state`` ``complete`` or
+        ``terminal``) and classifies it through the fixed
+        ``DIAGNOSE_REASON_CLASSIFICATIONS`` and
+        ``DIAGNOSE_EVENT_CLASSIFICATIONS`` maps:
+
+        - ``timeout`` and ``capacity-unavailable``: the same-named classes
+          over their ``worker-blocked`` receipts.
+        - ``worker-failure``: ``malformed-result``, ``runtime-error``,
+          ``runtime-policy-unavailable``, and ``cleanup-unverified``
+          receipts (the adapter's non-resumable unverified-kill arm
+          included).
+        - ``stale-evidence``: ``stale-claim`` receipts.
+        - ``inclusion``: ``precondition-unverified`` receipts.
+        - ``terminal-gate``: the ``terminal-refused`` event the terminal
+          refusal tail appends.
+        - ``user-interruption``: the ``user-interrupt-recorded`` event.
+        - ``none``: no classifiable failure survives the filter;
+          ``first_failed_transition`` is null.
+
+        Cancellation is not a separate class: a cancelled worker's receipts
+        already carry the ``timeout``, ``malformed-result``, or
+        ``cleanup-unverified`` codes and classify under those, and unverified
+        cleanup classifies under its receipt's ``worker-failure`` code. The
+        classification enum is a fixed map; a new recurring gate is a backlog
+        decision, never a silent extension of the table. A ``none`` report is
+        a ``success`` outcome; a named failure is a ``blocked`` outcome with
+        recovery action ``preserve-and-reconcile`` whose
+        ``first_failed_transition`` carries the named history event.
+        """
+
+        with _manifest_lock(self.manifest_path, self.owner) as acquired:
+            if not acquired:
+                outcome = _mutation_unavailable(self, "runtime:diagnose", action_scope="parent-continuation")
+                outcome["first_failed_transition"] = None
+                outcome["classification"] = "none"
+                return outcome
+            manifest = self.validate_manifest(load_manifest(self.manifest_path))
+        event, classification, index = self._first_failed_transition(manifest)
+        if event is None:
+            return _outcome(
+                "success",
+                "none",
+                ["no classifiable failure event in manifest history"],
+                "parent-continuation",
+                "runtime:diagnose",
+                manifest.get("generation", 0),
+                "continue-parent",
+                first_failed_transition=None,
+                classification="none",
+            )
+        label = f"history[{index}] {event.get('event')}"
+        task_id = event.get("task_id")
+        if isinstance(task_id, str) and task_id:
+            label += f" task={task_id}"
+        reason_code = event.get("reason_code")
+        if isinstance(reason_code, str) and reason_code:
+            label += f" reason_code={reason_code}"
+        return _outcome(
+            "blocked",
+            classification,
+            [f"first failed transition: {label}", f"classification: {classification}"],
+            "parent-continuation",
+            "runtime:diagnose",
+            manifest.get("generation", 0),
+            "preserve-and-reconcile",
+            first_failed_transition=event,
+            classification=classification,
+        )
+
+    def _first_failed_transition(self, manifest: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str, int]:
+        """Walk history in order and return the earliest live failure.
+
+        Returns ``(event, classification, index)`` with a copied event
+        mapping, or ``(None, "none", -1)`` when no classifiable failure
+        survives the progressed-terminal filter. Never mutates the manifest.
+        """
+
+        workflow_terminal = manifest.get("workflow_state") in {"complete", "terminal"}
+        for index, event in enumerate(manifest.get("history") or ()):
+            if not isinstance(event, Mapping):
+                continue
+            classification = self._diagnose_classification(event)
+            if classification is None or self._diagnose_event_superseded(manifest, event, workflow_terminal):
+                continue
+            return dict(event), classification, index
+        return None, "none", -1
+
+    @staticmethod
+    def _diagnose_classification(event: Mapping[str, Any]) -> str | None:
+        """Fixed-map classification for one history event; None when the event carries no classifiable failure evidence."""
+
+        event_type = str(event.get("event", ""))
+        if event_type == "worker-blocked":
+            return DIAGNOSE_REASON_CLASSIFICATIONS.get(str(event.get("reason_code", "")))
+        return DIAGNOSE_EVENT_CLASSIFICATIONS.get(event_type)
+
+    @staticmethod
+    def _diagnose_event_superseded(manifest: Mapping[str, Any], event: Mapping[str, Any], workflow_terminal: bool) -> bool:
+        """True when the event's subject has since reached the progressed terminal state."""
+
+        task_id = event.get("task_id")
+        if isinstance(task_id, str) and task_id:
+            task = manifest.get("tasks", {}).get(task_id)
+            return task is not None and task.get("status") == "complete"
+        return workflow_terminal
+
     def readiness(self, plan_path: str | Path) -> dict[str, Any]:
         """Decide continuation readiness from one locked manifest snapshot.
 
@@ -4079,13 +4419,9 @@ class RuntimeDriver:
         persists no owner backfill or receipt write either and the manifest
         is byte-identical across the whole operation. All five machine-owned
         conditions are evaluated against exactly one manifest snapshot. The
-        plan file is read through the same shared helper as the terminal
-        gate (``_read_plan_bounded`` with ``require_safe_path=False``): a
-        regular-file gate before any open (FIFOs, devices, and directories
-        refused without reading), a bounded ``read(LIMIT + 1)`` read, and an
-        outright refusal as ``precondition-unverified`` when the read proves
-        the plan over ``TERMINAL_PLAN_READ_LIMIT``; there is no stat size
-        gate, so no stat-then-read window exists. A missing, unreadable, or
+        plan file is read through the shared ``_read_plan_bounded`` policy
+        (``require_safe_path=False``); see that helper's docstring for the
+        bounded-read policy. A missing, unreadable, or
         over-limit plan is a fail-closed blocked outcome with the recovery
         decision. The digest, review-scope, and
         unresolved-finding conditions stay delegated to the Step 0.5
@@ -4199,7 +4535,7 @@ class RuntimeDriver:
         # in the plan through the skill-gated plan-edit step, never by
         # mutating the manifest. A pending task's unchecked boxes agree with
         # the manifest.
-        # Plan shape first (r4 R4-3): a plan with zero recognizable
+        # Plan shape first: a plan with zero recognizable
         # '### Task <N>:' headings cannot agree or disagree per-section;
         # failing it keeps a wrong --plan file from producing a vacuous
         # direct-continuation while no task has progressed.
@@ -4279,18 +4615,22 @@ class RuntimeDriver:
         fields stripped, and preserves recorded checkpoints as evidence. The
         replaced claim is reconciled by rotation and never quarantined at
         startup. Every refusal (before expiry, unknown task, closed or
-        replaced or aborted claim, progressed task) fails closed with the
+        replaced or aborted claim, parked ``waiting-capacity`` claim with a
+        live retry policy, progressed task) fails closed with the
         resumable ``stale-claim`` outcome and never mutates the manifest;
-        for a reclaimable claim on a task outside the progressed set, an
-        explicitly aborted workflow returns the ``explicit-abort``
-        preserve-and-stop outcome before any lease accounting instead of
-        releasing anything (a progressed-task refusal still returns
-        ``stale-claim``). A claim that belongs to a live batch claim group
-        is refused with the group named (r3 F1): the group protocol owns
+        for a reclaimable claim on a task outside the progressed set, a
+        workflow in the closed non-active set returns the preserve-and-stop
+        outcome before any lease accounting instead of releasing anything
+        (an explicitly aborted workflow keeps the ``explicit-abort``
+        outcome; a complete or terminal workflow returns the same shape
+        with evidence naming the finished state; a progressed-task refusal
+        still returns ``stale-claim``). A claim that belongs to a live
+        batch claim group
+        is refused with the group named: the group protocol owns
         its members and reclaiming one rotates it away while the group
         stays active, wedging every entrypoint; batch members recover
         through the group path (``continue --batch``), never through
-        reclaim - except the one executable exit (r4 F2): a member whose
+        reclaim - except the one executable exit: a member whose
         receipt is non-resumable (the task blocked with ``resume_allowed``
         False) has no group path left, so its reclaim is allowed through
         and atomically fails the group in the same locked CAS, releasing
@@ -4300,6 +4640,20 @@ class RuntimeDriver:
         manifest = self.refresh_manifest()
         task = manifest["tasks"].get(task_id)
         claim = manifest["claims"].get(task_id)
+        if isinstance(claim, Mapping) and claim.get("state") == "waiting-capacity":
+            # A parked claim is machine-proven durable state (its capacity
+            # receipt landed under the manifest lock), never an ambiguous
+            # live worker: it stays outside the reclaimable set while its
+            # bounded retry policy is live, and recovery is the in-place
+            # resume (continue relaunches the same claim), never a rotation.
+            return _stale_claim_outcome(
+                str(claim.get("token", f"{task_id}:reclaim")),
+                int(claim.get("generation", manifest.get("generation", 0))),
+                [
+                    "claim state 'waiting-capacity' is parked on a live bounded retry policy; reclaim refused",
+                    "resume in place with continue while attempts remain",
+                ],
+            )
         if task is None or not isinstance(claim, Mapping) or claim.get("state") not in RECLAIMABLE_CLAIM_STATES:
             state = claim.get("state") if isinstance(claim, Mapping) else "none"
             return _stale_claim_outcome(
@@ -4313,19 +4667,30 @@ class RuntimeDriver:
                 int(claim.get("generation", manifest.get("generation", 0))),
                 [f"task status '{task.get('status')}' is in the progressed set; reclaim refused"],
             )
-        if manifest.get("workflow_state") == "aborted":
-            # The stronger fence first: an explicitly aborted workflow is
-            # never resurrected by a reclaim, whatever the lease state is,
-            # so the abort outcome precedes the lease check (matching the
-            # contract's unconditional abort sentence).
+        workflow_state = manifest.get("workflow_state")
+        if workflow_state in {"aborted", "complete", "terminal"}:
+            # The stronger fence first: the full closed non-active set is
+            # never mutated by a reclaim of an expired lease claim, whatever
+            # the lease state is, so this fence precedes the lease check. An
+            # aborted workflow keeps the explicit-abort outcome; a complete
+            # or terminal workflow returns the same preserve-and-stop shape
+            # with evidence naming the finished state, because releasing a
+            # claim under a finished run would rewrite a settled record.
+            if workflow_state == "aborted":
+                fence_evidence = ["workflow was explicitly aborted before the reclaim"]
+            else:
+                fence_evidence = [
+                    f"workflow_state is '{workflow_state}'; the workflow already finished; reclaim refused",
+                    "the finished run is preserved; reclaim cannot release claims under it",
+                ]
             return _abort_outcome(
                 str(claim.get("token", f"{task_id}:reclaim")),
                 int(claim.get("generation", manifest.get("generation", 0))),
-                ["workflow was explicitly aborted before the reclaim"],
+                fence_evidence,
             )
         group_id = claim.get("group_id")
         if group_id and self._claim_owned_by_live_group(manifest, claim):
-            # Live-group fence (r3 F1) with its one executable exit (r4 F2).
+            # Live-group fence with its one executable exit.
             # The lease check below is exactly the wedge trigger - a group
             # parked at a budget pause is EXPECTED to be lease-expired - so
             # the fence precedes any lease accounting and fires for a member
@@ -4422,7 +4787,7 @@ class RuntimeDriver:
         group_id: str,
         group: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """The r4 F2 exit: reclaim a non-resumable member and fail its group.
+        """The executable exit: reclaim a non-resumable member and fail its group.
 
         Caller holds the manifest lock; the fence has already proven the
         wedge shape (live group, member claim, task blocked with a receipt
@@ -4698,7 +5063,7 @@ class RuntimeDriver:
             }
 
     def _mark_peer_resumed(self) -> None:
-        """Record a resume-path re-entry for the watcher peer fence (r1 F11).
+        """Record a resume-path re-entry for the watcher peer fence.
 
         Only ``resume`` and ``continue`` operations write this field: a
         session re-entering the run after a watcher was scheduled is exactly
@@ -4801,8 +5166,8 @@ class RuntimeDriver:
         supersede clears the pending watcher and bumps it too.
         """
 
-        # Schema owner: execute_plan_resume_watcher (r1 F18); the CAS stale
-        # predicate is the one shared copy (r1 F19).
+        # Schema owner: execute_plan_resume_watcher; the CAS stale
+        # predicate is the one shared copy.
         import execute_plan_resume_watcher
 
         manifest = load_manifest(self.manifest_path)
@@ -4877,7 +5242,7 @@ class RuntimeDriver:
                 cas_applied=True,
             )
         if action == "re-carrier":
-            # r6 F5: the schedule arm's post-chain carrier rectification.
+            # The schedule arm's post-chain carrier rectification.
             # The install compare-and-swap stamps the identity the chain was
             # built to arm; when the launchd link then refuses, the receipt
             # must state the outcome before the schedule result returns.
@@ -5066,6 +5431,19 @@ def _operation_reclaim(args: argparse.Namespace) -> dict[str, Any]:
         persist_construction=False,
     )
     return driver.reclaim(args.task_id)
+
+
+def _operation_diagnose(args: argparse.Namespace) -> dict[str, Any]:
+    """Read-only first-failed-transition report: runs before the shared mutating dispatch with the same ``persist_construction=False``, adapter-free driver construction as readiness; diagnose performs no adapter I/O and contains no write path, so an already-owned manifest stays byte-identical across the operation."""
+
+    driver = RuntimeDriver(
+        args.manifest,
+        plan_slug=args.plan_slug,
+        owner=args.owner,
+        repo_root=args.repo_root,
+        persist_construction=False,
+    )
+    return driver.diagnose()
 
 
 def _git_commit_matching_reference(repo_root: Path, reference: str) -> bool:
@@ -5259,9 +5637,9 @@ def _watcher_operation(
     payload: Mapping[str, Any],
     driver: "RuntimeDriver",
 ) -> dict[str, Any]:
-    """Production invocation path for the standing resume watcher (r1 F5).
+    """Production invocation path for the standing resume watcher.
 
-    One shared CLI handler in ``execute_plan_resume_watcher`` (r3 F4)
+    One shared CLI handler in ``execute_plan_resume_watcher``
     carries the schedule / supersede / fire arms for both watcher
     boundaries; this wrapper supplies the runtime boundary's identity: the
     driver-backed adapter, the driver's compare-and-swap writer as the
@@ -5304,18 +5682,18 @@ def _plans_watcher_operation(
     payload: Mapping[str, Any],
     repo_root: Path | str,
 ) -> dict[str, Any]:
-    """Production invocation path for the plans authoring watcher (r2 F11).
+    """Production invocation path for the plans authoring watcher.
 
     Manifest-free mirror of the ``watcher-*`` operations over the
     ``PlansAuthoringWatcherAdapter``: the authoring machine-state JSON at
     ``{tmp_dir}/plan-requirements-<slug>.json`` is the authority, so these
     operations take the payload ``state_path`` instead of ``--manifest``.
-    One shared CLI handler in ``execute_plan_resume_watcher`` (r3 F4)
+    One shared CLI handler in ``execute_plan_resume_watcher``
     carries the schedule / supersede / fire arms for both watcher
     boundaries; this wrapper supplies the authoring boundary's identity:
     the state-file adapter, the adapter's own compare-and-swap supersede
     sink, and the authoring boundary's fire default (the canonical guard
-    flag path since r3 F4, so the fire's cleanup contract matches the
+    flag path, so the fire's cleanup contract matches the
     runtime boundary instead of silently skipping it).
     ``plans-watcher-schedule`` records one budget-boundary decision and
     runs the same CLI fallback chain as the runtime boundary;
@@ -5361,7 +5739,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--operation", choices=("create", "claim", "checkpoint", "done", "resume", "continue", "terminal", "precondition", "interrupt", "progress", "readiness", "reclaim", "watcher-schedule", "watcher-supersede", "watcher-fire") + _PLANS_WATCHER_OPERATIONS)
+    parser.add_argument("--operation", choices=("create", "claim", "checkpoint", "done", "resume", "continue", "terminal", "precondition", "interrupt", "progress", "readiness", "reclaim", "diagnose", "watcher-schedule", "watcher-supersede", "watcher-fire") + _PLANS_WATCHER_OPERATIONS)
     parser.add_argument("--predecessors-file", type=Path, help="predecessors JSON document for the manifest-free precondition operation")
     parser.add_argument("--input", help="JSON object payload (create, checkpoint, done, interrupt, progress, terminal, and the watcher-* and plans-* operations)")
     parser.add_argument("--plan", help="plan file path for the readiness operation")
@@ -5383,7 +5761,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.predecessors_file is None:
                 parser.error("--predecessors-file is required for --operation precondition")
         elif args.operation in _PLANS_WATCHER_OPERATIONS:
-            # Manifest-free authoring watcher operations (r2 F11): the
+            # Manifest-free authoring watcher operations: the
             # payload state_path names the authoring machine-state JSON, so
             # --manifest is not required and no runtime driver is built.
             pass
@@ -5421,6 +5799,11 @@ def main(argv: list[str] | None = None) -> int:
             result = _operation_reclaim(args)
             print(json.dumps(result, sort_keys=True))
             return 0
+        if args.operation == "diagnose":
+            # Read-only report; _operation_diagnose owns the write-free construction contract.
+            result = _operation_diagnose(args)
+            print(json.dumps(result, sort_keys=True))
+            return 0
         if args.operation == "precondition":
             # Manifest-free: no driver is constructed and no manifest loaded;
             # the repository root resolves from --repo-root or the cwd. An
@@ -5447,7 +5830,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result, sort_keys=True))
             return 0
         if args.operation in _PLANS_WATCHER_OPERATIONS:
-            # Authoring watcher operations (r2 F11): manifest-free, the
+            # Authoring watcher operations: manifest-free, the
             # adapter owns its own state-file lock; a malformed payload
             # fails closed through the shared handler below.
             result = _plans_watcher_operation(args.operation, payload, args.repo_root or Path.cwd())
@@ -5481,7 +5864,7 @@ def main(argv: list[str] | None = None) -> int:
             # after every checkpoint and done boundary.
             result = driver.record_progress(payload.get("evidence"))
         elif args.operation in ("watcher-schedule", "watcher-supersede", "watcher-fire"):
-            # Standing resume watcher operations (r1 F5): the only
+            # Standing resume watcher operations: the only
             # production invocation path for the watcher state machine.
             result = _watcher_operation(args.operation, payload, driver)
         else:

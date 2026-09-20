@@ -3,6 +3,7 @@
 Captured: 2026-09-19 (source: cross-session friction audit - 7 days of app logs, 117k tool_usage rows, 5.4k sessions mined)
 Status: open
 Priority: low
+Disposition: 2026-09-19 (annotated 2026-09-21 via docs/plans/2026-09-19-scheduler-ops-lanes-durability.md Task 7): the repo-owned half (the budget-guard decision log and daily heartbeat) landed via that plan's Task 6 in `agents/hooks/budget-guard/`; the host-side halves (`hook.run.failed` stderr and exit-code enrichment, the host-level per-hook heartbeat) are external prerequisites release-gated under that plan's Ship when, so the item stays open for them.
 
 Workflow: backlog
 

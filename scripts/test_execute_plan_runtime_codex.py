@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -62,6 +63,25 @@ class RecordedRunner:
 
     def verify_terminated(self, handle):
         return self.cleanup_verified
+
+
+class LongWaitRunner(RecordedRunner):
+    """Fake runner whose wait consumes a fixed duration on a simulated clock.
+
+    The adapter's deadline is injected into the runner as ``timeout_seconds``,
+    so the simulated wait times out exactly when the wait deadline is shorter
+    than the simulated wait duration: the subprocess boundary's own deadline
+    semantics, replayed deterministically without sleeping.
+    """
+
+    def __init__(self, simulated_wait_seconds):
+        super().__init__()
+        self.simulated_wait_seconds = simulated_wait_seconds
+
+    def __call__(self, argv, timeout_seconds, operation, policy_token=None):
+        if operation == "wait" and timeout_seconds < self.simulated_wait_seconds:
+            return {"timed_out": True, "handle": "owned-process-tree", "stderr": "deadline exceeded"}
+        return super().__call__(argv, timeout_seconds, operation, policy_token=policy_token)
 
 
 class CodexAdapterTest(unittest.TestCase):
@@ -144,6 +164,57 @@ class CodexAdapterTest(unittest.TestCase):
         self.assertEqual(result["reason_code"], "cleanup-unverified")
         self.assertEqual(result["retry_policy"]["mode"], "none")
         self.assertTrue(any(call[0] == "cancel" for call in runner.calls))
+
+    def test_bounded_timeout_preserves_evidence(self):
+        # Regression pin (green before and after the deadline baseline
+        # change): a real deadline expiry preserves its evidence instead of
+        # collapsing into a generic failure. The verified-timeout arm names
+        # the deadline exceeded and carries the owned-process handle
+        # representation; the unverified arm degrades to cleanup-unverified
+        # with retry mode none so an unverifiable kill never reaps into a
+        # silent retry.
+        runner = RecordedRunner(timeout=True, cleanup_verified=True)
+        adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
+        self.assertEqual(adapter.activation_check()["status"], "success")
+        verified = adapter.launch({"id": "task-4"}, "implement task", 1, deadline_seconds=0.01, policy_token=self.policy())
+        self.assertEqual(verified["status"], "blocked")
+        self.assertEqual(verified["reason_code"], "timeout")
+        self.assertIn("launch deadline exceeded", verified["evidence"])
+        handle_entries = [entry for entry in verified["evidence"] if entry.startswith("owned_process=")]
+        self.assertEqual(len(handle_entries), 1, verified["evidence"])
+        self.assertIn("owned-process-tree", handle_entries[0])
+        unverified_runner = RecordedRunner(timeout=True, cleanup_verified=False)
+        unverified_adapter = CodexAdapter("/repo", runner=unverified_runner, approval_verified=True)
+        self.assertEqual(unverified_adapter.activation_check()["status"], "success")
+        unverified = unverified_adapter.launch({"id": "task-4"}, "implement task", 1, deadline_seconds=0.01, policy_token=self.policy())
+        self.assertEqual(unverified["status"], "blocked")
+        self.assertEqual(unverified["reason_code"], "cleanup-unverified")
+        self.assertEqual(unverified["retry_policy"]["mode"], "none")
+        self.assertTrue(any("deadline exceeded" in entry for entry in unverified["evidence"]))
+        self.assertTrue(any(call[0] == "cancel" for call in unverified_runner.calls))
+
+    def test_timeout_receipt_distinct_from_malformed_result(self):
+        # Regression pin: the same translation path must keep the timeout and
+        # malformed-result reason codes distinct over the same argv, so a
+        # deadline kill is never misread as a malformed worker envelope (or
+        # vice versa) by downstream recovery.
+        timeout_runner = RecordedRunner(timeout=True, cleanup_verified=True)
+        timeout_adapter = CodexAdapter("/repo", runner=timeout_runner, approval_verified=True)
+        self.assertEqual(timeout_adapter.activation_check()["status"], "success")
+        timed_out = timeout_adapter.launch({"id": "task-4"}, "implement task", 1, deadline_seconds=0.01, policy_token=self.policy())
+        self.assertEqual(timed_out["reason_code"], "timeout")
+
+        class MalformedLaunchRunner(RecordedRunner):
+            def __call__(self, argv, timeout_seconds, operation, policy_token=None):
+                if operation == "launch":
+                    return {"returncode": 0, "stdout": "{not jsonl}\n"}
+                return super().__call__(argv, timeout_seconds, operation, policy_token=policy_token)
+
+        malformed_adapter = CodexAdapter("/repo", runner=MalformedLaunchRunner(), approval_verified=True)
+        self.assertEqual(malformed_adapter.activation_check()["status"], "success")
+        malformed = malformed_adapter.launch({"id": "task-4"}, "implement task", 1, policy_token=self.policy())
+        self.assertEqual(malformed["reason_code"], "malformed-result")
+        self.assertNotEqual(timed_out["reason_code"], malformed["reason_code"])
 
     def test_approval_policy_never_uses_dangerous_bypass(self):
         runner = RecordedRunner()
@@ -496,14 +567,16 @@ class CodexAdapterTest(unittest.TestCase):
 
     def test_package_manifest_ambient_read(self):
         # Absent-var branch: the documented default-deadline fallback is the
-        # current contract. (Failing closed on a missing manifest is declined
-        # as a behavior change that would break non-activated runs; recorded
-        # in the Task 12 disposition.) Literals 30.0/300.0 on purpose: a
-        # mutation of the default constants must fail these assertions.
+        # current contract baseline (launch 900 / wait 1500). (Failing closed
+        # on a missing manifest is declined as a behavior change that would
+        # break non-activated runs; recorded in the Task 12 disposition.)
+        # Literals 900.0/1500.0 on purpose: a mutation of the default
+        # constants away from the contract baseline must fail these
+        # assertions.
         self.assertNotIn("EXECUTE_PLAN_PACKAGE_MANIFEST", os.environ)
         adapter = CodexAdapter("/repo", runner=RecordedRunner())
-        self.assertEqual(adapter.launch_deadline, 30.0)
-        self.assertEqual(adapter.wait_deadline, 300.0)
+        self.assertEqual(adapter.launch_deadline, 900.0)
+        self.assertEqual(adapter.wait_deadline, 1500.0)
 
         # Valid-manifest branch: the manifest deadlines are loaded and used.
         # try/finally restores the environment (mirroring the no-live-read
@@ -522,6 +595,55 @@ class CodexAdapterTest(unittest.TestCase):
             os.environ.pop("EXECUTE_PLAN_PACKAGE_MANIFEST", None)
         self.assertEqual(adapter.launch_deadline, 17.5)
         self.assertEqual(adapter.wait_deadline, 42.0)
+
+    def test_package_manifest_pins_cross_runtime_baseline(self):
+        # The shipped package manifest pins the cross-runtime deadline
+        # baseline and the runtime contract names the same values: the two
+        # surfaces drift together or this pin fails. Parse the manifest the
+        # way test_package_manifest_ambient_read parses manifest documents.
+        repo_root = Path(__file__).resolve().parents[1]
+        manifest_path = repo_root / "agents/skills/execute-plan/package-manifest.toml"
+        with manifest_path.open("rb") as stream:
+            values = tomllib.load(stream).get("adapters", {}).get("codex", {})
+        self.assertEqual(values.get("launch_deadline_seconds"), 900)
+        self.assertEqual(values.get("wait_deadline_seconds"), 1500)
+        contract_text = (repo_root / "agents/skills/execute-plan/runtime-contract.md").read_text(encoding="utf-8")
+        baseline_lines = [
+            line for line in contract_text.splitlines()
+            if "`launch_deadline_seconds = 900`" in line and "`wait_deadline_seconds = 1500`" in line
+        ]
+        self.assertTrue(baseline_lines, "contract baseline sentence naming both deadline values is missing")
+
+    def test_omitted_manifest_keys_fall_back_to_contract_baseline(self):
+        # A manifest document whose [adapters.codex] block omits both
+        # deadline keys must fall back to the in-code defaults, and those
+        # defaults equal the contract baseline (900/1500): the normal
+        # defaults cover the actual worker contract, not an arbitrary short
+        # window.
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                manifest = Path(directory) / "package-manifest.toml"
+                manifest.write_text('[adapters.codex]\nadapter_version = "1.0"\n', encoding="utf-8")
+                os.environ["EXECUTE_PLAN_PACKAGE_MANIFEST"] = str(manifest)
+                adapter = CodexAdapter("/repo", runner=RecordedRunner())
+        finally:
+            os.environ.pop("EXECUTE_PLAN_PACKAGE_MANIFEST", None)
+        self.assertEqual(adapter.launch_deadline, 900.0)
+        self.assertEqual(adapter.wait_deadline, 1500.0)
+
+    def test_legitimate_long_wait_within_deadline_completes(self):
+        # A legitimate 20-minute worker body of work (1200 simulated seconds
+        # on the runner's simulated clock) must complete under the in-code
+        # default wait deadline: constructed with no explicit wait_deadline
+        # argument and no temp manifest, so the default constants themselves
+        # decide the outcome and the pre-baseline RED expectation is
+        # deterministic.
+        runner = LongWaitRunner(1200.0)
+        adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
+        self.assertEqual(adapter.activation_check()["status"], "success")
+        result = adapter.wait("session-task-4", task_id="task-4", policy_token=self.policy())
+        self.assertEqual(result["status"], "success", result)
+        self.assertNotEqual(result["reason_code"], "timeout")
 
 
 if __name__ == "__main__":

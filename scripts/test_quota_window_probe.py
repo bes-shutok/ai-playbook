@@ -173,20 +173,32 @@ class QuotaWindowProbeTest(unittest.TestCase):
         self.assertEqual(report["pause_decision"], "continue")
         self.assertEqual(len(report["limits"]), 1)
         self.assertEqual(report["limits"][0]["kind"], "primary")
-        # Same mix but the live window is hot: the live window still decides.
+        # Same mix but the live window is hot and its reset is 5 minutes
+        # out: the live window still decides, and as a pause candidate with
+        # an imminent reset it rides through as wait-for-reset.
         hot_live = probe.make_limit("primary", 95.0, 1000 + 5 * 60, now=1000)
         hot = probe.build_report("zcode", [expired, hot_live], now=1000)
-        self.assertEqual(hot["pause_decision"], "pause")
+        self.assertEqual(hot["pause_decision"], "wait-for-reset")
+        self.assertEqual(hot["wait_minutes"], 7)
 
     def test_pause_decision_minutes_boundary(self) -> None:
         exactly = probe.build_report(
             "zcode", [probe.make_limit("primary", 10.0, 1000 + 20 * 60, now=1000)], now=1000
         )
         self.assertEqual(exactly["pause_decision"], "continue")
+        # Usage gate first: 19 minutes below the minutes-before threshold
+        # with low usage is a continue; clock proximity alone never pauses.
         below = probe.build_report(
             "zcode", [probe.make_limit("primary", 10.0, 1000 + 19 * 60, now=1000)], now=1000
         )
-        self.assertEqual(below["pause_decision"], "pause")
+        self.assertEqual(below["pause_decision"], "continue")
+        # A pause candidate inside the imminence band rides through:
+        # wait-for-reset with a 21-minute wait, never a pause.
+        hot_below = probe.build_report(
+            "zcode", [probe.make_limit("primary", 92.0, 1000 + 19 * 60, now=1000)], now=1000
+        )
+        self.assertEqual(hot_below["pause_decision"], "wait-for-reset")
+        self.assertEqual(hot_below["wait_minutes"], 21)
 
     def test_pause_decision_percent_boundary(self) -> None:
         exactly = probe.build_report(
@@ -198,6 +210,112 @@ class QuotaWindowProbeTest(unittest.TestCase):
         )
         self.assertEqual(under["pause_decision"], "continue")
 
+    def test_low_usage_imminent_reset_never_pauses(self) -> None:
+        # The witnessed misfire: 15 percent used with 10 minutes to the
+        # five-hour reset (exactly the default protocol margin) must
+        # continue - clock proximity with low usage never pauses.
+        report = probe.build_report(
+            "zcode", [probe.make_limit("primary", 15.0, 1000 + 10 * 60, now=1000)], now=1000
+        )
+        self.assertEqual(report["pause_decision"], "continue")
+        self.assertEqual(report["reasons"], [])
+
+    def test_high_usage_unfit_wave_pauses(self) -> None:
+        # 92 percent used (at or above the 90 default) with a 50-percent
+        # next wave against 8 remaining: the wave cannot fit the remaining
+        # quota, the reset is 240 minutes out, so the decision is a pause.
+        report = probe.build_report(
+            "zcode",
+            [probe.make_limit("primary", 92.0, 1000 + 240 * 60, now=1000)],
+            now=1000,
+            plan_cost_percent=50.0,
+        )
+        self.assertEqual(report["pause_decision"], "pause")
+        self.assertTrue(
+            any("used_percent" in r for r in report["reasons"]), report["reasons"]
+        )
+
+    def test_high_usage_imminent_reset_waits_for_reset(self) -> None:
+        # 92 percent used, 15 minutes to reset (below the 20-minute
+        # threshold): the gate rides through as wait-for-reset with a
+        # 17-minute in-session wait, never a pause.
+        report = probe.build_report(
+            "zcode",
+            [probe.make_limit("primary", 92.0, 1000 + 15 * 60, now=1000)],
+            now=1000,
+        )
+        self.assertEqual(report["pause_decision"], "wait-for-reset")
+        self.assertEqual(report["wait_minutes"], 17)
+        self.assertNotEqual(report["pause_decision"], "pause")
+
+    def test_usage_gate_fit_arm_alone_pauses(self) -> None:
+        # 80 percent (below the 90 threshold) with a 95-percent wave
+        # against 20 remaining: the fit arm alone is a pause candidate, and
+        # with the reset 240 minutes out it resolves a pause (quota, not
+        # time).
+        report = probe.build_report(
+            "zcode",
+            [probe.make_limit("primary", 80.0, 1000 + 240 * 60, now=1000)],
+            now=1000,
+            plan_cost_percent=95.0,
+        )
+        self.assertEqual(report["pause_decision"], "pause")
+
+    def test_fit_arm_float_residue_exact_fit_continues(self) -> None:
+        # Review r1 F1: fractional percents that exactly exhaust the window
+        # (78.2 + 21.8 = 100.0 in true arithmetic) must continue - the raw
+        # float 100.0 - 78.2 leaves a residue below 21.8, so the fit
+        # comparison tolerates IEEE-754 residue - while a genuinely larger
+        # wave (21.9) still pauses through the same fit arm.
+        report = probe.build_report(
+            "zcode",
+            [probe.make_limit("primary", 78.2, 1000 + 240 * 60, now=1000)],
+            now=1000,
+            plan_cost_percent=21.8,
+        )
+        self.assertEqual(report["pause_decision"], "continue")
+        unfit = probe.build_report(
+            "zcode",
+            [probe.make_limit("primary", 78.2, 1000 + 240 * 60, now=1000)],
+            now=1000,
+            plan_cost_percent=21.9,
+        )
+        self.assertEqual(unfit["pause_decision"], "pause")
+        self.assertTrue(
+            any("does not fit remaining quota" in r for r in unfit["reasons"]),
+            unfit["reasons"],
+        )
+
+    def test_wait_for_reset_report_carries_wait_minutes(self) -> None:
+        # The wait-for-reset report carries wait_minutes (minutes remaining
+        # plus the two-minute buffer); a continue report carries no
+        # wait_minutes key at all.
+        waiting = probe.build_report(
+            "zcode",
+            [probe.make_limit("primary", 92.0, 1000 + 15 * 60, now=1000)],
+            now=1000,
+        )
+        self.assertEqual(waiting["pause_decision"], "wait-for-reset")
+        self.assertEqual(waiting["wait_minutes"], 17)
+        continuing = probe.build_report(
+            "zcode",
+            [probe.make_limit("primary", 15.0, 1000 + 15 * 60, now=1000)],
+            now=1000,
+        )
+        self.assertEqual(continuing["pause_decision"], "continue")
+        self.assertNotIn("wait_minutes", continuing)
+
+    def test_imminence_boundary_is_strict(self) -> None:
+        # 92 percent at exactly the minutes-before threshold (20 with
+        # defaults) pauses: at-threshold is NOT imminent (strict <), and a
+        # regression to at-or-below flips this test to wait-for-reset.
+        report = probe.build_report(
+            "zcode",
+            [probe.make_limit("primary", 92.0, 1000 + 20 * 60, now=1000)],
+            now=1000,
+        )
+        self.assertEqual(report["pause_decision"], "pause")
+
     def test_build_report_contract(self) -> None:
         limit = probe.make_limit("primary", 87.5, 1000 + 12 * 60, now=1000)
         report = probe.build_report("zcode", [limit], now=1000)
@@ -207,17 +325,35 @@ class QuotaWindowProbeTest(unittest.TestCase):
         )
         self.assertEqual(report["runtime"], "zcode")
         self.assertEqual(report["binding"], "primary")
-        self.assertEqual(report["pause_decision"], "pause")
-        self.assertTrue(any("minutes_remaining" in r for r in report["reasons"]))
+        # Usage gate first: 87.5 percent is below the 90 threshold, so the
+        # 12-minute proximity is a continue.
+        self.assertEqual(report["pause_decision"], "continue")
         self.assertEqual(report["status"], "ok")
+        # The pause assertion moved to a high-usage, non-imminent case: the
+        # report contract keys are identical, only the decision differs.
+        pausing = probe.build_report(
+            "zcode",
+            [probe.make_limit("primary", 92.0, 1000 + 240 * 60, now=1000)],
+            now=1000,
+        )
+        self.assertEqual(
+            sorted(pausing),
+            sorted(["runtime", "limits", "binding", "pause_decision", "reasons", "status"]),
+        )
+        self.assertEqual(pausing["pause_decision"], "pause")
+        self.assertTrue(any("used_percent" in r for r in pausing["reasons"]))
 
     def test_thresholds_overridable(self) -> None:
-        # 30 minutes left pauses only when the minutes threshold is raised to 31.
-        limit = probe.make_limit("primary", 10.0, 1000 + 30 * 60, now=1000)
+        # The minutes threshold sets imminence for a pause candidate: 92
+        # percent with 30 minutes left pauses under the default threshold
+        # (not imminent) but rides through as wait-for-reset when the
+        # threshold is raised to 31.
+        limit = probe.make_limit("primary", 92.0, 1000 + 30 * 60, now=1000)
         default = probe.build_report("zcode", [limit], now=1000)
-        self.assertEqual(default["pause_decision"], "continue")
+        self.assertEqual(default["pause_decision"], "pause")
         raised = probe.build_report("zcode", [limit], minutes_threshold=31, now=1000)
-        self.assertEqual(raised["pause_decision"], "pause")
+        self.assertEqual(raised["pause_decision"], "wait-for-reset")
+        self.assertEqual(raised["wait_minutes"], 32)
         # 50% pauses only when the percent threshold is lowered to 50.
         hot = probe.make_limit("primary", 50.0, 1000 + 120 * 60, now=1000)
         strict = probe.build_report("zcode", [hot], percent_threshold=50, now=1000)
@@ -953,6 +1089,11 @@ class QuotaWindowProbeTest(unittest.TestCase):
             flag.unlink()
             probe.write_flag_if_paused(flag, "zcode", [continue_limit], "continue")
             self.assertFalse(flag.exists())
+            # A wait-for-reset ride-through arms nothing either: the flag
+            # writer keys on "pause" and nothing else.
+            waiting = probe.make_limit("primary", 92.0, 1000 + 15 * 60, now=1000)
+            probe.write_flag_if_paused(flag, "zcode", [waiting], "wait-for-reset")
+            self.assertFalse(flag.exists())
 
     def test_main_write_flag_relays_guard_armed(self) -> None:
         # r4 O18: the --write-flag relay must surface the arm outcome in the
@@ -1110,8 +1251,11 @@ class QuotaWindowProbeTest(unittest.TestCase):
             def hook_cleanup() -> None:
                 cleaner_started.set()
                 with contextlib.redirect_stdout(out):
+                    # Hermeticity: point the decision log into the fixture tmp
+                    # dir instead of the host-global hook-outcomes.log.
                     hook_outcome["code"] = budget_guard_core.main(
-                        ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired)]
+                        ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired),
+                         "--hook-outcomes-log", str(flag.parent / "hook-outcomes.log")]
                     )
 
             def writer_replacement() -> None:
@@ -1170,8 +1314,10 @@ class QuotaWindowProbeTest(unittest.TestCase):
 
     def test_secondary_binding_pause_writes_no_flag(self) -> None:
         # Report-only must be real: a weekly secondary window pauses the
-        # decision but must NOT arm the host-global guard flag.
-        early_secondary = probe.make_limit("secondary", 95.0, 1000 + 10 * 60, now=1000)
+        # decision but must NOT arm the host-global guard flag. The fixture
+        # keeps the binding reset 120 minutes out so the decision is a
+        # genuine usage-driven pause, not an imminent-reset ride-through.
+        early_secondary = probe.make_limit("secondary", 95.0, 1000 + 120 * 60, now=1000)
         late_primary = probe.make_limit("primary", 10.0, 1000 + 120 * 60, now=1000)
         report = probe.add_secondary_report_only_reason(
             probe.build_report("zcode", [early_secondary, late_primary], now=1000)
@@ -1221,6 +1367,8 @@ class QuotaWindowProbeTest(unittest.TestCase):
             sessions = tmp / "sessions" / "2026" / "09" / "12"
             sessions.mkdir(parents=True)
             resets = int(time.time()) + 3600
+            # Usage gate first: 50 percent used with the reset an hour out
+            # is a continue (exit 1) and arms no flag.
             rollout = (
                 '{"rate_limits": {"primary": {"used_percent": 50, "resets_at": %d}, '
                 '"secondary": {"used_percent": 10, "resets_at": %d}}}\n'
@@ -1232,7 +1380,28 @@ class QuotaWindowProbeTest(unittest.TestCase):
             flag = tmp / "budget-guard.flag"
             result = self._run_cli(
                 "--runtime", "codex",
-                "--minutes-before", "999",
+                "--config", str(tmp / "missing-config.json"),
+                "--sessions-dir", str(sessions.parent),
+                "--write-flag", str(flag),
+                "--plan", "my-plan",
+            )
+            self.assertEqual(result.returncode, 1, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual(report["pause_decision"], "continue")
+            self.assertFalse(flag.exists())
+            # The pause drill: 95 percent used (no minutes override, so the
+            # decision is quota-driven) exercises exit 0, pause, and an
+            # armed flag.
+            hot_rollout = (
+                '{"rate_limits": {"primary": {"used_percent": 95, "resets_at": %d}, '
+                '"secondary": {"used_percent": 10, "resets_at": %d}}}\n'
+                % (resets, resets + 5 * 86400)
+            )
+            (sessions / "rollout-2026-09-12T10-00-00.jsonl").write_text(
+                hot_rollout, encoding="utf-8"
+            )
+            result = self._run_cli(
+                "--runtime", "codex",
                 "--config", str(tmp / "missing-config.json"),
                 "--sessions-dir", str(sessions.parent),
                 "--write-flag", str(flag),
@@ -1246,6 +1415,35 @@ class QuotaWindowProbeTest(unittest.TestCase):
             content = flag.read_text(encoding="utf-8")
             self.assertIn("runtime=codex", content)
             self.assertIn("plan=my-plan", content)
+
+    def test_wait_for_reset_exits_1_and_arms_no_flag(self) -> None:
+        # A wait-for-reset report exits 1 (0 stays pause-only) and never
+        # arms the guard flag: the in-session ride-through writes nothing.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._write_config(Path(tmpdir))
+            flag = Path(tmpdir) / "budget-guard.flag"
+            now = time.time()
+            payload = {"data": {"limits": [
+                {
+                    "type": "TOKENS_LIMIT",
+                    "percentage": 92.0,
+                    "nextResetTime": int((now + 15 * 60) * 1000),
+                }
+            ]}}
+            body = json.dumps(payload)
+            out = io.StringIO()
+            with mock.patch.object(
+                probe, "urllib_transport", lambda url, headers: body
+            ), contextlib.redirect_stdout(out):
+                code = probe.main([
+                    "--runtime", "zcode",
+                    "--config", str(config),
+                    "--write-flag", str(flag),
+                ])
+            self.assertEqual(code, 1)
+            report = json.loads(out.getvalue())
+            self.assertEqual(report["pause_decision"], "wait-for-reset")
+            self.assertFalse(flag.exists())
 
     # test_cli_write_flag_refusal_reason_is_observable (review r2 F5) was
     # removed in review r4 F4: it pinned main()'s "guard flag not armed"
@@ -1335,90 +1533,113 @@ class QuotaWindowProbeTest(unittest.TestCase):
     # --- Task 1: probe protocol-completion margin (origin 2, layer 2) ---
 
     def test_evaluate_pause_protocol_margin_pauses_above_fixed_threshold(self) -> None:
-        # The margin fires above the fixed minutes line: 25 minutes remain,
-        # the 20-minute line is clear, but a 30-minute protocol margin means
-        # the pause protocol itself could not complete before the reset.
+        # The margin is a structural floor under the pause branch, never a
+        # clock-only pause line: with 25 minutes left, the 20-minute line
+        # clear, and a 30-minute protocol margin, a low-usage window
+        # continues. At 92 percent the margin makes the pause candidate
+        # ride through as wait-for-reset (margin 30 over 25 remaining).
         limit = probe.make_limit("primary", 10.0, 1000 + 25 * 60, now=1000)
+        decision, reasons = probe.evaluate_pause(
+            [limit], "primary",
+            minutes_threshold=20, percent_threshold=90, protocol_minutes_threshold=30,
+        )
+        self.assertEqual(decision, "continue")
+        self.assertEqual(reasons, [])
+        hot = probe.make_limit("primary", 92.0, 1000 + 25 * 60, now=1000)
+        decision, reasons = probe.evaluate_pause(
+            [hot], "primary",
+            minutes_threshold=20, percent_threshold=90, protocol_minutes_threshold=30,
+        )
+        self.assertEqual(decision, "wait-for-reset")
+        self.assertTrue(
+            any("ride-through" in r for r in reasons), reasons
+        )
+
+    def test_evaluate_pause_protocol_margin_default_floor_is_subsumed(self) -> None:
+        # The 10-minute default is a floor under the 20-minute line, not a
+        # second pause line at normal range: a pause candidate with 25
+        # minutes remaining under all defaults resolves pause by usage
+        # alone, never wait-for-reset — the default margin floor is
+        # subsumed by the imminence line.
+        limit = probe.make_limit("primary", 92.0, 1000 + 25 * 60, now=1000)
+        decision, reasons = probe.evaluate_pause([limit], "primary")
+        self.assertEqual(decision, "pause")
+        self.assertFalse(any("wait-for-reset" in r for r in reasons), reasons)
+
+    def test_evaluate_pause_protocol_margin_boundary_is_strict(self) -> None:
+        # Exactly at the margin does not arm the ride-through, mirroring
+        # the strict `<` of the minutes line: a pause candidate with 30
+        # minutes left against a 30-minute margin resolves pause by the
+        # usage arm alone, never wait-for-reset.
+        limit = probe.make_limit("primary", 92.0, 1000 + 30 * 60, now=1000)
         decision, reasons = probe.evaluate_pause(
             [limit], "primary",
             minutes_threshold=20, percent_threshold=90, protocol_minutes_threshold=30,
         )
         self.assertEqual(decision, "pause")
-        self.assertTrue(
-            any("protocol margin" in r for r in reasons), reasons
-        )
-
-    def test_evaluate_pause_protocol_margin_default_floor_is_subsumed(self) -> None:
-        # The 10-minute default is a floor under the 20-minute line, not a
-        # second pause line at normal range: 25 minutes remaining with all
-        # defaults continues.
-        limit = probe.make_limit("primary", 10.0, 1000 + 25 * 60, now=1000)
-        decision, reasons = probe.evaluate_pause([limit], "primary")
-        self.assertEqual(decision, "continue")
-        self.assertEqual(reasons, [])
-
-    def test_evaluate_pause_protocol_margin_boundary_is_strict(self) -> None:
-        # Exactly at the margin continues, mirroring the strict `<` of the
-        # minutes line.
-        limit = probe.make_limit("primary", 10.0, 1000 + 30 * 60, now=1000)
-        decision, reasons = probe.evaluate_pause(
-            [limit], "primary",
-            minutes_threshold=20, percent_threshold=90, protocol_minutes_threshold=30,
-        )
-        self.assertEqual(decision, "continue")
-        self.assertEqual(reasons, [])
+        self.assertFalse(any("wait-for-reset" in r for r in reasons), reasons)
 
     def test_secondary_binding_margin_stays_report_only(self) -> None:
-        # A weekly secondary-only limit set inside the margin pauses in the
-        # report but the flag writer refuses: the margin must not change the
-        # secondary report-only contract.
+        # A weekly secondary-only limit set inside the margin continues in
+        # the report (usage gate first: 10 percent never becomes a pause
+        # candidate) and the flag writer refuses regardless: the margin
+        # must not change the secondary report-only contract.
         with tempfile.TemporaryDirectory() as tmpdir:
             flag = Path(tmpdir) / "budget-guard.flag"
             limit = probe.make_limit("secondary", 10.0, 1000 + 25 * 60, now=1000)
             report = probe.build_report(
                 "zcode", [limit], now=1000, protocol_minutes_threshold=30,
             )
-            self.assertEqual(report["pause_decision"], "pause")
+            self.assertEqual(report["pause_decision"], "continue")
             self.assertFalse(
                 probe.write_flag_if_paused(flag, "zcode", [limit], "pause")
             )
             self.assertFalse(flag.exists())
 
     def test_cli_min_protocol_minutes_flag_pauses(self) -> None:
-        # The CLI flag threads through main() to the probe: 25 minutes
-        # remaining with --min-protocol-minutes 30 pauses with a
-        # protocol-margin reason (exit 0 = pause decision).
+        # The CLI flag threads through main() to the probe. With the usage
+        # gate first, 50 percent at 25 minutes is a continue (exit 1); at
+        # 95 percent the 30-minute margin over a 25-minute remainder
+        # resolves wait-for-reset, which also exits 1 (0 stays pause-only).
         with tempfile.TemporaryDirectory() as tmpdir:
             config = self._write_config(Path(tmpdir))
             now = time.time()
-            payload = {
-                "data": {
-                    "limits": [
-                        {
-                            "type": "TOKENS_LIMIT",
-                            "percentage": 50.0,
-                            "nextResetTime": int((now + 25 * 60) * 1000),
-                        }
-                    ]
+            # The reset carries one minute of headroom past the 25-minute
+            # scenario so the floor-divided minutes_remaining stays exactly
+            # 25 despite the parse clock reading a hair past ``now``.
+            reset_epoch = int(now + 26 * 60)
+
+            def run(percentage: float) -> tuple[int, dict]:
+                payload = {
+                    "data": {
+                        "limits": [
+                            {
+                                "type": "TOKENS_LIMIT",
+                                "percentage": percentage,
+                                "nextResetTime": reset_epoch * 1000,
+                            }
+                        ]
+                    }
                 }
-            }
-            body = json.dumps(payload)
-            out = io.StringIO()
-            with mock.patch.object(
-                probe, "urllib_transport", lambda url, headers: body
-            ), contextlib.redirect_stdout(out):
-                code = probe.main([
-                    "--runtime", "zcode",
-                    "--config", str(config),
-                    "--min-protocol-minutes", "30",
-                ])
-            self.assertEqual(code, 0)
-            report = json.loads(out.getvalue())
-            self.assertEqual(report["pause_decision"], "pause")
-            self.assertTrue(
-                any("protocol margin" in r for r in report["reasons"]),
-                report["reasons"],
-            )
+                body = json.dumps(payload)
+                out = io.StringIO()
+                with mock.patch.object(
+                    probe, "urllib_transport", lambda url, headers: body
+                ), contextlib.redirect_stdout(out):
+                    code = probe.main([
+                        "--runtime", "zcode",
+                        "--config", str(config),
+                        "--min-protocol-minutes", "30",
+                    ])
+                return code, json.loads(out.getvalue())
+
+            code, report = run(50.0)
+            self.assertEqual(code, 1)
+            self.assertEqual(report["pause_decision"], "continue")
+            code, report = run(95.0)
+            self.assertEqual(code, 1)
+            self.assertEqual(report["pause_decision"], "wait-for-reset")
+            self.assertEqual(report["wait_minutes"], 27)
 
     def test_cli_min_protocol_minutes_rejects_negative(self) -> None:
         # A negative margin is a usage error at the CLI (fail loud), never a
@@ -1446,7 +1667,9 @@ class QuotaWindowProbeTest(unittest.TestCase):
 
     def test_cli_plan_cost_upper_bound_boundary(self) -> None:
         # 100 is the inclusive upper bound (accepted); just above is a usage
-        # error. A continue-decision report carries the recommendation.
+        # error. A wave costing 100 percent cannot fit the remaining 20, so
+        # the fit arm alone makes the report a pause (exit 0) with the
+        # recommendation fields unchanged.
         with tempfile.TemporaryDirectory() as tmpdir:
             config = self._write_config(Path(tmpdir))
             now = time.time()
@@ -1458,8 +1681,10 @@ class QuotaWindowProbeTest(unittest.TestCase):
                     contextlib.redirect_stdout(out):
                 code = probe.main(["--runtime", "zcode", "--config", str(config),
                                    "--plan-cost", "100"])
-            self.assertEqual(code, 1)
-            self.assertEqual(json.loads(out.getvalue())["wave_recommendation"], "pause")
+            self.assertEqual(code, 0)
+            report = json.loads(out.getvalue())
+            self.assertEqual(report["pause_decision"], "pause")
+            self.assertEqual(report["wave_recommendation"], "pause")
         with self.assertRaises(SystemExit) as ctx:
             probe.main(["--runtime", "zcode", "--plan-cost", "100.5"])
         self.assertEqual(ctx.exception.code, 2)
@@ -1467,22 +1692,36 @@ class QuotaWindowProbeTest(unittest.TestCase):
     def test_codex_rollout_margin_threading_reaches_build_report(self) -> None:
         # The codex path threads protocol_minutes_threshold and
         # plan_cost_percent into build_report; dropping either kwarg in the
-        # codex call must fail this pin.
+        # codex call must fail this pin. Usage gate first: the 10-percent
+        # scenario now continues; at 95 percent the 30-minute margin over a
+        # 25-minute remainder converts the would-be pause to wait-for-reset
+        # and the threading pin survives.
         with tempfile.TemporaryDirectory() as tmpdir:
             sessions = Path(tmpdir) / "sessions"
             (sessions / "2026/09/18").mkdir(parents=True)
             now = time.time()
-            record = {"rate_limits": {"primary": {"used_percent": 10.0,
-                                                  "resets_at": int(now + 25 * 60)}}}
+            # A whole-second base plus one minute of headroom past the
+            # 25-minute scenario keeps the floor-divided minutes_remaining
+            # at exactly 25 (the plan's margin-over-remainder fixture).
+            reset_epoch = int(now) + 26 * 60
             rollout = sessions / "2026/09/18" / "rollout-test.jsonl"
+            record = {"rate_limits": {"primary": {"used_percent": 10.0,
+                                                  "resets_at": reset_epoch}}}
             rollout.write_text(json.dumps(record) + "\n", encoding="utf-8")
             report = probe.probe_codex(sessions_dir=sessions, now=now,
                                        protocol_minutes_threshold=30,
                                        plan_cost_percent=40.0)
             self.assertEqual(report["status"], "ok")
-            self.assertEqual(report["pause_decision"], "pause")
-            self.assertTrue(any("protocol margin" in r for r in report["reasons"]),
-                            report["reasons"])
+            self.assertEqual(report["pause_decision"], "continue")
+            record = {"rate_limits": {"primary": {"used_percent": 95.0,
+                                                  "resets_at": reset_epoch}}}
+            rollout.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            report = probe.probe_codex(sessions_dir=sessions, now=now,
+                                       protocol_minutes_threshold=30,
+                                       plan_cost_percent=40.0)
+            self.assertEqual(report["status"], "ok")
+            self.assertEqual(report["pause_decision"], "wait-for-reset")
+            self.assertEqual(report["wait_minutes"], 27)
 
     def test_cli_ninety_eight_percent_pause_drill_ac2_witness(self) -> None:
         # The origin-2 AC2 fixture drill: the pause fires at very high
@@ -1573,6 +1812,10 @@ class QuotaWindowProbeTest(unittest.TestCase):
         self.assertNotIn("wave_size", report)
 
     def test_cli_plan_cost_split_recommendation(self) -> None:
+        # 80 percent with a 40-percent wave against 20 remaining: the fit
+        # arm alone is a pause candidate (40 > 20) and with the reset two
+        # hours out it resolves a pause (exit 0). The recommendation fields
+        # are unchanged: split into waves of 2 (half-cost 20 <= remaining 20).
         with tempfile.TemporaryDirectory() as tmpdir:
             config = self._write_config(Path(tmpdir))
             now = time.time()
@@ -1597,8 +1840,9 @@ class QuotaWindowProbeTest(unittest.TestCase):
                     "--config", str(config),
                     "--plan-cost", "40",
                 ])
-            self.assertEqual(code, 1)
+            self.assertEqual(code, 0)
             report = json.loads(out.getvalue())
+            self.assertEqual(report["pause_decision"], "pause")
             self.assertEqual(report["wave_recommendation"], "split")
             self.assertEqual(report["wave_size"], 2)
 
@@ -2110,6 +2354,119 @@ class QuotaWindowProbeTest(unittest.TestCase):
         verdict = json.loads(out)
         self.assertEqual(verdict["status"], "unknown")
         self.assertIsNone(verdict["verdict"])
+
+    # --- Task 2 (F9): fire-at straddle band crosses midnight. Window
+    # fixtures 00:30-04:30 UTC+8 with straddle 60: the straddle band's
+    # lower bound (30 - 60 = -30) wraps negative, so the peak decision
+    # must price the pre-midnight tail band against the WINDOW-START day
+    # (the next day) while the wrapped morning arm keeps the fire's own
+    # day. Fixture dates: 2026-09-25 Friday, 26 Saturday, 27 Sunday,
+    # 28 Monday (2026-09-23 Wednesday stays the anchor from Task 1).
+
+    def test_straddle_tail_crossing_midnight_is_peak_on_weekday_window_start(self) -> None:
+        # F9: Sunday 23:45 UTC+8 sits in the pre-midnight straddle tail
+        # band before a midnight-crossing Monday window start (00:30-04:30,
+        # straddle 60): peak True because the WINDOW-START day (Monday) is
+        # Mon-Fri, not the fire day (Sunday). The deferral anchors on the
+        # window-start day too: Monday 04:30, never Sunday's end.
+        self.assertEqual(datetime(2026, 9, 27, tzinfo=TZ8).weekday(), 6)  # Sunday
+        fire = int(datetime(2026, 9, 27, 23, 45, tzinfo=TZ8).timestamp())
+        monday_end = int(datetime(2026, 9, 28, 4, 30, tzinfo=TZ8).timestamp())
+        pure = probe.evaluate_fire_at(
+            fire, now=fire - 3600, straddle_minutes=60,
+            peak_start="00:30", peak_end="04:30",
+        )
+        self.assertTrue(pure["peak"])
+        self.assertEqual(pure["verdict"], "defer-peak")
+        self.assertEqual(
+            int(datetime.fromisoformat(pure["defer_to"]).timestamp()), monday_end
+        )
+        # With need_minutes that fits: the fire instant sees 495 minutes of
+        # the reported window (resets Monday 08:00) and the Monday 04:30
+        # slot sees 210, both fitting the 120-minute estimate, so the
+        # deferral is blessed as defer-peak to the window-start day's end.
+        reset = int(datetime(2026, 9, 28, 8, 0, tzinfo=TZ8).timestamp())
+        fitted = probe.evaluate_fire_at(
+            fire, now=fire - 3600, need_minutes=120, straddle_minutes=60,
+            peak_start="00:30", peak_end="04:30",
+            limits=[probe.make_limit("primary", 50.0, reset, now=fire - 3600)],
+        )
+        self.assertTrue(fitted["peak"])
+        self.assertEqual(fitted["verdict"], "defer-peak")
+        self.assertTrue(fitted["fits"])
+        self.assertEqual(
+            int(datetime.fromisoformat(fitted["defer_to"]).timestamp()), monday_end
+        )
+
+    def test_straddle_tail_into_weekend_window_is_not_peak(self) -> None:
+        # F9 weekend arm: Friday 23:45 sits in the tail band before a
+        # SATURDAY window start (00:30-04:30, straddle 60); the
+        # window-start day is a weekend day, so there is no weekday peak
+        # to straddle into: peak False, verdict fire.
+        self.assertEqual(datetime(2026, 9, 25, tzinfo=TZ8).weekday(), 4)  # Friday
+        fire = int(datetime(2026, 9, 25, 23, 45, tzinfo=TZ8).timestamp())
+        self.assertEqual(datetime(2026, 9, 26, tzinfo=TZ8).weekday(), 5)  # Saturday
+        verdict = probe.evaluate_fire_at(
+            fire, now=fire - 3600, straddle_minutes=60,
+            peak_start="00:30", peak_end="04:30",
+        )
+        self.assertFalse(verdict["peak"])
+        self.assertEqual(verdict["verdict"], "fire")
+
+    def test_straddle_tail_minute_boundary(self) -> None:
+        # F9 tail threshold: start 00:30 (minute 30) with straddle 60 puts
+        # the tail-band threshold at 1440 - (60 - 30) = 1410 (23:30). A
+        # 23:29 fire (minute 1409) is one minute shy: not peak; a 23:30
+        # fire is in the tail band of the Thursday-start window: peak
+        # (Wednesday fire, Thursday window-start day - both weekdays, so
+        # the minute boundary is the only variable).
+        self.assertEqual(datetime(2026, 9, 23, tzinfo=TZ8).weekday(), 2)
+        before = int(datetime(2026, 9, 23, 23, 29, tzinfo=TZ8).timestamp())
+        not_peak = probe.evaluate_fire_at(
+            before, now=before - 3600, straddle_minutes=60,
+            peak_start="00:30", peak_end="04:30",
+        )
+        self.assertFalse(not_peak["peak"])
+        self.assertEqual(not_peak["verdict"], "fire")
+        at = int(datetime(2026, 9, 23, 23, 30, tzinfo=TZ8).timestamp())
+        peak = probe.evaluate_fire_at(
+            at, now=at - 3600, straddle_minutes=60,
+            peak_start="00:30", peak_end="04:30",
+        )
+        self.assertTrue(peak["peak"])
+        self.assertEqual(peak["verdict"], "defer-peak")
+
+    def test_post_midnight_morning_before_start_stays_peak(self) -> None:
+        # F9 wrapped-morning arm kept: fire Wednesday 00:10 falls inside
+        # today's wrapped negative band bound (-30 <= 10 < 270) before the
+        # same-day midnight-crossing start: peak True and the deferral
+        # anchors on the SAME day's window end (04:30), because the
+        # window-start day is the fire's own day here - only the
+        # pre-midnight tail band rolls the day forward (a two-band
+        # implementation keeping only head+tail arms silently drops this
+        # arm). Saturday 00:10 in the same window: the window-start day is
+        # the fire's own day and a weekend, so peak False.
+        self.assertEqual(datetime(2026, 9, 23, tzinfo=TZ8).weekday(), 2)
+        fire = int(datetime(2026, 9, 23, 0, 10, tzinfo=TZ8).timestamp())
+        wednesday_end = int(datetime(2026, 9, 23, 4, 30, tzinfo=TZ8).timestamp())
+        verdict = probe.evaluate_fire_at(
+            fire, now=fire - 3600, straddle_minutes=60,
+            peak_start="00:30", peak_end="04:30",
+        )
+        self.assertTrue(verdict["peak"])
+        self.assertEqual(verdict["verdict"], "defer-peak")
+        self.assertEqual(
+            int(datetime.fromisoformat(verdict["defer_to"]).timestamp()),
+            wednesday_end,
+        )
+        self.assertEqual(datetime(2026, 9, 26, tzinfo=TZ8).weekday(), 5)
+        saturday_fire = int(datetime(2026, 9, 26, 0, 10, tzinfo=TZ8).timestamp())
+        weekend = probe.evaluate_fire_at(
+            saturday_fire, now=saturday_fire - 3600, straddle_minutes=60,
+            peak_start="00:30", peak_end="04:30",
+        )
+        self.assertFalse(weekend["peak"])
+        self.assertEqual(weekend["verdict"], "fire")
 
 if __name__ == "__main__":
     unittest.main()

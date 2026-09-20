@@ -51,3 +51,25 @@ Weak or missing tests for wired code stay owned by the `testing` lens (`review-p
 **Ownership (tiered):** wiring, integration, completeness, return-value propagation, API schema alignment, config/env gaps. Do not report runtime algorithm bugs when wiring is correct, or structural layer violations (see `review-panel-selection.md`).
 
 Report problems only. No positive observations.
+
+## Framework and effective-configuration contract audit
+
+When the diff adds a framework annotation, calls a library API, changes a
+dependency, or validates configuration:
+
+1. Verify symbols, annotation attributes, method signatures, and artifact
+   ownership against the resolved dependency used by the target module. Do not
+   infer availability from a neighboring module or similarly named annotation.
+2. Run the narrowest real compile or generated-source check that exercises the
+   changed contract. If a post-test verifier or manifest gate runs, verify that
+   targeted selectors and the verifier select the same test population.
+3. Enumerate every bound key consumed by the component, including optional URL,
+   driver, username, password, timeout, pool, TLS, and credential aliases.
+4. Trace deployment representation through the framework's effective lookup to
+   the value consumed at runtime. Synthetic property aggregates and alternate
+   aliases do not prove source provenance; test a documented deployment and a
+   higher-precedence override.
+5. Check identity constraints between related resources, such as a dedicated
+   datasource and the shared database whose positions or jobs it must see.
+6. Stage `implementation#framework-contract-unverified` when these checks are
+   applicable but compile, selector, or effective-source evidence is absent.

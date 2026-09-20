@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import contextlib
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 import json
 import os
@@ -92,6 +92,10 @@ def run_hook(script: Path, flag_path: Path,
     cmd = [str(script), "--flag-path", str(flag_path)]
     if fired_path is not None:
         cmd += ["--fired-path", str(fired_path)]
+    # Hermeticity: the adapters forward extra args verbatim, so every test
+    # invocation points the decision log into the fixture directory instead
+    # of the canonical ~/.ai-playbook/runtime/hook-outcomes.log.
+    cmd += ["--hook-outcomes-log", str(flag_path.parent / "hook-outcomes.log")]
     return subprocess.run(
         cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
         timeout=10,
@@ -285,7 +289,8 @@ class BudgetGuardHookTest(unittest.TestCase):
             Path, "read_text", side_effect=[expired_content, future_content]
         ), contextlib.redirect_stdout(out):
             code = budget_guard_core.main(
-                ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired)]
+                ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired),
+                 "--hook-outcomes-log", str(self.tmp / "hook-outcomes.log")]
             )
         self.assertEqual(code, 0)
         self.assertEqual(out.getvalue(), "")
@@ -317,7 +322,8 @@ class BudgetGuardHookTest(unittest.TestCase):
                 started.set()
                 with contextlib.redirect_stdout(out):
                     hook_outcome["code"] = budget_guard_core.main(
-                        ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired)]
+                        ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired),
+                         "--hook-outcomes-log", str(self.tmp / "hook-outcomes.log")]
                     )
 
             cleaner = threading.Thread(target=hook_run)
@@ -343,6 +349,130 @@ class BudgetGuardHookTest(unittest.TestCase):
         self.assertTrue(fired.exists())
         self.assertEqual(fired.read_text(encoding="utf-8").strip(), str(RESET_EPOCH))
 
+    def test_decision_log_appends_blocks_and_daily_heartbeat(self) -> None:
+        # Task 6: the rate-limited decision log. The core runs in-process
+        # with the log path pointed into tmp and the day source frozen, so
+        # the already-today heartbeat rate check and the appended lines are
+        # deterministic.
+        flag = write_flag(self.tmp)
+        fired = self.tmp / "budget-guard.fired"
+        log = self.tmp / "hook-outcomes.log"
+        day = datetime.now().date()
+
+        def invoke() -> tuple[int, str]:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = budget_guard_core.main(
+                    ["--runtime", "zcode", "--flag-path", str(flag),
+                     "--fired-path", str(fired),
+                     "--hook-outcomes-log", str(log)]
+                )
+            return code, out.getvalue()
+
+        def log_records() -> list[dict]:
+            return [
+                json.loads(line)
+                for line in log.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+        # Same injected day: the first invocation blocks (the block line is
+        # always appended), the second allows through the block's own fired
+        # marker and logs the day's single allow heartbeat; a third same-day
+        # allow appends no duplicate heartbeat.
+        with mock.patch.object(budget_guard_core, "DATE_SOURCE", lambda: day):
+            code, stdout = invoke()
+            self.assertEqual(code, budget_guard_core.EXIT_BLOCK_ZCODE)
+            self.assertIn('"decision": "block"', stdout)
+            code, stdout = invoke()
+            self.assertEqual(code, 0)
+            self.assertEqual(stdout, "")
+            code, stdout = invoke()
+            self.assertEqual(code, 0)
+            self.assertEqual(stdout, "")
+        records = log_records()
+        self.assertEqual(len(records), 2)
+        block_line = records[0]
+        self.assertEqual(block_line["event"], "block")
+        self.assertEqual(block_line["decision"], "block")
+        self.assertEqual(block_line["hook"], "zcode")
+        self.assertIsInstance(block_line["ts"], str)
+        self.assertIsInstance(block_line["duration_ms"], int)
+        heartbeats = [r for r in records if r["event"] == "heartbeat"]
+        self.assertEqual(len(heartbeats), 1)
+        self.assertEqual(heartbeats[0]["decision"], "allow")
+        self.assertEqual(heartbeats[0]["hook"], "zcode")
+
+        # The injected day advancing: a second heartbeat line is appended.
+        with mock.patch.object(
+            budget_guard_core, "DATE_SOURCE", lambda: day + timedelta(days=1)
+        ):
+            code, stdout = invoke()
+            self.assertEqual(code, 0)
+            self.assertEqual(stdout, "")
+        heartbeats = [r for r in log_records() if r["event"] == "heartbeat"]
+        self.assertEqual(len(heartbeats), 2)
+
+        # Fault injection at the decision path: the exception guard appends
+        # the error line (failure kind, message text, fail-open exit code)
+        # and the decision stays the fail-open allow with exit 0.
+        def fault() -> None:
+            raise RuntimeError("decision path exploded")
+
+        fresh_flag = write_flag(self.tmp, name="fresh.flag")
+        with mock.patch.object(budget_guard_core, "DATE_SOURCE", lambda: day), \
+                mock.patch.object(
+                    budget_guard_core, "DECISION_FAULT_SOURCE", fault
+                ):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = budget_guard_core.main(
+                    ["--runtime", "zcode", "--flag-path", str(fresh_flag),
+                     "--fired-path", str(self.tmp / "fresh.fired"),
+                     "--hook-outcomes-log", str(log)]
+                )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue(), "")
+        errors = [r for r in log_records() if r["event"] == "error"]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["error_kind"], "RuntimeError")
+        self.assertEqual(errors[0]["error_message"], "decision path exploded")
+        self.assertEqual(errors[0]["exit_code"], 0)
+        self.assertEqual(errors[0]["decision"], "allow")
+
+        # The lock helper stubbed to refuse acquisition: decisions are
+        # unchanged (the allow stays allow, the block still fires) and no
+        # log line is appended.
+        @contextlib.contextmanager
+        def refusing_lock(*_args, **_kwargs):
+            yield False
+
+        refused_log = self.tmp / "refused-hook-outcomes.log"
+        with mock.patch.object(budget_guard_core, "DATE_SOURCE", lambda: day), \
+                mock.patch.object(
+                    budget_guard_core, "_shared_guard_lock", refusing_lock
+                ):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = budget_guard_core.main(
+                    ["--runtime", "zcode",
+                     "--flag-path", str(self.tmp / "absent.flag"),
+                     "--fired-path", str(self.tmp / "refused.fired"),
+                     "--hook-outcomes-log", str(refused_log)]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(out.getvalue(), "")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = budget_guard_core.main(
+                    ["--runtime", "zcode", "--flag-path", str(flag),
+                     "--fired-path", str(self.tmp / "refused2.fired"),
+                     "--hook-outcomes-log", str(refused_log)]
+                )
+            self.assertEqual(code, budget_guard_core.EXIT_BLOCK_ZCODE)
+            self.assertIn('"decision": "block"', out.getvalue())
+        self.assertFalse(refused_log.exists())
+
     def test_core_blocks_without_any_socket(self) -> None:
         # In-process network-abstinence arm: the core's full blocking path
         # (live flag, no fired marker) runs to a block decision while any
@@ -355,7 +485,8 @@ class BudgetGuardHookTest(unittest.TestCase):
             socket, "socket", side_effect=AssertionError("network disabled")
         ), contextlib.redirect_stdout(out):
             code = budget_guard_core.main(
-                ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired)]
+                ["--runtime", "zcode", "--flag-path", str(flag), "--fired-path", str(fired),
+                 "--hook-outcomes-log", str(self.tmp / "hook-outcomes.log")]
             )
         self.assertEqual(code, budget_guard_core.EXIT_BLOCK_ZCODE)
         self.assertIn('"decision": "block"', out.getvalue())

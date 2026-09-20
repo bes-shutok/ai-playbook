@@ -1221,9 +1221,16 @@ def classify_boundary(probe_report: Mapping[str, Any], boundary_kind: Optional[s
     """One classification per boundary decision.
 
     install: a known continue with a trusted binding reset epoch. Every
-    other decision (unknown, weekly-secondary, pause, abort, complete)
-    supersedes and clears any pending watcher even when no replacement is
-    scheduled.
+    other decision (unknown, weekly-secondary, wait-for-reset, pause,
+    abort, complete) supersedes and clears any pending watcher even when
+    no replacement is scheduled. wait-for-reset is the probe's in-session
+    ride-through: the boundary arms nothing, records no receipt, and the
+    orchestrator waits wait_minutes and re-probes, the fresh report
+    governing the boundary - classify_boundary must never arm a watcher
+    into a live wait. Precedence: the pause_decision check runs before the
+    status and binding checks, so a wait-for-reset decision classifies
+    wait-for-reset even when the binding is weekly-secondary or the status
+    is unknown (all three classes are non-schedulable).
     """
 
     if boundary_kind in {"abort", "complete"}:
@@ -1231,6 +1238,8 @@ def classify_boundary(probe_report: Mapping[str, Any], boundary_kind: Optional[s
     decision = str(probe_report.get("pause_decision", "continue"))
     if decision == "pause":
         return "pause"
+    if decision == "wait-for-reset":
+        return "wait-for-reset"
     if probe_report.get("status") != "ok":
         return "unknown"
     if probe_report.get("binding") == "secondary":

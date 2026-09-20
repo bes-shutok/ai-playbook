@@ -6828,6 +6828,8 @@ When a `git mv old.md dir/new.md` is staged and the commit is scoped with `git c
 
 **Witness (2026-09-18, ai-playbook):** `git commit -m "..." --only <new-backlog-file> <modified-file>` failed on the untracked half; `git add` of both paths followed by the same `--only` commit landed it scoped.
 
+**Witness 2 (2026-09-20, ai-playbook review r2):** the trap recurred in designed prose: an authoring landing blueprint prescribed a pathspec-scoped commit alone, which cannot carry the payload's untracked new files; the review caught it and the blueprint gained the explicit `git add -- <paths>` staging clause. Landing procedures in generated plans need the add-step probe as much as ad-hoc usage.
+
 **See also:** #371 (the pathspec commit duals: what a pathspec drops out and what a pathspec-less commit sweeps in).
 ## 383. Completion Records That State Test Counts Drift Whenever a Late Witness Lands
 
@@ -7070,3 +7072,96 @@ Witness: document-registry.md carried four `+| ...` rows from a diff paste (2026
 **Witness:** 2026-09-20, playbook plan review: a none-commit done receipt taught the dirty-tree exemption only at the done boundary; the next task's checkpoint scope witness persisted a non-resumable contract-violation on the sanctioned flip, a later real-commit done refused it at the clean tail, and resume reconciliation hard-blocked; the round staged all three as one blocking finding.
 
 **See also:** #400 (closing a taxonomy on named instances; the enumeration facet of the same coverage family).
+
+## 403. Fixture Subshell Verdicts Die in Unchained Compounds and Succeeding Exit Traps
+
+**Principle:** Family H (verify the real thing, not the abstraction: a fixture's green verdict is itself a claim, and an unverified witness asserts nothing).
+
+**Shape trigger:** a bash selftest fixture runs its scenario sides inside `( ... )` subshells - typically one per peer (a linked worktree, a second checkout) - chained in a compound (`if ! ...`, `&&`/`||` lists) with a cleanup EXIT trap.
+
+**Rule:** (1) Chain every inner subshell as `( ... ) || exit 1`, setup subshells included, and guard every `cd` inside a subshell with `|| exit 1`. (2) Know the two swallowing mechanisms: under `if ! <compound>` errexit is suppressed for the whole compound and the compound's status is the LAST inner subshell's, so an unchained earlier failure is dropped; and a fatal error inside a subshell (e.g. a nounset expansion after a failed `eval`) is masked when a succeeding EXIT trap leaves the subshell exiting 0. (3) Assert the intermediate state (exports, dirs, files) explicitly right after each risky command and `exit 1` on the assertion - an explicit status survives a trap. (4) Before trusting a new regression fixture, prove it can fail: inject the defect (or revert the fix), run the suite, require the fixture to FAIL, restore, and require GREEN.
+
+**Why:** a green `selftest OK` line reads as regression coverage but can be vacuous exactly for the defect class the fixture was written to catch; the compound's suppressed errexit and the trap's successful cleanup both convert a caught regression into a pass.
+
+**Witness (2026-09-20, ai-playbook done-lock selftest):** the cross-worktree mutual-exclusion fixture passed with a per-worktree lock-keying mutation injected: the suite run against the reverted keying exited 0 with the fixture's OK line printed. After chaining every inner subshell and guarding the `cd`s, the same mutation failed the suite naming the fixture. Earlier, a lock fixture printed OK while failing: the nounset kill after a failed `eval` was masked by the holder-kill EXIT trap; explicit export assertions with explicit exits fixed the verdict.
+
+**See also:** #231 (a mutation that matches nothing leaves the fixture testing the unmutated baseline), #235 (RED fixtures need a gate-unique assertion phrase), #220 (vacuous sweeps need RED-today proof).
+
+## 404. A Lock Keyed on the Working Copy Silently Loses Mutual Exclusion Across Linked Worktrees
+
+**Principle:** Family G (guard fail-closed: mutual exclusion was absent precisely when the resource was contended, with no error surface) crossed with identity keying: derive a lock's key from the contended resource's shared identity, never from the caller's vantage point.
+
+**Shape trigger:** a lock file, lock dir, or named mutex whose key is derived from the process's own location (`git rev-parse --show-toplevel`, `getcwd()`, a per-checkout config path), while the serialized resource (a shared branch, a store, a registry) is reachable from several working copies of one repository - linked git worktrees, bind mounts, containers mounting one repo.
+
+**Rule:** (1) Key the lock on the resource's shared identity: for git, the resolved common dir (strip a trailing `/.git`); every working copy of one repo must map to one lock. (2) Physicalize the identity (`pwd -P`, realpath) before hashing: logical spellings of one location (a symlinked temp root, an exported `GIT_DIR`) must key the same lock. (3) Keep per-instance keying only when the contention domain genuinely is the instance, and say so where the key is documented. (4) Pin the scoping with a cross-instance fixture: hold from one worktree, refuse the acquire from another, and run both directions.
+
+**Why:** each working copy acquires against its own private lock, so two writers interleave on the shared resource while every per-checkout check stays green; the defect surfaces only as cross-instance races that single-checkout tests cannot see.
+
+**Witness (2026-09-20, ai-playbook merge landing lock):** `merge-acquire` keyed on `--show-toplevel`, so a hold from a linked worktree did not block the primary checkout's acquire (r1 review, blocking). The fix keys on the resolved common dir; an exported `GIT_DIR` through a symlinked temp root still spelled the repo as a logical absolute path and keyed a second lock until physicalization became unconditional (r2 review, mutation-verified). A cross-worktree fixture asserts exclusion in both directions.
+
+**See also:** #387 (a matcher keyed on a relative path is identity-blind - the recognition-side sibling), #403 (the cross-instance fixture must itself be verdict-sound).
+
+## 405. Mutation-Check a Negative Content Pin by Re-Adding the Pinned String
+
+**Principle:** Family H (verify the real thing, not the abstraction) - an absence assertion (`assertNotIn`, negative grep) is keyed on the literal you typed, not the content you meant; a mistyped needle matches nothing, so the guard passes forever while the banned content sits in the target, green with zero discriminating power.
+
+**Shape trigger:** writing a probe or gate that asserts a string is gone - stale-identifier guards, banned-token fences, cleanup audits - especially when the needle is retyped from memory instead of copied from the authoritative source.
+
+**Rule:** (1) A negative pin must be shown able to fail: re-introduce the exact pinned string into the target and confirm the assertion goes RED before trusting its GREEN (the negative analogue of the empirical discrimination check). (2) Copy the needle from the authoritative source, never reconstruct it. (3) Give the discriminating weight to positive anchors on content that exists, and use the absence assertion as the outer fence, not the only fence.
+
+**Witness (2026-09-20, execute-plan contract probe r2):** a stale-scanner probe asserted NotIn of a slug with one word mistyped, so the real stale slug would have passed vacuously; the corrected needle was mutation-checked (re-added copy fails, unmutated contract passes).
+
+**See also:** #80 (the positive-side cousin: a final-state assertion cannot tell "fired and restored" from "never fired"; assert the intermediate mutation), #389 (a presence-only pin is placement-blind - the positive-pin complement).
+
+
+## 406. Merge-Time Dirt Backup/Restore Can Resurrect Stale Content That Regresses Committed HEAD
+
+**Principle:** Family H (verify the real thing, not the abstraction) crossed with dirt provenance: "uncommitted changes found in the checkout" is not evidence the content is newer than HEAD; only a comparison against HEAD proves dirt is forward work and not a stale leftover.
+
+**Shape trigger:** a merge/squash/closeout procedure that preserves dirty files across a commit by backing them up (`cp` to a scratch dir) and restoring them after, or any prompt that says "known peer-dirt files must not be committed; leave them dirty and uncommitted."
+
+**Rule:** (1) After restoring dirt over a new HEAD, run `git diff HEAD -- <restored files>` and classify the hunks: any hunk that REMOVES lines present in HEAD (especially lines added to main since the run's merge-base) is a dirt REGRESSION, not forward work; restore that file from HEAD instead and report it. (2) Never infer dirt provenance from "it was already dirty when I arrived"; witness it against commit history (`git log -- <file>`) and, when the working content matches a deployed runtime copy byte-for-byte, presume the deployed copy is the source and that it is stale (deploys refresh only when a deploy step runs). (3) A merge agent that must preserve dirt carries an explicit regression gate in its dispatch prompt, not just a "do not commit" instruction; preserving regression dirt across a merge is worse than losing it.
+
+**Why:** the backup/restore dance gives stale bytes a fresh mtime and a clean conscience: three successive merges faithfully re-preserved a working-tree `done-lock.sh` that was a byte-identical revert of committed cross-worktree merge-lock keying back to a Sep-4 deployment copy, and every merge's "two known peer-dirt files" check passed because it verified the file LIST, never the diff direction.
+
+**Witness (2026-09-21, ai-playbook peer-dirt forensics):** a user question about uncommitted changes traced `scripts/done-lock.sh` dirt to the stale deployed copy (shasum-equal to `~/.ai-playbook/scripts/done-lock.sh`, mtime Sep 4), removing the merge-lock common-dir keying landed as 181af6cc; the dirt had ridden the execute-plan-mechanics squash merge's backup/restore (and two earlier merges) untouched. The regression was repaired by restoring the file from HEAD.
+
+**See also:** #404 (the lock whose keying this dirt would have silently reverted), #403 (a fixture must be able to fail; a dirt check that only compares paths cannot fail on wrong content).
+
+## 407. Land Archive-Prep Plan Edits Before the Driver's Pre-Archive Stage Latches the Digest
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a staged terminal gate latches state at its pre-stage and re-checks it at its final stage; any edit that moves the latched bytes between the stages converts a finished run into a done-pending block at exactly the moment nothing is left to fix.
+
+**Shape trigger:** an orchestrator finishing a run that ends in a two-stage terminal operation (pre-archive then final) while also applying last-chance content edits to the artifact the gate digests.
+
+**Rule:** (1) Apply every archive-prep artifact edit BEFORE the pre-archive stage, so the latched digest is the digest of the final bytes. (2) Read the stage contract before improvising around a block: the final stage requires (a) the recomputed destination digest to equal the latched one and (b) the gate-recorded SOURCE path to be absent; re-staging a blocked sequence means materializing the identical source bytes at the recorded path, re-running pre-archive, removing the source, then running final. (3) Never point plan_path at the destination to work around a missing source: the receipt then demands the destination's absence, which can never hold.
+
+**Witness (2026-09-20, ai-playbook execute-plan closeout):** archive-prep header edits landed after the pre-archive stage had latched the plan digest; the final stage blocked on a digest mismatch, then on a source-present check after a workaround pointed plan_path at the destination; the clean re-stage (source bytes restored, pre-archive, source removed, final) passed on the first try.
+
+**See also:** #406 (closeout dirt provenance), #403 (a gate must be able to fail; the digest latch did).
+
+## 408. A Squash Tree-Identity Gate Holds Only as a Union Check Over a Peer-Interleaved Base
+
+**Principle:** Family H - when the base branch advances between a run's branch point and its squash, "squashed tree equals branch tree" is unsatisfiable by construction; the gate's intent (no reviewed content lost) is preserved by proving the squashed tree is the exact union of both deltas.
+
+**Shape trigger:** a dispatch contract requiring a tree-identical gate before a squash merge, executed on a shared repository where peers land work on the integration branch while the run is in flight (quota pauses make this routine).
+
+**Rule:** (1) After an unexpected base move, first diff the squashed HEAD against the run branch: when that diff is the byte-exact inverse of the peer's base delta, nothing of the run was lost or altered. (2) For files both sides touched, verify line-by-line that every added line from each side survives in the merged tree (mind `grep -qF -- "$line"`: a check line starting with a dash is parsed as an option without the terminator, producing false MISSes). (3) Record the adapted gate and its evidence in the run record; a plain "tree-identical: fail" on a moved base means the check was mis-applied, not that content was lost.
+
+**Witness (2026-09-20, ai-playbook context-budget squash):** main advanced by a peer landing while the run sat at a quota-pause boundary; the squash auto-merged two shared files; HEAD-to-branch diff mirrored the peer delta exactly and the per-line union check over both shared files came back empty, so the landing was certified as the exact union.
+
+**See also:** #407 (the same closeout's gate-sequencing sibling), #406 (dirt that survives merges unchecked).
+
+## 409. An Orchestrator Running Against the Primary Checkout Must Not Side-Edit Tracked Primary Files Mid-Flight
+
+**Principle:** Family G (contain the blast radius) crossed with worktree discipline: a run that executes its tasks in a dedicated worktree still shares one thing with every peer - the primary checkout - and a tracked file edited there mid-flight is unattributable dirt the moment the session pauses or dies.
+
+**Shape trigger:** an execution orchestrator or gate runner whose cwd is the primary checkout while its task work lives in a worktree; a pre-existing main regression that fails a gate run launched from the primary; any "apply the same fix here too so the gate goes green" impulse outside the run's own tree.
+
+**Rule:** (1) Every mutation of tracked files belongs inside the run's worktree/branch, even when the same content is needed elsewhere; run gates that depend on a fix inside the tree where the fix landed, not by patching a second checkout to match. (2) When a primary-checkout edit is genuinely unavoidable (gate must run there), record it as attributed dirt at creation time: owner session, plan/task, disposition (absorbed by the upcoming squash), and the reason - never leave it to be discovered by forensics. (3) A paused run's primary-checkout side edits must be part of the pause/resume handoff note; "unexplained dirt" is the failure mode, and attribution after the fact costs a full session-DB mining pass.
+
+**Why:** the quota-aware execution orchestrator patched the archived-fixture regression into the primary checkout's watcher test at 07:28 and paused one minute later; the identical fix was already committed on the run's branch, so the primary copy was a duplicate that read as unexplained peer dirt and took a session-DB query to attribute.
+
+**Witness (2026-09-21, ai-playbook quota-aware execution):** primary `scripts/test_execute_plan_resume_watcher.py` found dirty with a one-line fixture fix; attributed to session sess_acc16ecf at 07:28:32 via the session DB; benign (byte-contained in the run's 6c4b6df4) but indistinguishable from a regression until attributed.
+
+**See also:** #406 (dirt preservation must diff against HEAD; the consumer side of unattributed dirt), #372 (gitignored artifact homes live in the primary checkout - the sanctioned reason to write there).

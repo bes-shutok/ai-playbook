@@ -29,7 +29,7 @@ Review code for security vulnerabilities and unsafe practices.
 1. Error messages do not expose internal implementation details
 2. Stack traces not returned to clients in production
 3. Log output does not contain PII (email, phone, name, address)
-4. System identifiers (entity IDs, revision IDs) are NOT PII — do not flag them
+4. System identifiers (entity IDs, revision IDs) are NOT PII - do not flag them
 5. Debug endpoints disabled or protected in production
 
 ## Authentication and Authorization
@@ -39,12 +39,12 @@ Review code for security vulnerabilities and unsafe practices.
 3. Role/permission checks at the correct layer
 4. Session management handles invalidation
 
-**Note**: For internal services behind an API gateway + BFF, skip auth/authz checks — those are handled upstream. Focus on injection, input validation, and data leakage.
+**Note**: For internal services behind an API gateway + BFF, skip auth/authz checks - those are handled upstream. Focus on injection, input validation, and data leakage.
 
 ## Sensitive Data Handling
 
 1. PII encrypted at rest and in transit
-2. Minimal data retention — do not store what is not needed
+2. Minimal data retention - do not store what is not needed
 3. Audit logging for access to sensitive data
 
 ## Resource Identifiers
@@ -54,8 +54,8 @@ Review code for security vulnerabilities and unsafe practices.
 
 ## TLS and Transport
 
-1. Do NOT flag missing TLS in application code — it is typically handled by infrastructure (proxy, ingress, load balancer)
-2. Do NOT recommend HSTS unless explicitly asked — it has lasting side effects and can cause outages
+1. Do NOT flag missing TLS in application code - it is typically handled by infrastructure (proxy, ingress, load balancer)
+2. Do NOT recommend HSTS unless explicitly asked - it has lasting side effects and can cause outages
 3. `Secure` cookie flag only when TLS is guaranteed; flag absence is not a finding for dev/staging
 
 ## Python-Specific (FastAPI / Django / Flask)
@@ -73,3 +73,22 @@ Review code for security vulnerabilities and unsafe practices.
 
 
 Report problems only. No positive observations.
+
+## Fail-closed logging and configuration boundaries
+
+When a logging filter, redaction helper, provenance guard, or security setting
+changes:
+
+1. Model what the logging backend renders, including throwable cause chains,
+   nested causes, maps, collections, arrays, unknown objects, and arbitrary
+   strings. Inspecting only the primary message is insufficient.
+2. Treat unknown non-null objects, throwable-bearing events, and arbitrary
+   strings as unsafe unless an explicit field allowlist proves the value is
+   non-sensitive. Character shape is not a secrecy property.
+3. Test both source authorization and effective value policy. An approved
+   source can still provide disabled TLS or an unbounded pool, and an accepted
+   alias can differ from the value the application consumes.
+4. Add adversarial witnesses for a secret-shaped string, nested cause, object
+   `toString()`, documented environment placeholder, and higher-precedence
+   override. Stage `security#logging-render-surface-unchecked` when the full
+   rendered surface is not inspected.

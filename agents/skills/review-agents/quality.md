@@ -70,3 +70,22 @@ Before flagging cache eviction, invalidation, or fallback logic as incomplete or
 When tracing call graphs or data flows, note ambient-input reads reachable from tests in the diff or plan: env vars, network clients, cwd-relative or gitignored paths, and clock/timezone/locale dependence. Raise with a `quality#` prefix when visible. The `testing` worker leads the dedup group per `review-panel-selection.md`; the enumeration procedure lives in `testing.md`.
 
 Report problems only. No positive observations.
+
+## Representation precision and fan-out completeness
+
+When a value crosses a framework, database, serializer, or mapper boundary:
+
+1. Compare the accepted domain with the emitted representation. Check unit
+   conversion, timestamp precision, null versus empty JSON, and binary or text
+   JDBC binding. A positive duration that becomes zero is not a valid timeout.
+2. For paired records, normalize each record from its own source fields before
+   comparing them. Do not rebuild one record from the other and then claim the
+   pair was validated.
+3. Require boundary tests for the smallest value, precision edge, null, empty,
+   and mismatched-pair cases when reachable.
+
+When a change persists multiple facts or updates dependency-driven state,
+enumerate every changed fact, published predicate, downstream job source, and
+dependency key. Compare the persisted set with the fan-out set passed to
+coordinators or queues; a successful write with an incomplete fan-out is a
+stale-derived-state bug.

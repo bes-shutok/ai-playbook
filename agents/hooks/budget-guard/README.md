@@ -62,6 +62,10 @@ by a re-read confirmation: a concurrent probe may have replaced the flag
 with a newer live window between the hook's read and the removal, and in
 that case removal is skipped so the newer window stays enforced.
 
+## Decision log
+
+Decision log `~/.ai-playbook/runtime/hook-outcomes.log` (overridable with `--hook-outcomes-log`) appends one JSON line per outcome under the shared guard lock: `block` lines (appended on every block decision (a lock-acquisition failure skips the line)), `error` lines (an unexpected exception on the decision path, carrying the failure kind, the message text, and the fail-open exit code the invocation returns), and a daily `heartbeat` allow line rate-limited to the first allow invocation per hook per day; every write is best-effort, and a skipped or failed line (including a lock-acquisition failure) never changes the hook's decision or exit code.
+
 ## Shared guard lock and atomic cleanup contract
 
 Every mutation and cleanup of the guard flag and fired marker serializes on
@@ -420,6 +424,17 @@ fixed-name backup exists, and retired and disarmed once both are deleted.)
   backups; record the superseding edit under either option. Retirement
   timing: the refresh option retires at the next clean fresh-session diff
   per normal-path retirement below; the retire option retires immediately.
+- Not-intentional-divergence branch: if the unexpected divergence routed
+  through the superseded-edit decision is judged NOT intentional, restore
+  per the merge granularity, then either remove the unexplained change,
+  recording the removal (with a timestamp) where the protocol's other
+  decisions are recorded, so a later session evaluating the escalation
+  bound below can see the prior removal (after which normal-path
+  retirement applies on the next clean diff), or
+  report the state for manual recovery and retire both fixed-name backups
+  so the standing order cannot loop against a permanently dirty diff.
+  Escalation bound: when the same unexplained change returns after a
+  removal, do not remove again; take the report-and-retire arm instead.
 - Normal-path retirement: after a completed restore or a confirmed
   superseding edit whose next fresh-session diff is clean, retire both
   fixed-name backups by deleting them, so the standing order cannot later

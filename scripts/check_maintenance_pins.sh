@@ -113,6 +113,10 @@ pin "parent_absent_since needle" grep -qF 'parent_absent_since' "$S"
 pin "darkness clock keeps the earliest value" grep -qF 'keeps the earliest value' "$S"
 pin "step 0 keep-earliest phrasing" grep -qF 'keeping the earliest value' "$S"
 pin "idle occupancy join mirrored in SKILL.md" grep -qF 'whose target carries the `(idle)` marker' "$S"
+# merge landing lock group (plan 2026-09-20-merge-landing-lock-grouping): the
+# G3b guard arm; the prompt-templates and overlay needles live in their own
+# file sections below (count and body-scoped absence in the python block)
+pin "G3b guard present"      grep -qF 'G3b (landing in flight)' "$S"
 pin "pricing note read-back"  grep -qF 'note surfaces in the survey read-back' "$S"
 # --- quota leg bindings (P6 origins 1-2; schema-4 fire-time bookkeeping) ---
 pin "quota leg binds every clocked dispatch path" grep -qF 'binds every clocked child dispatch, from any session type' "$S"
@@ -121,6 +125,14 @@ pin "deferred-peak quota_status recorded" grep -qF 'quota_status: "deferred-peak
 pin "probe-invocation bullet present" grep -qF 'Run `python3 scripts/quota_window_probe.py`' "$S"
 pin "deferred slot fit-checked before pricing deferral" grep -qF 'before deferring for pricing, verify the deferred slot' "$S"
 pin "starvation beats pricing never fit" grep -qF 'starvation beats pricing, never the runtime-fit rule' "$S"
+# quota-aware authoring primitive selection (plan
+# 2026-09-20-quota-aware-scheduling-semantics, Task 5): the D2 quota-signal
+# decision input in SKILL.md and the authoring blueprint's stand-down gate
+# span in prompt-templates.md (the acceptance countability; the plan's
+# Validation block pins the sibling G6 spans author in-session, quota_signal,
+# still plan-uncovered, and in-session authoring primitive)
+pin "D2 quota-signal decision input" grep -qF "quota leg's probe report as a required decision input" "$S"
+pin "authoring stand-down gate span" grep -qF 're-check the assigned backlog item is still plan-uncovered under the resolved plans directory' "$P"
 python3 - "$S" <<'EOF'
 import json, re, sys
 s = open(sys.argv[1]).read()
@@ -158,6 +170,22 @@ if "parent_absent_since" not in doc or "pending_dispatch" not in doc:
 child = (doc.get("children") or [{}])[0]
 if not {"fire_at", "requested_at", "quota_status", "progress_mark", "resume_count"} <= set(child):
     print("PIN FAIL: children entry fields drifted"); sys.exit(1)
+# scheduler ops lanes and durability plan Task 2: the decision-time quota
+# record. Schema stays 4 (the assertion above is untouched and not duplicated);
+# the key joins additively with its per-lane shape, and the Step 3 region must
+# carry the record duty, the near-reset branch, and the fresh-window anchor.
+qad = doc.get("quota_at_decision")
+if not isinstance(qad, dict) or set(qad) != lanes:
+    print("PIN FAIL: quota_at_decision missing or per-lane keys drifted"); sys.exit(1)
+for lane in ("execution", "authoring"):
+    if not {"status", "percent_used", "minutes_to_reset"} <= set(qad.get(lane) or {}):
+        print("PIN FAIL: quota_at_decision %s shape drifted" % lane); sys.exit(1)
+step3 = s.split("### Step 3: decision")[1].split("### Step 4")[0]
+for needle in ("quota_at_decision",
+               "D1 defers the execution dispatch past the reset and D2 defers the authoring dispatch",
+               "must cite an explicit non-quota reason"):
+    if needle not in step3:
+        print("PIN FAIL: Step 3 lacks the quota decision needle %r" % needle); sys.exit(1)
 need(s, "### Step 1: survey"); need(s, "### Step 2")
 step1 = s.split("### Step 1: survey")[1].split("### Step 2")[0]
 if "pending_dispatch" not in step1:
@@ -192,6 +220,13 @@ need(s, "## Failure detection and the failure cap")
 failure_region = s.split("## Failure detection and the failure cap", 1)[1].split("\n## ", 1)[0]
 if "\\[[xX]\\]" not in failure_region:
     print("PIN FAIL: corrected checkbox regex literal missing from the failure-detection region"); sys.exit(1)
+# authoring claim file surfaces (scheduler ops lanes and durability plan,
+# Task 1): the claim reading is the G1a guard's own discovery arm, so pin it
+# region-scoped to the G1a region (a stray authoring-claims mention elsewhere
+# in SKILL.md must not satisfy it vacuously)
+g1a_region = s.split("G1a (authoring lane)")[1].split("Duplicate-parent tripwire")[0]
+if "authoring-claims" not in g1a_region:
+    print("PIN FAIL: G1a discovery arm missing the authoring-claims claim reading"); sys.exit(1)
 EOF
 rc=$?
 [ "$rc" -ne 0 ] && fail=1
@@ -213,8 +248,21 @@ pin "never pin local hours"      grep -qF 'never pin local hours' "$Z"
 pin "execution-child marker repo containment" grep -qF 'and the resolved repository root (the relative plans-dir substring alone' "$Z"
 expect_absent "superseded uncontained execution-child marker wording must be absent from zcode.md" 'plus a path under the resolved `plans_dir` (SKILL.md Configuration; default `docs/plans/`).' "$Z"
 pin "zcode tripwire shape excludes the title conjunct" grep -qF 'title conjunct is deliberately not required' "$Z"
-pin "ladder recycling needle"    grep -qF 'update the recorded parent record into the child one-shot' "$Z"
-pin "hand-off proceed refusal bound" grep -qF "converges to the fallback's fresh-id create within the same dispatch attempt" "$Z"
+# scheduler ops lanes and durability plan Task 4 (2026-09-19): the recycling
+# update call is demoted to a verified-only optimization leg, so the old
+# 'ladder recycling needle' literal (the update-as-primary step 2 sentence)
+# and the old 'hand-off proceed refusal bound' literal (the update-refusal
+# convergence sentence "converges to the fallback's fresh-id create within
+# the same dispatch attempt") both died with the recycling primary path.
+# The refusal-bound pin is REWRITTEN, not dropped: the successor sentence
+# below carries the same semantics on the operative path (a create refusal
+# routes to the next mutating call, the lingered-record delete, instead of
+# stranding the dispatch). Both dead literals are frozen absent.
+pin "ladder operative delete-plus-create needle" grep -qF 'delete-plus-create is the operative path' "$Z"
+pin "recycling update is a verified-only optimization leg" grep -qF 'may replace the delete-plus-create above only when a live-verified parent-to-child flip is recorded' "$Z"
+pin "hand-off proceed refusal bound (operative path)" grep -qF 'deleting your own lingered completed spawner record first when the create is refused for the automation-born cap' "$Z"
+expect_absent "demoted update-as-primary recycling wording must be absent from zcode.md" 'update the recorded parent record into the child one-shot' "$Z"
+expect_absent "superseded update-refusal convergence sentence must be absent from zcode.md" "converges to the fallback's fresh-id create within the same dispatch attempt" "$Z"
 pin "verification section anchored" grep -qF '## Automation primitive verification' "$Z"
 pin "linger-deletion needle"     grep -qF 'deleting your own lingered' "$Z"
 pin "ambiguous-outcome carve-out kept" grep -qF 'treat the child as dispatched' "$Z"
@@ -231,6 +279,8 @@ pin "straddle rule bound in the off-peak preference" grep -qF -- '--straddle-min
 # the operative zcode copy stayed green; pin it separately.
 pin "fit-before-pricing rule bound (zcode copy)" grep -qF 'Before deferring for pricing, verify the deferred slot' "$Z"
 expect_absent "superseded 60-minute horizon bullet must be absent from zcode.md" 'when it is under 60 (the observed one-to-four-hour child run' "$Z"
+# merge landing lock group: the overlay must name the merge lock family
+pin "overlay names the merge lock acquire command" grep -qF 'merge-acquire' "$Z"
 
 # --- prompt-templates.md child-duty needles (state-driven rearm, successor dispatch, resume) ---
 pin "state-first rearm duty" grep -qF 'state-first, without listing first' "$P"
@@ -244,6 +294,15 @@ pin "rearm lingered-record deletion in blueprints" grep -qF 'deleting your own l
 pin "success-via-existing confirmation" grep -qF 'counts as success only after one more listing confirms' "$P"
 pin "successor fire time names the full quota leg" grep -qF 'runtime-fit, deferred-window, peak-pricing, and floor rules' "$P"
 pin "successor entry records requested_at" grep -qF 'requested_at carrying the originally requested fire time' "$P"
+# scheduler ops lanes and durability plan Task 4: the durable HOST CAVEAT.
+# The re-arm caveat span sits inside the byte-identical FIRST ACTION
+# paragraphs; the plain grep here is a presence canary only (satisfiable by
+# a single occurrence), and the python parity block below pins the count
+# exactly (2 for the re-arm span, one per blueprint paragraph; 1 for the
+# successor reshape leg; the deviation-list entries paraphrase and must not
+# carry the spans, or those counts drift).
+pin "blueprint re-arm HOST CAVEAT present" grep -qF 'HOST CAVEAT: any recycling update whose echoed record is not verifiably the intended form' "$P"
+pin "successor reshape-leg HOST CAVEAT present" grep -qF 'HOST CAVEAT: any recycling update whose echoed record is not verifiably the intended form (enabled true, recurring false, a future nextRunAt matching the successor fire time, confirmed by a listing) is treated as a refusal' "$P"
 # Review r1 F8: the 'runtime-fit, deferred-window, ...' needle above occurs
 # TWICE in prompt-templates.md (blueprint + deviation paraphrase), so
 # reverting only the blueprint's --fire-at sentence stayed green; pin the
@@ -260,6 +319,24 @@ expect_absent "superseded listing-driven rearm wording must be absent from promp
 # the other keeps the duty must still fail.
 pin "authoring blueprint checkpoint duty" grep -qF 'after each blueprint step block, at a boundary only, never mid-task, log one telemetry record (skill: plans-authoring) to docs/tmp/authoring/<plan-slug>/context.jsonl' "$P"
 pin "execution blueprint checkpoint duty" grep -qF 'after each blueprint step block, at a boundary only, never mid-task, log one telemetry record (skill: execute-plan) to docs/tmp/execute-plan/<plan-slug>/context.jsonl' "$P"
+
+# --- authoring claim file surfaces (scheduler ops lanes and durability plan, Task 1) ---
+# The 2026-09-18 authoring-lane collision (automation-343ce2b0 vs a foreign
+# session on the same item scope) was invisible to the listing- and state-based
+# arms; the fix is a claim file the authoring payload writes before its
+# pre-work gate and the G1a discovery arm reads. The plain greps below are
+# whole-file (satisfiable by the dated deviation-list entry, the F8 precedent),
+# so the python integrity block below re-asserts the operative literals
+# body-scoped. Design constraints pinned there: the claim duty and gate stay
+# separate authoring-blueprint paragraphs (never inside the shared FIRST
+# ACTION re-arm span, keeping the re-arm parity pin untouched), and the
+# execution blueprint must never carry the claim literal at all (an execution
+# payload writing authoring claim files would false-trip G1a's foreign-claim
+# reading and stall the lane; expect-absent, body-scoped).
+pin "G1a authoring claim discovery arm" grep -qF 'authoring-claims' "$S"
+pin "authoring blueprint claim duty" grep -qF 'authoring-claims' "$P"
+pin "foreign-claim clobber-witness span present" grep -qF "never clobber the first writer's witness" "$P"
+pin "overlay names the concrete claim directory" grep -qF 'docs/tmp/authoring-claims/' "$Z"
 
 # --- prompt-templates.md blueprint integrity ---
 python3 - "$P" "$Z" "$D" <<'EOF'
@@ -290,6 +367,16 @@ for needle in ('"rearm_note"', "loop-parent-missing", "parent_automation_id",
                "(1) when", "(2) when", "(3) when"):
     if needle not in paras[0]:
         print("PIN FAIL: re-arm paragraph escalation drifted (missing %s)" % needle); sys.exit(1)
+# scheduler ops lanes and durability plan Task 4: the durable HOST CAVEAT is
+# pinned parity-safe by count (the spans sit inside the byte-identical re-arm
+# paragraphs, so exactly one occurrence per blueprint; the deviation-list
+# entries paraphrase and must not carry the spans, or these counts drift)
+rearm_caveat = "HOST CAVEAT: any recycling update whose echoed record is not verifiably the intended form (enabled true, the intended recurring value, a future nextRunAt confirmed by a listing) is treated as a refusal and takes the delete-plus-create path"
+if p.count(rearm_caveat) != 2:
+    print("PIN FAIL: re-arm HOST CAVEAT count %d != 2 (one per blueprint paragraph)" % p.count(rearm_caveat)); sys.exit(1)
+succ_caveat = "HOST CAVEAT: any recycling update whose echoed record is not verifiably the intended form (enabled true, recurring false, a future nextRunAt matching the successor fire time, confirmed by a listing) is treated as a refusal"
+if p.count(succ_caveat) != 1:
+    print("PIN FAIL: successor reshape-leg HOST CAVEAT count %d != 1" % p.count(succ_caveat)); sys.exit(1)
 if p.count("Maintenance scheduler turn (every 2 hours)") != 0:
     print("PIN FAIL: title literal must not appear in prompt-templates.md (the zcode.md recipe is the single literal home)"); sys.exit(1)
 if z.count("Maintenance scheduler turn (every 2 hours)") != 1:
@@ -331,6 +418,55 @@ def confined(span):
         print("PIN FAIL: execution-only span left the execution inner block: %s" % span); sys.exit(1)
 confined("beyond the re-arm duty below and the single successor-dispatch duty below")
 confined("this is a resume run")
+# merge landing lock group (plan 2026-09-20-merge-landing-lock-grouping):
+# each blueprint acquires the merge landing lock exactly once (the dated
+# deviation-list entries paraphrase the literal, so the count stays 2), the
+# authoring blueprint carries the worktree isolation fragment, and the
+# superseded riding sentence is absent from the fenced blueprint bodies
+# (region-scoped like the checkbox-regex pin above, so the dated deviation-list
+# history entry outside the fences stays legal).
+if p.count("merge-wait-acquire") != 2:
+    print("PIN FAIL: merge-wait-acquire count %d != 2 in prompt-templates.md (once per blueprint)" % p.count("merge-wait-acquire")); sys.exit(1)
+need(norm(p), "git worktree add -b YYYY-MM-DD-authoring-<slug> <sibling-path> <default-branch>")
+fence = "```"
+bodies = re.findall(r"^" + fence + r"\n(.*?)^" + fence + r"$", p, re.S | re.M)
+if not bodies:
+    print("PIN FAIL: no fenced blueprint bodies found (absence check would be vacuous)"); sys.exit(1)
+riding = "final squash merge as joint-state content"
+hits = [i for i, body in enumerate(bodies) if riding in body]
+if hits:
+    print("PIN FAIL: superseded riding sentence still in fenced blueprint body(ies) %s" % hits); sys.exit(1)
+# r3 F2 (plan 2026-09-20-merge-landing-lock-grouping, r3 folds): the
+# r2-generation landing invariants are pinned scoped to the authoring body
+# itself; the dated deviation-list entries only paraphrase these literals,
+# so a body-scoped check cannot be satisfied by the registration prose.
+auth_bodies = [b for b in bodies if "git worktree add -b YYYY-MM-DD-authoring-<slug>" in norm(b)]
+if len(auth_bodies) != 1:
+    print("PIN FAIL: could not uniquely identify the authoring blueprint body"); sys.exit(1)
+for needle in ("git add -- <paths>",
+               "git update-ref refs/heads/<default> <new> <old>",
+               "git show refs/heads/<default>:"):
+    need(norm(auth_bodies[0]), needle)
+# authoring claim file surfaces (scheduler ops lanes and durability plan,
+# Task 1): body-scoped positives for the authoring blueprint and the
+# expect-absent half for the execution blueprint. The plain greps above are
+# satisfiable by the dated deviation-list prose, so the operative literals are
+# asserted inside the authoring body itself; the execution body and its
+# dispatch slice must never carry the literal (a foreign-claim false trip
+# would stall G1a), and the re-arm parity span must stay claim-free (the duty
+# and gate are separate paragraphs, never inside the shared FIRST ACTION span).
+if "docs/tmp/authoring-claims/" not in auth_bodies[0]:
+    print("PIN FAIL: claim directory literal missing from the authoring blueprint body"); sys.exit(1)
+if "never clobber the first writer's witness" not in auth_bodies[0]:
+    print("PIN FAIL: foreign-claim gate (clobber-witness span) missing from the authoring blueprint body"); sys.exit(1)
+exec_bodies = [b for b in bodies if "SUCCESSOR DISPATCH" in b]
+if len(exec_bodies) != 1:
+    print("PIN FAIL: could not uniquely identify the execution blueprint body"); sys.exit(1)
+if "authoring-claims" in exec_bodies[0] or "authoring-claims" in inner:
+    print("PIN FAIL: execution blueprint carries the authoring-claims literal (a foreign-claim false trip would stall G1a)"); sys.exit(1)
+for para in paras:
+    if "authoring-claims" in para:
+        print("PIN FAIL: claim duty/gate must stay outside the shared re-arm FIRST ACTION span"); sys.exit(1)
 EOF
 rc=$?
 [ "$rc" -ne 0 ] && fail=1

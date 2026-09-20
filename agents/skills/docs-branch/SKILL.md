@@ -287,7 +287,7 @@ if git show-ref --verify --quiet "refs/heads/${DOCS_BRANCH}"; then
 if [ -s "$RESTORED_PATHS_FILE" ] && [ -f "$PLAN_GUARD_SCRIPT" ]; then
   grep "^${_plans_dir_ord%/}/" "$RESTORED_PATHS_FILE" | while IFS= read -r _restored_plan; do
     python3 "$PLAN_GUARD_SCRIPT" check-restored \
-      --reviews-dir "$_reviews_dir_ord" --plans-dir "$_plans_dir_ord" "$_restored_plan" || true
+      --reviews-dir "$_reviews_dir_ord" "$_restored_plan" || true
   done
 fi
   unset shadow_root clean_root tracked _restored
@@ -512,9 +512,15 @@ if [ -f .ai-playbook/facts.md ]; then
 fi
 DEDUPE_SCRIPT="${DOCS_BRANCH_DEDUPE_SCRIPT:-${_ORD_TOP}/scripts/docs_branch_backlog_dedupe.py}"
 [ -f "$DEDUPE_SCRIPT" ] || DEDUPE_SCRIPT="${HOME}/.ai-playbook/scripts/docs_branch_backlog_dedupe.py"
-if [ -f "$DEDUPE_SCRIPT" ] && [ -d "${DOCS_WORKTREE}/${_backlog_dir_cfg}" ]; then
-  python3 "$DEDUPE_SCRIPT" --worktree-root "$DOCS_WORKTREE" --backlog-dir "$_backlog_dir_cfg" \
-    || echo "WARN: backlog duplicate sweep failed; continuing (warn-and-continue)" >&2
+if [ -d "${DOCS_WORKTREE}/${_backlog_dir_cfg}" ]; then
+  if [ -f "$DEDUPE_SCRIPT" ]; then
+    python3 "$DEDUPE_SCRIPT" --worktree-root "$DOCS_WORKTREE" --backlog-dir "$_backlog_dir_cfg" \
+      || echo "WARN: backlog duplicate sweep failed; continuing (warn-and-continue)" >&2
+  else
+    # Missing-script warn parity with the certified-plan guard above: the
+    # sweep is skipped, but never silently.
+    echo "WARN: backlog duplicate-sweep script not found; sync proceeds without dedupe" >&2
+  fi
 fi
 
 # Doc-hierarchy rogue-dir detection: when the ``doc-hierarchy-migrate`` skill
@@ -612,6 +618,8 @@ find "$DOCS_WORKTREE" -mindepth 2 -name '.git' -type d | while read -r d; do rm 
 sync_rc=$?
 exit "$sync_rc"
 ```
+
+Failure semantics (sync): every failure path in the block is loud on stderr and splits into two classes. Exit 1 abort paths (nothing is staged or committed when they trip): the hygiene gate (a deny-pattern or absolute-home-path match in `.ai-playbook/facts.md` aborts the staging subshell, and the block tail re-raises that status so a hygiene-aborted sync reports failure to the caller instead of silent success), and the certified-downgrade refusal (exit 1, before staging), which enforces the Certified-plan ordering Rules bullet by refusing any overlay write that would replace plan bytes matching the latest certified sidecar digest with bytes that do not match it. Warn-and-continue paths (the sync completes, and the skip is never silent): the certified-plan guard script missing (the sync proceeds without the ordering check), the dedupe script missing or the backlog duplicate sweep failing (the sync proceeds without dedupe), and the restored-plan witness warnings when a restore fills a plan file whose bytes do not match the latest certified sidecar digest.
 
 > **Note:** When `docs/` is also a directory on the working branch, `git log --oneline docs` is ambiguous. Always use `git log --oneline refs/heads/docs --` to reference the branch unambiguously.
 

@@ -112,9 +112,19 @@ Before staging a finding, identify the document's intended owner, scope, and lev
 
 Do not raise a failure scenario only because it is theoretically possible in a distributed system. Require evidence in the reviewed page, a linked source, or an applicable contract. If the source does not establish the scenario, treat it as a hypothesis and drop it unless the user confirms that it is in scope.
 
+#### 4.1.2.1 Architecture-level scope gate
+
+For an RFC or architecture document, first identify which decisions the document is expected to settle and which details are intentionally deferred to a technical design or implementation plan. Treat the following as implementation-level unless the page explicitly owns them: Redis or database field layouts, timeout and retry values, atomicity, retention periods, exact sample sizes, callback deduplication, and fail-open or fail-closed mechanics. Do not stage these as findings merely because the architecture does not specify them.
+
+When the document defines an observation stage before enforcement, check whether it preserves enough basic events, outcomes, dimensions, decision context, and later outcomes to support future analysis. Suggest collecting individual facts when that would enable later investigation, including AI-assisted analysis, but do not require compound metrics or immediate use in enforcement. Keep the suggestion at the level of future analytical capability.
+
+Distinguish intentional projections from policy reconciliation. If the page already says that one event updates several projections, do not report the existence of multiple scopes as a gap. Only raise the remaining architectural question: whether conflicting policy results are reconciled in the first release or intentionally deferred, and how that choice is represented in logged decisions.
+
 #### 4.1.3 Plain language for findings
 
 Finding titles and comments must use common technical English. Describe the behaviour directly instead of relying on review jargon. For example, write "how migration restarts after a pause" instead of "resume invariant", "the meaning of changed fields" instead of "delta semantics", and "what happens after profile creation" instead of "handoff". For an overview document, defer exact implementation and operations details rather than presenting them as missing requirements.
+
+Prefer concrete plain-language examples over abstract jargon. Do not use terms such as "privacy-appropriate", "pseudonymous correlation", or similar specialist shorthand unless the document defines them and the comment explains their practical meaning.
 
 #### 4.2 Actionability
 - Can an engineer implement from this document without guessing?
