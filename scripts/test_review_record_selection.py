@@ -108,6 +108,24 @@ class SelectionHelperTest(unittest.TestCase):
     def select(self, digest: str, *extra: str) -> tuple[int, dict, str]:
         return self.select_in(self.reviews, digest, *extra)
 
+    def select_slug(
+        self, directory: Path, slug: str, digest: str, *extra: str
+    ) -> tuple[int, dict, str]:
+        # The pair-grammar cases address families other than `demo`, so the
+        # slug is a parameter here instead of the hardcoded fixture value.
+        code, out, err = self.run_cli(
+            "select",
+            "--dir",
+            str(directory),
+            "--slug",
+            slug,
+            "--source-digest",
+            digest,
+            *extra,
+        )
+        payload = json.loads(out) if out.strip() else {}
+        return code, payload, err
+
     # -- the eight named cases --------------------------------------------
 
     def test_select_new_record_pair(self) -> None:
@@ -312,13 +330,17 @@ class SelectionHelperTest(unittest.TestCase):
         self.assertIn(sidecar.name, err)
         self.assertEqual((md.read_bytes(), sidecar.read_bytes()), before)
 
-    def test_select_refuses_whitespace_only_digest(self) -> None:
+    def test_select_rejects_empty_source_digest(self) -> None:
         # Refused before any comparison: an empty digest would silently
-        # disable the overwrite guard.
-        code, payload, err = self.select("   ")
-        self.assertEqual(code, 1)
-        self.assertEqual(payload, {})
-        self.assertIn("--source-digest", err)
+        # disable the overwrite guard. Both the empty and the
+        # whitespace-only spelling are usage errors (exit 2), the same
+        # taxonomy as every other invalid --source-digest.
+        for digest in ("", "   "):
+            code, payload, err = self.select(digest)
+            self.assertEqual(code, 2, (digest, err))
+            self.assertEqual(payload, {})
+            self.assertIn("--source-digest", err)
+            self.assertEqual(list(self.reviews.iterdir()), [])
 
     def test_select_rejects_traversal_slug(self) -> None:
         # r1 F13: a slug is embedded in emitted filenames; a traversal slug
@@ -765,11 +787,10 @@ class SelectionHelperTest(unittest.TestCase):
 
     def test_select_rejects_malformed_source_digest(self) -> None:
         # r3 overflow risk F3: --source-digest must match ^[0-9a-f]{64}$
-        # (the lowercase-hex sidecar grammar); any other spelling is a
-        # usage error (exit 2) refused before any record is read. The
-        # empty/whitespace case keeps its dedicated exit-1 refusal (r2
-        # arm), so every digest that reaches the comparison matches the
-        # grammar.
+        # (the lowercase-hex sidecar grammar); every invalid digest shares
+        # the usage-error taxonomy (exit 2) and is refused before any
+        # record is read, so every digest that reaches the comparison
+        # matches the grammar.
         for digest in ("xyz", "a" * 63, "a" * 65, "A" * 64, "g" * 64):
             code, out, err = self.run_cli(
                 "select",
@@ -783,6 +804,228 @@ class SelectionHelperTest(unittest.TestCase):
             self.assertEqual(code, 2, (digest, err))
             self.assertIn("--source-digest", err)
             self.assertEqual(list(self.reviews.iterdir()), [])
+
+
+    # -- pair grammar pass additions (suffix shadowing) ---------------------
+
+    def test_pair_pattern_cross_slug_negative(self) -> None:
+        # Suffix shadowing: slug `plan` must not enumerate the `review-plan`
+        # family's record. The pair grammar anchors the slug after the
+        # date-stamped prefix (plus the optional legacy `plan-review-`
+        # infix), so the foreign pair is invisible and the decision is a
+        # fresh own-family `-r1` pair with no prior and no supersedes.
+        self.write_pair(self.reviews, "2026-09-19-review-plan-r1", DIGEST_A)
+        code, payload, err = self.select_slug(self.reviews, "plan", DIGEST_A)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "new-record")
+        md = Path(payload["markdown"])
+        self.assertEqual(md.name, f"{self.today}-plan-r1.md")
+        self.assertEqual(Path(payload["sidecar"]), md.with_suffix(".stats.json"))
+        self.assertIsNone(payload["prior"])
+        self.assertIsNone(payload["supersedes"])
+
+    def test_explicit_new_round_cross_slug_negative(self) -> None:
+        # With only a foreign `review-plan` pair in the directory, slug
+        # `plan` owns no record, so --explicit-new-round must still decide
+        # new-record (never new-round) and must not link a foreign record
+        # as prior or supersedes.
+        self.write_pair(self.reviews, "2026-09-19-review-plan-r1", DIGEST_A)
+        code, payload, err = self.select_slug(
+            self.reviews, "plan", DIGEST_B, "--explicit-new-round"
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "new-record")
+        self.assertIsNone(payload["prior"])
+        self.assertIsNone(payload["supersedes"])
+
+    def test_pair_pattern_legacy_plan_review_positive(self) -> None:
+        # The legacy `plan-review-` infix enumeration is preserved: a
+        # `2026-09-08-plan-review-demo-r2` pair is the slug `demo` family's
+        # round 2 record and is reused on a matching digest.
+        base = "2026-09-08-plan-review-demo-r2"
+        md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
+        code, payload, err = self.select_slug(self.reviews, "demo", DIGEST_A)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+        self.assertEqual(payload["markdown"], str(md))
+        self.assertEqual(payload["sidecar"], str(sidecar))
+        pairs, orphans, _backups = helper._enumerate(self.reviews, "demo")
+        self.assertEqual([pair.round for pair in pairs], [2])
+        self.assertEqual(orphans, [])
+
+    def test_pair_pattern_emitted_shape_positive(self) -> None:
+        # The emitted date-stamped shape enumerates: a
+        # `2026-09-19-demo-r3` pair is the slug `demo` family's round 3
+        # record and is reused on a matching digest.
+        base = "2026-09-19-demo-r3"
+        md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
+        code, payload, err = self.select_slug(self.reviews, "demo", DIGEST_A)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+        self.assertEqual(payload["markdown"], str(md))
+        self.assertEqual(payload["sidecar"], str(sidecar))
+        pairs, orphans, _backups = helper._enumerate(self.reviews, "demo")
+        self.assertEqual([pair.round for pair in pairs], [3])
+        self.assertEqual(orphans, [])
+
+    def test_pair_pattern_owner_family_enumeration(self) -> None:
+        # Two families coexist in one directory: slug `review-plan` owns
+        # `-r1` and a foreign `plan-review-demo-r2` pair sits next to it;
+        # the enumeration must see exactly the own-family round 1 record
+        # and reuse it, never the foreign pair.
+        own_md, own_sidecar = self.write_pair(
+            self.reviews, "2026-09-19-review-plan-r1", DIGEST_A
+        )
+        self.write_pair(self.reviews, "2026-09-08-plan-review-demo-r2", DIGEST_B)
+        code, payload, err = self.select_slug(
+            self.reviews, "review-plan", DIGEST_A
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+        self.assertEqual(payload["markdown"], str(own_md))
+        self.assertEqual(payload["sidecar"], str(own_sidecar))
+        pairs, orphans, _backups = helper._enumerate(self.reviews, "review-plan")
+        self.assertEqual([pair.round for pair in pairs], [1])
+        self.assertEqual(orphans, [])
+
+    # -- live-family grammar additions (r1 F1, scheduler ops contract plan) --
+
+    def test_pair_pattern_branch_review_family_positive(self) -> None:
+        # The live corpus's largest previously-unenumerated family: a
+        # branch-review record is the branch slug's own family record, so
+        # slug `main` reuses the exact `branch-review-main` pair and stays
+        # exclusive against a sibling branch's records.
+        own_md, own_sidecar = self.write_pair(
+            self.reviews, "2026-07-17-branch-review-main-r6", DIGEST_A
+        )
+        self.write_pair(
+            self.reviews, "2026-07-24-branch-review-update-stacked-branches-r2", DIGEST_B
+        )
+        code, payload, err = self.select_slug(self.reviews, "main", DIGEST_A)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+        self.assertEqual(payload["markdown"], str(own_md))
+        self.assertEqual(payload["sidecar"], str(own_sidecar))
+        pairs, orphans, _backups = helper._enumerate(self.reviews, "main")
+        self.assertEqual([pair.round for pair in pairs], [6])
+        self.assertEqual(orphans, [])
+
+    def test_pair_pattern_code_review_family_positive(self) -> None:
+        # The corpus's code-review kind (written today): the artifact slug
+        # reuses its exact `code-review-` prefixed record.
+        base = (
+            "2026-09-19-code-review-"
+            "scheduler-operations-discipline-quota-peaks-locks-r1"
+        )
+        md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
+        slug = "scheduler-operations-discipline-quota-peaks-locks"
+        code, payload, err = self.select_slug(self.reviews, slug, DIGEST_A)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+        self.assertEqual(payload["markdown"], str(md))
+        self.assertEqual(payload["sidecar"], str(sidecar))
+        pairs, orphans, _backups = helper._enumerate(self.reviews, slug)
+        self.assertEqual([pair.round for pair in pairs], [1])
+        self.assertEqual(orphans, [])
+
+    def test_pair_pattern_exec_review_family_positive(self) -> None:
+        # The corpus's exec-review kind: the artifact slug reuses its
+        # exact `exec-review-` prefixed record.
+        base = (
+            "2026-09-18-exec-review-"
+            "backlog-long-tail-prose-predicates-small-mechanics-r1"
+        )
+        md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
+        slug = "backlog-long-tail-prose-predicates-small-mechanics"
+        code, payload, err = self.select_slug(self.reviews, slug, DIGEST_A)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+        self.assertEqual(payload["markdown"], str(md))
+        self.assertEqual(payload["sidecar"], str(sidecar))
+        pairs, orphans, _backups = helper._enumerate(self.reviews, slug)
+        self.assertEqual([pair.round for pair in pairs], [1])
+        self.assertEqual(orphans, [])
+
+    def test_pair_pattern_guarded_review_infix_positive(self) -> None:
+        # The bare `review-` kind is offered only to slugs that already
+        # begin with `review-`: the plan slug `review-coverage-pass-2`
+        # reuses its `review-review-coverage-pass-2` record through the
+        # guarded infix reading (the bare reading would need the doubled
+        # slug `review-review-coverage-pass-2`, which no caller passes).
+        base = "2026-09-15-review-review-coverage-pass-2-r3"
+        md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
+        code, payload, err = self.select_slug(
+            self.reviews, "review-coverage-pass-2", DIGEST_A
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+        self.assertEqual(payload["markdown"], str(md))
+        self.assertEqual(payload["sidecar"], str(sidecar))
+        pairs, orphans, _backups = helper._enumerate(
+            self.reviews, "review-coverage-pass-2"
+        )
+        self.assertEqual([pair.round for pair in pairs], [3])
+        self.assertEqual(orphans, [])
+
+    def test_pair_pattern_review_shape_stays_bare_owned(self) -> None:
+        # The shadowing fix extends to the corpus's bare `review-` shape:
+        # a `<date>-review-<slug>-r<N>` name is NOT enumerated by the
+        # inner slug (it belongs to the full-rest slug, here
+        # `review-vrs-freshness-round2`'s family), so the inner slug
+        # `vrs-freshness-round2` sees no own record and decides a fresh
+        # own-family `-r1` pair with no prior and no supersedes.
+        self.write_pair(
+            self.reviews, "2026-09-15-review-vrs-freshness-round2-r1", DIGEST_A
+        )
+        code, payload, err = self.select_slug(
+            self.reviews, "vrs-freshness-round2", DIGEST_A
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "new-record")
+        self.assertIsNone(payload["prior"])
+        self.assertIsNone(payload["supersedes"])
+        # The full-rest slug does own the record and reuses it.
+        code, payload, err = self.select_slug(
+            self.reviews, "review-vrs-freshness-round2", DIGEST_A
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+
+    def test_pair_pattern_branch_infix_alias_is_shared(self) -> None:
+        # The documented alias, pinned for the new kinds: a name under an
+        # offered infix is shared by the inner slug and the full-rest
+        # slug. Slug `plan` reuses the `branch-review-plan` record through
+        # the infix reading, and slug `branch-review-plan` reuses the same
+        # pair through the bare reading. (Design note: unlike the pinned
+        # bare `review-` shape, this overlap cannot be designed away
+        # without blinding the real branch slugs such as `main`, so it is
+        # documented in the _pair_pattern docstring and pinned here.)
+        base = "2026-09-19-branch-review-plan-r1"
+        md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
+        code, payload, err = self.select_slug(self.reviews, "plan", DIGEST_A)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+        self.assertEqual(payload["markdown"], str(md))
+        self.assertEqual(payload["sidecar"], str(sidecar))
+        code, payload, err = self.select_slug(
+            self.reviews, "branch-review-plan", DIGEST_A
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "reuse")
+        self.assertEqual(payload["markdown"], str(md))
+
+    def test_pair_pattern_plan_review_plan_stays_plan_owned(self) -> None:
+        # Cross-slug interaction of the widened set: slug `review-plan`
+        # must not enumerate the `plan-review-plan` record, which belongs
+        # to slug `plan`'s legacy plan-review family (no infix spelling of
+        # the widened set reproduces the rest `plan-review-plan` from the
+        # slug `review-plan`).
+        self.write_pair(self.reviews, "2026-09-19-plan-review-plan-r1", DIGEST_A)
+        code, payload, err = self.select_slug(self.reviews, "review-plan", DIGEST_A)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "new-record")
+        self.assertIsNone(payload["prior"])
+        self.assertIsNone(payload["supersedes"])
 
 
 if __name__ == "__main__":

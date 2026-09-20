@@ -1,6 +1,6 @@
 # Backlog: scheduler turn does not compare child runtime against the quota window's remaining minutes
 
-Status: open
+Status: done
 Priority: high (user re-affirmed 2026-09-16: run execution always when possible - assess the current 5h window, the next reset, and current token cost, and schedule the next execution as soon as it makes sense rather than sticking to the origin cadence)
 Workflow: backlog
 Source: scheduler turn 2026-09-15T07:15Z: the probe read primary 89% used with roughly 80 minutes left in the 5h window; the turn deferred the authoring dispatch for PRICING and then lost it to the selection loop, and never asked the quota question "can a 30-120 minute authoring child even finish in the remaining window?" The window reset a few hours later; the 2026-09-16T11:15Z turn found the window fresh (1% used, 299 minutes left) - firing immediately was quota-optimal and required no deferral at all.

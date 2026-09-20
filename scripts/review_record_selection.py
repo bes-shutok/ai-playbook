@@ -93,7 +93,21 @@ class SelectionRefused(Exception):
 
 
 class SelectionUsageError(Exception):
-    """The caller invoked the helper with an invalid argument (exit 2)."""
+    """An invalid invocation, or an unusable target/state that is the
+    caller's to repair (exit 2).
+
+    Beyond plainly invalid arguments (the slug grammar, the slug length
+    bound, the backup-infix slug, the source-digest grammar), this class
+    also covers the environmental raise sites about the invocation
+    target: a symlinked prior record, a prior record with an unclosed
+    code fence, a backup name that appeared while the pair was being
+    placed, and an exhausted backup collision-suffix search.
+
+    The exit taxonomy, stated once: usage errors (this class) exit 2;
+    environmental refusals (``SelectionRefused``) exit 1, covering a
+    missing or damaged record target, an orphaned half, and a differing
+    digest without a decision.
+    """
 
 
 @dataclass
@@ -119,9 +133,69 @@ class Selection:
     supersedes: str | None = None
 
 
+# The literal review-kind infixes the live corpus uses between the date
+# stamp and the slug (r1 F1 of the scheduler ops contract plan). The bare
+# "review-" kind is not in this tuple: its names are inherently ambiguous
+# with another slug's bare family, so it joins the alternation only for
+# slugs that already begin with it (see _pair_pattern).
+REVIEW_KIND_INFIXES = (
+    "plan-review-",
+    "branch-review-",
+    "code-review-",
+    "exec-review-",
+)
+
+# The guarded review-kind infix, offered only to slugs that begin with it.
+REVIEW_KIND_BARE_INFIX = "review-"
+
+
 def _pair_pattern(slug: str) -> re.Pattern[str]:
-    """A record pair base is ``[<anything>-]<slug>-r<N>``."""
-    return re.compile(rf"^(?:.+-)?{re.escape(slug)}-r(\d+)$")
+    """A record pair base is ``<date>[-<review-kind-infix>]<slug>-r<N>``.
+
+    The supported prefix is the emitted date stamp plus one optional
+    review-kind infix drawn from the live corpus's literal kinds
+    (``plan-review-``, ``branch-review-``, ``code-review-``,
+    ``exec-review-``). Anchoring the prefix to these literal shapes keeps
+    suffix-shadowing slugs (``plan`` vs ``review-plan``) from enumerating
+    a foreign family's records, and enumerates every family shape the
+    live corpus carries (``main`` reuses ``branch-review-main`` rounds;
+    the code-review and exec-review kinds enumerate the same way).
+
+    The bare ``review-`` kind is the one inherently ambiguous shape: a
+    ``<date>-review-<slug>-r<N>`` name parses both as the review-kind
+    record of the inner slug and as the bare record of the full-rest
+    slug. The pinned shadowing semantics decide it: the bare reading
+    owns the name (slug ``review-plan`` owns ``2026-09-19-review-plan-r1``
+    and slug ``plan`` stays blind to it), so the ``review-`` infix joins
+    the alternation only when the slug itself begins with ``review-``,
+    reopening names like ``2026-09-15-review-review-coverage-pass-2-r1``
+    to their natural owner ``review-coverage-pass-2`` (where the bare
+    reading would need a doubled ``review-review-`` slug nobody passes).
+
+    Accepted residual alias, documented and tested but not guarded: a
+    slug that itself begins with an offered infix string (form
+    ``<infix>Y``, e.g. ``plan-review-Y`` or ``branch-review-Y``)
+    enumerates the same legacy-shaped ``<date>-<infix>Y-r<N>`` records
+    as the bare ``Y`` slug, because the infix alternative and the slug
+    spelling reach the same names; bare ``Y`` additionally owns the
+    bare-shaped ``<date>-Y-r<N>`` records the infixed spelling never
+    matches. Symmetrically, the bare ``Y`` slug enumerates that
+    family's records (so ``plan`` reuses ``branch-review-plan``
+    rounds). Every such overlap is shared ownership of the same files,
+    never a silent loss.
+
+    The pattern is assembled with plain string concatenation, not an
+    f-string: the quantifier braces (``{4}``, ``{2}``) in the date regex
+    would be parsed as f-string replacement fields.
+    """
+    infixes = list(REVIEW_KIND_INFIXES)
+    if slug.startswith(REVIEW_KIND_BARE_INFIX):
+        infixes.append(REVIEW_KIND_BARE_INFIX)
+    return re.compile(
+        r"^(?:\d{4}-\d{2}-\d{2}-(?:" + "|".join(infixes) + r")?)"
+        + re.escape(slug)
+        + r"-r(\d+)$"
+    )
 
 
 def _sidecar_twin(markdown: Path) -> Path:
@@ -202,8 +276,8 @@ def select_record(
     if not SLUG_PATTERN.fullmatch(slug):
         raise SelectionUsageError(
             f"invalid --slug {slug!r}: a slug must match "
-            "^[a-z0-9][a-z0-9._-]*$ (no path separators, no '..', no "
-            "trailing newline) because it is embedded in the emitted "
+            "^[a-z0-9][a-z0-9._-]*$ (no path separators, no trailing "
+            "newline) because it is embedded in the emitted "
             "record filenames"
         )
     if len(slug) > MAX_SLUG_LENGTH:
@@ -231,7 +305,11 @@ def select_record(
             "repaired (restore the missing twin or remove the orphan)"
         )
     if not source_digest.strip():
-        raise SelectionRefused(
+        # A caller-supplied invocation error, not a record-corpus state:
+        # an empty digest would silently disable the overwrite guard, so
+        # it is refused in the usage-error taxonomy (exit 2) before any
+        # comparison.
+        raise SelectionUsageError(
             "--source-digest is empty; an empty digest would silently "
             "disable the overwrite guard"
         )

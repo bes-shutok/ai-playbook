@@ -1,6 +1,15 @@
 # Backlog: unqualified "driver never reads review sidecars" claim in archived completed plan
 
-Status: open
+Status: closed (accepted as immutable history)
+Disposition (2026-09-19, batch-2 phase-2 execution): the claim is accepted as
+immutable history; the archived completed plan
+`docs/plans/completed/2026-09-16-execute-plan-integrity-quad.md` stays
+byte-untouched per the document lifecycle (verified by validation gate W1).
+Superseded-by owners: the readiness section's sidecar-boundary sentence and
+the staged-terminal section of
+`agents/skills/execute-plan/runtime-contract.md` (the single canonical home
+after the boundary dedup, with SKILL.md quoting it verbatim).
+Accepted: 2026-09-19.
 Priority: low
 Workflow: backlog
 Date: 2026-09-18

@@ -40,3 +40,17 @@ a separate invocation.
 `agents/skills/maintenance/zcode.md` (the recipe a script would encode). Environment: repo-local
 skills checkout, 2026-09-18; the re-arm itself was completed manually in the same session per the
 recipe (parent id recorded, absent-since and rearm-note cleared).
+
+Witness 2026-09-20 (a direct done run in this repo): the Step 0 cannot-decide enumeration proved
+ambiguous for the freshly-unexplained-absence case - a recorded parent id with `parent_absent_since`
+about 19 minutes old and no live pending child. One same-session reading ran the listing (an
+unexplained absence younger than one cadence is enumerated as a cannot-decide case, so the listing
+runs and the darkness threshold gates only the re-arm decision); a second reading resolved
+state-first with no listing (absence younger than the cadence is not darkness, so no classification
+needs listing confirmation). The run proceeded on the second reading without a listing and without
+bookkeeping, which is exactly the silent-outcome class this item exists to mechanize. The codified
+classification classes in the certified plan covering this origin
+(`docs/plans/2026-09-20-harness-triage-paperkeeping-dismantling-wall-clock.md`, the rearm_on_touch
+task: `listing-required` reasons `fresh-absence`/`null-parent-id` vs `stale-state-listing-required`)
+are the fix path; until that plan executes, the ambiguity stands and every manual reading of the
+enumeration is a coin flip.

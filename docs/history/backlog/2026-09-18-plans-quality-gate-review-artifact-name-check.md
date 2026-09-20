@@ -33,3 +33,15 @@ cannot diverge. The check should also cover the sidecar self-reference hazard ab
 path but nothing re-verifies it per round); `agents/skills/review-staging` (its validator binds content
 but not the filename-to-discovery binding). Witness environment: repo-local validators on the skills repo
 checkout, 2026-09-18.
+
+## Witness addendum (2026-09-20, second occurrence)
+
+Re-bitten during an authoring run with four review rounds: the round prompts pinned a short feature
+slug for the review artifact filenames while `plan_readiness.py` derives the review slug from the
+plan's full stem (date prefix stripped only), so the gate's full-stem glob matched nothing and the
+done-boundary readiness check failed at "no review artifact" until a round wrote the full-stem name
+and a matching sidecar `artifact_slug`. This run dodged the rename hazard by leaving the early rounds
+in place and pinning full-stem naming from the next round on (the gate binds only the latest round's
+sidecar), but the defect is unchanged: the sub-agent template's `<feature-name>` placeholder is not
+pinned to the plan stem's `feature_slug` semantics, and nothing re-verifies the filename binding
+per round. The witness strengthens the per-round mechanical check case above.

@@ -12,6 +12,8 @@ Table format consumed by scripts/doc_registry_validator.py. -->
 
 | identity | sot | state | archived | reason | src | successor | aliases | audit |
 |---|---|---|---|---|---|---|---|---|
+| context-budget-and-telemetry-long-running-skills | no | completed | 2026-09-20 | executed | docs/plans/completed/2026-09-19-context-budget-and-telemetry-long-running-skills.md |  |  |  |
+| context-budget-and-telemetry-long-running-skills | no | completed | 2026-09-20 | backfill | docs/history/backlog/completed/2026-09-18-context-budget-and-telemetry-long-running-skills.md |  |  | plan/backlog |
 | repo-ai-playbook-facts | no | completed | 2026-06-13 | backfill | docs/plans/completed/2026-06-13-repo-ai-playbook-facts.md |  |  |  |
 | lessons-recall-hook | no | completed | 2026-07-01 | backfill | docs/plans/completed/2026-07-01-lessons-recall-hook.md |  |  |  |
 | agent-hooks-workflow-v2 | no | completed | 2026-07-04 | backfill | docs/plans/completed/2026-07-04-agent-hooks-workflow-v2.md |  |  |  |
@@ -297,3 +299,6 @@ Table format consumed by scripts/doc_registry_validator.py. -->
 | review-round-record-selection | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-16-review-round-record-selection.md |  |  |  |
 | review-artifact-overwrite-guard | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-16-review-artifact-overwrite-guard.md |  |  |  |
 | review-backlog-redaction-gate | no | completed | 2026-09-19 | executed | docs/history/backlog/completed/2026-09-16-review-backlog-redaction-gate.md |  |  |  |
+| scheduler-operations-discipline-quota-peaks-locks | no | completed | 2026-09-20 | plan-completed | docs/plans/completed/2026-09-19-scheduler-operations-discipline-quota-peaks-locks.md |  |  |  |
+| peak-window-dispatch-discipline | no | completed | 2026-09-20 | executed | docs/history/backlog/completed/2026-09-16-peak-window-dispatch-discipline.md |  |  |  |
+| quota-aware-fire-time | no | completed | 2026-09-20 | executed | docs/history/backlog/completed/2026-09-16-quota-aware-fire-time.md |  |  |  |

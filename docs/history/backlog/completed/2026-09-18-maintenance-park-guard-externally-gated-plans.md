@@ -1,6 +1,6 @@
 # Backlog: maintenance has no park/defer path for externally gated plans
 
-Status: open
+Status: done
 Workflow: backlog
 Source: 2026-09-18 post-mortem of the legacy verdict-grammar deletion plan (parked by hand the same day at docs/plans/deferred/2026-09-15-plan-readiness-legacy-verdict-grammar-deletion.md after Andrey asked why maintenance never proposed the deferral); root-caused against agents/skills/maintenance/SKILL.md as deployed 2026-09-18
 Severity: Medium (latent: a wasted child dispatch and a spurious G2 loop halt are one selection step away; no damage yet)

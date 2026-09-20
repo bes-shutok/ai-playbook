@@ -57,6 +57,8 @@ If `git diff ${BASE_BRANCH}...HEAD | wc -c` exceeds `review_large_diff_bytes` (d
 
 **Do not** merge step 3 fixes into the same round's step 1 verdict. Step 1's output is **provisional findings before fixes**.
 
+**Context budget checkpoint (round boundary):** the orchestrator applies the execute-plan `Context budget checkpoints` policy at each round boundary (after the round's step 4, before the next round's step 1): measure context size, log one telemetry record with `skill: review-loop` to the run's telemetry file `docs/tmp/review-loop/<branch-slug>/context.jsonl`, and act per that policy's threshold ladder; review-loop does not restate the ladder.
+
 ## Staging doc (required every round)
 
 Path pattern:

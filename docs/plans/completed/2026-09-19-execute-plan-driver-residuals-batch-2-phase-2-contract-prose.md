@@ -197,18 +197,18 @@ this digest is the r3 input.
 Files:
 - none (read-only gate)
 
-- [ ] Re-read the five origin files; re-derive every count in the Assumptions calibration and every pinned sentence against the current tree; where a span drifted, update this plan in the same edit and record the drift; classification [class: REPOSITORY_TEST]
-- [ ] Confirm the phase-1 sibling plan landed (the clause (4) bounded-sidecar sentence and the checkpoint caller envelope section exist in the contract); when it did not, sequence after it; classification [class: REPOSITORY_TEST]
-- [ ] Stand down and report when a peer session holds any of the four target files dirty; classification [class: REPOSITORY_TEST]
+- [x] Re-read the five origin files; re-derive every count in the Assumptions calibration and every pinned sentence against the current tree; where a span drifted, update this plan in the same edit and record the drift; classification [class: REPOSITORY_TEST]
+- [x] Confirm the phase-1 sibling plan landed (the clause (4) bounded-sidecar sentence and the checkpoint caller envelope section exist in the contract); when it did not, sequence after it; classification [class: REPOSITORY_TEST]
+- [x] Stand down and report when a peer session holds any of the four target files dirty; classification [class: REPOSITORY_TEST]
 
 ### Task 2: Archived-history disposition (origin: archived sidecar claim)
 
 Files:
 - `docs/history/backlog/2026-09-18-execute-plan-archived-sidecar-claim-immutable-history.md`
 
-- [ ] Flip the item status to `Status: closed (accepted as immutable history)` and append a disposition note recording: acceptance date, the superseded-by owners (the readiness section sentence and the staged terminal section of `agents/skills/execute-plan/runtime-contract.md`), and that the archived file stays untouched per the document lifecycle; classification [class: IMPLEMENTATION_REQUIRED]
-- [ ] Verify `git diff --exit-code -- docs/plans/completed/2026-09-16-execute-plan-integrity-quad.md` stays clean; classification [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: record immutable-history disposition for the archived sidecar claim` [class: IMPLEMENTATION_REQUIRED]
+- [x] Flip the item status to `Status: closed (accepted as immutable history)` and append a disposition note recording: acceptance date, the superseded-by owners (the readiness section sentence and the staged terminal section of `agents/skills/execute-plan/runtime-contract.md`), and that the archived file stays untouched per the document lifecycle; classification [class: IMPLEMENTATION_REQUIRED]
+- [x] Verify `git diff --exit-code -- docs/plans/completed/2026-09-16-execute-plan-integrity-quad.md` stays clean; classification [class: REPOSITORY_TEST]
+- [x] Commit: `docs: record immutable-history disposition for the archived sidecar claim` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Requiredness wording and boundary dedup (origins: contract requiredness, sidecar boundary dedup)
 
@@ -216,11 +216,11 @@ Files:
 - `agents/skills/execute-plan/runtime-contract.md`
 - `scripts/execute_plan_runtime.py` (one docstring span only; see Review Scope)
 
-- [ ] Reword the clause (4) parenthetical to: the verdict is the only field whose absence falls through, and `last_fix_commit` is nullable (absent or null skips the ancestry check); keep the surrounding non-null ancestry requirement intact; classification [class: IMPLEMENTATION_REQUIRED]
-- [ ] Twin the same reword in the `_pre_archive_gate` docstring's clause (4) parenthetical, which today carries the identical overstated claim (the `the only optional field` phrasing beside the sidecar-path sentence), so the docstring and the contract state the same facts in the same edit; prescribe the twin wording verbatim as: the verdict is the only field whose absence falls through, and `last_fix_commit` is nullable (absent or null skips the ancestry check); every other span of the driver file stays frozen; classification [class: IMPLEMENTATION_REQUIRED]
-- [ ] Replace the staged-terminal closing sidecar sentence with the pointer: the sidecar boundary is owned by the readiness section's sentence above; the literal `terminal-gate-only` dies with this sentence; classification [class: IMPLEMENTATION_REQUIRED]
-- [ ] Verify the readiness-section canonical sentence and its verbatim SKILL.md quote are byte-unchanged by this task; classification [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: dedup the sidecar boundary rule and correct requiredness wording` [class: IMPLEMENTATION_REQUIRED]
+- [x] Reword the clause (4) parenthetical to: the verdict is the only field whose absence falls through, and `last_fix_commit` is nullable (absent or null skips the ancestry check); keep the surrounding non-null ancestry requirement intact; classification [class: IMPLEMENTATION_REQUIRED]
+- [x] Twin the same reword in the `_pre_archive_gate` docstring's clause (4) parenthetical, which today carries the identical overstated claim (the `the only optional field` phrasing beside the sidecar-path sentence), so the docstring and the contract state the same facts in the same edit; prescribe the twin wording verbatim as: the verdict is the only field whose absence falls through, and `last_fix_commit` is nullable (absent or null skips the ancestry check); every other span of the driver file stays frozen; classification [class: IMPLEMENTATION_REQUIRED]
+- [x] Replace the staged-terminal closing sidecar sentence with the pointer: the sidecar boundary is owned by the readiness section's sentence above; the literal `terminal-gate-only` dies with this sentence; classification [class: IMPLEMENTATION_REQUIRED]
+- [x] Verify the readiness-section canonical sentence and its verbatim SKILL.md quote are byte-unchanged by this task; classification [class: REPOSITORY_TEST]
+- [x] Commit: `docs: dedup the sidecar boundary rule and correct requiredness wording` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 4: Drop the recurrence relay (origin: recurrence relay consumer seam)
 
@@ -228,10 +228,10 @@ Files:
 - `agents/skills/execute-plan/subagent-prompts.md`
 - `agents/skills/execute-plan/SKILL.md`
 
-- [ ] Remove the Done prompt context bullet `- Recurrence status: <verbatim recurrence_groups trigger status from manifest.md>` and the required-output bullet beginning `- Recurrence status: relay the recurrence status line verbatim`; classification [class: IMPLEMENTATION_REQUIRED]
-- [ ] Remove the Step 3.4 recording sentence (the parent records the relayed recurrence status against the `recurrence_groups` line); leave the Step 3.2 evaluation, the trigger table, and Hard Gate 24 untouched; classification [class: IMPLEMENTATION_REQUIRED]
-- [ ] Verify no case-insensitive `recurrence status` mention remains in either file and the Step 3.2 ledger sentence occurs exactly once; classification [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: drop the consumer-less recurrence relay requirement` [class: IMPLEMENTATION_REQUIRED]
+- [x] Remove the Done prompt context bullet `- Recurrence status: <verbatim recurrence_groups trigger status from manifest.md>` and the required-output bullet beginning `- Recurrence status: relay the recurrence status line verbatim`; classification [class: IMPLEMENTATION_REQUIRED]
+- [x] Remove the Step 3.4 recording sentence (the parent records the relayed recurrence status against the `recurrence_groups` line); leave the Step 3.2 evaluation, the trigger table, and Hard Gate 24 untouched; classification [class: IMPLEMENTATION_REQUIRED]
+- [x] Verify no case-insensitive `recurrence status` mention remains in either file and the Step 3.2 ledger sentence occurs exactly once; classification [class: REPOSITORY_TEST]
+- [x] Commit: `docs: drop the consumer-less recurrence relay requirement` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 5: Worktree bootstrap block (origin: worktree gitignored bootstrap gap)
 
@@ -239,7 +239,7 @@ Files:
 - `agents/skills/execute-plan/SKILL.md`
 - `docs/tmp/b2-worktree-bootstrap-followthrough.sh` *(new, gitignored)*
 
-- [ ] Insert into Step 0.4, after the machine-manifest seeding paragraph, a block titled `**Linked-worktree bootstrap (before the Step 0.5 gate):**` prescribing exactly this recipe, fenced as bash: [class: IMPLEMENTATION_REQUIRED]
+- [x] Insert into Step 0.4, after the machine-manifest seeding paragraph, a block titled `**Linked-worktree bootstrap (before the Step 0.5 gate):**` prescribing exactly this recipe, fenced as bash: [class: IMPLEMENTATION_REQUIRED]
 
 ```bash
 if [ -f .git ]; then
@@ -253,16 +253,16 @@ fi
 ```
 
   followed by one sentence: run this before the Step 0.5 readiness gate whenever the checkout is a linked worktree, resolve `reviews_dir`/`tmp_dir` from the facts TOML fence when it defines them instead of the defaults shown, and re-run the Step 0.5 gate after the bootstrap; classification [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit (SKILL.md only; the follow-through script lives under gitignored `docs/tmp/`): `docs: add the linked-worktree bootstrap to Step 0.4` [class: IMPLEMENTATION_REQUIRED]
-- [ ] Author `docs/tmp/b2-worktree-bootstrap-followthrough.sh` (after the commit bullet above has landed, so a worktree of HEAD carries the block): create a detached worktree of HEAD in a temp parent (`git worktree add --detach <path> HEAD`), assert the worktree `.git` is a file, assert `.ai-playbook/facts.md` and `docs/reviews` are absent, create a probe artifact `b2-bootstrap-probe-r1.md` in the primary checkout's `docs/reviews/`, execute the prescribed block verbatim inside the worktree (extracted from the committed SKILL.md text, not from this plan), assert `facts.md` arrived byte-identical, the probe artifact arrived, and `docs/tmp/` exists, resolve the facts keys inside the worktree as a gate-input smoke (`python3 scripts/facts_paths.py`-equivalent read of the TOML fence, asserting non-empty `reviews_dir` and `tmp_dir`), and exit 0; any assertion failure exits nonzero, and teardown (probe artifact removal plus `git worktree remove --force`) runs on the failure path too through a trap, so a failed assert never leaks the worktree or the probe artifact; evidence boundary: the full Step 0.5 gate additionally needs a certified plan-plus-sidecar pair, which the origin's documentation variant deliberately does not require; this follow-through proves the block lands every input the gate resolves; classification [class: REPOSITORY_TEST]
-- [ ] Run the follow-through → expect exit 0; classification [class: REPOSITORY_TEST]
+- [x] Commit (SKILL.md only; the follow-through script lives under gitignored `docs/tmp/`): `docs: add the linked-worktree bootstrap to Step 0.4` [class: IMPLEMENTATION_REQUIRED]
+- [x] Author `docs/tmp/b2-worktree-bootstrap-followthrough.sh` (after the commit bullet above has landed, so a worktree of HEAD carries the block): create a detached worktree of HEAD in a temp parent (`git worktree add --detach <path> HEAD`), assert the worktree `.git` is a file, assert `.ai-playbook/facts.md` and `docs/reviews` are absent, create a probe artifact `b2-bootstrap-probe-r1.md` in the primary checkout's `docs/reviews/`, execute the prescribed block verbatim inside the worktree (extracted from the committed SKILL.md text, not from this plan), assert `facts.md` arrived byte-identical, the probe artifact arrived, and `docs/tmp/` exists, resolve the facts keys inside the worktree as a gate-input smoke (`python3 scripts/facts_paths.py`-equivalent read of the TOML fence, asserting non-empty `reviews_dir` and `tmp_dir`), and exit 0; any assertion failure exits nonzero, and teardown (probe artifact removal plus `git worktree remove --force`) runs on the failure path too through a trap, so a failed assert never leaks the worktree or the probe artifact; evidence boundary: the full Step 0.5 gate additionally needs a certified plan-plus-sidecar pair, which the origin's documentation variant deliberately does not require; this follow-through proves the block lands every input the gate resolves; classification [class: REPOSITORY_TEST]
+- [x] Run the follow-through → expect exit 0; classification [class: REPOSITORY_TEST]
 
 ### Task 6: Final validation sweep
 
 Files:
 - none (verification only)
 
-- [ ] Run the full Validation Commands block from the repository root → expect every gate green; re-author the W5 follow-through from the Task 5 text if `docs/tmp/` was cleaned between tasks; classification [class: REPOSITORY_TEST]
-- [ ] Run the pin-versus-prescribed-text audit: every pinned sentence in this plan occurs verbatim at its target or is an authored-today phrase recorded in the authoring execution record; all counts re-derived; classification [class: REPOSITORY_TEST]
-- [ ] Run the public hygiene scan from the repository root; expect exit 0; classification [class: REPOSITORY_TEST]
-- [ ] Commit (if anything moved): `chore: batch 2 phase 2 final sweep` [class: REPOSITORY_TEST]
+- [x] Run the full Validation Commands block from the repository root → expect every gate green; re-author the W5 follow-through from the Task 5 text if `docs/tmp/` was cleaned between tasks; classification [class: REPOSITORY_TEST]
+- [x] Run the pin-versus-prescribed-text audit: every pinned sentence in this plan occurs verbatim at its target or is an authored-today phrase recorded in the authoring execution record; all counts re-derived; classification [class: REPOSITORY_TEST]
+- [x] Run the public hygiene scan from the repository root; expect exit 0; classification [class: REPOSITORY_TEST]
+- [x] Commit (if anything moved): `chore: batch 2 phase 2 final sweep` [class: REPOSITORY_TEST]

@@ -7016,3 +7016,57 @@ Witness: document-registry.md carried four `+| ...` rows from a diff paste (2026
 **Distinguishing from #190/#191:** those govern assertion polarity and ordering inside validation blocks; this one governs the pattern-derivation input, which can be wrong before polarity or order ever matters.
 
 **See also:** #190 (character-order presence), #191 (fail-closed abort semantics), #33 (count criteria need count gates; the ownership facet this lesson's byte-form rule completes).
+
+## 399. A Stage-Bound Gate Runs Before The Move That Removes Its Stage Path
+
+**Principle:** Family E (Temporal / ordering invariants)
+
+**Trigger:** a multi-stage verification gate binds each stage to the subject's lifecycle location (a pre-archive stage hashes the source plan at its plans-dir path and resolves the archive destination; a final stage verifies the archived path and digest after the move), and a caller reaches for the pre-move stage after already performing the move.
+
+**Rule:** Invoke a location-bound gate stage while its subject still sits at the location that stage validates; perform the move only after that stage returns success, then run the next stage with the post-move path. Never "re-run the earlier stage to be safe" after the move: the stage resolves and hashes its subject at the pre-move path, so the post-move call is structurally unsatisfiable (refused as a missing or unsupported location), and the refusal reads like an environment bug rather than an ordering mistake. Treat a required pre-action receipt as the move's precondition, not as a post-hoc audit that can be back-filled.
+
+**Why:** the execute-plan terminal gate is staged exactly this way: the pre-archive stage validates the active plan under the plans directory and echoes the declared archive destination; the final stage verifies the archived path, commit, and plan digest after the move. The staging makes the ordering enforceable by path binding: once the plan has moved, only the before-the-move call could ever have satisfied the pre-archive stage, so gate-before-move is not a convention, it is the only order that can pass.
+
+**Witness:** 2026-09-19/20, execute-plan scheduler-operations-discipline-quota-peaks-locks terminal flow: the recorded receipt chain (archive gate with declared_destination before the git mv; terminal receipt with workflow_state complete and plan_digest after it) is satisfiable only in gate-before-move order; a post-move pre-archive call would refuse on the location check, not on content.
+
+**See also:** #355 (the same terminal gate's bounded read and over-limit refusal; gate-internal containment, where this lesson owns the gate-to-move ordering), #303 (sweep every path anchor when re-opening an archived artifact's validation block; the stale-anchor facet of lifecycle moves), #359 (diff plan paths against the trunk side after rebasing past a sibling squash merge; the restore-side counterpart), #206 (interim validation references only artifacts that exist at that stage; the validation-command facet of stage-path coherence).
+
+## 400. Derive the Class Behind User Examples Before Closing a Taxonomy
+
+**Principle:** Family A (Equivalence-class coverage)
+
+**Trigger:** a user illustrates a proposed classification with "e.g." examples (two or three instance names), and the next design step is a closed set built from exactly those instances plus minimal additions.
+
+**Rule:** Treat user-named examples as members of a class the user has in mind, not as an enumeration of it. Before fixing the set, derive the generating dimensions (what makes an instance belong), enumerate the adjacent members those dimensions imply, and offer either a superset or an explicit amendment mechanism. Closing on the named instances plus one obvious gap-fill converts the user's next correction into a redesign.
+
+**Why:** the examples a user gives while describing a problem are recalls, not definitions. The class boundary lives in their intent ("forces that matter for prioritizing work"), which spans dimensions (scale, speed) the named instances (security, maintainability) do not surface.
+
+**Witness:** 2026-09-20, playbook plan-review taxonomy: the user illustrated backlog driving forces with "e.g. security, maintainability, simplicity"; the first proposal closed at the plans-side six-tag set plus security, and the user immediately widened the space ("think more driving force that matters, e.g. scalability, run-time/speed"); the accepted design was a 12-force set plus an amendment rule.
+
+## 401. A Dispatch Prompt Carries Only Constraints No Invoked Skill Owns
+
+**Principle:** Family D (single source of truth)
+
+**Trigger:** authoring or trimming a dispatch/scheduling prompt that delegates work to a skill (plan authoring, plan execution, done closeout).
+
+**Rule:** before writing any workflow constraint into the prompt, locate its owner in the invoked skill (grep the SKILL.md for the behavior); if a skill owns it, omit or cite by pointer - the prompt carries only session-scoped inputs (target paths, schedule, pre-authorizations) and constraints no skill owns yet. When an owner exists, a restated constraint is a second owner with no sync mechanism: it drifts at the next skill edit, bloats every future payload, and quietly teaches the operator the skill cannot run its own steps.
+
+**Example:** a dispatch prompt restated a plan's branch-agnostic sweep, the review-loop round cap, and commit-scoping rules the invoked skills already owned; the dedup pass (for each constraint line, name the owning skill and step, or keep the line) cut the prompt by more than half with no behavior loss.
+
+**Verification:** every constraint line in a dispatch prompt resolves to either an owner (skill + step) or an explicit unowned gap; lines that resolve to an owner get deleted, not reworded.
+
+**See also:** #304 (the skill-definition facet of the same family: rules shared by skills are defined once and pointed at).
+
+## 402. Teach a Legalized State to Every Consumer of Its Predicate
+
+**Principle:** Family A (Equivalence-class coverage)
+
+**Trigger:** a change legalizes a previously forbidden state (a tolerated dirty entry, an accepted no-op receipt, a new terminal shape) by adding the exemption inside one consumer of the forbidden-state predicate.
+
+**Rule:** In the same change set, enumerate the full class of consumers that read the predicate (refusals, witnesses, scope checks, reconcilers, startup gates) and route each through one shared classifier; pin a cross-boundary witness where the legalized state flows into a sibling consumer, not only through the branch that granted it.
+
+**Why:** the branch that grants the tolerance is rarely the only code observing the state; a tolerance owned by one branch re-creates the original wedge at the first sibling refusal, and the same change usually removes the old workaround, leaving no legal exit.
+
+**Witness:** 2026-09-20, playbook plan review: a none-commit done receipt taught the dirty-tree exemption only at the done boundary; the next task's checkpoint scope witness persisted a non-resumable contract-violation on the sanctioned flip, a later real-commit done refused it at the clean tail, and resume reconciliation hard-blocked; the round staged all three as one blocking finding.
+
+**See also:** #400 (closing a taxonomy on named instances; the enumeration facet of the same coverage family).

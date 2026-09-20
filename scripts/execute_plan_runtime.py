@@ -3778,7 +3778,7 @@ class RuntimeDriver:
         evidence naming ``clean-round review sidecar exceeds the bounded
         read limit``), then schema version 1, ``source_kind``
         ``code``, a present
-        verdict must be ``yes`` (the only optional field; an absent verdict
+        verdict must be ``yes`` (the verdict is the only field whose absence falls through, and ``last_fix_commit`` is nullable (absent or null skips the ancestry check); an absent verdict
         falls through to the blocking-rows check), the findings array is
         required and every findings row must carry a boolean ``blocking``
         flag, zero findings rows with ``blocking`` true, and a

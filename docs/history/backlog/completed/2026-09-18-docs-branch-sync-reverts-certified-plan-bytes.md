@@ -1,6 +1,6 @@
 # Backlog: docs-branch sync can commit an older plan shape over a certified one, manufacturing stale-digest gate failures
 
-Status: open
+Status: done
 Priority: high
 Workflow: backlog
 

@@ -69,6 +69,9 @@ bash ~/.ai-playbook/scripts/scan-public-hygiene.sh   # from instructions repo ro
 - Do not add a parallel command-file layer that duplicates a skill in `agents/skills/`; the skill is the canonical form. Remove the duplicate command copy and update all doc references to point to the skill.
 - When removing or replacing a cross-cutting skill module (for example deleting a shared file under `agents/skills/_shared/` in favor of an on-demand skill), complete the migration in one pass: update every consumer skill reference, README and `agent-runtime-layout.md` catalog entries, migration templates, verify-script repo fingerprints, and bidirectional Integration Points before merge. Run `rg` for the deleted path after edits.
 
+## Scheduling asks (verb contract)
+- A "schedule at ..." ask schedules: create or patch the automation, then report the automation id and its next fire time; it never executes the payload in the same turn.
+
 ## Commit & Pull Request Guidelines
 Git history is currently minimal (`init`, `Readme added`), so use short, clear subjects and keep each commit scoped to one logical change.
 

@@ -1,6 +1,6 @@
 # Backlog: evaluate overlapping execution children (requires per-execution worktree isolation)
 
-Status: open
+Status: done
 Priority: medium
 Workflow: backlog
 Date: 2026-09-18

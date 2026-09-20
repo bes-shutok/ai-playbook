@@ -6,7 +6,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import os
@@ -50,6 +50,26 @@ ROOT = Path(__file__).resolve().parents[1]
 QUOTA_DIR = ROOT / "scripts/testdata/quota"
 ZCODE_FIXTURE = QUOTA_DIR / "zcode_limit_response.json"
 CODEX_FIXTURE = QUOTA_DIR / "codex_rollout.jsonl"
+
+# --- Task 1 (P6 origins 1-2): --fire-at fixtures. 2026-09-23 is a
+# Wednesday; every fixture instant is stated in the default peak zone
+# UTC+8 and never pins the host's local zone. Review r1 F2: the payload-
+# driven fit tests are clock-independent through an INJECTED now (FIRE_NOW_
+# EPOCH below, threaded main -> _fire_at_cli -> run_probe/evaluate_fire_at),
+# so these fixed fixture dates can never go stale against the host clock -
+# the live-primary filter and the 40-day reset horizon both read the
+# injected instant, never time.time(). The plan's Validation Commands smoke
+# keeps the same 2026-09-23 dates (its pure-pricing calls consult no clock
+# at all).
+TZ8 = timezone(timedelta(hours=8))
+FIRE_PEAK_EPOCH = int(datetime(2026, 9, 23, 15, 0, tzinfo=TZ8).timestamp())
+FIRE_OFFPEAK_EPOCH = int(datetime(2026, 9, 23, 13, 0, tzinfo=TZ8).timestamp())
+FIRE_WINDOW_END_EPOCH = int(datetime(2026, 9, 23, 18, 0, tzinfo=TZ8).timestamp())
+# Injected clock for the payload-driven fit tests: one hour before the
+# earliest fixture fire instant, so every fixture reset stays live
+# (reset_at_epoch > now) and unclamped (within the 40-day horizon of now)
+# regardless of when the suite runs.
+FIRE_NOW_EPOCH = FIRE_OFFPEAK_EPOCH - 3600
 
 # Review r4 F1: flag-content assertions parse through the REAL hook core,
 # not a reimplementation of its contract.
@@ -1588,6 +1608,508 @@ class QuotaWindowProbeTest(unittest.TestCase):
                 with self.assertRaises(SystemExit) as ctx:
                     probe.main(["--runtime", "zcode", "--plan-cost", bad])
                 self.assertEqual(ctx.exception.code, 2)
+
+    # --- Task 1 (P6 origins 1-2): probe --fire-at mode (pricing and fit) ---
+
+    def _fire_at_main(self, argv: list[str], payload: str = "{}",
+                      with_key: bool = True,
+                      now: int = FIRE_NOW_EPOCH) -> tuple[int, str]:
+        """Drive main() in-process with the zcode transport mocked.
+
+        Reuses the _write_config + urllib_transport patch pattern of the
+        existing CLI tests; the transport answers with ``payload`` verbatim
+        and is never consulted when the fire-at mode runs pure pricing.
+        Review r1 F2: the injected ``now`` (default FIRE_NOW_EPOCH) threads
+        through main -> _fire_at_cli -> run_probe/evaluate_fire_at, so the
+        payload-driven fit tests read a fixed clock instead of the host's
+        wall clock and can never false-REDD once the real date passes the
+        fixture windows.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._write_config(Path(tmpdir), with_key=with_key)
+            out = io.StringIO()
+            with mock.patch.object(
+                probe, "urllib_transport", lambda url, headers: payload
+            ), contextlib.redirect_stdout(out):
+                code = probe.main(["--runtime", "zcode", "--config", str(config), *argv],
+                                  now=now)
+            return code, out.getvalue()
+
+    def _limits_payload(self, primary_reset_epoch: int) -> str:
+        """A zcode payload whose TOKENS_LIMIT resets at the given epoch."""
+        return json.dumps({"data": {"limits": [
+            {
+                "type": "TOKENS_LIMIT",
+                "percentage": 50.0,
+                "nextResetTime": int(primary_reset_epoch) * 1000,
+            },
+        ]}})
+
+    def test_fire_at_peak_defers_with_window_end(self) -> None:
+        # Wednesday 2026-09-23 15:00 UTC+8 sits inside the default peak
+        # window; without --need-minutes the mode is pure pricing and
+        # defers to the same day 18:00 UTC+8 (exit 2).
+        self.assertEqual(datetime(2026, 9, 23, tzinfo=TZ8).weekday(), 2)
+        code, out = self._fire_at_main(["--fire-at", "2026-09-23T15:00:00+08:00"])
+        self.assertEqual(code, 2)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["status"], "ok")
+        self.assertEqual(verdict["verdict"], "defer-peak")
+        self.assertTrue(verdict["peak"])
+        self.assertIsNone(verdict["fits"])
+        self.assertIsNone(verdict["minutes_remaining_at_fire"])
+        self.assertEqual(
+            int(datetime.fromisoformat(verdict["defer_to"]).timestamp()),
+            FIRE_WINDOW_END_EPOCH,
+        )
+
+    def test_fire_at_off_peak_fires(self) -> None:
+        # Wednesday 13:00 UTC+8 is off-peak: fire as planned (exit 0); the
+        # fit fields stay null in the pure-pricing form.
+        code, out = self._fire_at_main(["--fire-at", "2026-09-23T13:00:00+08:00"])
+        self.assertEqual(code, 0)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["status"], "ok")
+        self.assertEqual(verdict["verdict"], "fire")
+        self.assertFalse(verdict["peak"])
+        self.assertIsNone(verdict["defer_to"])
+        self.assertIsNone(verdict["fits"])
+        self.assertIsNone(verdict["minutes_remaining_at_fire"])
+
+    def test_fire_at_weekend_is_off_peak(self) -> None:
+        # Saturday 2026-09-26 15:00 UTC+8: the peak window is Mon-Fri only.
+        self.assertEqual(datetime(2026, 9, 26, tzinfo=TZ8).weekday(), 5)
+        code, out = self._fire_at_main(["--fire-at", "2026-09-26T15:00:00+08:00"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["verdict"], "fire")
+
+    def test_fire_at_window_boundaries_end_exclusive(self) -> None:
+        # Exactly 14:00 is inside (start inclusive, exit 2); exactly 18:00
+        # is outside (end exclusive, exit 0).
+        code, out = self._fire_at_main(["--fire-at", "2026-09-23T14:00:00+08:00"])
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(out)["verdict"], "defer-peak")
+        code, out = self._fire_at_main(["--fire-at", "2026-09-23T18:00:00+08:00"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["verdict"], "fire")
+
+    def test_fire_at_straddle_param(self) -> None:
+        # 13:30 UTC+8 is 30 minutes before the window start: the default
+        # straddle of 0 keeps it off-peak; straddle_minutes=60 (the
+        # execution lane's margin) makes the same instant peak.
+        fire = FIRE_OFFPEAK_EPOCH + 30 * 60
+        plain = probe.evaluate_fire_at(fire, now=fire - 3600)
+        self.assertEqual(plain["verdict"], "fire")
+        self.assertFalse(plain["peak"])
+        straddled = probe.evaluate_fire_at(fire, now=fire - 3600, straddle_minutes=60)
+        self.assertEqual(straddled["verdict"], "defer-peak")
+        self.assertTrue(straddled["peak"])
+        self.assertEqual(
+            int(datetime.fromisoformat(straddled["defer_to"]).timestamp()),
+            FIRE_WINDOW_END_EPOCH,
+        )
+
+    def test_fire_at_fit_defers_to_reset(self) -> None:
+        # 80 minutes remain at the fire instant on the reported primary
+        # window; a 120-minute child cannot finish, so the fire moves past
+        # the containing window's reset (fit outranks pricing, exit 3).
+        fire = FIRE_OFFPEAK_EPOCH
+        reset = fire + 80 * 60
+        code, out = self._fire_at_main(
+            ["--fire-at", "2026-09-23T13:00:00+08:00", "--need-minutes", "120"],
+            payload=self._limits_payload(reset),
+        )
+        self.assertEqual(code, 3)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["verdict"], "defer-reset")
+        self.assertFalse(verdict["fits"])
+        self.assertEqual(verdict["minutes_remaining_at_fire"], 80)
+        self.assertEqual(
+            int(datetime.fromisoformat(verdict["defer_to"]).timestamp()), reset
+        )
+
+    def test_fire_at_fit_and_off_peak_fires(self) -> None:
+        # 200 minutes at the fire instant fits the 120-minute estimate on
+        # an off-peak Wednesday 13:00: fire as planned (exit 0).
+        fire = FIRE_OFFPEAK_EPOCH
+        reset = fire + 200 * 60
+        code, out = self._fire_at_main(
+            ["--fire-at", "2026-09-23T13:00:00+08:00", "--need-minutes", "120"],
+            payload=self._limits_payload(reset),
+        )
+        self.assertEqual(code, 0)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["verdict"], "fire")
+        self.assertTrue(verdict["fits"])
+        self.assertEqual(verdict["minutes_remaining_at_fire"], 200)
+        self.assertIsNone(verdict["defer_to"])
+
+    def test_fire_at_peak_and_unfit_prefers_reset(self) -> None:
+        # Peak fire time whose primary window leaves 60 minutes: fit
+        # outranks pricing, so the verdict is defer-reset (exit 3), never
+        # a pricing defer-peak.
+        fire = FIRE_PEAK_EPOCH
+        reset = fire + 60 * 60
+        code, out = self._fire_at_main(
+            ["--fire-at", "2026-09-23T15:00:00+08:00", "--need-minutes", "120"],
+            payload=self._limits_payload(reset),
+        )
+        self.assertEqual(code, 3)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["verdict"], "defer-reset")
+        self.assertTrue(verdict["peak"])
+        self.assertFalse(verdict["fits"])
+        self.assertEqual(verdict["minutes_remaining_at_fire"], 60)
+        self.assertEqual(
+            int(datetime.fromisoformat(verdict["defer_to"]).timestamp()), reset
+        )
+
+    def test_fire_at_peak_deferred_slot_unfit_defers_to_reset(self) -> None:
+        # The fire instant fits (200 minutes) but the deferred slot at the
+        # window's end (18:00) leaves only 20 minutes of the same reported
+        # window: the slot is fit-checked before exit 2 is blessed, so the
+        # verdict is defer-reset to the containing window's reset.
+        fire = FIRE_PEAK_EPOCH
+        reset = fire + 200 * 60  # 18:20 UTC+8; the 18:00 slot leaves 20 min
+        code, out = self._fire_at_main(
+            ["--fire-at", "2026-09-23T15:00:00+08:00", "--need-minutes", "120"],
+            payload=self._limits_payload(reset),
+        )
+        self.assertEqual(code, 3)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["verdict"], "defer-reset")
+        self.assertTrue(verdict["peak"])
+        self.assertTrue(verdict["fits"])
+        self.assertEqual(verdict["minutes_remaining_at_fire"], 200)
+        self.assertEqual(
+            int(datetime.fromisoformat(verdict["defer_to"]).timestamp()), reset
+        )
+
+    def test_fire_at_fire_time_beyond_current_reset_uses_cadence_window(self) -> None:
+        # The fire instant is at (or past) the reported primary
+        # reset_at_epoch: the fit computation anchors on the five-hour
+        # cadence window. An instant exactly at reset_at_epoch sees the
+        # full 300 minutes; an instant half an hour in sees 270; a negative
+        # against the stale reported reset is never computed.
+        code, out = self._fire_at_main(
+            ["--fire-at", "2026-09-23T13:00:00+08:00", "--need-minutes", "300"],
+            payload=self._limits_payload(FIRE_OFFPEAK_EPOCH),
+        )
+        self.assertEqual(code, 0)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["verdict"], "fire")
+        self.assertTrue(verdict["fits"])
+        self.assertEqual(verdict["minutes_remaining_at_fire"], 300)
+        code, out = self._fire_at_main(
+            ["--fire-at", "2026-09-23T13:30:00+08:00", "--need-minutes", "270"],
+            payload=self._limits_payload(FIRE_OFFPEAK_EPOCH),
+        )
+        self.assertEqual(code, 0)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["verdict"], "fire")
+        self.assertEqual(verdict["minutes_remaining_at_fire"], 270)
+
+    def test_fire_at_naive_input_rejected(self) -> None:
+        # A --fire-at without a UTC offset is a usage error naming the
+        # required +HH:MM form; no verdict JSON reaches stdout.
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as ctx:
+                probe.main(["--fire-at", "2026-09-23T15:00:00"])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("+HH:MM", err.getvalue())
+
+    def test_fire_at_malformed_peak_window_rejected(self) -> None:
+        # A --peak-window that is not HH:MM-HH:MM is a usage error with no
+        # verdict JSON on stdout (the flag itself must be recognized, so
+        # the argparse unknown-flag error would fail this test too).
+        # Review r1 F3: a reversed or equal range ("18:00-14:00",
+        # "14:00-14:00") is malformed too - the peak predicate could never
+        # hold, silently disabling pricing - not a midnight wrap.
+        for bad in ("14-18", "25:00-18:00", "14:00", "14:00-18", "1:00-2:00-3:00",
+                    "18:00-14:00", "14:00-14:00"):
+            with self.subTest(bad=bad):
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    with self.assertRaises(SystemExit) as ctx:
+                        probe.main([
+                            "--fire-at", "2026-09-23T15:00:00+08:00",
+                            "--peak-window", bad,
+                        ])
+                self.assertEqual(ctx.exception.code, 2)
+                self.assertEqual(out.getvalue(), "")
+                self.assertNotIn("unrecognized arguments", err.getvalue())
+
+    def test_fire_at_out_of_range_peak_offset_rejected(self) -> None:
+        # A fixed timezone cannot carry an offset of 24 hours or more:
+        # usage error, no JSON on stdout. A valid non-default offset must
+        # thread through to the peak computation (15:00+08:00 is 07:00
+        # UTC, off-peak under --peak-offset-hours 0).
+        for bad in ("24", "-24"):
+            with self.subTest(bad=bad):
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    with self.assertRaises(SystemExit) as ctx:
+                        probe.main([
+                            "--fire-at", "2026-09-23T15:00:00+08:00",
+                            "--peak-offset-hours", bad,
+                        ])
+                self.assertEqual(ctx.exception.code, 2)
+                self.assertEqual(out.getvalue(), "")
+                self.assertNotIn("unrecognized arguments", err.getvalue())
+        code, out = self._fire_at_main([
+            "--fire-at", "2026-09-23T15:00:00+08:00", "--peak-offset-hours", "0",
+        ])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["verdict"], "fire")
+
+    def test_fire_at_negative_need_minutes_rejected(self) -> None:
+        # Review r1 F4: a negative --need-minutes can never lose the fit leg
+        # (every window "fits" a negative need), vacating the leg silently;
+        # mirror the --straddle-minutes guard and refuse it as a usage error
+        # with no verdict JSON on stdout.
+        for bad in ("-5", "-1"):
+            with self.subTest(bad=bad):
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    with self.assertRaises(SystemExit) as ctx:
+                        probe.main([
+                            "--fire-at", "2026-09-23T15:00:00+08:00",
+                            "--need-minutes", bad,
+                        ])
+                self.assertEqual(ctx.exception.code, 2)
+                self.assertEqual(out.getvalue(), "")
+                self.assertIn("--need-minutes must be >= 0", err.getvalue())
+
+    def test_fire_at_negative_straddle_rejected(self) -> None:
+        # Review r2 F11: the --straddle-minutes < 0 guard (which review
+        # r1 F4's --need-minutes test mirrored) never got its own rejection
+        # test; pin it directly. A negative straddle would shrink the peak
+        # window's leading edge, silently vacating part of the pricing leg,
+        # so the value is refused as a usage error with no verdict JSON on
+        # stdout.
+        for bad in ("-5", "-1"):
+            with self.subTest(bad=bad):
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    with self.assertRaises(SystemExit) as ctx:
+                        probe.main([
+                            "--fire-at", "2026-09-23T15:00:00+08:00",
+                            "--straddle-minutes", bad,
+                        ])
+                self.assertEqual(ctx.exception.code, 2)
+                self.assertEqual(out.getvalue(), "")
+                self.assertIn("--straddle-minutes must be >= 0", err.getvalue())
+
+    def test_fire_at_slot_unfit_cadence_arm_defers_to_reset(self) -> None:
+        # Review r1 F5: the existing slot-unfit test exercises the in-window
+        # branch (slot < reset). These cases cover the cadence arm (slot at
+        # or beyond the reported reset):
+        #   k = 0 arm: fire exactly AT the reported reset 17:30 UTC+8 (peak,
+        #   still before the 18:00 end) sees the full fresh 300-minute
+        #   cadence window, so the fire instant fits the 300-minute
+        #   estimate; the deferred slot at the pricing window's end (18:00)
+        #   sits in the same cadence window whose end is reset + 5h = 22:30,
+        #   leaving only 270 minutes < 300 -> defer-reset (exit 3) to
+        #   22:30, never a blessed-unfit exit 2.
+        #   k >= 1 arm: reset 09:00, fire 14:00 (window start) evaluates
+        #   against the SECOND cadence window (end 19:00, 300 minutes), so
+        #   a 100-minute estimate fits at the fire instant; the 18:00 slot
+        #   lands in that same second cadence window leaving only 60
+        #   minutes < 100 -> defer-reset (exit 3) to 19:00.
+        reset_k0 = FIRE_PEAK_EPOCH + 150 * 60  # 17:30 UTC+8
+        cadence_end_k0 = reset_k0 + 300 * 60  # 22:30 UTC+8
+        code, out = self._fire_at_main(
+            ["--fire-at", "2026-09-23T17:30:00+08:00", "--need-minutes", "300"],
+            payload=self._limits_payload(reset_k0),
+        )
+        self.assertEqual(code, 3)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["verdict"], "defer-reset")
+        self.assertTrue(verdict["peak"])
+        self.assertTrue(verdict["fits"])
+        self.assertEqual(verdict["minutes_remaining_at_fire"], 300)
+        self.assertEqual(
+            int(datetime.fromisoformat(verdict["defer_to"]).timestamp()),
+            cadence_end_k0,
+        )
+        # k >= 1 arm: the 18:00 slot sits one full cadence window past the
+        # reported reset (09:00), so this sub-case injects its own earlier
+        # clock (08:00) - the shared FIRE_NOW default (12:00) would leave
+        # that reset behind the live-primary filter.
+        reset_k1 = FIRE_OFFPEAK_EPOCH - 4 * 3600  # 09:00 UTC+8
+        cadence_end_k1 = reset_k1 + 600 * 60  # 19:00 UTC+8 (second window)
+        code, out = self._fire_at_main(
+            ["--fire-at", "2026-09-23T14:00:00+08:00", "--need-minutes", "100"],
+            payload=self._limits_payload(reset_k1),
+            now=reset_k1 - 3600,
+        )
+        self.assertEqual(code, 3)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["verdict"], "defer-reset")
+        self.assertTrue(verdict["peak"])
+        self.assertTrue(verdict["fits"])
+        self.assertEqual(verdict["minutes_remaining_at_fire"], 300)
+        self.assertEqual(
+            int(datetime.fromisoformat(verdict["defer_to"]).timestamp()),
+            cadence_end_k1,
+        )
+
+    def test_fire_at_straddle_boundary_is_inclusive(self) -> None:
+        # Review r1 F6: the straddle rule reads (start - straddle) <=
+        # minute_of_day, so a fire instant exactly N minutes before the
+        # window start IS peak; one minute earlier is not. Pin the inclusive
+        # reading on both sides of the boundary.
+        fire = FIRE_OFFPEAK_EPOCH  # 13:00 UTC+8, exactly 60 minutes before 14:00
+        at_boundary = probe.evaluate_fire_at(
+            fire, now=fire - 3600, straddle_minutes=60
+        )
+        self.assertTrue(at_boundary["peak"])
+        self.assertEqual(at_boundary["verdict"], "defer-peak")
+        self.assertEqual(
+            int(datetime.fromisoformat(at_boundary["defer_to"]).timestamp()),
+            FIRE_WINDOW_END_EPOCH,
+        )
+        one_minute_earlier = probe.evaluate_fire_at(
+            fire - 60, now=fire - 3600, straddle_minutes=60
+        )
+        self.assertFalse(one_minute_earlier["peak"])
+        self.assertEqual(one_minute_earlier["verdict"], "fire")
+
+    def test_fire_at_clamped_primary_is_unknown(self) -> None:
+        # A live primary whose reset was clamped to the horizon carries a
+        # bound, not a real window end: cadence arithmetic never anchors
+        # on it, so the fit leg degrades to status unknown (exit 1) while
+        # the pricing half stays wall-clock-derived. Review r2 F10: the raw
+        # reset is stated against the INJECTED clock (FIRE_NOW_EPOCH + 100
+        # days, 60 days past the 40-day horizon), so the clamp engages
+        # deterministically instead of leaning on the host wall clock.
+        payload = json.dumps({"data": {"limits": [
+            {
+                "type": "TOKENS_LIMIT",
+                "percentage": 95.0,
+                "nextResetTime": (FIRE_NOW_EPOCH + 100 * 86400) * 1000,
+            },
+        ]}})
+        code, out = self._fire_at_main(
+            ["--fire-at", "2026-09-23T15:00:00+08:00", "--need-minutes", "120"],
+            payload=payload,
+        )
+        self.assertEqual(code, 1)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIsNone(verdict["verdict"])
+        self.assertIsNone(verdict["defer_to"])
+        self.assertTrue(verdict["peak"])
+
+    def test_fire_at_peak_with_need_minutes_blesses_exit2(self) -> None:
+        # Peak fire time with 150 minutes at the fire instant (fits the
+        # 120-minute estimate) and a fitting slot at the window's end: the
+        # 18:00 slot sits half an hour past the reported reset inside the
+        # fresh cadence window (270 minutes), so the pricing deferral to
+        # the window end is blessed with exit 2.
+        fire = FIRE_PEAK_EPOCH
+        reset = fire + 150 * 60  # 17:30 UTC+8
+        code, out = self._fire_at_main(
+            ["--fire-at", "2026-09-23T15:00:00+08:00", "--need-minutes", "120"],
+            payload=self._limits_payload(reset),
+        )
+        self.assertEqual(code, 2)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["verdict"], "defer-peak")
+        self.assertTrue(verdict["peak"])
+        self.assertTrue(verdict["fits"])
+        self.assertEqual(verdict["minutes_remaining_at_fire"], 150)
+        self.assertEqual(
+            int(datetime.fromisoformat(verdict["defer_to"]).timestamp()),
+            FIRE_WINDOW_END_EPOCH,
+        )
+
+    def test_fire_at_never_writes_guard_flag(self) -> None:
+        # --fire-at never writes the guard flag regardless of the verdict:
+        # the early dispatch precedes the flag writer entirely, so not even
+        # the shared lock file appears next to --write-flag's path.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            flag = Path(tmpdir) / "budget-guard.flag"
+            for argv, expected_code in (
+                (["--fire-at", "2026-09-23T15:00:00+08:00"], 2),  # defer-peak
+                (["--fire-at", "2026-09-23T13:00:00+08:00"], 0),  # fire
+            ):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    code = probe.main([*argv, "--write-flag", str(flag)])
+                self.assertEqual(code, expected_code)
+                self.assertFalse(flag.exists())
+                self.assertEqual(list(Path(tmpdir).iterdir()), [])
+
+    def test_fire_at_unknown_limits_exit_1(self) -> None:
+        # With --need-minutes and empty limits (a config without an API key
+        # yields none): status unknown, no deferral invented, exit 1.
+        direct = probe.evaluate_fire_at(
+            FIRE_PEAK_EPOCH, now=FIRE_PEAK_EPOCH - 60, need_minutes=120, limits=[]
+        )
+        self.assertEqual(direct["status"], "unknown")
+        self.assertIsNone(direct["verdict"])
+        self.assertIsNone(direct["defer_to"])
+        code, out = self._fire_at_main(
+            ["--fire-at", "2026-09-23T15:00:00+08:00", "--need-minutes", "120"],
+            with_key=False,
+        )
+        self.assertEqual(code, 1)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIsNone(verdict.get("verdict"))
+        self.assertIsNone(verdict["defer_to"])
+
+    def test_fire_at_without_need_minutes_never_touches_transport(self) -> None:
+        # Pure pricing: a transport mock that raises on any call is never
+        # invoked; the pricing verdict is computed from wall-clock data.
+        def exploding_transport(url: str, headers: Mapping[str, str]) -> str:
+            raise AssertionError("fire-at pricing must not invoke a transport")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._write_config(Path(tmpdir))
+            out = io.StringIO()
+            with mock.patch.object(
+                probe, "urllib_transport", exploding_transport
+            ), contextlib.redirect_stdout(out):
+                code = probe.main([
+                    "--runtime", "zcode", "--config", str(config),
+                    "--fire-at", "2026-09-23T15:00:00+08:00",
+                ])
+        self.assertEqual(code, 2)
+        verdict = json.loads(out.getvalue())
+        self.assertEqual(verdict["verdict"], "defer-peak")
+        self.assertTrue(verdict["peak"])
+
+    def test_fire_at_secondary_only_binding_is_unknown(self) -> None:
+        # A live secondary window never anchors a child deferral: with only
+        # a secondary limit and --need-minutes set, the verdict is status
+        # unknown (exit 1), never a deferral computed off the weekly window.
+        pure = probe.evaluate_fire_at(
+            FIRE_PEAK_EPOCH, now=FIRE_PEAK_EPOCH - 60, need_minutes=120,
+            limits=[probe.make_limit(
+                "secondary", 10.0, FIRE_PEAK_EPOCH + 3600, now=FIRE_PEAK_EPOCH - 60
+            )],
+        )
+        self.assertEqual(pure["status"], "unknown")
+        self.assertIsNone(pure["verdict"])
+        payload = json.dumps({"data": {"limits": [
+            {
+                "type": "TIME_LIMIT",
+                "percentage": 2.0,
+                "nextResetTime": (FIRE_PEAK_EPOCH + 3600) * 1000,
+            },
+        ]}})
+        code, out = self._fire_at_main(
+            ["--fire-at", "2026-09-23T15:00:00+08:00", "--need-minutes", "120"],
+            payload=payload,
+        )
+        self.assertEqual(code, 1)
+        verdict = json.loads(out)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIsNone(verdict["verdict"])
 
 if __name__ == "__main__":
     unittest.main()

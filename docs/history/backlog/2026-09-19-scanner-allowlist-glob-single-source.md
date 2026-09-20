@@ -9,4 +9,4 @@ The standard allowlist globs are hand-maintained on three surfaces inside `scrip
 
 Fix shape: one declared glob list and one shared matcher consumed by all three surfaces (rg args built from the list, changed-from filtering and the explicit-paths predicate calling the same matcher), with the scanner selftest extended to assert the surfaces agree.
 
-Trigger: the next allowlist glob addition, or the next scanner change touching any of the three surfaces. Known live instance for that refactor (r3 overflow risk F5): the root-level `LICENSE.txt` shape (and absolute spellings of it) is scanned in the explicit-paths mode while allowlisted on the other two surfaces; the asymmetry scans in the fail-closed direction, so it is recorded here rather than fixed now.
+Trigger: the next allowlist glob addition, or the next scanner change touching any of the three surfaces. Known live instance for that refactor (r3 overflow risk F5): the root-level `LICENSE.txt` shape is scanned in the explicit-paths mode while allowlisted on the other two surfaces; the asymmetry scans in the fail-closed direction, so it is recorded here rather than fixed now.

@@ -204,6 +204,21 @@ docs_branch_cleanup() {
 }
 trap docs_branch_cleanup EXIT INT TERM
 
+# Certified-plan ordering guard (fail-closed): the sync must never commit a
+# plan file's older bytes over the newer certified shape the branch holds.
+# The certification digest comes from the plan's latest review sidecar.
+_ORD_TOP="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+_plans_dir_ord="docs/plans"
+_reviews_dir_ord="${REVIEWS_DIR:-docs/reviews}"
+if [ -f .ai-playbook/facts.md ]; then
+  _pd_cfg=$(awk 'BEGIN{F3=sprintf("%c%c%c",96,96,96)} $0 ~ "^"F3"toml"{f=1;next} f && $0 ~ "^"F3{exit} f && /^plans_dir[[:space:]]*=/{gsub(/^plans_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
+  [ -n "$_pd_cfg" ] && _plans_dir_ord="$_pd_cfg"
+  _rd_cfg=$(awk 'BEGIN{F3=sprintf("%c%c%c",96,96,96)} $0 ~ "^"F3"toml"{f=1;next} f && $0 ~ "^"F3{exit} f && /^reviews_dir[[:space:]]*=/{gsub(/^reviews_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
+  [ -n "$_rd_cfg" ] && _reviews_dir_ord="$_rd_cfg"
+fi
+PLAN_GUARD_SCRIPT="${DOCS_BRANCH_PLAN_GUARD_SCRIPT:-${_ORD_TOP}/scripts/docs_branch_plan_guard.py}"
+[ -f "$PLAN_GUARD_SCRIPT" ] || PLAN_GUARD_SCRIPT="${HOME}/.ai-playbook/scripts/docs_branch_plan_guard.py"
+
 # Add-only safety net: restore shadow files that exist on the docs branch but are
 # missing on disk BEFORE sync. Without this, a file lost earlier (e.g. by a manual
 # branch switch) would stay gone and never be re-synced. Reviews and all other
@@ -265,6 +280,16 @@ if git show-ref --verify --quiet "refs/heads/${DOCS_BRANCH}"; then
       git reset -q -- "$_restored" 2>/dev/null || true
     done
   fi
+# Restore-leg certified-digest witness (warn-and-continue): a plan file just
+# restored from the branch whose bytes do not match the latest certified
+# sidecar digest is recorded loudly at restore time; refusal remains the
+# overlay guard's job above.
+if [ -s "$RESTORED_PATHS_FILE" ] && [ -f "$PLAN_GUARD_SCRIPT" ]; then
+  grep "^${_plans_dir_ord%/}/" "$RESTORED_PATHS_FILE" | while IFS= read -r _restored_plan; do
+    python3 "$PLAN_GUARD_SCRIPT" check-restored \
+      --reviews-dir "$_reviews_dir_ord" --plans-dir "$_plans_dir_ord" "$_restored_plan" || true
+  done
+fi
   unset shadow_root clean_root tracked _restored
 fi
 [ -n "${DOCS_STAGED_DELETES_FILE:-}" ] && [ -f "$DOCS_STAGED_DELETES_FILE" ] && rm -f "$DOCS_STAGED_DELETES_FILE"
@@ -366,6 +391,21 @@ else
   )
 fi
 
+# Certified-plan ordering guard (fail-closed): compares the worktree's
+# PRISTINE branch bytes against the incoming snapshot BEFORE the overlay
+# overwrites them; a certified downgrade aborts the sync before staging.
+if [ -d "${DOCS_WORKTREE}/${_plans_dir_ord}" ]; then
+  if [ -f "$PLAN_GUARD_SCRIPT" ]; then
+    python3 "$PLAN_GUARD_SCRIPT" guard \
+      --incoming-root "$SHADOW_TMP" \
+      --branch-root "$DOCS_WORKTREE" \
+      --plans-dir "$_plans_dir_ord" \
+      --reviews-dir "$_reviews_dir_ord" || exit 1
+  else
+    echo "WARN: certified-plan guard script not found; sync proceeds without the ordering check" >&2
+  fi
+fi
+
 # Sync .gitignore from the working branch, then strip standard LLM artifact rules
 # and any rules that match extra shadow paths so the docs branch can track its
 # shadow files explicitly. Extra shadow paths are still staged with -f below.
@@ -457,6 +497,24 @@ if [ -f .ai-playbook/facts.md ]; then
         done
   fi
   unset _plans_dir_cfg _plans_completed_cfg _completed_file _base _old_worktree _live_old
+fi
+
+# Backlog duplicate sweep (warn-and-continue): drop a stale top-level
+# {backlog_dir}/<name>.md copy when its archived twin under completed/ or
+# deferred/ exists on the branch and matches beyond the Status line;
+# surface (never delete) on a deeper mismatch. Bounded: this removes
+# duplicates of archived items only and never widens the sweep-root rule
+# ({tmp_dir} stays the one sweep-eligible root).
+_backlog_dir_cfg="docs/history/backlog"
+if [ -f .ai-playbook/facts.md ]; then
+  _bd_cfg=$(awk 'BEGIN{F3=sprintf("%c%c%c",96,96,96)} $0 ~ "^"F3"toml"{f=1;next} f && $0 ~ "^"F3{exit} f && /^backlog_dir[[:space:]]*=/{gsub(/^backlog_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
+  [ -n "$_bd_cfg" ] && _backlog_dir_cfg="$_bd_cfg"
+fi
+DEDUPE_SCRIPT="${DOCS_BRANCH_DEDUPE_SCRIPT:-${_ORD_TOP}/scripts/docs_branch_backlog_dedupe.py}"
+[ -f "$DEDUPE_SCRIPT" ] || DEDUPE_SCRIPT="${HOME}/.ai-playbook/scripts/docs_branch_backlog_dedupe.py"
+if [ -f "$DEDUPE_SCRIPT" ] && [ -d "${DOCS_WORKTREE}/${_backlog_dir_cfg}" ]; then
+  python3 "$DEDUPE_SCRIPT" --worktree-root "$DOCS_WORKTREE" --backlog-dir "$_backlog_dir_cfg" \
+    || echo "WARN: backlog duplicate sweep failed; continuing (warn-and-continue)" >&2
 fi
 
 # Doc-hierarchy rogue-dir detection: when the ``doc-hierarchy-migrate`` skill
@@ -647,6 +705,9 @@ This only works when an old `git stash push --all` run happened after the files 
 - **Never** include `.claude/` (or similar local config dirs) in `SHADOW_PATHS`: they stay local-only and are not synced to the branch.
 - Build `extra_shadow_dirs` from the union of live `.ai-playbook/facts.md` and `refs/heads/docs:.ai-playbook/facts.md`. A stale live facts file must not remove already-configured shadow paths.
 - **Add-only sync:** never treat a missing on-disk shadow file as a deletion on the `docs` branch. Restore fill-only from `refs/heads/docs` for every shadow root (including reviews) before sync. Only paths explicitly deleted in the latest `docs` commit may be removed from the worktree and staged as deletions. **Single exception (`{tmp_dir}`):** a path under `{tmp_dir}` (fallback `docs/tmp/`) that is tracked on the branch, absent on disk, not staged for deletion or rename in the live index, and still gitignored in the live repo is swept from the branch instead of restored, because `{tmp_dir}` is scratch with plan lifetime (`done` Step 2.62 sweep, `plans` **Plan Lifecycle** cleanup). Never widen this exception to `{reviews_dir}` or any other root.
+- Backlog duplicate sweep: after the overlay, the sync drops a top-level {backlog_dir} copy whose archived twin under completed/ or deferred/ exists on the branch and matches it beyond the Status: line; a deeper mismatch is surfaced and kept. Warn-and-continue always; never widen this to other roots.
+- Certified-plan ordering: the sync refuses (exit 1, before staging) any overlay write that would replace plan bytes matching the plan's latest certified sidecar digest with bytes that do not match it, and warns when a restore fills a plan file whose bytes do not match the certification digest; a certified downgrade is never committed, and the refusal names the plan, the certified digest, and the sidecar.
+- Ad-hoc worktree ordering: run the sync in the main checkout after closeout migration, never from a worktree that is about to be removed; a sync from a stale worktree can commit doomed bytes and, through the fill-only restore, re-export them later.
 - **Ephemeral tmp prune:** after the add-only overlay, remove stale `docs/tmp/*-cf-out.md` and `docs/tmp/**/__pycache__/**` from the temporary docs worktree when they are absent from the live checkout (`confluence-mirror-hygiene.sh docs-worktree-prune`). `done` Step 2.65 runs `audit-cf-out` first; cf-out is deleted only when hierarchy promotion is complete or the snapshot is STALE.
 - Before syncing, restore any ignored shadow file that exists on the `docs` branch but is missing on disk (fill-only, never overwrite). This recovers content lost by an earlier manual branch switch and prevents the sync from dropping it from the `docs` backup. Paths staged for deletion or rename in the live index are intentional moves and are never restore targets; the follow-up unstage resets only the paths actually restored, never a blanket reset over the shadow roots (a blanket reset unstages the user's own staged work).
 - Before staging on the `docs` branch, always strip LLM artifact gitignore rules and rules matching `extra_shadow_dirs` from `.gitignore` so the branch can track its own files. For a container root such as `resources/source/`, copy only ignored descendants that are not inside a tracked subtree; skip tracked or unignored children such as committed examples. Use `git add -f` when staging to also bypass any `.git/info/exclude` rules that may block adding gitignored paths.

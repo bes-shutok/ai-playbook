@@ -867,8 +867,7 @@ destination escaping the repository root refuses, and a candidate
 differing from the resolved destination refuses as
 `unsupported archive destination`); (4) clean-round review sidecar (the terminal gate reads the clean-round review sidecar through the same bounded policy as the plan read, and an over-limit sidecar refuses with evidence naming `clean-round review sidecar exceeds the bounded read limit`; schema
 version 1, `source_kind` `code`, a present verdict must be `yes` (an
-absent verdict falls through to the blocking-rows check; the verdict is
-the only optional field), the findings array is required, a findings row
+absent verdict falls through to the blocking-rows check; the verdict is the only field whose absence falls through, and `last_fix_commit` is nullable (absent or null skips the ancestry check)), the findings array is required, a findings row
 whose `blocking` value is missing or not boolean refuses, zero findings
 rows with `blocking` true, and a non-null `last_fix_commit`
 ancestor-or-self of HEAD; a present `residual_policy` input is validated in
@@ -918,8 +917,7 @@ that equality held. Every refusal preserves the manifest (no manifest
 state beyond construction-time manifest writes (owner, receipts, updated_at)) and leaves
 `workflow_state` non-terminal.
 
-Sidecar boundary: the terminal operation reads the clean-round review
-sidecar as a `terminal-gate-only` boundary extension; the readiness operation never reads review sidecars.
+Sidecar boundary: the sidecar boundary is owned by the readiness section's sentence above.
 
 ### Seeding boundary and resume reconciliation
 

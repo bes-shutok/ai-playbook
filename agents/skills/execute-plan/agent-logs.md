@@ -7,6 +7,7 @@ Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase
 | Agent / owner | Log path |
 |-------|----------|
 | Implement task N | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-implement.log.md` |
+| Intermediate task review task N (Step 1.2b, parent-owned) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-review.log.md` |
 | Phase 3 review round R (parent default, or recovery orchestrator) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
 | Address review round R | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review.log.md` |
 | Address fan-out worker W in round R (one log per fan-out worker, append-only) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review-w<W>.log.md` |
@@ -14,6 +15,8 @@ Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase
 | Review diff snapshots (optional) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/diff-r<R>.patch`, `src-diff-r<R>.patch` |
 
 In a fanned address round (Step 3.3 fan-out contract), the base `review-r<R>-receiving-review.log.md` stays parent-owned: the parent heartbeats it before the fan-out and appends the merge pass after the workers return. Each fan-out worker owns only its per-worker log `review-r<R>-receiving-review-w<W>.log.md` (one log per fan-out worker, append-only, same create-versus-append rules as every other log path) and never writes the base log.
+
+The Step 1.2b intermediate review log `task-<N>-review.log.md` lives next to `task-<N>-implement.log.md` in the session dir: the execute-plan parent appends one pass record per pass (the record Step 1.2b defines), and a focused re-review appends another pass record to the same file. The parent passes the path into the per-task `done` prompt as `<TASK_REVIEW_LOG_PATH>`, required only when Step 1.2b ran for the task.
 
 Create the directory before the first sub-agent launch. `<PLAN_SLUG>` is a short kebab-case slug from the plan filename (e.g. `PROJ-1234-feature-name` from `PROJ-1234-feature-name.md`).
 
@@ -43,7 +46,7 @@ The orchestrator sets `<LOG_PASS_NUM>`: `1` on first launch for that path; incre
 
 This matters most for **address review** (`review-r<R>-receiving-review.log.md`): Step 3.3 may be relaunched within round R; a retry must append Pass 2+, not clobber Pass 1.
 
-Apply the same create/append rules to implement logs, address-review logs, per-worker address fan-out logs, and the Phase 3 review log (`review-r<R>-doing-code-review.log.md`). The same holds per fan-out worker: a worker-subset retry appends to that worker's `review-r<R>-receiving-review-w<W>.log.md`. Lens workers do not own a log path.
+Apply the same create/append rules to implement logs, the per-task intermediate review log (`task-<N>-review.log.md`), address-review logs, per-worker address fan-out logs, and the Phase 3 review log (`review-r<R>-doing-code-review.log.md`). The same holds per fan-out worker: a worker-subset retry appends to that worker's `review-r<R>-receiving-review-w<W>.log.md`. Lens workers do not own a log path.
 
 ## Heartbeat (Phase 3 review log)
 
@@ -85,7 +88,7 @@ When the staging doc is written, append a final Pass (or update via append block
 
 ## Log file format (required)
 
-**Ownership:** implement and receiving-review workers update their assigned log before returning. In a fanned address round a receiving-review worker updates only its per-worker log; the base address log stays parent-owned (heartbeat plus merge pass). Phase 3 lens workers have no log path and return findings only. The Phase 3 review log (`review-r<R>-doing-code-review.log.md`) is owned by the execute-plan **parent** on the default path, or by the nested recovery orchestrator when Step 3.1 uses recovery. Do not tell lens workers to write that review log.
+**Ownership:** implement and receiving-review workers update their assigned log before returning. In a fanned address round a receiving-review worker updates only its per-worker log; the base address log stays parent-owned (heartbeat plus merge pass). Phase 3 lens workers have no log path and return findings only. Step 1.2b intermediate review workers likewise have no log path and return findings only; the parent appends their pass to `task-<N>-review.log.md`. The Phase 3 review log (`review-r<R>-doing-code-review.log.md`) is owned by the execute-plan **parent** on the default path, or by the nested recovery orchestrator when Step 3.1 uses recovery. Do not tell lens workers to write that review log.
 
 Workers that own a log path **update it before returning** (create or append per table above). Minimum sections per pass:
 
@@ -180,7 +183,7 @@ Read logs from the worker step(s) that **directly preceded this `done` invocatio
 
 | `done` invocation | Preceding step(s) | Log(s) to read |
 |-------------------|-------------------|----------------|
-| Per task (Step 1.4) | Step 1.2 implement | `task-<N>-implement.log.md` for that task only |
+| Per task (Step 1.4) | Step 1.2 implement; Step 1.2b intermediate review when it ran | `task-<N>-implement.log.md` for that task only; plus `task-<N>-review.log.md`, required only when Step 1.2b ran for the task |
 | Per review iteration (Step 3.4) | Step 3.1 review; Step 3.3 address if it ran | `review-r<R>-doing-code-review.log.md`; plus `review-r<R>-receiving-review.log.md` only when Step 3.3 ran; when the round fanned, read that base log plus every per-worker address log for the round (`review-r<R>-receiving-review-w<W>.log.md`), or the single address log (no fan-out) otherwise |
 
 Do **not** pass implement logs into review-iteration `done`, or prior rounds' review/address logs into a later iteration.

@@ -24,7 +24,7 @@ and terminal-state transitions. The worker owns implementation and evidence;
 the done workflow owns the commit operation. Do not reproduce driver state
 transitions or host protocol details in a worker or done prompt.
 
-**Orchestrator:** after implement → verify → mark checkboxes → `done` for a task, **launch the next task immediately**. Do not ask the user for permission between tasks, between review rounds, or before Phase 3. See SKILL.md "Continuous execution" and Step 1.5.
+**Orchestrator:** after implement → verify → Step 1.2b intermediate review → mark checkboxes → `done` for a task, **launch the next task immediately**. Do not ask the user for permission between tasks, between review rounds, or before Phase 3. See SKILL.md "Continuous execution" and Step 1.5.
 
 Placeholders:
 
@@ -43,6 +43,10 @@ Placeholders:
 | `<BASE_BRANCH>` | Branch plan work started from (e.g. `main`) |
 | `<PLAN_SLUG>` | Kebab-case slug for log directory |
 | `<IMPLEMENT_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-implement.log.md` |
+| `<TASK_REVIEW_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-review.log.md`; intermediate review log for Task N (Step 1.2b; parent-owned) |
+| `<INTER_REVIEW_WORKER>` | Lens id of one Step 1.2b intermediate review worker (e.g. `correctness-completeness`); maps to its Required lenses in review-panel-selection.md |
+| `<TASK_FILES>` | The task's canonical `Files:` list; also the path restriction of the Step 1.2b changed-context diff |
+| `<TASK_VALIDATION_OUTPUT>` | Fresh output of the task's validation commands, passed from the Step 1.2 implement result |
 | `<REVIEW_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
 | `<ADDRESS_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review.log.md` |
 | `<MANIFEST_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` |
@@ -210,6 +214,58 @@ success | blocked
 
 ---
 
+## Intermediate task review worker (Step 1.2b)
+
+Use from the execute-plan **parent** during Step 1.2b, after Step 1.2 verification passes and before Step 1.3 checkbox marking. One launch per worker in the tier-resolved set (see `agents/skills/review-agents/review-panel-selection.md`, **Per-task intermediate review selection**); workers may launch in parallel within the tier. This is a separate pass from Phase 3 rounds: no staging doc, no `.stats.json` sidecar, no mutator failure-mode matrix. The parent owns the `task-<N>-review.log.md` record and all backlog capture; workers return findings only.
+
+```
+You are one intermediate task review worker for an execute-plan Step 1.2b pass.
+
+Worker lens: <INTER_REVIEW_WORKER>
+Plan: <PLAN_PATH>
+Task: ### Task <TASK_NUM>: <TASK_TITLE>
+
+< TASK_BODY >
+
+## Changed context (the complete review scope)
+
+- Canonical `Files:` list: <TASK_FILES>
+- Changed-context diff: git diff HEAD -- <TASK_FILES> (the task's changes are uncommitted in the working tree at Step 1.2b time; the `-- <TASK_FILES>` restriction is what excludes earlier batch members' uncommitted changes, the member `Files:` sets being pairwise disjoint; plus every new untracked file among the task's `Files:` entries, read in full)
+- Fresh validation output for this task's gates (from the Step 1.2 implement result):
+
+< TASK_VALIDATION_OUTPUT >
+
+Read and apply ~/.agents/skills/review-agents/severity-calibration.md and the lenses in the Required lenses column mapped to <INTER_REVIEW_WORKER> in review-panel-selection.md's Recommended five-worker panel table; load those lens catalogs from ~/.agents/skills/review-agents/. This is an adversarial review: re-derive what the implementation and its green validation output do not prove, including miss paths and contracts the diff touches but does not state. Green validation is necessary, not sufficient.
+
+## Rules
+
+1. Review ONLY the changed context above. Never widen to the whole branch diff or to other tasks.
+2. Report a finding outside the changed context only when it is causally tied to this task or the plan (implements or completes the task, regression from this task's work, wiring or docs implied by an explicit change, contradicts a contract the task altered). Findings without that causal tie are out of scope; do not report them.
+3. Every finding carries a calibrated severity, an independent blocking flag (blocking is a severity-independent decision), and a plan-related yes/no answer.
+4. Do not fix code, do not edit the plan, do not commit. This pass creates no staging doc and no `.stats.json` sidecar; those remain Phase 3 obligations.
+5. Never write `task-<N>-review.log.md`; the orchestrator owns that log path. Return findings only.
+6. Valid findings inside the changed context that are not plan-related are never fixed in-task and never silently dropped: return each as a backlog candidate with a suggested driving force from the Backlog driving-force taxonomy in ~/.agents/skills/receiving-review/SKILL.md. The parent captures them per receiving-review **Backlog capture**; you never write the backlog.
+
+## Return
+
+### Verdict
+clean | blocking | backlogged-candidates
+(clean = no valid findings; blocking = at least one unresolved blocking finding; backlogged-candidates = valid findings present, none blocking; plan-related non-blocking findings are recorded in the pass record and left for the mandatory Phase 3 pass, off-plan candidates await parent capture)
+
+### Findings
+One self-contained entry per finding:
+- Title; File:line; Severity (Critical | High | Medium | Low); blocking: yes | no; plan-related: yes | no
+- Evidence: quoted diff or validation lines and the concrete consequence
+- For plan-related: no (backlog candidate): suggested driving force from the Backlog driving-force taxonomy (primary force, plus a secondary force when one exists) and a one-line concern statement
+- For plan-related: yes: the causal link to the task or plan
+
+### Validation
+- Re-ran the task's validation commands, or trusted the passed fresh output (state which)
+- Result: pass | fail
+```
+
+---
+
 ## Done (per task)
 
 ```
@@ -222,6 +278,7 @@ Context:
 - Completed task: ### Task <TASK_NUM>: <TASK_TITLE>
 - Suggested commit subject: <COMMIT_HINT>
 - Manifest: <MANIFEST_PATH>
+- Captured backlog paths: the backlog paths recorded on the task's `inter_review` line (empty when Step 1.2b did not run or captured nothing); include those repository files in the commit scope
 
 The execute-plan invocation authorizes the repository-scoped commit for this
 task. Run the done workflow without asking conversational permission. Push,
@@ -230,14 +287,15 @@ outside this prompt.
 
 ## Preceding-step log: read before learn (required)
 
-Step 1.4 follows Step 1.2 implement. Read in full before invoking `learn`:
+Step 1.4 follows Step 1.2 implement, plus Step 1.2b intermediate review when it ran for this task. Read in full before invoking `learn`:
 - <IMPLEMENT_LOG_PATH>
+- <TASK_REVIEW_LOG_PATH> (`task-<N>-review.log.md`): required only when Step 1.2b ran for the task
 
-Do not read logs from other tasks or review rounds. If the log is missing or empty, stop and return `blocked: missing implement log`; do not commit.
+Do not read logs from other tasks or review rounds. If <IMPLEMENT_LOG_PATH> is missing or empty, stop and return `blocked: missing implement log`; do not commit. If Step 1.2b ran and <TASK_REVIEW_LOG_PATH> is missing or empty, stop and return `blocked: missing <TASK_REVIEW_LOG_PATH>`; do not commit.
 
 ## Scope
 
-Commit ONLY changes from this task. If `git status` shows unrelated uncommitted files from other work, do not stage them; ask is not available; leave them unstaged.
+Commit ONLY changes from this task; the commit scope additionally includes any Driving-force backlog items this task's Step 1.2b captured (repository-file captured items ride the task's done commit; an external or non-tracked destination records its exception on the task's `inter_review` line; a captured item left out of the commit defeats the durability guarantee). If `git status` shows unrelated uncommitted files from other work, do not stage them; ask is not available; leave them unstaged.
 
 Run the full done workflow: read preceding-step log → learn → docs-branch → sensitive-data scan → commit.
 
@@ -262,7 +320,6 @@ Context:
 - Review doc: <REVIEW_DOC_PATH>
 - Address-review ran: yes | no (no = Step 3.3 skipped; still run learn + commit if anything is uncommitted)
 - Manifest: <MANIFEST_PATH>
-- Recurrence status: <verbatim recurrence_groups trigger status from manifest.md>
 
 The execute-plan invocation authorizes only the repository-scoped review-fix
 commit for this iteration. Do not ask conversational permission for that
@@ -293,7 +350,6 @@ Return (orchestrator blocks the next review round without these):
 - Commit SHA (or explicit justified "nothing to commit")
 - Commit message used
 - Any files left unstaged intentionally
-- Recurrence status: relay the recurrence status line verbatim as a structured signal the parent records at the Step 3.4 checkpoint (when the done sub-agent returns); copy the manifest.md trigger status exactly; when manifest.md carries no `recurrence_groups` line, report `recurrence status: none recorded`
 ```
 
 ---

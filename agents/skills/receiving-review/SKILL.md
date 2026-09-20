@@ -372,14 +372,39 @@ Required content per item (`{backlog_dir}/YYYY-MM-DD-<slug>.md`; one finding or 
 - Suggested fix, or the options considered when the fix is a design choice
 - Severity and source reference: staging doc path, round, finding id, capture hygiene check verdict
 - Why not fixed now: the scope boundary or decision, and who made it
+- Driving force: the primary force tag from the Backlog driving-force taxonomy, plus a secondary force when one exists
+
+Capture sources: review-fix cycles and execute-plan Step 1.2b intermediate task reviews; both record the Driving force line on every captured item.
 
 Before the item counts as captured, run the public-hygiene scanner over the composed draft while it is still uncommitted (capture hygiene check):
 
 1. From the repo root, run the scanner in explicit-paths mode over the draft file: `bash scripts/scan-public-hygiene.sh --files <draft-path>` (outside the skills repo, use the runtime copy at `~/.ai-playbook/scripts/scan-public-hygiene.sh`).
 2. A nonzero verdict stops the capture: fix the draft in place and rerun until the scan passes; never widen or fork the deny-patterns file to make a draft pass. The scanner's two built-in patterns and the shared deny-patterns file stay the only rule sources.
 3. Record the passing verdict in the item's source reference (for example `capture hygiene: scan-public-hygiene --files pass`).
+4. A missing or erroring scanner produces no passing verdict: record the failed-resolution evidence in the item's source reference, route the capture through the `bootstrap-ai-playbook` recovery pass, and stop for user direction when the scanner still cannot be resolved (the shared shape of every unresolved-evidence gate: record the evidence; never guess); never mark such an item captured.
 
 Record the backlog item path on the finding (Analysis section or triage log) so later rounds and downstream analysis can find it.
+
+### Backlog driving-force taxonomy
+
+Every captured item declares its Driving force from this closed set.
+
+- security: vulnerabilities, authorization or injection gaps
+- performance: run-time speed, latency, throughput
+- scalability: behavior under growth in data volume
+- reliability: failure handling, retries and idempotency
+- maintainability: structure that slows future change
+- simplicity: unnecessary abstraction or structure
+- testability: coverage gaps, hermeticity, flake resistance
+- observability: logging, metrics, tracing, and debuggability gaps
+- docs: documentation debt or source-of-truth drift
+- token-usage: agent context or token cost
+- new-capability: improvement suggestion that adds functionality
+- external: mandated from outside current project priorities
+
+Once the certified plans driving-force metadata plan lands, plans declare a driving force from that skill's own closed set; the plans efficiency tag reads as performance or token-usage, its code-quality force maps to maintainability, and its simplicity force maps here unchanged.
+
+Amendment rule: adding a force requires documenting it in this list (tag plus one-line scope) before first use; renaming or removing a force requires a plan. An item fitting no force uses `external` with the concern named in its Problem statement.
 
 ## Agent corpus feedback (accepted human findings)
 
@@ -439,6 +464,8 @@ Triage updates **Triage outcomes** and finding **Triage** fields; preserves immu
 Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review`. Triage is authoritative for exit: implement valid fixes, mark `drop` or `done`, and leave only validated unresolved issues at `pending`. The orchestrator counts unresolved findings with `blocking: true`, not severity alone. Accepted fixes identify every owning or affected worker for the targeted follow-up. Phase 3 Hard Gate 23 applies **Fix-risk triage when fixes regenerate findings** before further folding; the focused verification round's worker composition follows `review-panel-selection.md`.
 
 Under the Step 3.3 fan-out contract, the orchestrator may hand the pass a finding id subset with its canonical allowed files, an opaque worker scope token, and its own per-worker log path (up to three file-affinity workers per fanned round); the subset worker does not edit the staging doc and does not commit. The parent merges the returned per-finding triage into the staging doc and sidecar, re-runs the full Validation Commands block once after all workers return, and lands one address commit per round. Contract boundary: `extensions.address_fanout` is emitted and validated only for current-v1 sidecars; versionless legacy sidecars keep the existing single-worker path and are not upgraded by receiving-review; the parent, not any subset worker, writes the sidecar extension and runs the final `--hard` validation.
+
+The Step 1.2b intermediate task review is a second consumer; execute-plan Step 1.2b defines the pass (changed context, worker selection, and record). This skill contributes **Backlog capture** and the Driving force line for off-plan findings; repository-file captured items ride the task's done commit; an external or non-tracked destination records its exception on the task's `inter_review` line.
 
 ### With `review-loop` skill
 Orchestration rule 4 applies **Fix-risk triage when fixes regenerate findings** in a regenerating loop; the triage classes and fix-vs-backlog decisions feed its exit report and **Backlog capture** tally.

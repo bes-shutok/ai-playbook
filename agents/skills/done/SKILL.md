@@ -343,7 +343,7 @@ Remove only verified stale Vim swap files before `docs-branch` snapshots ignored
 
 ## Step 2: Preserve Gitignored Docs and Instructions
 
-Invoke the `docs-branch` skill now. It will:
+Invoke the `docs-branch` skill now. When the session runs in an ad-hoc worktree, first migrate the run's review staging docs and session logs to the main checkout (the execute-plan Phase 5 migration, `worktree_closeout_migrate.py migrate`), before the docs-branch sync and in every case before the worktree is removed. It will:
 1. Snapshot all configured gitignored shadow paths (`docs/`, `.github/docs/`, `.ai-playbook/`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `COPILOT.md`, plus repo `extra_shadow_dirs`) while leaving the live checkout on the current branch.
 2. Sync those files to the permanent `docs` orphan branch through a temporary `git worktree`, creating it if it doesn't exist.
 
@@ -658,7 +658,7 @@ Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-sk
 ### With `execute-plan` skill
 Invoked as a sub-agent after **each** completed plan task (per-task commit) and after **each** review/fix iteration (per-iteration commit). The orchestrator passes the plan path, task or review-round context, suggested commit subject, and **sub-agent log paths** under resolved `{tmp_dir}/execute-plan/<plan-slug>/`.
 
-**Before Step 1 (learn):** read only the **preceding-step** log(s) the orchestrator listed: for per-task `done`, the implement log from Step 1.2; for review-iteration `done`, the current round's review log (Step 3.1) and address log (Step 3.3) when it ran. Do not read full session history. Use log content as primary input for `learn`, not the orchestrator chat summary. If a required preceding-step log is missing, release the Step 0 lock (Step 6), return `blocked`, and do not commit. See `execute-plan/agent-logs.md`.
+**Before Step 1 (learn):** read only the **preceding-step** log(s) the orchestrator listed: for per-task `done`, the implement log from Step 1.2; for review-iteration `done`, the current round's review log (Step 3.1) and address log (Step 3.3) when it ran. Do not read full session history. Use log content as primary input for `learn`, not the orchestrator chat summary. For a review-iteration commit, derive the staging file set from the address log's files-touched list rather than from the handoff's scope summary; when the two disagree, the log is authoritative, because a handoff that under-lists files would otherwise leave one fold of the fix half-committed and the working tree dirty. If a required preceding-step log is missing, release the Step 0 lock (Step 6), return `blocked`, and do not commit. See `execute-plan/agent-logs.md`.
 
 Each execute-plan `done` sub-agent still runs Step 0 and Step 6. Sequential tasks in one orchestrator usually acquire immediately after the prior release; parallel chats on the same repo wait on **wait-acquire**.
 
@@ -677,6 +677,7 @@ Step 2.62 sweeps `{tmp_dir}` entries whose owning plan archived (plans Plan Life
 - Always run learn before committing; lessons must be captured first.
 - Never skip the learn step even if the user says "just commit".
 - Invoke `docs-branch` skill for all docs/instructions preservation; do not inline the stash or branch logic here.
+- Never remove an ad-hoc worktree before its run's gitignored review artifacts verify present in the main checkout; the docs-branch sync runs where the on-disk corpus is canonical (the main checkout after migration).
 - Run Step 2.65 (Confluence mirror validate, audit-cf-out promotion gate, ephemeral `docs/tmp` cleanup) before `docs-branch` when the manifest exists or the session touched Confluence mirrors, wiki pages, or ephemeral publish snapshots.
 - Always verify that new or revised reusable docs, reference material, and explanatory artifacts added in the session are referenced from instructions or related canonical docs where future agents will need them.
 - Never stage or commit a file that is gitignored, even if it appears in `git diff` (it was previously force-tracked). Use `git rm --cached` to remove it from tracking; do not commit it on the feature branch.

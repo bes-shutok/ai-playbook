@@ -169,22 +169,22 @@ Files:
 
 Style: stdlib-only `unittest`, fixtures built in `tempfile.TemporaryDirectory`, mirroring `scripts/test_check_lesson_scope.py` (load the script module by path with `importlib.util`; no repo-state dependence).
 
-- [ ] `CertifiedPlanGuardTest#test_guard_refuses_certified_downgrade`; given a branch-root plan copy whose digest matches the plan's latest certified sidecar (`source_kind: "plan"`, `artifact_slug` equal to the plan's feature slug) and an incoming-root copy with different bytes, expects exit non-zero, output naming the plan path, the certified digest, and the sidecar filename [class: REPOSITORY_TEST]
-- [ ] `CertifiedPlanGuardTest#test_guard_allows_certified_upgrade`; given a branch copy whose bytes do not match the certification digest and an incoming copy whose bytes do, expects exit 0 with an upgrade info line naming the plan [class: REPOSITORY_TEST]
-- [ ] `CertifiedPlanGuardTest#test_guard_warns_when_neither_side_matches`; given branch and incoming copies that both differ from the certification digest, expects exit 0 with a warn line naming the plan and the certified digest [class: REPOSITORY_TEST]
-- [ ] `CertifiedPlanGuardTest#test_guard_silent_without_sidecar`; given a plan present in both roots and no sidecar under the reviews dir, expects exit 0 with no refusal [class: REPOSITORY_TEST]
-- [ ] `CertifiedPlanGuardTest#test_guard_ignores_completed_subdir`; given a plan copy only under the plans dir's `completed/` subdirectory, expects it never considered (no refusal regardless of bytes) [class: REPOSITORY_TEST]
-- [ ] `CertifiedPlanGuardTest#test_guard_prefix_digest_sidecar`; given a sidecar whose `source_digest` is the first 16 hex chars of the full digest, expects the downgrade still refused [class: REPOSITORY_TEST]
-- [ ] `CertifiedPlanGuardTest#test_guard_latest_round_wins`; given sidecars r1 (older digest) and r3 (current digest) for one plan, expects the r3 digest treated as certified: an incoming copy matching r1 but not r3 is refused [class: REPOSITORY_TEST]
-- [ ] `CertifiedPlanGuardTest#test_guard_feature_slug_lookup`; given a plan `2026-09-19-<feature>.md` and a sidecar whose `artifact_slug` is `<feature>` (date prefix stripped, the `feature_slug()` shape in `scripts/plan_readiness.py`), expects the lookup to find the sidecar and a downgrade to be refused [class: REPOSITORY_TEST]
-- [ ] `CertifiedPlanGuardTest#test_guard_mixed_round_forms`; given one sidecar with round `"r9"` (string form) and a newer one with round `10` (integer form), expects the integer-10 sidecar treated as latest (string comparison would misorder `"r10" < "r9"` and mixed-type comparison would raise); a downgrade against the integer-10 digest is refused [class: REPOSITORY_TEST]
-- [ ] `CertifiedPlanGuardTest#test_check_restored_warns_on_mismatch`; given a restored plan file whose digest differs from the certification digest, `check-restored` expects exit 0 with a warn line naming the file [class: REPOSITORY_TEST]
-- [ ] `CertifiedPlanGuardTest#test_check_restored_silent_on_match_or_missing_sidecar`; given a restored file matching the certification digest, and separately a restored file with no sidecar, expects exit 0 with no warning [class: REPOSITORY_TEST]
-- [ ] Run → expect RED: `"$TESTPY" -m pytest scripts/test_docs_branch_plan_guard.py -q` (collection error: the module does not exist yet) [class: REPOSITORY_TEST]
-- [ ] Implement `scripts/docs_branch_plan_guard.py`: subcommand `guard` with `--incoming-root`, `--branch-root`, `--plans-dir`, `--reviews-dir`; subcommand `check-restored` with `--reviews-dir`, `--plans-dir`, and file arguments. The sidecar lookup keys on the plan's feature slug (basename sans `.md` with the leading `YYYY-MM-DD-` prefix stripped), mirroring `feature_slug()` in `scripts/plan_readiness.py`. Latest-round selection normalizes the round to an integer (strip a leading `r`/`R`, then `int()`), treating a non-numeric round as oldest and breaking ties by date, so string `"r9"` and integer `10` forms compare correctly and never raise. Digest match is prefix-tolerant in one direction: the byte digest equals the sidecar digest or starts with it. Refusal collects every certified-downgrade row, prints them, and exits 1; upgrade/warn lines exit 0; `check-restored` always exits 0 [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: `"$TESTPY" -m pytest scripts/test_docs_branch_plan_guard.py -q` (all eleven arms pass; the other two suites do not exist yet and are not run at this task point) [class: REPOSITORY_TEST]
-- [ ] Deploy the refreshed copy for consumer repos: `cp scripts/docs_branch_plan_guard.py ~/.ai-playbook/scripts/docs_branch_plan_guard.py` [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `feat: certified-plan digest guard for docs-branch sync` [class: IMPLEMENTATION_REQUIRED]
+- [x] `CertifiedPlanGuardTest#test_guard_refuses_certified_downgrade`; given a branch-root plan copy whose digest matches the plan's latest certified sidecar (`source_kind: "plan"`, `artifact_slug` equal to the plan's feature slug) and an incoming-root copy with different bytes, expects exit non-zero, output naming the plan path, the certified digest, and the sidecar filename [class: REPOSITORY_TEST]
+- [x] `CertifiedPlanGuardTest#test_guard_allows_certified_upgrade`; given a branch copy whose bytes do not match the certification digest and an incoming copy whose bytes do, expects exit 0 with an upgrade info line naming the plan [class: REPOSITORY_TEST]
+- [x] `CertifiedPlanGuardTest#test_guard_warns_when_neither_side_matches`; given branch and incoming copies that both differ from the certification digest, expects exit 0 with a warn line naming the plan and the certified digest [class: REPOSITORY_TEST]
+- [x] `CertifiedPlanGuardTest#test_guard_silent_without_sidecar`; given a plan present in both roots and no sidecar under the reviews dir, expects exit 0 with no refusal [class: REPOSITORY_TEST]
+- [x] `CertifiedPlanGuardTest#test_guard_ignores_completed_subdir`; given a plan copy only under the plans dir's `completed/` subdirectory, expects it never considered (no refusal regardless of bytes) [class: REPOSITORY_TEST]
+- [x] `CertifiedPlanGuardTest#test_guard_prefix_digest_sidecar`; given a sidecar whose `source_digest` is the first 16 hex chars of the full digest, expects the downgrade still refused [class: REPOSITORY_TEST]
+- [x] `CertifiedPlanGuardTest#test_guard_latest_round_wins`; given sidecars r1 (older digest) and r3 (current digest) for one plan, expects the r3 digest treated as certified: an incoming copy matching r1 but not r3 is refused [class: REPOSITORY_TEST]
+- [x] `CertifiedPlanGuardTest#test_guard_feature_slug_lookup`; given a plan `2026-09-19-<feature>.md` and a sidecar whose `artifact_slug` is `<feature>` (date prefix stripped, the `feature_slug()` shape in `scripts/plan_readiness.py`), expects the lookup to find the sidecar and a downgrade to be refused [class: REPOSITORY_TEST]
+- [x] `CertifiedPlanGuardTest#test_guard_mixed_round_forms`; given one sidecar with round `"r9"` (string form) and a newer one with round `10` (integer form), expects the integer-10 sidecar treated as latest (string comparison would misorder `"r10" < "r9"` and mixed-type comparison would raise); a downgrade against the integer-10 digest is refused [class: REPOSITORY_TEST]
+- [x] `CertifiedPlanGuardTest#test_check_restored_warns_on_mismatch`; given a restored plan file whose digest differs from the certification digest, `check-restored` expects exit 0 with a warn line naming the file [class: REPOSITORY_TEST]
+- [x] `CertifiedPlanGuardTest#test_check_restored_silent_on_match_or_missing_sidecar`; given a restored file matching the certification digest, and separately a restored file with no sidecar, expects exit 0 with no warning [class: REPOSITORY_TEST]
+- [x] Run → expect RED: `"$TESTPY" -m pytest scripts/test_docs_branch_plan_guard.py -q` (collection error: the module does not exist yet) [class: REPOSITORY_TEST]
+- [x] Implement `scripts/docs_branch_plan_guard.py`: subcommand `guard` with `--incoming-root`, `--branch-root`, `--plans-dir`, `--reviews-dir`; subcommand `check-restored` with `--reviews-dir`, `--plans-dir`, and file arguments. The sidecar lookup keys on the plan's feature slug (basename sans `.md` with the leading `YYYY-MM-DD-` prefix stripped), mirroring `feature_slug()` in `scripts/plan_readiness.py`. Latest-round selection normalizes the round to an integer (strip a leading `r`/`R`, then `int()`), treating a non-numeric round as oldest and breaking ties by date, so string `"r9"` and integer `10` forms compare correctly and never raise. Digest match is prefix-tolerant in one direction: the byte digest equals the sidecar digest or starts with it. Refusal collects every certified-downgrade row, prints them, and exits 1; upgrade/warn lines exit 0; `check-restored` always exits 0 [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: `"$TESTPY" -m pytest scripts/test_docs_branch_plan_guard.py -q` (all eleven arms pass; the other two suites do not exist yet and are not run at this task point) [class: REPOSITORY_TEST]
+- [x] Deploy the refreshed copy for consumer repos: `cp scripts/docs_branch_plan_guard.py ~/.ai-playbook/scripts/docs_branch_plan_guard.py` [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `feat: certified-plan digest guard for docs-branch sync` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Wire the guard into the docs-branch sync (origin 1)
 
@@ -193,7 +193,7 @@ Files:
 
 Three insertions into the Step 2 script, in this order:
 
-- [ ] Insert the shared resolution block immediately after the cleanup-trap registration (`trap docs_branch_cleanup EXIT INT TERM`) and before the add-only restore section, so both later insertions can use its variables [class: IMPLEMENTATION_REQUIRED]
+- [x] Insert the shared resolution block immediately after the cleanup-trap registration (`trap docs_branch_cleanup EXIT INT TERM`) and before the add-only restore section, so both later insertions can use its variables [class: IMPLEMENTATION_REQUIRED]
 
 ```bash
 # Certified-plan ordering guard (fail-closed): the sync must never commit a
@@ -212,7 +212,7 @@ PLAN_GUARD_SCRIPT="${DOCS_BRANCH_PLAN_GUARD_SCRIPT:-${_ORD_TOP}/scripts/docs_bra
 [ -f "$PLAN_GUARD_SCRIPT" ] || PLAN_GUARD_SCRIPT="${HOME}/.ai-playbook/scripts/docs_branch_plan_guard.py"
 ```
 
-- [ ] Insert the guard call immediately after the worktree creation block (the conditional that runs `git worktree add` or creates the orphan branch) and BEFORE the shadow overlay loop, so the guard compares the worktree's pristine branch bytes against the incoming snapshot before `cp -Rp` overwrites them; a refusal aborts before any staging. Placed after the overlay the refuse condition is unreachable: the worktree no longer holds the branch's previous bytes, and every downgrade would degrade to warn-and-continue (r1 F2) [class: IMPLEMENTATION_REQUIRED]
+- [x] Insert the guard call immediately after the worktree creation block (the conditional that runs `git worktree add` or creates the orphan branch) and BEFORE the shadow overlay loop, so the guard compares the worktree's pristine branch bytes against the incoming snapshot before `cp -Rp` overwrites them; a refusal aborts before any staging. Placed after the overlay the refuse condition is unreachable: the worktree no longer holds the branch's previous bytes, and every downgrade would degrade to warn-and-continue (r1 F2) [class: IMPLEMENTATION_REQUIRED]
 
 ```bash
 # Certified-plan ordering guard (fail-closed): compares the worktree's
@@ -231,7 +231,7 @@ if [ -d "${DOCS_WORKTREE}/${_plans_dir_ord}" ]; then
 fi
 ```
 
-- [ ] Insert the restore-leg witness immediately after the restore section's unstaged-reset block (`if [ -s "$RESTORED_PATHS_FILE" ]`) and before `RESTORED_PATHS_FILE` is removed, so it can enumerate the restored paths [class: IMPLEMENTATION_REQUIRED]
+- [x] Insert the restore-leg witness immediately after the restore section's unstaged-reset block (`if [ -s "$RESTORED_PATHS_FILE" ]`) and before `RESTORED_PATHS_FILE` is removed, so it can enumerate the restored paths [class: IMPLEMENTATION_REQUIRED]
 
 ```bash
 # Restore-leg certified-digest witness (warn-and-continue): a plan file just
@@ -246,9 +246,9 @@ if [ -s "$RESTORED_PATHS_FILE" ] && [ -f "$PLAN_GUARD_SCRIPT" ]; then
 fi
 ```
 
-- [ ] Add one Rules bullet after the existing add-only-sync bullet: the ordering-invariant sentence, verbatim: `Certified-plan ordering: the sync refuses (exit 1, before staging) any overlay write that would replace plan bytes matching the plan's latest certified sidecar digest with bytes that do not match it, and warns when a restore fills a plan file whose bytes do not match the certification digest; a certified downgrade is never committed, and the refusal names the plan, the certified digest, and the sidecar.` [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: the syntax gate and the five guard wiring pins from Validation Commands (run only those six lines; the other suites and pins belong to later tasks and are not run at this task point) [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: abort docs-branch sync on certified-plan downgrade` [class: IMPLEMENTATION_REQUIRED]
+- [x] Add one Rules bullet after the existing add-only-sync bullet: the ordering-invariant sentence, verbatim: `Certified-plan ordering: the sync refuses (exit 1, before staging) any overlay write that would replace plan bytes matching the plan's latest certified sidecar digest with bytes that do not match it, and warns when a restore fills a plan file whose bytes do not match the certification digest; a certified downgrade is never committed, and the refusal names the plan, the certified digest, and the sidecar.` [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: the syntax gate and the five guard wiring pins from Validation Commands (run only those six lines; the other suites and pins belong to later tasks and are not run at this task point) [class: REPOSITORY_TEST]
+- [x] Commit: `feat: abort docs-branch sync on certified-plan downgrade` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 3: Backlog duplicate sweep script (origin 4)
 
@@ -256,25 +256,25 @@ Files:
 - `scripts/test_docs_branch_backlog_dedupe.py` *(new)*
 - `scripts/docs_branch_backlog_dedupe.py` *(new)*
 
-- [ ] `BacklogDedupeTest#test_removes_top_level_when_archived_twin_identical`; given a worktree with `backlog/<name>.md` and an identical `backlog/completed/<name>.md`, expects the top-level copy removed and the archived twin untouched [class: REPOSITORY_TEST]
-- [ ] `BacklogDedupeTest#test_removes_when_twin_differs_only_in_status_line`; given the twins differing in exactly one `Status:` line, expects the top-level copy removed [class: REPOSITORY_TEST]
-- [ ] `BacklogDedupeTest#test_keeps_and_surfaces_on_body_mismatch`; given twins differing beyond the `Status:` line, expects the top-level copy kept, a warning naming the file, exit 0 [class: REPOSITORY_TEST]
-- [ ] `BacklogDedupeTest#test_no_twin_left_untouched`; given a top-level item with no archived twin, expects it untouched and no warning [class: REPOSITORY_TEST]
-- [ ] `BacklogDedupeTest#test_deferred_twin_same_rules`; given a `deferred/` twin, expects the same remove-or-surface rules as `completed/` [class: REPOSITORY_TEST]
-- [ ] `BacklogDedupeTest#test_idempotent_second_run_noop`; given the tree a first run already swept, expects a second run to change nothing and exit 0 [class: REPOSITORY_TEST]
-- [ ] `BacklogDedupeTest#test_always_warn_and_continue`; given a worktree where one twin mismatches and another matches, expects the matched copy removed, the mismatch surfaced, exit 0 [class: REPOSITORY_TEST]
-- [ ] Run → expect RED: `"$TESTPY" -m pytest scripts/test_docs_branch_backlog_dedupe.py -q` (collection error: module missing) [class: REPOSITORY_TEST]
-- [ ] Implement `scripts/docs_branch_backlog_dedupe.py`: `--worktree-root`, `--backlog-dir`; for every top-level `<name>.md` whose twin exists under `completed/` or `deferred/`, compare after dropping lines matching `^Status:`; equal-after-normalization removes the top-level copy, otherwise warn and keep; always exit 0 [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: `"$TESTPY" -m pytest scripts/test_docs_branch_backlog_dedupe.py -q` (all seven arms pass) [class: REPOSITORY_TEST]
-- [ ] Deploy the refreshed copy: `cp scripts/docs_branch_backlog_dedupe.py ~/.ai-playbook/scripts/docs_branch_backlog_dedupe.py` [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `feat: backlog duplicate sweep for docs-branch sync` [class: IMPLEMENTATION_REQUIRED]
+- [x] `BacklogDedupeTest#test_removes_top_level_when_archived_twin_identical`; given a worktree with `backlog/<name>.md` and an identical `backlog/completed/<name>.md`, expects the top-level copy removed and the archived twin untouched [class: REPOSITORY_TEST]
+- [x] `BacklogDedupeTest#test_removes_when_twin_differs_only_in_status_line`; given the twins differing in exactly one `Status:` line, expects the top-level copy removed [class: REPOSITORY_TEST]
+- [x] `BacklogDedupeTest#test_keeps_and_surfaces_on_body_mismatch`; given twins differing beyond the `Status:` line, expects the top-level copy kept, a warning naming the file, exit 0 [class: REPOSITORY_TEST]
+- [x] `BacklogDedupeTest#test_no_twin_left_untouched`; given a top-level item with no archived twin, expects it untouched and no warning [class: REPOSITORY_TEST]
+- [x] `BacklogDedupeTest#test_deferred_twin_same_rules`; given a `deferred/` twin, expects the same remove-or-surface rules as `completed/` [class: REPOSITORY_TEST]
+- [x] `BacklogDedupeTest#test_idempotent_second_run_noop`; given the tree a first run already swept, expects a second run to change nothing and exit 0 [class: REPOSITORY_TEST]
+- [x] `BacklogDedupeTest#test_always_warn_and_continue`; given a worktree where one twin mismatches and another matches, expects the matched copy removed, the mismatch surfaced, exit 0 [class: REPOSITORY_TEST]
+- [x] Run → expect RED: `"$TESTPY" -m pytest scripts/test_docs_branch_backlog_dedupe.py -q` (collection error: module missing) [class: REPOSITORY_TEST]
+- [x] Implement `scripts/docs_branch_backlog_dedupe.py`: `--worktree-root`, `--backlog-dir`; for every top-level `<name>.md` whose twin exists under `completed/` or `deferred/`, compare after dropping lines matching `^Status:`; equal-after-normalization removes the top-level copy, otherwise warn and keep; always exit 0 [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: `"$TESTPY" -m pytest scripts/test_docs_branch_backlog_dedupe.py -q` (all seven arms pass) [class: REPOSITORY_TEST]
+- [x] Deploy the refreshed copy: `cp scripts/docs_branch_backlog_dedupe.py ~/.ai-playbook/scripts/docs_branch_backlog_dedupe.py` [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `feat: backlog duplicate sweep for docs-branch sync` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 4: Wire the sweep into the docs-branch sync (origin 4)
 
 Files:
 - `agents/skills/docs-branch/SKILL.md`
 
-- [ ] Insert the sweep block immediately after the plan-archive move-detection block and before the doc-hierarchy rogue-dir detection block [class: IMPLEMENTATION_REQUIRED]
+- [x] Insert the sweep block immediately after the plan-archive move-detection block and before the doc-hierarchy rogue-dir detection block [class: IMPLEMENTATION_REQUIRED]
 
 ```bash
 # Backlog duplicate sweep (warn-and-continue): drop a stale top-level
@@ -296,9 +296,9 @@ if [ -f "$DEDUPE_SCRIPT" ] && [ -d "${DOCS_WORKTREE}/${_backlog_dir_cfg}" ]; the
 fi
 ```
 
-- [ ] Add one Rules bullet after the tmp-sweep-exception bullet, verbatim: `Backlog duplicate sweep: after the overlay, the sync drops a top-level {backlog_dir} copy whose archived twin under completed/ or deferred/ exists on the branch and matches it beyond the Status: line; a deeper mismatch is surfaced and kept. Warn-and-continue always; never widen this to other roots.` [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: the syntax gate plus the two dedupe wiring pins (scoped to this task's obligations) [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: sweep stale top-level backlog duplicates on docs-branch sync` [class: IMPLEMENTATION_REQUIRED]
+- [x] Add one Rules bullet after the tmp-sweep-exception bullet, verbatim: `Backlog duplicate sweep: after the overlay, the sync drops a top-level {backlog_dir} copy whose archived twin under completed/ or deferred/ exists on the branch and matches it beyond the Status: line; a deeper mismatch is surfaced and kept. Warn-and-continue always; never widen this to other roots.` [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: the syntax gate plus the two dedupe wiring pins (scoped to this task's obligations) [class: REPOSITORY_TEST]
+- [x] Commit: `feat: sweep stale top-level backlog duplicates on docs-branch sync` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 5: Worktree closeout migration script (origin 2)
 
@@ -306,20 +306,20 @@ Files:
 - `scripts/test_worktree_closeout_migrate.py` *(new)*
 - `scripts/worktree_closeout_migrate.py` *(new)*
 
-- [ ] `WorktreeCloseoutTest#test_capture_records_hashes`; given a source tree with files under two configured dirs, `capture` expects a baseline file listing each path with its SHA-256 [class: REPOSITORY_TEST]
-- [ ] `WorktreeCloseoutTest#test_migrate_copies_new_and_modified_with_checksum_verify`; given a baseline and a source with one new and one modified file, `migrate` expects both copied to the target at identical paths, byte-verified, and the migrated list written to the manifest [class: REPOSITORY_TEST]
-- [ ] `WorktreeCloseoutTest#test_migrate_skips_identical_target`; given a target file byte-identical to the source, expects skip (no rename, no rewrite) and a skip note in the manifest [class: REPOSITORY_TEST]
-- [ ] `WorktreeCloseoutTest#test_migrate_renames_on_collision`; given a target file that exists with different content, expects the incoming copy as `<stem>.wt-<suffix><ext>` beside it and both files present [class: REPOSITORY_TEST]
-- [ ] `WorktreeCloseoutTest#test_migrate_preserves_symlinks`; given a source file that is a symlink, expects the copy to preserve the link rather than dereference the target into a second regular file [class: REPOSITORY_TEST]
-- [ ] `WorktreeCloseoutTest#test_migrate_missing_baseline_fails_loud`; given a `--baseline` path that does not exist, expects non-zero exit with a loud message naming the missing baseline (never an implicit empty baseline, which would silently skip pre-existing artifacts) [class: REPOSITORY_TEST]
-- [ ] `WorktreeCloseoutTest#test_migrate_fails_without_moving_on_verify_error`; given the copy step tampered (patched to write wrong bytes), expects non-zero exit, the source copy still present (copy never moves first), and a loud report [class: REPOSITORY_TEST]
-- [ ] `WorktreeCloseoutTest#test_migrate_noop_when_source_equals_target`; given `--source` equal to `--target`, expects exit 0 with an in-place no-op note and nothing copied [class: REPOSITORY_TEST]
-- [ ] `WorktreeCloseoutTest#test_manifest_records_migration`; given a successful migrate, expects the manifest to carry the migrated list with per-file verification status [class: REPOSITORY_TEST]
-- [ ] Run → expect RED: `"$TESTPY" -m pytest scripts/test_worktree_closeout_migrate.py -q` (collection error: module missing) [class: REPOSITORY_TEST]
-- [ ] Implement `scripts/worktree_closeout_migrate.py`: `capture` (`--out`, `--dirs`, default `docs/reviews docs/tmp`) writes the path-plus-SHA-256 listing; `migrate` (`--baseline`, `--source`, `--target`, `--manifest`, `--suffix`) enumerates new and modified files against the baseline, copies each with symlink-preserving `shutil` copy semantics (`follow_symlinks=False` for links; nothing assumes rename(2)), verifies each copy by re-read checksum, renames on collision to `<stem>.wt-<suffix><ext>`, appends the migrated/renamed/skipped lists to the manifest, and exits non-zero when any verification fails; a missing baseline file exits non-zero with a loud message naming the path (r2 F4) [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: `"$TESTPY" -m pytest scripts/test_worktree_closeout_migrate.py -q` (all nine arms pass) [class: REPOSITORY_TEST]
-- [ ] Deploy the refreshed copy: `cp scripts/worktree_closeout_migrate.py ~/.ai-playbook/scripts/worktree_closeout_migrate.py` [class: IMPLEMENTATION_REQUIRED]
-- [ ] Commit: `feat: worktree closeout review-artifact migration tool` [class: IMPLEMENTATION_REQUIRED]
+- [x] `WorktreeCloseoutTest#test_capture_records_hashes`; given a source tree with files under two configured dirs, `capture` expects a baseline file listing each path with its SHA-256 [class: REPOSITORY_TEST]
+- [x] `WorktreeCloseoutTest#test_migrate_copies_new_and_modified_with_checksum_verify`; given a baseline and a source with one new and one modified file, `migrate` expects both copied to the target at identical paths, byte-verified, and the migrated list written to the manifest [class: REPOSITORY_TEST]
+- [x] `WorktreeCloseoutTest#test_migrate_skips_identical_target`; given a target file byte-identical to the source, expects skip (no rename, no rewrite) and a skip note in the manifest [class: REPOSITORY_TEST]
+- [x] `WorktreeCloseoutTest#test_migrate_renames_on_collision`; given a target file that exists with different content, expects the incoming copy as `<stem>.wt-<suffix><ext>` beside it and both files present [class: REPOSITORY_TEST]
+- [x] `WorktreeCloseoutTest#test_migrate_preserves_symlinks`; given a source file that is a symlink, expects the copy to preserve the link rather than dereference the target into a second regular file [class: REPOSITORY_TEST]
+- [x] `WorktreeCloseoutTest#test_migrate_missing_baseline_fails_loud`; given a `--baseline` path that does not exist, expects non-zero exit with a loud message naming the missing baseline (never an implicit empty baseline, which would silently skip pre-existing artifacts) [class: REPOSITORY_TEST]
+- [x] `WorktreeCloseoutTest#test_migrate_fails_without_moving_on_verify_error`; given the copy step tampered (patched to write wrong bytes), expects non-zero exit, the source copy still present (copy never moves first), and a loud report [class: REPOSITORY_TEST]
+- [x] `WorktreeCloseoutTest#test_migrate_noop_when_source_equals_target`; given `--source` equal to `--target`, expects exit 0 with an in-place no-op note and nothing copied [class: REPOSITORY_TEST]
+- [x] `WorktreeCloseoutTest#test_manifest_records_migration`; given a successful migrate, expects the manifest to carry the migrated list with per-file verification status [class: REPOSITORY_TEST]
+- [x] Run → expect RED: `"$TESTPY" -m pytest scripts/test_worktree_closeout_migrate.py -q` (collection error: module missing) [class: REPOSITORY_TEST]
+- [x] Implement `scripts/worktree_closeout_migrate.py`: `capture` (`--out`, `--dirs`, default `docs/reviews docs/tmp`) writes the path-plus-SHA-256 listing; `migrate` (`--baseline`, `--source`, `--target`, `--manifest`, `--suffix`) enumerates new and modified files against the baseline, copies each with symlink-preserving `shutil` copy semantics (`follow_symlinks=False` for links; nothing assumes rename(2)), verifies each copy by re-read checksum, renames on collision to `<stem>.wt-<suffix><ext>`, appends the migrated/renamed/skipped lists to the manifest, and exits non-zero when any verification fails; a missing baseline file exits non-zero with a loud message naming the path (r2 F4) [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: `"$TESTPY" -m pytest scripts/test_worktree_closeout_migrate.py -q` (all nine arms pass) [class: REPOSITORY_TEST]
+- [x] Deploy the refreshed copy: `cp scripts/worktree_closeout_migrate.py ~/.ai-playbook/scripts/worktree_closeout_migrate.py` [class: IMPLEMENTATION_REQUIRED]
+- [x] Commit: `feat: worktree closeout review-artifact migration tool` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 6: Wire closeout migration into the run flows (origin 2)
 
@@ -328,7 +328,7 @@ Files:
 - `agents/skills/done/SKILL.md`
 - `agents/skills/docs-branch/SKILL.md`
 
-- [ ] In execute-plan Step 0.4 (session bootstrap), after the manifest-creation block, add the baseline-capture insert; resolve `{reviews_dir}` and `{tmp_dir}` from facts per using-skills Step 0 [class: IMPLEMENTATION_REQUIRED]
+- [x] In execute-plan Step 0.4 (session bootstrap), after the manifest-creation block, add the baseline-capture insert; resolve `{reviews_dir}` and `{tmp_dir}` from facts per using-skills Step 0 [class: IMPLEMENTATION_REQUIRED]
 
 ```bash
 # Closeout baseline: record the pre-run file set of the gitignored artifact
@@ -346,7 +346,7 @@ if [ ! -f "{tmp_dir}/execute-plan/${PLAN_SLUG}/closeout-baseline.json" ]; then
 fi
 ```
 
-- [ ] In execute-plan Phase 5, immediately before the removal block, add the migration subsection: detect an ad-hoc worktree by resolving `git rev-parse --git-dir` and `git rev-parse --git-common-dir` to absolute paths (`cd ... && pwd`) and comparing (raw rev-parse output is relative at the repo root and absolute from subdirectories, so normalization is load-bearing, r1 F5 / r2 F4); when equal, the step is a documented no-op; when unequal, run the migration and gate removal on it [class: IMPLEMENTATION_REQUIRED]
+- [x] In execute-plan Phase 5, immediately before the removal block, add the migration subsection: detect an ad-hoc worktree by resolving `git rev-parse --git-dir` and `git rev-parse --git-common-dir` to absolute paths (`cd ... && pwd`) and comparing (raw rev-parse output is relative at the repo root and absolute from subdirectories, so normalization is load-bearing, r1 F5 / r2 F4); when equal, the step is a documented no-op; when unequal, run the migration and gate removal on it [class: IMPLEMENTATION_REQUIRED]
 
 ```bash
 # Ad-hoc-worktree closeout: migrate gitignored run artifacts to the main
@@ -367,17 +367,17 @@ if [ "$GIT_DIR_P" != "$GIT_COMMON_P" ]; then
     --baseline "{tmp_dir}/execute-plan/<PLAN_SLUG>/closeout-baseline.json" \
     --source "$(git rev-parse --show-toplevel)" \
     --target "$MAIN_ROOT" \
-    --manifest "{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md" \
+    --manifest "{tmp_dir}/execute-plan/<PLAN_SLUG>/closeout-migration.json" \
     --suffix "<PLAN_SLUG>" || { echo "closeout migration failed; do NOT remove the worktree" >&2; exit 1; }
 fi
 ```
 
-- [ ] In done Step 2 (the paragraph introducing the docs-branch invocation), add one pointer sentence: `When the session runs in an ad-hoc worktree, first migrate the run's review staging docs and session logs to the main checkout (the execute-plan Phase 5 migration, `worktree_closeout_migrate.py migrate`), before the docs-branch sync and in every case before the worktree is removed.` [class: IMPLEMENTATION_REQUIRED]
-- [ ] In done Rules, add one bullet: `Never remove an ad-hoc worktree before its run's gitignored review artifacts verify present in the main checkout; the docs-branch sync runs where the on-disk corpus is canonical (the main checkout after migration).` [class: IMPLEMENTATION_REQUIRED]
-- [ ] In docs-branch Rules (or the Step 2 notes), add the ordering note, verbatim: `Ad-hoc worktree ordering: run the sync in the main checkout after closeout migration, never from a worktree that is about to be removed; a sync from a stale worktree can commit doomed bytes and, through the fill-only restore, re-export them later.` [class: IMPLEMENTATION_REQUIRED]
-- [ ] Verify the already-landed payload clause: `grep -qF 'docs/reviews/' agents/skills/maintenance/prompt-templates.md` (the worktree review-migration bullet and both payload sentences exist; no edit) [class: REPOSITORY_TEST]
-- [ ] Run → expect GREEN: the six Task 6 wiring pins (scoped to this task's obligations; earlier pins stay green from their tasks) [class: REPOSITORY_TEST]
-- [ ] Commit: `feat: wire worktree closeout migration into execution and done flows` [class: IMPLEMENTATION_REQUIRED]
+- [x] In done Step 2 (the paragraph introducing the docs-branch invocation), add one pointer sentence: `When the session runs in an ad-hoc worktree, first migrate the run's review staging docs and session logs to the main checkout (the execute-plan Phase 5 migration, `worktree_closeout_migrate.py migrate`), before the docs-branch sync and in every case before the worktree is removed.` [class: IMPLEMENTATION_REQUIRED]
+- [x] In done Rules, add one bullet: `Never remove an ad-hoc worktree before its run's gitignored review artifacts verify present in the main checkout; the docs-branch sync runs where the on-disk corpus is canonical (the main checkout after migration).` [class: IMPLEMENTATION_REQUIRED]
+- [x] In docs-branch Rules (or the Step 2 notes), add the ordering note, verbatim: `Ad-hoc worktree ordering: run the sync in the main checkout after closeout migration, never from a worktree that is about to be removed; a sync from a stale worktree can commit doomed bytes and, through the fill-only restore, re-export them later.` [class: IMPLEMENTATION_REQUIRED]
+- [x] Verify the already-landed payload clause: `grep -qF 'docs/reviews/' agents/skills/maintenance/prompt-templates.md` (the worktree review-migration bullet and both payload sentences exist; no edit) [class: REPOSITORY_TEST]
+- [x] Run → expect GREEN: the six Task 6 wiring pins (scoped to this task's obligations; earlier pins stay green from their tasks) [class: REPOSITORY_TEST]
+- [x] Commit: `feat: wire worktree closeout migration into execution and done flows` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 7: Execution-lane concurrency stance (origin 3)
 
@@ -386,16 +386,16 @@ Files:
 
 Peer-dirty file as of authoring (2026-09-19): re-read the current bytes before editing; anchor both insertions on the `## Invariants` and `## Revisions` headings, which the peer's plan does not touch.
 
-- [ ] Add a subsection immediately after the Invariants bullet list, titled `### Execution-lane concurrency stance (evaluated 2026-09-19)`, with exactly this content: overlapping execution children remain forbidden and per-execution worktree isolation remains rejected (the 2026-09-15 removal stands); the collisions that force this are execute-plan Phase 0 branch setup and branch switches (a peer switch sweeps the other's uncommitted files), staged-index races during per-task commits, the done lock, the document-registry archive commit, and the final merge; a future change must first reinstate per-execution worktrees off a snapshot, rework what depends on the shared-checkout assumption (Phase 0 setup, done-lock scope, the archive commit, the merge order policy, the lane guards' discovery arm per worktree, and the state schema's single `progress_mark` per child), and decide the parallelism degree and merge-order policy; until then the two sanctioned overlap shapes stay as they are: one authoring child beside one execution child, and worktree runs only where an operator or plan prescribes them, which the closeout migration (this plan's Task 5) now makes survivable [class: IMPLEMENTATION_REQUIRED]
-- [ ] Append one Revisions line: `- 2026-09-19 (lane-model evaluation, user-directed proposal evaluated): recorded the concurrency stance above; no design change; the overlapping-executions evaluation closed with the collision list and revisit preconditions.` [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: the stance wiring pin (`Execution-lane concurrency stance`) [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: record execution-lane concurrency evaluation in maintenance skill` [class: IMPLEMENTATION_REQUIRED]
+- [x] Add a subsection immediately after the Invariants bullet list, titled `### Execution-lane concurrency stance (evaluated 2026-09-19)`, with exactly this content: overlapping execution children remain forbidden and per-execution worktree isolation remains rejected (the 2026-09-15 removal stands); the collisions that force this are execute-plan Phase 0 branch setup and branch switches (a peer switch sweeps the other's uncommitted files), staged-index races during per-task commits, the done lock, the document-registry archive commit, and the final merge; a future change must first reinstate per-execution worktrees off a snapshot, rework what depends on the shared-checkout assumption (Phase 0 setup, done-lock scope, the archive commit, the merge order policy, the lane guards' discovery arm per worktree, and the state schema's single `progress_mark` per child), and decide the parallelism degree and merge-order policy; until then the two sanctioned overlap shapes stay as they are: one authoring child beside one execution child, and worktree runs only where an operator or plan prescribes them, which the closeout migration (this plan's Task 5) now makes survivable [class: IMPLEMENTATION_REQUIRED]
+- [x] Append one Revisions line: `- 2026-09-19 (lane-model evaluation, user-directed proposal evaluated): recorded the concurrency stance above; no design change; the overlapping-executions evaluation closed with the collision list and revisit preconditions.` [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: the stance wiring pin (`Execution-lane concurrency stance`) [class: REPOSITORY_TEST]
+- [x] Commit: `docs: record execution-lane concurrency evaluation in maintenance skill` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 8: Final validation
 
 Files:
 - none new (validation and residual fixes only)
 
-- [ ] Run the full Validation Commands block → expect exit 0 (all three suites green, syntax gate clean, ordering chain OK, all sixteen wiring pins hit) [class: REPOSITORY_TEST]
-- [ ] Run the public hygiene scan and the no-em-dash scan over the touched paths → expect exit 0 both (`bash ~/.ai-playbook/scripts/scan-public-hygiene.sh` from the repo root; `"${HOME}/.ai-playbook/scripts/check-no-em-dash.sh" touched`) [class: REPOSITORY_TEST]
-- [ ] Fix any residual the block surfaces, re-run the block to exit 0, and commit any fix: `chore: final validation for docs-branch sync and worktree lifecycle safety` [class: IMPLEMENTATION_REQUIRED]
+- [x] Run the full Validation Commands block → expect exit 0 (all three suites green, syntax gate clean, ordering chain OK, all sixteen wiring pins hit) [class: REPOSITORY_TEST]
+- [x] Run the public hygiene scan and the no-em-dash scan over the touched paths → expect exit 0 both (`bash ~/.ai-playbook/scripts/scan-public-hygiene.sh` from the repo root; `"${HOME}/.ai-playbook/scripts/check-no-em-dash.sh" touched`) [class: REPOSITORY_TEST]
+- [x] Fix any residual the block surfaces, re-run the block to exit 0, and commit any fix: `chore: final validation for docs-branch sync and worktree lifecycle safety` [class: IMPLEMENTATION_REQUIRED]

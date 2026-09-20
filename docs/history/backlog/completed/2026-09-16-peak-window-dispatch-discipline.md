@@ -1,6 +1,6 @@
 # Backlog: enforce the peak-window pricing check on every child dispatch path
 
-Status: open
+Status: done
 Priority: high
 
 Workflow: backlog

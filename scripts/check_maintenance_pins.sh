@@ -4,8 +4,9 @@
 # regress: guard structure, lane cap wording, dispatch-slice tag integrity,
 # re-arm paragraph parity and escalation, the parent title's single creation
 # source, the recognition span literal, section anchors other files navigate
-# by, SKILL.md runtime-agnosticism, the pricing cache home, the schema-3 state
-# contract, and the pricing seed presence. Exit 0 = all pins hold; exit 1 with
+# by, SKILL.md runtime-agnosticism, the pricing cache home, the schema-4 state
+# contract, the pricing seed presence, and the budget-gate resume mirrors in
+# the execute-plan and plans skills. Exit 0 = all pins hold; exit 1 with
 # PIN FAIL lines otherwise. Repo-relative paths only; run from anywhere.
 set -u
 fail=0
@@ -63,6 +64,17 @@ expect_absent() { # expect_absent <description> <pattern> <file>: rc 0 = fail, r
 #       (zcode.md): superseded by the 2026-09-16 linger-model correction.
 #   'list once more immediately before the create' (prompt-templates.md):
 #       superseded by the state-first re-arm duty (liveness plan, Task 3).
+#   'when it is under 60 (the observed one-to-four-hour child run'
+#       (zcode.md): superseded by the runtime-fit rule (plan
+#       2026-09-19-scheduler-operations-discipline-quota-peaks-locks,
+#       Task 1, P6 origin 1; the rule names the superseded 2026-09-15
+#       60-minute fire-time horizon in its own lead-in).
+#   'never inside a deferred window' (prompt-templates.md): superseded
+#       fire-time sentence replaced by the blueprint-unique probe
+#       --fire-at pin (code review r1 F8, plan
+#       2026-09-19-scheduler-operations-discipline-quota-peaks-locks);
+#       the deviation bullet's paraphrase of the pinned anchor is
+#       deliberately not frozen (code review r2 F12 deferred half).
 #   done-skill ordering pin (python block): freezes the pointer line
 #       'Before Step 0, in a repository that resolves the maintenance skill'
 #       above the Step 0 heading (liveness plan, Task 4; the line is
@@ -102,6 +114,13 @@ pin "darkness clock keeps the earliest value" grep -qF 'keeps the earliest value
 pin "step 0 keep-earliest phrasing" grep -qF 'keeping the earliest value' "$S"
 pin "idle occupancy join mirrored in SKILL.md" grep -qF 'whose target carries the `(idle)` marker' "$S"
 pin "pricing note read-back"  grep -qF 'note surfaces in the survey read-back' "$S"
+# --- quota leg bindings (P6 origins 1-2; schema-4 fire-time bookkeeping) ---
+pin "quota leg binds every clocked dispatch path" grep -qF 'binds every clocked child dispatch, from any session type' "$S"
+pin "runtime-fit rule defers to reset regardless of pricing" grep -qF 'fire at reset_at_epoch instead, regardless of pricing' "$S"
+pin "deferred-peak quota_status recorded" grep -qF 'quota_status: "deferred-peak"' "$S"
+pin "probe-invocation bullet present" grep -qF 'Run `python3 scripts/quota_window_probe.py`' "$S"
+pin "deferred slot fit-checked before pricing deferral" grep -qF 'before deferring for pricing, verify the deferred slot' "$S"
+pin "starvation beats pricing never fit" grep -qF 'starvation beats pricing, never the runtime-fit rule' "$S"
 python3 - "$S" <<'EOF'
 import json, re, sys
 s = open(sys.argv[1]).read()
@@ -112,8 +131,8 @@ order_ok = (lambda seq: all(s.find(a) != -1 and s.find(a) < s.find(b, s.find(a))
              for a, b in zip(seq, seq[1:])))
 if not order_ok(["G1e (execution lane)", "G1a (authoring lane)", "G2 (failure cap)", "G3 (joint state)"]):
     print("PIN FAIL: guard order G1e<G1a<G2<G3"); sys.exit(1)
-if not order_ok(["D1 (execute)", "D2 (author)", "D3 (no-op)"]):
-    print("PIN FAIL: decision order D1<D2<D3"); sys.exit(1)
+if not order_ok(["D1 (execute)", "D4 (propose park)", "D2 (author)", "D3 (no-op)"]):
+    print("PIN FAIL: decision order D1<D4<D2<D3"); sys.exit(1)
 if re.search(r'Cron(Create|List|Update|Delete)|OffPeak(Create|List)', s):
     print("PIN FAIL: SKILL.md names a runtime primitive (must stay runtime-agnostic)"); sys.exit(1)
 need(s, "## State file")
@@ -124,8 +143,8 @@ try:
     doc = json.loads(m.group(1))
 except ValueError as exc:
     print("PIN FAIL: state schema json block does not parse: %s" % exc); sys.exit(1)
-if doc.get("schema") != 3:
-    print("PIN FAIL: state schema is not 3"); sys.exit(1)
+if doc.get("schema") != 4:
+    print("PIN FAIL: state schema is not 4"); sys.exit(1)
 lanes = {"execution", "authoring"}
 if set(doc.get("decision", {})) != lanes or set(doc.get("decision_reason", {})) != lanes:
     print("PIN FAIL: per-lane decision/decision_reason keys drifted"); sys.exit(1)
@@ -137,7 +156,7 @@ if "rearm_note" not in doc:
 if "parent_absent_since" not in doc or "pending_dispatch" not in doc:
     print("PIN FAIL: top-level parent_absent_since/pending_dispatch missing from the state schema"); sys.exit(1)
 child = (doc.get("children") or [{}])[0]
-if not {"fire_at", "quota_status", "progress_mark", "resume_count"} <= set(child):
+if not {"fire_at", "requested_at", "quota_status", "progress_mark", "resume_count"} <= set(child):
     print("PIN FAIL: children entry fields drifted"); sys.exit(1)
 need(s, "### Step 1: survey"); need(s, "### Step 2")
 step1 = s.split("### Step 1: survey")[1].split("### Step 2")[0]
@@ -203,6 +222,15 @@ expect_absent "superseded unscoped ambiguous-outcome carve-out must be absent fr
 pin "idle attribution per-session" grep -qF ' sessionId matches the current session' "$Z"
 pin "pricing clear-on-success"   grep -qF 'clears the pricing-verification-failed note' "$Z"
 expect_absent "superseded completed-spawner claim must be absent from zcode.md" 'sessions whose spawner automation has completed are not blocked' "$Z"
+pin "ladder clocked create runs the quota check first" grep -qF 'runs the peak-window and runtime-fit check first' "$Z"
+pin "runtime-fit probe invocation shape" grep -qF -- '--fire-at <iso> --need-minutes' "$Z"
+pin "--fire-at mode contract present" grep -qF -- '--fire-at <iso> [--need-minutes <N>]' "$Z"
+pin "straddle rule bound in the off-peak preference" grep -qF -- '--straddle-minutes 60' "$Z"
+# Review r1 F7: zcode.md carries a CAPITALIZED copy of the fit-before-pricing
+# sentence (the SKILL.md pin's lowercase needle cannot match it), so deleting
+# the operative zcode copy stayed green; pin it separately.
+pin "fit-before-pricing rule bound (zcode copy)" grep -qF 'Before deferring for pricing, verify the deferred slot' "$Z"
+expect_absent "superseded 60-minute horizon bullet must be absent from zcode.md" 'when it is under 60 (the observed one-to-four-hour child run' "$Z"
 
 # --- prompt-templates.md child-duty needles (state-driven rearm, successor dispatch, resume) ---
 pin "state-first rearm duty" grep -qF 'state-first, without listing first' "$P"
@@ -214,8 +242,24 @@ pin "successor adopt matcher repo containment" grep -qF 'whose prompt also conta
 pin "resume rule in the execution payload" grep -qF 'this is a resume run' "$P"
 pin "rearm lingered-record deletion in blueprints" grep -qF 'deleting your own lingered' "$P"
 pin "success-via-existing confirmation" grep -qF 'counts as success only after one more listing confirms' "$P"
+pin "successor fire time names the full quota leg" grep -qF 'runtime-fit, deferred-window, peak-pricing, and floor rules' "$P"
+pin "successor entry records requested_at" grep -qF 'requested_at carrying the originally requested fire time' "$P"
+# Review r1 F8: the 'runtime-fit, deferred-window, ...' needle above occurs
+# TWICE in prompt-templates.md (blueprint + deviation paraphrase), so
+# reverting only the blueprint's --fire-at sentence stayed green; pin the
+# blueprint-unique span too, and keep the superseded fire-time span absent.
+pin "successor blueprint names the probe --fire-at mode" grep -qF 'using its --fire-at mode with --need-minutes set to this lane' "$P"
+expect_absent "superseded fire-time sentence must be absent from prompt-templates.md" 'never inside a deferred window' "$P"
 expect_absent "superseded unscoped success-via-existing clause must be absent from prompt-templates.md" 'counts as success only after one more listing confirms an ENABLED automation with that title and prompt opening is present; on that success-via-existing path' "$P"
 expect_absent "superseded listing-driven rearm wording must be absent from prompt-templates.md" 'list once more immediately before the create' "$P"
+
+# Context-budget plan Task 4: the checkpoint duty paragraph added to each
+# blueprint body. The anchor 'after each blueprint step block' occurs in BOTH
+# blueprints, so each pin stretches to the blueprint-unique telemetry record
+# span (same twice-needle trap as the F8 note above): reverting one body while
+# the other keeps the duty must still fail.
+pin "authoring blueprint checkpoint duty" grep -qF 'after each blueprint step block, at a boundary only, never mid-task, log one telemetry record (skill: plans-authoring) to docs/tmp/authoring/<plan-slug>/context.jsonl' "$P"
+pin "execution blueprint checkpoint duty" grep -qF 'after each blueprint step block, at a boundary only, never mid-task, log one telemetry record (skill: execute-plan) to docs/tmp/execute-plan/<plan-slug>/context.jsonl' "$P"
 
 # --- prompt-templates.md blueprint integrity ---
 python3 - "$P" "$Z" "$D" <<'EOF'
@@ -296,6 +340,34 @@ rc=$?
 pin "step 0 rearm-on-touch check" grep -qF 'rearm-on-touch check: consult the scheduler state file first' "$S"
 expect_absent "superseded listing-first rearm-on-touch trigger must be absent from SKILL.md" 'when the automation listing shows no ENABLED parent' "$S"
 pin "done-skill rearm-on-touch pointer" grep -qF 'rearm-on-touch check defined in the maintenance skill' "$D"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- budget-gate resume mirrors (P6 origins 1-2) ---
+E="$repo/agents/skills/execute-plan/SKILL.md"
+PL="$repo/agents/skills/plans/SKILL.md"
+for f in "$E" "$PL"; do
+  [ -f "$f" ] || { echo "missing $f"; fail=1; }
+done
+[ "$fail" -eq 1 ] && exit 1
+pin "resume-fit --fire-at check at resume-scheduling boundaries" grep -qF -- '--fire-at mode with the scheduled resume time as the fire instant' "$E"
+pin "resume-pricing defers to the reported defer_to" grep -qF 'on exit 2 (defer-peak, a fitting slot inside the weekday peak window), schedule the watcher at the reported defer_to' "$E"
+pin "plans budget gate mirrors the canonical resume checks" grep -qF 'The canonical resume-fit and resume-pricing checks apply at this boundary' "$PL"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- trigger-verb contract surfaces (schedule-vs-execute verb contract plan, Task 3) ---
+A="$repo/AGENTS.md"
+[ -f "$A" ] || { echo "missing $A"; fail=1; }
+[ "$fail" -eq 1 ] && exit 1
+pin "SKILL.md trigger-verb subsection anchored" grep -qF 'Trigger verbs (schedule vs execute vs resume)' "$S"
+pin "repo AGENTS.md scheduling verb contract anchored" grep -qF 'Scheduling asks (verb contract)' "$A"
+pin "zcode.md interactive dispatch template anchored" grep -qF 'Interactive dispatch template' "$Z"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- toolset precheck surfaces (scheduler ops contract plan, Task 4) ---
+pin "SKILL.md step 5 ladder-precheck precondition anchored" grep -qF 'ladder precheck' "$S"
+pin "zcode.md Ladder precheck bullet anchored" grep -qF 'Ladder precheck' "$Z"
+pin "clocked-lane stand-down reason pinned" grep -qF 'clocked-primitives-absent' "$Z"
+pin "idle-lane stand-down reason pinned" grep -qF 'idle-primitive-absent' "$Z"
 [ "$fail" -eq 1 ] && exit 1
 
 echo "maintenance pins: all hold"

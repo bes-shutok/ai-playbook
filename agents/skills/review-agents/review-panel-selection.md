@@ -1,6 +1,6 @@
 # Review Panel Selection
 
-Single source for which review workers launch, which lenses they load, and when a focused or escalated panel is valid. All orchestrators (`doing-code-review`, `review-plan`, `rfc-design`, `review-confluence-doc`) reference this file; do not duplicate panel policy inline.
+Single source for which review workers launch, which lenses they load, and when a focused or escalated panel is valid. All orchestrators (`doing-code-review`, `review-plan`, `rfc-design`, `review-confluence-doc`, and `execute-plan` for per-task intermediate selection) reference this file; do not duplicate panel policy inline.
 
 ## Recommended five-worker panel
 
@@ -64,6 +64,22 @@ Boundary: a changed normative documentation example alone (docs-only or docs-plu
 Treat changed dependency coordinates, outbound service URL configuration, and downstream error-response mapping as risk signals even when the diff is small. The shared changed-scope trigger surfaces enumerated in the `doing-code-review` Step 2.5 mandatory-evidence rules are risk signals as well. These signals require the `risk` worker and the guideline checks of the changed files' language overlay (Java/Spring, Kotlin/Spring, or Python) per those mandatory-evidence rules.
 
 Record the detected signals in the staging Metadata `Changed-risk signals` field (comma list or `none`).
+
+### Per-task intermediate review selection
+
+For an execute-plan Step 1.2b intermediate task review, select workers by complexity tier instead of the full panel:
+
+| Tier | Trigger | Workers |
+|------|---------|---------|
+| Tier L | docs/skill-only diff, or at most 2 files and no risk signals | one worker: `correctness-completeness`, or `contract-docs` for a docs-only diff |
+| Tier M | 3 or more files, or a behavior change, and no risk signals | `correctness-completeness` plus `testing` |
+| Tier H | any risk signal, a concurrency or transactional mutator marker, or a public-contract change | the `### Risk-signal floor` worker set; the full five-worker panel at two or more risk signals |
+
+The plan's Review tier hint sets the starting tier; post-implement risk signals may raise it and never lower it, and so may the trigger table. When triggers overlap, the highest matching tier wins (a behavior change never resolves below Tier M).
+
+When the plan records no tier hint, derive the tier from the task's `Files:` list and the post-implement diff.
+
+A per-task pass is a separate pass from Phase 3 rounds: it carries its own launch accounting under the six-launch ceiling.
 
 ### Replacement-lens selection
 

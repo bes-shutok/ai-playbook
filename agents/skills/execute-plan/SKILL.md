@@ -25,6 +25,8 @@ description: >
 
 Orchestrate plan execution from the main agent. Always run Phase 0 (branch setup) first; do not skip it. Delegate heavy work to sub-agents so context stays clean. Do not implement tasks inline unless a sub-agent fails and you must recover.
 
+**Intermediate reviews (default on):** every executed task passes the Step 1.2b intermediate task review before its done commit. A plan header line `Intermediate reviews: off` skips Step 1.2b for that run, and the Recovery path does not run it; any other value or absence keeps it on.
+
 ## Runtime-neutral execution contract
 
 The shared skill supplies policy, task scope, worker evidence requirements, and
@@ -55,7 +57,7 @@ The orchestration state is derived, never invented: read it from machine `workfl
 
 The transition loop is mandatory: after every worker return, review result, quota decision, and user status question the orchestrator selects and starts the next action before control returns. Async join: no final response while any launched worker of this run lacks a durably recorded outcome in the machine manifest (every live claim closed or its task terminal); mirror that join state into the session manifest and logs. The terminal gate refuses completion when review freshness or verification evidence is invalid, per the Phase 5 checklist and the Step 0.5 digest rule.
 
-**Announcement is not execution.** Saying you are using this skill does not satisfy it. The parent agent must run the Phase 1 loop (implement sub-agent → verify → refresh marker → mark checkboxes → **done sub-agent** → report) for **each** task. Passing tests or marking all checkboxes in one parent session is **not** a substitute for per-task `done` commits.
+**Announcement is not execution.** Saying you are using this skill does not satisfy it. The parent agent must run the Phase 1 loop (implement sub-agent → verify → Step 1.2b intermediate review → refresh marker → mark checkboxes → **done sub-agent** → report) for **each** task. Passing tests or marking all checkboxes in one parent session is **not** a substitute for per-task `done` commits.
 
 ## Invocation detection (run first)
 
@@ -150,6 +152,8 @@ Do not start Phase 1 until execute-plan is chosen (invocation signal or gate opt
 | Address review fixes then start next review round without `done` | Each review iteration must end with Step 3.4 `done` before Step 3.1 runs again |
 | Batch all review fixes into one commit at loop exit | `done` runs after **every** review iteration, not only when the loop exits |
 | Skip Phase 3 because implementation looks complete | Review/fix loop is mandatory; each iteration still ends with `done` |
+| Skip Step 1.2b and launch done directly | Hard Gate 25 blocks the Step 1.4 done launch until the task's `inter_review` line records verdict `clean` or `backlogged-candidates` with every recorded backlog path captured; skipping the review forfeits the per-task defect boundary; the only sanctioned skips are the `Intermediate reviews: off` opt-out and the Recovery path, where Step 1.2b does not run |
+| Fix off-plan review findings in-task instead of backlogging | Off-plan findings are not causally related to the plan; fixing them in-task widens the done commit and hides the deferral; capture them as backlog items with a Driving force line instead |
 | `done` without preceding-step log files | `learn` needs the immediately prior worker log(s) on disk; chat return text alone is insufficient |
 | Pass all session logs into every `done` | Each `done` reads only logs from its preceding step(s), not full history |
 | Overwrite an existing worker log on relaunch | Same path = append Pass N to end; never truncate `review-r<R>-receiving-review.log.md` or other worker logs |
@@ -332,6 +336,37 @@ Update the manifest when Phase 0 completes. See [agent-logs.md](agent-logs.md) f
 
 **Machine manifest seeding (Phase 0):** When a structured machine manifest (`runtime_state.json`) is used for the run, the driver's `create` operation (`--operation create`) is the **only documented path that translates plan checkboxes into machine manifest state**: it seeds the authoritative manifest from the plan task list (pending statuses, fresh generation, mode `0600`) and validates every task's `allowed_paths` entries against the same fail-closed path policy enforced at launch. Directory-valued entries (including trailing-slash entries) are rejected with an actionable error naming the entry; directory prefix matching is out of scope because it would silently never match the file-level witnesses. No other path may write the initial machine manifest.
 
+**Linked-worktree bootstrap (before the Step 0.5 gate):** when the checkout is a linked worktree (its `.git` is a file), the gitignored inputs the Step 0.5 gate resolves - the facts file, the reviews directory with the certified artifacts, and the tmp directory - are missing, so run this recipe before the gate:
+
+```bash
+if [ -f .git ]; then
+  PRIMARY="$(git worktree list --porcelain | sed -n 's/^worktree //p' | head -1)"
+  mkdir -p .ai-playbook docs/reviews docs/tmp
+  test -f .ai-playbook/facts.md || cp "$PRIMARY/.ai-playbook/facts.md" .ai-playbook/facts.md
+  if [ -d "$PRIMARY/docs/reviews" ]; then
+    cp -R "$PRIMARY/docs/reviews/." docs/reviews/
+  fi
+fi
+```
+
+Run this before the Step 0.5 readiness gate whenever the checkout is a linked worktree, resolve `reviews_dir`/`tmp_dir` from the facts TOML fence when it defines them instead of the defaults shown, and re-run the Step 0.5 gate after the bootstrap.
+
+```bash
+# Closeout baseline: record the pre-run file set of the gitignored artifact
+# dirs so closeout can migrate exactly what this run added or modified.
+# Capture ONCE per run (r2 F3): a resumed run keeps the original baseline so
+# closeout also migrates artifacts created before the interruption.
+# Two-tier script resolution mirrors the sync gates' pattern: repo-local
+# first, then the deployed home copy (r1 F3).
+CLOSEOUT_SCRIPT="${WORKTREE_CLOSEOUT_SCRIPT:-$(git rev-parse --show-toplevel)/scripts/worktree_closeout_migrate.py}"
+[ -f "$CLOSEOUT_SCRIPT" ] || CLOSEOUT_SCRIPT="${HOME}/.ai-playbook/scripts/worktree_closeout_migrate.py"
+if [ ! -f "{tmp_dir}/execute-plan/${PLAN_SLUG}/closeout-baseline.json" ]; then
+  python3 "$CLOSEOUT_SCRIPT" capture \
+    --out "{tmp_dir}/execute-plan/${PLAN_SLUG}/closeout-baseline.json" \
+    --dirs "{reviews_dir}" "{tmp_dir}"
+fi
+```
+
 **Hard gate:** The parent agent must **not** edit production or test files listed in the plan's `Files:` sections until Step 0.4 completes **and** execute-plan is chosen (invocation signal or plan-path gate option 1).
 
 ### Step 0.4b: Stale plan-path checkpoint (doc-hierarchy migration)
@@ -416,6 +451,8 @@ Ordering: the orchestrator resolves `validator` outcomes FIRST: run the declared
 
 ### Budget gate (quota-window pause and resume)
 
+Step 1.2b is not a budget-gate boundary: the intermediate review panel launches mid-task by design, and the following Step 1.5 probe bounds the cycle it sits inside.
+
 Resolve `budget_pause_minutes_before_reset`, `budget_pause_max_used_percent`, and `budget_probe_runtime` from the opening TOML block of `.ai-playbook/facts.md` per the table convention above. At the Step 1.5 and Step 3.5 boundaries, before every Phase 3 worker-wave launch (the Step 3.1 panel launch and the Step 3.3 address launch, single or fanned), before every fold batch and every mechanical audit pass inside a Phase 3 review round (the between-boundary probes), and never mid-task or mid-worker, run:
 
 unsupported harness budget skip: before resolving the probe, run scripts/harness_detection.py (resolved like BUDGET_PROBE minus its env-override leg: repo-local copy first, then the deployed home copy); when it reports `harness: none` and no `budget_probe_runtime` override is configured, record `budget_skip` in the run's manifest notes, skip the probe, the pause protocol, and the resume watcher, and continue, leaving any existing pending resume watcher to its own stand-down checks; the skip path never arms or clears the guard flag (when a `budget_probe_runtime` override routes the run back through the probe, the probe's own flag semantics apply, and that override is the only way to run the family on an unsupported harness); a missing or erroring helper counts as unsupported (record the evidence; the family must not run against an unknown harness).
@@ -455,11 +492,25 @@ The resume prompt continues through the normal Step 0.5 resume path and the driv
 
 Watcher state is authoritative and fenced in machine state: the runtime driver persists a monotonic `progress_revision` and a `resume_watcher` object in `runtime_state.json` containing watcher id, plan slug, canonical repository root, canonical plan path, plan-byte digest, scheduling epoch, reset epoch, expected generation, expected progress revision, current boundary generation, binding, status, and replacement predecessor. All writes and replacement, cancellation, supersession, and no-schedule transitions run under the manifest lock with compare-and-swap on watcher id, generation, and boundary generation; `manifest.md` receives a human-readable projection only. A watcher re-reads machine state immediately before firing and refuses to clear guards or relaunch when its id, generation, progress revision, workflow state, canonical repository root, canonical plan path, plan digest, or current boundary generation no longer matches.
 
-At every budget-gate boundary whose decision is continue and whose probe report contains a trusted binding reset epoch, including the between-boundary probes (fold batches and mechanical audit passes), schedule a one-shot resume automation at `reset time plus one minute` after the binding window's reset (rounded up to the whole minute) through the driver's `watcher-schedule` operation (exact command in the pause protocol above); every other non-schedulable boundary (unknown, weekly secondary, abort, complete) supersedes and clears through `--operation watcher-supersede --input '{"reason": "..."}'`; a pause boundary supersedes through the step-3 `watcher-schedule` call instead (the call supersedes internally and emits `manual_command`), never through a separate `watcher-supersede` call, which would drop the manual-resume bookkeeping or double-bump the boundary generation; the watcher is `self-disarming and idempotent`. Its prompt re-enters execute-plan on the plan path and applies four stand-down checks before any relaunch, each with its own machine-state detection: it stands down when the semantic progress revision changed after the scheduling point; it stands down when a peer session resumed the work (a resume-path re-entry recorded in machine state by the `resume` or `continue` operation after the scheduling epoch); it stands down when the plan is archived or completed; and it stands down when the run was explicitly aborted or interrupted (an aborted workflow state in machine state, or a `user_interrupt` field newer than this watcher's scheduling epoch, so a latched old interrupt never trips a later watcher). When no stand-down fires it applies the Step 0.5 resume rules and continues the loop. The orchestrator records semantic progress through the driver's progress operation after every checkpoint and done boundary, so a scheduled watcher's expected progress revision goes stale exactly when the work moved.
+At every budget-gate boundary whose decision is continue and whose probe report contains a trusted binding reset epoch, including the between-boundary probes (fold batches and mechanical audit passes), schedule a one-shot resume automation at `reset time plus one minute` after the binding window's reset (rounded up to the whole minute) through the driver's `watcher-schedule` operation (exact command in the pause protocol above); every other non-schedulable boundary (unknown, weekly secondary, abort, complete) supersedes and clears through `--operation watcher-supersede --input '{"reason": "..."}'`; a pause boundary supersedes through the step-3 `watcher-schedule` call instead (the call supersedes internally and emits `manual_command`), never through a separate `watcher-supersede` call, which would drop the manual-resume bookkeeping or double-bump the boundary generation; the watcher is `self-disarming and idempotent`. Resume-fit check (P6 origin 2): at every resume-scheduling boundary whose probe report carries usable window data, run the probe's --fire-at mode with the scheduled resume time as the fire instant and the expected remaining runtime as --need-minutes (the execution lane upper bound, 240 minutes; a paused authoring run uses 120); on exit 3 (defer-reset), schedule the watcher at the following reset instead. The exit-3 branch can fire only when --need-minutes exceeds the fresh cadence window's roughly 300 minutes or the resume time is not a reset-anchored slot, which arms the check for future lane-estimate changes. The comparison is recorded in the budget_pause record on a pause boundary; on a continue boundary the comparison is surfaced in the orchestrator's turn output and the scheduling result's trail notes the applied verdict (the watcher-schedule receipt carries no notes field today; a driver-side notes channel is a named follow-up), never as a synthesized resume_scheduled: no budget_pause record (the reconciliation rule would complete the scheduling at the original reset and undo the deferral). This check governs every resume scheduling the pause protocol performs, including the step 3 scheduling call. Resume-pricing check (P6 origin 1): the same --fire-at call also carries the pricing verdict; on exit 2 (defer-peak, a fitting slot inside the weekday peak window), schedule the watcher at the reported defer_to (the pricing window's end) instead of reset plus one minute, unless the canonical starvation exception applies (for an execution-lane resume, no execution dispatch in the last 24 hours; it releases only the starved lane, so a paused authoring run takes no starvation release) or the user explicitly overrides in the same request. The deferral rides the orchestrator-created automation path (the automation's fire time carries the deferred instant, while the watcher-schedule receipt stays anchored to the quota reset epoch); on the launchd fallback path (create refused, or automations unavailable) the carrier still fires at reset plus one minute, so a host on that fallback surfaces the peak-boundary deferral in its turn output instead of deferring - a named driver-side follow-up, not this plan's work. The pricing deferral is recorded in the same sink as the fit comparison above. Its prompt re-enters execute-plan on the plan path and applies four stand-down checks before any relaunch, each with its own machine-state detection: it stands down when the semantic progress revision changed after the scheduling point; it stands down when a peer session resumed the work (a resume-path re-entry recorded in machine state by the `resume` or `continue` operation after the scheduling epoch); it stands down when the plan is archived or completed; and it stands down when the run was explicitly aborted or interrupted (an aborted workflow state in machine state, or a `user_interrupt` field newer than this watcher's scheduling epoch, so a latched old interrupt never trips a later watcher). When no stand-down fires it applies the Step 0.5 resume rules and continues the loop. The orchestrator records semantic progress through the driver's progress operation after every checkpoint and done boundary, so a scheduled watcher's expected progress revision goes stale exactly when the work moved.
 
 Replace and cancel rules: later boundaries replace, never stack, watchers (the machine state records the superseded watcher id and compare-and-swap result); every non-schedulable boundary also supersedes and clears any existing pending watcher; the weekly secondary binding still writes no flag and schedules no watcher; a clean exit or archive leaves the last watcher to stand itself down via its own checks. A `status: unknown` report is explicitly report-only: it schedules no watcher and names the exact manual resume command. At a schedulable boundary (a continue with a trusted binding reset epoch), missing automation capability takes the CLI fallback chain (launchd one-shot with a sentinel self-disable file, then report-only naming the exact resume command and time); at a pause boundary there is no launchd fallback - the resume is manual per pause-protocol step 6.
 
 The plans skill mirrors this protocol at plan-authoring boundaries (see the plans skill Budget gate section), which makes this section the canonical home of the shared pause protocol.
+
+### Context budget checkpoints
+
+A context-size mechanism, distinct from the quota-window pause in the Budget gate above: the ladder below compacts this session's own working context and never pauses the run for a quota window. Run a context budget checkpoint only at safe boundaries: after each worker return, at each phase transition, and after each review round. The safe-boundary rule holds at every one of them: a checkpoint is never mid-task, because a compaction between a worker claim and its completion orphans driver state; the machine manifest mitigates but the boundary rule removes the exposure.
+
+**Threshold ladder.** At each checkpoint measure context size: runtime session/transcript stats where available; otherwise a char-count proxy over the transcript with a ~4 chars/token ratio, labeled an estimate (carried inline here because standalone execute-plan runs never load the maintenance overlay). Prefer the runtime's documented host-scoped locator where a runtime overlay defines one (for ZCode: the overlay's `Context measurement primitive` section); when no executable measurement surface exists — no locator, or the located store is missing, unreadable, or the session id not resolvable — the checkpoint appends the record with `action: no-primitive` and continues rather than skipping. The budget is `context_budget_tokens`, read from the opening TOML block of `.ai-playbook/facts.md`, falling back to 300000 when the key is absent. Apply the first matching rung:
+
+- When the measurement is below 70% of budget, log and continue: append the telemetry record below and proceed to the next defined step.
+- 70-85%: cheap shedding first — drop superseded round payloads, applied diff snapshots, and resolved quota chatter from the working set; re-measure at the next checkpoint.
+- Above 85%: the run performs full compaction at the safe boundary — via the runtime compaction primitive when the runtime exposes one; otherwise by writing the handoff document manually following the `agents/skills/handoff/SKILL.md` template (that skill is user-invocation-only, so use its template as the format source rather than invoking it), resuming from `runtime_state.json` and the survival list. A run on a runtime without a compaction primitive attempts the manual handoff once; at later checkpoints where `compactions_to_date` is unchanged since the previous record, it logs the record and surfaces the budget state at the boundary instead of re-attempting full compaction. The survival list, enumerated here as the normative owner: machine manifest runtime_state.json, current round state, claim tokens, peer-safety fences. A run without a machine manifest resolves the survival list against its own durable state: the run's staging docs and, for scheduled children, the scheduler state file.
+
+**Telemetry.** Append one JSONL record per checkpoint `{ts, skill, run_slug, phase, est_tokens_before, action, est_tokens_after, compactions_to_date}` to `docs/tmp/execute-plan/<plan-slug>/context.jsonl` (gitignored, per-run; substitute the resolved `{tmp_dir}` for the `docs/tmp/` prefix shown when facts.md overrides the default).
+
+**Phase 4 archive ordering (anchored, not optional).** As a Phase 4 step performed BEFORE the pre-archive stage, the parent copies the run's `context.jsonl` to `docs/tmp/context-telemetry/<plan-slug>.jsonl`. Phase 5's session-tmp cleanup removes the whole run directory; this copy is what keeps the completed run's telemetry, because the archived telemetry file outlives the run directory it was copied from.
 
 ### Plan-file edits (skill-gate)
 
@@ -535,7 +586,7 @@ Use the **Implement Task** template from [subagent-prompts.md](subagent-prompts.
 
 Pass: plan file path, task number/title, full task section text, `## Validation Commands`, `Files:` list, and `<IMPLEMENT_LOG_PATH>` (see [agent-logs.md](agent-logs.md)).
 
-**Batch option (disjoint tasks):** When the next K unchecked tasks, taken as a prefix of the unchecked queue in canonical document order with a cap of four, have pairwise-disjoint canonical `Files:` sets and the combined member file count is capped at 8, the orchestrator MAY batch them into ONE implement sub-agent launch (a **batch implement launch**) using the **Implement Task Batch** template from [subagent-prompts.md](subagent-prompts.md) instead of one launch per task, passing each member's task-local validation command, the group id, the active member ordinal, the member policy token, the anchor session id, and the per-task implement log paths. The orchestrator passes the driver's batch opt-in flag when claiming a batch and declines the option by claiming without the flag (a no-flag claim is today's single-task claim); the driver computes the batch membership as the maximal disjoint prefix (cap of four, canonical document order, no skipping past an overlapping task, and the combined member file count capped at 8). The batch worker uses one session and implements only the active member at a time, returns a member checkpoint at each task boundary, and resumes the same session for the next member with a fresh member policy token and moving baseline, writing each member's evidence into its own task-<N>-implement.log.md (create or append per [agent-logs.md](agent-logs.md)), so every member's Step 1.4 done reads its own preceding-step log exactly as today. Downstream stays exactly as today: per-task done commits in document order, per-task verification per the Step 1.2 exit criteria, per-task checkbox flips with a fresh marker refresh per write, per-task driver checkpoints, and K commits with no batch-level commit. Guardrail: never batch tasks carrying host-wiring exception receipts, inclusion-gate ambiguity, or overlapping files. The batch decision and membership are recorded in the session manifest. When a failure in batch task j stops the batch, earlier batch tasks verify, checkpoint, and commit normally, and task j and later recover through the standard fix path. The inclusion hard gate runs on every batched task before the single launch.
+**Batch option (disjoint tasks):** When the next K unchecked tasks, taken as a prefix of the unchecked queue in canonical document order with a cap of four, have pairwise-disjoint canonical `Files:` sets and the combined member file count is capped at 8, the orchestrator MAY batch them into ONE implement sub-agent launch (a **batch implement launch**) using the **Implement Task Batch** template from [subagent-prompts.md](subagent-prompts.md) instead of one launch per task, passing each member's task-local validation command, the group id, the active member ordinal, the member policy token, the anchor session id, and the per-task implement log paths. The orchestrator passes the driver's batch opt-in flag when claiming a batch and declines the option by claiming without the flag (a no-flag claim is today's single-task claim); the driver computes the batch membership as the maximal disjoint prefix (cap of four, canonical document order, no skipping past an overlapping task, and the combined member file count capped at 8). The batch worker uses one session and implements only the active member at a time, returns a member checkpoint at each task boundary, and resumes the same session for the next member with a fresh member policy token and moving baseline, writing each member's evidence into its own task-<N>-implement.log.md (create or append per [agent-logs.md](agent-logs.md)), so every member's Step 1.4 done reads its own preceding-step log exactly as today. Downstream stays exactly as today: per-task done commits in document order, per-task verification per the Step 1.2 exit criteria, per-task checkbox flips with a fresh marker refresh per write, per-task driver checkpoints, and K commits with no batch-level commit; sanctioned exception, a member held by a Step 1.2b blocking verdict (holding and done ordering per Step 1.2b Rounds). Guardrail: never batch tasks carrying host-wiring exception receipts, inclusion-gate ambiguity, or overlapping files. The batch decision and membership are recorded in the session manifest. When a failure in batch task j stops the batch, earlier batch tasks verify, checkpoint, and commit normally, and task j and later recover through the standard fix path. The inclusion hard gate runs on every batched task before the single launch.
 
 **Exit criteria (sub-agent must satisfy before returning):**
 
@@ -547,6 +598,22 @@ Pass: plan file path, task number/title, full task section text, `## Validation 
 - No unrelated files changed outside the task's `Files:` list (unless the plan explicitly requires cross-file wiring).
 
 If the sub-agent reports failure or tests do not pass: do not mark checkboxes; do not launch `done`. Diagnose and immediately launch a focused fix sub-agent or perform the bounded inline recovery, then re-run implement verification. Do not ask the user for a routine restart confirmation; pause only when the recovery budget, a hard gate, or explicit user direction requires it.
+
+### Step 1.2b: Intermediate task review
+
+Runs between Step 1.2 exit verification and Step 1.3 checkbox marking so review fixes fold into the task's single done commit. The review runs for every task and per member under a Step 1.2 batch launch at that member's checkpoint. Skipped only when the plan header declares `Intermediate reviews: off`; the Recovery path does not run this step.
+
+**Changed context only:** the task's `Files:` list, the working-tree diff of that task's changes against the pre-task HEAD (plus new untracked `Files:` entries), the task section text, and fresh validation output; never the whole branch diff.
+
+**Worker set:** resolve the complexity tier per `review-panel-selection.md` **Per-task intermediate review selection** (consumes the task's `Review tier:` line when present; derive the tier when absent). Launch the tier's workers with the **Intermediate task review worker (Step 1.2b)** template from [subagent-prompts.md](subagent-prompts.md), in parallel within the tier.
+
+**Rounds:** union the tier's worker verdicts into the pass verdict: any blocking finding makes the pass verdict blocking; otherwise any valid finding makes it `backlogged-candidates`; otherwise `clean`. One round when the verdict is clean; when the pass verdict is blocking, a focused fix of those findings plus ONE focused re-review of the changed context with the owning workers; cap 2 rounds then stop for user direction. Under a Step 1.2 batch launch, a member's blocking verdict holds that member's pipeline: the focused fix and its focused re-review launch only after the batch implement launch returns, and held members' done commits run in document order before the next Phase 1 iteration.
+
+**Off-plan findings:** valid findings and improvement suggestions not causally related to the plan are never fixed in-task; before Step 1.4 launches they become durable backlog items with the Driving force line per receiving-review Backlog capture, and repository-file captured items ride the task's done commit; an external or non-tracked destination records its exception on the task's `inter_review` line. An off-plan finding flagged `blocking: yes` is resolved by capture, not by fix: once its backlog item is recorded, the pass verdict records `backlogged-candidates`.
+
+**Record:** append a lightweight pass record to `task-<N>-review.log.md`, and append one `inter_review task <N>:` line to `manifest.md` (tier, workers, rounds, verdict, backlog paths) before Step 1.4; the line is required at the cap-stop and at the timeout stop too, recording verdict `failed-relaunch-exhausted` when the round cap or the recovery budget was exhausted, regardless of the last worker verdict. Do not launch the Step 1.4 `done` sub-agent while blocking findings are unresolved or the off-plan backlog items are uncaptured (Hard Gate 25).
+
+**Timeout:** intermediate panels inherit the 20-minute timeout and the focused-relaunch path defined under Sub-Agent Launch Rules.
 
 ### Step 1.3: Mark plan progress
 
@@ -570,7 +637,7 @@ Skip the upkeep run on personal projects or when migration-complete is false (su
 Launch a sub-agent using your agent's sub-agent execution capability.
 Use the **Done (per task)** template from [subagent-prompts.md](subagent-prompts.md).
 
-Pass the plan's commit line when present (e.g. `Commit: feat: ...`), `<IMPLEMENT_LOG_PATH>` for the task just completed, and `manifest.md` path. The sub-agent **reads the implement log before `learn`**, then runs the full `done` skill (learn → docs-branch → commit) scoped to this task's changes.
+Pass the plan's commit line when present (e.g. `Commit: feat: ...`), `<IMPLEMENT_LOG_PATH>` for the task just completed, and `manifest.md` path. When Step 1.2b ran for the task, also pass `<TASK_REVIEW_LOG_PATH>` (`task-<N>-review.log.md`) and the captured backlog paths recorded on the task's `inter_review` line; omit the review log under the `Intermediate reviews: off` opt-out and on the Recovery path, where Step 1.2b does not run. The sub-agent **reads the implement log before `learn`**, then runs the full `done` skill (learn → docs-branch → commit) scoped to this task's changes.
 
 **Do not advance to the next task until `done` completes successfully.**
 
@@ -579,7 +646,7 @@ Pass the plan's commit line when present (e.g. `Commit: feat: ...`), `<IMPLEMENT
 1. `done` sub-agent confirmed it read `<IMPLEMENT_LOG_PATH>`.
 2. `done` sub-agent returned a commit SHA, or an explicit justified `nothing to commit`.
 3. `git log -1 --oneline` in the repo shows that commit at HEAD (or the user-visible branch tip moved).
-4. `git status` has no unstaged/uncommitted files from the completed task's `Files:` list; if it does, relaunch `done` or a fix sub-agent; do **not** open Task N+1.
+4. `git status` has no unstaged/uncommitted files from the completed task's `Files:` list, and every repository-file backlog path on the task's `inter_review` line is included in the done commit; if either fails, relaunch `done` or a fix sub-agent; do **not** open Task N+1.
 
 ### Step 1.5: Report and continue (auto; no prompt)
 
@@ -772,7 +839,7 @@ If Step 3.2 shows no unresolved blocking findings, skip Step 3.3's launch but st
 1. Address sub-agent returned `<ADDRESS_LOG_PATH>` and the file is non-empty.
 2. Staging doc statuses updated (`done`, `drop`, or justified `pending`).
 3. Address log remaining-blocking section parsed, or staging re-read for unresolved `blocking: true`.
-4. Every valid finding not fixed in this iteration has a durable backlog item (path recorded on the finding, in the address log when Step 3.3 launched, or in the skip-path disposition note); a finding held `pending` for the fix-risk user decision (Hard Gate 23) follows the **Backlog capture** returned-for-ask exception (`receiving-review`).
+4. Every valid finding not fixed in this iteration has a durable backlog item that records its Driving force line per receiving-review Backlog capture (path recorded on the finding, in the address log when Step 3.3 launched, or in the skip-path disposition note); a finding held `pending` for the fix-risk user decision (Hard Gate 23) follows the **Backlog capture** returned-for-ask exception (`receiving-review`).
 5. On the Step 3.3-skip path, when Step 3.2 left non-blocking residuals, the skip-path receiving-review pass ran and every valid unfixed finding carries a durable backlog item, recorded in a short disposition note appended to `manifest.md` (finding, fixed or deferred, backlog item path); with no residuals, no pass is required and this item passes; items 1-3 apply only when Step 3.3 launched, and on the skip path this item governs.
 6. A returned-for-ask presentation is outstanding only until it is discharged, and the run never increments its round with the ask outstanding. An interactive run performs the fix-risk ask before returning to Step 3.1 (the wait applies before the next Step 3.1 launch; the Step 3.5 stop row may fold the ask into the user ask). A non-interactive run discharges it per the Fix-risk section: for a non-blocking ask, recording the fix-risk rationale and returned-for-ask marker per review-staging's receiving-review consumer row IS the discharge, after which the loop may continue and increment rounds, and the run surfaces the recorded returned-for-ask question in the exit report; a must-stay-blocking ask is never discharged by recording and stops for direction at the Step 3.5 stop row.
 7. When the round fanned: the base address log and every per-worker address log exist and are non-empty, every worker patch has passed the parent scope and attempt witness, the grouping and final worker statuses are recorded in machine state and the manifest, and the sidecar carries `extensions.address_fanout` (shape per the review-staging skill's Address fan-out accounting subsection); a missing item relaunches only an eligible affected subset, and never relaunches an attempt whose termination or scope is unverified.
@@ -827,8 +894,6 @@ Pass review round number, review doc path, whether address-review ran, and **pre
 - `manifest.md` path (traceability; not a substitute for worker logs)
 
 The sub-agent **reads those preceding-step logs before `learn`**; not implement logs or prior review rounds; then runs the full `done` skill (learn → docs-branch → commit) for this iteration's changes.
-
-When the done sub-agent returns, the parent records the relayed recurrence status it carried against the `recurrence_groups` line in `manifest.md` (the Step 3.2 evaluation owns the line's semantics); a `recurrence status: none recorded` relay is recorded as no line.
 
 **Do not return to Step 3.5 until done sub-agent succeeds.**
 
@@ -930,12 +995,39 @@ Delete the execute-plan session directory **only after the full workflow succeed
 3. Phase 3 exited after one fresh blocking-clean review of the current digest, after a satisfied recorded residual policy with its exit report (the Residual-acceptance exit; the review gate accepts the exit report's backlogged-residual tally in place of zero blocking findings), or the user explicitly accepted a documented stop.
 4. Last Step 3.4 `done` completed successfully.
 5. Plan file exists at the resolved completed path, the archive gate's `declared_destination` (Phase 4 archive done).
+6. Telemetry archived: the archived telemetry file `docs/tmp/context-telemetry/<plan-slug>.jsonl` is present (the Phase 4 copy of the run's `context.jsonl`, made before the pre-archive stage per **Context budget checkpoints**; the removal below deletes the run directory but never this copy).
 
 **If any item is false**; do **not** remove tmp files (preserve for resume, debugging, or `learn` on retry).
 
 **Terminal receipt (before removal):** The runtime driver's terminal operation is the gate, never the Markdown audit receipt. While `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` still exists, call the continuation driver's terminal operation at its final terminal stage (the default stage; the pre-archive stage already ran before the Phase 4 move) with the archived-plan path, the last commit SHA, and the Phase 5 success checklist; the final-stage success stdout does not echo the gate fields, so re-read the manifest's `terminal_receipt` (or issue a follow-up resume/continue call), which records `workflow_state: complete` and the gate's `plan_digest`, and confirm it. Only after the driver-verified receipt exists, mirror the verified fields (`workflow_state: complete`, archived-plan path, last commit SHA, `plan_digest`) into `manifest.md` as the human audit receipt; that synchronization step is never the gate. Capture the verified receipt fields into the final user report. Do **not** delete the session directory before the driver terminal receipt is written, re-read, and mirrored. A missing session directory or an `active` machine manifest is evidence that execution is still in progress, not a reason to return a final answer.
 
 **Exit-path throwaway-script cleanup (every terminal exit, not just success):** The success-only gate above is correct for `.md` logs (which have resume/`learn` value), but it is the wrong gate for throwaway scripts and scratch data. On ANY terminal exit (user interrupt, max-rounds stop, handoff, crash) where Phase 5 success cleanup did not run, the orchestrator (or the operator before the next `docs-branch` sync) must audit `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for throwaway `.py`/`.sh`/`.csv`/`.txt`/`__pycache__` files and scratch dirs such as `mutant-*` / `mutants/`, and either delete them or relocate them to repo-root `tmp/` per `agent_workflow_guidelines.md` §50.3.1. Reason: `docs-branch` is add-only and never auto-prunes, so throwaway scripts that ride along with the `.md` logs get synced permanently and accumulate across plans. Keep the `.md` logs and `manifest.md`; drop the scripts and mutant scratch trees.
+
+**Ad-hoc-worktree closeout (before any removal):** when the checkout is a linked worktree, detect it by resolving `git rev-parse --git-dir` and `git rev-parse --git-common-dir` to absolute paths (`cd ... && pwd`) and comparing them (raw rev-parse output is relative at the repo root and absolute from subdirectories, so normalization is load-bearing); when the two resolved paths are equal the step is a documented no-op, and when unequal, run the migration below and gate removal on it.
+
+```bash
+# Ad-hoc-worktree closeout: migrate gitignored run artifacts to the main
+# checkout BEFORE any worktree removal. Worktree removal is allowed only
+# after verified migration; if the main checkout is mid-merge, mid-rebase,
+# or done-locked, retry the migration and do not remove the worktree while
+# blocked. Normalized path comparison (r1 F5, r2 F4 cwd fix): raw rev-parse
+# output is relative at the repo root and absolute from subdirectories, so
+# both paths are resolved through cd+pwd before comparing; equal in the
+# main checkout, unequal in a linked worktree.
+GIT_DIR_P="$(cd "$(git rev-parse --git-dir)" && pwd)"
+GIT_COMMON_P="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
+if [ "$GIT_DIR_P" != "$GIT_COMMON_P" ]; then
+  MAIN_ROOT="$(cd "$(dirname "$GIT_COMMON_P")" && pwd)"
+  CLOSEOUT_SCRIPT="${WORKTREE_CLOSEOUT_SCRIPT:-$(git rev-parse --show-toplevel)/scripts/worktree_closeout_migrate.py}"
+  [ -f "$CLOSEOUT_SCRIPT" ] || CLOSEOUT_SCRIPT="${HOME}/.ai-playbook/scripts/worktree_closeout_migrate.py"
+  python3 "$CLOSEOUT_SCRIPT" migrate \
+    --baseline "{tmp_dir}/execute-plan/<PLAN_SLUG>/closeout-baseline.json" \
+    --source "$(git rev-parse --show-toplevel)" \
+    --target "$MAIN_ROOT" \
+    --manifest "{tmp_dir}/execute-plan/<PLAN_SLUG>/closeout-migration.json" \
+    --suffix "<PLAN_SLUG>" || { echo "closeout migration failed; do NOT remove the worktree" >&2; exit 1; }
+fi
+```
 
 **Removal (orchestrator runs directly; not a sub-agent; only after terminal receipt):**
 
@@ -959,6 +1051,7 @@ Report successful plan completion to the user, including the verified terminal-r
 |-----------|--------------|
 | Implement task | No |
 | Done (per task / per review iteration) | No |
+| Intermediate task review workers | Yes (parallel within the tier) |
 | Phase 3 review lens workers | Yes (launch the selected panel in parallel) |
 | Phase 3 nested "Code Review" orchestrator | No (forbidden by default; recovery template only) |
 | Address review | Fan-out: up to 3 file-affinity workers in parallel; merge and commit stay parent-owned; otherwise No |
@@ -969,14 +1062,14 @@ Report successful plan completion to the user, including the verified terminal-r
 - Pass absolute plan path and task excerpt in every prompt.
 - Sub-agents must read the referenced skills (`tdd-guide`, `unit-test-runner`, `done`, `doing-code-review`, `receiving-review`) from `~/.agents/skills/` (or `agents/skills/` in the skills repository per `skills_repo_path` in `~/.ai-playbook/facts.md`).
 
-**Timeout:** If a sequential sub-agent (implement, done, address-review) or the Phase 3 panel wall-clock has not produced its required artifacts within 20 minutes, automatically use the defined focused relaunch or bounded inline recovery path without asking for confirmation. For Step 3.1, "required artifacts" means non-empty staging doc **and** non-empty `<REVIEW_LOG_PATH>` (see Step 3.1 Timeout). Ask only after the recovery budget, review-round cap, or a genuine user-direction hard gate is reached.
+**Timeout:** If a sequential sub-agent (implement, done, address-review), the Step 1.2b intermediate review panel (same 20-minute bound and focused-relaunch path), or the Phase 3 panel wall-clock has not produced its required artifacts within 20 minutes, automatically use the defined focused relaunch or bounded inline recovery path without asking for confirmation. For Step 3.1, "required artifacts" means non-empty staging doc **and** non-empty `<REVIEW_LOG_PATH>` (see Step 3.1 Timeout). Ask only after the recovery budget, review-round cap, or a genuine user-direction hard gate is reached.
 
 ## Hard Gates
 
 1. **Branch setup before implementation**; Phase 0 must run and complete (definitive match auto-continue, branch created with tracking, or explicitly declined by user) before Phase 1 begins. Never skip Step 0.3 verification or start work on detached HEAD.
 2. **No checkbox without green tests**; never mark `- [x]` before validation passes.
 3. **One implement launch per iteration, never parallel; a launch may batch up to four file-disjoint tasks as one batch implement launch under the Step 1.2 batch contract; batching never creates a batch-level commit and never launches implement or done in parallel.** The never-parallel clause is what makes a batch one launch rather than parallel launches, and the address fan-out's parallelism stays governed by the Step 3.3 contract and the launch-rules table, so this gate's clause scopes to implement and done only.
-4. **Done after every task**; launch the `done` **sub-agent** (Step 1.4) and verify a commit at HEAD before starting the next task; overrides the plans skill handoff default of session-end-only `done`. Parent-agent implementation does not satisfy this gate.
+4. **Done after every task**; launch the `done` **sub-agent** (Step 1.4) and verify a commit at HEAD before starting the next task; overrides the plans skill handoff default of session-end-only `done`. Parent-agent implementation does not satisfy this gate. Sanctioned exception: a member of a Step 1.2 batch held by a Step 1.2b blocking verdict; subsequent batch members implement before the held member's done, and held members' done commits run in document order once the batch returns (Step 1.2b Rounds).
 5. **Done after every review iteration**; launch the `done` **sub-agent** (Step 3.4) before the next review round; address-review fixes must not accumulate uncommitted across iterations.
 6. **Review scope (two tiers)**; **Explicit must-fix** paths from the plan are always in scope. Unlisted paths use **plan-related extension**: keep findings only when causally tied to the plan; drop unrelated issues. Do not treat the explicit list as a ceiling that hides plan-caused defects elsewhere on the branch.
 7. **One fresh blocking-clean review of the current digest**; the quality bar still requires the mutator matrix and required risk lenses; exception: when a recorded residual policy is satisfied (the Residual-acceptance exit per the Review end condition table's Residual-acceptance exit row), the gate is satisfied by that exit's named-set and backlog conditions instead of zero blocking findings.
@@ -997,6 +1090,7 @@ Report successful plan completion to the user, including the verified terminal-r
 22. **Parent-orchestrated Phase 3 panel**; the execute-plan parent runs `doing-code-review` and launches lens workers directly. Do not nest a "Code Review" sub-agent that re-orchestrates the panel when the parent can fan out. Write the review heartbeat log before waiting. Enforce the 20-minute Step 3.1 artifact timeout.
 23. **Fix-risk triage before more folding**; when fixes keep regenerating findings across rounds, apply `receiving-review` **Fix-risk triage when fixes regenerate findings** before folding further, and verify scoped fixes with the focused targeted round composed per `review-panel-selection.md` (Targeted follow-ups).
 24. **Reconciliation before continued churn**; the Phase 3 trigger is evaluated mechanically every round (Step 3.2) with the `recurrence_groups` manifest line as its witness, and invocation happens in-loop before the next panel, not only at the cap: while an instance is `triggered`, invoke `review-reconciliation` before another panel or fold. The execute-plan parent remains the original orchestrator and must run the fresh normal panel after any reconciliation change.
+25. **Intermediate review before done**; launch the Step 1.4 `done` sub-agent only after the task's `inter_review` manifest line records verdict `clean` or `backlogged-candidates` with every recorded backlog path captured, unless the `Intermediate reviews: off` opt-out or the Recovery carve-out applies (Step 1.2b does not run on the Recovery path); a `failed-relaunch-exhausted` verdict stops the run for user direction instead of launching done.
 
 ## User Interruption
 
@@ -1057,8 +1151,11 @@ Only `done` performs git commits. Invoked after each implementation task (Step 1
 ### Consumes `doing-code-review` skill (parent-orchestrated in Phase 3)
 After all tasks, the execute-plan **parent** runs `doing-code-review` as the review orchestrator and launches lens workers as sub-agents. Staging doc is the handoff artifact. Uses full-branch diff (`<BASE_BRANCH>...HEAD`). Applies two-tier Review Scope: explicit must-fix plus plan-related extension for unlisted paths. Nested "Code Review" sub-agent only as recovery when the parent cannot fan out (see Step 3.1).
 
+### Consumes `review-panel-selection` skill (per-task intermediate tiers)
+Step 1.2b resolves each task's intermediate review worker set from `review-panel-selection.md` **Per-task intermediate review selection**; tier policy lives only in that subsection and this skill never restates it.
+
 ### Consumes `receiving-review` skill (sub-agent)
-Triages provisional findings between rounds. Phase 3 exit depends on unresolved `blocking: true`, not raw severity counts. Valid findings not fixed in the run must leave durable backlog items per its **Backlog capture** rule; the Step 3.3 verification gate checks the artifact exists. Hard Gate 23 applies its **Fix-risk triage when fixes regenerate findings** section when a regenerating loop would otherwise keep folding.
+Triages provisional findings between rounds. Phase 3 exit depends on unresolved `blocking: true`, not raw severity counts. Valid findings not fixed in the run must leave durable backlog items per its **Backlog capture** rule; the Step 3.3 verification gate checks the artifact exists. Step 1.2b uses the same **Backlog capture** rule for a task's off-plan findings, captured before that task's done commit and recorded on its `inter_review` line. Hard Gate 23 applies its **Fix-risk triage when fixes regenerate findings** section when a regenerating loop would otherwise keep folding.
 
 ### Consumes `review-reconciliation` skill
 Phase 3 evaluates the trigger mechanically at Step 3.2 with the `recurrence_groups` manifest line as its witness and invokes reconciliation in-loop at Step 3.5 before the next panel. It receives the review history and mutation scope, but the execute-plan parent owns the subsequent fresh panel and digest gate.

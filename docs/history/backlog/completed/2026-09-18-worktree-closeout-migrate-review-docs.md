@@ -1,6 +1,6 @@
 # Backlog: worktree closeout must migrate fresh review docs to the main checkout
 
-Status: open
+Status: done
 Workflow: backlog
 Source: Andrey 2026-09-18: "we might need execution or plan authoring when it works on worktree and squash merge afterwards to also bring all freshly created review docs from the worktree to the main project and branch." Motivated by the same post-mortem as the parked legacy verdict-grammar plan (whose coverage gaps name the main-checkout-bound corpus); root-caused 2026-09-18: zero worktree handling exists in execute-plan, done, or any maintenance asset, the temp-worktree squash pattern lives only in session memories.
 Severity: Medium (silent evidence loss: every worktree run that ends in squash-merge plus worktree deletion destroys its review staging docs and session logs; certification chains break retroactively)

@@ -1,6 +1,6 @@
 # Backlog: context budget and telemetry for long-running skills
 
-Status: open
+Status: done
 Workflow: backlog
 Source: Andrey 2026-09-18: "another issue with maintenance as well as with other long running skills like execute-plan is that the context gets too big which leads to excessive expense in tokens and often missing important details. We should periodically measure context and keep it shorter than 300k. Also we might need to keep track of context size for later analysis."
 Severity: Medium (recurring token cost on every long run; fidelity loss, early-phase details dropping out of attention or runtime auto-summarization, has already caused missed-detail rework in long review loops)

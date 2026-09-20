@@ -2,9 +2,10 @@
 """Quota window probe pure core.
 
 Parses Z.ai/ZCode limit responses and Codex rollout rate-limit records into a
-uniform limit contract, selects the binding (earliest resetting) window, and
-evaluates pause thresholds. Pure stdlib, no network; Task 2 adds transports
-behind injectable interfaces on top of this module.
+uniform limit contract, selects the binding (earliest resetting) window,
+evaluates pause thresholds, and prices and fit-checks a proposed --fire-at
+instant (evaluate_fire_at, P6 origin 2). Pure stdlib, no network; Task 2 adds
+transports behind injectable interfaces on top of this module.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import fcntl
 import json
 import math
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import pathlib
 import sys
 import time
@@ -368,6 +369,209 @@ def build_report(runtime: str, limits: Sequence[Mapping],
     return report
 
 
+# --- Task 1 (P6 origins 1-2): probe --fire-at mode (pricing and fit) ---
+
+# The observed cadence of the provider's primary token window (the same
+# five-hour window family the maintenance surfaces schedule for): the report
+# cannot describe a window that has not started, so the cadence anchored at
+# the reported reset_at_epoch fills exactly that gap.
+FIRE_AT_CADENCE_SECONDS = 5 * 3600
+
+_FIRE_AT_EXIT_CODES = {"fire": 0, "defer-peak": 2, "defer-reset": 3}
+
+
+def _parse_hhmm(value: str) -> int:
+    """Minutes-of-day for a strict HH:MM string; ValueError when malformed."""
+    parts = value.split(":")
+    if len(parts) != 2:
+        raise ValueError("expected HH:MM, got {!r}".format(value))
+    hours, minutes = int(parts[0]), int(parts[1])
+    if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+        raise ValueError("HH:MM out of range, got {!r}".format(value))
+    return hours * 60 + minutes
+
+
+def _split_peak_window(value: str) -> tuple[str, str]:
+    """Split an HH:MM-HH:MM peak window into its two validated halves.
+
+    Review r1 F3: a reversed or equal range (``start >= end``) silently
+    disables pricing for every instant (the peak predicate can never hold),
+    so it is a malformed range, not a midnight wrap: reject it here so the
+    CLI wiring surfaces it as a usage error.
+    """
+    left, sep, right = value.partition("-")
+    if not sep or ":" not in left or ":" not in right:
+        raise ValueError("expected HH:MM-HH:MM, got {!r}".format(value))
+    start_minutes = _parse_hhmm(left)
+    end_minutes = _parse_hhmm(right)
+    if start_minutes >= end_minutes:
+        raise ValueError(
+            "peak window start must be before end (no reversed or same-minute "
+            "range), got {!r}".format(value)
+        )
+    return left, right
+
+
+def _fire_at_is_peak(fire_local: datetime, start_minutes: int, end_minutes: int,
+                     straddle_minutes: int) -> bool:
+    """Peak when the weekday is Mon-Fri and start <= t < end (end exclusive).
+
+    ``straddle_minutes`` extends the window backwards: a fire time within N
+    minutes before a weekday window start counts as peak too (the execution
+    lane's straddle margin).
+    """
+    if fire_local.weekday() > 4:  # Monday == 0 .. Sunday == 6
+        return False
+    minute_of_day = fire_local.hour * 60 + fire_local.minute
+    return (start_minutes - straddle_minutes) <= minute_of_day < end_minutes
+
+
+def _fire_at_peak_window_end(fire_local: datetime, end_minutes: int) -> int:
+    """Epoch of the pricing window's end on the fire instant's local day."""
+    end_local = fire_local.replace(
+        hour=end_minutes // 60, minute=end_minutes % 60, second=0, microsecond=0
+    )
+    return int(end_local.timestamp())
+
+
+def _fire_at_window_end(slot_epoch: int, reset_at_epoch: int) -> int:
+    """End of the quota window live at ``slot_epoch`` (five-hour cadence).
+
+    The reported primary window's end while the slot lies inside it
+    (``slot < reset_at_epoch``); the containing cadence window's end once the
+    slot is at or beyond the reported reset - an instant exactly at
+    ``reset_at_epoch`` evaluates against the fresh cadence window, never
+    negatively against the stale reset.
+    """
+    if slot_epoch < reset_at_epoch:
+        return reset_at_epoch
+    k = (slot_epoch - reset_at_epoch) // FIRE_AT_CADENCE_SECONDS
+    return reset_at_epoch + FIRE_AT_CADENCE_SECONDS * (k + 1)
+
+
+def _fire_at_verdict(status: str, fire_iso: str, verdict: Optional[str],
+                     peak: bool, fits: Optional[bool],
+                     minutes_remaining: Optional[int],
+                     defer_epoch: Optional[int],
+                     tz: timezone) -> dict:
+    """The fixed seven-key fire-at output contract."""
+    defer_iso = (
+        None if defer_epoch is None
+        else datetime.fromtimestamp(defer_epoch, tz).isoformat()
+    )
+    return {
+        "status": status,
+        "fire_at": fire_iso,
+        "verdict": verdict,
+        "peak": peak,
+        "fits": fits,
+        "minutes_remaining_at_fire": minutes_remaining,
+        "defer_to": defer_iso,
+    }
+
+
+def evaluate_fire_at(fire_epoch: int, now: Optional[float] = None,
+                     need_minutes: Optional[int] = None,
+                     straddle_minutes: int = 0,
+                     peak_start: str = "14:00", peak_end: str = "18:00",
+                     peak_offset_hours: int = 8,
+                     limits: Optional[Sequence[Mapping]] = None) -> dict:
+    """Price and fit-check one proposed fire instant (P6 origin 2).
+
+    Verdict ladder (one pass, no loops): unfit at the fire instant (when
+    ``need_minutes`` is present and minutes_remaining_at_fire < need_minutes)
+    -> ``defer-reset`` to the containing window's reset; else peak -> the
+    deferred slot at the pricing window's end is fit-checked the same way
+    before the deferral is blessed (slot unfit -> ``defer-reset``, slot fit ->
+    ``defer-peak`` to the window end); else ``fire``. Starvation beats
+    pricing, never fit. Peak computation is pure wall clock in the fixed
+    ``timezone(timedelta(hours=peak_offset_hours))`` (Mon-Fri,
+    ``peak_start <= t < peak_end``, end exclusive); ``straddle_minutes``
+    extends the window backwards.
+
+    Window model: ``minutes_remaining_at_slot = (window_end_of(slot) - slot)
+    // 60`` where ``window_end_of`` returns the reported primary
+    ``reset_at_epoch`` while the slot lies inside the reported window and the
+    containing cadence window's end (``reset_at_epoch + 18000 * (k + 1)`` for
+    the largest k with ``reset_at_epoch + 18000 * k <= slot``) at or beyond
+    it - an instant exactly at ``reset_at_epoch`` sees the fresh 300-minute
+    cadence window.
+
+    Unknown window data invents nothing: with ``need_minutes`` present, a
+    missing live primary window (a secondary-only binding never anchors a
+    child deferral) or a clamped primary (``reset_clamped`` marker: a bound,
+    not a real window end) yields ``status: "unknown"`` with a null verdict
+    and no deferral. Without ``need_minutes`` the mode is a pure pricing
+    computation: ``limits`` are never consulted and the fit fields stay null.
+
+    Output contract: ``{"status", "fire_at", "verdict", "peak", "fits",
+    "minutes_remaining_at_fire", "defer_to"}``; CLI exit 0 fire, 1 unknown,
+    2 defer-peak, 3 defer-reset.
+    """
+    if now is None:
+        now = time.time()
+    if limits is None:
+        limits = []
+    tz = timezone(timedelta(hours=peak_offset_hours))
+    start_minutes = _parse_hhmm(peak_start)
+    end_minutes = _parse_hhmm(peak_end)
+    fire_local = datetime.fromtimestamp(fire_epoch, tz)
+    fire_iso = fire_local.isoformat()
+    peak = _fire_at_is_peak(fire_local, start_minutes, end_minutes, straddle_minutes)
+    if need_minutes is None:
+        # Pure pricing: wall-clock derived only, no window data consulted.
+        if peak:
+            defer_epoch = _fire_at_peak_window_end(fire_local, end_minutes)
+            return _fire_at_verdict(
+                "ok", fire_iso, "defer-peak", True, None, None, defer_epoch, tz
+            )
+        return _fire_at_verdict("ok", fire_iso, "fire", False, None, None, None, tz)
+    # A live, unclamped primary window anchors every deferral; a secondary
+    # window never does (the runtime-fit rule computes on the primary), and
+    # a clamped reset is a bound, not a real window end.
+    live_primary = next(
+        (limit for limit in limits
+         if limit.get("kind") == "primary"
+         and isinstance(limit.get("reset_at_epoch"), (int, float))
+         and limit["reset_at_epoch"] > now),
+        None,
+    )
+    if live_primary is None or live_primary.get("reset_clamped"):
+        return _fire_at_verdict(
+            "unknown", fire_iso, None, peak, None, None, None, tz
+        )
+    reset = live_primary["reset_at_epoch"]
+
+    def window_end(slot_epoch: int) -> int:
+        return _fire_at_window_end(slot_epoch, reset)
+
+    minutes_at_fire = (window_end(fire_epoch) - fire_epoch) // 60
+    if minutes_at_fire < need_minutes:
+        # Starvation at the fire instant: fit outranks pricing; a fresh
+        # window is the only slot that reliably fits the child.
+        return _fire_at_verdict(
+            "ok", fire_iso, "defer-reset", peak, False, minutes_at_fire,
+            window_end(fire_epoch), tz,
+        )
+    if not peak:
+        return _fire_at_verdict(
+            "ok", fire_iso, "fire", False, True, minutes_at_fire, None, tz
+        )
+    # Peak and fitting: the deferred slot at the pricing window's end is
+    # fit-checked before the deferral is blessed - never a blessed-unfit
+    # exit 2.
+    slot_epoch = _fire_at_peak_window_end(fire_local, end_minutes)
+    slot_minutes = (window_end(slot_epoch) - slot_epoch) // 60
+    if slot_minutes < need_minutes:
+        return _fire_at_verdict(
+            "ok", fire_iso, "defer-reset", peak, True, minutes_at_fire,
+            window_end(slot_epoch), tz,
+        )
+    return _fire_at_verdict(
+        "ok", fire_iso, "defer-peak", peak, True, minutes_at_fire, slot_epoch, tz
+    )
+
+
 # --- Task 2: transports, runtime discovery, fail-open, flag write ---
 
 # Live Z.ai monitor endpoint (extracted from the ZCode desktop app bundle, 2026-09-13); the legacy https://api.z.ai/api/quota/limit answers 404-NOT_FOUND inside HTTP 200, which read as a permanent status: unknown; do not revert.
@@ -707,13 +911,104 @@ def run_probe(runtime: str,
     return add_secondary_report_only_reason(report)
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def _fire_at_cli(parser: argparse.ArgumentParser, args: argparse.Namespace,
+                 now: Optional[float] = None) -> int:
+    """--fire-at mode (P6 origin 2): price and fit-check one proposed fire time.
+
+    Early-dispatched by main() before the pause thresholds and the flag
+    writer; the mode never writes the guard flag. Exit 0 = fire as planned,
+    1 = status unknown or unusable window data, 2 = defer-peak, 3 =
+    defer-reset; argparse usage errors keep exit 2 and emit no JSON on
+    stdout, so consumers parse the JSON verdict and treat an empty report as
+    status unknown. ``now`` is an injected clock (review r1 F2): when given,
+    both the transport report's window parsing/filtering and the verdict's
+    live-primary check read it instead of the wall clock, so tests can pin
+    instants near the fixture windows deterministically; None keeps the real
+    clock.
+    """
+    try:
+        fire_dt = datetime.fromisoformat(args.fire_at)
+    except ValueError:
+        fire_dt = None
+    if fire_dt is None or fire_dt.tzinfo is None or fire_dt.utcoffset() is None:
+        # The caller must state the zone, mirroring the overlay's
+        # never-pin-local-hours rule; a naive wall-clock instant is refused.
+        parser.error(
+            "--fire-at requires an ISO 8601 instant with an explicit UTC "
+            "offset (+HH:MM form, for example 2026-09-23T15:00:00+08:00); "
+            "the caller must state the zone, local wall-clock hours are "
+            "never pinned"
+        )
+    fire_epoch = int(fire_dt.timestamp())
+    try:
+        peak_start, peak_end = _split_peak_window(args.peak_window)
+    except ValueError as exc:
+        parser.error("--peak-window invalid: {}".format(exc))
+    if args.straddle_minutes < 0:
+        parser.error("--straddle-minutes must be >= 0")
+    if args.need_minutes is not None and args.need_minutes < 0:
+        # Review r1 F4: a negative need vacates the fit leg entirely (every
+        # window fits); mirror the straddle guard and refuse it up front.
+        parser.error("--need-minutes must be >= 0")
+    try:
+        timezone(timedelta(hours=args.peak_offset_hours))
+    except ValueError:
+        parser.error(
+            "--peak-offset-hours must be strictly between -24 and 24, got "
+            "{}".format(args.peak_offset_hours)
+        )
+    limits: Optional[Sequence[Mapping]] = None
+    if args.need_minutes is not None:
+        # The fit half needs live window data from the normal transports;
+        # the pricing-only form (need_minutes absent) never invokes one.
+        try:
+            runtime = detect_runtime(
+                args.runtime, zcode_config=args.config, codex_sessions=args.sessions_dir
+            )
+        except Exception:
+            runtime = None
+        if runtime is None:
+            limits = []
+        else:
+            report = run_probe(runtime, config_path=args.config,
+                               sessions_dir=args.sessions_dir, url=args.url,
+                               now=now)
+            limits = report.get("limits") or []
+    verdict = evaluate_fire_at(
+        fire_epoch,
+        now=now,
+        need_minutes=args.need_minutes,
+        straddle_minutes=args.straddle_minutes,
+        peak_start=peak_start,
+        peak_end=peak_end,
+        peak_offset_hours=args.peak_offset_hours,
+        limits=limits,
+    )
+    json.dump(verdict, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    if verdict["status"] == "unknown":
+        return 1
+    return _FIRE_AT_EXIT_CODES[verdict["verdict"]]
+
+
+def main(argv: Optional[Sequence[str]] = None,
+         now: Optional[float] = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Quota window probe (stdlib only). Exit codes: 0 = pause decision, "
-            "1 = continue (including status unknown). Parse pause_decision "
-            "from the stdout JSON report, not from the exit code. Resets "
-            "beyond MAX_RESET_HORIZON_SECONDS ({} days) are clamped to that "
+            "Quota window probe (stdlib only). Default mode exit codes: 0 = "
+            "pause decision, 1 = continue (including status unknown). Parse "
+            "pause_decision from the stdout JSON report, not from the exit "
+            "code. With --fire-at the probe instead prices and fit-checks a "
+            "proposed fire time: exit 0 = fire as planned (off-peak and "
+            "fitting), 1 = status unknown or unusable window data (no "
+            "deferral invented), 2 = peak with a fitting deferred slot "
+            "(defer to the pricing window's end), 3 = unfit at the fire "
+            "instant or at the deferred slot (defer past the containing "
+            "window's reset); argparse usage errors keep their usual exit 2 "
+            "and emit no JSON on stdout, so parse the fire-at verdict from "
+            "the JSON and treat an empty report as status unknown; --fire-at "
+            "never writes the guard flag. Resets beyond "
+            "MAX_RESET_HORIZON_SECONDS ({} days) are clamped to that "
             "horizon at parse time (a clamped binding can still arm the flag "
             "at the clamped epoch); the flag writer additionally refuses any "
             "binding still beyond the horizon.".format(
@@ -731,7 +1026,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--sessions-dir", default=str(DEFAULT_CODEX_SESSIONS))
     parser.add_argument("--url", default=ZCODE_QUOTA_URL)
     parser.add_argument("--plan")
+    parser.add_argument("--fire-at")
+    parser.add_argument("--need-minutes", type=int, default=None)
+    parser.add_argument("--straddle-minutes", type=int, default=0)
+    parser.add_argument("--peak-window", default="14:00-18:00")
+    parser.add_argument("--peak-offset-hours", type=int, default=8)
     args = parser.parse_args(argv)
+    # --fire-at mode early-dispatches before the pause-threshold validation
+    # and the flag writer: it has its own exit contract and never writes the
+    # guard flag. The injected ``now`` clock (review r1 F2) matters only on
+    # this path; the default pause mode always reads the real clock.
+    if args.fire_at is not None:
+        return _fire_at_cli(parser, args, now=now)
     if args.min_protocol_minutes < 0:
         parser.error("--min-protocol-minutes must be >= 0")
     if args.plan_cost is not None and not (0 < args.plan_cost <= 100):
