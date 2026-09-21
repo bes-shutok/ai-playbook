@@ -250,7 +250,7 @@ project-specific:
 2b. **Company-wide convention** -> `company_guidelines_master` (facts key): a do/do-not rule shared by repositories of the same company or organization because they perform the same kind of work, even when product domains differ and the rule is not universal. Full rule in the company master; incident repos keep at most a concise witness pointer. Require the sibling search and company-portability gate (`learn` 4c) before choosing this over fork (4).
 3. **Concrete cross-project lesson** -> **user-level corpus** (`development_lessons.md` resolved
    from `shared_docs_dir`), strict-tagged (`**Principle:** Family X`, next `UL#N`). The user-level
-   corpus is gated by `lessons_index.py` (the `learn` Step 6.6 gate). The value of a corpus entry
+   corpus is gated by `lessons.py index` (the `learn` Step 6.6 gate). The value of a corpus entry
    is the incident witness; do not flatten a concrete lesson into a precept in `coding_guidelines.md`
    or a stack guideline file.
 4. **Project-specific** -> repo `development_lessons.md` (convention-tagged, `**Principle:** Family X`).

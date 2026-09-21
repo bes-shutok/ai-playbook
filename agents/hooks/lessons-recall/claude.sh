@@ -4,7 +4,9 @@
 # Reads the Claude hook JSON payload on stdin, extracts `.prompt` with python3
 # (NOT jq - see plan Design Invariant "Adapters parse stdin with python3 not
 # jq"; agy hosts may not have jq, and python3 is already required by the core),
-# pipes it to the agent-agnostic core, and builds the Claude envelope ONLY via
+# pipes it to the agent-agnostic core through the lessons hub (`lessons.py
+# recall`; the hub owns ALL lessons CLI dispatch, so direct module invocation
+# is never used), and builds the Claude envelope ONLY via
 # `json.dumps({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit",
 # "additionalContext": <core stdout>}})` when the core emits non-empty output
 # (dict construction, never f-string/concatenation; M3).
@@ -26,7 +28,7 @@
 set -u
 
 SESSION_CHANNEL="$HOME/.ai-playbook/scripts/session_channel.py"
-CORE="$HOME/.ai-playbook/scripts/lessons_recall.py"
+HUB="$HOME/.ai-playbook/scripts/lessons.py"
 
 # Read the entire stdin payload.
 payload="$(cat)"
@@ -60,11 +62,11 @@ else
     session_args=()
 fi
 
-# Pipe the prompt to the core via --prompt; capture stdout; discard stderr;
-# never fail (a recall hook NEVER blocks).
+# Pipe the prompt to the hub's recall subcommand via --prompt; capture stdout;
+# discard stderr; never fail (a recall hook NEVER blocks).
 # NOTE: `${arr[@]+"${arr[@]}"}` is the bash-3.2-safe empty-array expansion
 # under `set -u` (bare `"${arr[@]}"` errors on an empty array in macOS bash).
-out="$(python3 "$CORE" --prompt "$prompt" ${session_args[@]+"${session_args[@]}"} 2>/dev/null || true)"
+out="$(python3 "$HUB" recall --prompt "$prompt" ${session_args[@]+"${session_args[@]}"} 2>/dev/null || true)"
 
 # Build the envelope ONLY via json.dumps dict construction when the core emitted
 # a non-empty value.

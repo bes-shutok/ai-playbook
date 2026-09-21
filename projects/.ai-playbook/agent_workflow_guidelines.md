@@ -601,14 +601,14 @@ When generating any text artifact (PR descriptions, READMEs, skill docs, commit 
 | --- | --- | --- |
 | Compose | §39.3 self-check + skill scan steps | Before save/send |
 | Pre-commit | `check-no-em-dash.sh` (`staged` or `touched`) | Before `git commit` |
-| Session end | `done` skill Step 2.76 | Before staging prose files |
+| Session end | `done` skill pre-commit sweep gate run (em-dash-scan gate) | Before staging prose files |
 | CI / guardrail | Repo test or lint on agreed doc roots | On `mvn test` / PR |
 
 Portable script (default path): `~/.ai-playbook/scripts/check-no-em-dash.sh` (override via `CHECK_NO_EM_DASH_SCRIPT` in facts when keyed). Scans `*.md`, `*.mdc`, and instruction entrypoint filenames unless `CHECK_NO_EM_DASH_ALL=1`.
 
 39.5. **Optional agent-runtime hooks.** User-installed hooks (for example Cursor `preToolUse` on Slack/Atlassian MCP and prose file edits) add a second line of defense. They are **not** canonical policy storage and are not required for other agents to comply.
 
-39.6. **Product repos vs agent tooling.** Em-dash policy and enforcement belong in the **agent layer** (this section, `done` Step 2.76, `check-no-em-dash.sh` under the user playbook scripts). Do **not** add to a product/service repository: one-off fix scripts, guardrail tests, or numbered project-guidelines rules whose sole purpose is agent prose style. Cleaning em dashes in committed docs is fine; mechanical gates stay outside the product codebase unless the team explicitly adopts a human style guide for that repo.
+39.6. **Product repos vs agent tooling.** Em-dash policy and enforcement belong in the **agent layer** (this section, the `done` skill's pre-commit sweep gate run's em-dash-scan gate, `check-no-em-dash.sh` under the user playbook scripts). Do **not** add to a product/service repository: one-off fix scripts, guardrail tests, or numbered project-guidelines rules whose sole purpose is agent prose style. Cleaning em dashes in committed docs is fine; mechanical gates stay outside the product codebase unless the team explicitly adopts a human style guide for that repo.
 
 ## 40. Named Tools and Skills Must Be Visually Listed, Not Only Inline
 
@@ -823,7 +823,7 @@ When an implement sub-agent reports that work for the current task "was already 
 
 50.1. **Facts hold environment, not workflow policy.** `user_facts_path`, ownership facts, and repo `repo_facts_rel` store machine paths, accounts, domains, repo path keys, and local-only hygiene artifacts. They do **not** store portable numeric thresholds, loop limits, or skill completion criteria.
 
-50.2. **Skills own portable policy.** Byte budgets, retry counts, gate mode names, placement ladders, and "when to run" rules belong in the owning skill's `SKILL.md` (for example instruction size budget in `learn` Step 6.5 and `done` Step 2.8).
+50.2. **Skills own portable policy.** Byte budgets, retry counts, gate mode names, placement ladders, and "when to run" rules belong in the owning skill's `SKILL.md` (for example instruction size budget in `learn` Step 6.5 and the `done` pre-commit sweep gate run's instruction-size gate).
 
 50.3. **Scripts follow the same split.** Default behavior and constants live in the skill and in shared scripts tracked under repo-root `scripts/` (canonical source), synced to `~/.ai-playbook/scripts/` at runtime. Facts may point at a runtime script path when it varies by machine; facts must not restate the script's policy constants. Only secrets-bearing or machine-specific scripts (e.g. `sync-mcp-credentials.sh`, `public_hygiene_patterns_file`) remain gitignored under `~/.ai-playbook/scripts/`.
 
@@ -853,7 +853,7 @@ When an implement sub-agent reports that work for the current task "was already 
 
 ## 51. Instruction Context Loading: Always-On vs On Demand
 
-51.1. **Always-on entrypoints:** user-level `AGENTS.md`, repo `AGENTS.md`, applicable `facts.md`, and the triggered skill body for the current workflow. These fit a fixed byte budget (see `learn` Step 6.5 / `done` Step 2.8).
+51.1. **Always-on entrypoints:** user-level `AGENTS.md`, repo `AGENTS.md`, applicable `facts.md`, and the triggered skill body for the current workflow. These fit a fixed byte budget (see `learn` Step 6.5 / the `done` pre-commit sweep gate run's instruction-size gate).
 
 51.2. **On demand:** canonical guideline tiers (`project_guidelines_rel`, `company_guidelines_master`, files under `shared_docs_dir`, Layer 2 repo docs). Open only the **section or numbered rule** the task touches, not whole files every turn.
 

@@ -23,11 +23,100 @@ import execute_plan_runtime as runtime
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_PATH = ROOT / "projects/.ai-playbook/execute-plan-runtime-inventory.toml"
 CONTRACT_PATH = ROOT / "agents/skills/execute-plan/runtime-contract.md"
+ADAPTER_PROFILE_PATH = ROOT / "agents/skills/execute-plan/runtime-adapters/codex.md"
 RUNTIME_LAYOUT_PATH = ROOT / "projects/.ai-playbook/agent-runtime-layout.md"
 AGTERM_CATALOG_PATH = ROOT / "agents/skills/agterm/agent-runtimes.md"
 HOOK_PROBE_PATH = ROOT / "scripts/hooks_probe.py"
 EXPECTED_IDS_PATH = ROOT / "scripts/testdata/execute-plan/expected-runtime-ids.json"
 ACTIVATION_FIXTURE_PATH = ROOT / "scripts/testdata/execute-plan/activation"
+
+PLANS_SKILL_PATH = ROOT / "agents/skills/plans/SKILL.md"
+EXECUTE_PLAN_SKILL_PATH = ROOT / "agents/skills/execute-plan/SKILL.md"
+
+# The normative shared skill bodies: the neutral core of the execute-plan
+# contract. They must never name a host runtime; host behavior belongs in
+# adapter profiles under agents/skills/execute-plan/runtime-adapters/.
+SHARED_SKILL_PATHS = (
+    PLANS_SKILL_PATH,
+    EXECUTE_PLAN_SKILL_PATH,
+    ROOT / "agents/skills/execute-plan/subagent-prompts.md",
+    ROOT / "agents/skills/execute-plan/agent-logs.md",
+)
+
+# Cross-artifact contract pointers pinned by the coherence test: the neutral
+# authoring (plans) and execution (execute-plan) artifacts reference the
+# normative runtime contract and the adapter-profile home, the contract
+# points back at the profile home it defines, and the adapter profile alone
+# carries host-specific mechanics as a registry projection.
+CONTRACT_REFERENCE = "agents/skills/execute-plan/runtime-contract.md"
+ADAPTER_PROFILE_DIR_REFERENCE = "agents/skills/execute-plan/runtime-adapters/"
+
+# Finite vendor and agent runtime names, vendor-specific commands, and
+# vendor-specific event-envelope terms banned from the shared skill bodies.
+# Generic scheduler and driver vocabulary stays allowed.
+FORBIDDEN_SHARED_RUNTIME_TERMS: tuple[str, ...] = (
+    # Vendor and agent runtime names (the registry's canonical ids).
+    "claude",
+    "codex",
+    "cursor",
+    "zcode",
+    "opencode",
+    "copilot",
+    "gemini",
+    "antigravity",
+    "pi",
+    # Vendor-specific commands.
+    "codex exec",
+    # Vendor-specific event-envelope terms.
+    "jsonl",
+    "hooks.json",
+    "pretooluse",
+    "mcp__",
+    # Vendor-specific CLI flags.
+    "--resume",
+)
+
+# The four incident obligations the adapter-profile contract must carry. For
+# each obligation: the markers naming the obligation and the refusal-witness
+# markers proving its refusal and recovery semantics. Every marker must
+# appear in the runtime contract or the adapter profile combined.
+ADAPTER_INCIDENT_OBLIGATIONS = (
+    (
+        "lifecycle and capacity reconciliation",
+        ("worker registry", "capacity reconciliation"),
+        ("stale inventory", "not_found", "stalled worker"),
+    ),
+    (
+        "atomic handoff ownership rotation",
+        ("atomic handoff",),
+        ("owner mismatch", "replayed handoff"),
+    ),
+    (
+        "machine-verifiable evidence",
+        ("machine-verifiable evidence",),
+        ("malformed receipt",),
+    ),
+    (
+        "interruption reconciliation",
+        ("interruption reconciliation",),
+        ("non-resumable interruption",),
+    ),
+)
+
+# Registry-owned profile fields the adapter profile must not assign; their
+# values live only in the inventory registry.
+REGISTRY_OWNED_PROFILE_FIELDS = (
+    "adapter_entrypoint",
+    "launch_operation",
+    "wait_operation",
+    "resume_operation",
+    "adapter_version",
+    "approval_policy",
+    "retry_budget",
+    "eligibility",
+    "capabilities",
+    "fallback",
+)
 
 
 def _expected_ids() -> dict[str, list[str]]:
@@ -36,6 +125,27 @@ def _expected_ids() -> dict[str, list[str]]:
 
 def _normalized(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def find_forbidden_shared_terms(
+    text: str, terms: tuple[str, ...] = FORBIDDEN_SHARED_RUNTIME_TERMS
+) -> list[str]:
+    """Return the forbidden terms present in ``text``.
+
+    A term edge that is alphanumeric requires a non-alphanumeric neighbor, so
+    a short runtime name such as ``pi`` never matches inside ``pipeline``;
+    terms with a non-alphanumeric edge (``--resume``, ``mcp__``) keep plain
+    substring semantics.
+    """
+
+    lowered = text.lower()
+    found: list[str] = []
+    for term in terms:
+        head = r"(?<![a-z0-9])" if term[0].isalnum() else ""
+        tail = r"(?![a-z0-9])" if term[-1].isalnum() else ""
+        if re.search(head + re.escape(term) + tail, lowered):
+            found.append(term)
+    return found
 
 
 class RuntimeCapabilitiesTest(unittest.TestCase):
@@ -204,24 +314,210 @@ class RuntimeCapabilitiesTest(unittest.TestCase):
         provider_neutral = self.contract.split(
             "## Runtime profile data", maxsplit=1
         )[0]
-        forbidden = (
-            "claude",
-            "codex",
-            "cursor",
-            "zcode",
-            "opencode",
-            "copilot",
-            "gemini",
-            "antigravity",
-            "pi",
-            "hooks.json",
-            "pretooluse",
-            "--resume",
-            "mcp__",
+        leaked = find_forbidden_shared_terms(provider_neutral)
+        self.assertEqual(
+            leaked,
+            [],
+            "host protocol leaked: " + ", ".join(leaked),
         )
-        lowered = provider_neutral.lower()
-        for term in forbidden:
-            self.assertNotIn(term, lowered, f"host protocol leaked: {term}")
+
+    def test_shared_skill_bodies_have_no_runtime_names(self) -> None:
+        # Behavior witnesses for the matcher: the finite term set fires on a
+        # vendor name, a vendor command, and a vendor event-envelope term,
+        # while generic scheduler/driver vocabulary and words merely
+        # containing a short name (``pipeline``) stay allowed.
+        self.assertEqual(
+            find_forbidden_shared_terms("use codex exec with jsonl events"),
+            ["codex", "codex exec", "jsonl"],
+        )
+        self.assertEqual(
+            find_forbidden_shared_terms(
+                "The scheduler starts one driver per task and pipelines the probes."
+            ),
+            [],
+        )
+        violations: list[str] = []
+        for path in SHARED_SKILL_PATHS:
+            self.assertTrue(path.is_file(), f"missing shared skill file: {path}")
+            for term in find_forbidden_shared_terms(path.read_text(encoding="utf-8")):
+                violations.append(f"{path.relative_to(ROOT)}: {term}")
+        self.assertEqual(
+            violations,
+            [],
+            "shared skill bodies must not name a vendor runtime, vendor command, "
+            "or vendor event envelope:\n" + "\n".join(violations),
+        )
+
+    def test_adapter_profile_carries_all_incident_obligations(self) -> None:
+        if not ADAPTER_PROFILE_PATH.is_file():
+            self.fail(
+                f"missing adapter profile {ADAPTER_PROFILE_PATH.relative_to(ROOT)}: "
+                "every incident obligation lacks its adapter-profile carrier, so "
+                "no obligation names its refusal witness"
+            )
+        combined = _normalized(
+            self.contract + ADAPTER_PROFILE_PATH.read_text(encoding="utf-8")
+        )
+        for label, obligations, witnesses in ADAPTER_INCIDENT_OBLIGATIONS:
+            for phrase in obligations:
+                self.assertIn(
+                    _normalized(phrase),
+                    combined,
+                    f"{label}: missing obligation marker {phrase!r}",
+                )
+            for phrase in witnesses:
+                self.assertIn(
+                    _normalized(phrase),
+                    combined,
+                    f"{label}: missing refusal witness {phrase!r}",
+                )
+
+    def _assert_profile_references_registry_without_duplicate_owner(
+        self, profile_text: str
+    ) -> None:
+        """Pin the adapter profile as a registry projection, not a second owner.
+
+        The profile names the canonical runtime ID and the registry path,
+        assigns no registry-owned field, and copies no registry-owned value.
+        Shared by the direct ownership test and the cross-artifact coherence
+        test so the two checks cannot drift apart.
+        """
+
+        normalized_profile = _normalized(profile_text)
+
+        # The profile references the canonical runtime ID and the registry
+        # path instead of restating any registry-owned value.
+        self.assertIn("codex", self.inventory["inventory"]["canonical_ids"])
+        self.assertRegex(profile_text, r"(?i)(?<![a-z0-9])codex(?![a-z0-9])")
+        self.assertIn(
+            _normalized("canonical runtime id"),
+            normalized_profile,
+            "profile must name the canonical runtime ID it projects",
+        )
+        registry_path = self.inventory["inventory"]["registry_path"]
+        self.assertIn(
+            _normalized(registry_path),
+            normalized_profile,
+            "profile must reference the registry path",
+        )
+
+        # No second capability owner: registry-owned fields appear in the
+        # profile only as references, never as assignments or table rows, and
+        # the registry-unique capability field names never appear at all.
+        for field in REGISTRY_OWNED_PROFILE_FIELDS:
+            self.assertNotRegex(
+                profile_text,
+                rf"(?im)^\s*\|?\s*`?{field}`?\s*(?:[:=]|\|)",
+                f"profile must not assign registry-owned field {field}",
+            )
+        for capability in ("parent_continuation", "final_response"):
+            self.assertNotIn(
+                capability,
+                profile_text,
+                f"profile duplicates registry-owned capability {capability}",
+            )
+
+        # Registry-owned authoritative values are not copied into the profile.
+        codex_row = self.inventory["runtimes"]["codex"]
+        registry_owned_values = (
+            "adapter_entrypoint",
+            "launch_operation",
+            "wait_operation",
+            "resume_operation",
+            "approval_policy",
+            "fallback",
+        )
+        for field in registry_owned_values:
+            value = codex_row[field]
+            self.assertTrue(value, f"registry lost its {field} value")
+            self.assertNotRegex(
+                profile_text,
+                re.escape(value),
+                f"profile duplicates registry-owned {field} value {value!r}",
+            )
+
+    def test_profile_references_registry_without_duplicate_capability_owner(self) -> None:
+        if not ADAPTER_PROFILE_PATH.is_file():
+            self.fail(
+                f"missing adapter profile {ADAPTER_PROFILE_PATH.relative_to(ROOT)}: "
+                "no profile-to-registry reference exists and no duplicate "
+                "capability owner can be ruled out"
+            )
+        self._assert_profile_references_registry_without_duplicate_owner(
+            ADAPTER_PROFILE_PATH.read_text(encoding="utf-8")
+        )
+
+    def test_cross_artifact_contract_coherence(self) -> None:
+        """plans, execute-plan, the runtime contract, and the adapter profile
+        stay one linked contract set: the neutral authoring and execution
+        artifacts reference the adapter-profile contract and carry no
+        forbidden shared-runtime term, the contract points back at the
+        profile home it defines, and the adapter profile alone carries
+        host-specific lifecycle mechanics as a registry projection that
+        duplicates no registry-owned profile value."""
+
+        plans_text = PLANS_SKILL_PATH.read_text(encoding="utf-8")
+        execute_plan_text = EXECUTE_PLAN_SKILL_PATH.read_text(encoding="utf-8")
+        profile_text = ADAPTER_PROFILE_PATH.read_text(encoding="utf-8")
+
+        # The authoring and execution boundaries point at the same normative
+        # contract and the same adapter-profile home, so a future edit cannot
+        # move one boundary and strand the other.
+        for label, text in (("plans", plans_text), ("execute-plan", execute_plan_text)):
+            self.assertIn(
+                CONTRACT_REFERENCE,
+                text,
+                f"{label} skill must reference the normative runtime contract",
+            )
+            self.assertIn(
+                ADAPTER_PROFILE_DIR_REFERENCE,
+                text,
+                f"{label} skill must reference the adapter-profile contract home",
+            )
+
+        # The contract-to-profile direction of the same link: the contract
+        # defines the profile contract section and points at the profile home.
+        self.assertIn(
+            "## Adapter profile contract",
+            self.contract,
+            "runtime contract must define the adapter profile contract section",
+        )
+        self.assertIn(
+            ADAPTER_PROFILE_DIR_REFERENCE,
+            self.contract,
+            "runtime contract must reference the adapter-profile home",
+        )
+
+        # Neither neutral artifact names a forbidden shared-runtime term, and
+        # the provider-neutral part of the contract stays term-free too.
+        for label, text in (
+            ("plans", plans_text),
+            ("execute-plan", execute_plan_text),
+            (
+                "runtime contract neutral part",
+                self.contract.split("## Runtime profile data", maxsplit=1)[0],
+            ),
+        ):
+            leaked = find_forbidden_shared_terms(text)
+            self.assertEqual(
+                leaked,
+                [],
+                f"{label} names forbidden shared-runtime terms: " + ", ".join(leaked),
+            )
+
+        # Host-specific lifecycle mechanics live in the adapter profile, the
+        # one artifact allowed to name them (witnessed here by the vendor
+        # launch command the neutral artifacts must never contain).
+        self.assertIn(
+            "codex exec",
+            profile_text,
+            "adapter profile must carry the host-specific launch mechanics "
+            "banned from the neutral artifacts",
+        )
+
+        # The profile stays a non-authoritative registry projection: it
+        # references the registry and duplicates no registry-owned value.
+        self._assert_profile_references_registry_without_duplicate_owner(profile_text)
 
     def test_unsupported_capability_is_explicit(self) -> None:
         profile = dict(self.profiles["codex"])

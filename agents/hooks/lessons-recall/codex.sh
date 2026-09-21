@@ -30,7 +30,10 @@
 set -u
 
 SESSION_CHANNEL="$HOME/.ai-playbook/scripts/session_channel.py"
-CORE="$HOME/.ai-playbook/scripts/lessons_recall.py"
+# Hub dispatch (harness triage plan Task 7): the hub owns ALL lessons CLI
+# dispatch, so the core is reached as `lessons.py recall`, never invoked
+# directly.
+HUB="$HOME/.ai-playbook/scripts/lessons.py"
 
 payload="$(cat)"
 
@@ -52,7 +55,7 @@ else
     session_args=()
 fi
 
-out="$(python3 "$CORE" --prompt "$prompt" ${session_args[@]+"${session_args[@]}"} 2>/dev/null || true)"
+out="$(python3 "$HUB" recall --prompt "$prompt" ${session_args[@]+"${session_args[@]}"} 2>/dev/null || true)"
 
 # Flat envelope (Codex): top-level additionalContext, NO hookSpecificOutput.
 if [ -n "$out" ]; then

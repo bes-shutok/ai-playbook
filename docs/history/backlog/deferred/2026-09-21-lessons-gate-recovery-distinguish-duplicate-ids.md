@@ -1,0 +1,29 @@
+# Backlog: lessons-gate recovery must distinguish duplicate IDs from untagged lessons
+
+Status: open
+Priority: deferred (formal-hardening triage 2026-09-22 full sweep per the project-priority-profiles directive: on this personal/pet repo formal fixes defer, no witnessed failure; rare-recovery polish (documented manual path worked). Revive on the next witnessed duplicate-id incident, or a project-priority-profile change.)
+Workflow: backlog
+
+## Problem
+
+The strict user-level lessons validator reported a duplicate numeric lesson identifier. The documented recovery offered `lessons_adopt.py --tag-unclassified`, but that command only adds the `Family unclassified` tag to lessons that lack a family tag. It cannot repair duplicate identifiers, so the first recovery attempt made no change and the operator had to inspect the duplicate headings and assign a unique number manually.
+
+## Expected behavior
+
+The blocked learn/done recovery message should branch on the validator category:
+
+1. `untagged` or `invalid-family`: use the tagging/adoption workflow.
+2. `duplicate`: inspect the colliding headings, choose a unique identifier, update any same-corpus references, and rerun the validator.
+3. `multiple-tags`: remove the competing family tags after classifying the lesson.
+
+The message should not present the unclassified-tagging command as a complete remedy for duplicate identifiers.
+
+## Evidence
+
+- Validator output: `UL#<number>: duplicate`.
+- Tagging command output: `0 lessons rewritten (all already tagged)`.
+- Manual recovery: the later colliding heading was renumbered, then the lessons validator passed.
+
+## Scope
+
+Update the learn/done recovery contract and add a regression test covering each validator category and its recommended recovery action. Keep the repair operator-driven; do not automatically renumber lessons or rewrite cross-references.

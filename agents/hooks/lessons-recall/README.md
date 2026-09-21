@@ -2,7 +2,8 @@
 
 Per-agent adapters around the agent-agnostic `lessons_recall.py` core. Each
 adapter reads the agent's hook payload on stdin, extracts the prompt with
-python3, pipes it to the core, derives the session id via the shared
+python3, dispatches it to the core through the lessons hub (`lessons.py
+recall`), derives the session id via the shared
 `session_channel.py` subprocess, and builds the agent's specific envelope via
 `json.dumps` dict construction.
 
@@ -120,7 +121,10 @@ classifier is opt-in CLI only until a follow-on plan wires adapters.
 
 **Frozen adapters (v2):** `claude.sh`, `codex.sh`, `agy.sh`, and all three
 non-Cursor `skill-gate` adapters. Do not edit their stdin parsing, envelopes, or
-exit codes without a regression-driven unfreeze.
+exit codes without a regression-driven unfreeze. 2026-09-21 (harness triage
+plan): the dispatch line inside the three recall adapters was switched from
+direct `lessons_recall.py` invocation to hub dispatch (`lessons.py recall`);
+stdin parsing, envelopes, and exit codes are unchanged.
 
 ## Same repository, multiple agents
 
@@ -155,6 +159,9 @@ INSTRUCTIONS_REPO=~/path/to/ai-playbook   # edit
 mkdir -p ~/.ai-playbook/scripts ~/.ai-playbook/runtime ~/.ai-playbook/logs
 ln -sf "$INSTRUCTIONS_REPO/scripts/session_channel.py"  ~/.ai-playbook/scripts/session_channel.py
 ln -sf "$INSTRUCTIONS_REPO/scripts/lessons_recall.py"   ~/.ai-playbook/scripts/lessons_recall.py
+# Lessons hub: the recall adapters exec `lessons.py recall`, so a host without
+# this symlink has silently dead recall.
+ln -sf "$INSTRUCTIONS_REPO/scripts/lessons.py"          ~/.ai-playbook/scripts/lessons.py
 ln -sf "$INSTRUCTIONS_REPO/scripts/skill_gate.py"       ~/.ai-playbook/scripts/skill_gate.py
 ln -sf "$INSTRUCTIONS_REPO/scripts/facts_paths.py"      ~/.ai-playbook/scripts/facts_paths.py
 ln -sf "$INSTRUCTIONS_REPO/scripts/lessons_classify.py" ~/.ai-playbook/scripts/lessons_classify.py
@@ -301,8 +308,9 @@ several agents. Weekly cron (Mondays 09:00 local):
 | agy | DEGRADED | `PreInvocation` + adapter symlink | Best-effort injection; not Claude-grade per-prompt |
 | Cursor | DEGRADED | `sessionStart` one-shot + adapter symlink | Optional `cursor-session-bridge.sh` adds per-tab session env (v2); per-prompt recall blocked on product schema |
 
-Classifier: `lessons_recall.py` core default remains `--classifier v1`; v2 is
-opt-in CLI only until a follow-on plan wires adapters.
+Classifier: the recall core's default remains `--classifier v1`; v2 is opt-in
+through the hub CLI only (`lessons.py recall --classifier v2`) until a
+follow-on plan wires adapters.
 
 ## Dedup behavior
 
@@ -489,6 +497,9 @@ mkdir -p ~/.ai-playbook/scripts ~/.codex/hooks ~/.gemini/antigravity-cli/hooks ~
 # in ~/.ai-playbook/scripts/) and for single-source-model consistency.
 ln -sf "$INSTRUCTIONS_REPO/scripts/session_channel.py"  ~/.ai-playbook/scripts/session_channel.py
 ln -sf "$INSTRUCTIONS_REPO/scripts/lessons_recall.py"   ~/.ai-playbook/scripts/lessons_recall.py
+# Lessons hub: the recall adapters exec `lessons.py recall`, so a host without
+# this symlink has silently dead recall.
+ln -sf "$INSTRUCTIONS_REPO/scripts/lessons.py"          ~/.ai-playbook/scripts/lessons.py
 ln -sf "$INSTRUCTIONS_REPO/scripts/facts_paths.py"      ~/.ai-playbook/scripts/facts_paths.py
 ln -sf "$INSTRUCTIONS_REPO/scripts/lessons_classify.py" ~/.ai-playbook/scripts/lessons_classify.py
 ln -sf "$INSTRUCTIONS_REPO/scripts/hooks_probe.py"       ~/.ai-playbook/scripts/hooks_probe.py

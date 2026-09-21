@@ -1866,5 +1866,6 @@ def selftest() -> int:
     return 0 if all_ok else 1
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+# Standalone CLI dispatch moved to scripts/lessons.py (the lessons
+# hub, harness triage plan Task 7); this module stays an importable
+# library and keeps main(argv)/selftest() for the hub to delegate to.

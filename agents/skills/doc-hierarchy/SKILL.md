@@ -142,7 +142,7 @@ Templates: [instruction-templates.md](instruction-templates.md).
 | `plans`, `execute-plan` | Read `{plans_dir}`, `{backlog_dir}`, `{backlog_completed_dir}`, `{reviews_dir}`, `{tmp_dir}` from `.ai-playbook/facts.md`; `plans` completion transition writes the registry row (freeze) for the completed plan and promoted backlog items |
 | `receiving-review` | Backlog capture writes pre-plan items under `{backlog_dir}` (`history/backlog/`); promotion and archival follow `plans` |
 | `learn` | Placement rules; no new `docs/examples/` or `docs/<module>/` after migration |
-| `done`, `docs-branch` | PR checklist; gitignored doc paths via resolved `{reviews_dir}`; `done` Step 2.648 runs the registry validator (`validate` plus `check-writes`) |
+| `done`, `docs-branch` | PR checklist; gitignored doc paths via resolved `{reviews_dir}`; the pre-docs sweep gate run's doc-registry gate runs the registry validator (`validate` plus `check-writes`) |
 | `doing-code-review`, `review-plan` | Staging docs under resolved `{reviews_dir}` |
 | `github-pr-workflow` | Doc migration PR description rules from `company-decisions.md` |
 | `review-confluence-doc` | Reads `{reviews_dir}` (and `{tmp_dir}` for scratch only) from `.ai-playbook/facts.md`; review staging under `{reviews_dir}/` per `review-staging` |

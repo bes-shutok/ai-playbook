@@ -56,6 +56,12 @@ Every CR comment thread must get a reply before it is resolved. For fixes, refer
 
 When a plan is needed, save grouped tasks to `{plans_dir}/<BRANCH-KEY>-<short-title>.md` (read `{plans_dir}` from `.ai-playbook/facts.md` TOML per `using-skills` Step 0) using the repository plan format. Do not start implementing the plan unless the user explicitly says to start.
 
+## Review-thread marker
+
+When the session begins processing external PR feedback, write a review-thread marker at `docs/tmp/review-threads/<session-slug>.json` before posting any reply or resolution. The marker carries the PR identity, the branch head, the tracked thread IDs, the per-thread dispositions (updated in the same file as triage decisions land), and the writer's session identity. Session identity derivation, named once here: the slug is derived from the runtime session id at marker-write time and recorded in the marker; done matches the current session's identity against the recorded value, and a marker whose recorded identity does not match is reported as stale and skipped, never gating an unrelated session's done run.
+
+Replies post idempotently against the marker: before creating a reply, verify the exact existing response is not already present on the thread (an exact-body match marks the reply already posted; never re-post it), and verify attachment by stable thread ID plus parent metadata (the same target-thread verification gate as Feedback-source Workflow step 13).
+
 ## Forbidden Responses
 
 **NEVER:**
@@ -466,6 +472,9 @@ Invoked as a sub-agent between review rounds. Input is the staging doc from `doi
 Under the Step 3.3 fan-out contract, the orchestrator may hand the pass a finding id subset with its canonical allowed files, an opaque worker scope token, and its own per-worker log path (up to three file-affinity workers per fanned round); the subset worker does not edit the staging doc and does not commit. The parent merges the returned per-finding triage into the staging doc and sidecar, re-runs the full Validation Commands block once after all workers return, and lands one address commit per round. Contract boundary: `extensions.address_fanout` is emitted and validated only for current-v1 sidecars; versionless legacy sidecars keep the existing single-worker path and are not upgraded by receiving-review; the parent, not any subset worker, writes the sidecar extension and runs the final `--hard` validation.
 
 The Step 1.2b intermediate task review is a second consumer; execute-plan Step 1.2b defines the pass (changed context, worker selection, and record). This skill contributes **Backlog capture** and the Driving force line for off-plan findings; repository-file captured items ride the task's done commit; an external or non-tracked destination records its exception on the task's `inter_review` line.
+
+### With `done` skill
+Done is the gate consumer for the review-thread marker this skill writes: it gates its run on the closure state that marker records before reporting completion. Marker format, session identity, and the idempotent-reply duties above stay owned by this skill; the consuming step's mechanics are done's.
 
 ### With `review-loop` skill
 Orchestration rule 4 applies **Fix-risk triage when fixes regenerate findings** in a regenerating loop; the triage classes and fix-vs-backlog decisions feed its exit report and **Backlog capture** tally.

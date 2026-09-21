@@ -1113,20 +1113,24 @@ def _project_already_migrated(project_text: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# Gate invocation (run lessons_index.py on the .tmp).
+# Gate invocation (run the lessons hub "index" subcommand on the .tmp).
 # --------------------------------------------------------------------------- #
 def run_gate(corpus_path: str) -> int:
     """Run the read-only gate on ``corpus_path``. Returns its exit code.
 
-    The gate path is resolved relative to this script's directory (canonical
-    source). The gate is invoked via subprocess (never imported - keeps the
-    read-only gate decoupled from this mutator, Family F).
+    The hub path is resolved relative to this script's directory (canonical
+    source), so the hub and this module always come from the same checkout
+    snapshot. The gate is invoked via subprocess (never imported - keeps the
+    read-only gate decoupled from this mutator, Family F). Harness triage
+    plan Task 7: the dispatch goes through the hub (``lessons.py index``)
+    because direct module invocation of lessons_index.py became a silent
+    no-op once its standalone dispatch moved into the hub.
     """
-    gate = str(Path(__file__).resolve().parent / "lessons_index.py")
+    hub = str(Path(__file__).resolve().parent / "lessons.py")
     interp = sys.executable or "python3"
     try:
         result = subprocess.run(
-            [interp, gate, corpus_path],
+            [interp, hub, "index", corpus_path],
             capture_output=True,
             check=False,
         )
@@ -2405,16 +2409,18 @@ def run_gate_on_text(text: str) -> int:
     """Run the gate on an in-memory corpus string by writing it to a temp file.
 
     Selftest helper only (the gate takes a path). Returns the gate's exit code.
+    Resolves the hub sibling of this module (same checkout snapshot) and runs
+    the hub ``index`` subcommand (see run_gate).
     """
     import tempfile
-    gate = str(Path(__file__).resolve().parent / "lessons_index.py")
+    hub = str(Path(__file__).resolve().parent / "lessons.py")
     interp = sys.executable or "python3"
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
         f.write(text)
         tmp_path = f.name
     try:
         result = subprocess.run(
-            [interp, gate, tmp_path],
+            [interp, hub, "index", tmp_path],
             capture_output=True, check=False,
         )
         return result.returncode
@@ -2526,5 +2532,6 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+# Standalone CLI dispatch moved to scripts/lessons.py (the lessons
+# hub, harness triage plan Task 7); this module stays an importable
+# library and keeps main(argv)/selftest() for the hub to delegate to.

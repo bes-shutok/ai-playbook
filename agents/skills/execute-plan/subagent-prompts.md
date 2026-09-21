@@ -19,12 +19,22 @@ records an explicit stop, `error` records a runtime or tool failure, and
 Natural-language hesitation is not an approval state. Unknown or malformed
 results fail closed and must never be reported as degraded success.
 
+A `success` return carries machine-verifiable evidence, per the
+machine-verifiable evidence obligation in
+`agents/skills/execute-plan/runtime-contract.md`: the identity of each
+validating command, the working directory it ran in, its exit status, the
+output identity of the captured result, the selected test identities, the
+changed paths measured against the launch baseline, and the plan-criterion
+coverage those changes satisfy. A narrative claim, a summary line, or a log
+path alone is not evidence, and the orchestrator never accepts one in place of
+the envelope.
+
 The driver owns task selection, atomic claiming, checkpointing, reload, resume,
 and terminal-state transitions. The worker owns implementation and evidence;
 the done workflow owns the commit operation. Do not reproduce driver state
 transitions or host protocol details in a worker or done prompt.
 
-**Orchestrator:** after implement → verify → Step 1.2b intermediate review → mark checkboxes → `done` for a task, **launch the next task immediately**. Do not ask the user for permission between tasks, between review rounds, or before Phase 3. See SKILL.md "Continuous execution" and Step 1.5.
+**Orchestrator:** after implement → verify → Step 1.2b intermediate review → mark checkboxes → `done` for a task, **launch the next task immediately**. The next-task launch rides the driver's atomic handoff (see the adapter profile contract in `agents/skills/execute-plan/runtime-contract.md`): it requires a fresh owner identity, claim token, generation, and launch receipt for every next task; a replayed handoff receipt is idempotent and returns the recorded outcome, and a handoff carrying the previous task's owner or token is refused before any launch. Do not ask the user for permission between tasks, between review rounds, or before Phase 3. See SKILL.md "Continuous execution" and Step 1.5.
 
 Placeholders:
 
@@ -111,6 +121,15 @@ success | blocked
 - Result: pass | fail
 - Output summary: (key lines only)
 
+### Evidence envelope (required when status=success; machine-verifiable, not narrative)
+- Command identity: each validating command, verbatim
+- Working directory: where each command ran
+- Exit status: per command
+- Output identity: reference to the captured fresh output (log section or path)
+- Selected test identities: which tests the commands selected
+- Changed paths: every path changed against the pre-task baseline
+- Plan-criterion coverage: which task criteria each changed path satisfies
+
 ### Implemented clauses
 - (list each `- [ ]` item you completed)
 
@@ -189,6 +208,12 @@ success | blocked
 - Result: pass | fail
 - Output summary: (key lines only)
 
+### Evidence envelope (active member; required when member status=success)
+- Command identity: the member's task-local validating command, verbatim
+- Working directory, exit status, output identity, selected test identities
+- Changed paths: every path changed against the moving baseline
+- Plan-criterion coverage: which task criteria each changed path satisfies
+
 ### Implemented clauses (active member)
 - (list each `- [ ]` item you completed)
 
@@ -212,7 +237,7 @@ success | blocked
 - Group id: <BATCH_GROUP_ID>; anchor session id: <ANCHOR_SESSION_ID>; attempt id: <ATTEMPT_ID>
 ```
 
-**Parent gate on every member result:** the parent rejects any result whose member, member policy token, ordinal, or changed paths do not match the active group state (group id, active member ordinal, current token, canonical `Files:` set) recorded for the batch implement launch; a mismatched result is not merged and the member is re-driven.
+**Parent gate on every member result:** the parent rejects any result whose member, member policy token, ordinal, or changed paths do not match the active group state (group id, active member ordinal, current token, canonical `Files:` set) recorded for the batch implement launch; a mismatched result is not merged and the member is re-driven. A result whose evidence envelope is missing, malformed, or narrative-only fails closed the same way per the machine-verifiable evidence obligation in `agents/skills/execute-plan/runtime-contract.md`; it is never merged as a degraded success.
 
 ---
 

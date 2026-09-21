@@ -5,7 +5,8 @@
 # re-arm paragraph parity and escalation, the parent title's single creation
 # source, the recognition span literal, section anchors other files navigate
 # by, SKILL.md runtime-agnosticism, the pricing cache home, the schema-4 state
-# contract, the pricing seed presence, and the budget-gate resume mirrors in
+# contract, the state-durability loop_mode/pending_rearm contract, the pricing
+# seed presence, and the budget-gate resume mirrors in
 # the execute-plan and plans skills. Exit 0 = all pins hold; exit 1 with
 # PIN FAIL lines otherwise. Repo-relative paths only; run from anywhere.
 set -u
@@ -79,6 +80,12 @@ expect_absent() { # expect_absent <description> <pattern> <file>: rc 0 = fail, r
 #       'Before Step 0, in a repository that resolves the maintenance skill'
 #       above the Step 0 heading (liveness plan, Task 4; the line is
 #       prescribed unchanged in its owning plan).
+#   'Maintenance scheduler turn (every 2 hours)' (zcode.md recipe title):
+#       superseded by the quota-aligned cadence plan
+#       (docs/plans/2026-09-21-maintenance-turn-self-scheduling-cadence.md,
+#       Task 1): the recognition title is form-independent, the cadence
+#       parenthetical is deleted from the recipe, and the cadence pin is
+#       rescoped to the never-dark fallback branch (exactly once).
 #   Executed RED/GREEN evidence for these pins (scratch regressions, failing
 #       pin lines, sweep rcs): plan
 #       2026-09-18-maintenance-loop-residuals-occupancy-anchors-rearm-wording,
@@ -102,6 +109,10 @@ pin "idle-time outcome arm present" grep -qF 'Idle-time children are covered too
 pin "pricing edits stay in the state cache" grep -qF 'never edits tracked skill files' "$S"
 pin "state pricing_cache field named" grep -qF 'pricing_cache' "$S"
 pin "step 6 carries forward externally written values" grep -qF 'carry forward the values whose authoritative writes may occur outside Step 6' "$S"
+# review r1 F4 (state durability plan): the carry-forward enumeration must name
+# the two state-durability fields; the opener pin above predates them, so a
+# rewrite that drops the enumeration tail stays green without this membership pin
+pin "carry-forward names the state-durability fields" grep -qF 'plus `loop_mode` and `pending_rearm`' "$S"
 pin "starvation releases only the starved lane" grep -qF 'releases only the starved lane' "$S"
 pin "five sanctioned writer classes" grep -qF 'five sanctioned writer classes' "$S"
 pin "execution-child progress counts checked checkboxes" grep -qF 'checked-checkbox count' "$S"
@@ -118,6 +129,22 @@ pin "idle occupancy join mirrored in SKILL.md" grep -qF 'whose target carries th
 # file sections below (count and body-scoped absence in the python block)
 pin "G3b guard present"      grep -qF 'G3b (landing in flight)' "$S"
 pin "pricing note read-back"  grep -qF 'note surfaces in the survey read-back' "$S"
+# --- state durability contract (scheduler/maintenance state durability plan, Task 6) ---
+# The loop_mode and pending_rearm prose surfaces. The paragraph openers and the
+# Step 3 enforcement spans below are unique-span whole-file greps (measured
+# 2026-09-21: each occurs exactly once in SKILL.md; the Revisions-ledger
+# entries paraphrase these spans and do not carry them). The schema literals,
+# the Step 1 reader arm, and the Step 0 verifiable echo arm are pinned
+# region-scoped in the python block below: the pending_rearm whole-file and
+# Step 1-region counts are computed and asserted there (the suite computes
+# both counts itself and asserts the invariant that matters, so no manual
+# total is frozen in a comment), and verifiable echo
+# also occurs in the self-heal arm's Revisions-ledger entry, so whole-file
+# greps there would be satisfied by a stray copy.
+pin "loop_mode field paragraph opener" grep -qF 'is the standing loop directive' "$S"
+pin "authoring-only enforcement needle" grep -qF 'authoring-only resolves D1 and D4 to D3' "$S"
+pin "execution-only enforcement needle" grep -qF 'execution-only resolves D2 to D3' "$S"
+pin "pending_rearm field paragraph opener" grep -qF 'is the re-arm intent record' "$S"
 # --- quota leg bindings (P6 origins 1-2; schema-4 fire-time bookkeeping) ---
 pin "quota leg binds every clocked dispatch path" grep -qF 'binds every clocked child dispatch, from any session type' "$S"
 pin "runtime-fit rule defers to reset regardless of pricing" grep -qF 'fire at reset_at_epoch instead, regardless of pricing' "$S"
@@ -167,6 +194,11 @@ if "rearm_note" not in doc:
     print("PIN FAIL: rearm_note missing from the state schema"); sys.exit(1)
 if "parent_absent_since" not in doc or "pending_dispatch" not in doc:
     print("PIN FAIL: top-level parent_absent_since/pending_dispatch missing from the state schema"); sys.exit(1)
+# state durability plan Tasks 1 and 4: the additive loop_mode and pending_rearm
+# fields join the schema-4 block (checked against the parsed doc, so deleting
+# either literal line, or breaking the block's JSON, fails here)
+if "loop_mode" not in doc or "pending_rearm" not in doc:
+    print("PIN FAIL: top-level loop_mode/pending_rearm missing from the state schema"); sys.exit(1)
 child = (doc.get("children") or [{}])[0]
 if not {"fire_at", "requested_at", "quota_status", "progress_mark", "resume_count"} <= set(child):
     print("PIN FAIL: children entry fields drifted"); sys.exit(1)
@@ -190,6 +222,87 @@ need(s, "### Step 1: survey"); need(s, "### Step 2")
 step1 = s.split("### Step 1: survey")[1].split("### Step 2")[0]
 if "pending_dispatch" not in step1:
     print("PIN FAIL: pending_dispatch reader missing from the Step 1 list"); sys.exit(1)
+# state durability plan Task 4: the pending_rearm reader arm, region-scoped to
+# the Step 1 region (the counts are computed and asserted below, never frozen
+# in a comment; a whole-file grep is satisfied by a stray copy, and deleting
+# the Pending re-arm reader bullet empties the region and fails here)
+if "pending_rearm" not in step1:
+    print("PIN FAIL: pending_rearm reader arm missing from the Step 1 region"); sys.exit(1)
+# review r3 F10: the suite self-measures the pending_rearm counts instead of
+# restating brittle totals: both counts are computed here, and the invariant
+# that matters is asserted; every in-region occurrence must sit inside the
+# "- Pending re-arm:" bullet, so a future sentence elsewhere in the region that
+# names the field cannot re-satisfy the token check above after the reader arm
+# is deleted (the bare-token backlog item's vacuous-canary shape)
+pr_total = s.count("pending_rearm")
+pr_hits = [m.start() for m in re.finditer("pending_rearm", step1)]
+pr_region = len(pr_hits)
+b_at = step1.find("- Pending re-arm: when `pending_rearm` is set")
+if b_at == -1:
+    print("PIN FAIL: Step 1 lacks the Pending re-arm bullet anchor"); sys.exit(1)
+b_start = step1.rfind("\n", 0, b_at) + 1
+b_end = step1.find("\n", b_at)
+if b_end == -1:
+    b_end = len(step1)
+pr_bullet = sum(1 for pos in pr_hits if b_start <= pos < b_end)
+if pr_bullet != pr_region:
+    print("PIN FAIL: %d of %d pending_rearm occurrence(s) in the Step 1 region sit outside the Pending re-arm bullet (whole-file count %d)" % (pr_region - pr_bullet, pr_region, pr_total)); sys.exit(1)
+# review r2 F7: the r1-added operative contracts pinned region-scoped (the
+# Revisions-ledger prose paraphrases these spans, so whole-file greps would be
+# vacuous): the loop-mode-held retention gate and the consume-semantics span
+# in Step 1
+if "loop-mode-held" not in step1:
+    print("PIN FAIL: Step 1 lacks the loop-mode-held retention gate"); sys.exit(1)
+if "never a precondition" not in step1:
+    print("PIN FAIL: Step 1 lacks the pending_rearm consume-semantics span"); sys.exit(1)
+# review r3 F12: the consume pin above keys on the generic phrase, so pin the
+# crash-window span itself (deleting only the survival clause must fail)
+if "only after the re-arm's state edit has survived" not in step1:
+    print("PIN FAIL: Step 1 lacks the pending_rearm consume crash-window span"); sys.exit(1)
+# review r4 F7: the three r3 Step 1 contracts (the reader refusal branch, the
+# cannot-decide signal, and the label precedence), region-scoped to the Step 1
+# region (the ledger paraphrases these contracts and carries none of the spans;
+# region-scoping keeps the pin robust against future ledger prose; deleting any
+# of the three sentences empties its span and fails here)
+for needle in ("record the structured-first-line `rearm_note` under the reader-side token",
+               "a set `pending_rearm` is itself a cannot-decide signal",
+               "the short-circuit `loop-mode-held` reason wins when both holds coincide"):
+    if needle not in step1:
+        print("PIN FAIL: Step 1 lacks the r3 Step 1 contract span %r" % needle); sys.exit(1)
+# review r5 F2: the loop-mode-held retention clause's operative sub-span,
+# region-scoped to the Step 1 region (the r2-era bare-token pin above stays
+# green on the clause's other occurrences; deleting the retention clause's tail
+# empties this span and fails here)
+if "is retained in `pending_dispatch` with reason `loop-mode-held`" not in step1:
+    print("PIN FAIL: Step 1 lacks the loop-mode-held retention clause span"); sys.exit(1)
+# review r3 F12: the writer-classes closedness membership clauses, pinned per
+# class line (each sanctioned class is one bullet line), so dropping a member
+# from its class line fails where the whole-file topic greps stay green
+def class_line(prefix):
+    for line in s.split("\n"):
+        if line.startswith(prefix):
+            return line
+    return ""
+sched_turn_class = class_line("  - Scheduler turns, whose write modes are")
+child_first_class = class_line("  - A child's re-arm FIRST ACTION")
+if not sched_turn_class or "the `loop_mode` write/replace" not in sched_turn_class:
+    print("PIN FAIL: scheduler-turn writer class lacks the loop_mode write/replace membership"); sys.exit(1)
+if not child_first_class or "the `pending_rearm` park write" not in child_first_class:
+    print("PIN FAIL: child FIRST ACTION writer class lacks the pending_rearm park write membership"); sys.exit(1)
+# review r5 F2: the three remaining writer-class membership clauses, pinned per
+# class line like the two above, so the closed writer-classes list cannot drop
+# a member and stay green (the watchdog class line carries the landed "and
+# clears `pending_rearm`" wording; "and `pending_rearm`" is the zcode.md
+# watchdog bullet's span, already pinned in the later block)
+successor_class = class_line("  - A completing execution child's successor-dispatch")
+watchdog_class = class_line("  - The idle-time watchdog")
+rot_class = class_line("  - Rearm-on-touch sessions")
+if not successor_class or "the both-legs-fail `pending_dispatch` park write" not in successor_class:
+    print("PIN FAIL: successor-dispatch writer class lacks the both-legs-fail pending_dispatch park write membership"); sys.exit(1)
+if not watchdog_class or "and clears `pending_rearm` in that same recovery edit" not in watchdog_class:
+    print("PIN FAIL: watchdog writer class lacks the pending_rearm recovery clear membership"); sys.exit(1)
+if not rot_class or "the `loop_mode` write/replace" not in rot_class:
+    print("PIN FAIL: rearm-on-touch writer class lacks the loop_mode write/replace membership"); sys.exit(1)
 # placement pin (review r1 T2): state-first ordering inside the Step 0
 # rearm-on-touch bullet; the consult anchor and the listing-gate anchor are
 # both fail-closed so a reworded bullet cannot pass vacuously, and the order
@@ -201,6 +314,77 @@ if a_consult not in step0 or a_gate not in step0:
     print("PIN FAIL: step 0 state-first placement anchors missing"); sys.exit(1)
 if step0.index(a_gate) < step0.index(a_consult):
     print("PIN FAIL: step 0 must consult the state file before the listing (state-first placement)"); sys.exit(1)
+# review r1 C1: the turn-start duty bullet's Step 0 placement precedes the
+# rearm-on-touch bullet (the duty runs before the survey and supersedes the
+# check's re-arm leg for the turn itself, so it must lead); both anchors are
+# fail-closed and the comparison catches a reordered Step 0 that keeps both
+# positive spans intact
+a_turnstart = "turn-start carrier re-arm: run the runtime overlay's Turn-start carrier re-arm duty before the survey"
+if a_turnstart not in step0 or a_consult not in step0:
+    print("PIN FAIL: step 0 duty-before-touch placement anchors missing"); sys.exit(1)
+if step0.index(a_turnstart) > step0.index(a_consult):
+    print("PIN FAIL: step 0 turn-start duty bullet must precede the rearm-on-touch bullet (placement)"); sys.exit(1)
+# state durability plan Task 2: the mode-appendix self-heal arm's verifiable
+# echo contract, region-scoped to the Step 0 region (the arm's Revisions-ledger
+# entry repeats the span, so a whole-file grep is satisfied by the ledger copy;
+# deleting the self-heal arm sentence empties the region and fails here).
+# Review r1 F17: the needle is the distinctive span, which the fallback
+# sentence's "non-verifiable echo" does not contain, so deleting only the
+# landed-gate sentence while keeping the fallback wording fails too
+if "only on a verifiable echo" not in step0:
+    print("PIN FAIL: step 0 self-heal lacks the verifiable echo arm"); sys.exit(1)
+# review r2 F7: the self-heal attempt-bound span, region-scoped to the Step 0
+# region (the writer-classes line paraphrases it, so a whole-file grep would be
+# satisfied by a stray copy; deleting the attempt-bound sentence empties the
+# region and fails here)
+if "suppresses the repair for that touch" not in step0:
+    print("PIN FAIL: step 0 lacks the self-heal attempt-bound span"); sys.exit(1)
+# review r3 F12: the loop_mode removal leg's intended-form span, region-scoped
+# to the Step 0 region (the Revisions ledger paraphrases it)
+if "carrying no mode appendix" not in step0:
+    print("PIN FAIL: step 0 lacks the loop_mode removal leg span"); sys.exit(1)
+# review r5 F2: the removal trigger's mode-value phrasing (the landed r4
+# wording), region-scoped to the Step 0 region (the Revisions ledger
+# paraphrases it; deleting the removal-trigger sentence empties the span)
+if "mode value is `dual` or null (the withdrawn field's cleared trace, whose mode is null, included)" not in step0:
+    print("PIN FAIL: step 0 lacks the removal-trigger mode-value span"); sys.exit(1)
+# review r2 F7: the loop_mode withdrawal arm span, region-scoped to the
+# loop_mode field paragraph in the State file section ('is withdrawn' also
+# occurs in the writer-classes line and the Revisions ledger, so a whole-file
+# grep would be satisfied by a stray copy)
+state_region = s.split("## State file", 1)[1].split("\n## ", 1)[0]
+lp_at = state_region.find("`loop_mode` is the standing loop directive")
+if lp_at == -1:
+    print("PIN FAIL: loop_mode field paragraph missing from the State file section"); sys.exit(1)
+loop_mode_para = state_region[lp_at:state_region.find("\n\n`", lp_at)]
+if "is withdrawn" not in loop_mode_para:
+    print("PIN FAIL: loop_mode field paragraph lacks the withdrawal arm span"); sys.exit(1)
+# review r5 F2: the withdrawal trace's cleared_at key, region-scoped to the
+# loop_mode field paragraph (the Step 0 freshness test reads it; the Step 0
+# cannot-decide clause and the Revisions ledger also name it, so a whole-file
+# grep would be satisfied by a stray copy)
+if "cleared_at" not in loop_mode_para:
+    print("PIN FAIL: loop_mode field paragraph lacks the cleared_at trace"); sys.exit(1)
+# review r4 F1: the identity-bound derivation's home literal is pinned
+# region-scoped to the pending_rearm field paragraph (the paragraph owns the
+# derivation; deleting the derivation clause fails here), and the superseded
+# bare date-only payload path stays absent from every operative SKILL.md
+# surface (the cut before the Revisions ledger excludes the ledger's
+# historical copies)
+pr_at = state_region.find("`pending_rearm` is the re-arm intent record")
+if pr_at == -1:
+    print("PIN FAIL: pending_rearm field paragraph missing from the State file section"); sys.exit(1)
+pending_rearm_para = state_region[pr_at:state_region.find("\n\n`", pr_at)]
+if "docs/tmp/future-plan-prompts-<date>-rearm.md" not in pending_rearm_para:
+    print("PIN FAIL: pending_rearm paragraph lacks the rearm-kind derivation literal"); sys.exit(1)
+# review r5 F2: the dispatch kind's derivation literal, pinned region-scoped to
+# the same owning paragraph (the r4 F1 pin above guards the rearm kind only,
+# so deleting the dispatch-kind form stayed green)
+if "docs/tmp/future-plan-prompts-<date>-dispatch-<target-basename>.md" not in pending_rearm_para:
+    print("PIN FAIL: pending_rearm paragraph lacks the dispatch-kind derivation literal"); sys.exit(1)
+operative = s.split("## Revisions", 1)[0]
+if "docs/tmp/future-plan-prompts-<date>.md" in operative:
+    print("PIN FAIL: superseded bare date-only payload path still in an operative SKILL.md surface"); sys.exit(1)
 need(s, "G1e (execution lane)"); need(s, "Duplicate-parent tripwire")
 arms = s.split("G1e (execution lane)")[1].split("Duplicate-parent tripwire")[0]
 if "certification oracle" not in arms:
@@ -237,12 +421,15 @@ pin "recipe section anchored"    grep -qF '## Recurring automation recipe' "$Z"
 pin "ladder section anchored"    grep -qF '## Child dispatch ladder' "$Z"
 pin "quota section anchored"     grep -qF '## Quota leg' "$Z"
 pin "model policy section anchored" grep -qF '## Child model and effort policy' "$Z"
-pin "parent title in recipe"     grep -qF 'Title: `Maintenance scheduler turn (every 2 hours)`' "$Z"
+pin "parent title in recipe"     grep -qF 'Title: `Maintenance scheduler turn`' "$Z"
+# quota-aligned cadence plan Task 1: the old cadence-pinned title literal is
+# frozen absent (superseding origin recorded in the freeze block above)
+expect_absent "superseded cadence-pinned title literal must be absent from zcode.md" 'Maintenance scheduler turn (every 2 hours)' "$Z"
 pin "recognition span full literal in recipe" grep -qF 'You are the maintenance scheduler for the repository at {REPO_ROOT}' "$Z"
 pin "pricing seed present"       grep -qF 'pricing_last_verified' "$Z"
 pin "ladder rollback present"    grep -qF 'Rollback: if the child create then fails' "$Z"
 pin "watchdog backstop present"  grep -qF 'Watchdog backstop' "$Z"
-pin "2h cadence pinned"          grep -qF '15 */2 * * *' "$Z"
+pin "fallback cadence pinned (never-dark fallback branch, exactly once)" grep -qF '15 */2 * * *' "$Z"
 pin "peak window UTC+8 anchor"   grep -qF '14:00-18:00 UTC+8' "$Z"
 pin "never pin local hours"      grep -qF 'never pin local hours' "$Z"
 pin "execution-child marker repo containment" grep -qF 'and the resolved repository root (the relative plans-dir substring alone' "$Z"
@@ -281,6 +468,143 @@ pin "fit-before-pricing rule bound (zcode copy)" grep -qF 'Before deferring for 
 expect_absent "superseded 60-minute horizon bullet must be absent from zcode.md" 'when it is under 60 (the observed one-to-four-hour child run' "$Z"
 # merge landing lock group: the overlay must name the merge lock family
 pin "overlay names the merge lock acquire command" grep -qF 'merge-acquire' "$Z"
+# state durability plan Tasks 2 and 4: the recipe's mode-appendix clause and
+# the Cron-tool boundary's reduced-toolset inheritance note (unique-span
+# whole-file greps; measured 2026-09-21: each occurs exactly once in zcode.md)
+pin "recipe mode appendix clause" grep -qF 'mode appendix sourced from state' "$Z"
+# review r1 F8: the existence pin above guards presence only, so a content
+# needle for the clause's directive-wording span (unique in zcode.md) pins the
+# determinate appendix shape the Step 0 detection predicate reads
+pin "recipe mode appendix content (directive wording span)" grep -qF "carrying the user's directive wording and naming the lane the mode excludes" "$Z"
+# review r2 F6: the recipe pins the appendix's canonical template literal, so
+# every renderer class builds one form and SKILL.md's detection predicate diffs
+# against it (unique literal in zcode.md)
+pin "recipe mode appendix canonical template literal" grep -qF 'Mode directive: <directive> (<mode> lane only.)' "$Z"
+# review r1 F15: re-needled from the generic topic phrase 'reduced toolset' to
+# the operative precheck-routing fragment, which a partial edit cannot satisfy
+# by leaving the phrase behind (unique in zcode.md)
+pin "reduced toolset precheck routing duty" grep -qF 'payload duties precheck before leg selection' "$Z"
+# review r2 F7: the Re-arm hygiene Loop guard's suppressed-re-arm park write
+# (the SKILL.md rearm-on-touch writer class names it; unique span in zcode.md).
+# Review r3 F1: the span now carries the derivation reference (the field
+# paragraph owns the filename), replacing the bare date-only path; the pin
+# moved with the wording in the same edit.
+pin "loop guard park-write span" grep -qF "write \`pending_rearm\` plus the assembled parent payload copy under the identity-bound payload filename derived per the \`pending_rearm\` field paragraph (the rearm kind) in that same targeted state edit" "$Z"
+
+# --- quota-aligned cadence pins (plan 2026-09-21-maintenance-turn-self-scheduling-cadence, Task 1) ---
+# Count-gated pins for the overlay's cadence rule and Turn-start carrier re-arm
+# duty. Each span below is unique-span whole-file (measured on the post-Task-1
+# tree: each occurs exactly once in zcode.md), so a count of exactly 1 fails
+# both a deletion and a stray duplicate copy; the fallback cadence literal is
+# rescoped here to exactly once (the never-dark fallback branch is its only
+# legal home after the fixed cadence was superseded).
+python3 - "$Z" <<'EOF'
+import sys
+z = open(sys.argv[1]).read()
+def one(span):
+    n = z.count(span)
+    if n != 1:
+        print("PIN FAIL: cadence span count %d != 1 in zcode.md: %s" % (n, span)); sys.exit(1)
+one("Loop carrier: the armed automation that fires scheduler turns")
+one("the carrier is a one-shot carrying this recipe's title and prompt template")
+one("reset_at_epoch plus 10 minutes")
+one("no arming path may end with the loop dark")
+one("attempt the recurring fallback create per the recipe before escalating")
+one("Turn-start carrier re-arm duty")
+one("the same state-first re-arm duty the child blueprints carry as their FIRST ACTION")
+one("before any survey or dispatch step")
+one("or the live recurring fallback record this session spawned from")
+one("unless it is the carrier this session's turn-start duty armed this turn")
+one("re-arms the carrier per the recipe's cadence rule")
+one("15 */2 * * *")
+# review r1 C1: the duty-before-survey placement is pinned positionally, not just
+# by span counts: the duty bullet must sit before the overlay's first Step 1
+# survey reference. Both anchors fail closed (the count pins above hold the duty
+# anchor at exactly one; a stripped survey reference fails the membership check),
+# so a moved or reworded bullet cannot pass vacuously
+if "Turn-start carrier re-arm duty" not in z or "Step 1 survey" not in z:
+    print("PIN FAIL: duty-before-survey placement anchors missing from zcode.md"); sys.exit(1)
+if z.index("Turn-start carrier re-arm duty") > z.index("Step 1 survey"):
+    print("PIN FAIL: turn-start duty bullet must precede the Step 1 survey reference in zcode.md"); sys.exit(1)
+EOF
+rc=$?
+[ "$rc" -ne 0 ] && fail=1
+[ "$fail" -eq 1 ] && exit 1
+
+# --- quota-aligned cadence blueprint pins (plan
+# 2026-09-21-maintenance-turn-self-scheduling-cadence, Task 2) ---
+# Count-gated pins for the cadence-rule spans the Task 2 edits landed inside
+# both byte-identical FIRST ACTION re-arm paragraphs. Each span below occurs
+# exactly twice in prompt-templates.md (once per blueprint paragraph; the
+# deviation-list entries paraphrase and must not carry the spans, or these
+# counts drift), so a count of exactly 2 fails both a deletion and a stray
+# duplicate copy; the blueprint integrity block's byte-identity parity pin
+# covers the two paragraphs' byte equality, so exact-literal count 2 plus that
+# parity is the byte-parity guarantee per span. Freeze origins (the superseded
+# literals these gates replaced; both stood exactly twice before Task 2 and
+# must not return): '(its title, its cadence cron, recurring true, enabled
+# true, its prompt template with {REPO_ROOT} filled)' (the full form
+# parenthetical in step (1) of each paragraph) and 'then update
+# "parent_automation_id" as a targeted field edit' (the step (3) closing) are
+# superseded by Task 2 of plan
+# 2026-09-21-maintenance-turn-self-scheduling-cadence; review r1 flagged that
+# freeze as claimed but unenforced, and the two expect_absent pins after this
+# block enforce it.
+python3 - "$P" <<'EOF'
+import sys
+p = open(sys.argv[1]).read()
+def two(span):
+    n = p.count(span)
+    if n != 2:
+        print("PIN FAIL: blueprint cadence span count %d != 2 in prompt-templates.md: %s" % (n, span)); sys.exit(1)
+two("in the form the recipe's cadence rule selects")
+two('record the armed carrier\'s fire time into "next_turn_at"')
+EOF
+rc=$?
+[ "$rc" -ne 0 ] && fail=1
+[ "$fail" -eq 1 ] && exit 1
+# review r1 C2: enforcement pins for the Task 2 freeze literals recorded in the
+# comment block above (both stood exactly twice before Task 2 and must not
+# return; the superseding origin is Task 2 of plan
+# 2026-09-21-maintenance-turn-self-scheduling-cadence). Fixed-string greps, so
+# the pin fires only on the verbatim superseded prose returning in any copy.
+expect_absent "superseded fixed-form blueprint parenthetical must be absent from prompt-templates.md" '(its title, its cadence cron, recurring true, enabled true, its prompt template with {REPO_ROOT} filled)' "$P"
+expect_absent "superseded parent_automation_id-only re-arm closing must be absent from prompt-templates.md" 'then update "parent_automation_id" as a targeted field edit' "$P"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- quota-aligned cadence SKILL.md pins (plan
+# 2026-09-21-maintenance-turn-self-scheduling-cadence, Task 3) ---
+# Count-gated pins for the SKILL.md wiring of the cadence rule: the Step 0
+# turn-start carrier re-arm duty bullet, the next_turn_at schema line, the
+# human-check armed-chain exemption clause, the parent_automation_id carrier
+# wording, and the Revisions ledger entry. Each span below occurs exactly once
+# in SKILL.md (measured on the post-Task-3 tree), so a count of exactly 1
+# fails both a deletion and a stray duplicate copy; the ledger span is
+# count-gated so a future ledger entry naming the plan again cannot
+# re-satisfy a presence-only grep. Freeze origins (the superseded literals
+# these gates replaced; none may return):
+#   'the recurring parent automation's id' (the parent_automation_id
+#       definitional head; exactly one occurrence before Task 3):
+#       superseded by the carrier wording (the chained one-shot or the
+#       recurring fallback record; the form is the cadence rule's) of plan
+#       2026-09-21-maintenance-turn-self-scheduling-cadence, Task 3.
+expect_absent "superseded recurring-parent definitional wording must be absent from SKILL.md" "the recurring parent automation's id" "$S"
+python3 - "$S" <<'EOF'
+import sys
+s = open(sys.argv[1]).read()
+def one(span):
+    n = s.count(span)
+    if n != 1:
+        print("PIN FAIL: cadence SKILL.md span count %d != 1: %s" % (n, span)); sys.exit(1)
+one("the runtime overlay's Turn-start carrier re-arm duty")
+one('"next_turn_at": null,')
+one("in the future and the recorded `parent_automation_id` is ENABLED")
+one("the loop carrier automation's id")
+one("maintenance-turn-self-scheduling-cadence")
+EOF
+rc=$?
+[ "$rc" -ne 0 ] && fail=1
+[ "$fail" -eq 1 ] && exit 1
 
 # --- prompt-templates.md child-duty needles (state-driven rearm, successor dispatch, resume) ---
 pin "state-first rearm duty" grep -qF 'state-first, without listing first' "$P"
@@ -367,6 +691,23 @@ for needle in ('"rearm_note"', "loop-parent-missing", "parent_automation_id",
                "(1) when", "(2) when", "(3) when"):
     if needle not in paras[0]:
         print("PIN FAIL: re-arm paragraph escalation drifted (missing %s)" % needle); sys.exit(1)
+# state durability plan Tasks 3 and 5: the re-arm duty paragraph carries the
+# appendix-sourcing sentence and the primitive-precheck sentences (before the
+# reshape and the create/recycle legs); paras[0] membership plus the
+# byte-identity parity above cover both blueprints, so deleting either
+# sentence from either paragraph fails a pin
+for needle in ("assert the session actually owns", "mode appendix sourced from state"):
+    if needle not in paras[0]:
+        print("PIN FAIL: re-arm paragraph lacks the state-durability needle %s" % needle); sys.exit(1)
+# review r1 F5: the pending_rearm park duties (the (4) escalation park, the
+# Loop-guard stand-down park, and the decision-first recording) are pinned
+# paras[0]-scoped (the byte-identity parity covers the twin paragraph); the
+# deviation-list entries paraphrase these spans and must not carry them
+for needle in ('then write "pending_rearm" plus the assembled parent payload copy under the rearm kind\'s identity-bound payload filename (derived per the pending_rearm field paragraph) in the same targeted state edit (the park-path pairing rule: intent record and payload copy are one paired write, always before the memory note)',
+               'write "pending_rearm" plus the assembled parent payload copy under the rearm kind\'s identity-bound payload filename (derived per the pending_rearm field paragraph) in that same targeted state edit (the park-path pairing rule)',
+               'set "pending_rearm" (targeted field edit) paired with the assembled parent payload copy under the rearm kind\'s identity-bound payload filename (derived per the pending_rearm field paragraph; the park-path pairing rule)'):
+    if needle not in paras[0]:
+        print("PIN FAIL: re-arm paragraph lacks the pending_rearm park duty span %s" % needle[:72]); sys.exit(1)
 # scheduler ops lanes and durability plan Task 4: the durable HOST CAVEAT is
 # pinned parity-safe by count (the spans sit inside the byte-identical re-arm
 # paragraphs, so exactly one occurrence per blueprint; the deviation-list
@@ -377,10 +718,31 @@ if p.count(rearm_caveat) != 2:
 succ_caveat = "HOST CAVEAT: any recycling update whose echoed record is not verifiably the intended form (enabled true, recurring false, a future nextRunAt matching the successor fire time, confirmed by a listing) is treated as a refusal"
 if p.count(succ_caveat) != 1:
     print("PIN FAIL: successor reshape-leg HOST CAVEAT count %d != 1" % p.count(succ_caveat)); sys.exit(1)
+# state durability plan Tasks 3-5: whole-file count floors for the two
+# blueprint sentences. The mode-appendix sourcing sentence must stand in all
+# three legs (each re-arm paragraph plus the successor both-legs-fail leg; the
+# deviation-list entries paraphrase the span and must not carry it, or this
+# floor drifts); the floor is the prescribed whole-file minimum, and review
+# r1 F21's shrink suggestion for it overflowed to backlog, so it stays.
+# Review r1 F14: the primitive-precheck needle is pinned to the exact total 5
+# (the re-arm paragraphs carry it twice each, before the reshape and the
+# create/recycle legs, and the successor leg once), so any single deletion
+# anywhere fails it; the per-paragraph distribution below is pinned at 2 for
+# the both-legs-identical-deletion shape: the byte-identity parity pin already
+# fails a single-leg deletion first, so this pin's marginal direction is the
+# both-legs deletion, which keeps the two paragraphs byte-identical and drops
+# the needle from both at once (the successor leg's copy is covered by its own
+# region membership check above)
+if p.count("mode appendix sourced from state") < 3:
+    print("PIN FAIL: mode appendix sourcing count %d < 3 in prompt-templates.md" % p.count("mode appendix sourced from state")); sys.exit(1)
+if p.count("assert the session actually owns") != 5:
+    print("PIN FAIL: primitive precheck count %d != 5 in prompt-templates.md" % p.count("assert the session actually owns")); sys.exit(1)
+if paras[0].count("assert the session actually owns") != 2:
+    print("PIN FAIL: re-arm paragraph precheck distribution %d != 2 per paragraph" % paras[0].count("assert the session actually owns")); sys.exit(1)
 if p.count("Maintenance scheduler turn (every 2 hours)") != 0:
     print("PIN FAIL: title literal must not appear in prompt-templates.md (the zcode.md recipe is the single literal home)"); sys.exit(1)
-if z.count("Maintenance scheduler turn (every 2 hours)") != 1:
-    print("PIN FAIL: title literal must appear exactly once (recipe) in zcode.md"); sys.exit(1)
+if z.count("Title: `Maintenance scheduler turn`") != 1:
+    print("PIN FAIL: new title literal must appear exactly once (recipe) in zcode.md"); sys.exit(1)
 span = "You are the maintenance scheduler for the repository at"
 if z.count(span) != 2 or p.count(span) != 0:
     print("PIN FAIL: recognition span literal counts drifted (want 2 in zcode.md, 0 in prompt-templates.md)"); sys.exit(1)
@@ -418,6 +780,41 @@ def confined(span):
         print("PIN FAIL: execution-only span left the execution inner block: %s" % span); sys.exit(1)
 confined("beyond the re-arm duty below and the single successor-dispatch duty below")
 confined("this is a resume run")
+# state durability plan Tasks 4 and 5: the successor both-legs-fail leg carries
+# its own precheck sentence (before the reshape leg), its own appendix
+# sentence (on the re-create leg), and its own pending_dispatch park write (the
+# both-legs-fail tail); all are pinned region-scoped to the successor paragraph
+# (everything in the execution inner block after the SUCCESSOR DISPATCH anchor),
+# so a single-leg deletion cannot hide behind the other legs' copies (the park
+# write pin is review r1 F5)
+succ = inner.split("SUCCESSOR DISPATCH")[1]
+for needle in ("assert the session actually owns", "mode appendix sourced from state",
+               'write "pending_dispatch" (kind execute'):
+    if needle not in succ:
+        print("PIN FAIL: successor dispatch leg lacks the state-durability needle %s" % needle); sys.exit(1)
+# review r2 F7: the chain-nothing loop_mode condition, region-scoped to the
+# successor paragraph (the deviation-list entry paraphrases it, so a whole-file
+# grep would be satisfied by the registration prose)
+if "is a non-dual mode excluding the execution lane" not in succ:
+    print("PIN FAIL: successor leg lacks the chain-nothing loop_mode condition"); sys.exit(1)
+# review r3 F12: the watchdog recovery clear span (the SKILL.md watchdog writer
+# class names it), region-scoped to the Watchdog backstop bullet (one line; the
+# whole-file zcode greps cannot scope it, so the check lives here)
+watchdog_line = ""
+for line in z.split("\n"):
+    if line.startswith("- Watchdog backstop:"):
+        watchdog_line = line
+        break
+if not watchdog_line or "and `pending_rearm`" not in watchdog_line:
+    print("PIN FAIL: watchdog bullet lacks the rearm_note-and-pending_rearm recovery clear span"); sys.exit(1)
+# review r5 F2: the recipe gate's mode-value phrasing (the landed r4 wording),
+# region-scoped to the recipe section (the Step 0 removal trigger and the
+# Revisions ledger paraphrase the same gate on other surfaces, so a whole-file
+# grep would be satisfied by a stray copy; deleting the gate's clause empties
+# the span and fails here)
+recipe_region = z.split("## Recurring automation recipe")[1].split("\n## ")[0]
+if "carries a mode of `authoring-only` or `execution-only`" not in recipe_region:
+    print("PIN FAIL: recipe section lacks the mode-value gate span"); sys.exit(1)
 # merge landing lock group (plan 2026-09-20-merge-landing-lock-grouping):
 # each blueprint acquires the merge landing lock exactly once (the dated
 # deviation-list entries paraphrase the literal, so the count stays 2), the
@@ -504,6 +901,28 @@ pin "SKILL.md step 5 ladder-precheck precondition anchored" grep -qF 'ladder pre
 pin "zcode.md Ladder precheck bullet anchored" grep -qF 'Ladder precheck' "$Z"
 pin "clocked-lane stand-down reason pinned" grep -qF 'clocked-primitives-absent' "$Z"
 pin "idle-lane stand-down reason pinned" grep -qF 'idle-primitive-absent' "$Z"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- mechanical gates wiring pins (scheduler-maintenance-loop-quality-gates plan, Task 8) ---
+# Needle spans below are unique to the OPERATIVE sentences (review r2 finding: changelog
+# copies of a needle must never satisfy a pin), measured single-occurrence at pin time.
+EP="$repo/agents/skills/execute-plan/SKILL.md"
+MS="$repo/agents/skills/maintenance/SKILL.md"
+RR="$repo/agents/skills/receiving-review/SKILL.md"
+RP="$repo/agents/skills/review-plan/SKILL.md"
+for f in "$EP" "$MS" "$RR" "$RP"; do
+  [ -f "$f" ] || { echo "missing $f"; fail=1; }
+done
+[ "$fail" -eq 1 ] && exit 1
+pin "origins-closure archive arm wired in execute-plan SKILL.md" grep -qF 'check_plan_origins_closed.py' "$EP"
+pin "origins-block survey warn arm wired in maintenance SKILL.md" grep -qF 'Archived-coverage warn arm: an open top-level backlog item' "$MS"
+pin "dirt regression merge arm wired in execution blueprint" grep -qF 'dirt_regression_gate.py --base' "$P"
+pin "origins-closure blueprint archive-sentence duty wired" grep -qF 'origins-closure check (`python3' "$P"
+pin "done dirt guard wired" grep -qF 'dirt_regression_gate.py' "$D"
+pin "done review-thread closure gate wired" grep -qF 'review_thread_gate.py --marker' "$D"
+pin "receiving-review review-thread marker duty wired" grep -qF 'write a review-thread marker at `docs/tmp/review-threads/<session-slug>.json` before posting any reply' "$RR"
+pin "review-plan rule 5 vendored landing clause wired" grep -qF 'vendored-sync backlog item' "$RP"
+pin "AGENTS.md vendored landing mirror clause wired" grep -qF 'land the vendored copy in the same run' "$A"
 [ "$fail" -eq 1 ] && exit 1
 
 echo "maintenance pins: all hold"

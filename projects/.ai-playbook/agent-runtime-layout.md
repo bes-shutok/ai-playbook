@@ -25,6 +25,24 @@ Shared workflow policy owns authorization, durable state, retry budgets,
 continuation, and commit boundaries. A host adapter owns only its local launch,
 wait, resume, and event translation protocol.
 
+Within that skill, authority is split by artifact. The registry
+(`projects/.ai-playbook/execute-plan-runtime-inventory.toml`) remains the
+capability source of truth: canonical IDs, aliases, eligibility, the
+adapter entrypoint, the launch, wait, and resume operations, the approval
+policy, capability states, the retry budget, and fallback values are
+owned there and nowhere else. The adapter profile under
+`agents/skills/execute-plan/runtime-adapters/` is the host-specific
+source of launch and lifecycle mechanics: command shapes, event
+envelopes, session formats, cancellation and deadlines, worker identity,
+lifecycle receipt schemas, terminal/timeout/shutdown hooks, the capacity
+witness, handoff receipts, evidence verification, and interruption
+reconciliation. A profile is a non-authoritative projection: it
+references the registry path plus the canonical runtime ID and never
+restates a registry-owned value, so there is never a second capability
+matrix. Each eligible runtime has at most one profile; deferred runtimes
+have none. The eligible `codex` runtime's profile is
+`agents/skills/execute-plan/runtime-adapters/codex.md`.
+
 The registry currently defines one eligible profile and eight deferred
 runtimes (seven no-adapter runtimes plus Pi). The paths and command families
 below are verified against the current repository inventory and the runtime
@@ -92,7 +110,7 @@ available; no deferred runtime is silently treated as an eligible profile.
 ### Review staging and panel (`agents/skills/review-staging/`, `review-agents/`, consumers)
 - `review-staging`: gold source for grouped severity output, worker/lens launch accounting, descendant declarations, blocking-aware findings, overflow, and compatible sidecars.
 - `review-agents`: shared lens catalogs bundled into the recommended five workers. `review-panel-selection.md` owns full/focused panels, escalation, conditional risk lenses, and tiered ownership; `severity-calibration.md` owns tangible consequence tiers and finding budgets.
-- Consumers: `doing-code-review`, `review-plan`, `review-loop`, `receiving-code-review`, `rfc-design`, `review-confluence-doc`, `execute-plan` Phase 3, `done` (Step 2.64). Staging docs are gitignored on consumer repos; sync to orphan `docs` branch via `docs-branch`.
+- Consumers: `doing-code-review`, `review-plan`, `review-loop`, `receiving-code-review`, `rfc-design`, `review-confluence-doc`, `execute-plan` Phase 3, `done` (the pre-docs sweep gate run's review-staging gate). Staging docs are gitignored on consumer repos; sync to orphan `docs` branch via `docs-branch`.
 
 ### Claude Code
 - Runtime source: `~/.claude/skills` (symlink → `~/.agents/skills`)

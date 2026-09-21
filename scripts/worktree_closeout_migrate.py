@@ -4,16 +4,19 @@
 Subcommands:
   capture  Write a JSON baseline (path plus SHA-256) of the configured
            review dirs, relative to the current working directory.
-           Dangling symlinks are skipped with a warning and recorded
-           under a "skipped" list instead of crashing the capture.
+           Any path whose digest read raises OSError (a dangling symlink,
+           a permission-denied file, ...) is skipped with a named
+           warning and recorded under a "skipped" list instead of
+           crashing the capture; the exit stays 0.
   migrate  Copy files that are new or modified versus the baseline from a
            source worktree into a target worktree, verifying every copy by
            re-read checksum. Never moves: on any verification failure the
            source file is still present and the exit code is non-zero.
            Dangling symlinks in the source are skipped with a warning and
            recorded as manifest skip entries. The manifest is written even
-           when the run aborts mid-loop (an "incomplete" marker names the
-           error), so already-copied files stay in the audit record.
+           when the run aborts mid-loop (an "interrupted": true marker
+           flags the run, and an "incomplete" entry names the error), so
+           already-copied files stay in the audit record.
 """
 
 from __future__ import annotations
@@ -99,7 +102,10 @@ def _append_manifest(manifest_path: Path, sections: dict[str, list[dict]]) -> No
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     for key, entries in sections.items():
-        manifest.setdefault(key, []).extend(entries)
+        if isinstance(entries, list):
+            manifest.setdefault(key, []).extend(entries)
+        else:
+            manifest[key] = entries
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -113,16 +119,21 @@ def cmd_capture(args: argparse.Namespace) -> int:
     skipped: list[dict] = []
     for path in _iter_configured_files(root, dirs):
         rel = path.relative_to(root).as_posix()
-        if _is_dangling_symlink(path):
-            print(f"WARN: skipping dangling symlink: {path}", file=sys.stderr)
-            skipped.append(
-                {
-                    "path": rel,
-                    "reason": "dangling symlink; target missing; excluded from baseline",
-                }
+        # Every OSError from the per-file digest read is contained the same
+        # way: a dangling symlink (open raises FileNotFoundError), a
+        # permission-denied regular file, any other unreadable shape. The
+        # path is named on stderr, recorded under "skipped", and the
+        # capture exit stays 0.
+        try:
+            files[rel] = _sha256(path)
+        except OSError as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            print(
+                f"WARN: capture: skipping unreadable path {rel}: {reason}",
+                file=sys.stderr,
             )
+            skipped.append({"path": rel, "reason": reason})
             continue
-        files[rel] = _sha256(path)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
@@ -183,8 +194,9 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     failed: list[dict] = []
     # Manifest durability: the four sections accumulate in memory and the
     # manifest is written in a finally block, so a mid-loop abort still
-    # records every entry earned so far, plus an incomplete marker naming
-    # the error, before the failure propagates.
+    # records every entry earned so far, plus an "interrupted": true marker
+    # and an incomplete entry naming the error, before the failure
+    # propagates unchanged.
     aborted: BaseException | None = None
     try:
         for src in _iter_configured_files(source, dirs):
@@ -253,6 +265,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
             "failed": failed,
         }
         if aborted is not None:
+            sections["interrupted"] = True
             sections["incomplete"] = [
                 {
                     "error": f"{type(aborted).__name__}: {aborted}",

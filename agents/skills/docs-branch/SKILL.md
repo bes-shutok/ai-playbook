@@ -15,7 +15,7 @@ description: >
 - **Snapshot backup**: A plain temp-directory copy of shadow paths, taken before syncing. Never use `git stash push --all` for ignored shadow files because it removes them from disk.
 - **`docs` orphan branch**: A single permanent local branch with no code history that stores the full history of all gitignored doc changes across all feature branches. Never pushed to remote.
 - **Single-branch invariant**: The shadow history for gitignored docs must live on one branch named exactly `docs`. Branches such as `docs/master` or `docs/<feature>` are incorrect and must be consolidated back into `docs`, not reused.
-- **Add-only sync invariant**: The `docs` branch sync never treats a missing on-disk file as a deletion. Sync adds or updates paths present on disk only. Paths tracked on `refs/heads/docs` but absent from disk are restored from that branch before sync (unless the path was explicitly deleted in the latest `docs` commit). Review directories (`{reviews_dir}` and fallbacks such as `docs/reviews/`, `docs/history/reviews/`) always follow this rule. **tmp sweep exception:** `{tmp_dir}` (fallback `docs/tmp/`) is the ONE sweep-eligible root: a path under it that is tracked on the branch, absent on disk, not explicitly deleted, not staged for deletion or rename in the live index, and still gitignored (committed tmp paths are restored like any other branch-tracked content) is DROPPED from the branch (staged as a deletion) instead of restored, because `{tmp_dir}` is scratch with plan lifetime (see `done` Step 2.62 and `plans` **Plan Lifecycle** docs/tmp cleanup). Every other root, review directories above all, stays strictly add-only.
+- **Add-only sync invariant**: The `docs` branch sync never treats a missing on-disk file as a deletion. Sync adds or updates paths present on disk only. Paths tracked on `refs/heads/docs` but absent from disk are restored from that branch before sync (unless the path was explicitly deleted in the latest `docs` commit). Review directories (`{reviews_dir}` and fallbacks such as `docs/reviews/`, `docs/history/reviews/`) always follow this rule. **tmp sweep exception:** `{tmp_dir}` (fallback `docs/tmp/`) is the ONE sweep-eligible root: a path under it that is tracked on the branch, absent on disk, not explicitly deleted, not staged for deletion or rename in the live index, and still gitignored (committed tmp paths are restored like any other branch-tracked content) is DROPPED from the branch (staged as a deletion) instead of restored, because `{tmp_dir}` is scratch with plan lifetime (see the pre-docs sweep gate run's docs-tmp-sweep gate and `plans` **Plan Lifecycle** docs/tmp cleanup). Every other root, review directories above all, stays strictly add-only.
 - **Temporary docs worktree**: A separate `git worktree` used for all `docs` branch operations. The live project checkout stays on the user's working branch and is only read from.
 
 ## Documentation paths
@@ -253,8 +253,9 @@ if git show-ref --verify --quiet "refs/heads/${DOCS_BRANCH}"; then
           git check-ignore -q "$tracked" || continue
           case "$tracked" in
             "${tmp_root}"/*)
-              # tmp sweep: {tmp_dir} is scratch with plan lifetime (done Step 2.62,
-              # plans Plan Lifecycle cleanup). Absent on disk means the owner
+              # tmp sweep: {tmp_dir} is scratch with plan lifetime (the pre-docs
+              # sweep gate run's docs-tmp-sweep gate, plans Plan Lifecycle
+              # cleanup). Absent on disk means the owner
               # cleaned it up: drop from the branch instead of restoring. This is
               # the one non-add-only root; do NOT widen it to other roots.
               # Sits after the check-ignore gate so only genuinely gitignored
@@ -519,7 +520,7 @@ if [ -d "${DOCS_WORKTREE}/${_backlog_dir_cfg}" ]; then
   else
     # Missing-script warn parity with the certified-plan guard above: the
     # sweep is skipped, but never silently.
-    echo "WARN: backlog duplicate-sweep script not found; sync proceeds without dedupe" >&2
+    echo "WARN: backlog dedupe script not found; sync proceeds without the duplicate sweep" >&2
   fi
 fi
 
@@ -629,7 +630,7 @@ When the caller holds a lesson-scope-audit drift witness line (from done Step 3 
 
 Contract: the caller passes the exact witness line as the single argument; the line must start with lesson-scope-audit: (fail loud otherwise). The canonical drift witness line this skill expects is: lesson-scope-audit: config drift: company guidelines master not found; company duplicate audit not run. Invoke the append from the audited project repository root; the skill does not resolve or verify the root (the docs-branch refusal only guards the current repo).
 
-Failure semantics: a missing docs branch, a failed worktree add, or a failed commit each returns non-zero with a loud message; a missing docs branch means no sync ever carried the corpus, so the append must refuse rather than overstate coverage.
+Failure semantics: a missing docs branch, a failed worktree add, or a failed commit each returns non-zero with a loud message, as does a certified-downgrade refusal (the plan guard's exit 1 before staging, naming every refused row); a missing docs branch means no sync ever carried the corpus, so the append must refuse rather than overstate coverage.
 
 Run this block as a single shell invocation, in bash not zsh, with the worktree removed on every exit path; never push, the docs branch stays a local safety net per this skill's Rules:
 
@@ -712,11 +713,11 @@ This only works when an old `git stash push --all` run happened after the files 
 - Create the `docs` branch as an **orphan** when it does not yet exist.
 - **Never** include `.claude/` (or similar local config dirs) in `SHADOW_PATHS`: they stay local-only and are not synced to the branch.
 - Build `extra_shadow_dirs` from the union of live `.ai-playbook/facts.md` and `refs/heads/docs:.ai-playbook/facts.md`. A stale live facts file must not remove already-configured shadow paths.
-- **Add-only sync:** never treat a missing on-disk shadow file as a deletion on the `docs` branch. Restore fill-only from `refs/heads/docs` for every shadow root (including reviews) before sync. Only paths explicitly deleted in the latest `docs` commit may be removed from the worktree and staged as deletions. **Single exception (`{tmp_dir}`):** a path under `{tmp_dir}` (fallback `docs/tmp/`) that is tracked on the branch, absent on disk, not staged for deletion or rename in the live index, and still gitignored in the live repo is swept from the branch instead of restored, because `{tmp_dir}` is scratch with plan lifetime (`done` Step 2.62 sweep, `plans` **Plan Lifecycle** cleanup). Never widen this exception to `{reviews_dir}` or any other root.
+- **Add-only sync:** never treat a missing on-disk shadow file as a deletion on the `docs` branch. Restore fill-only from `refs/heads/docs` for every shadow root (including reviews) before sync. Only paths explicitly deleted in the latest `docs` commit may be removed from the worktree and staged as deletions. **Single exception (`{tmp_dir}`):** a path under `{tmp_dir}` (fallback `docs/tmp/`) that is tracked on the branch, absent on disk, not staged for deletion or rename in the live index, and still gitignored in the live repo is swept from the branch instead of restored, because `{tmp_dir}` is scratch with plan lifetime (the pre-docs sweep gate run's docs-tmp-sweep gate, `plans` **Plan Lifecycle** cleanup). Never widen this exception to `{reviews_dir}` or any other root.
 - Backlog duplicate sweep: after the overlay, the sync drops a top-level {backlog_dir} copy whose archived twin under completed/ or deferred/ exists on the branch and matches it beyond the Status: line; a deeper mismatch is surfaced and kept. Warn-and-continue always; never widen this to other roots.
 - Certified-plan ordering: the sync refuses (exit 1, before staging) any overlay write that would replace plan bytes matching the plan's latest certified sidecar digest with bytes that do not match it, and warns when a restore fills a plan file whose bytes do not match the certification digest; a certified downgrade is never committed, and the refusal names the plan, the certified digest, and the sidecar.
 - Ad-hoc worktree ordering: run the sync in the main checkout after closeout migration, never from a worktree that is about to be removed; a sync from a stale worktree can commit doomed bytes and, through the fill-only restore, re-export them later.
-- **Ephemeral tmp prune:** after the add-only overlay, remove stale `docs/tmp/*-cf-out.md` and `docs/tmp/**/__pycache__/**` from the temporary docs worktree when they are absent from the live checkout (`confluence-mirror-hygiene.sh docs-worktree-prune`). `done` Step 2.65 runs `audit-cf-out` first; cf-out is deleted only when hierarchy promotion is complete or the snapshot is STALE.
+- **Ephemeral tmp prune:** after the add-only overlay, remove stale `docs/tmp/*-cf-out.md` and `docs/tmp/**/__pycache__/**` from the temporary docs worktree when they are absent from the live checkout (`confluence-mirror-hygiene.sh docs-worktree-prune`). The pre-docs sweep gate run's confluence-hygiene gate runs `audit-cf-out` first; cf-out is deleted only when hierarchy promotion is complete or the snapshot is STALE.
 - Before syncing, restore any ignored shadow file that exists on the `docs` branch but is missing on disk (fill-only, never overwrite). This recovers content lost by an earlier manual branch switch and prevents the sync from dropping it from the `docs` backup. Paths staged for deletion or rename in the live index are intentional moves and are never restore targets; the follow-up unstage resets only the paths actually restored, never a blanket reset over the shadow roots (a blanket reset unstages the user's own staged work).
 - Before staging on the `docs` branch, always strip LLM artifact gitignore rules and rules matching `extra_shadow_dirs` from `.gitignore` so the branch can track its own files. For a container root such as `resources/source/`, copy only ignored descendants that are not inside a tracked subtree; skip tracked or unignored children such as committed examples. Use `git add -f` when staging to also bypass any `.git/info/exclude` rules that may block adding gitignored paths.
 - The live project checkout is read-only for shadow paths during sync. Copy shadow content to temp storage, then into the temporary docs worktree.
@@ -731,7 +732,7 @@ This only works when an old `git stash push --all` run happened after the files 
 ## Integration Points
 
 ### With `done` and `plans` skills (docs/tmp sweep)
-The `{tmp_dir}` sweep-eligible-root exception (Add-only sync invariant) exists to propagate `done` Step 2.62 (ownerless scratch sweep; it never touches `review-loop*`/`code-review/`/`handoff/` scratch) and `plans` **Plan Lifecycle** (plan-completion docs/tmp cleanup) deletions to the branch. Never widen the exception for other consumers.
+The `{tmp_dir}` sweep-eligible-root exception (Add-only sync invariant) exists to propagate the pre-docs sweep gate run's docs-tmp-sweep gate (ownerless scratch sweep; it never touches `review-loop*`/`code-review/`/`handoff/` scratch) and `plans` **Plan Lifecycle** (plan-completion docs/tmp cleanup) deletions to the branch. Never widen the exception for other consumers.
 
 ### With `done` (drift witness)
 done Step 3 items 4a and 6 invoke this step's witness append when the audited corpus is gitignored; docs-branch owns the append mechanics, done owns the witness line text.

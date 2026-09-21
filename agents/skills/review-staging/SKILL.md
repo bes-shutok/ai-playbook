@@ -501,4 +501,4 @@ Provider skill for staged review hierarchy and statistics. Consumers **must** fo
 | `rfc-design` | `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` | Shared severities; statistics section required; declares `record_kind` (sidecar field; Metadata twin via the universal review-staging template) on records dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` |
 | `review-confluence-doc` | `{reviews_dir}/YYYY-MM-DD-confluence-review-<slug>.md` | Tag `[Prose]` / `[Premortem]` / `[Code]` in Source field; declares `record_kind` (sidecar field + Metadata `Record kind:` twin) on records dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` |
 | `execute-plan` Phase 3 | `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Not `-plan-review-r`; review logs reference staging path with statistics; runs the record selection helper (`scripts/review_record_selection.py select`) before workers launch |
-| `done` | Session-touched staging under `{reviews_dir}/` | Step 2.64 validates before docs-branch sync |
+| `done` | Session-touched staging under `{reviews_dir}/` | the pre-docs sweep gate run's review-staging gate validates before docs-branch sync |

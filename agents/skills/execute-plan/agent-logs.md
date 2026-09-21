@@ -124,6 +124,8 @@ Workers that own a log path **update it before returning** (create or append per
 
 Include enough detail for `learn` to extract friction and corrections; not just a one-line status.
 
+A worker pass that reports `success` records the machine-verifiable evidence envelope in its `Commands run` and `Full return payload` sections: the identity of each validating command, the working directory it ran in, its exit status, the output identity of the captured output, the selected test identities, the changed paths measured against the launch baseline, and the plan-criterion coverage those changes satisfy. The parent accepts success only from that envelope (per the machine-verifiable evidence obligation in `agents/skills/execute-plan/runtime-contract.md`); a log path or a narrative claim alone never advances a task.
+
 ## Machine state and receipt ownership
 
 The structured machine manifest at
@@ -147,6 +149,16 @@ the commit-before-checkpoint window is possible, it persists
 `commit-pending` and reconciles the task identity, telemetry, and exact
 repository commit on reload. A proven commit records a completed checkpoint
 without relaunch. An ambiguous or live claim remains blocked and fenced.
+
+Every worker lifecycle event (completion, timeout, parent shutdown, and
+session restart) lands a durable lifecycle receipt through the selected
+adapter profile's lifecycle hooks (see the adapter profile contract in
+`agents/skills/execute-plan/runtime-contract.md`); terminal, timeout, and
+shutdown receipts release worker capacity idempotently. Before launching
+another worker, the parent reconciles capacity and claim state against the
+receipt-fed capacity witness and the live claim records (never against a
+remembered worker count or a stale inventory entry), and after a session
+restart it continues only through interruption reconciliation.
 
 Terminal state belongs to the driver. A final-response mechanism may be
 degraded, but an active machine manifest always suppresses terminal finalization.

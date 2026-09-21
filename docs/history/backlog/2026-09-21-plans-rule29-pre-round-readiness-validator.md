@@ -23,8 +23,16 @@ Extend plans rule 29: after the em-dash and hygiene scans, run the readiness val
 - 2026-09-20/21 authoring run: pre-round scans green, seven review rounds clean on the point, exit-gate readiness FAILED on "task checklist item in Task 1 carries no [class: ...] classification tag" (first of twelve), one extra certification round required after the tag-only fold.
 - The plan's own Validation preamble recorded the empirical gate states, so the miss was visible in the artifact; the enforcing component is the validator, which no reviewer executes.
 
+## Witness 2026-09-22 (second recurrence)
+
+Third occurrence, same class, independent run (automation-f08eceb0, executed-origin-strays-and-landing-gaps authoring): pre-round mechanical scans green (em-dash, hygiene, plus the plan's own RED-today validation execution), then r1 (five-worker panel) and r2 (three-worker post-fold round) both reported zero blocking findings, and the readiness validator failed at done time on five Commit checklist lines carrying no classification tag. Cost: one extra certification round (a blind correctness-completeness probe) after the tag-only fold. New detail for the fix shape: the gap sat in the per-task Commit lines, which an authoring-side review of checklist items treats as bookkeeping rather than task items; a structural pre-round validator pass catches them mechanically regardless of that framing.
+
 ## Environment
 
 - Playbook repo, ZCode runtime, 2026-09-20/21; repo-local validator copy (scripts/plan_readiness.py) with the deployed home fallback; vendored skill equal to runtime source (same repository).
 
 Suspected root area: plans SKILL.md rule 29 gate enumeration; the readiness validator's role is documented as an exit gate in plans Plan Quality Gate and done Step 1.5 but never as a pre-round structural gate.
+
+## Witness 2026-09-22 (recurrence, priority re-affirmed: high)
+
+Second occurrence, same class, independent run: authoring of docs/plans/2026-09-22-project-priority-profiles.md (automation-197f75a7) ran the em-dash and hygiene pre-round gates faithfully, then review r1 returned ready=no with one blocking finding: all 21 task checklist items carried no classification tag (the round spent about 19 minutes and a full panel on a defect the readiness validator reports mechanically and instantly). The fold added the tags plus a tag-coverage audit; r2/r3 then certified clean. The suggested fix is unchanged and this item stays high: the recurrence happened AFTER this item was filed, so the gap is still live in the skill text.

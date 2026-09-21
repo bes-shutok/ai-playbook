@@ -8,12 +8,12 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 SCRIPT_PATH = Path(__file__).resolve().parent / "docs_branch_plan_guard.py"
 
@@ -57,7 +57,7 @@ def _load_guard_module():
 GUARD_MODULE = _load_guard_module()
 
 
-class CertifiedPlanGuardTest(unittest.TestCase):
+class DocsBranchPlanGuardTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
@@ -297,19 +297,34 @@ class CertifiedPlanGuardTest(unittest.TestCase):
 
     def test_check_restored_rejects_plans_dir_flag(self) -> None:
         # The check-restored subparser never read --plans-dir; accepting it
-        # let callers pass a dead argument. The flag must now be rejected
-        # (SystemExit from argparse) while the guard subcommand keeps its.
-        restored = self._write_plan(self.branch, CERTIFIED_TEXT)
+        # let callers pass a dead argument. The flag must be rejected with
+        # argparse's usage error exit (SystemExit 2) while the invocation
+        # without it keeps the normal warn-only witness behavior, and the
+        # guard subcommand keeps its own used --plans-dir.
+        stale = self._write_plan(self.branch, OLDER_TEXT)
+        self._write_sidecar(
+            f"2026-09-19-plan-review-{FEATURE}-r1.stats.json",
+            slug=FEATURE,
+            round_="r1",
+            digest=self.cert_digest,
+        )
+        # Without the flag: normal warn-only behavior (exit 0, named warn).
+        code, out, _err = self._run_check_restored(str(stale))
+        self.assertEqual(code, 0)
+        self.assertIn("WARN:", out)
+        self.assertIn(str(stale), out)
+        # With --plans-dir: argparse rejects the dead argument (exit code 2).
         with contextlib.redirect_stderr(io.StringIO()):  # silence argparse usage
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(SystemExit) as refused:
                 GUARD_MODULE.build_parser().parse_args(
                     [
                         "check-restored",
                         "--plans-dir", str(PLANS_REL),
                         "--reviews-dir", str(self.reviews),
-                        str(restored),
+                        str(stale),
                     ]
                 )
+        self.assertEqual(refused.exception.code, 2)
         # The guard subcommand still accepts --plans-dir (unchanged posture).
         parsed = GUARD_MODULE.build_parser().parse_args(
             [
@@ -341,15 +356,19 @@ class CertifiedPlanGuardTest(unittest.TestCase):
         self.assertNotIn("WARN:", out)
 
     # ------------------------------------------------------------------
-    # OSError containment: unreadable plan files skip-and-warn
+    # Unreadable plan pair: guard fail-closed, check-restored witness
     # ------------------------------------------------------------------
 
-    def test_guard_warns_and_skips_unreadable_plan(self) -> None:
-        # A plan file whose bytes cannot be read must degrade to a named
-        # skip-and-warn on stderr, never an accidental fail-closed traceback
-        # (guard) or crash (check-restored). The seam is sha256_file itself,
-        # patched to raise OSError; the guard arm keeps its refusal posture
-        # for readable downgrades (covered by the other tests).
+    def test_guard_fails_closed_on_unreadable_plan_check_restored_warns(self) -> None:
+        # A shared plan file made unreadable (chmod 0o000, restored in a
+        # finally) must never surface a bare traceback, but the two postures
+        # diverge on it: guard stays fail-closed on inputs it cannot verify
+        # (the certified-downgrade boundary stays closed: non-zero exit with
+        # a named warn), while check-restored is the warn-and-continue
+        # witness leg (exit 0, same named warn). Skipped entirely for root,
+        # whose reads defeat the chmod.
+        if os.geteuid() == 0:
+            self.skipTest("root reads defeat chmod 0o000")
         self._write_plan(self.branch, CERTIFIED_TEXT)
         self._write_plan(self.incoming, OLDER_TEXT)
         self._write_sidecar(
@@ -359,45 +378,24 @@ class CertifiedPlanGuardTest(unittest.TestCase):
             digest=self.cert_digest,
         )
         branch_plan = self.branch / PLANS_REL / PLAN_NAME
+        os.chmod(branch_plan, 0o000)
+        try:
+            # guard: fail-closed on the unverifiable input.
+            code, out, err = self._run_guard()
+            self.assertNotEqual(code, 0)
+            self.assertNotIn("REFUSE:", out)
+            self.assertIn("skipping unreadable plan pair", err)
+            self.assertIn(str(branch_plan), err)
+            self.assertNotIn("Traceback", err)
 
-        def _raise(path: Path) -> str:
-            raise OSError(f"unreadable for test: {path}")
-
-        def _invoke(*argv: str) -> tuple[int, str, str]:
-            out, err = io.StringIO(), io.StringIO()
-            with (
-                mock.patch.object(GUARD_MODULE, "sha256_file", _raise),
-                contextlib.redirect_stdout(out),
-                contextlib.redirect_stderr(err),
-            ):
-                code = GUARD_MODULE.main(list(argv))
-            return code, out.getvalue(), err.getvalue()
-
-        # guard: exit 0, warn line naming the unreadable path, no refusal.
-        code, out, err = _invoke(
-            "guard",
-            "--incoming-root", str(self.incoming),
-            "--branch-root", str(self.branch),
-            "--plans-dir", str(PLANS_REL),
-            "--reviews-dir", str(self.reviews),
-        )
-        self.assertEqual(code, 0)
-        self.assertNotIn("REFUSE:", out)
-        self.assertIn("unreadable plan file", err)
-        self.assertIn(str(branch_plan), err)
-        self.assertNotIn("Traceback", err)
-
-        # check-restored: same containment, warn-and-continue with exit 0.
-        code, out, err = _invoke(
-            "check-restored",
-            "--reviews-dir", str(self.reviews),
-            str(branch_plan),
-        )
-        self.assertEqual(code, 0)
-        self.assertNotIn("REFUSE:", out)
-        self.assertIn("unreadable plan file", err)
-        self.assertIn(str(branch_plan), err)
-        self.assertNotIn("Traceback", err)
+            # check-restored: same named warn, warn-and-continue, exit 0.
+            code, out, err = self._run_check_restored(str(branch_plan))
+            self.assertEqual(code, 0)
+            self.assertIn("skipping unreadable plan pair", err)
+            self.assertIn(str(branch_plan), err)
+            self.assertNotIn("Traceback", err)
+        finally:
+            os.chmod(branch_plan, 0o644)
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 import runtime_capabilities as capabilities
 from runtime_capabilities import bounded_evidence
@@ -68,6 +68,29 @@ WAITING_CAPACITY_RETRY_ATTEMPTS = 3
 # write; every consumer keys on == "active", so a failed group routes
 # no member action.
 BATCH_GROUP_STATES = {"active", "closed", "failed"}
+# The group-kind discriminator in the manifest group record. `batch` is the
+# pre-existing one-worker sequential protocol (also the reading for legacy
+# records written before the field existed); `parallel` is the concurrent
+# single-task-worker protocol: members launch together, each on its own
+# session, claim, policy token, and log path, with no anchor session and no
+# active-member ordinal gate. Every group-protocol branch reads the kind
+# through `_claim_group_kind` so a missing field can never change batch
+# behavior.
+GROUP_KIND_BATCH = "batch"
+GROUP_KIND_PARALLEL = "parallel"
+# The batch numeric caps: the one source of truth shared by the batch prefix
+# computation and the parallel-group claim refusals (a parallel implement
+# group never exceeds the batch contract's known-safe size - 4 members, 8
+# combined canonical member files). Driver-owned code: the caps are contract
+# constants, never environment-tunable.
+PARALLEL_GROUP_MEMBER_CAP = 4
+PARALLEL_GROUP_COMBINED_FILE_CAP = 8
+# Claim states a parallel-group member's claim may hold when its group
+# closes: `closed` (the member's done landed), `replaced` (released by the
+# per-member reclaim exit or the session-less resume release), or `aborted`
+# (explicitly stopped). Close = the last member reaching one of these; a
+# released or stopped member never wedges an otherwise complete group.
+PARALLEL_MEMBER_TERMINAL_CLAIM_STATES = {"closed", "replaced", "aborted"}
 # The terminal gate bounds its archived-plan read at 1,000,000 bytes: a plan
 # at or under the bound is read whole (the unchecked-checkbox scan covers the
 # entire file), and a plan over the bound is refused outright instead of
@@ -906,6 +929,52 @@ def _unchecked_checkbox_lines(lines: Sequence[str]) -> list[str]:
     return [line for _number, line in _unchecked_checkbox_pairs(lines)]
 
 
+def _checkbox_flip_identity(content: str, *, checked: bool) -> str | None:
+    """Identity of a checkbox line after its ``- [ ]`` / ``- [x]`` marker.
+
+    Returns the line text with the marker (and one following space) stripped,
+    or None when the line does not carry that exact marker shape: only lines
+    that are a checkbox marker before and after the change can pair.
+    """
+
+    marker = "- [x]" if checked else "- [ ]"
+    if not content.startswith(marker):
+        return None
+    rest = content[len(marker):]
+    return rest[1:] if rest.startswith(" ") else rest
+
+
+def _diff_is_checkbox_marker_only(diff_text: str) -> bool:
+    """True when a unified diff flips pre-existing checkbox markers only.
+
+    The paired-line identity the tolerated dirty-entry shape requires: hunk
+    and file headers are ignored, every removed line must carry the unchecked
+    marker, every added line the checked marker, and the two sides must pair
+    one-to-one on the identity after the markers. Only unchecked-to-checked
+    flips of pre-existing checkbox lines satisfy the shape; a content
+    rewrite, an inserted or deleted line, and any non-checkbox changed line
+    never do. An empty diff is never marker-only: nothing is proven there,
+    and the caller refuses.
+    """
+
+    removed: list[str] = []
+    added: list[str] = []
+    for line in diff_text.splitlines():
+        if line.startswith("-") and not line.startswith("---"):
+            identity = _checkbox_flip_identity(line[1:], checked=False)
+            if identity is None:
+                return False
+            removed.append(identity)
+        elif line.startswith("+") and not line.startswith("+++"):
+            identity = _checkbox_flip_identity(line[1:], checked=True)
+            if identity is None:
+                return False
+            added.append(identity)
+    if not removed and not added:
+        return False
+    return sorted(removed) == sorted(added)
+
+
 class RuntimeDriver:
     """Own durable task transitions; never owns commits."""
 
@@ -1082,10 +1151,22 @@ class RuntimeDriver:
                 members = group.get("members")
                 if not isinstance(members, list) or not members or not all(isinstance(member, str) and member for member in members):
                     raise ValueError("batch group members must be a non-empty ordered list")
-                if group.get("anchor") not in members:
-                    raise ValueError("batch group anchor must be a member")
-                if group.get("active_member") is not None and group.get("active_member") not in members:
-                    raise ValueError("batch group active member must be a member")
+                kind = str(group.get("kind") or GROUP_KIND_BATCH)
+                if kind not in (GROUP_KIND_BATCH, GROUP_KIND_PARALLEL):
+                    raise ValueError(f"unknown claim group kind: {group.get('kind')}")
+                if kind == GROUP_KIND_PARALLEL:
+                    # Concurrent members carry no anchor identity and no
+                    # active-member ordinal gate; both must be absent so a
+                    # batch-shaped record can never masquerade as parallel.
+                    if group.get("anchor") is not None:
+                        raise ValueError("parallel group must not carry a batch anchor")
+                    if group.get("active_member") is not None:
+                        raise ValueError("parallel group must not carry an active member")
+                else:
+                    if group.get("anchor") not in members:
+                        raise ValueError("batch group anchor must be a member")
+                    if group.get("active_member") is not None and group.get("active_member") not in members:
+                        raise ValueError("batch group active member must be a member")
                 if isinstance(group.get("generation"), bool) or not isinstance(group.get("generation"), int) or group["generation"] < 0:
                     raise ValueError("batch group generation must be non-negative")
                 for member in members:
@@ -1269,10 +1350,13 @@ class RuntimeDriver:
         claim = manifest["claims"][task_id]
         claim["state"] = "blocked"
         if claim.get("group_id"):
-            # Persist the attempt receipt on the group and capture the anchor
-            # session from the first member receipt that carries one.
+            # Batch members persist the attempt receipt on the group and
+            # capture the anchor session from the first member receipt that
+            # carries one. Parallel members keep neither: each member owns
+            # its session on its own task record, and the blocked receipt
+            # stays on the task (the reclaim exit reads it there).
             group = manifest.get("claim_groups", {}).get(claim["group_id"])
-            if isinstance(group, Mapping):
+            if isinstance(group, Mapping) and RuntimeDriver._claim_group_kind(manifest, claim, group) == GROUP_KIND_BATCH:
                 if session_id and not group.get("anchor_session"):
                     group["anchor_session"] = str(session_id)
                 attempts = group.setdefault("member_attempts", {})
@@ -1382,6 +1466,21 @@ class RuntimeDriver:
             return stale(["member claim references an unknown batch group"])
         if (claim or {}).get("state") not in {"claimed", "launched", "blocked"}:
             return stale(["receipt names a closed or superseded batch member"])
+        if RuntimeDriver._claim_group_kind(manifest, claim, group) == GROUP_KIND_PARALLEL:
+            # Concurrent members: the fence accepts any live member's receipt
+            # at any time. No active-member ordinal gate exists (all members
+            # are live together), no group attempt record is consulted (each
+            # member launches through its own ordinary launch record), and no
+            # shared anchor session is pinned: a receipt carrying a session
+            # that disagrees with the member's OWN task session is fenced.
+            if group.get("state") != "active":
+                return stale(["receipt names a member of an inactive parallel group"])
+            task = manifest.get("tasks", {}).get(task_id) or {}
+            own_session = task.get("session_id")
+            session_id = raw.get("session_id") if isinstance(raw, Mapping) else None
+            if session_id and own_session and str(session_id) != str(own_session):
+                return stale(["receipt session does not match the member's own session"])
+            return None
         if group.get("state") != "active" or group.get("active_member") != task_id:
             return stale(["receipt does not name the active batch member"])
         attempt_record = (group.get("member_attempts") or {}).get(task_id) or {}
@@ -1463,6 +1562,14 @@ class RuntimeDriver:
 
     def _record_checkpoint_locked(self, raw: Mapping[str, Any]) -> dict[str, Any] | _RetryRelaunch:
         result = self.validate_adapter_result(raw)
+        if result.get("reason_code") == "malformed-result":
+            # A malformed envelope refuses read-only: return before the
+            # fence, before any claim lookup, latch, history append, or
+            # checkpoint record write, so a self-inflicted malformed receipt
+            # never converts a healthy claim into a blocked state; the
+            # corrected re-submission under the same live claim token and
+            # generation succeeds immediately.
+            return result
         manifest = load_manifest(self.manifest_path)
         task_id = self._task_id_from_checkpoint(result["checkpoint_identity"])
         claim = manifest.get("claims", {}).get(task_id)
@@ -1523,8 +1630,9 @@ class RuntimeDriver:
         if retryable and progressed:
             retryable = False
         member_retry_session: str | None = None
+        claim_group_kind = self._claim_group_kind(manifest, claim)
         if retryable and retry.get("attempts_remaining", 0) > 0 and self.adapter is not None and task is not None:
-            if claim.get("group_id"):
+            if claim_group_kind == GROUP_KIND_BATCH:
                 # A batch member never takes the plain driver relaunch.
                 # That relaunch bypasses the group fences (launch refusal,
                 # attempt rotation, member_attempts re-arm), and its fresh
@@ -1543,7 +1651,11 @@ class RuntimeDriver:
                 # (``continue --batch``; the recycle shape for the
                 # anchor).
                 member_retry_session = self._member_session(manifest, task, claim, anchor_first=False)
-            if member_retry_session is not None or not claim.get("group_id"):
+            # A parallel member has no anchor session to protect and carries
+            # its own launch record, so its retryable receipt takes the plain
+            # in-place relaunch exactly like a single-task claim; the member
+            # fence's own-session pin still judges every retry receipt.
+            if member_retry_session is not None or claim_group_kind != GROUP_KIND_BATCH:
                 retry["attempts_remaining"] = int(retry["attempts_remaining"]) - 1
                 # A failed attempt must not poison the stable checkpoint
                 # identity: record it under a distinct attempt identity so the
@@ -1727,16 +1839,18 @@ class RuntimeDriver:
             return {**result, "state": "done-pending", "duplicate": True, "actions": []}
         if claim.get("state") not in {"claimed", "launched", "blocked"}:
             return _outcome("blocked", "owner-mismatch", ["checkpoint claim is not live"], "repository-task", identity, result["generation"], "preserve-and-reconcile")
-        if claim.get("group_id"):
+        if claim.get("group_id") and self._claim_group_kind(manifest, claim) == GROUP_KIND_BATCH:
             # The anchor session is captured once from the first member
             # receipt that carries one; every later member resume reuses it.
+            # Parallel members capture no group session: each member keeps
+            # its own session on its own task record.
             group = manifest.get("claim_groups", {}).get(claim["group_id"])
             if isinstance(group, Mapping) and raw.get("session_id") and not group.get("anchor_session"):
                 group["anchor_session"] = str(raw["session_id"])
         drift = self._claim_drift_outcome(manifest, claim, "repository-task", identity)
         if drift is not None:
             return drift
-        verdict, unexpected = self._worktree_scope_violation(claim)
+        verdict, unexpected = self._worktree_scope_violation(claim, self._parallel_sibling_paths(manifest, claim))
         if verdict == "unavailable":
             return _outcome("blocked", "worktree-witness-unavailable", ["git diff scope witness failed"], "repository-task", identity, result["generation"], "preserve-and-reconcile", resume_allowed=False)
         if verdict == "cleanup":
@@ -1849,14 +1963,20 @@ class RuntimeDriver:
         member_fence = self._member_receipt_fence(manifest, task_id, claim, raw, "done-handoff", checkpoint_identity)
         if member_fence is not None:
             return member_fence, False
-        if not self.commit_lookup(str(raw["commit_identity"])):
+        stripped_identity = str(raw["commit_identity"]).strip()
+        none_receipt = stripped_identity == "none"
+        if not none_receipt and not self.commit_lookup(str(raw["commit_identity"])):
             return _outcome("blocked", "commit-pending", [f"commit not found: {raw['commit_identity']}"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile"), False
+        # The none receipt skips the commit lookup: the boundary witnesses
+        # below prove the clean state themselves, and the recorded identity
+        # is the justification literal, never a manufactured commit.
         boundary = self._done_boundary_block(claim, str(raw["commit_identity"]), checkpoint_identity, manifest.get("generation", 0), manifest=manifest)
         if boundary is not None:
             return boundary, False
         if task.get("status") == "checkpointed" and task.get("commit_identity") == raw["commit_identity"]:
             return _outcome("success", "completed", ["duplicate done handoff"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "continue-parent", actions=[], duplicate=True), False
-        resume_action, claim_next, advance_blocked = self._advance_group_locked(manifest, task_id, str(raw["commit_identity"]), checkpoint_identity)
+        stored_identity = stripped_identity if none_receipt else str(raw["commit_identity"])
+        resume_action, claim_next, advance_blocked = self._advance_group_locked(manifest, task_id, stored_identity, checkpoint_identity)
         if advance_blocked is not None:
             return advance_blocked, False
         self._complete_and_persist(
@@ -1866,22 +1986,27 @@ class RuntimeDriver:
                 "status": "checkpointed",
                 "checkbox": True,
                 "complete": True,
-                "commit_identity": str(raw["commit_identity"]),
+                "commit_identity": stored_identity,
                 "done_log_evidence": bounded_evidence(raw["log_evidence"]),
             },
             # commit-pending is owned solely by mark_commit_pending; the done
             # handoff records only its own completion event.
             history=[
-                {"event": "done-commit", "task_id": task_id, "commit_identity": str(raw["commit_identity"])},
+                {"event": "done-commit", "task_id": task_id, "commit_identity": stored_identity},
             ],
             claim_state="closed",
+        )
+        done_evidence = (
+            "no-commit justification, checkbox, clean-state, and log evidence recorded"
+            if none_receipt
+            else "done commit, checkbox, clean-state, and log evidence recorded"
         )
         if resume_action is not None:
             # A member done advances the group under this manifest lock and
             # suppresses the generic next-claim: the parent resumes the next
             # member on the anchor session instead of launching a new task.
-            return _outcome("success", "completed", ["done commit, checkbox, clean-state, and log evidence recorded"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "continue-parent", actions=[resume_action]), claim_next
-        return _outcome("success", "completed", ["done commit, checkbox, clean-state, and log evidence recorded"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "continue-parent", actions=[]), claim_next
+            return _outcome("success", "completed", [done_evidence], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "continue-parent", actions=[resume_action]), claim_next
+        return _outcome("success", "completed", [done_evidence], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "continue-parent", actions=[]), claim_next
 
     def _advance_group_locked(self, manifest: dict[str, Any], task_id: str, commit_identity: str, checkpoint_identity: str) -> tuple[dict[str, Any] | None, bool, dict[str, Any] | None]:
         """Advance a live group after one member closed; caller holds the lock.
@@ -1894,6 +2019,12 @@ class RuntimeDriver:
         counter). The last member closes the group and returns
         ``claim_next=True`` so the generic next-claim resumes only after the
         lock is released. Non-member claims pass through unchanged.
+
+        Parallel-kind groups take the concurrent branch instead: there is no
+        anchor session to capture and no next member to activate (all members
+        run together), so a member done only re-derives the close rule
+        (close = the last member reaching a terminal claim state) and always
+        returns ``claim_next=True``.
         """
 
         claim = manifest["claims"].get(task_id) or {}
@@ -1902,9 +2033,28 @@ class RuntimeDriver:
         if not isinstance(group, Mapping):
             return None, True, None
         members = list(group.get("members") or ())
+        if self._claim_group_kind(manifest, claim, group) == GROUP_KIND_PARALLEL:
+            if group.get("state") == "active" and task_id in members:
+                # The done close runs the one terminal-membership predicate
+                # shared with the reclaim and resume-release exits below:
+                # every terminal transition of a parallel member re-derives
+                # the close rule, so no release path can leave the group
+                # active with zero live members.
+                self._close_parallel_group_when_terminal_locked(manifest, group_id, task_id, group)
+            return None, True, None
         if group.get("state") == "active" and task_id in members:
             index = members.index(task_id)
             if index + 1 < len(members):
+                # The advance baseline is computed once for every hand-off
+                # site below: a none done hands the driver's current HEAD
+                # revision to the next member exactly as if a real commit
+                # had landed, any other identity advances on itself. An
+                # unreadable HEAD under a none done refuses the done as
+                # commit-pending (fail closed) instead of seeding an empty
+                # baseline the done-boundary witnesses cannot consume.
+                advance_revision = self._git_head_revision() if str(commit_identity).strip() == "none" else str(commit_identity)
+                if not advance_revision:
+                    return None, False, _outcome("blocked", "commit-pending", ["no-commit advance baseline unavailable: HEAD revision could not be read"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
                 # Anchor-session resolution: the anchor capture is
                 # receipt-driven, so a member whose receipts carried no
                 # session id leaves the group without one and the advance
@@ -1980,14 +2130,14 @@ class RuntimeDriver:
                 # does not age into reclaimable-looking leases (reclaim
                 # refuses live-group members regardless, but the lease
                 # field stays an honest activation timestamp).
-                next_claim.update({"state": "claimed", "attempt": 1, "policy_token": policy_token, "baseline_revision": str(commit_identity), "timestamp": self.clock()})
+                next_claim.update({"state": "claimed", "attempt": 1, "policy_token": policy_token, "baseline_revision": advance_revision, "timestamp": self.clock()})
                 manifest["tasks"][next_id]["status"] = "claimed"
                 self._set_group_state(manifest, str(group_id), "active", next_id)
                 group.setdefault("member_attempts", {})[next_id] = {
                     "attempt": 1,
                     "token": next_claim["token"],
-                    "baseline_revision": str(commit_identity),
-                    "initialized_from": str(commit_identity),
+                    "baseline_revision": advance_revision,
+                    "initialized_from": advance_revision,
                     "launched_at": self.clock(),
                 }
                 manifest["history"].append({"event": "batch-member-advanced", "group_id": group_id, "from": task_id, "to": next_id, "member_ordinal": next_claim.get("member_ordinal")})
@@ -1998,12 +2148,52 @@ class RuntimeDriver:
                     "member_ordinal": next_claim.get("member_ordinal"),
                     "session_id": group.get("anchor_session"),
                     "policy_token": policy_token,
-                    "baseline_revision": str(commit_identity),
+                    "baseline_revision": advance_revision,
                 }
                 return action, False, None
             self._set_group_state(manifest, str(group_id), "closed", None)
             manifest["history"].append({"event": "batch-group-closed", "group_id": group_id})
         return None, True, None
+
+    def _close_parallel_group_when_terminal_locked(
+        self,
+        manifest: dict[str, Any],
+        group_id: Any,
+        last_member: str,
+        group: Mapping[str, Any],
+    ) -> bool:
+        """The ONE parallel-group terminal-membership close predicate.
+
+        Caller holds the manifest lock. Close = the group is active, the
+        transitioning member holds its seat, and every member claim is at a
+        terminal claim state (the just-transitioned member is exempt: the
+        caller records its own transition and the done handoff closes its
+        claim only afterwards). Invoked at EVERY terminal transition of a
+        parallel member - the done-handoff advance close, the per-member
+        reclaim exit, and the session-less resume release - so no release
+        path can leave the group active with zero live members (the wedge
+        where every later claim is refused forever and reclaim cannot touch
+        a terminal claim). Writes the closed state through the one group
+        primitive and appends the ``parallel-group-closed`` history event.
+        Returns True when the group closed here.
+        """
+
+        members = [str(member) for member in (group.get("members") or ())]
+        if group.get("state") != "active" or last_member not in members:
+            return False
+        if not all(
+            member == last_member
+            or (manifest["claims"].get(member) or {}).get("state") in PARALLEL_MEMBER_TERMINAL_CLAIM_STATES
+            for member in members
+        ):
+            return False
+        self._set_group_state(manifest, str(group_id), "closed", None)
+        manifest.setdefault("history", []).append({
+            "event": "parallel-group-closed",
+            "group_id": group_id,
+            "last_member": last_member,
+        })
+        return True
 
     def _done_boundary_block(self, claim: Mapping[str, Any] | None, commit_identity: str, checkpoint_identity: str, generation: int, manifest: Mapping[str, Any]) -> dict[str, Any] | None:
         """Verify the done boundary against the claim's launch baseline.
@@ -2015,6 +2205,16 @@ class RuntimeDriver:
         when verification passes, or a blocked outcome describing the failure.
         ``manifest`` is the locked-read snapshot supplied by the caller; every
         call site runs under the manifest lock, so the parameter is required.
+
+        The none no-commit justification takes its own arm before the commit
+        witnesses: the commit lookup is never consulted, the dirty-entry
+        classifier proves the clean state (in-scope dirt, untracked entries,
+        and every non-checkbox content change refuse; the checkbox-marker-only
+        Markdown flip outside the claim's scope is the one tolerated entry),
+        and when the claim carries a baseline revision HEAD must equal it, so
+        a committing worker cannot report ``none`` past its baseline. Real
+        identities keep the full witness chain, with the same classifier at
+        the clean-worktree tail.
         """
 
         # Drift first: a claim whose launch-record snapshot no longer matches
@@ -2023,16 +2223,49 @@ class RuntimeDriver:
         drift = self._claim_drift_outcome(manifest, claim, "done-handoff", checkpoint_identity)
         if drift is not None:
             return drift
+        allowed = set((claim.get("policy_token") or {}).get("allowed_paths", ()))
+        sibling_paths = self._parallel_sibling_paths(manifest, claim)
+        if str(commit_identity).strip() == "none":
+            classified = self._classify_dirty_entries(allowed, exempt_paths=sibling_paths)
+            if classified is None:
+                return _outcome("blocked", "worktree-witness-unavailable", ["done-boundary clean-state witness failed"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
+            refused, _tolerated = classified
+            if refused:
+                evidence = ["no-commit justification requires a clean worktree: worktree is not clean at the done boundary"] + [
+                    f"{_printable_evidence(code)} {_printable_evidence(path)}" for code, path in refused[:20]
+                ]
+                if len(refused) > 20:
+                    evidence.append(f"... and {len(refused) - 20} more entries")
+                return _outcome("blocked", "commit-pending", evidence, "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
+            # The honesty check that keeps the none receipt provable: with a
+            # recorded baseline the driver's HEAD must still equal it, else
+            # committed work hides behind the no-commit justification.
+            baseline_revision = str((claim or {}).get("baseline_revision") or "").strip()
+            if baseline_revision:
+                head = self._git_head_revision()
+                if not head or head != baseline_revision:
+                    return _outcome("blocked", "commit-pending", [f"HEAD moved past the claim baseline for the no-commit justification: baseline={baseline_revision} head={head or 'unavailable'}"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
+            return None
         baseline_revision = str((claim or {}).get("baseline_revision") or "").strip()
         if not baseline_revision:
             return None
-        allowed = set((claim.get("policy_token") or {}).get("allowed_paths", ()))
         is_descendant, witness_ok = self._git_commit_is_descendant(baseline_revision, commit_identity)
         if not witness_ok or not allowed:
             return _outcome("blocked", "worktree-witness-unavailable", ["done-boundary git witness failed"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
         if not is_descendant:
             return _outcome("blocked", "commit-pending", [f"commit is not new work on the claim baseline: {commit_identity}"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
-        committed_paths = self._git_diff_paths(baseline_revision, commit_identity)
+        # A parallel member's committed-paths witness measures the done
+        # commit's OWN change set (first-parent diff), not the cumulative
+        # diff since its launch baseline: per-member done runs after all
+        # members land, so the member's commit sits on top of its siblings'
+        # commits and a baseline-cumulative diff would name the siblings'
+        # committed files as this member's scope escape. The descendant check
+        # above still pins the commit to the claim's recorded baseline.
+        committed_paths = (
+            self._git_commit_own_paths(commit_identity)
+            if sibling_paths
+            else self._git_diff_paths(baseline_revision, commit_identity)
+        )
         if committed_paths is None:
             return _outcome("blocked", "worktree-witness-unavailable", ["done-boundary git diff witness failed"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
         out_of_scope = [path for path in committed_paths if path not in allowed]
@@ -2044,12 +2277,23 @@ class RuntimeDriver:
             return _outcome("blocked", "worktree-witness-unavailable", ["done-boundary symlink witness failed"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
         if symlink_escapes:
             return _outcome("blocked", "commit-pending", [f"committed symlink escapes repository: {path}" for path in symlink_escapes], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
-        try:
-            actually_dirty = self._git_worktree_dirty()
-        except (OSError, RuntimeError):
+        # Clean-state witness through the shared dirty-entry classifier: a
+        # member of an active parallel group has its concurrently running
+        # siblings' claimed files exempted first (see
+        # ``_parallel_sibling_paths``), the checkbox-marker-only Markdown
+        # flip outside the claim's scope is the one tolerated entry, and
+        # every other dirty path keeps the full witness force.
+        classified = self._classify_dirty_entries(allowed, exempt_paths=sibling_paths)
+        if classified is None:
             return _outcome("blocked", "worktree-witness-unavailable", ["done-boundary clean-state witness failed"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
-        if actually_dirty:
-            return _outcome("blocked", "commit-pending", ["worktree is not clean at the done boundary"], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
+        refused, _tolerated = classified
+        if refused:
+            evidence = ["worktree is not clean at the done boundary"] + [
+                f"{_printable_evidence(code)} {_printable_evidence(path)}" for code, path in refused[:20]
+            ]
+            if len(refused) > 20:
+                evidence.append(f"... and {len(refused) - 20} more entries")
+            return _outcome("blocked", "commit-pending", evidence, "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=False)
         return None
 
     def _complete_and_persist(
@@ -2101,6 +2345,62 @@ class RuntimeDriver:
             if isinstance(group, Mapping) and group.get("state") == "active":
                 return group
         return None
+
+    @staticmethod
+    def _claim_group_kind(manifest: Mapping[str, Any], claim: Mapping[str, Any] | None, group: Mapping[str, Any] | None = None) -> str:
+        """The one group-kind discriminator read every group-protocol branch shares.
+
+        Returns ``GROUP_KIND_PARALLEL`` or ``GROUP_KIND_BATCH`` for a claimed
+        member (a legacy record with no ``kind`` field reads as batch, so
+        pre-parallel manifests behave byte-identically), and ``"none"`` when
+        the claim carries no group reference. A pre-resolved group record may
+        be passed by callers that already hold it.
+        """
+
+        if group is None:
+            group_id = (claim or {}).get("group_id")
+            if not group_id:
+                return "none"
+            group = (manifest.get("claim_groups") or {}).get(str(group_id))
+        if not isinstance(group, Mapping):
+            return GROUP_KIND_BATCH
+        return str(group.get("kind") or GROUP_KIND_BATCH)
+
+    @staticmethod
+    def _parallel_sibling_paths(manifest: Mapping[str, Any], claim: Mapping[str, Any] | None) -> frozenset[str]:
+        """Allowed-path union of a parallel member's siblings, or empty.
+
+        A member of an ACTIVE parallel group works in the shared worktree at
+        the same time as its siblings, so the siblings' claimed files sit
+        changed-but-uncommitted while this member's receipts run. They are
+        the group's claimed in-flight work, never foreign changes, and both
+        member-scoped path witnesses (the checkpoint scope witness and the
+        done-boundary clean-state witness) subtract this set before judging.
+        Every path outside it keeps the full witness force. Batch members
+        never qualify: their protocol is sequential in one session with a
+        moving baseline, so no sibling files exist while a batch member runs.
+        """
+
+        if RuntimeDriver._claim_group_kind(manifest, claim) != GROUP_KIND_PARALLEL:
+            return frozenset()
+        group_id = str((claim or {}).get("group_id") or "")
+        group = (manifest.get("claim_groups") or {}).get(group_id)
+        if not isinstance(group, Mapping) or group.get("state") != "active":
+            return frozenset()
+        task_id = str((claim or {}).get("task_id") or "")
+        siblings: set[str] = set()
+        for member in group.get("members") or ():
+            member = str(member)
+            if member == task_id:
+                continue
+            member_claim = manifest.get("claims", {}).get(member) or {}
+            paths = member_claim.get("allowed_paths")
+            if not paths:
+                paths = (manifest.get("tasks", {}).get(member) or {}).get("allowed_paths", ())
+            if isinstance(paths, str) or not isinstance(paths, (list, tuple)):
+                continue
+            siblings.update(str(path) for path in paths)
+        return frozenset(siblings)
 
     @staticmethod
     def _set_group_state(
@@ -2182,12 +2482,14 @@ class RuntimeDriver:
 
         Canonical document order (the persisted ordinal; the prefix is
         re-sorted so a caller's ordering can never leak task-number order
-        into the batch queue), no skipping past an overlapping task,
-        member cap four, combined canonical file cap eight. A zero-scope or
-        network-flagged pending task ends the prefix: its envelope
-        can never be authorized, so the batch contract never stages it as a
-        member and its single-task launch path owns the authorization
-        refusal.
+        into the batch queue), no skipping past an overlapping task, the
+        shared parallel-group numeric caps (``PARALLEL_GROUP_MEMBER_CAP``,
+        ``PARALLEL_GROUP_COMBINED_FILE_CAP`` - the one source of truth for
+        both the batch prefix and the parallel-group claim refusals). A
+        zero-scope or network-flagged pending task ends the prefix: its
+        envelope can never be authorized, so the batch contract never stages
+        it as a member and its single-task launch path owns the
+        authorization refusal.
         """
 
         ordered = sorted(pending, key=_pending_sort_key)
@@ -2195,7 +2497,7 @@ class RuntimeDriver:
         member_paths: list[set[str]] = []
         combined = 0
         for task in ordered:
-            if len(members) >= 4:
+            if len(members) >= PARALLEL_GROUP_MEMBER_CAP:
                 break
             paths = set(self._task_allowed_paths(task))
             if not paths or task.get("network") is True:
@@ -2205,7 +2507,7 @@ class RuntimeDriver:
                 # task ends the prefix and stays in the individual queue.
                 break
             if members:
-                if combined + len(paths) > 8:
+                if combined + len(paths) > PARALLEL_GROUP_COMBINED_FILE_CAP:
                     break
                 if any(paths & prior for prior in member_paths):
                     break
@@ -2344,6 +2646,166 @@ class RuntimeDriver:
             self._save(manifest)
             return {"status": "success", "claimed": True, "task_id": task["id"], "generation": manifest["generation"], "token": token, "actions": []}
 
+    def claim_parallel_group(self, member_ids: Sequence[str]) -> dict[str, Any]:
+        """Claim the requested tasks as one parallel implement group.
+
+        The parallel-group operation on the claim path: the orchestrator
+        selects the next K unchecked tasks in canonical document order and
+        requests them by id; the driver trusts nothing and re-derives every
+        membership condition from the manifest before any state write. The
+        membership disjointness computation is the batch prefix's (pairwise
+        disjoint canonical ``Files:`` sets over the manifest's canonical
+        allowed paths, canonical document order, no ineligible member), but
+        evaluated per requested member with a refusal instead of a prefix
+        stop, and the batch numeric caps are carried verbatim as the
+        known-safe envelope (4 members, 8 combined canonical member files):
+        an overlapping or over-cap request refuses at claim time with
+        stale-claim evidence naming the violation, never truncates silently.
+        The requested set must also be exactly the next pending tasks of the
+        canonical queue (no skipping past a pending task).
+
+        Divergence points threaded from the batch protocol, which otherwise
+        stays untouched: the group record carries the ``kind: parallel``
+        discriminator; all members claim live together (no staged members,
+        no anchor, no active-member ordinal gate); each member keeps its own
+        session, claim, policy token, and log path; reclaim is per member
+        (the terminal-receipt exit releases only that member); close = the
+        last member reaching a terminal claim state. One generation bump
+        covers the whole group, and every member's envelope is authorized
+        before any state write (a member whose envelope cannot be authorized
+        refuses the claim cheaply, leaving the manifest untouched).
+        """
+
+        with _manifest_lock(self.manifest_path, self.owner) as acquired:
+            manifest = load_manifest(self.manifest_path)
+            if not acquired:
+                return _outcome("blocked", "stale-claim", ["manifest claim is held by another owner"], "repository-task", "claim:conflict", manifest.get("generation", 0), "resumable-conflict", claimed=False)
+            if manifest.get("workflow_state") == "aborted":
+                # An explicitly aborted workflow never hands out a new claim.
+                return _abort_outcome(
+                    "claim:aborted",
+                    manifest.get("generation", 0),
+                    ["workflow was explicitly aborted before claim"],
+                    claimed=False,
+                )
+
+            def refuse(evidence: list[str]) -> dict[str, Any]:
+                return _outcome("blocked", "stale-claim", evidence, "repository-task", "claim:parallel-group", manifest.get("generation", 0), "resumable-conflict", claimed=False)
+
+            requested = [str(member) for member in member_ids]
+            if len(set(requested)) != len(requested):
+                return refuse(["parallel group membership names a task twice"])
+            if len(requested) < 2:
+                return refuse([f"a parallel group requires at least two members; {len(requested)} requested"])
+            unknown = [member for member in requested if member not in manifest["tasks"]]
+            if unknown:
+                return refuse([f"parallel group names unknown task '{member}'" for member in unknown])
+            pending = [task for task in manifest["tasks"].values() if not self._task_complete(task) and task.get("status") == "pending"]
+            pending.sort(key=_pending_sort_key)
+            pending_ids = [str(task["id"]) for task in pending]
+            requested_set = set(requested)
+            not_pending = [member for member in requested if member not in pending_ids]
+            if not_pending:
+                return refuse([
+                    f"parallel group member '{member}' is not pending (status: {manifest['tasks'][member].get('status')})"
+                    for member in not_pending
+                ])
+            # Canonical document-order prefix: the requested set is exactly
+            # the next len(requested) pending tasks, so a parallel group can
+            # never skip past a pending task the way the batch prefix never
+            # skips past an overlapping one.
+            expected = pending_ids[:len(requested)]
+            if set(expected) != requested_set:
+                skipped = next((member for member in expected if member not in requested_set), expected[-1] if expected else "unknown")
+                return refuse([f"parallel group membership must be the next pending tasks in canonical document order; '{skipped}' precedes the requested set"])
+            existing_claim = next((claim for claim in manifest["claims"].values() if claim.get("state") in {"claimed", "launched", "waiting-capacity"}), None)
+            if existing_claim:
+                return _outcome("blocked", "stale-claim", ["another task is already claimed"], "repository-task", existing_claim.get("token", "claim"), manifest.get("generation", 0), "resumable-conflict", claimed=False)
+            if self._live_group(manifest) is not None:
+                return _outcome("blocked", "stale-claim", ["another task is already claimed"], "repository-task", "claim:parallel-group", manifest.get("generation", 0), "resumable-conflict", claimed=False)
+            members = [task for task in pending if str(task["id"]) in requested_set]
+            # The batch membership disjointness computation, evaluated per
+            # requested member with refusal instead of a prefix stop.
+            member_path_sets: list[set[str]] = []
+            combined = 0
+            for task in members:
+                member_id = str(task["id"])
+                paths = set(self._task_allowed_paths(task))
+                if not paths or task.get("network") is True:
+                    return refuse([f"parallel member '{member_id}' has no authorizable envelope (empty scope or network flag); its single-task launch path owns the authorization refusal"])
+                if member_path_sets:
+                    if combined + len(paths) > PARALLEL_GROUP_COMBINED_FILE_CAP:
+                        return refuse([f"parallel group exceeds the combined member file cap: {combined + len(paths)} combined canonical files exceeds the batch cap of {PARALLEL_GROUP_COMBINED_FILE_CAP} (batch numeric caps carried verbatim: {PARALLEL_GROUP_MEMBER_CAP} members, {PARALLEL_GROUP_COMBINED_FILE_CAP} combined member files)"])
+                    for prior_position, prior_paths in enumerate(member_path_sets):
+                        shared = paths & prior_paths
+                        if shared:
+                            prior_id = str(members[prior_position]["id"])
+                            return refuse([f"parallel group members {prior_id} and {member_id} share canonical file(s): {', '.join(sorted(shared))}"])
+                member_path_sets.append(paths)
+                combined += len(paths)
+            if len(members) > PARALLEL_GROUP_MEMBER_CAP:
+                return refuse([f"parallel group exceeds the member cap: {len(members)} requested members exceeds the batch cap of {PARALLEL_GROUP_MEMBER_CAP} (batch numeric caps carried verbatim: {PARALLEL_GROUP_MEMBER_CAP} members, {PARALLEL_GROUP_COMBINED_FILE_CAP} combined member files)"])
+            manifest["generation"] = int(manifest.get("generation", 0)) + 1
+            generation = manifest["generation"]
+            group_id = f"group-{generation}"
+            for task in members:
+                member_id = str(task["id"])
+                envelope = ActionEnvelope(
+                    str(self.repo_root),
+                    tuple(str(path) for path in self._task_allowed_paths(task)),
+                    str(task.get("operation_kind", "repository-task")),
+                    task.get("network") is True,
+                    (f"task={member_id}", f"plan={self.plan_slug}", f"group={group_id}"),
+                )
+                authorization = self.authorize_envelope(envelope, generation)
+                if authorization["status"] != "success":
+                    # Nothing was persisted: the in-memory generation bump is
+                    # discarded with the unsaved manifest snapshot.
+                    return authorization
+            member_ids_canonical = [str(task["id"]) for task in members]
+            member_ordinals = {member_id: ordinal for ordinal, member_id in enumerate(member_ids_canonical, start=1)}
+            member_paths = {member_id: list(self._task_allowed_paths(task)) for member_id, task in zip(member_ids_canonical, members)}
+            timestamp = self.clock()
+            for member_id in member_ids_canonical:
+                # Every member claims live together: an ordinary claim (own
+                # token, own canonical paths, own ordinal) bound to the group,
+                # with no staged state and no anchor.
+                manifest["claims"][member_id] = {
+                    "token": uuid.uuid4().hex,
+                    "generation": generation,
+                    "owner": self.owner,
+                    "timestamp": timestamp,
+                    "state": "claimed",
+                    "task_id": member_id,
+                    "group_id": group_id,
+                    "member_ordinal": member_ordinals[member_id],
+                    "allowed_paths": member_paths[member_id],
+                }
+                manifest["tasks"][member_id]["status"] = "claimed"
+            manifest.setdefault("claim_groups", {})[group_id] = {
+                "group_id": group_id,
+                "kind": GROUP_KIND_PARALLEL,
+                "members": member_ids_canonical,
+                "member_ordinals": member_ordinals,
+                "member_paths": member_paths,
+                "generation": generation,
+            }
+            # Activate through the one primitive: state active, no active
+            # member (concurrent members have no ordinal gate), and the
+            # progress-revision mirror ride every lifecycle transition.
+            self._set_group_state(manifest, group_id, "active", None)
+            self._save(manifest)
+            return {
+                "status": "success",
+                "claimed": True,
+                "parallel": True,
+                "generation": generation,
+                "group_id": group_id,
+                "members": member_ids_canonical,
+                "member_ordinals": member_ordinals,
+                "actions": [],
+            }
+
     @_locked_mutation
     def _mark_claim_launched(self, claim: Mapping[str, Any], task_id: str, policy_token: Mapping[str, Any]) -> dict[str, Any] | None:
         """Fence the claim-launched write; re-verify the claim under the lock."""
@@ -2454,14 +2916,21 @@ class RuntimeDriver:
     def _member_launch_refusal(self, claim: Mapping[str, Any], task_id: str) -> dict[str, Any] | None:
         """Refuse a launch that would bypass the group session protocol.
 
-        Only the anchor's initial launch (live group, no anchor session yet)
-        is a launch; later batch members resume the anchor session, so any
-        other member launch attempt fails closed as stale-claim.
+        Batch groups: only the anchor's initial launch (live group, no anchor
+        session yet) is a launch; later batch members resume the anchor
+        session, so any other member launch attempt fails closed as
+        stale-claim. Parallel groups: every member's initial launch IS an
+        ordinary launch on its own session, so the only gate is that the
+        member is a claimed member of the still-active group.
         """
 
         manifest = load_manifest(self.manifest_path)
         group = manifest.get("claim_groups", {}).get(claim.get("group_id"))
         current_claim = manifest.get("claims", {}).get(task_id) or {}
+        if isinstance(group, Mapping) and str(group.get("kind") or GROUP_KIND_BATCH) == GROUP_KIND_PARALLEL:
+            if group.get("state") != "active" or current_claim.get("state") != "claimed":
+                return _stale_claim_outcome(str(claim.get("token", task_id)), int(claim.get("generation", 0)), ["parallel member launch does not name a claimed member of the active group"])
+            return None
         if not isinstance(group, Mapping) or group.get("state") != "active":
             return _stale_claim_outcome(str(claim.get("token", task_id)), int(claim.get("generation", 0)), ["member claim references an unknown or closed batch group"])
         if group.get("anchor") != task_id or group.get("anchor_session") is not None or current_claim.get("state") != "claimed":
@@ -2470,7 +2939,9 @@ class RuntimeDriver:
 
     def _launch_claimed_task(self, claim: Mapping[str, Any], prompt: str, deadline_seconds: float | None) -> dict[str, Any]:
         task_id = str(claim["task_id"])
+        group_kind = "none"
         if claim.get("group_id"):
+            group_kind = self._claim_group_kind(load_manifest(self.manifest_path), claim)
             refusal = self._member_launch_refusal(claim, task_id)
             if refusal is not None:
                 return refusal
@@ -2489,7 +2960,11 @@ class RuntimeDriver:
         authorization = self.authorize_envelope(envelope, int(claim["generation"]))
         if authorization["status"] != "success":
             return self._persist_blocked_claim(claim, authorization, task_id)
-        if claim.get("group_id"):
+        if group_kind == GROUP_KIND_BATCH:
+            # Batch members fence through the group anchor launch (one
+            # launch record on the group, no member records); parallel
+            # members are ordinary launches with their own launch record,
+            # baseline, and policy token.
             fencing = self._mark_group_launched(claim, task_id, authorization["policy_token"])
         else:
             fencing = self._mark_claim_launched(claim, task_id, authorization["policy_token"])
@@ -2513,11 +2988,20 @@ class RuntimeDriver:
             if fencing is not None:
                 return fencing
         raw = self._invoke_adapter_launch(claim, task, prompt, deadline_seconds, authorization["policy_token"])
-        if raw.get("status") != "success" and raw.get("reason_code") in {"malformed-result", "runtime-policy-unavailable", "runtime-error", "timeout"}:
+        if raw.get("reason_code") == "malformed-result":
+            # A malformed launch receipt refuses read-only: return before the
+            # blocked-persist arm, so a self-inflicted malformed receipt never
+            # latches the claim into a blocked state that only a lease expiry
+            # or hand edit can undo; the corrected relaunch or resume proceeds
+            # under the live claim token and generation.
+            return raw
+        if raw.get("status") != "success" and raw.get("reason_code") in {"runtime-policy-unavailable", "runtime-error", "timeout"}:
             return self._persist_blocked_claim(claim, raw, task_id)
         validated = self.validate_adapter_result(raw)
         if validated.get("reason_code") == "malformed-result":
-            return self._persist_blocked_claim(claim, validated, task_id)
+            # An envelope-shaped failure validated to malformed-result is the
+            # same read-only refusal: return it without persisting.
+            return validated
         return self.record_worker_checkpoint(raw)
 
     def launch_next_task(self, prompt: str = "continue execute-plan", deadline_seconds: float | None = None, batch: bool = False) -> dict[str, Any]:
@@ -2528,6 +3012,31 @@ class RuntimeDriver:
         claim = self.claim_next_task(batch=batch)
         if not claim.get("claimed"):
             return claim
+        return self._launch_claimed_task(claim, prompt, deadline_seconds)
+
+    def launch_member_task(self, task_id: str, prompt: str = "continue execute-plan", deadline_seconds: float | None = None) -> dict[str, Any]:
+        """Launch one claimed member of a live parallel implement group.
+
+        The parallel-group launch entry: after ``claim_parallel_group``
+        claims every member, the orchestrator launches the members
+        concurrently through this operation, one call per member. Each
+        member is an ordinary launch (own authorized envelope, own launch
+        record and baseline, own policy token and session); the group's
+        only gates are that the group is still active and the target is a
+        claimed member of it. A group that is not a live parallel group
+        refuses: batch members launch through the group continuation, not
+        this path.
+        """
+
+        manifest = self.refresh_manifest()
+        claim = manifest.get("claims", {}).get(str(task_id))
+        if not isinstance(claim, Mapping) or claim.get("owner") != self.owner or claim.get("state") not in {"claimed", "launched", "waiting-capacity"}:
+            return _outcome("blocked", "stale-claim", [f"launch does not name an owned live claim: {task_id}"], "parent-continuation", f"{task_id}:launch", manifest.get("generation", 0), "preserve-and-reconcile")
+        if self._claim_group_kind(manifest, claim) != GROUP_KIND_PARALLEL:
+            return _outcome("blocked", "stale-claim", [f"launch does not name a parallel group member: {task_id}"], "parent-continuation", f"{task_id}:launch", manifest.get("generation", 0), "preserve-and-reconcile")
+        group = manifest.get("claim_groups", {}).get(str(claim.get("group_id") or ""))
+        if not isinstance(group, Mapping) or group.get("state") != "active" or str(task_id) not in [str(member) for member in (group.get("members") or ())]:
+            return _stale_claim_outcome(str(claim.get("token", f"{task_id}:launch")), int(claim.get("generation", 0)), ["parallel member launch does not name the active group"])
         return self._launch_claimed_task(claim, prompt, deadline_seconds)
 
     def continue_parent(self, prompt: str = "continue execute-plan", deadline_seconds: float | None = None, batch: bool = False) -> dict[str, Any]:
@@ -2842,7 +3351,11 @@ class RuntimeDriver:
                 return drift
         validated = self.validate_adapter_result(raw)
         if validated.get("reason_code") == "malformed-result":
-            return self._persist_blocked_claim(claim, validated, task["id"])
+            # A malformed resume receipt refuses read-only: the seeded
+            # receipt-permitting claim keeps its durable state instead of
+            # being latched non-resumable, so the corrected re-submission
+            # still resumes it under the same token and generation.
+            return validated
         return self.record_worker_checkpoint(raw)
 
     def _resume_select_locked(self) -> dict[str, Any] | _AdapterWindow | _ContinueParent:
@@ -2883,7 +3396,36 @@ class RuntimeDriver:
         if not isinstance(claim.get("policy_token"), Mapping) or claim["policy_token"].get("generation") != claim.get("generation"):
             return _outcome("blocked", "runtime-policy-unavailable", ["resume policy token is missing or stale"], "parent-continuation", str(claim.get("token", f"{task['id']}:resume")), int(claim.get("generation", manifest.get("generation", 0))), "preserve-and-reconcile")
         session_id = task.get("session_id")
-        if claim.get("group_id"):
+        if claim.get("group_id") and self._claim_group_kind(manifest, claim) == GROUP_KIND_PARALLEL:
+            # A parallel member resumes on its OWN session (concurrent
+            # members share no anchor session and there is no active-member
+            # gate to satisfy). With no session anywhere the member takes
+            # the standard single-task release: its identity rotates and its
+            # task re-enters the queue once the group closes (the replaced
+            # claim is terminal for the group's close rule).
+            group = manifest.get("claim_groups", {}).get(claim["group_id"])
+            if not isinstance(group, Mapping) or group.get("state") != "active":
+                return _stale_claim_outcome(str(claim.get("token", f"{task['id']}:resume")), int(claim.get("generation", manifest.get("generation", 0))), ["resume does not name a live parallel group member"])
+            if not session_id:
+                self._reset_task_to_pending(task)
+                claim["state"] = "replaced"
+                manifest.setdefault("history", []).append({
+                    "event": "parallel-member-released",
+                    "group_id": claim["group_id"],
+                    "member": task["id"],
+                    "reason": "resume has no member session",
+                })
+                # The release is a terminal member transition, so it runs the
+                # one terminal-membership close predicate (shared with the
+                # advance close and the per-member reclaim exit). Without it
+                # a released last live member left the group active with zero
+                # live members: every later claim refused forever ("another
+                # task is already claimed") and reclaim cannot touch a
+                # replaced claim - the wedge.
+                self._close_parallel_group_when_terminal_locked(manifest, claim["group_id"], task["id"], group)
+                self._save(manifest)
+                return _ContinueParent()
+        elif claim.get("group_id"):
             # Resume selects only the live group's active member, through the
             # group's anchor session when the task carries no session of its
             # own; a member is never replaced onto the pending queue.
@@ -3008,6 +3550,33 @@ class RuntimeDriver:
                 entries = self._git_worktree_entries()
             except (OSError, RuntimeError, UnicodeDecodeError):
                 entries = []
+        if dirty_worktree and entries:
+            # The tolerated riding flip (tracked Markdown outside every
+            # launch-evidence claim's allowed paths, paired-line
+            # checkbox-marker-only diff) leaves the gate's dirty set
+            # entirely, so `continue` and resume re-entry after a none
+            # completion never hard-block on the uncommitted plan flip. The
+            # ambient-noise allowlist cannot carry this exemption (its arms
+            # are conditioned on launch-record absence), and a classifier
+            # witness failure here keeps the hard block (fail closed). The
+            # tolerated entries also drop out of the operator-facing
+            # evidence: the gate names only what still refuses.
+            gate_allowed: set[str] = set()
+            for _gate_task_id, gate_claim in launch_evidence_claims:
+                gate_paths = (gate_claim.get("policy_token") or {}).get("allowed_paths", ()) or gate_claim.get("allowed_paths", ())
+                if not isinstance(gate_paths, str) and isinstance(gate_paths, (list, tuple)):
+                    gate_allowed.update(str(path) for path in gate_paths)
+            try:
+                classified = self._classify_dirty_entries(gate_allowed, entries=entries)
+            except (OSError, RuntimeError, UnicodeDecodeError):
+                classified = None
+            if classified is not None:
+                refused, _tolerated = classified
+                if not refused:
+                    dirty_worktree = False
+                    entries = []
+                else:
+                    entries = refused
         if ambient_entries is not None:
             # Both operator-facing evidence emission sites in this method
             # (the resumable cleanup-required outcome below and the hard
@@ -3096,8 +3665,12 @@ class RuntimeDriver:
                     return cleanup_outcome(claim.get("token", "claim"), claim.get("generation", 0))
                 return _outcome("blocked", "dirty-worktree", worktree_evidence, "repository-task", claim.get("token", "claim"), claim.get("generation", 0), "preserve-and-reconcile")
             commit_identity = task.get("commit_identity")
-            if commit_identity and task.get("done_log_evidence") and commit_lookup and commit_lookup(commit_identity):
-                return _ReconcileCommit(task_id, commit_identity, commit_lookup, claim.get("token"), claim.get("generation"))
+            if commit_identity and task.get("done_log_evidence"):
+                # A recorded none identity is a valid completion on its own:
+                # the done flow proved the clean state before recording it,
+                # so the recovery completes without any git lookup.
+                if str(commit_identity).strip() == "none" or (commit_lookup and commit_lookup(commit_identity)):
+                    return _ReconcileCommit(task_id, str(commit_identity), commit_lookup, claim.get("token"), claim.get("generation"))
             if live_worker_owner and live_worker_owner == claim.get("owner"):
                 return _outcome("blocked", "stale-claim", ["ambiguous live worker claim"], "repository-task", claim.get("token", "claim"), claim.get("generation", 0), "preserve-and-reconcile")
             return _outcome("blocked", "owner-mismatch", ["claim owner or generation cannot be proven safe"], "repository-task", claim.get("token", "claim"), claim.get("generation", 0), "preserve-and-reconcile")
@@ -3261,6 +3834,80 @@ class RuntimeDriver:
     def _git_worktree_dirty(self) -> bool:
         return bool(self._git_worktree_entries())
 
+    def _entry_is_tolerated_checkbox_flip(self, path: str, code: str) -> bool:
+        """True for the one tolerated dirty entry: the sanctioned flip shape.
+
+        A tracked Markdown file whose working-tree diff over HEAD is
+        checkbox-marker-only with paired-line identity (the Step 1.3
+        plan-file checkbox flip). Untracked entries, non-Markdown files,
+        repository-escaping paths, and any witness failure refuse (fail
+        closed): the tolerance is an allowance for the riding plan flip,
+        never a laundering channel for content changes.
+        """
+
+        if not path or code == "??":
+            # Untracked entries carry no tracked diff to prove anything
+            # about; an empty diff must never read as a tolerated flip.
+            return False
+        if PurePosixPath(path).suffix.lower() != ".md":
+            return False
+        if self._path_escapes_repo(path):
+            return False
+        try:
+            completed = subprocess.run(
+                ["git", "-c", "core.quotePath=false", "diff", "HEAD", "--", path],
+                cwd=self.repo_root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+        except (OSError, RuntimeError, UnicodeDecodeError):
+            return False
+        if completed.returncode != 0:
+            return False
+        return _diff_is_checkbox_marker_only(completed.stdout)
+
+    def _classify_dirty_entries(
+        self,
+        allowed_paths: Iterable[str],
+        exempt_paths: Iterable[str] = frozenset(),
+        entries: list[tuple[str, str]] | None = None,
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]] | None:
+        """Partition worktree entries into (refused, tolerated) for one scope.
+
+        The one dirty-entry classifier every dirty-tree consumer shares (the
+        done boundary's none arm and real-identity clean tail, the checkpoint
+        scope witness, and the startup reconciliation dirty gate): a dirty
+        entry inside ``allowed_paths`` refuses; a tracked Markdown entry
+        outside them is tolerated only when its working-tree diff is
+        checkbox-marker-only with paired-line identity; every other dirty
+        entry refuses. ``exempt_paths`` (a parallel member's siblings) are
+        in-flight by contract and are neither refused nor tolerated. Callers
+        that already hold an enumeration pass it as ``entries`` so the gate
+        never takes a second witness snapshot; otherwise the worktree is
+        enumerated here. Returns None when the git witness fails so every
+        caller fails closed.
+        """
+
+        if entries is None:
+            try:
+                entries = self._git_worktree_entries()
+            except (OSError, RuntimeError):
+                return None
+        allowed = set(allowed_paths)
+        exempt = set(exempt_paths)
+        refused: list[tuple[str, str]] = []
+        tolerated: list[tuple[str, str]] = []
+        for code, path in entries:
+            if not path or path in exempt:
+                continue
+            if path in allowed or not self._entry_is_tolerated_checkbox_flip(path, code):
+                refused.append((code, path))
+            else:
+                tolerated.append((code, path))
+        return refused, tolerated
+
     def _git_head_revision(self) -> str:
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -3340,6 +3987,28 @@ class RuntimeDriver:
     def _git_diff_paths(self, baseline: str, commit: str) -> list[str] | None:
         completed = subprocess.run(
             ["git", "-c", "core.quotePath=false", "diff", "--name-only", baseline, commit],
+            cwd=self.repo_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return None
+        return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+    def _git_commit_own_paths(self, commit: str) -> list[str] | None:
+        """The done commit's own change set (first-parent diff).
+
+        The parallel-member done-boundary measure: per-member done runs after
+        all members land, so the member's commit sits on top of its siblings'
+        commits and the baseline-cumulative diff would count the siblings'
+        committed files as this member's scope escape. A root-commit target
+        (no first parent) fails the witness (None, fail closed).
+        """
+
+        completed = subprocess.run(
+            ["git", "-c", "core.quotePath=false", "diff", "--name-only", f"{commit}^", commit],
             cwd=self.repo_root,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -3432,10 +4101,11 @@ class RuntimeDriver:
         task_id = str((claim or {}).get("task_id") or self._task_id_from_checkpoint(checkpoint_identity))
         task = manifest.get("tasks", {}).get(task_id, {})
         group_id = (claim or {}).get("group_id")
-        if group_id:
-            # Member claims drift against the group's single launch record
-            # and their own attempt baseline; they never carry launch
-            # records of their own.
+        if group_id and self._claim_group_kind(manifest, claim) == GROUP_KIND_BATCH:
+            # Batch member claims drift against the group's single launch
+            # record and their own attempt baseline; they never carry launch
+            # records of their own. Parallel members are ordinary launches:
+            # they fall through to their own launch-record snapshot below.
             group = manifest.get("claim_groups", {}).get(group_id)
             record = group.get("launch_record") if isinstance(group, Mapping) else None
             if not isinstance(record, Mapping):
@@ -3503,7 +4173,7 @@ class RuntimeDriver:
             )
         return None
 
-    def _worktree_scope_violation(self, claim: Mapping[str, Any]) -> tuple[str, list[str]]:
+    def _worktree_scope_violation(self, claim: Mapping[str, Any], sibling_paths: frozenset[str] = frozenset()) -> tuple[str, list[str]]:
         """Enforce the claim's allowed-path boundary with a git witness.
 
         Returns ``(verdict, paths)`` where verdict is ``ok``, ``violation``,
@@ -3516,7 +4186,20 @@ class RuntimeDriver:
         ``cleanup`` envelope instead of the terminal ``violation`` that
         would hard-wedge the task on host-generated untracked noise; any
         tracked out-of-scope modification, even one wearing an ambient
-        name, keeps the hard block.
+        name, keeps the hard block. The one exception is the tolerated
+        dirty-entry shape from the shared classifier: a tracked Markdown
+        out-of-scope path whose working-tree diff is checkbox-marker-only
+        with paired-line identity (the Step 1.3 plan-file flip riding
+        uncommitted after a none completion) is not ``unexpected``, so the
+        next task's checkpoint after a none completion never persists a
+        non-resumable ``contract-violation``.
+
+        ``sibling_paths`` is the parallel-group carve-out: the claimed files
+        of this member's concurrently running siblings (see
+        ``_parallel_sibling_paths``) are subtracted before judging, so a
+        sibling's in-flight work never reads as this member's scope escape.
+        Every path outside the member's scope AND the sibling set keeps the
+        full witness force, including the on-disk escape probe.
         """
 
         baseline = str(claim.get("baseline_revision") or "").strip()
@@ -3528,10 +4211,27 @@ class RuntimeDriver:
         changed = self._git_changed_paths(baseline)
         if changed is None:
             return "unavailable", []
-        unexpected = [path for path in changed if path not in allowed or self._path_escapes_repo(path)]
+        unexpected = [
+            path
+            for path in changed
+            if path not in sibling_paths and (path not in allowed or self._path_escapes_repo(path))
+        ]
         if unexpected:
             if self._ambient_untracked_witness(unexpected):
                 return "cleanup", unexpected
+            # The tolerated-entry carve-out runs after the ambient arm: an
+            # untracked entry can never satisfy the flip shape (no tracked
+            # diff), so the two allowances never overlap. A classifier
+            # witness failure keeps the hard block (fail closed).
+            try:
+                classified = self._classify_dirty_entries(allowed, exempt_paths=sibling_paths)
+            except (OSError, RuntimeError, UnicodeDecodeError):
+                classified = None
+            if classified is not None:
+                tolerated_paths = {path for _code, path in classified[1]}
+                unexpected = [path for path in unexpected if path not in tolerated_paths]
+                if not unexpected:
+                    return "ok", []
             return "violation", unexpected
         return "ok", []
 
@@ -3683,7 +4383,9 @@ class RuntimeDriver:
             return _outcome("success", "completed", ["commit already reconciled"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "continue-parent", actions=[]), False
         if task.get("commit_identity") != commit_identity or not task.get("done_log_evidence"):
             return _outcome("blocked", "commit-pending", ["matching done-log evidence and commit identity are required"], "done-handoff", f"{task_id}:commit", claim.get("generation", manifest.get("generation", 0)), "preserve-and-reconcile"), False
-        if not commit_lookup(commit_identity):
+        # The none identity never consults the lookup: the boundary witnesses
+        # below (the none arm of the done boundary) prove the state instead.
+        if str(commit_identity).strip() != "none" and not commit_lookup(commit_identity):
             return _outcome("blocked", "commit-pending", [f"commit not found: {commit_identity}"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "preserve-and-reconcile"), False
         # The committed artifact is verified exactly as the done handoff would
         # verify it: an out-of-scope or escaping commit is never reconciled
@@ -4690,6 +5392,27 @@ class RuntimeDriver:
             )
         group_id = claim.get("group_id")
         if group_id and self._claim_owned_by_live_group(manifest, claim):
+            group = manifest.get("claim_groups", {}).get(group_id)
+            if self._claim_group_kind(manifest, claim, group) == GROUP_KIND_PARALLEL:
+                # Parallel groups have no group path to recover through
+                # (members recover through the standard single-task path),
+                # so the fence is only about who releases: a member whose
+                # receipt still permits continuation has that recovery left,
+                # so its reclaim is refused naming the group; a member with
+                # a terminal (non-resumable) receipt has no path left, and
+                # its reclaim is the executable exit that releases ONLY that
+                # member - the group stays active and its siblings are never
+                # touched (never an atomic group fail).
+                if not (task.get("status") == "blocked" and task.get("resume_allowed") is False):
+                    return _stale_claim_outcome(
+                        str(claim.get("token", f"{task_id}:reclaim")),
+                        int(claim.get("generation", manifest.get("generation", 0))),
+                        [
+                            f"claim is a member of live parallel group '{group_id}'; reclaim refused",
+                            "recover the member through the standard single-task path (resume), not reclaim",
+                        ],
+                    )
+                return self._reclaim_parallel_member_locked(manifest, task_id, claim, group_id, group)
             # Live-group fence with its one executable exit.
             # The lease check below is exactly the wedge trigger - a group
             # parked at a budget pause is EXPECTED to be lease-expired - so
@@ -4858,6 +5581,84 @@ class RuntimeDriver:
             replacement_generation=replaced_generation,
             group_id=group_id,
             group_state="failed",
+        )
+
+    def _reclaim_parallel_member_locked(
+        self,
+        manifest: dict[str, Any],
+        task_id: str,
+        claim: Mapping[str, Any],
+        group_id: str,
+        group: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """The per-member executable exit: reclaim one parallel member only.
+
+        Caller holds the manifest lock; the fence has already proven the
+        terminal shape (live parallel group, member claim, task blocked with
+        a receipt whose ``resume_allowed`` is False, so the standard
+        single-task recovery refuses it forever). One save carries the whole
+        release: the member identity rotates (fresh token and bumped
+        generation, so any late receipt from the dead attempt fences as
+        owner-mismatch) and the task returns to pending with the dead
+        session's resume fields stripped. Unlike the batch exit this is
+        never an atomic group fail: the group stays active, the siblings'
+        claims are untouched, and the released member's task re-enters the
+        queue once the group closes. When the release leaves every member at
+        a terminal claim state the group closes too (the last commit may
+        already have landed before the final member was released), so the
+        live group can never wedge on a fully terminal membership.
+        """
+
+        replaced_generation = int(manifest.get("generation", 0)) + 1
+        replaced_token = uuid.uuid4().hex
+        manifest["generation"] = replaced_generation
+        manifest["claims"][task_id] = {
+            **claim,
+            "token": replaced_token,
+            "generation": replaced_generation,
+            "state": "replaced",
+            "replaced_at": self.clock(),
+        }
+        self._reset_task_to_pending(manifest["tasks"][task_id])
+        manifest.setdefault("history", []).append({
+            "event": "claim-reclaimed",
+            "task_id": task_id,
+            "replaced_generation": int(claim.get("generation", 0)),
+            "generation": replaced_generation,
+        })
+        manifest["history"].append({
+            "event": "parallel-member-reclaimed",
+            "group_id": group_id,
+            "member": task_id,
+        })
+        # The release is a terminal member transition, so it runs the one
+        # terminal-membership close predicate (shared with the advance close
+        # and the session-less resume release): when this release leaves
+        # every member claim terminal the group closes too.
+        self._close_parallel_group_when_terminal_locked(manifest, group_id, task_id, group)
+        self._save(manifest)
+        return _outcome(
+            "success",
+            "reclaimed",
+            _reclaim_evidence_lines(
+                task_id,
+                str(claim.get("token", "claim")),
+                replaced_token,
+                replaced_generation,
+            )
+            + [
+                f"group={group_id} stays active; only this member was released",
+            ],
+            "repository-task",
+            f"{task_id}:reclaim",
+            replaced_generation,
+            "continue-parent",
+            actions=[],
+            claimed=False,
+            reclaimed_task=task_id,
+            replacement_generation=replaced_generation,
+            group_id=group_id,
+            group_state=str((manifest.get("claim_groups", {}).get(group_id) or {}).get("state", "active")),
         )
 
     def selftest(self) -> None:
@@ -5741,7 +6542,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--operation", choices=("create", "claim", "checkpoint", "done", "resume", "continue", "terminal", "precondition", "interrupt", "progress", "readiness", "reclaim", "diagnose", "watcher-schedule", "watcher-supersede", "watcher-fire") + _PLANS_WATCHER_OPERATIONS)
     parser.add_argument("--predecessors-file", type=Path, help="predecessors JSON document for the manifest-free precondition operation")
-    parser.add_argument("--input", help="JSON object payload (create, checkpoint, done, interrupt, progress, terminal, and the watcher-* and plans-* operations)")
+    parser.add_argument("--input", help="JSON object payload (create, checkpoint, done, interrupt, progress, terminal, and the watcher-* and plans-* operations; plans-watcher-schedule takes the FULL probe report as probe_report, or the payload itself, plus plan_path and state_path; the classifier reads status, binding, pause_decision, and the binding limit's reset_at_epoch from limits[], so a subset payload classifies unknown and degrades to the report-only supersede)")
     parser.add_argument("--plan", help="plan file path for the readiness operation")
     parser.add_argument("--task-id", help="task id for the reclaim operation")
     parser.add_argument("--plan-slug")
@@ -5846,7 +6647,15 @@ def main(argv: list[str] | None = None) -> int:
             persist_construction=True,
         )
         if args.operation == "claim":
-            result = driver.claim_next_task(batch=args.batch)
+            parallel_members = payload.get("parallel_group") if isinstance(payload, Mapping) else None
+            if parallel_members is not None:
+                # The parallel-group opt-in: --input carries the requested
+                # member ids; the driver validates the full membership.
+                if not isinstance(parallel_members, list) or not parallel_members or not all(isinstance(item, str) and item for item in parallel_members):
+                    raise ValueError("parallel_group claim payload must be a non-empty list of task ids")
+                result = driver.claim_parallel_group(parallel_members)
+            else:
+                result = driver.claim_next_task(batch=args.batch)
         elif args.operation == "checkpoint":
             result = driver.record_worker_checkpoint(payload)
         elif args.operation == "done":
@@ -5854,7 +6663,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.operation == "resume":
             result = driver.resume()
         elif args.operation == "continue":
-            result = driver.continue_parent(batch=args.batch)
+            parallel_member = payload.get("parallel_member") if isinstance(payload, Mapping) else None
+            if parallel_member is not None:
+                # Launch one claimed member of a live parallel group.
+                result = driver.launch_member_task(str(parallel_member))
+            else:
+                result = driver.continue_parent(batch=args.batch)
         elif args.operation == "interrupt":
             # User Interruption fence: persists user_interrupt under the
             # manifest lock while keeping workflow_state unchanged.

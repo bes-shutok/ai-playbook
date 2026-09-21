@@ -96,10 +96,20 @@ def run_hook(script: Path, flag_path: Path,
     # invocation points the decision log into the fixture directory instead
     # of the canonical ~/.ai-playbook/runtime/hook-outcomes.log.
     cmd += ["--hook-outcomes-log", str(flag_path.parent / "hook-outcomes.log")]
+    env = dict(os.environ)
+    # The wrapper fast-path stats BUDGET_GUARD_FLAG before spawning python,
+    # so every hermetic invocation pins the override to the fixture flag;
+    # otherwise the wrapper would consult the host's real runtime flag path.
+    env["BUDGET_GUARD_FLAG"] = str(flag_path)
     return subprocess.run(
         cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-        timeout=10,
+        timeout=10, env=env,
     )
+
+
+def sh_quote(path: Path) -> str:
+    # Single-quote a path for embedding in the POSIX sh sentinel script.
+    return "'" + str(path).replace("'", "'\\''") + "'"
 
 
 class BudgetGuardHookTest(unittest.TestCase):
@@ -107,6 +117,77 @@ class BudgetGuardHookTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.tmp = Path(self._tmp.name)
+
+    def make_python3_shim(self) -> tuple[Path, Path, Path]:
+        """PATH shim whose python3 sentinel records argv and invocation.
+
+        Pure sh builtins only (printf and :), so the sentinel works with the
+        shim dir prepended to PATH and no external command is spawned.
+        """
+        shim_bin = self.tmp / "shim-bin"
+        shim_bin.mkdir()
+        argv_record = self.tmp / "python3-argv.txt"
+        invoked = self.tmp / "python3-invoked"
+        script = (
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$@\" >> {argv}\n"
+            ": > {invoked}\n"
+            "exit 0\n"
+        ).format(argv=sh_quote(argv_record), invoked=sh_quote(invoked))
+        (shim_bin / "python3").write_text(script, encoding="utf-8")
+        (shim_bin / "python3").chmod(0o755)
+        return shim_bin, argv_record, invoked
+
+    def run_wrapper_with_shim(self, script: Path, shim_bin: Path,
+                              flag: Path) -> subprocess.CompletedProcess:
+        env = dict(os.environ)
+        env["PATH"] = str(shim_bin) + os.pathsep + env.get("PATH", "")
+        env["BUDGET_GUARD_FLAG"] = str(flag)
+        return subprocess.run(
+            [str(script)], stdin=subprocess.DEVNULL, capture_output=True,
+            text=True, timeout=10, env=env,
+        )
+
+    def test_wrapper_fast_path_absent_flag_no_python(self) -> None:
+        # Shell stat fast-path: an absent flag file means the guard was never
+        # armed, so the wrapper must exit 0 with empty stdout without
+        # spawning python; the sentinel records any python3 invocation and
+        # must stay unwritten, for both wrappers.
+        shim_bin, _argv, invoked = self.make_python3_shim()
+        absent = self.tmp / "absent-fast-path.flag"
+        for wrapper in (ZCODE_SH, CODEX_SH):
+            result = self.run_wrapper_with_shim(wrapper, shim_bin, absent)
+            self.assertEqual(result.returncode, 0, wrapper.name)
+            self.assertEqual(result.stdout, "", wrapper.name)
+            self.assertFalse(invoked.exists(), wrapper.name)
+
+    def test_wrapper_flag_present_execs_core(self) -> None:
+        # A present flag (armed or expired) takes the unchanged core path:
+        # the sentinel python3 is exec'd with the wrapper's runtime id
+        # argument and the same flag path the fast-path stat'ed.
+        shim_bin, argv, invoked = self.make_python3_shim()
+        armed = self.tmp / "armed-fast-path.flag"
+        armed.touch()
+        for wrapper, runtime in ((ZCODE_SH, "zcode"), (CODEX_SH, "codex")):
+            if invoked.exists():
+                invoked.unlink()
+            if argv.exists():
+                argv.unlink()
+            result = self.run_wrapper_with_shim(wrapper, shim_bin, armed)
+            self.assertEqual(result.returncode, 0, wrapper.name)
+            self.assertEqual(result.stdout, "", wrapper.name)
+            self.assertTrue(invoked.exists(), wrapper.name)
+            recorded = argv.read_text(encoding="utf-8").splitlines()
+            self.assertIn("--runtime", recorded, wrapper.name)
+            self.assertEqual(
+                recorded[recorded.index("--runtime") + 1], runtime, wrapper.name,
+            )
+            self.assertIn("--flag-path", recorded, wrapper.name)
+            self.assertEqual(
+                recorded[recorded.index("--flag-path") + 1], str(armed),
+                wrapper.name,
+            )
+
 
     def test_flag_absent_passes(self) -> None:
         flag = self.tmp / "absent.flag"

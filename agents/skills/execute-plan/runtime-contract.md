@@ -23,6 +23,13 @@ must not ask conversational permission or call a user-question facility for
 them. Push, deploy, merge, external communication, access changes, and any
 network action remain gated and must be returned as `blocked`.
 
+Plan authoring stays on the neutral side of this boundary: a plan task names
+only observable commands, paths, test identities, and acceptance criteria,
+with evidence and validation criteria the selected adapter can verify. The
+adapter and its profile under `agents/skills/execute-plan/runtime-adapters/`
+supply host identity, worker lifecycle, capacity, and interruption receipts;
+host-specific lifecycle mechanics never enter plan task prose.
+
 ### Result contract
 
 The worker returns one closed result. `success` includes evidence that proves
@@ -68,8 +75,10 @@ the deferral `reason`; they carry no lifecycle capabilities and resolve to the
 fail-closed unsupported adapter with the recorded reason.
 
 Runtime-specific launch syntax, event envelopes, hook payloads, and session
-identifiers belong in adapter references and profile data. They do not belong
-in the provider-neutral section above.
+identifiers belong in the adapter profile under
+`agents/skills/execute-plan/runtime-adapters/` (see the "Adapter profile
+contract" section) and registry profile data. They do not belong in the
+provider-neutral sections of this contract.
 
 ## Runtime selection and activation
 
@@ -88,6 +97,117 @@ workflow policy owns authorization, state transitions, evidence, retry budgets,
 and continuation. A host-specific adapter owns only protocol translation and
 bounded process interaction; it cannot widen policy, bypass approval, or turn a
 degraded capability into `full`.
+
+## Adapter profile contract
+
+An adapter profile is the host-specific declaration of how one eligible
+runtime satisfies this contract. Profiles live under
+`agents/skills/execute-plan/runtime-adapters/`, one file per eligible
+runtime, named for the canonical runtime ID it projects. Host-specific
+command shapes, event envelopes, session formats, cancellation mechanics,
+and deadlines belong in the profile and never in this neutral contract.
+The profile is a non-authoritative projection of the registry: it names
+the registry path
+`projects/.ai-playbook/execute-plan-runtime-inventory.toml` and the
+canonical runtime ID it projects, and every registry-owned value - the
+adapter entrypoint, the launch, wait, and resume operations, the adapter
+version, the approval policy, the capability states, eligibility, the
+retry budget, and the fallback - appears only as a reference to that
+registry path plus canonical runtime ID. A profile that restates a
+registry-owned value is a second capability owner and fails contract
+review.
+
+Each profile defines these surfaces, whatever the host names them
+locally:
+
+- **Worker identity**: the durable identity of one launched worker
+  (claim token, generation, host session and process identity) that
+  receipts, hooks, and the capacity witness key on.
+- **Launch, wait, and resume receipt schemas**: one machine-readable
+  lifecycle receipt per operation, each carrying the worker identity,
+  the operation's outcome, and bounded evidence; the adapter translates
+  each receipt into the normalized result schema before the driver sees
+  it.
+- **Terminal, timeout, and shutdown hooks**: what the host runs when a
+  worker completes, exceeds its deadline, or the parent shuts down; each
+  hook emits its receipt and feeds capacity release.
+- **Capacity witness**: the reconciled view of live workers and
+  available launch capacity, rebuilt by capacity reconciliation before
+  every launch.
+- **Handoff receipt**: the receipt that rotates ownership into the next
+  task.
+- **Evidence verifier**: the host mechanism that proves a worker's
+  validation claims as machine-verifiable evidence.
+- **Interruption reconciler**: the ordered reconciliation a host runs
+  before any relaunch after an interruption.
+- **Host fallback mechanics**: how the host applies the registry-owned
+  fallback for a degraded or unsupported capability and reports a
+  capability it cannot enforce.
+
+### Incident obligations
+
+Four incident obligations bind every adapter profile. Each names its
+refusal witnesses and its recovery path. A profile that cannot implement
+an obligation reports the affected capability as degraded or unsupported
+through the registry with its fallback; it never silently skips one.
+
+1. **Lifecycle and capacity reconciliation.** The profile's worker
+   registry records every worker it launched and the launch capacity it
+   consumed. Terminal, timeout, and shutdown events release that
+   capacity idempotently: releasing an already-released worker succeeds
+   without a second effect, and a terminal event that arrives twice
+   releases once. Capacity reconciliation runs against the reconciled
+   witness before every launch, never against a cached count. Refusals:
+   a stale inventory entry (a worker recorded in the worker registry
+   that the host cannot prove live) is neither counted live nor counted
+   as free capacity; the launch is refused until the witness reconciles.
+   A `not_found` close result means the worker already exited: the
+   release completes idempotently and the next launch proceeds. A
+   stalled worker (no heartbeat or log progress inside the profile's
+   bounded liveness window) is not counted live or free; it is routed to
+   the timeout hook and refused as launch capacity. Recovery: reconcile
+   the worker registry against the host's live session and process
+   state, then re-run the readiness decision.
+
+2. **Atomic handoff.** Advancing from one completed task to the next is
+   an atomic handoff: one indivisible transition rotates the owner
+   identity, the claim token, and the generation together with the next
+   worker's launch identity, under the same lock that records the
+   previous worker's terminal receipt. Refusals: an owner mismatch - a
+   receipt or continuation carrying the previous task's owner or token -
+   is refused before any launch and preserves the durable claim; a
+   replayed handoff (the same handoff receipt delivered again) is
+   idempotent: it returns the recorded outcome and never rotates a
+   second time. Recovery: re-read the durable claim record and continue
+   from its current owner, token, and generation.
+
+3. **Machine-verifiable evidence.** A worker result advances a task only
+   on machine-verifiable evidence: the identity of each validating
+   command, its working directory, its exit status, the output identity
+   of the captured result, the selected test identities, the changed
+   paths measured against the launch baseline, and the plan-criterion
+   coverage those changes satisfy. A log path, a narrative claim, or an
+   attestation without command identity is not evidence. Refusals: a
+   malformed receipt - evidence missing, unparseable, or out of shape -
+   fails closed as `blocked` or `error`, never as a degraded success,
+   and preserves the claim for a corrected re-submission; evidence
+   naming paths outside the task scope fails closed as a contract
+   violation. Recovery: re-run the validation commands and re-submit the
+   evidence envelope under the live claim.
+
+4. **Interruption reconciliation.** After any interruption, the profile
+   reconciles, in order, before any relaunch: the durable task manifest,
+   the worker registry (which workers the interruption orphaned), the
+   latest lifecycle event per worker, and the worktree state against the
+   launch baseline. Only a reconciled state relaunches. Refusals: a
+   non-resumable interruption state - unverified process cleanup, an
+   unresolved approval gate, or worktree drift that cannot be attributed
+   to a proven source - stays blocked with `resume_allowed: false` until
+   the named recovery action resolves it; the reconciler never relaunches
+   into an unresolved state. Recovery: the reconciler records what it
+   proved, releases the capacity of workers whose terminal events
+   already closed, quarantines what it could not prove, and hands the
+   parent one reconciled capacity witness to continue from.
 
 ## Normalized result schema
 
@@ -443,7 +563,7 @@ action, then re-classify the state.
 | `cleanup-unverified` | Owned process and failed termination evidence | Preserve claim; never take over | 0 | `blocked`, `resume_allowed: false` | Require operator cleanup verification; do not retry. |
 | `reclaimed` | Expired claim lease (at least `CLAIM_LEASE_SECONDS`) on a claim in `claimed`, `launched`, or `blocked`, with the task outside the progressed set, with the machine `workflow_state` outside the closed non-active set (`aborted`, `complete`, `terminal` - a finished-workflow reclaim is refused with the `explicit-abort` preserve-and-stop envelope before any lease accounting, its evidence naming the finished state), and the claim not a member of a live batch claim group (a live-group member is refused with the resumable `stale-claim` outcome naming the group, r3 F1; the one exit, r4 F2: a live-group member whose task is blocked with `resume_allowed` false reclaims through with no lease wait, and the same compare-and-swap fails its group) | Replace generation and token, mark the old claim `replaced`, reset the task to `pending` with the previous session's resume fields stripped, recorded checkpoints preserved as evidence; on the r4 F2 exit the group is also marked `failed` with its active member cleared and the still-staged member claims closed | 0 | `pending` task under the `replaced` claim; the next claim takes the freed task under a fresh generation; on the r4 F2 exit the staged members' pending tasks also re-enter the individual queue | Re-claim and relaunch the freed task; a post-reclaim checkpoint or launch receipt from the replaced owner fails fenced as `owner-mismatch`, while a late done handoff refuses as unfenced done evidence; the replaced claim is reconciled by rotation and never quarantined at startup; a workflow in the closed non-active set returns `explicit-abort` (preserve-and-stop; the evidence names the finished state) and is never released. |
 | `commit-pending` | Started receipt and task identity | Keep claim fenced during reconciliation | 0 | `blocked`, `checkpointed`, or `aborted` (the wedged-claim abort exit) | Inspect the exact commit before deciding whether work is complete. Abort with the current token is permitted when the recorded commit provably does not exist (the wedged-claim runtime exit; preserve-and-stop). |
-| `done-pending` | Worker checkpoint plus done handoff evidence | Keep claim until done boundary closes | 0 | `blocked` or `checkpointed` | Do not launch the next task until commit, checkbox, clean state, and log evidence exist. |
+| `done-pending` | Worker checkpoint plus done handoff evidence | Keep claim until done boundary closes | 0 | `blocked` or `checkpointed` | Do not launch the next task until commit (or the documented no-commit justification), checkbox, clean state, and log evidence exist. |
 | `committed` | Commit identity, checkbox, clean state, and log evidence | Close matching claim | 0 | `checkpointed` | Record the commit and continue once, idempotently. |
 
 Illegal transitions, unknown statuses, missing evidence, generation mismatch,
@@ -501,8 +621,8 @@ worktrees remain quarantined and are never relaunched automatically.
 
 ## Live-session discovery ladder
 
-The shared skill's Live-session discovery ladder section (`agents/skills/execute-plan/SKILL.md`) owns the rung order, the stop-at-the-first-resolving-rung rule, the rung-3 report wording, and the manifest-only deviation note; this section pins only the concrete mechanism behind each rung for the driver boundary, the way the maintenance
-overlay (`agents/skills/maintenance/zcode.md`) pins scheduling primitives.
+The shared skill's Live-session discovery ladder section (`agents/skills/execute-plan/SKILL.md`) owns the rung order, the stop-at-the-first-resolving-rung rule, the rung-3 report wording, and the manifest-only deviation note; this section pins only the concrete mechanism behind each rung for the driver boundary, the way the
+host-scheduler maintenance overlay under `agents/skills/maintenance/` pins scheduling primitives.
 
 - Driver claim check (rung 1): the executable driver is
   `scripts/execute_plan_runtime.py`; the claim check consults the machine
@@ -703,7 +823,12 @@ lines; records the resume-path re-entry the shared peer fence stands down
 on), `plans-progress` (advances the authoring progress revision),
 `plans-interrupt` (payload `state_path` plus optional ISO-8601
 `user_interrupt`), and `plans-terminal` (payload `state_path` plus `kind`
-of `complete`, `archived`, or `aborted`).
+of `complete`, `archived`, or `aborted`). The schedule arm's probe report
+must be the FULL probe report, never a subset: the boundary classifier
+reads `status`, `binding`, `pause_decision`, and the binding window's
+`reset_at_epoch` from the matching `limits[]` entry, so a subset payload
+(for example one carrying a flat `reset_at_epoch` without `limits[]`)
+classifies `unknown` and degrades to the report-only supersede.
 
 This table is the closed CLI operation boundary (r1 F22: `interrupt`,
 `progress`, the three `watcher-*` operations, and the `plans-*` authoring
@@ -741,18 +866,19 @@ envelope carries these required keys:
 Every field except `claim_token` is checked by
 `runtime_capabilities.normalize_result`; `claim_token` never reaches
 normalization and exists only for the driver's fence. A malformed receipt
-(the envelope missing or failing any check) fails closed: the normalization
-refusal surfaces as a blocked `malformed-result` outcome carrying the
-caller's checkpoint identity and the manifest generation, so when the live
-claim matches that fence the task latches blocked with `resume_allowed:
-false`, and when the claim's generation differs from the manifest generation
-the receipt refuses as `owner-mismatch` before any latch. Recovery from a
-latched malformed receipt is in place: a corrected re-submission under the
-same live claim token and the claim's generation succeeds without lease
-expiry, claim replacement, or manifest recreation, provided the claim carries
-its launch record. A post-launch claim without a launch record refuses the
-corrected receipt as the resumable `stale-claim` outcome by design
-(anti-tamper); re-submission does not recover it. Copy-paste example
+(the envelope missing or failing any check) fails closed as a read-only refusal:
+the normalization refusal surfaces as a blocked `malformed-result`
+outcome carrying the caller's checkpoint identity and the manifest
+generation, and the driver returns it before the claim fence, before any
+latch, history append, or checkpoint record write. The claim and task keep
+their pre-receipt state, so a malformed receipt never converts a healthy
+claim into a blocked state; recovery is the corrected re-submission itself,
+under the same live claim token and the claim's generation, with no lease
+expiry, claim replacement, launch-record precondition, or manifest
+recreation. When the envelope is well formed, the existing fence and
+recovery semantics apply unchanged, including the drift guard that refuses a
+corrected receipt on a post-launch claim without a launch record as the
+resumable `stale-claim` outcome by design (anti-tamper). Copy-paste example
 (substitute the live claim token; `generation` is 1, the first claim's
 generation on a fresh manifest):
 
@@ -767,6 +893,32 @@ generation on a fresh manifest):
   "claim_token": "REPLACE_WITH_LIVE_CLAIM_TOKEN"
 }
 ```
+
+### Done handoff receipt
+
+The done handoff receipt normally carries a `commit_identity` matching a
+HEAD-reachable commit, verified by the driver's commit lookup and the done
+boundary witnesses. A task whose plan section carries no `Commit:` line (a
+read-only verification gate with nothing to commit) records the no-commit
+justification instead: `commit_identity` set to the exact literal `none`
+after stripping. The driver never consults the commit lookup for `none`; it
+proves the state itself: a dirty entry inside the claim's allowed paths
+refuses as `commit-pending`, a dirty entry outside them is tolerated only
+when its working-tree diff over that tracked Markdown file is
+checkbox-marker-only with paired-line identity (the Step 1.3 flip on the
+executing plan file is the sanctioned case; a content rewrite never
+satisfies the shape), every other dirty entry refuses as `commit-pending`
+with the clean-state evidence, and when the claim carries a baseline
+revision the driver requires HEAD to equal it, so a worker that committed
+changes cannot report `none` past its baseline. The same tolerated-entry
+classification applies at the checkpoint scope witness, the real-identity
+done tail, and the resume reconciliation dirty gate, so the riding flip
+never wedges the next receipt; the flips ride uncommitted and land with the
+run's end-of-run plan-state handling. The none completion records `none` as
+the task's completion identity and in the `done-commit` history event, and
+hands the group advance the current HEAD revision as the next claim's
+baseline. Checkbox-flip commits manufactured to satisfy the boundary are
+not part of the contract.
 
 ### Readiness decision
 
@@ -1146,78 +1298,3 @@ ordered predicate of the "Staged terminal operation (archive gate)"
 section passes (its gate clauses plus its archived-plan checks). A
 refused terminal call preserves the manifest and leaves `workflow_state`
 non-terminal.
-
-## Codex adapter boundary
-
-`scripts/execute_plan_runtime_codex.py` is the only Codex-specific integration
-point. It verifies the installed host activation surface before use and keeps
-Codex JSONL envelopes, session IDs, process cancellation, and deadlines out of
-the provider-neutral driver and shared skill prose. The verified command shapes
-are:
-
-```text
-codex exec --json [-C <repo-root>] <prompt>
-codex exec resume <session-id> --json [<prompt>]
-```
-
-Launch always pins the repository root with `-C <repo-root>`; `wait` resumes a
-session without appending a prompt, while `resume` appends one.
-
-The cross-runtime deadline baseline is `launch_deadline_seconds = 900` and `wait_deadline_seconds = 1500`,
-pinned in the shipped package manifest. The in-code adapter defaults equal
-this baseline and apply only when a manifest omits the deadline keys.
-Profiles may lower or raise those values only when the resulting deadline is
-finite and positive. The wait baseline is sized to cover a legitimate
-20-minute worker body of work (the same per-worker budget the driver's claim
-lease is sized against), finite and bounded, so an ordinary long worker or
-review panel completes inside the baseline instead of being terminated at an
-arbitrary short default. A timed-out operation
-cancels its owned process tree and
-must verify termination; failed verification becomes
-`cleanup-unverified` with no retry or claim takeover.
-
-Timeout cleanup consults each owned PID's captured start-time identity
-immediately before escalating to `SIGKILL`, so a recycled foreign process is
-treated as exited instead of signalled. This identity check is a best-effort
-narrowing of the PID-recycle race; the kernel-level race itself is closed only
-by a pidfd-based signal where the platform provides one.
-
-The adapter never passes `--approve-for-me`,
-`--dangerously-bypass-approvals-and-sandbox`, or any equivalent bypass flag.
-The verified non-interactive approval configuration has exactly one production
-source: an auditable approval receipt file naming the runtime and recording
-`approval = "verified"`, passed to the driver CLI (`--approval-receipt`),
-validated at adapter construction, and quoted in the activation receipt.
-If the target host has no such receipt, the adapter
-returns `blocked: runtime-policy-unavailable` and preserves the machine
-manifest. Host results are translated into the normalized schema before the
-driver sees them.
-
-The approval receipt is owner-only evidence: the file must have mode `0600`
-(any group- or other-readable mode is rejected), and it must record two
-mandatory cross-check fields: `config_path` (the host config file the
-operator attested, for codex the host codex config) and `policy_fingerprint`
-(the fingerprint of the non-interactive approval policy recorded in that
-config, for codex its `approval_policy` value). Both fields are
-operator-attested evidence, not a cryptographic credential. Loading the
-receipt re-reads the recorded config path from the host and recomputes the
-policy fingerprint; a missing or unreadable config file, a config file that
-is not valid TOML, an absent non-interactive approval policy, or a recomputed
-fingerprint that differs from the recorded `policy_fingerprint` is rejected
-as an approval-receipt policy cross-check failure (only the mismatch case
-names the fingerprint mismatch); a config file holding non-UTF-8 bytes
-surfaces the raw decode error (`UnicodeDecodeError`, caught fail-closed at
-the CLI boundary) and is not a named cross-check class. A relative
-`config_path` resolves only against an injected config
-root and must be absolute when none is injected; a relative path without an
-injected root is rejected as an invalid receipt, a failure distinct from the
-cross-check rejection. Each failure prints its specific message on stderr. A rejected receipt fails closed before driver
-construction: the driver CLI exits non-zero with an "approval receipt"
-failure message on stderr (no normalized result is emitted) and preserves the
-machine manifest, so the run stays resumable. Remediation is operator re-attestation: re-activate the
-host runtime, confirm its non-interactive approval policy, and issue a fresh
-mode-0600 receipt recording the current config path and fingerprint; this is the
-same remediation as any other failed activation attestation. Pre-upgrade
-receipts lacking `config_path` or `policy_fingerprint` (or carrying a looser
-file mode) fail closed under this reading by design; re-attesting them after
-host re-activation is a documented migration step, not an unplanned break.

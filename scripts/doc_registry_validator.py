@@ -4,7 +4,7 @@
 Three subcommands plus a hermetic ``--selftest``:
 
 - ``validate``: registry integrity. Required fields, duplicate identity,
-  duplicate SOT declarations, successor cycles, alias target resolution,
+  duplicate SOT declarations, successor cycles,
   completed-history files missing registry entries, audit-note token
   format. Exit 0 with warnings when only warn-tier findings; exit 1 on
   any hard finding. A missing registry file fails OPEN (exit 0, single
@@ -722,28 +722,15 @@ def cmd_validate(root: Path, cfg: dict, out: io.StringIO) -> int:
         print("HARD successor cycle: %s" % cycle, file=out)
         hard += 1
 
-    # Dangling successor identities (warn): a successor no row declares
-    # breaks the supersession chain silently (typo or never created).
-    declared_identities = set(by_identity)
-    for row in rows:
-        succ = row.get("successor", "").strip()
-        ident = row.get("identity", "").strip()
-        if succ and succ not in declared_identities:
-            print("warn: successor identity '%s' of '%s' is not declared"
-                  " by any registry row" % (succ, ident or "?"), file=out)
-            warns += 1
-
-    # Stale aliases (warn).
-    for row in rows:
-        for alias in split_aliases(row.get("aliases", "")):
-            rel = normalize_repo_path(alias)
-            if not (root / rel).exists():
-                print("warn: stale alias '%s' (identity '%s') does not"
-                      " exist on disk" % (rel, row.get("identity", "?")),
-                      file=out)
-                warns += 1
-
     # Completed-history files without registry entries (warn, fail open).
+    # (The two warn-tier lints this subcommand used to carry here, the
+    # dangling-successor warn and the stale-alias warn, were removed
+    # 2026-09-21 on lifetime evidence: zero firings across the
+    # full 100-commit registry-bearing history, per plan
+    # 2026-09-20-harness-triage-paperkeeping-dismantling-wall-clock
+    # Task 6; the hard integrity core and the check-writes gate are
+    # untouched. Aliases still feed the claimed-src set below.)
+
     claimed = registered_src_paths(rows)
     for rel in list_completed_files(root, cfg):
         if _fold(rel) not in claimed:
@@ -1470,15 +1457,6 @@ def _run_selftest_checks(st: Selftest) -> None:
     st.expect("test_check_writes_custom_facts_dir_fails", code, output, 1,
               want_substr="docs/archived-plans/old.md")
 
-    # Warn tier: stale alias target.
-    root = make_fixture("stale-alias", registry_header() +
-                        "| doc-a | yes | living |  |  | docs/a.md |  |"
-                        " docs/old-link.md |  |\n",
-                        extra_files=["docs/a.md"])
-    code, output = run(["--root", str(root), "validate"])
-    st.expect("test_stale_alias_warns", code, output, 0,
-              want_substr="alias")
-
     # Warn tier: completed-history file missing from registry (fail open).
     root = make_fixture("legacy", registry_header() +
                         "| doc-a | yes | living |  |  | docs/a.md |  |  |  |\n",
@@ -1548,15 +1526,6 @@ def _run_selftest_checks(st: Selftest) -> None:
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_successor_selfloop_fails", code, output, 1,
               want_substr="cycle")
-
-    # Warn tier: dangling successor identity (declared by no row).
-    root = make_fixture("dangling-successor", registry_header() +
-                        "| doc-a | no | superseded | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |"
-                        " nonexistent-identity |  |  |\n")
-    code, output = run(["--root", str(root), "validate"])
-    st.expect("test_dangling_successor_warns", code, output, 0,
-              want_substr="is not declared by any registry row")
 
     # Warn + hard: a src claimed by two identities stays gated even when
     # one claimant carries an audit note (no override, no lifecycle

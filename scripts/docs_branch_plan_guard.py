@@ -15,10 +15,11 @@ Two subcommands with two distinct postures (never swapped):
   leg, witness each restored plan file; a file whose bytes do not match the
   certification digest prints a warn line and the command always exits 0.
 
-Both subcommands treat an unreadable plan file (an OSError from the
-per-file digest read) as skip-and-warn: the file is named on stderr and
-the run continues without the digest check for it. Only a readable
-downgrade can trip the fail-closed refusal.
+The two postures also diverge on an unreadable plan file (an OSError from
+the per-file digest read): ``guard`` prints a named warn and exits
+non-zero -- the certified-downgrade boundary stays closed on inputs it
+cannot verify -- while ``check-restored`` prints the same named warn,
+continues, and returns 0. Neither posture ever surfaces a traceback.
 
 The certification digest is the ``source_digest`` of the latest sidecar
 under the reviews dir whose ``source_kind`` is ``plan`` and whose
@@ -56,11 +57,11 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def warn_unreadable_plan(path: Path) -> None:
+def warn_unreadable_plan(subcommand: str, path: Path, exc: OSError) -> None:
     """Named skip-and-warn for a plan file whose digest read raised OSError."""
+    reason = f"{type(exc).__name__}: {exc}"
     print(
-        f"WARN: unreadable plan file: {path}; sync proceeds without the "
-        f"digest check for it",
+        f"WARN: {subcommand}: skipping unreadable plan pair for {path}: {reason}",
         file=sys.stderr,
     )
 
@@ -155,18 +156,21 @@ def cmd_guard(args: argparse.Namespace) -> int:
 
     sidecars = load_sidecars(Path(args.reviews_dir))
     refusals = 0
+    unreadable = 0
     for name in shared:
         branch_plan = branch_plans_dir / name
         incoming_plan = incoming_plans_dir / name
         try:
             branch_digest = sha256_file(branch_plan)
-        except OSError:
-            warn_unreadable_plan(branch_plan)
+        except OSError as exc:
+            warn_unreadable_plan("guard", branch_plan, exc)
+            unreadable += 1
             continue
         try:
             incoming_digest = sha256_file(incoming_plan)
-        except OSError:
-            warn_unreadable_plan(incoming_plan)
+        except OSError as exc:
+            warn_unreadable_plan("guard", incoming_plan, exc)
+            unreadable += 1
             continue
         if branch_digest == incoming_digest:
             continue
@@ -192,11 +196,17 @@ def cmd_guard(args: argparse.Namespace) -> int:
                 f"WARN: neither branch nor incoming bytes of {branch_plan} match the "
                 f"certified digest {cert_digest} (sidecar {sidecar_path.name}); sync proceeds"
             )
-    if refusals:
-        print(
-            f"certified-plan guard: {refusals} certified downgrade(s) refused; "
-            f"sync aborted before staging"
-        )
+    if refusals or unreadable:
+        if refusals:
+            print(
+                f"certified-plan guard: {refusals} certified downgrade(s) refused; "
+                f"sync aborted before staging"
+            )
+        if unreadable:
+            print(
+                f"certified-plan guard: {unreadable} unreadable plan file(s); "
+                f"the certified-downgrade boundary stays closed on inputs it cannot verify"
+            )
         return 1
     return 0
 
@@ -215,8 +225,8 @@ def cmd_check_restored(args: argparse.Namespace) -> int:
         cert_digest = str(sidecar_data.get("source_digest") or "")
         try:
             file_digest = sha256_file(path)
-        except OSError:
-            warn_unreadable_plan(path)
+        except OSError as exc:
+            warn_unreadable_plan("check-restored", path, exc)
             continue
         if not digest_matches(file_digest, cert_digest):
             print(

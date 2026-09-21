@@ -33,17 +33,23 @@ manual, one-time-per-repo tool.
 
 ## How It Works
 
-The skill invokes `~/.ai-playbook/scripts/lessons_migrate.py` (canonical source
-in the ai-playbook repo at `~/Projects/myrepos/ai-playbook/scripts/`). The
+The skill invokes `~/.ai-playbook/scripts/lessons.py migrate` (the lessons hub;
+canonical source in the ai-playbook repo at `~/Projects/myrepos/ai-playbook/scripts/`). The
 engine is stdlib-only and the only writer of BOTH files during a migration.
 
 **Sibling script convention (mixed).** The runtime directory `~/.ai-playbook/scripts/`
-is mixed by design, and the three lessons scripts adopt a **repo-homed** model
+is mixed by design, and the lessons scripts adopt a **repo-homed** model
 while older siblings stay **runtime-only**:
 
 - **Repo-homed (canonical in `ai-playbook/scripts/`, synced to runtime):**
-  `lessons_index.py`, `lessons_adopt.py`, `lessons_migrate.py`. These are
+  the lessons hub `lessons.py` (which owns ALL lessons CLI dispatch) and the
+  importable libraries it dispatches: `lessons_index.py`, `lessons_adopt.py`,
+  `lessons_classify.py`, `lessons_migrate.py`, plus the shared-primitives
+  `lessons_corpus.py`. These are
   version-controlled; edit the repo copy and sync to `~/.ai-playbook/scripts/`.
+  Invoke them ONLY through the hub (`lessons.py index|adopt|classify|migrate|recall`);
+  the libraries' standalone dispatch moved into the hub, so a direct module
+  invocation is a silent no-op.
 - **Runtime-only (no repo source):** `done-lock.sh`, `scan-public-hygiene.sh`,
   and similar older siblings. They live only at their runtime path.
 
@@ -202,16 +208,17 @@ tags and zero-tag lessons survive unchanged in the project output.
 ### Step 0: Resolve the script
 
 ```bash
-script="${LESSONS_MIGRATE_SCRIPT:-${HOME}/.ai-playbook/scripts/lessons_migrate.py}"
+script="${LESSONS_MIGRATE_SCRIPT:-${HOME}/.ai-playbook/scripts/lessons.py}"
 ```
 
 `~/.ai-playbook/scripts/` is trusted. `LESSONS_MIGRATE_SCRIPT` override is
-local-testing only.
+local-testing only. All invocations below go through the hub's `migrate`
+subcommand (`"$script" migrate ...`), never a direct module invocation.
 
 ### Step 1: Dry-run first (audit before destructive write)
 
 ```bash
-python "$script" --dry-run docs/maintenance/development_lessons.md
+python "$script" migrate --dry-run docs/maintenance/development_lessons.md
 ```
 
 Review the emitted classification + review list (the untagged-retained tail
@@ -233,7 +240,7 @@ them).
 ### Step 3: Run the migration
 
 ```bash
-python "$script" docs/maintenance/development_lessons.md
+python "$script" migrate docs/maintenance/development_lessons.md
 ```
 
 Confirm the summary counts, that the self-check gate passed (exit 0), and that
@@ -291,11 +298,11 @@ first.
 After a run, confirm:
 
 - The user corpus passes the strict gate:
-  `python ~/.ai-playbook/scripts/lessons_index.py <user_corpus>` exits 0.
+  `python ~/.ai-playbook/scripts/lessons.py index <user_corpus>` exits 0.
 - The gate's own contract still holds (the gate-behavior cases - duplicate,
   invalid-family, fenced pseudo-tag, taxonomy table, unbalanced fence - live
   in the gate's in-memory selftest, NOT in any adopting repo's pytest):
-  `python ~/.ai-playbook/scripts/lessons_index.py --selftest` exits 0. Run
+  `python ~/.ai-playbook/scripts/lessons.py selftest index` exits 0. Run
   this once per migration so a regression in the gate (the authority the
   migrated corpus is validated against) is caught at the run, not later.
 - No tracked reference to `principle-index.md` survives anywhere it could hide
@@ -319,7 +326,8 @@ After a run, confirm:
 
 - Plan: `docs/history/plans/2026-06-29-lessons-corpus-derived-index.md` (Task 4
   is the authoritative spec).
-- Gate: `~/.ai-playbook/scripts/lessons_index.py` (read-only; validates the
+- Gate: `~/.ai-playbook/scripts/lessons.py index` (the `lessons_index` library
+  behind the hub; read-only; validates the
   user corpus).
 - Shared primitives: `~/.ai-playbook/scripts/lessons_corpus.py` (parser,
   fence-aware collector, `VALID_FAMILIES`, `atomic_write_text`).

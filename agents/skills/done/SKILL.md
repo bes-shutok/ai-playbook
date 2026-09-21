@@ -28,7 +28,7 @@ Before Step 0, inventory every repository touched by the task from tool activity
 - **Do not** delegate this workflow to a Task/subagent that tries to exec a skill path.
 - **Do** read each skill file (`~/.agents/skills/<name>/SKILL.md`) and execute its steps in **this** agent session using normal tools (shell for scripts, Read/Write for skill logic).
 
-**Workflow continuity:** This skill executes as a continuous sequence of steps (0 → 1 → 1.5 → 2.65 → 2.648 → 2.645 → 2.64 → 2.63 → 2.62 → 2 → 2.5 → 2.6 → 2.7 → 2.75 → 2.76 → 2.8 → 3 → 4 → 5 → 6 → 7). After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification. **Exception:** Step 0 uses a short agent wait (`DONE_LOCK_AGENT_MAX_WAIT_SECS`, default 90s); on timeout return `blocked` with lock `status` instead of polling for hours. **An empty project working tree is not a stop condition:** still run Steps 2.65, 2.648, 2.645, 2.64, 2.63, 2.62, 2, and 6 and finish with Step 7.
+**Workflow continuity:** This skill executes as a continuous sequence of steps (0 → 1 → the pre-docs sweep gate run → 2 → 2.5 → 2.6 → 2.75 → the pre-commit sweep gate run → 3 → 4 → 5 → 6 → 7); the two sweep gate runs are the `done_sweep_gates.sh` phases (`pre-docs`, `pre-commit`) and carry no fixed step numbers. After each step or skill invocation completes, immediately proceed to the next step without stopping or waiting for user input. Only stop if a step fails, produces an error, or requires user clarification. **Exception:** Step 0 uses a short agent wait (`DONE_LOCK_AGENT_MAX_WAIT_SECS`, default 90s); on timeout return `blocked` with lock `status` instead of polling for hours. **An empty project working tree is not a stop condition:** still run the pre-docs sweep gate run (`done_sweep_gates.sh pre-docs`), Step 2, and Step 6 and finish with Step 7.
 
 ## Configuration (from facts document)
 
@@ -51,7 +51,7 @@ Agent wait budget for Step 0 (override for local testing):
 "${DONE_LOCK_AGENT_MAX_WAIT_SECS:-90}"
 ```
 
-Before Step 0, in a repository that resolves the maintenance skill, run the rearm-on-touch check defined in the maintenance skill's Step 0 and follow its darkness classification.
+Before Step 0, in a repository that resolves the maintenance skill, run the rearm-on-touch check defined in the maintenance skill's Step 0 through its mechanical script, from the project git root: `python3 "${REARM_ON_TOUCH_SCRIPT:-${HOME}/.ai-playbook/scripts/rearm_on_touch.py}"` (a repo-local `scripts/rearm_on_touch.py` copy wins when present), passing `--listing-json <path|->` when an automation listing was fetched as decision input. The escalation contract is echo-and-continue: echo the verdict in the Step 7 report (the class, any bookkeeping edits it applied, the skipped-reason, or the rc 2 malformed-or-failed error) so a skipped or failed check is visible in the run record, and never block the commit path on it: a failed check is advisory, matching the scheduler state file's advisory status and the sibling fail-open hygiene gates; the script classifies, books, and decides but never calls automation primitives, so perform any listing or re-arm the verdict calls for per the maintenance skill before continuing.
 
 ## Step 0: Acquire project done lock
 
@@ -105,7 +105,7 @@ Parallel agent sessions on the **same git repository** must not run `learn`, `do
 
 **After the lock is acquired, immediately continue to Step 1.** Do not run learn, docs-branch, or project commits before Step 0 succeeds.
 
-**Run-start marker:** immediately after the lock is acquired, write a content-bearing per-run marker file under `{tmp_dir}/done-session/` named `run-start-<UTCtimestamp>` (filename format `run-start-YYYYmmddTHHMMSSZ`, UTC; create the directory if missing). Step 1.5 anchors this run's session window on the newest marker written by a previous done run. Marker pruning is governed solely by the Step 2.62 sweep. The marker is content-bearing: its single line records the creation epoch, the trailing-slash-stripped resolved `$REPO_TOP`, and the writing shell PID, so gate-time identity can rely on content-match confirmation instead of chat recall alone. Field order in the marker line: the first field is the epoch, the last field is the PID, and everything between them is the repo root (repo roots containing spaces therefore parse unambiguously).
+**Run-start marker:** immediately after the lock is acquired, write a content-bearing per-run marker file under `{tmp_dir}/done-session/` named `run-start-<UTCtimestamp>` (filename format `run-start-YYYYmmddTHHMMSSZ`, UTC; create the directory if missing). The pre-docs sweep gate run's plan-readiness gate anchors this run's session window on the newest marker written by a previous done run. Marker pruning is governed solely by the docs-tmp-sweep gate. The marker is content-bearing: its single line records the creation epoch, the trailing-slash-stripped resolved `$REPO_TOP`, and the writing shell PID, so gate-time identity can rely on content-match confirmation instead of chat recall alone. Field order in the marker line: the first field is the epoch, the last field is the PID, and everything between them is the repo root (repo roots containing spaces therefore parse unambiguously).
 
 ```bash
 REPO_TOP="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -118,7 +118,7 @@ MARKER="$(cd "$(dirname "$MARKER")" && pwd)/$(basename "$MARKER")"
 printf '%s\n' "$(date -u +%s) ${REPO_TOP%/} $$" > "$MARKER" && printf 'run-start marker: %s\n' "$MARKER"
 ```
 
-Keep the echoed marker path in chat context; Step 1.5 (anchor discrimination) and the Step 2.62 sweep (current-run marker immunity) reuse it across separate shell calls. If it is lost or matches no marker at gate time, Step 1.5 treats the window as unanchorable (conservative gating) and the Step 2.62 sweep prunes no `run-start-*` markers this run; never guess by recency. This rule is the Step 0 echo-loss fallback that Step 1.5 back-references.
+Keep the echoed marker path in chat context as this run's audit record. The sweep gates derive the session window mechanically from the `run-start-*` markers under `{tmp_dir}/done-session/` (the newest content-confirmed marker is the current run; the newest strictly older one is the previous-run anchor), which is the mechanical counterpart of the echo: when fewer than two markers are content-confirmable at gate time, the window is unanchorable (conservative gating) and the docs-tmp-sweep gate prunes no `run-start-*` markers this run; never guess by recency. This rule is the Step 0 echo-loss fallback that the plan-readiness gate back-references.
 
 ## Step 1: Run Learn
 
@@ -126,220 +126,30 @@ Invoke the `learn` skill now to extract lessons and update the documentation cor
 
 **Learn-owned commits in this step:** learn may commit its own skills-repo artifacts during this step (its Step 1.8 backlog items and skill-placement edits); that is expected and does not double-commit, because Step 4 sees only non-learn leftovers plus the failed-capture set, and no-ops when clean.
 
-**If `learn` reports a blocked state** (Step 6.6 user-corpus violation: a strict-tagged `UL#N` lesson is missing its `**Principle:** Family X` tag, or the gate script returned non-zero on the adopted corpus), release the lock via Step 6 and return `blocked` WITHOUT proceeding to Step 2 commit. `learn` is invoked here as a SKILL (a sub-procedure), not as a subprocess whose exit code this step checks, so the gate's block decision lives in `learn`'s Step 6.6 text and propagates here through `learn`'s returned state. The operator fixes the user corpus out-of-band (classify the listed `UL#N` via learn/generalize, or run `lessons_adopt.py --tag-unclassified <user_corpus>` manually) before the next `done`.
+**If `learn` reports a blocked state** (Step 6.6 user-corpus violation: a strict-tagged `UL#N` lesson is missing its `**Principle:** Family X` tag, or the gate script returned non-zero on the adopted corpus), release the lock via Step 6 and return `blocked` WITHOUT proceeding to Step 2 commit. `learn` is invoked here as a SKILL (a sub-procedure), not as a subprocess whose exit code this step checks, so the gate's block decision lives in `learn`'s Step 6.6 text and propagates here through `learn`'s returned state. The operator fixes the user corpus out-of-band (classify the listed `UL#N` via learn/generalize, or run `lessons.py adopt --tag-unclassified <user_corpus>` manually) before the next `done`.
 
-**After learn completes, immediately continue to Step 2.65.** Do not stop or wait for user input; the workflow is continuous and all steps should execute in sequence.
+**After learn completes, immediately continue to the pre-docs sweep gate run.** Do not stop or wait for user input; the workflow is continuous and all steps should execute in sequence.
 
-## Step 1.5: Plan readiness gate (this session's plan deliverables)
+## Pre-docs sweep gates (`done_sweep_gates.sh pre-docs`)
 
-This gate applies ONLY to plans that are **this session's deliverable**: a plan file under the resolved `{plans_dir}` that is untracked or modified relative to HEAD at done time (`git status --porcelain -- <plans_dir>`), or a plan path listed in `{tmp_dir}/done-session/plan-deliverables.txt` (one repo-relative path per line; ignore blank lines and `#` comments). Plain `git status --porcelain` is inert when `{plans_dir}` is gitignored (a shadow-path repo hides untracked plans), so also run the ignored-matching arm `git status --porcelain --ignored=matching -- <plans_dir>`; a plan the ignored arm lists with the ignored marker (`!!`) counts as a session-deliverable candidate when that same path is listed in `{tmp_dir}/done-session/plan-deliverables.txt` or its modification time falls inside the session window (an unlisted `!!` plan with a modification time outside the window belongs to its authoring session and gets no gate). The session window's anchor is the newest `run-start-` marker written by a previous done run under `{tmp_dir}/done-session/` (every done run writes its own marker at Step 0; the current run's own marker (identified by the marker path echoed at Step 0, re-read from chat context across shell calls) does not anchor its own window; if the echoed marker path is lost or matches no marker under `{tmp_dir}/done-session/` at gate time, apply the Step 0 echo-loss fallback (unanchorable window; the conservative-gating branch below applies); never substitute the newest on-disk marker; when the echoed marker file exists, confirm its identity from its content (the recorded `$REPO_TOP` must equal this repo's resolved repo root); recorded content naming a different repository is a cross-repo done run: the starting repo's marker cannot anchor this repo's window, so this repo's gate deterministically lands in the conservative-gating branch (expected and named for a secondary repo; the gate still names every gated plan and never silently skips one); the window runs from the anchor marker's timestamp to gate time). When no marker from a previous run exists at all, the window is unanchorable: apply conservative gating and treat every `!!` plan as this session's deliverable (the gate names each gated plan; it never silently skips them). **Producers (must run before this gate):** (1) any plan-file mutation under `{plans_dir}` (excluding `{plans_completed_dir}`) appends the path to `{tmp_dir}/done-session/plan-deliverables.txt` (create the directory/file if missing; one repo-relative path per line; skip duplicates) (the `plans` skill does this on every Write, Edit, or StrReplace; any other skill or tool that mutates a plan file under `{plans_dir}` does the same); (2) any `git commit` that stages `{plans_dir}` paths appends those paths in the same turn before `git commit` returns (binding agent commit hygiene; see Step 3 item 0b). It does NOT sweep every plan under `{plans_dir}`: committed stale plans this session never touched and never listed get **no gate and no refusal** (they belong to their authoring session), and `{plans_completed_dir}` is explicitly excluded even when nested under `{plans_dir}` (completed plans are archived, not pending). The gate does NOT apply while the mechanical `execute-plan` marker is present: `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` exists and records `workflow_state: active` (gate on that marker, never on caller-identity prose) AND that manifest carries an `updated:` timestamp (ISO8601, refreshed by the orchestrator on every manifest update) no older than 24 hours at done time; a stale or abandoned manifest grants NO exemption: an active manifest with no `updated:` line, or one older than 24 hours, is stale: the exclusion does not apply and the gate runs (treat the run as interrupted-and-drifted: the non-stop path below is a fresh `review-plan` round of the current bytes). `<PLAN_SLUG>` = the candidate plan's basename without `.md`, same as execute-plan Step 0.4. A legitimate resumed run re-establishes the fresh witness via the orchestrator's resume-time manifest refresh (execute-plan Step 0.4: the first action on resume is updating the manifest's `updated:` timestamp and confirming `workflow_state: active`), not via per-task review rounds. Such runs' checkbox marks (`- [ ]` → `- [x]`) legitimately mutate the plan digest after the final review round, and that mutation is covered by `execute-plan`'s Phase 3 fresh-review rule, not by this gate; for checkbox drift on an interrupted `execute-plan` run (marker present, run stopped, plan bytes drifted beyond the Step 0.5 resume exemption), the non-stop path is a fresh `review-plan` round of the checkbox-marked bytes, which re-binds the digest. When the gate applies, verify plan readiness before finalizing; run this gate once per repo that has a resolved `{plans_dir}` (a done session may commit across multiple repos). Run the readiness validator with the project git root as cwd, resolving the script via env-var override with two fallbacks (repo-local copy if present, then the deployed runtime copy; this skill may run in any consumer repo, not only the repo that ships the script):
-
-```bash
-GATE_TOP="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-PLAN_READINESS_VALIDATOR="${PLAN_READINESS_VALIDATOR:-}"
-if [ -z "$PLAN_READINESS_VALIDATOR" ] && [ -f "$GATE_TOP/scripts/plan_readiness.py" ]; then
-  PLAN_READINESS_VALIDATOR="$GATE_TOP/scripts/plan_readiness.py"
-  echo "readiness gate: using repo-local validator $PLAN_READINESS_VALIDATOR" >&2
-fi
-PLAN_READINESS_VALIDATOR="${PLAN_READINESS_VALIDATOR:-$HOME/.ai-playbook/scripts/plan_readiness.py}"
-python3 "$PLAN_READINESS_VALIDATOR" <plan-path>
-```
-
-- **Exit 0:** the latest review of these exact plan bytes reports `ready=yes` with a valid sidecar; continue to Step 2.65. Removal rule for `{tmp_dir}/done-session/plan-deliverables.txt`: remove every line listing that path after it passes the gate, after it is exempted via the manifest marker (the `execute-plan` mechanical exemption above), or after it is recorded-stopped; and every line listing a path that no longer exists under `{plans_dir}` (e.g. it archived to `{plans_completed_dir}`) is skipped as archived, not gated, and likewise removed. This keeps a later `done` in the same chat from re-gating stale or already-exempted entries.
-- **Non-zero exit:** **refuse to finalize**. Report the first failed readiness condition to the user and require a fresh `review-plan` round (after any plan edit that changes the digest) before re-running this gate. **Deployment-gap signature (narrow, r5 Y8):** a deployment gap is ONLY (a) the validator file itself missing or unopenable, or (b) a `ModuleNotFoundError` in the output. For either: stop and report the wiring gap, and never use the recorded-stop exception for it; manual remedy: `cp scripts/plan_readiness.py ~/.ai-playbook/scripts/` plus siblings (the script imports `validate_review_staging.py` and `facts_paths.py` from its own directory, so copy all three; the deployed `facts_paths.py` may be a symlink, keep it one, e.g. `cp -P`, do not dereference it into a second copy). Any OTHER non-zero exit that prints no `readiness FAILED:` line (validator crash, traceback, unexpected output) is NOT covered by that copy remedy: investigate the validator before re-running the gate.
-- **Recorded-stop exception:** the only permitted way past a failed gate is when the user explicitly chooses to stop without finalization and that choice is recorded in the session log. In that case do not commit the plan deliverable: record the excluded plan path in the session log and, in this session's later commit-all steps, exclude exactly that path plus its review artifacts (the review Markdown and `.stats.json` sidecar under `{reviews_dir}`) when staging, then continue with the remaining hygiene steps and report the recorded stop in Step 7. Also remove every line listing the excluded path from `{tmp_dir}/done-session/plan-deliverables.txt` so it does not reappear as a gate target.
-
-**After Step 1.5 completes (or does not apply), immediately continue to Step 2.65.**
-
-## Step 2.65: Confluence mirror and ephemeral tmp hygiene
-
-Before `docs-branch`, validate Confluence mirror state and handle ephemeral publish snapshots under `docs/tmp/`. **Never delete `*-cf-out.md` until audit confirms the content is already represented in the docs hierarchy or is a stale duplicate.**
-
-**Run when any of these are true:**
-
-- `docs/maintenance/confluence-sync-manifest.json` exists in the project repo
-- This session created or updated files under `docs/history/context/confluence/`
-- This session pushed or restored Confluence pages via Atlassian MCP
-- Ephemeral files exist under `docs/tmp/` (`*-cf-out.md`, `__pycache__`)
-
-**Skip** when none apply and `docs/tmp/` has no ephemeral publish snapshots.
+Immediately after learn and before `docs-branch`, run the deterministic pre-docs gates once per repo from the project git root:
 
 ```bash
-HYGIENE="${CONFLUENCE_MIRROR_HYGIENE_SCRIPT:-${HOME}/.ai-playbook/scripts/confluence-mirror-hygiene.sh}"
+bash "${DONE_SWEEP_GATES_SCRIPT:-${HOME}/.ai-playbook/scripts/done_sweep_gates.sh}" pre-docs
 ```
 
-1. **Audit before delete.** Classify each `docs/tmp/*-cf-out.md`:
+Gates run in this order: plan-readiness, confluence-hygiene, doc-registry, backlog-inbox, review-thread closure (a session-level conditional gate the runner does not execute; apply it in-session per its bullet below before continuing), review-staging, vim-swap-sweep, docs-tmp-sweep. The runner derives every session-scoped input mechanically (it cannot read chat context): the session window anchors on the `run-start-*` markers under `{tmp_dir}/done-session/` (the newest content-confirmed marker is the current run, the newest strictly older one is the previous-run anchor, and fewer than two confirmable markers means an unanchorable window with conservative gating), and candidates come from `{tmp_dir}/done-session/plan-deliverables.txt` plus the porcelain and ignored-matching git arms. **Exit 0:** continue immediately to Step 2. **Failure:** every gate reports even after an earlier failure; fix what the report flags using the per-gate guidance below and re-run the runner until it exits 0.
 
-   ```bash
-   "$HYGIENE" audit-cf-out
-   ```
+- **plan-readiness** (a gated plan's latest review does not cover its current bytes): refuse to finalize; require a fresh `review-plan` round (after any plan edit that changes the digest) before re-running the gate; passed, manifest-exempted, and archived plans have their deliverable lines pruned by the runner. **Deployment-gap signature (narrow):** a deployment gap is ONLY (a) the validator file itself missing or unopenable, or (b) a `ModuleNotFoundError` in the output. For either: stop and report the wiring gap, and never use the recorded-stop exception for it; manual remedy: `cp scripts/plan_readiness.py ~/.ai-playbook/scripts/` plus siblings (the script imports `validate_review_staging.py` and `facts_paths.py` from its own directory, so copy all three; the deployed `facts_paths.py` may be a symlink, keep it one, e.g. `cp -P`, do not dereference it into a second copy). Any OTHER non-zero exit that prints no `readiness FAILED:` line (validator crash, traceback, unexpected output) is NOT covered by that copy remedy: investigate the validator before re-running the gate. **Recorded-stop exception:** the only permitted way past a failed gate is when the user explicitly chooses to stop without finalization and that choice is recorded in the session log. In that case do not commit the plan deliverable: record the excluded plan path in the session log and, in this session's later commit-all steps, exclude exactly that path plus its review artifacts (the review Markdown and `.stats.json` sidecar under `{reviews_dir}`) when staging, then continue with the remaining hygiene steps and report the recorded stop in Step 7; also remove every line listing the excluded path from `{tmp_dir}/done-session/plan-deliverables.txt` so it does not reappear as a gate target.
+- **confluence-hygiene:** never delete `*-cf-out.md` until audit confirms the content is already represented in the docs hierarchy or is a stale duplicate. NEEDS_UPGRADE: promote first (mirror at `docs/history/context/confluence/{page_id}-{slug}.md` with standard frontmatter, manifest `layer2_targets`, or the spike sync ledger). UNMAPPED: route manually (new manifest entry, mirror file, or Layer 2 doc); do not delete. On `validate` failure: fix the mirror frontmatter and filenames, the manifest rows, and the mirror index; after a live push, refresh mirror bodies, bump manifest versions, and set `sync_status: synced` in the same session (never leave truncated wiki pages; republish the full body). **Deployment gap:** when `confluence-mirror-hygiene.sh` is absent from every resolved path while a run-when trigger is live, the gate fails rc 1 as a deployment gap; deploy the script to the runtime home `scripts/` directory and re-run, and never use the recorded-stop exception for a deployment gap.
+- **doc-registry:** warn-only findings (legacy files without registry entries, multiply-claimed srcs) do not block: report them, and clear a standing-override's audit note after the licensed write lands. Hard findings (registry parse errors, invalid `sot`/`state` values, malformed audit-note tokens, duplicate identities or SOT declarations, successor cycles, unprotected writes to completed-history paths): fix the registry row or move the change into the living SOT instead of editing a completed artifact. An absent validator is fail-open (reported once, non-blocking). The runner's check-writes stdin union carries git's change-type letters verbatim (porcelain `XY PATH` rows with renames as `R  old -> new`, the committed-since-session-start name-status rows, and ignored files as bare rows); the letters are what bind the registered-src exemption to the archive transition, so the union is never downgraded to name-only paths.
+- **backlog-inbox:** genuine backlog material moves into the resolved `{backlog_dir}` per `receiving-review` Backlog capture (rename to `YYYY-MM-DD-<slug>.md` when needed); a legitimate Layer 2 doc that merely trips the filename shape is renamed to a compliant name, asking the user when the run is interactive; never a silent move that misfiles real content.
+- **review-thread closure:** when a review-thread marker (a `docs/tmp/review-threads/<session-slug>.json` per `receiving-review`'s marker duty) whose recorded session identity matches the CURRENT session exists, run `python3 scripts/review_thread_gate.py --marker <path>` with an inventory source (canned file/pipe such as captured `gh` output, or `--live`): exit 0 only when every tracked thread carries a verified agent reply or an explicit disposition. On failure, report blocked, release the project done lock per Step 6, and do not report completion; report push authorization separately from review-response state. A session with no marker, or a marker whose recorded identity does not match the current session (stale or foreign), is unaffected: the gate reports it as stale/skipped and never gates this session's done run. Human-authored threads are never auto-resolved.
+- **review-staging:** complete each flagged staging doc per `review-staging` (Metadata, Review Statistics, Findings with Comment/Analysis) before continuing; do not sync stub staging docs to the orphan `docs` branch.
+- **vim-swap-sweep:** the runner removes only verified stale swaps (dead-owner PID) and preserves live-owner or unverifiable files; a `needs-manual` entry stays in place until manually confirmed.
+- **docs-tmp-sweep:** durable findings graduate into lessons, completed plans, or Layer 2 docs; the rest dies with its owner. The runner never removes an ACTIVE `execute-plan` session (its plan pending anywhere under `{plans_dir}`, nested subdirectories included), `review-loop*`/`code-review/`/`handoff/` scratch (their owning skills clean up), the previous-run anchor marker, or the current-run marker, and it skips rather than removes anything never synced to the `docs` branch or of unclear ownership; a one-off already synced to the `docs` branch is likewise skipped while it was modified inside the session window (removal waits for a session whose window no longer covers it, and an unanchorable window removes nothing). Resolve skips by hand only after confirming sync state, and report what was left and why.
 
-   - **NEEDS_UPGRADE:** promote content into the docs hierarchy first:
-     1. `docs/history/context/confluence/{page_id}-{slug}.md` with standard mirror frontmatter (verbatim wiki body)
-     2. `layer2_targets` from `confluence-sync-manifest.json` when curated Layer 2 is authoritative
-     3. Engineering spike sync ledgers (for example ADR-46 §Confluence sync ledger) when versions changed
-   - **UNMAPPED:** route manually (new manifest entry, mirror file, or Layer 2 doc); do not delete.
-   - **STALE:** safe to remove after promotion pass (older publish snapshot, subset of mirror, or superseded wording).
-
-   Re-run `audit-cf-out` until exit 0 before cleanup.
-
-2. When a manifest exists, run validation:
-
-   ```bash
-   "$HYGIENE" validate
-   ```
-
-   On failure, fix before `docs-branch` and re-run until exit 0:
-
-   - Mirror files use standard YAML frontmatter (`confluence_page_id`, `confluence_title`, `confluence_version`, `confluence_url`, `space_key`, `synced_at`, `sync_status`, `layer2_targets`). Do not use a bare `path:` key.
-   - Mirror filenames follow `{page_id}-{slug}.md`.
-   - `docs/maintenance/confluence-sync-manifest.json` lists every mirror with matching `local_path`, versions, and `layer2_targets`.
-   - `docs/history/context/confluence/README.md` indexes manifest pages.
-   - Engineering spike docs with a Confluence sync ledger (for example ADR-46) match manifest `confluence_version` after an intentional wiki push (`sync_status: synced`). Use `pending` when repo mirrors are ahead of wiki per project-guidelines #92.
-
-3. After a live Confluence push, refresh mirror bodies from the published wiki content (or authoritative repo spike sections), bump manifest versions, and set `sync_status: synced` in the same session. Do not leave truncated wiki pages; republish the full body before marking synced (via `confluence-page-sync`).
-
-4. **Cleanup only after audit passes:**
-
-   ```bash
-   "$HYGIENE" cleanup
-   ```
-
-   Removes `__pycache__` always; removes `*-cf-out.md` only when step 1 marked them STALE. Aborts when promotion is still pending.
-
-**After Step 2.65 completes, immediately continue to Step 2.648.**
-
-## Step 2.648: Document registry hygiene
-
-Before `docs-branch`, validate the document ownership registry and gate writes to completed-history paths. The prose SOT for the registered-src exemption is the doc-hierarchy skill. Resolve the validator via the facts key (env-var override for local testing):
-
-```bash
-DOC_REGISTRY_VALIDATOR="${DOC_REGISTRY_VALIDATOR_SCRIPT:-${HOME}/.ai-playbook/scripts/doc_registry_validator.py}"
-```
-
-Fail-open semantics (matching pre-deploy vendored consumers):
-
-- If the validator script itself is absent at the runtime path, report that once and continue to Step 2.645; do not block the commit on a missing deployment.
-- If the registry file is absent at the resolved path, the validator reports the inventory hint (`inventory` lists unregistered completed-history files; the migration backlog owns them); report the hint once and continue.
-
-Run, from the project git root:
-
-1. **Registry integrity:**
-
-   ```bash
-   python3 "$DOC_REGISTRY_VALIDATOR" validate
-   ```
-
-2. **Immutable-path write gate**, when the session produced changed files:
-
-   ```bash
-   FACTS_PATHS_SCRIPT="${FACTS_PATHS_SCRIPT:-${HOME}/.ai-playbook/scripts/facts_paths.py}"
-   REPO_TOP_2648="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-   TMP_DIR_2648="$(python3 "$FACTS_PATHS_SCRIPT" resolve tmp_dir "$REPO_TOP_2648" 2>/dev/null || true)"
-   SESSION_HEAD_FILE="${TMP_DIR_2648:-docs/tmp}/done-session/session-start-head.txt"
-   if [ -f "$SESSION_HEAD_FILE" ]; then
-     SESSION_START_HEAD="$(cat "$SESSION_HEAD_FILE")"
-   fi
-   BASE="${SESSION_START_HEAD:-ORIG_HEAD}"
-   git rev-parse -q --verify "$BASE^{commit}" >/dev/null \
-     || { echo "2.648: session-start base '$BASE' unresolvable; using HEAD as base for this run"; BASE="$(git rev-parse HEAD)"; }
-   { git -c core.quotePath=false status --porcelain; git -c core.quotePath=false diff --name-status --no-renames "$BASE" HEAD; } | sort -u \
-     | python3 "$DOC_REGISTRY_VALIDATOR" check-writes --stdin
-   mkdir -p "$(dirname "$SESSION_HEAD_FILE")" \
-     && git rev-parse HEAD > "$SESSION_HEAD_FILE"
-   ```
-
-   Degradation: an absent git root (`git rev-parse` fails outside a repo) leaves `REPO_TOP_2648` empty, which anchors the resolve at the current directory (`Path("")` is cwd; matching the `|| pwd` anchor of the block this replaced), so a facts file resolvable from there still yields the real tmp dir. An absent or old facts_paths script (one that rejects the root argument) or an absent facts file degrades exactly as the absent-facts.md case did: `TMP_DIR_2648` resolves empty and the unchanged `${TMP_DIR_2648:-docs/tmp}` fallback applies (fail-open parity).
-
-   The final line re-anchors the session-base file at the end of this step: because the session's commits land in later steps, the recorded HEAD predates them, so the next run re-covers this session's commits (change types intact; freeze-move adds stay licensed) rather than missing them; fail-closed by design.
-
-   Include changed files from every write state with their change type: the porcelain arm covers unstaged edits, staged changes, and untracked files (`XY PATH`, renames as `R old -> new`); the name-status arm covers changes committed since the session started (`A/M/D<TAB>path`), matching the union pattern used by the neighboring hygiene steps; skip the gate when nothing changed. The change-type letters are what bound the registered-src exemption to the archive transition, so never downgrade the union to name-only output. Trust boundary: the letters are asserted by the feeding command and are only as trustworthy as it; the validator does not re-derive them from git, so never feed it a hand-typed or filtered change list in place of the git commands above. The committed-since base is fail-loud and self-anchoring: read the previous run's HEAD from `{tmp_dir}/done-session/session-start-head.txt` when present, else `ORIG_HEAD` (on first adoption, before any session-base file exists, `ORIG_HEAD` is the only anchor and may point at a checkout/rewrite base rather than the true session start; the session-base file removes that limitation from the second run on); when the base does not resolve to a commit (fresh clone or init-only repo), say so and use the current HEAD as the base for this run so the arm degrades loudly, never silently. Run this step's commands in each repository named by the Step 0 inventory when the session touched more than one (the gate must run where the immutable paths live, not only where the latest artifact sits).
-
-Result handling:
-
-- **Warn-only findings** (including but not limited to stale aliases, legacy files without registry entries, dangling successors, multiply-claimed srcs, and the no-change-type-letter verify warn on registered srcs): report them in the step summary; they do not block. A standing-override warn carries a duty, not just information: clear the audit note after the licensed write lands so the guard is not left disarmed.
-- **Hard findings** (including but not limited to registry parse errors, invalid `sot`/`state` values, malformed or ill-dated audit-note tokens, duplicate identities or SOT declarations, successor cycles, and unprotected writes to completed-history paths): stop and remediate before continuing, with the same stop semantics as the neighboring hygiene steps; fix the registry row or move the change into the living SOT instead of editing a completed artifact.
-
-**After Step 2.648 completes, immediately continue to Step 2.645.**
-
-## Step 2.645: Backlog inbox location gate
-
-Before `docs-branch`, verify no backlog-inbox-shaped file sits outside the resolved backlog home. This is the mechanical second line of defense behind the `receiving-review` skill hardening (2026-08-30 invented-destination incident). Run it over the validator's full scan surface: rule 2 over the tracked tree plus rule 1 hot-dir filesystem walk (untracked and gitignored shadow-tree files included).
-
-```bash
-VALIDATOR="${BACKLOG_LOCATION_GATE:-$HOME/.ai-playbook/scripts/check_backlog_inbox_location.py}"
-GATE_TOP="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-if [ ! -f "$VALIDATOR" ] && [ -f "$GATE_TOP/scripts/check_backlog_inbox_location.py" ]; then
-  VALIDATOR="$GATE_TOP/scripts/check_backlog_inbox_location.py"
-  echo "backlog gate: using repo-local validator $VALIDATOR" >&2
-fi
-if [ ! -f "$VALIDATOR" ]; then
-  echo "warning: check_backlog_inbox_location.py not found; skipping backlog inbox location gate" >&2
-else
-  python3 "$VALIDATOR" || exit 1
-fi
-```
-
-Fail-open rationale: the done skill is vendored to project repos where the copy-sync redeploy has not landed; a hard abort there would block every commit until an external redeploy. When a copy exists, the gate fails closed (`|| exit 1`).
-
-On failure, remediate before continuing (disposition-dependent, never a silent move that misfiles real content): a file that is genuine backlog material moves into the resolved `{backlog_dir}` per `receiving-review` Backlog capture (rename to the `YYYY-MM-DD-<slug>.md` convention when needed); a legitimate Layer 2 doc that merely trips the filename shape is renamed to a compliant name, asking the user when the run is interactive.
-
-**After Step 2.645 completes, immediately continue to Step 2.64.**
-
-## Step 2.64: Review staging hygiene
-
-When this session wrote or updated review staging docs under `{reviews_dir}/` (resolve from `.ai-playbook/facts.md` via `using-skills` Step 0), validate each session-touched staging file before `docs-branch` sync. Cover every review-staging kind: basename matches `*review*.md`, or PR staging names (`*-PR-*` / `PR-<n>-...` per `review-staging`), or any path accepted by the validator's `is_staging_review_path`. Do not filter to `*review*.md` alone; that misses PR staging.
-
-```bash
-VALIDATOR="${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}"
-# Only paths this session created or edited (do not glob all historical rounds)
-for f in <session-touched-staging-paths>; do
-  [ -f "$f" ] || continue
-  python3 "$VALIDATOR" --hard "$f" || exit 1
-done
-```
-
-On failure: complete the staging doc per `review-staging` (Metadata, Review Statistics, Findings with Comment/Analysis) before continuing. Do not sync stub staging docs to the orphan `docs` branch.
-
-**After Step 2.64 completes, immediately continue to Step 2.63.**
-
-## Step 2.63: Clean stale Vim swap files
-
-Remove only verified stale Vim swap files before `docs-branch` snapshots ignored files. These files are editor recovery artifacts, not untracked work to preserve. Never delete a swap file for a live editor process or a file whose owner cannot be verified.
-
-1. Find candidate swap files, excluding `.git`:
-
-   ```bash
-   find . -path ./.git -prune -o -type f \( -name '.*.swp' -o -name '.*.swo' -o -name '.*.swn' \) -print
-   ```
-
-2. For each candidate, run `file -- <path>`. Continue only when it identifies a `Vim swap file` and reports a PID.
-
-3. Check the PID with `ps -p <pid> -o command=`.
-   - If the PID is live and its command names the edited document, preserve the swap file and report it as active.
-   - If the PID is dead, remove that exact candidate with `rm -f -- <path>` and report it as removed.
-   - If the PID is live but the document does not match, or the header has no usable PID, preserve the file and report that cleanup needs manual confirmation.
-
-4. Do not remove other untracked, ignored, backup, lock, or temporary files automatically. This cleanup is deliberately limited to verified stale Vim swaps.
-
-**After Step 2.63 completes, immediately continue to Step 2.62.**
-
-## Step 2.62: docs/tmp plan-lifetime sweep
-
-`{tmp_dir}/` (resolve from `.ai-playbook/facts.md` via `using-skills` Step 0) is scratch with plan lifetime, not an archive: durable findings graduate into lessons, completed plans, or Layer 2 docs, and the rest dies with its owner. Sweep what outlived its owner before `docs-branch` snapshots it:
-
-1. For each entry directly under `{tmp_dir}/`, classify and remove when its owner is finished:
-   - `execute-plan/<slug>/` whose plan file is no longer under `{plans_dir}/` (it archived to `{plans_completed_dir}/`): remove the whole session dir.
-   - `plan-requirements-<slug>.md` whose plan is in `{plans_completed_dir}/`: remove.
-   - `review-loop*`, `code-review/`, `handoff/` scratch: leave in place. A plan-less review loop has no liveness witness (the plan check cannot see it), and `done` runs inside review-loop's own fix cycles, so removing these here can delete an ACTIVE loop's unsynced staging. Their owning skills (review-loop, doing-code-review, handoff) remove them when their staging is final.
-   - `done-session/`: owned by `done`. Remove `run-start-*` markers strictly older than the newest marker written by a previous done run; NEVER remove the newest previous-run marker (it is this run's session-window anchor) or the current run's marker (it is the next run's anchor). `plan-deliverables.txt` is governed by the Step 1.5 removal rule, not this sweep. If the echoed marker path is lost or matches no marker under this directory, prune no `run-start-*` markers this run (never guess by recency). Confirm the recalled current-run marker from its content the same way: a recorded `$REPO_TOP` matching this repo is the confirmable field, and the run-unique epoch and PID are recorded for post-hoc audit rather than gate-time comparison; a content mismatch applies the same no-prune rule as a lost echo.
-   - One-off scripts and log notes (`.py`, `*.log.md`, dated one-off `.md`) with no pointer from a tracked doc and not from the current session: remove.
-   - Anything else (unclear ownership, active work): leave in place and report it.
-2. Never remove an ACTIVE `execute-plan` session: its dir contains `manifest.md` and its plan still sits under `{plans_dir}/`.
-3. Sweep without prompting; removals stay recoverable from the `docs` branch history (the sweep deletion's parent commit) **only when a prior sync captured them**; a never-synced file's removal is permanent, so when presence on `refs/heads/docs` is uncertain, skip the file and report it instead. Report the removed list in the step summary.
-4. Deletion propagation is the `docs-branch` sync's job (its `{tmp_dir}` sweep-eligible root drops branch copies in the same Step 2 run); do not hand-edit the docs branch here.
-
-**After Step 2.62 completes, immediately continue to Step 2.**
+**After the pre-docs sweep gate run completes (or no-ops), immediately continue to Step 2.** Do not stop or wait for user input; the workflow is continuous and all steps should execute in sequence.
 
 ## Step 2: Preserve Gitignored Docs and Instructions
 
@@ -429,46 +239,6 @@ Check for these cases:
 
 Do not assume the `learn` step already wired these references correctly. Re-check the final diff before staging and commit any missing cross-links as part of cleanup.
 
-## Step 2.7: Sensitive Data and Personal Information Scan
-
-Before committing, scan all uncommitted changes (including untracked files) for sensitive or personal information that must not appear in public repositories.
-
-**Check for:**
-- Hardcoded absolute paths containing usernames (e.g., `<home>/username/` paths)
-- Organization-specific domains, internal URLs, or service names
-- Employee names, email addresses, or identifiers (except copyright lines in `LICENSE.txt`)
-- API keys, tokens, passwords, or credentials
-- Project-specific ticket prefixes or internal naming that reveals client/employer identity
-- Environment names or internal infrastructure references
-- `Co-authored-by:` / `Co-Authored-By:` trailers in commit messages being pushed
-- Employer or client brand names in commit subjects (especially in vendored skills)
-
-**How to scan:**
-1. List all changed/untracked files: `git status --short`
-2. For each file in the diff, grep for patterns:
-   ```bash
-   git diff --cached -U0 | grep -iE '/Users/|/home/|\.atlassian\.net|@[a-z]+\.(com|io|net)|api[_-]?key|token|password|secret'
-   ```
-   Also run `public_hygiene_scan_script` from user facts (deny patterns: `public_hygiene_patterns_file`).
-3. For untracked files being staged, scan their full content.
-4. When a push is planned, audit commits in the push range (`origin/<branch>..HEAD` or the squashed commit about to be pushed):
-   ```bash
-   git log origin/<branch>..HEAD --format='%B---' | grep -iE 'Co-authored-by|Co-Authored-By|<employer-brand-from-facts>'
-   git log origin/<branch>..HEAD --format='%s' | grep -iE '<employer-brand-from-facts>'
-   rg -i '<employer-brand-from-facts>' --glob '!**/LICENSE.txt' agents/skills/
-   ```
-   Resolve employer-brand patterns from the user's facts document; never hardcode them in skill files.
-
-**If found:**
-- Replace personal paths with facts-document references or generic placeholders (e.g., `<your-org>.atlassian.net`, `~/Projects/<project>/`)
-- Replace internal names with generic equivalents
-- Move credentials to `.env` or facts documents (never commit them)
-- If the information is in a skill file, externalize **machine-specific** values to facts documents; keep **portable policy constants and workflow thresholds** in the skill body (see `learn` Step 2, Facts vs skill configuration; `agent_workflow_guidelines.md` §50).
-
-**When committing this repository (`skills_repo_path`) or vendored skills:** run `public_hygiene_scan_script` from user facts at the instructions repo root and fix all failures before staging.
-
-**Do NOT commit until all sensitive data is resolved.**
-
 ## Step 2.75: Unused import scan (all touched source files)
 
 Before committing, verify every changed or new **source file** from this session has no unused-import diagnostics (or the language equivalent: `using`, `require`, type-only imports, and so on).
@@ -489,52 +259,31 @@ Before committing, verify every changed or new **source file** from this session
 
 Do not stage source files for commit while unused-import diagnostics remain on any touched path from this session.
 
-**After Step 2.75 completes, immediately continue to Step 2.76.**
+**After Step 2.75 completes, immediately continue to the pre-commit sweep gate run.**
 
-## Step 2.76: No em dash scan (touched prose files)
+## Pre-commit sweep gates (`done_sweep_gates.sh pre-commit`)
 
-Before committing, scan touched prose and instruction files for em dash (U+2014). Policy: `agent_workflow_guidelines.md` §39.
+After Step 2.75 and before Step 3, run the deterministic pre-commit gates once per repo from the project git root:
 
-1. From the repo root (or each repo you will commit), run:
-   ```bash
-   "${CHECK_NO_EM_DASH_SCRIPT:-${HOME}/.ai-playbook/scripts/check-no-em-dash.sh}" touched
-   ```
-2. The script scans `*.md`, `*.mdc`, and instruction entrypoint filenames among touched paths. Fix every reported line: use a comma, colon, semicolon, period, or parentheses instead of a long dash.
-3. Re-run until exit code 0.
+```bash
+bash "${DONE_SWEEP_GATES_SCRIPT:-${HOME}/.ai-playbook/scripts/done_sweep_gates.sh}" pre-commit
+```
 
-No silent gate-satisfying rewrites of human-authored prose: when a gate or validator fails on prose the user authored, do not rewrite the passage wholesale and do not silently substitute its wording, punctuation, or structure. Make only the narrowly-scoped edit the gate actually requires, only inside the lines this run's own change touches (the hunks this run edited, not merely the same file), and report the edit in the return or commit summary; when the failures reach untouched user prose, or no minimal edit exists, stop and surface the conflict for the user to adjudicate (returned-for-ask shape: name the gate, the failing lines, and the options). Whole-file rewording of user-authored text is out of scope for any worker, always. Restoring the user's original text outranks a green gate. Text you authored this run is yours to fix freely; this pin never applies to it and never excuses stopping for routine fixable failures. When the stop-and-surface clause of this paragraph fires, it overrides the surrounding imperatives: do not re-run the scan for exit code 0, leave the failing prose unstaged, and do not continue to Step 2.8 until the user adjudicates.
+Gates run in this order: **sensitive-data-scan** (diff-content pattern grep over staged content, full-content scan of untracked files, the push-range commit-message audit when an upstream is configured, skipped with a warning line in the report when none is (`Co-authored-by:` trailers and employer-brand patterns resolved from the facts document), and `public_hygiene_scan_script` when this repo is the skills repo), **em-dash-scan** (`check-no-em-dash.sh touched` over touched prose; policy: `agent_workflow_guidelines.md` §39; a script absent from every resolved path is a rc 1 deployment gap, never a skip), **instruction-size** (`check-instruction-size.sh gate`; budget 30,720 bytes per instruction entrypoint, the learn Step 6.5 constant; only over-budget files with uncommitted changes block; a script absent from every resolved path is a rc 1 deployment gap, never a skip). Fixing stays in this skill: on a failure, fix per the guidance below and re-run the runner until exit 0; for a deployment gap, deploy the missing script to the runtime home `scripts/` directory and re-run, and never use the recorded-stop exception for it. Do not stage files a failing gate flags; after the pre-commit sweep gate run exits 0, immediately continue to Step 3.
 
-Do not stage prose or instruction files while the scan fails.
-
-**After Step 2.76 completes, immediately continue to Step 2.8.**
-
-## Step 2.8: Instruction Size Gate (before commit)
-
-When uncommitted changes touch always-loaded instruction entrypoints (`AGENTS.md`, `CLAUDE.md`, and others listed in `user_facts_path` when present), verify they still fit the context budget after learn compaction.
-
-**Budget:** **30,720 bytes** per instruction entrypoint (same constant as learn Step 6.5).
-
-1. From the repo root, run:
-   ```bash
-   "${HOME}/.ai-playbook/scripts/check-instruction-size.sh" gate
-   ```
-   (Override script path only for local testing via `INSTRUCTION_SIZE_CHECK_SCRIPT`.)
-2. **Gate behavior:** exits non-zero when an instruction file exceeds the budget **and** has uncommitted changes. Grandfathered over-budget files with no pending edits do not block unrelated commits.
-3. On failure: return to learn Step 6.5, compact hybrid bullets to cross-references, move infrequent rules to skills, then re-run **gate** before staging instruction files.
-
-Do not stage instruction entrypoints for commit while **gate** fails.
-
-**After Step 2.8 completes, immediately continue to Step 3.**
+- **sensitive-data-scan:** replace personal paths with facts-document references or generic placeholders (e.g., `<your-org>.atlassian.net`, `~/Projects/<project>/`); replace internal names with generic equivalents; move credentials to `.env` or facts documents (never commit them); in a skill file, externalize machine-specific values to facts documents and keep portable policy constants and workflow thresholds in the skill body (see `learn` Step 2, Facts vs skill configuration; `agent_workflow_guidelines.md` §50); fix all `public_hygiene_scan_script` failures before staging. **Do NOT commit until all sensitive data is resolved.**
+- **em-dash-scan:** fix every reported line with a comma, colon, semicolon, period, or parentheses, under the no-silent-gate-satisfying-rewrites rule (see Rules): when the failures reach untouched user-authored prose, or no minimal edit exists, stop and surface the conflict for the user to adjudicate; do not re-run the scan for exit code 0, leave the failing prose unstaged, and do not continue to Step 3 until the user adjudicates.
+- **instruction-size:** return to learn Step 6.5 (compact hybrid bullets to cross-references, move infrequent rules to skills), then re-run the runner before staging instruction files.
 
 ## Step 3: Commit Uncommitted Changes
 
 After learn and stash steps complete:
 
-0b. **Plan-deliverable append (producer 2 for Step 1.5):** Before any `git commit` in this session that stages paths under `{plans_dir}` (excluding `{plans_completed_dir}`), append each staged plan path to `{tmp_dir}/done-session/plan-deliverables.txt` (create dir/file if missing; one repo-relative path per line; skip duplicates). Do this in the same turn as the commit, including when the commit is not part of `done`.
+0b. **Plan-deliverable append (producer 2 for the pre-docs sweep gate run's plan-readiness gate):** Before any `git commit` in this session that stages paths under `{plans_dir}` (excluding `{plans_completed_dir}`), append each staged plan path to `{tmp_dir}/done-session/plan-deliverables.txt` (create dir/file if missing; one repo-relative path per line; skip duplicates). Do this in the same turn as the commit, including when the commit is not part of `done`.
 
 0. **Distinguish session changes from pre-existing local changes.** Only commit changes that were made during this session. If `git status` shows uncommitted files that were not touched by you in this session, ask the user before staging them; they may be in-progress work the user does not want committed yet. For cleanup or restoration sessions, capture the dirty-tree and untracked-file baseline before the first edit: always record the git status --porcelain baseline in the session notes before the first edit; additionally run the cleanup baseline checker scripts/check_cleanup_scope_baseline.py against the task's scope ledger when the task's scope ledger exists (resolve the skills repo checkout from the skills-repo path key in the user facts document and pass this repo via --repo-root). Refuse to stage any path that was already dirty or untracked at baseline unless the user explicitly includes it. Checker exit codes: exit 1 means a path outside the ledger is dirty or deleted, so ask the user before staging it; exit 2 means the checker could not run, so fall back to the recorded session-notes baseline; if the checker exits 2 and no recorded baseline exists, ask the user before staging any path not created or modified this session. Run the checker before the first commit of the session for full coverage; after commits exist, only deletions remain checkable (against the ledger's session-start base ref, never with `--base HEAD`), because committed non-deletion sweeps are invisible at any base ref once committed: assess committed modifications from the recorded session-notes baseline instead. If no pre-edit baseline exists at done time (whatever the reason: checker never run, exit 2 with no recorded baseline, or baseline recorded after edits), ask the user before staging any path not created or modified this session; a baseline recorded after edits is not a baseline. Checker limitations: it cannot see gitignored files (capture the ignored set with `git status --porcelain --ignored` and record those paths in the session notes explicitly), and it matches allow-list paths byte-exact relative to the repo root (no `./` prefix). If the skills-repo path key is missing or unresolvable, record the session-notes baseline and note that the checker was skipped.
 1. Run `git status` and `git diff` (staged + unstaged) to see all changes.
-   **Pre-commit guard (post sub-agent git op):** Step 2 `docs-branch` (and any prior sub-agent `git worktree`/`git checkout`/`git stash` operation) can leave the main repo's index/worktree in a REVERTED state relative to HEAD while HEAD stays correct. Before staging, run `git diff --cached --stat`: if it shows large deletions across files you did not edit this iteration (e.g. +73/-1062 across 14 files) OR the test count dropped vs the last known-good count on HEAD, a leaked revert is staged. Run `git reset --hard HEAD`, re-stage only your intended edits, then re-verify. Never a directory-wide add (no `git add -A`/`git add .`) here, or the rollback is swept into the commit. (Witness: 2026-07-23 group-leftover-crypto-warnings r6; see project `development_lessons.md` lesson on this family.)
+   **Pre-commit guard (post sub-agent git op):** Step 2 `docs-branch` (and any prior sub-agent `git worktree`/`git checkout`/`git stash` operation) can leave the main repo's index/worktree in a REVERTED state relative to HEAD while HEAD stays correct. Before staging, run `git diff --cached --stat`: if it shows large deletions across files you did not edit this iteration (e.g. +73/-1062 across 14 files) OR the test count dropped vs the last known-good count on HEAD, a leaked revert is staged. Run `git reset --hard HEAD`, re-stage only your intended edits, then re-verify. Never a directory-wide add (no `git add -A`/`git add .`) here, or the rollback is swept into the commit. The same guard covers unstaged dirt that REGRESSES HEAD: after the cached-diff check, run the dirt regression gate (`python3 scripts/dirt_regression_gate.py --base <merge-base-with-default-branch>`, resolved via `git merge-base HEAD <default>`; skip with a one-line note when no default branch resolves) over the working tree's modified files; any file it names as a dirt REGRESSION is restored from HEAD (`git checkout -- <file>`) and reported, never staged or committed. (Witness: 2026-07-23 group-leftover-crypto-warnings r6; see project `development_lessons.md` lesson on this family.)
 2. Run `git log --oneline -5` to match existing commit message style.
 3. Derive the story key from the current branch name (e.g. `feature/PROJ-1234-...` → `PROJ-1234`). If the branch name contains no story key, use a plain descriptive commit message without a ticket prefix on branches such as `main` or `master`. Ask the user only if the repository convention is unclear and there is no obvious non-ticket fallback.
 4. **Before staging any file, verify it is not gitignored:**
@@ -595,7 +344,7 @@ After committing the current project, check the skills repository for leftover c
 
    When clean, report "no non-learn skills-repo changes" and no-op.
 3. Classify each dirty path as session-attributed (this session's non-learn skill edits, or failed-capture-set artifacts) or foreign. Ask the user before staging each session-attributed path (same discipline as Step 3 item 0); never stage foreign or peer-session paths. For paths learn reported as skipped for foreign or unrecognizable hunks, review the path's diff and stage only after the user confirms the foreign hunks are acceptable (path-level staging stages the file as a whole); when they are not, leave the path unstaged and report it.
-4. Stage by explicit path only; never a directory-wide add (no `git add -A` or `git add .`). Re-run the Step 2.7 sensitive-data scan over the staged content, then commit with a descriptive message.
+4. Stage by explicit path only; never a directory-wide add (no `git add -A` or `git add .`). Re-run the pre-commit sweep gate run's sensitive-data-scan gate (`done_sweep_gates.sh pre-commit`) over the staged content, then commit with a descriptive message.
 
 ## Step 5: Commit Pending Facts and Docs Changes
 
@@ -671,13 +420,16 @@ Invoked as a sub-agent after **each** completed plan task (per-task commit) and 
 
 Each execute-plan `done` sub-agent still runs Step 0 and Step 6. Sequential tasks in one orchestrator usually acquire immediately after the prior release; parallel chats on the same repo wait on **wait-acquire**.
 
-**Batch implement launches (Step 1.2 batch contract):** when the orchestrator launched several file-disjoint tasks as one batch, `done` still runs **per member task, in document order**, never once for the batch. Each member's `done` reads only **its own** `task-<N>-implement.log.md` as the preceding-step log, exactly as the single-task flow does. The member's done staging receipt is **member-scoped**: the driver's claim-group protocol fences the handoff to that member's own canonical allowed paths against its moving baseline (the pre-batch launch baseline for the first member; the immediately preceding member's commit for later members, r1 F27), so a member done that touches another member's file is rejected by the driver before any commit is recorded. Members between the first and the last advance only through the driver's typed `resume_member` action on the group's one anchor session; the batch never produces a batch-level commit, and the orchestrator's generic next-task claim stays suppressed until the group closes.
+**Batch implement launches (Step 1.2 batch contract):** when the orchestrator launched several file-disjoint tasks as one batch, `done` still runs **per member task, in document order**, never once for the batch. Each member's `done` reads only **its own** `task-<N>-implement.log.md` as the preceding-step log, exactly as the single-task flow does. The member's done staging receipt is **member-scoped**: the driver's claim-group protocol fences the handoff to that member's own canonical allowed paths against its moving baseline (the pre-batch launch baseline for the first member; the immediately preceding member's commit for later members, r1 F27), so a member done that touches another member's file is rejected by the driver before any commit is recorded. Members between the first and the last advance only through the driver's typed `resume_member` action on the group's one anchor session; the batch never produces a batch-level commit, and the orchestrator's generic next-task claim stays suppressed until the group closes. **Parallel-group launches (Step 1.2 parallel-group contract):** the per-member rule carries over when the members implemented concurrently instead: each member has its own session, claim, policy token, and `task-<N>-implement.log.md`, and per-member `done` still runs one at a time in document order with the same member-scoped receipt, so the group closes on the last member commit with no group-level commit.
 
 ### With `review-staging` skill
-Step 2.64 validates session-touched staging docs under `{reviews_dir}/` before docs-branch sync. Include `*review*.md`, PR staging (`*-PR-*` / `PR-<n>-...`), and any path accepted by `is_staging_review_path` (not only `*review*.md` or `*-r*.md`). Complete Metadata, Review Statistics, and Findings with Comment/Analysis before continuing; do not sync stub staging docs.
+The pre-docs sweep gate run's review-staging gate validates session-touched staging docs under `{reviews_dir}/` before docs-branch sync (candidates: porcelain plus ignored-matching paths restricted to the session window, filtered by the validator's `is_staging_review_path`; include `*review*.md`, PR staging (`*-PR-*` / `PR-<n>-...`), and any path the predicate accepts, never only `*review*.md`). Complete Metadata, Review Statistics, and Findings with Comment/Analysis before continuing; do not sync stub staging docs.
+
+### With `receiving-review` skill (review-thread closure gate)
+`receiving-review`'s marker duty is the provider: a passive-review session writes the review-thread marker at feedback-processing start and keeps per-thread dispositions in it. `done` is the gate consumer: the pre-docs sweep's review-thread-closure gate runs `scripts/review_thread_gate.py` only for a marker whose recorded session identity matches the current session, failing closed while closure is not established. This skill does not restate the marker schema or reply idempotence rules (owned by `receiving-review`).
 
 ### With `plans` and `docs-branch` skills (docs/tmp sweep)
-Step 2.62 sweeps `{tmp_dir}` entries whose owning plan archived (plans Plan Lifecycle cleanup) or that are one-off ownerless scratch; `review-loop*`/`code-review/`/`handoff/` scratch is never swept here (no liveness witness; their owning skills clean up). The `docs-branch` sync then drops branch-tracked `{tmp_dir}` paths absent on disk (`{tmp_dir}` is its one sweep-eligible root), so branch copies propagate without hand-editing the docs branch.
+The pre-docs sweep gate run's docs-tmp-sweep gate sweeps `{tmp_dir}` entries whose owning plan archived (plans Plan Lifecycle cleanup) or that are one-off ownerless scratch; `review-loop*`/`code-review/`/`handoff/` scratch is never swept here (no liveness witness; their owning skills clean up). The `docs-branch` sync then drops branch-tracked `{tmp_dir}` paths absent on disk (`{tmp_dir}` is its one sweep-eligible root), so branch copies propagate without hand-editing the docs branch.
 
 ## Rules
 
@@ -687,7 +439,7 @@ Step 2.62 sweeps `{tmp_dir}` entries whose owning plan archived (plans Plan Life
 - Never skip the learn step even if the user says "just commit".
 - Invoke `docs-branch` skill for all docs/instructions preservation; do not inline the stash or branch logic here.
 - Never remove an ad-hoc worktree before its run's gitignored review artifacts verify present in the main checkout; the docs-branch sync runs where the on-disk corpus is canonical (the main checkout after migration).
-- Run Step 2.65 (Confluence mirror validate, audit-cf-out promotion gate, ephemeral `docs/tmp` cleanup) before `docs-branch` when the manifest exists or the session touched Confluence mirrors, wiki pages, or ephemeral publish snapshots.
+- Run the pre-docs sweep gate run (`done_sweep_gates.sh pre-docs`) after learn and before `docs-branch`; it carries the Confluence mirror validate, audit-cf-out promotion gate, and ephemeral `docs/tmp` cleanup gates, and it no-ops the gates whose triggers (manifest, Confluence mirror or wiki touches, ephemeral publish snapshots) are absent.
 - Always verify that new or revised reusable docs, reference material, and explanatory artifacts added in the session are referenced from instructions or related canonical docs where future agents will need them.
 - Never stage or commit a file that is gitignored, even if it appears in `git diff` (it was previously force-tracked). Use `git rm --cached` to remove it from tracking; do not commit it on the feature branch.
 - Stage by explicit path only; never a directory-wide add. Learn-owned artifacts are committed by learn in Step 1, and Step 4 stages only session-attributed non-learn paths (plus failed-capture-set artifacts, and paths learn reported as skipped for foreign or unrecognizable hunks, staged only after the user confirms the foreign hunks are acceptable) after asking.

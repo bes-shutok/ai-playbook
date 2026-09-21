@@ -7165,3 +7165,77 @@ Witness: document-registry.md carried four `+| ...` rows from a diff paste (2026
 **Witness (2026-09-21, ai-playbook quota-aware execution):** primary `scripts/test_execute_plan_resume_watcher.py` found dirty with a one-line fixture fix; attributed to session sess_acc16ecf at 07:28:32 via the session DB; benign (byte-contained in the run's 6c4b6df4) but indistinguishable from a regression until attributed.
 
 **See also:** #406 (dirt preservation must diff against HEAD; the consumer side of unattributed dirt), #372 (gitignored artifact homes live in the primary checkout - the sanctioned reason to write there).
+
+## 410. Flip Probes Over Multi-Occurrence Pins Must Delete Every Occurrence
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a region-scoped positive pin stays green while any one copy of its needle survives, so deleting a single occurrence proves nothing when the claimed region holds several.
+
+**Shape trigger:** writing or reviewing a mutation/flip check for a must-match pin whose needle can legitimately appear more than once inside the pin's region (the same token in two bullets of one rule, in a sentence and its retention enumeration, or added by two clauses of one fix).
+
+**Rule:** (1) Before trusting a flip probe, count the needle's occurrences within the pin's claimed scope (a region-scoped count, not whole-file); the mutation must remove every occurrence the pin can match, or the probe's GREEN verifies nothing. (2) A multi-occurrence pin is itself fragile: prefer a needle unique to the region, or assert the exact occurrence count, so a partial deletion still fails. (3) The probe harness's readout must encode "mutant detected" as the expected outcome for each pin row; a harness that labels a detected mutation FAIL inverts the verdict and can hide a useless probe behind noise.
+
+**Witness (2026-09-22, ai-playbook maintenance state-durability r2 address):** seven new region-scoped pins got flip probes; run one's harness marked detection rows FAIL, and one probe deleted only one of the two Step 1 occurrences the fix had introduced, so it passed without exercising the pin. Run three deleted both occurrences: 7/7 DETECTED. The product pins were correct throughout; only the probe harness was wrong.
+
+**See also:** #405 (negative pins: re-add the needle to prove the assertion can fail), #389 (presence-only pins are placement-blind; confinement, ordering, and bounded regions are the complements), #209 (two-way simulation: deleting the pinned line must fail the probe).
+
+
+## 411. A Measured Count Frozen in a Guard Comment Will Drift
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a count measured once and recorded in a guard comment is an unverified claim the day after it is written; only a count the suite computes and asserts at run time verifies anything.
+
+**Shape trigger:** writing or reviewing a pin/guard suite whose comments cite measured quantities ("last manual measurement: N total / M in region"), or a backlog/premise document whose factual claim rests on a one-time measurement of a mutable target.
+
+**Rule:** (1) When a guard can compute the quantity its comment cites (an occurrence total, a region-scoped count), compute it in the suite and assert the invariant it implies (for example: every in-region occurrence of the token sits inside the one documented site); demote the manual measurement to dated provenance beside the assertion. (2) A newly asserted invariant binds the whole change set, not just the file it targets: sweep the set's sibling edits against it before staging, and when a sibling edit must mention the guarded token outside the asserted region, it references the concept by its definition phrase while a canonical entry owns the literal. (3) When a measured claim in a premise or backlog document has drifted, refresh it with a re-measurement plus a pointer to the mechanical assertion, not a bare number correction.
+
+**Witness (2026-09-22, ai-playbook maintenance state-durability r3):** a pins suite froze four needles on a bare payload path while its comments cited manually measured token counts, and a backlog premise's measured claim no longer matched the file. The fix moved the needles to the landed wording in the same edit, made the suite compute the counts and assert the all-inside-the-bullet invariant, and refreshed the premise ("measured 2026-09-22; asserted mechanically"). A sibling fix named its clear by definition phrase because a literal token outside the asserted region would have turned the new invariant red.
+
+**See also:** #410 (flip probes over multi-occurrence pins; prefer asserting the exact occurrence count), #405 (negative pins must be shown able to fail), #396 (count-gate patterns must match the target's on-disk byte form).
+
+
+## 412. An Absence Assertion Must Scope Out the Revision Ledger
+
+**Principle:** Family H (verify the real thing, not the abstraction) - an expect-absent guard frozen over a whole document asserts more than its finding names: revision ledgers and history sections legitimately quote the superseded form they replaced, so a whole-file freeze converts documented history into false positives (or tempts a later editor into rewriting history to go green).
+
+**Shape trigger:** adding a banned-literal or superseded-token absence guard over a document that carries a revisions ledger, changelog, decision record, or quoted history; any expect-absent grep whose target accumulates historical copies of the banned form.
+
+**Rule:** (1) When a finding names operative content ("this literal is still used"), assert absence over the operative surface the finding targets, not the whole file; derive the region boundary from the document's own history marker (for example the section that opens its revision ledger) and cut there. (2) The guard comment states which region is frozen and why history is excluded, so a later editor neither widens the scope into the ledger nor reads the carve-out as license. (3) The flip probe mutates the operative surface only; re-adding the needle inside the history region must stay green, because quoting the replaced form is the ledger's job.
+
+**Witness (2026-09-22, ai-playbook maintenance state-durability r4):** an expect-absent pin froze the whole skill file against a superseded bare payload path, but the Revisions ledger's earlier entries legitimately quote the path they replaced; the fix cut the frozen region at the ledger heading, pinning the operative sections while history kept its quotes, and the flip probe re-added the literal only inside the operative region.
+
+**See also:** #405 (prove an absence assertion can fail; the needle-verifiability complement), #411 (a canonical entry owns the literal; references stay by definition phrase), #389 (a presence-only pin is placement-blind).
+
+## 413. A Pin Needle Must Come from the Target's Landed Bytes
+
+**Principle:** Family H (verify the real thing, not the abstraction) - a literal-span pin is a claim about what the target surface says; a needle copied from the finding's quotation or from the same concept's wording on a sibling surface is secondhand, and it either fails on a green tree or freezes words the target never carried.
+
+**Shape trigger:** adding a must-match needle to a preservation-pins suite to close a "this is not pinned" finding, when the handiest string for the needle comes from the finding text itself or from an already-pinned span about the same concept elsewhere in the corpus.
+
+**Rule:** (1) Open the target file's region and copy the needle from its landed bytes at write time; when the finding's quote differs from the landed text, the quote is the reviewer's paraphrase and the landed text is what gets frozen. (2) A span already pinned against a different surface is not a pin for this surface: grep the suite for a candidate needle's span first, and when it duplicates an existing pin, re-derive from the target region instead. (3) Flip-probe each new needle by deleting the landed span on a copy; a probe that stays green proves the needle matched nothing on the target surface.
+
+**Witness (2026-09-22, ai-playbook maintenance state-durability r5 address):** two of six new companion needles were initially sourced from the finding's shorthand quote and from a sibling overlay bullet's span that an earlier round had already pinned. Both were re-derived from the target regions' landed bytes (the class line's recovery-edit clause, not the sibling's bare-token form), and each new needle passed its own flip probe by span deletion on a copy.
+
+**See also:** #410 (flip probes must delete every occurrence of a multi-occurrence needle), #411 (needles move to the landed wording when measured counts are asserted), #396 (count-gate patterns must match the target's on-disk byte form), #180 (a deny-set needle that matches the target's own public vocabulary; the needle-validity complement for leak scans).
+
+## 414. A Scripted Bulk Edit Must Verify Anchors and Postconditions Per File
+
+**Principle:** Family H (Verify the real thing, not the abstraction) - a bulk edit scripted against an assumed record shape edits only the files that happen to match it; files whose anchors differ (a bold variant, a missing block) are silently skipped, and a lookup key built without a field anchor can match nothing and still report success.
+
+**Shape trigger:** looping a mechanical transform (insert a header line, rewrite a field, move-and-edit) over a directory of records whose header shapes were never enumerated first.
+
+**Rule:** (1) Before the loop, enumerate anchor coverage across the whole set (`grep -L` per anchor variant); a miss is a file needing its own insertion strategy, not a silent skip. (2) Anchor lookup keys at the field boundary (line-start, not a floating delimiter) so a value at line start cannot miss its own match. (3) After the loop, verify a per-file postcondition: count files carrying the new marker and diff against the operated set; a count mismatch localizes every skipped file immediately and converts a silent partial edit into a fixable list.
+
+**Witness (2026-09-22, ai-playbook backlog deferral sweep):** a 72-file defer wave inserted a Priority line via plain `^Status:`/`^Priority:` anchors; 18 files used a bold `- **Status:**` variant and 8 had no status block at all, so all 26 were silently skipped; a per-item lookup keyed on a floating delimiter also produced 8 headers with empty class fields. The postcondition count (54 of 72 carrying the marker) exposed all three classes in one pass; two fallback anchors plus a title-insertion arm repaired every miss.
+
+**See also:** #413 (a needle must come from the target's landed bytes), #396 (count-gate patterns must match on-disk byte form), #410 (flip probes over multi-occurrence pins).
+
+## 415. An Expected Early Gate Failure Masks Later Ones
+
+**Principle:** Family H (verify the real thing, not the abstraction) - an ordered validator that short-circuits reports only its first failure; while a known-expected early failure stands (a missing review artifact before the first review round), later structural failures stay invisible, and review rounds can pass on bytes the final oracle would reject.
+
+**Shape trigger:** certifying an artifact against a multi-check validator whose early checks are expected to fail at the current stage (no sidecar yet, no digest yet), with later checks (positional tag parsers, trailer probes) not yet exercised.
+
+**Rule:** (1) At authoring time, probe the masked checks explicitly: simulate the post-state that satisfies the early check (a placeholder sidecar, a staged file) or invoke the validator's per-probe entries directly, so a format defect surfaces before the first review round instead of after three. (2) When a mid-loop round finally exposes a masked failure, sweep the validator's remaining checks in the same pass instead of assuming the artifact is otherwise clean. (3) Format obligations a parser enforces positionally (a classification tag unwrapped at the end of the item line) are exactly the ones prose review cannot see; carry the parser's own shape rule into the authoring checklist.
+
+**Witness (2026-09-22, ai-playbook loop-liveness plan authoring):** all 26 plan checklist items carried their classification tag backtick-wrapped on a continuation line; the readiness oracle read every item as untagged, but its stale-digest short-circuit fired first through three review rounds, and the defect surfaced only when the oracle's tag parser finally ran. The fold moved all 26 tags unwrapped onto the item lines; a simulated sidecar at authoring time would have exposed the defect before round 1.
+
+**See also:** #414 (verify per-file postconditions after a bulk edit; the same post-state simulation discipline), #405 (prove a gate can fail), #337 (record the first actually-failing gate, never a predicted one).

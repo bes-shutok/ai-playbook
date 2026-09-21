@@ -5,7 +5,7 @@ set -euo pipefail
 
 MODE="${1:-check}"
 
-# Budget matches learn Step 6.5 / done Step 2.8 (override for local testing via env only).
+# Budget matches learn Step 6.5 / the done pre-commit sweep gate run's instruction-size gate (override for local testing via env only).
 MAX_BYTES="${INSTRUCTION_FILE_MAX_BYTES:-30720}"
 
 DEFAULT_FILES=(AGENTS.md CLAUDE.md GEMINI.md COPILOT.md)

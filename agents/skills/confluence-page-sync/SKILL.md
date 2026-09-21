@@ -116,7 +116,7 @@ Publishing, page updates, and diagram-integrity checks are owned here; `review-c
 The sync manifest lives under `docs/maintenance/` and page mirrors under `docs/history/context/confluence/` per `doc-hierarchy`; `confluence-mirror-hygiene.sh validate` checks both. Fetch and HTML scratch files go under `{tmp_dir}` read from the facts TOML per `using-skills` Step 0.
 
 ### With `done` and `docs-branch` skills (session-end sync hygiene)
-`done` Step 2.65 validates the sync manifest and mirrors at session end; `docs-branch` prunes stale Confluence publish snapshots from the docs worktree via the same hygiene script; when their guidance says to republish or refresh a page, run that through this skill's publication rules and Step 3 verification before recording `synced`.
+the `done` pre-docs sweep gate run's confluence-hygiene gate validates the sync manifest and mirrors at session end; `docs-branch` prunes stale Confluence publish snapshots from the docs worktree via the same hygiene script; when their guidance says to republish or refresh a page, run that through this skill's publication rules and Step 3 verification before recording `synced`.
 
 ## Guidelines
 
