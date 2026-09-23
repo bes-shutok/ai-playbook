@@ -20,6 +20,12 @@ The inventory constants below record the surfaces mapped during the Task 3
 inventory step. Repo paths are repository-relative. Home entrypoints resolve
 through Path.home() and are swept only when present, so the suite stays
 runnable on a fresh checkout while still guarding this operator's wiring.
+The home surface lists are externalizable per host via the optional
+`home_entrypoint_files` / `home_hook_config_files` TOML-array keys in the
+repo-scoped gitignored `.ai-playbook/facts.md` fence; the in-script lists
+(DEFAULT_HOME_*) are the fallback default when the file, the fence, or a key
+is absent (or a present value is malformed, with a stderr warning naming the
+key). The exists-then-skip design with its recorded skip message is unchanged.
 """
 
 from __future__ import annotations
@@ -53,7 +59,11 @@ HOOK_ADAPTER_ROOT = REPO_ROOT / "agents" / "hooks"
 # Active shared instruction entrypoints on this single-operator host. Each is
 # a thin import of or symlink to the canonical docs/AGENTS.md (verified during
 # the Task 3 inventory; see the gitignored surface-inventory working notes).
-HOME_ENTRYPOINT_FILES = [
+# FALLBACK DEFAULT: externalizable per host via the optional
+# `home_entrypoint_files` TOML-array key in the repo-scoped gitignored
+# `.ai-playbook/facts.md` fence (see _load_home_surface_lists); the
+# exists-then-skip sweep design with its recorded skip message is unchanged.
+DEFAULT_HOME_ENTRYPOINT_FILES = [
     "~/.zcode/AGENTS.md",
     "~/.claude/CLAUDE.md",
     "~/.codex/AGENTS.md",
@@ -62,13 +72,76 @@ HOME_ENTRYPOINT_FILES = [
 ]
 
 # Registered hook configuration files per host agent (registered adapters).
-HOME_HOOK_CONFIG_FILES = [
+# FALLBACK DEFAULT: externalizable per host via the optional
+# `home_hook_config_files` TOML-array key in the repo-scoped gitignored
+# `.ai-playbook/facts.md` fence (see _load_home_surface_lists).
+DEFAULT_HOME_HOOK_CONFIG_FILES = [
     "~/.zcode/cli/config.json",
     "~/.claude/settings.json",
     "~/.codex/hooks.json",
     "~/.cursor/hooks.json",
     "~/.gemini/antigravity-cli/hooks.json",
 ]
+
+
+def _load_home_surface_lists(facts_path=None):
+    """Load the home-surface sweep lists from the repo-scoped gitignored
+    facts fence, falling back to the in-script DEFAULT_* lists.
+
+    Reads the FIRST ```toml-fenced block in `.ai-playbook/facts.md` (repo
+    default: REPO_ROOT/.ai-playbook/facts.md; the parameter exists for the
+    unit tests) and consumes the optional TOML-array keys
+    `home_entrypoint_files` / `home_hook_config_files`. A missing file,
+    missing fence, or missing key falls back to the corresponding DEFAULT_*
+    list; a PRESENT but malformed value (not a non-empty list of non-empty
+    strings) is also ignored with a one-line stderr warning naming the key
+    and the fallback, so a typo'd override cannot silently no-op. Never
+    raises. Mirrors facts_paths.py's first-fence walk; it deliberately does
+    NOT import or widen facts_paths.resolve_toml_key_raw (scalar-only,
+    docstring-pinned single source).
+    """
+    import sys
+    entrypoints = list(DEFAULT_HOME_ENTRYPOINT_FILES)
+    hook_configs = list(DEFAULT_HOME_HOOK_CONFIG_FILES)
+    path = Path(facts_path) if facts_path is not None else REPO_ROOT / ".ai-playbook" / "facts.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError):  # ValueError: invalid-encoding facts bytes
+        return entrypoints, hook_configs
+    lines = text.splitlines()
+    try:
+        start = next(i for i, ln in enumerate(lines) if ln.strip() == "```toml")
+        end = next(i for i, ln in enumerate(lines[start + 1:], start + 1) if ln.strip() == "```")
+        block = "\n".join(lines[start + 1:end])
+    except StopIteration:
+        return entrypoints, hook_configs
+    try:
+        import tomllib
+        data = tomllib.loads(block)
+    except Exception:
+        return entrypoints, hook_configs
+    for key, target in (
+        ("home_entrypoint_files", entrypoints),
+        ("home_hook_config_files", hook_configs),
+    ):
+        if key not in data:
+            continue
+        value = data[key]
+        if (
+            isinstance(value, list)
+            and bool(value)
+            and all(isinstance(item, str) and item for item in value)
+        ):
+            target[:] = value
+        else:
+            sys.stderr.write(
+                f"harness policy contract: ignoring malformed {key!r} in {path}; "
+                f"falling back to the in-script default list\n"
+            )
+    return entrypoints, hook_configs
+
+
+HOME_ENTRYPOINT_FILES, HOME_HOOK_CONFIG_FILES = _load_home_surface_lists()
 
 # Patterns whose ONLY purpose is hostile-co-user threat framing. Chosen to
 # never match accidental-data-loss wording (accident, unintended, peer
@@ -268,6 +341,67 @@ class HarnessPolicyContractTest(unittest.TestCase):
             "removed co-user control is still operationally referenced:\n"
             + "\n".join(leftovers),
         )
+
+    def test_home_surface_lists_override_from_facts_keys(self):
+        """A facts fence with both optional keys overrides the defaults exactly."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            facts = Path(td) / "facts.md"
+            facts.write_text(
+                "# notes\n```toml\n"
+                'home_entrypoint_files = ["~/zcode/AGENTS.example.md"]\n'
+                'home_hook_config_files = ["~/agents/hooks.example.json"]\n'
+                "```\n",
+                encoding="utf-8",
+            )
+            ep, hc = _load_home_surface_lists(facts_path=facts)
+        self.assertEqual(ep, ["~/zcode/AGENTS.example.md"])
+        self.assertEqual(hc, ["~/agents/hooks.example.json"])
+
+    def test_home_surface_lists_fallback_defaults(self):
+        """Missing file, no fence, or fence without the keys all fall back."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            missing = Path(td) / "absent.md"
+            no_fence = Path(td) / "nofence.md"
+            no_fence.write_text("plain markdown, no fence\n", encoding="utf-8")
+            no_keys = Path(td) / "nokeys.md"
+            no_keys.write_text(
+                "```toml\nother_key = \"value\"\n```\n", encoding="utf-8"
+            )
+            for facts in (missing, no_fence, no_keys):
+                ep, hc = _load_home_surface_lists(facts_path=facts)
+                self.assertEqual(ep, DEFAULT_HOME_ENTRYPOINT_FILES)
+                self.assertEqual(hc, DEFAULT_HOME_HOOK_CONFIG_FILES)
+
+    def test_home_surface_lists_rejects_malformed_values(self):
+        """A bare string or a list with a non-string element falls back + warns."""
+        import contextlib
+        import io
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            bare = Path(td) / "bare.md"
+            bare.write_text(
+                "```toml\n"
+                'home_entrypoint_files = "~/oops.md"\n'
+                "```\n",
+                encoding="utf-8",
+            )
+            badlist = Path(td) / "badlist.md"
+            badlist.write_text(
+                "```toml\n"
+                "home_hook_config_files = [\"~/ok.json\", 42]\n"
+                "```\n",
+                encoding="utf-8",
+            )
+            for facts, key in ((bare, "home_entrypoint_files"), (badlist, "home_hook_config_files")):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    ep, hc = _load_home_surface_lists(facts_path=facts)
+                self.assertIn(key, stderr.getvalue())
+                self.assertIn("falling back", stderr.getvalue())
+                self.assertEqual(ep, DEFAULT_HOME_ENTRYPOINT_FILES)
+                self.assertEqual(hc, DEFAULT_HOME_HOOK_CONFIG_FILES)
 
     def test_removed_controls_absent_from_active_entrypoints(self):
         """No configured surface (entrypoint or registered hook config) reintroduces it."""

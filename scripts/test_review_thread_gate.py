@@ -180,5 +180,80 @@ class ReviewThreadGateTest(unittest.TestCase):
         self.assertEqual(err, "")
 
 
+class ResolveLiveTargetTest(unittest.TestCase):
+    """Unit coverage for the pure live-target resolver (no network)."""
+
+    @staticmethod
+    def _load():
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "review_thread_gate_module", SCRIPT_PATH
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_canonical_shape(self):
+        module = self._load()
+        owner, name, number, error = module._resolve_live_target(
+            {"pr": "owner/repo#63"}
+        )
+        self.assertEqual((owner, name, number), ("owner", "repo", 63))
+        self.assertEqual(error, "")
+
+    def test_numeric_pr_with_repo(self):
+        module = self._load()
+        owner, name, number, error = module._resolve_live_target(
+            {"pr": 63, "repo": "owner/name"}
+        )
+        self.assertEqual((owner, name, number), ("owner", "name", 63))
+        self.assertEqual(error, "")
+
+    def test_numeric_pr_with_url(self):
+        module = self._load()
+        owner, name, number, error = module._resolve_live_target(
+            {"pr": 63, "url": "https://github.com/owner/name/pull/63"}
+        )
+        self.assertEqual((owner, name, number), ("owner", "name", 63))
+        self.assertEqual(error, "")
+
+    def test_malformed_url_rejected(self):
+        module = self._load()
+        _, _, _, error = module._resolve_live_target(
+            {"pr": 63, "url": "https://github.com/owner/pull/63"}
+        )
+        self.assertTrue(error)
+
+    def test_unresolvable_error(self):
+        module = self._load()
+        _, _, _, error = module._resolve_live_target({"pr": 63})
+        self.assertTrue(error)
+
+
+class LiveGateErrorPathTest(unittest.TestCase):
+    def test_unresolvable_marker_exits_before_network(self):
+        tmp = Path(tempfile.mkdtemp(prefix="review-thread-gate-live-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        marker = tmp / "marker.json"
+        marker.write_text(
+            json.dumps({"pr": "63", "threads": []}) + "\n", encoding="utf-8"
+        )
+        proc = subprocess.run(
+            [
+                sys.executable, str(SCRIPT_PATH),
+                "--marker", str(marker),
+                "--live",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(
+            "error: marker pr '63' is not resolvable to owner/repo#N; "
+            "cannot fetch live",
+            proc.stderr,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

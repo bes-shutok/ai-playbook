@@ -45,6 +45,24 @@ expect_absent() { # expect_absent <description> <pattern> <file>: rc 0 = fail, r
   fi
 }
 
+# Wrap-tolerant absence check (plan
+# 2026-09-24-p57-per-execution-worktree-isolation.md, Task 5): a multi-word
+# phrase can be line-wrapped in the target, so the line-oriented check above
+# never matches it; newlines are flattened to spaces (repeats squeezed) before
+# the fixed-string match. Same three-way polarity as expect_absent:
+# rc 0 = forbidden match (fail), rc >= 2 = grep error (fail), rc 1 = pass.
+expect_absent_flat() { # expect_absent_flat <description> <pattern> <file>
+  local desc="$1" pat="$2" f="$3" out rc
+  out="$(tr '\n' ' ' < "$f" | tr -s ' ' | grep -nF -- "$pat" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "PIN FAIL: $desc"
+    fail=1
+  elif [ "$rc" -ge 2 ]; then
+    echo "PIN FAIL: grep error on $f while checking flat absence: $out"
+    fail=1
+  fi
+}
+
 # --- deliberate freeze literals (review r1 RISK-4) ---
 # The expect_absent pins below freeze exact prose in files whose owning plans
 # are completed or frozen. A future legitimate edit that trips one of them is
@@ -244,6 +262,14 @@ if "loop_mode" not in doc or "pending_rearm" not in doc:
 child = (doc.get("children") or [{}])[0]
 if not {"fire_at", "requested_at", "quota_status", "progress_mark", "resume_count"} <= set(child):
     print("PIN FAIL: children entry fields drifted"); sys.exit(1)
+# P57 per-execution worktree isolation plan Task 1 (plan
+# 2026-09-24-p57-per-execution-worktree-isolation.md): the additive per-run
+# `worktree` field joins the children[] entry shape, null at rest (checked
+# against the parsed doc, so deleting the literal line, or breaking the block's
+# JSON, fails here); the schema stays 4 with no version bump (the assertion
+# above is untouched and not duplicated)
+if "worktree" not in child or child["worktree"] is not None:
+    print("PIN FAIL: children entry lacks the additive worktree field (null at rest)"); sys.exit(1)
 # scheduler ops lanes and durability plan Task 2: the decision-time quota
 # record. Schema stays 4 (the assertion above is untouched and not duplicated);
 # the key joins additively with its per-lane shape, and the Step 3 region must
@@ -287,8 +313,19 @@ b_end = step1.find("\n", b_at)
 if b_end == -1:
     b_end = len(step1)
 pr_bullet = sum(1 for pos in pr_hits if b_start <= pos < b_end)
-if pr_bullet != pr_region:
-    print("PIN FAIL: %d of %d pending_rearm occurrence(s) in the Step 1 region sit outside the Pending re-arm bullet (whole-file count %d)" % (pr_region - pr_bullet, pr_region, pr_total)); sys.exit(1)
+# superseded 2026-09-24, P54 plan Task 2 (plan
+# 2026-09-24-p54-scheduler-loop-continuity-directives.md): the Step 1 region
+# gained the park-discharge duty bullet after the Pending re-arm bullet, and
+# that bullet legitimately names pending_rearm (the field it discharges), so
+# occurrences inside the discharge bullet are allowed beside the reader bullet.
+d_at = step1.find("- Parked-intent discharge (the park-discharge duty):")
+d_start = step1.rfind("\n", 0, d_at) + 1 if d_at != -1 else -1
+d_end = step1.find("\n", d_at) if d_at != -1 else -1
+if d_end == -1:
+    d_end = len(step1)
+pr_discharge = sum(1 for pos in pr_hits if d_start <= pos < d_end)
+if (pr_bullet + pr_discharge) != pr_region:
+    print("PIN FAIL: %d of %d pending_rearm occurrence(s) in the Step 1 region sit outside the Pending re-arm and park-discharge bullets (whole-file count %d)" % (pr_region - pr_bullet - pr_discharge, pr_region, pr_total)); sys.exit(1)
 # review r2 F7: the r1-added operative contracts pinned region-scoped (the
 # Revisions-ledger prose paraphrases these spans, so whole-file greps would be
 # vacuous): the loop-mode-held retention gate and the consume-semantics span
@@ -560,6 +597,8 @@ pin "loop guard park-write span" grep -qF "write \`pending_rearm\` plus the asse
 [ "$(grep -oF 'exactly ONE mutating call implementing that recorded decision' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: single-call bound count"; fail=1; }
 [ "$(grep -oF 'never curtails an advancing dispatch' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: advancing-dispatch scoping count"; fail=1; }
 [ "$(grep -oF 'The bound counts decided mutations, not primitive calls' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: bound unit clause count"; fail=1; }
+# bound unit-clause parenthetical count (dfm loop-guard successor)
+[ "$(grep -oF "a parent re-arm's shape is per the recipe's operative shape (delete-plus-create today; the recycling leg only if a verified flip reopens it)" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: bound unit-clause parenthetical count"; fail=1; }
 [ "$(grep -oF 'any refusal after that single call takes the existing escalation paths' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: escalation-routing count"; fail=1; }
 [ "$(grep -oF "must stop touching automation primitives immediately after it regardless of the call's outcome" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: stop-bound tail count"; fail=1; }
 [ "$(grep -oF "the loop's signature appeared (two listings, no mutating step between them)" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: guard-signature restatement count"; fail=1; }
@@ -730,13 +769,34 @@ expect_absent "superseded listing-driven rearm wording must be absent from promp
 [ "$(grep -oF 'and this session owns that record' "$P" | wc -l | tr -d ' ')" -eq 2 ] || { echo "PIN FAIL: blueprint ownership clause count"; fail=1; }
 [ "$fail" -eq 1 ] && exit 1
 
+# Same-edit coupling (P51 origin 3): a payload telemetry path change edits the body or payload text carrying the literal and these pins in one edit; see the execute-plan skill's telemetry exception sentence.
 # Context-budget plan Task 4: the checkpoint duty paragraph added to each
 # blueprint body. The anchor 'after each blueprint step block' occurs in BOTH
 # blueprints, so each pin stretches to the blueprint-unique telemetry record
 # span (same twice-needle trap as the F8 note above): reverting one body while
-# the other keeps the duty must still fail.
-pin "authoring blueprint checkpoint duty" grep -qF 'after each blueprint step block, at a boundary only, never mid-task, log one telemetry record (skill: plans-authoring) to docs/tmp/authoring/<plan-slug>/context.jsonl' "$P"
-pin "execution blueprint checkpoint duty" grep -qF 'after each blueprint step block, at a boundary only, never mid-task, log one telemetry record (skill: execute-plan) to docs/tmp/execute-plan/<plan-slug>/context.jsonl' "$P"
+# the other keeps the duty must still fail. P51 origin 2 (plan
+# docs/plans/2026-09-23-p51-plans-authoring-surface-hygiene.md Task 2) retyped
+# both pins from presence greps to count gates (the pin helper carrying the
+# count as its command): the authoring span occurs exactly 2 times in
+# prompt-templates.md (body + the payload paragraph's compact mirror), the
+# execution span exactly 1 (in the execution payload block, not a body
+# paragraph), so slice text and the transmitted
+# region cannot drift apart again; a wording change to a pinned span is a
+# change to the owning plan's prescribed text, so reconcile the pin and the
+# text in the same edit and record the superseding origin.
+pin "authoring blueprint checkpoint duty" test "$(grep -oF 'after each blueprint step block, at a boundary only, never mid-task, log one telemetry record (skill: plans-authoring) to docs/tmp/authoring/<plan-slug>/context.jsonl' "$P" | wc -l | tr -d ' ')" -eq 2
+pin "execution blueprint checkpoint duty" test "$(grep -oF 'after each blueprint step block, at a boundary only, never mid-task, log one telemetry record (skill: execute-plan) to docs/tmp/execute-plan/<plan-slug>/context.jsonl' "$P" | wc -l | tr -d ' ')" -eq 1
+# P51 origin 2 payload duty sentence sets and slice reconciliation (same plan,
+# Task 2): the payload paragraph's compact RE-ARM DUTY, CONTEXT CHECKPOINTS,
+# and FINAL STEP sets are count-gated so the payload stays self-contained for
+# the duties a child session must see (the deviation-ledger entry paraphrases
+# and must not carry the spans, or these counts drift), and the Step 5
+# authoring slice wording is pinned to the payload-paragraph assembly it must
+# describe (the pin pair above keeps its prescribed names for the execute-plan
+# telemetry coupling sentence).
+pin "authoring slice payload-region wording" grep -qF 'observed dispatch practice transmits the authoring blueprint' "$S"
+pin "payload re-arm sentence set count" test "$(grep -oF 'restore the maintenance loop parent state-first, without listing first' "$P" | wc -l | tr -d ' ')" -eq 1
+pin "FINAL STEP compaction sentence count" test "$(grep -oF 'FINAL STEP, after the report: compact this session' "$P" | wc -l | tr -d ' ')" -eq 3
 
 # --- authoring claim file surfaces (scheduler ops lanes and durability plan, Task 1) ---
 # The 2026-09-18 authoring-lane collision (automation-343ce2b0 vs a foreign
@@ -974,6 +1034,14 @@ if len(exec_bodies) != 1:
     print("PIN FAIL: could not uniquely identify the execution blueprint body"); sys.exit(1)
 if "authoring-claims" in exec_bodies[0] or "authoring-claims" in inner:
     print("PIN FAIL: execution blueprint carries the authoring-claims literal (a foreign-claim false trip would stall G1a)"); sys.exit(1)
+# P57 per-execution worktree isolation plan Task 4 (plan
+# 2026-09-24-p57-per-execution-worktree-isolation.md): the execution body must
+# never carry the authoring worktree literal (mirroring the authoring-claims
+# absence half above; the execution run's worktree branches per its own
+# create command, and a stray authoring literal here would also break the
+# auth_bodies exactly-once identification pinned in the Task 4 block below).
+if "git worktree add -b YYYY-MM-DD-authoring-<slug>" in exec_bodies[0]:
+    print("PIN FAIL: execution blueprint carries the authoring worktree literal (the execution run's worktree branches per its own create command)"); sys.exit(1)
 # execution-integrity worker-evidence plan Task 3: the payload tail claim
 # duty. Scoped to the Schedule-at paragraph itself (distinct from the
 # whole-body authoring pin above): the payload paragraph is what scheduled
@@ -1045,6 +1113,16 @@ pin "resume-fit --fire-at check at resume-scheduling boundaries" grep -qF -- '--
 pin "resume-pricing defers to the reported defer_to" grep -qF 'on exit 2 (defer-peak, a fitting slot inside the weekday peak window), schedule the watcher at the reported defer_to' "$E"
 pin "plans budget gate mirrors the canonical resume checks" grep -qF 'The canonical resume-fit and resume-pricing checks apply at this boundary' "$PL"
 
+# --- dfm gate-suite successor pins (P56 Task 4; archived plan bytes frozen) ---
+# dfm r1 F5 successor (whole-file; the archived plan's gates saw only the extracted template region)
+[ "$(grep -oF 'Driving force: <tag>' "$PL" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: driving-force template count (F5)"; fail=1; }
+[ "$(grep -oF 'TLDR: <what changes>' "$PL" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: TLDR template count (F5)"; fail=1; }
+# dfm r1 F8 successor (taxonomy tail and park-triage half had no needles)
+pin "dfm r1 F8 successor external-cites-source needle" grep -qF 'where `external` must cite its source' "$PL"
+pin "dfm r1 F8 successor park-triage needle" grep -qF 'why park-triage would or would not take it' "$PL"
+pin "dfm r2 F1 successor backlog-origin-none producer line" grep -qF 'otherwise the line reads `Backlog origin: none`' "$PL"
+pin "dfm r2 F1 successor driving-principles enumeration" grep -qF 'four driving principles (`efficiency`, `token-usage`, `simplicity`, `code-quality`)' "$PL"
+
 # --- budget-gate resume fallback preservation pins (plan 2026-09-21-budget-gate-resume-fallbacks, Task 1) ---
 # Freeze-literal origin note: the preservation spans' origin is plan
 # docs/plans/2026-09-21-budget-gate-resume-fallbacks.md; their text was landed
@@ -1077,14 +1155,17 @@ pin "contract mirrors the claim boundary" grep -qF 'resolves the claim per the b
 pin "contract derives the claim-less case from stop lines" grep -qF 'its waiting-for-capacity derivation reads the recorded stop lines' "$RC"
 # --- backoff floor and scaled panel bounds (P37 rate-pressure ingestion and quota scheduling plan, Task 2) ---
 pin "resume backoff carries a floor" grep -qF 'after a backoff of at least 60 seconds' "$E"
-pin "serialized cap doubles panel bounds" grep -qF 'while the shaped fan-out cap is 1, panel wall-clock bounds double' "$E"
+pin "serialized cap doubles the intermediate-panel bound" grep -q 'intermediate panels inherit the 20-minute timeout.*panel wall-clock bounds double' "$E"
+pin "serialized cap doubles the Step 3.1 bound" grep -q 'wall-clock from Step 3.1 start.*panel wall-clock bounds double' "$E"
+pin "serialized cap doubles the fanned-round bound" grep -q 'fanned address wave inherits the Step 3.1 timeout semantics.*panel wall-clock bounds double' "$E"
+pin "serialized cap doubles the omnibus bound" grep -q 'If a sequential sub-agent.*panel wall-clock bounds double' "$E"
 # --- writer/ingester stop-line token format (P37 rate-pressure ingestion and quota scheduling plan, Task 3) ---
 pin "stop line token format pinned" grep -qF 'a line-initial rate_limited: token followed by an ISO timestamp' "$E"
 pin "ingestion mirrors the stop-line token format" grep -qF 'a line-initial rate_limited: token followed by an ISO timestamp' "$S"
 # --- dedup ledger decoupled from the capped array (P37 rate-pressure ingestion and quota scheduling plan, Task 4) ---
 pin "dedup consults the rolling ledger" grep -qF 'the dedup consults the rolling ledger' "$S"
 pin "ledger rides the same 24-hour window" grep -qF 'pruned to the same 24-hour window' "$S"
-pin "step 6 carries the dedup ledger" grep -qF 'plus `rate_limited_events` and the dedup ledger' "$S"
+pin "step 6 carries the dedup ledger" grep -qF 'plus the dedup ledger (the ledger is a top-level field' "$S"
 pin "dedup ledger declared in the schema block" grep -qF '"rate_limited_dedup_ledger"' "$S"
 # --- lost-update enumeration and define-once rate_pressure (P37 rate-pressure ingestion and quota scheduling plan, Task 5) ---
 pin "lost-update enumeration names the rate rail" grep -qF 'the rate-pressure rail' "$S"
@@ -1112,6 +1193,9 @@ pin "child lanes analysis home" grep -qF 'as their analysis home' "$E"
 # substitution rule scoped to every telemetry path this policy names, with the
 # maintenance blueprints' payload paths recorded as the pinned literal exception.
 pin "telemetry substitution rule scopes this policy's paths" grep -qF 'governs every telemetry path this policy names' "$E"
+# P48 Task 1 (unlanded-plan worktree cherry-pick): the linked-worktree bootstrap
+# names the missing-plan remedy for plan bytes living on an unlanded branch.
+pin "worktree bootstrap names the unlanded-plan remedy" grep -qF 'cherry-pick only the plan-authoring commit' "$E"
 # P37 Task 4 (turn-usage live verification): the measurement primitive section
 # must name the store's turn_usage table (the live-verified source or the
 # recorded negative, per the variant applied).
@@ -1249,6 +1333,10 @@ pin "done dirt guard wired" grep -qF 'dirt_regression_gate.py' "$D"
 pin "done review-thread closure gate wired" grep -qF 'review_thread_gate.py --marker' "$D"
 pin "receiving-review review-thread marker duty wired" grep -qF 'write a review-thread marker at `docs/tmp/review-threads/<session-slug>.json` before posting any reply' "$RR"
 pin "review-plan rule 5 vendored landing clause wired" grep -qF 'vendored-sync backlog item' "$RP"
+# dfm r2 F1 successor (the archived gates left these producer steps ungated; the declaration-audit half lives on review-plan)
+pin "dfm r2 F1 successor declaration audit producer step" grep -qF 'Declaration audit' "$RP"
+# dfm r1 F6 successor (the archived gate's shorter needle was satisfied by the boundary sixth family without any pricing sentence)
+pin "dfm r1 F6 successor narrowed contradiction pricing needle" grep -qF "contradicts the plan's content is blocking" "$RP"
 pin "AGENTS.md vendored landing mirror clause wired" grep -qF 'land the vendored copy in the same run' "$A"
 [ "$fail" -eq 1 ] && exit 1
 
@@ -1397,6 +1485,193 @@ if "quota-state-aware carrier-selection rule" not in step3:
 EOF
 rc=$?
 [ "$rc" -ne 0 ] && fail=1
+# --- P54 park-discharge duty pins (plan 2026-09-24-p54-scheduler-loop-continuity-directives.md Task 2) ---
+pin "P54 able-session predicate literal" grep -qF 'able-session predicate' "$S"
+pin "P54 discharge field predicate" grep -qF 'pending_rearm or pending_dispatch' "$S"
+pin "P54 discharge duty anchor" grep -qF 'park-discharge duty' "$S"
+pin "P54 discharge operative phrase" grep -qF 'discharges the parked intents in the same session before ending, guard-bound' "$S"
+[ "$(grep -cF 'CLOSING PARK DISCHARGE DUTY' "$P")" -eq 2 ] || { echo "PIN FAIL: P54 blueprint discharge anchor count != 2"; fail=1; }
+# --- P54 execution queue and priority pins (plan ... Task 3) ---
+pin "P54 execution_queue schema line" grep -qF '"execution_queue": []' "$S"
+pin "P54 execution_priority schema line" grep -qF '"execution_priority": null' "$S"
+pin "P54 park-first anchor in execution blueprint" grep -qF 'Park-first chaining' "$P"
+python3 - "$S" <<'EOF' || fail=1
+import sys
+s = open(sys.argv[1]).read()
+cf = [l for l in s.split("\n") if "carry forward" in l]
+if not cf or "execution_queue" not in cf[0] or "execution_priority" not in cf[0]:
+    print("PIN FAIL: P54 execution_queue/execution_priority absent from the Step 6 carry-forward list"); sys.exit(1)
+EOF
+rc=$?
+[ "$rc" -ne 0 ] && fail=1
+# --- P54 dedup guard and execution claims pins (plan ... Task 4) ---
+pin "P54 duplicate-user-directed-dispatch tripwire" grep -qF 'duplicate-user-directed-dispatch' "$S"
+pin "P54 user-directed negative-shape payload-opening prefix" grep -qF 'You are an unattended scheduled session in the repository at' "$S"
+pin "P54 execution-claims directory in discovery arm" grep -qF 'execution-claims' "$S"
+pin "P54 blueprint claim duty anchor" grep -qF 'EXECUTION CLAIM' "$P"
+# --- P54 needs-recert pin (plan ... Task 5), region-scoped to the Step 3 decision region ---
+python3 - "$S" <<'EOF' || fail=1
+import sys
+s = open(sys.argv[1]).read()
+if "### Step 3: decision" not in s or "### Step 4" not in s:
+    print("PIN FAIL: P54 Step 3 region anchors missing"); sys.exit(1)
+step3 = s.split("### Step 3: decision")[1].split("### Step 4")[0]
+if "needs-recert" not in step3:
+    print("PIN FAIL: P54 needs-recert literal absent from the D1 region"); sys.exit(1)
+EOF
+rc=$?
+[ "$rc" -ne 0 ] && fail=1
+# --- P54 needs-recert pin block end marker (plan ... Task 5; comment label corrected 2026-09-24 review r4) ---
+[ "$fail" -eq 1 ] && exit 1
+
+# --- duplicate-parent tripwire migration arm pins (plan
+# 2026-09-23-p50-scheduler-state-durability-leftovers.md, Task 3) ---
+# Count-gated pins for the tripwire's migration arm: the Step 3 arm bullet's
+# dated anchor (pinned by the disambiguated span, unique whole-file after the
+# writer join names the arm in the two closed enumerations), the delete-leg
+# span, the retitle-leg span, the Revisions ledger span, and the zcode.md
+# pointer. Each span occurs exactly once in its file (measured on the
+# post-Task-3 tree), so a count of exactly 1 fails both a deletion of the
+# operative text and a stray duplicate copy; the ledger span is count-gated
+# so a future ledger entry naming the plan again cannot re-satisfy a
+# presence-only grep. Freeze-literal origins (the spans' owning text; a
+# legitimate wording change reconciles the pin and the text in the same
+# edit and records the superseding origin):
+#   'Duplicate-parent migration arm (added 2026-09-23' (SKILL.md): the Step 3
+#       arm bullet's dated anchor of plan
+#       2026-09-23-p50-scheduler-state-durability-leftovers.md Task 3; the
+#       "(added 2026-09-23" tail disambiguates it from the two writer-join
+#       entries ("the Duplicate-parent migration arm" in the rearm_note
+#       Writers list and the scheduler-turn write-mode enumeration).
+#   'the leg is a delete of the old-form record targeted by its listed id'
+#       (SKILL.md): the carrier-live leg's operative span (same plan Task 3).
+#   'retimes and retitles the old-form record per the cadence rule'
+#       (SKILL.md): the no-live-carrier leg's operative span (same plan
+#       Task 3).
+#   '2026-09-23: the duplicate-parent tripwire gained the migration arm'
+#       (SKILL.md): the Revisions ledger entry's dated span (same plan
+#       Task 3).
+#   'the migration arm (SKILL.md Step 3)' (zcode.md): the tripwire
+#       description bullet's pointer sentence naming the arm's owning bullet
+#       (same plan Task 3).
+[ "$(grep -oF 'Duplicate-parent migration arm (added 2026-09-23' "$S" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: migration arm Step 3 anchor count != 1"; fail=1; }
+[ "$(grep -oF 'the leg is a delete of the old-form record targeted by its listed id' "$S" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: migration arm delete-leg span count != 1"; fail=1; }
+[ "$(grep -oF 'retimes and retitles the old-form record per the cadence rule' "$S" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: migration arm retitle-leg span count != 1"; fail=1; }
+[ "$(grep -oF '2026-09-23: the duplicate-parent tripwire gained the migration arm' "$S" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: migration arm ledger span count != 1"; fail=1; }
+[ "$(grep -oF 'the migration arm (SKILL.md Step 3)' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: migration arm zcode.md pointer count != 1"; fail=1; }
+[ "$fail" -eq 1 ] && exit 1
+
+# --- per-execution worktree field and per-run read pins (plan
+# 2026-09-24-p57-per-execution-worktree-isolation.md, Task 1) ---
+# Companion pins for the additive children[] `worktree` field and the per-run
+# read sites. Each pin below is a dedicated fixed-string grep that fails when
+# its span is deleted (spans S1, S2, S3, S4, S5, S21 of the plan's Validation
+# Commands, against SKILL.md). The schema-block half (the parsed children[0]
+# carries a "worktree" key with value null and schema stays 4) lives in the
+# first SKILL.md python block beside the existing children-entry fields pin,
+# mirroring that block's block-parse mechanism.
+pin "P57 S1 worktree field paragraph" grep -qF 'once its blueprint-created per-execution worktree exists' "$S"
+pin "P57 S2 progress-mark per-run clause" grep -qF "resolved inside the entry's recorded \`worktree\` when that additive field is set" "$S"
+pin "P57 S3 ingestion per-run clause" grep -qF 'the same repository-relative manifest path inside the recorded worktree' "$S"
+pin "P57 S4 fast re-dispatch per-run clause" grep -qF 'the same per-run resolution the rate-limited ingestion bullet applies' "$S"
+pin "P57 S5 sanctioned-writer own-record clause" grep -qF 'own-record per-run worktree recording' "$S"
+pin "P57 S21 ref-based archival read" grep -qF 'the archival arm is read ref-based' "$S"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- interim-constraint retirement and fleet/merge-order policy pins (plan
+# 2026-09-24-p57-per-execution-worktree-isolation.md, Task 2) ---
+# Companion pins for the operative flip of the execution-lane stance. S7 and S8
+# live outside the stance section (the Step 2 fleet-cap bullet and the
+# Invariants fleet-cap bullet), so their pins are file-scoped; S9 lives in the
+# Execution-lane concurrency stance section, so its pin is region-scoped with
+# the same awk region the plan's Validation Commands use (a Revisions-ledger
+# paraphrase must not satisfy it). Both absence pins are case-sensitive
+# fixed-string checks with the three-way polarity above (rc 1 = clean), so the
+# P54 Revisions ledger entry's lowercase historical wording cannot satisfy or
+# break them; the S10 count is exactly-once so a duplicated ledger entry fails.
+pin "P57 S7 fleet-cap execution-isolation sentence" grep -qF 'EXECUTION ISOLATION (landed 2026-09-24, P57' "$S"
+pin "P57 S8 Invariants worktree-isolated fleet-member clause" grep -qF 'execution children run in per-execution ad-hoc worktrees off the default-branch snapshot' "$S"
+pin "P57 S9 stance rework-executed lead-in (region-scoped)" bash -c "awk '/^### Execution-lane concurrency stance/{f=1; next} /^## Revisions/{f=0} f' \"$S\" | grep -qF 'REWORK EXECUTED (landed 2026-09-24, P57'"
+pin "P57 S9 stance overlap-shapes tail (region-scoped)" bash -c "awk '/^### Execution-lane concurrency stance/{f=1; next} /^## Revisions/{f=0} f' \"$S\" | grep -qF 'up to four concurrent children across mixed kinds with executions worktree-isolated'"
+expect_absent "retired INTERIM EXECUTION CONSTRAINT heading must be absent from SKILL.md (the ledger's lowercase historical wording must not satisfy or break this)" 'INTERIM EXECUTION CONSTRAINT' "$S"
+expect_absent "superseded Until-P57 sanctioned-overlap-shapes sentence must be absent from SKILL.md" 'Until P57, the sanctioned overlap shapes' "$S"
+[ "$(grep -cF '2026-09-24 (P57 per-execution worktree isolation' "$S")" -eq 1 ] || { echo "PIN FAIL: P57 Revisions ledger date string count != 1"; fail=1; }
+[ "$fail" -eq 1 ] && exit 1
+
+# --- runtime overlay execution-lane flip pins (plan
+# 2026-09-24-p57-per-execution-worktree-isolation.md, Task 3) ---
+# Companion pins for the overlay's two flipped clauses (the child-classification
+# markers bullet and the dispatch ladder's never-routed-in-session
+# parenthetical). Both absence pins are fixed-string checks with the three-way
+# polarity above (rc 1 = clean), so the retired interim wording cannot return
+# anywhere in zcode.md and a grep error cannot read as clean; the S11/S12
+# presence pins are dedicated fixed-string greps that fail when their span is
+# deleted.
+expect_absent "retired execution-lane-stays-single interim wording must be absent from zcode.md" 'stays single until P57' "$Z"
+expect_absent "retired one-in-flight-hold interim wording must be absent from zcode.md" 'holds at one in-flight child until P57' "$Z"
+pin "P57 S11 zcode markers worktree-isolated fleet clause" grep -qF 'execution children in their per-execution worktrees, P57' "$Z"
+pin "P57 S12 zcode ladder single-child-hold-retired clause" grep -qF 'retired 2026-09-24 by P57' "$Z"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- execution blueprint Phase 0 per-execution worktree pins (plan
+# 2026-09-24-p57-per-execution-worktree-isolation.md, Task 4) ---
+# Companion pins for the blueprint's PER-EXECUTION WORKTREE paragraph, the
+# per-run pre-Phase-0 gate rewording, and the Execute-paragraph rewording. S13
+# is counted exactly-once across the whole file: the literal lives only inside
+# the execution body (the authoring worktree literal is barred from the execution body by the
+# python absence half above, and the dated deviation-list entry paraphrases
+# the command, never quoting it), so the whole-file count is body-scoped by uniqueness. The authoring
+# worktree literal stays exactly-once for the same reason: a stray copy
+# anywhere would degenerate the suite's auth_bodies identification above (the
+# authoring-body python filter keys on it). S14 and S15 are dedicated
+# fixed-string presence greps that fail when their span is deleted.
+[ "$(grep -oF 'git worktree add -b <execution-branch> <sibling-path> <default-branch>' "$P" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: P57 S13 execution worktree create-literal count != 1"; fail=1; }
+[ "$(grep -oF 'YYYY-MM-DD-authoring-<slug>' "$P" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: authoring worktree literal count != 1 (auth_bodies identification would degenerate)"; fail=1; }
+pin "P57 S14 Linked-worktree bootstrap recipe span" grep -qF 'Linked-worktree bootstrap recipe' "$P"
+pin "P57 S15 per-run pre-Phase-0 gate span" grep -qF "the run's own done lock is free (done locks are keyed per-worktree" "$P"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- execution blueprint dual-arm landing and per-worktree archive pins (plan
+# 2026-09-24-p57-per-execution-worktree-isolation.md, Task 5) ---
+# Companion pins for the blueprint's dual-arm landing rework (S16, S17, S18)
+# and the per-run archive and done-lock scoping spans (S19, S20). S17-S20 are
+# dedicated fixed-string presence greps that fail when their span is deleted;
+# S16 is tightened (review-panel r1) from the bare `merge --squash <branch>`
+# presence grep to exactly-once counts of the full primary-arm literal and of
+# the temp arm's bare form (the prefixed form does not contain the bare
+# substring: `git -C <default-checkout> ` intervenes, so the two counts are
+# disjoint).
+# The merge-wait-acquire exactly-2 count pin (each blueprint acquires the merge
+# landing lock once) already lives in the blueprint integrity block above and
+# continues to pass unchanged. The superseded shared-checkout Phase 0 clause is
+# frozen absent with the wrap-tolerant flattened form (expect_absent_flat
+# above): the clause was line-wrapped in the file, so the plain line-oriented
+# expect_absent is a no-op against the wrapped bytes and must not be used here.
+[ "$(grep -oF 'git -C <default-checkout> merge --squash <branch>' "$P" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: P57 S16 primary-arm prefixed squash command count != 1"; fail=1; }
+[ "$(grep -oF 'git merge --squash <branch>' "$P" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: P57 S16 temp-arm bare squash command count != 1"; fail=1; }
+pin "P57 S17 temp-worktree arm create command" grep -qF 'git worktree add --detach <temp-path> refs/heads/<default>' "$P"
+pin "P57 S18 compare-and-swap landing command" grep -qF 'git update-ref refs/heads/<default> <new-tip> <old-tip>' "$P"
+pin "P57 S19 archive per-run worktree commit span" grep -qF 'the archive commit is a per-run worktree commit' "$P"
+pin "P57 S20 done-lock per-run scoping span" grep -qF "so the run's done lock is its own" "$P"
+expect_absent_flat "superseded shared-checkout Phase 0 clause must be absent from prompt-templates.md (wrap-tolerant)" 'Phase 0 dedicated branch from main' "$P"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- review r1 fleet-stance straggler fold pins (plan
+# 2026-09-24-p57-per-execution-worktree-isolation.md, review-panel r1 fold) ---
+# Companion pins for the two strictly-sequential stragglers the Task 1-3 flip
+# spans missed: the G1a lane bullet's execution-sequencing sentence and the D2
+# carrier-selection parenthetical, both reworded to the fleet-member stance.
+# The presence pins are dedicated fixed-string greps that fail when their span
+# is deleted; the absence pins are case-sensitive fixed-string checks with the
+# three-way polarity above (rc 1 = clean). The G1a absence literal is the live
+# sentence's unique full form: its bare prefix also occurs in the Revisions
+# ledger's historical 2026-09-15 entry ("never two at once"), so the
+# file-scoped check pins the longer form and the ledger's historical wording
+# can neither satisfy nor break it.
+pin "P57 r1 G1a fleet-member sequencing sentence" grep -qF 'Executions are fleet members and may overlap, each in its own per-execution worktree' "$S"
+pin "P57 r1 D2 carrier sequencing-superseded parenthetical" grep -qF "sequencing superseded 2026-09-24 by P57's per-execution worktree isolation" "$S"
+expect_absent "retired strictly-sequential execution sentence must be absent from SKILL.md (the ledger's historical wording must not satisfy or break this)" 'Executions are strictly sequential (never two in flight)' "$S"
+expect_absent "retired strictly-sequential clocked-child stance parenthetical must be absent from SKILL.md" 'strictly sequential clocked-child stance is unchanged' "$S"
 [ "$fail" -eq 1 ] && exit 1
 
 

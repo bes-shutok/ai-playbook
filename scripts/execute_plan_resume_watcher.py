@@ -1307,8 +1307,14 @@ def record_budget_boundary(
             transition["receipt"]["armed_launchd"] = dict(armed_launchd)
         machine = adapter.compare_and_swap_schedule(transition)
         if machine.get("status") != "success":
+            # A genuine compare-and-swap refusal keeps the stale boundary
+            # (r3 F7); a receipt-validation refusal returns its own
+            # malformed boundary so the CLI arm can surface the named
+            # precondition instead of masquerading it as a lost race.
+            machine_reason = machine.get("reason_code")
+            cas_refused = machine_reason is None or machine_reason == "" or machine_reason == "stale-attempt"
             return {
-                "boundary": "stale",
+                "boundary": "stale" if cas_refused else "malformed",
                 "classification": classification,
                 "machine": dict(machine),
                 "scheduling": None,
@@ -1506,15 +1512,26 @@ def run_cli_watcher_operation(
             "install": "resume-watcher-scheduled",
             "supersede": "resume-watcher-superseded",
             "stale": "watcher-cas-stale",
+            "malformed": "watcher-receipt-invalid",
         }.get(boundary_name, "watcher-cas-stale")
+        machine_block = boundary.get("machine") or {}
+        evidence = [
+            f"boundary={boundary.get('boundary')}",
+            f"classification={boundary.get('classification')}",
+            f"scheduling={json.dumps(boundary.get('scheduling'), sort_keys=True) if boundary.get('scheduling') else 'none'}",
+        ]
+        if boundary_name not in {"install", "supersede"}:
+            # The machine trail on every refused boundary: the machine
+            # result's reason code plus its evidence strings, so the caller
+            # sees the exact precondition (the ValueError naming the
+            # unsatisfied receipt field) instead of a bare boundary name;
+            # the genuine stale outcome carries the same trail.
+            evidence.append(f"machine-reason={machine_block.get('reason_code')}")
+            evidence.extend(str(item) for item in (machine_block.get("evidence") or []))
         return outcome_factory(
             "success" if boundary_name == "install" else "blocked",
             reason_code,
-            [
-                f"boundary={boundary.get('boundary')}",
-                f"classification={boundary.get('classification')}",
-                f"scheduling={json.dumps(boundary.get('scheduling'), sort_keys=True) if boundary.get('scheduling') else 'none'}",
-            ],
+            evidence,
             "repository-write",
             f"{identity_prefix}:schedule",
             int((boundary.get("machine") or {}).get("generation", 0)),
@@ -1525,7 +1542,10 @@ def run_cli_watcher_operation(
             manual_command=boundary.get("manual_command"),
             carrier_rectified=boundary.get("carrier_rectified"),
             carrier_teardown=boundary.get("carrier_teardown"),
-            cas_applied=boundary_name != "stale",
+            # The machine refused the write on a refused boundary, so the
+            # envelope must not claim an applied swap; the true value scopes
+            # to the install and supersede boundaries.
+            cas_applied=boundary_name in {"install", "supersede"},
         )
     if kind == "supersede":
         snapshot = adapter.read_state()

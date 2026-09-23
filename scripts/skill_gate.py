@@ -2005,6 +2005,166 @@ def selftest() -> int:
         )
 
     # ------------------------------------------------------------------ #
+    # project_worktree_target_not_admitted_by_primary_marker: a LINKED
+    # worktree derives a DIFFERENT project key than its primary checkout,
+    # so a marker written keyed to the PRIMARY does NOT admit a consult
+    # for a worktree target; a marker keyed to the WORKTREE does. Neither
+    # resolve may fall back to keying=no-anchor (both git anchors work).
+    # ------------------------------------------------------------------ #
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        primary = td_path / "primary"
+        make_git_repo(primary)
+        (primary / "docs" / "plans").mkdir(parents=True)
+        (primary / "docs" / "plans" / "seed.md").write_text("seed", encoding="utf-8")
+        import subprocess as _sp
+        env = dict(os.environ)
+        env["GIT_AUTHOR_NAME"] = "selftest"
+        env["GIT_AUTHOR_EMAIL"] = "selftest@example.com"
+        env["GIT_COMMITTER_NAME"] = "selftest"
+        env["GIT_COMMITTER_EMAIL"] = "selftest@example.com"
+        _sp.run(["git", "-C", str(primary), "add", "-A"], check=True, env=env)
+        _sp.run(
+            ["git", "-C", str(primary), "commit", "-q", "-m", "plans"],
+            check=True, env=env,
+        )
+        wt = td_path / "linked_wt"
+        _sp.run(
+            ["git", "-C", str(primary), "worktree", "add", "-q", str(wt)],
+            check=True, env=env,
+        )
+        (wt / "docs" / "plans" / "new.md").write_text("new", encoding="utf-8")
+        home_dir = td_path / "home"
+        home_dir.mkdir()
+        runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
+        # Marker keyed to the PRIMARY root, same session.
+        write_marker_at(
+            start_dir=primary,
+            home_dir=home_dir,
+            session_id="sess-WT",
+            runtime_dir=runtime_dir,
+            mtime_offset=0,
+        )
+        target = str(wt / "docs" / "plans" / "new.md")
+        allow_primary, reason_primary = run_consult(
+            target,
+            start_dir=wt,
+            home_dir=home_dir,
+            session_id="sess-WT",
+            runtime_dir=runtime_dir,
+        )
+        check(
+            "project_worktree_target_not_admitted_by_primary_marker: DENY (primary-keyed marker)",
+            not allow_primary,
+            f"allow={allow_primary} reason={reason_primary!r}",
+        )
+        # Second marker keyed to the WORKTREE, same session.
+        write_marker_at(
+            start_dir=wt,
+            home_dir=home_dir,
+            session_id="sess-WT",
+            runtime_dir=runtime_dir,
+            mtime_offset=0,
+        )
+        allow_wt, reason_wt = run_consult(
+            target,
+            start_dir=wt,
+            home_dir=home_dir,
+            session_id="sess-WT",
+            runtime_dir=runtime_dir,
+        )
+        check(
+            "project_worktree_target_not_admitted_by_primary_marker: ALLOW (worktree-keyed marker)",
+            allow_wt,
+            f"allow={allow_wt} reason={reason_wt!r}",
+        )
+        hooks_log = home_dir / ".ai-playbook" / "logs" / "hooks.log"
+        keyings_wt: list[str] = []
+        if hooks_log.is_file():
+            for ln in hooks_log.read_text(encoding="utf-8").splitlines():
+                if not ln.strip():
+                    continue
+                try:
+                    keyings_wt.append(json.loads(ln).get("keying"))
+                except ValueError:
+                    continue
+        check(
+            "project_worktree_target_not_admitted_by_primary_marker: NO keying=no-anchor (git anchors resolved)",
+            "no-anchor" not in keyings_wt,
+            f"keyings={keyings_wt}",
+        )
+
+    # ------------------------------------------------------------------ #
+    # write_marker_cli_cwd_passthrough_keys_worktree: the CLI subprocess
+    # `--write-marker --cwd <worktree>` keys the marker to the WORKTREE
+    # project key, and a consult started from the worktree with the same
+    # session is then ADMITTED with no second marker write.
+    # ------------------------------------------------------------------ #
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        primary = td_path / "primary_cli"
+        make_git_repo(primary)
+        (primary / "docs" / "plans").mkdir(parents=True)
+        (primary / "docs" / "plans" / "seed.md").write_text("seed", encoding="utf-8")
+        import subprocess as _sp
+        env = dict(os.environ)
+        env["GIT_AUTHOR_NAME"] = "selftest"
+        env["GIT_AUTHOR_EMAIL"] = "selftest@example.com"
+        env["GIT_COMMITTER_NAME"] = "selftest"
+        env["GIT_COMMITTER_EMAIL"] = "selftest@example.com"
+        _sp.run(["git", "-C", str(primary), "add", "-A"], check=True, env=env)
+        _sp.run(
+            ["git", "-C", str(primary), "commit", "-q", "-m", "plans"],
+            check=True, env=env,
+        )
+        wt = td_path / "linked_wt_cli"
+        _sp.run(
+            ["git", "-C", str(primary), "worktree", "add", "-q", str(wt)],
+            check=True, env=env,
+        )
+        (wt / "docs" / "plans" / "new.md").write_text("new", encoding="utf-8")
+        home_dir = td_path / "home"
+        home_dir.mkdir()
+        runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
+        cli_env = dict(os.environ)
+        cli_env["HOME"] = str(home_dir)
+        proc = _sp.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--write-marker",
+                "--cwd", str(wt),
+                "--session-id", "sess-WTCLI",
+            ],
+            capture_output=True, text=True, env=cli_env,
+        )
+        expected_proj = hashlib.sha1(os.path.realpath(str(wt)).encode()).hexdigest()[:16]
+        markers = sorted(runtime_dir.glob("plans.*.%s.marker" % _derive_session_component("sess-WTCLI"))) if runtime_dir.is_dir() else []
+        check(
+            "write_marker_cli_cwd_passthrough_keys_worktree: CLI exit 0",
+            proc.returncode == 0,
+            f"rc={proc.returncode} stderr={proc.stderr!r}",
+        )
+        check(
+            "write_marker_cli_cwd_passthrough_keys_worktree: marker filename carries worktree project key",
+            any(expected_proj in m.name for m in markers),
+            f"expected_proj={expected_proj} markers={[m.name for m in markers]}",
+        )
+        target = str(wt / "docs" / "plans" / "new.md")
+        allow_cli, reason_cli = run_consult(
+            target,
+            start_dir=wt,
+            home_dir=home_dir,
+            session_id="sess-WTCLI",
+            runtime_dir=runtime_dir,
+        )
+        check(
+            "write_marker_cli_cwd_passthrough_keys_worktree: consult ALLOW from worktree",
+            allow_cli,
+            f"allow={allow_cli} reason={reason_cli!r}",
+        )
+
+    # ------------------------------------------------------------------ #
     # project_no_anchor_in_non_git_dir: non-git cwd -> project =
     # sha1(realpath(cwd)) AND hooks.log FILE carries keying=no-anchor.
     # r17-M1 ABSENT-PARENT + r18-M2 GIT-REPO CWD PIN.

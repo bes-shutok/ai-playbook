@@ -257,6 +257,52 @@ class PlanOriginsClosedTest(unittest.TestCase):
         self.assertIn("warning", corpus.stdout)
         self.assertIn(GAMMA, corpus.stdout)
 
+    # ------------------------------------------------------------------
+    # Singular Backlog origin header form (P56 Task 3)
+    # ------------------------------------------------------------------
+    def _singular_plan(self, name: str, origin: str) -> Path:
+        lines = [
+            "# Plan: fixture-singular",
+            "",
+            f"Backlog origin: `{origin}`",
+            "",
+            "## Tasks",
+            "",
+            "- [ ] fixture task",
+            "",
+        ]
+        return self._write(self.plans_dir / name, "\n".join(lines))
+
+    def test_singular_origin_line_gates(self) -> None:
+        self._open_top(ALPHA)
+        plan = self._singular_plan(
+            "2026-09-24-fixture-singular-open.md",
+            f"docs/history/backlog/{ALPHA}",
+        )
+        proc = self._run("--plan", str(plan))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("straggler", proc.stdout)
+        self.assertIn(ALPHA, proc.stdout)
+
+    def test_singular_origin_closed_item_passes(self) -> None:
+        self._archived(ALPHA)
+        plan = self._singular_plan(
+            "2026-09-24-fixture-singular-closed.md",
+            f"docs/history/backlog/{ALPHA}",
+        )
+        proc = self._run("--plan", str(plan))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("1/1 origins closed", proc.stdout)
+
+    def test_singular_origin_non_backlog_path_ignored(self) -> None:
+        plan = self._singular_plan(
+            "2026-09-24-fixture-singular-nonbacklog.md",
+            "docs/reviews/some-review.md",
+        )
+        proc = self._run("--plan", str(plan))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("no origins block; nothing to verify", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

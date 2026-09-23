@@ -39,7 +39,7 @@ Invoke when **Terms triggers** fire (at most once per session, except **recovery
 
 When the file exists, TOML is valid, required keys are present, paths exist on disk, and gitignore passes; **no-op**; return cached values.
 
-**Recovery rerun (same session):** If bootstrap already ran this session but post-write validation fails (missing required key, directory absent, unparsable opening fence), or a consumer cannot resolve a required path key after reading `.ai-playbook/facts.md`, run bootstrap again once for recovery. Do not cap recovery reruns when validation still fails after the first write. Exception: a `{backlog_dir}` / `{backlog_completed_dir}` ask awaiting the user is not a validation failure; re-ask once per session instead of rerunning bootstrap.
+**Recovery rerun (same session):** If bootstrap already ran this session but post-write validation fails (missing required key, directory absent, unparsable opening fence), or a consumer cannot resolve a required path key after reading `.ai-playbook/facts.md`, run bootstrap again once for recovery. Do not cap recovery reruns when validation still fails after the first write. Exception: a `{backlog_dir}` / `{backlog_completed_dir}` ask awaiting the user, or a greenfield doc-layout ask awaiting the user, is not a validation failure; re-ask once per session instead of rerunning bootstrap, so the persist-no-keys greenfield behavior cannot compose with the missing-required-key trigger into an unbounded non-interactive rerun loop.
 
 Other skills **read** TOML keys from `.ai-playbook/facts.md`; they do not invoke this skill every task unless a trigger fires (see `using-skills` Step 0).
 
@@ -101,6 +101,8 @@ bootstrap_version = "1"
 ...
 ````
 
+The `docs/plans/` and `docs/reviews/` values in this example are legacy-layout examples, not greenfield defaults; for the canonical history map, see the greenfield rule in Path Discovery.
+
 Optional keys (discover when present; omit when not found):
 
 | Key | Purpose | Discovery hints |
@@ -132,7 +134,9 @@ Optional keys (discover when present; omit when not found):
 - **Never** write a path key from doc-hierarchy default tables or plan examples unless that exact path exists on disk.
 - `backlog_dir` / `backlog_completed_dir`: discover `docs/history/backlog/` and `docs/history/backlog/completed/` (Layer 3 backlog per `doc-hierarchy`). When `docs/history/` exists but `backlog/` does not, create `docs/history/backlog/completed/` and persist both keys. When `docs/history/` is absent, ask the user (or return the ask to the orchestrator in a non-interactive run) for the backlog home and persist the confirmed path; do not invent one (`docs/maintenance/` is Layer 2 living ops and `docs/tmp/` is ephemeral; neither is a backlog home).
 - For company-scoped repos, when user or ownership facts provide `team_references_project` and the directory exists, persist that optional key in the repo facts. Do not invent the path or copy a concrete team alias into this portable skill.
-- If no home exists, follow `project_guidelines_rel` if documented; else ask the user before creating new top-level `docs/` trees.
+- **Greenfield (no `docs/` tree at all):** when the repo has no `docs/` tree at all, ask explicitly whether the doc-hierarchy schema is the target layout before any doc-key discovery. When confirmed, skip discovery for the doc keys and seed the canonical map directly: `plans_dir = "docs/history/plans/"`, `plans_completed_dir = "docs/history/plans/completed/"`, `reviews_dir = "docs/history/reviews/"`, `backlog_dir = "docs/history/backlog/"`, `backlog_completed_dir = "docs/history/backlog/completed/"`, `tmp_dir = "docs/tmp/"`; create every seeded directory before persisting (satisfying the on-disk rule in Core Concepts), and add `docs/history/reviews/` and `docs/tmp/` to `.gitignore` when no existing rule ignores them, committing the ignore rule so it survives fresh clones. Bootstrap and `doc-hierarchy-migrate` then compose in either order, because a later migration finds the layout already canonical and no-ops on the doc keys. When the ask goes unanswered in a non-interactive run, record the open ask (per **Recovery rerun**) and persist no invented doc keys. When the ask is explicitly declined, do not seed doc keys and do not run the default hint discovery: fall through to the no-home policy in the final Discovery rule below (which composes with the residual legacy fallback for any caller-directed legacy layout); a declined ask persists no doc keys of its own and counts as the ask for this session's once-per-session re-ask budget.
+- **Residual legacy fallback:** when top-level `docs/plans/` and `docs/reviews/` keys get persisted anyway (a caller-directed legacy layout or an older runtime default), warn that this is a conflict with the doc-hierarchy-migrate step2 gate, which fails while plans and reviews sit at the `docs/` root, and that the keys must be re-pointed to the canonical history map after any later migration.
+- If no home exists, follow `project_guidelines_rel` if documented; else ask the user before creating new top-level `docs/` trees. On a repo with no `docs/` tree at all and no answered greenfield ask, this defers to the greenfield ask above; an unanswered ask persists no path keys (see the greenfield rule); a declined ask lands here, so follow `project_guidelines_rel` if documented, else ask before creating new top-level `docs/` trees.
 
 ### Exploration commands
 
@@ -187,7 +191,7 @@ Return each resolved path to the caller. Substitute `{plans_dir}`, `{reviews_dir
 | Consumer / Provider | Integration |
 |---------------------|-------------|
 | `using-skills` | Step 0 reads `.ai-playbook/facts.md`; invokes this skill only when Terms triggers fire |
-| `doc-hierarchy`, `doc-hierarchy-migrate`, `doc-hierarchy-upkeep` | Migration-complete signal and Step 5b for legacy committed facts |
+| `doc-hierarchy`, `doc-hierarchy-migrate`, `doc-hierarchy-upkeep` | Migration-complete signal and Step 5b for legacy committed facts; on a repo with no `docs/` tree, the greenfield ask seeds the canonical history map when it is confirmed as the target layout |
 | `plans`, `execute-plan`, `doing-code-review`, `review-plan`, `learn`, `done`, `docs-branch` | Read TOML keys from `.ai-playbook/facts.md` |
 | `receiving-review` | Backlog capture reads `{backlog_dir}` / `{backlog_completed_dir}`; the recovery rerun resolves or creates the backlog home when the keys are missing |
 | `review-confluence-doc`, `rfc-design` | Read `{reviews_dir}` and `{tmp_dir}` from repo agent facts; primary review staging under `{reviews_dir}/` per `review-staging` (`rfc-design` never uses `{tmp_dir}/rfc-review/`) |

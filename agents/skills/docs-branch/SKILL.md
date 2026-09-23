@@ -108,11 +108,19 @@ for p in "${SHADOW_CANDIDATES[@]}"; do
     parent=$(dirname "$clean")
     mkdir -p "${SNAPSHOT_TMP}/${parent}"
     cp -Rp "$clean" "${SNAPSHOT_TMP}/${parent}/"
+  elif [ -e "$clean" ] && ! git ls-files --error-unmatch -- "$clean" >/dev/null 2>&1; then
+    # Loud skip: the candidate is still never staged (skip semantics unchanged),
+    # but lost ignore coverage must name itself instead of vanishing quietly.
+    # The arm fires only for disk-only content: a tracked unignored candidate is
+    # intentionally not shadow content (ignore-else-track covers it), so no warning.
+    echo "docs-branch: shadow candidate '$clean' exists but is not gitignored (git check-ignore rejects it); NOT synced to the docs branch shadow. Add the ignore rule to .gitignore or correct the facts reviews_dir/tmp_dir key, then re-run." >&2
   fi
 done
 [ -e ".claude" ] && SNAPSHOT_PATHS+=(".claude/")
 rm -rf "${SNAPSHOT_TMP}"
 ```
+
+A candidate that exists but fails the check-ignore gate is skipped with the loud warning above, never a silent skip, because the reviews-dir shadow is the only durable copy of review records and lost ignore coverage must name itself, while an unignored but git-tracked candidate stays silently out of the shadow by design (ignore-else-track: tracked content is product content, not a shadow target).
 
 ## Step 1.5: Preserve Active Execute-Plan Session Logs (when present)
 

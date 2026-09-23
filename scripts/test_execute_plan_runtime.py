@@ -10385,5 +10385,672 @@ class PlansWatcherScheduleContractTest(unittest.TestCase):
         self.assertEqual(bootstrap_calls, [], "the degraded boundary must arm nothing")
 
 
+class DonePendingRecoveryTest(unittest.TestCase):
+    """Recovery-transition pins for the stuck done-pending claim (Tasks 1-3).
+
+    The done-pending boundary previously had no sanctioned exit: ``abort``
+    refuses to regress a claim past its receipt boundary, ``reclaim`` admits
+    only tasks outside the progressed statuses behind a four-hour lease, and
+    ``record_done`` refuses the incomplete done evidence, so a terminal
+    worker's done-pending claim wedged the run behind a manual machine-manifest
+    edit. Eighteen witnesses pin the driver-owned ``recover_done_pending``
+    transition end to end across the three plan tasks:
+
+    - Task 1 (requeue core): the exact-identity fence (owner, token, and
+      generation must match the live claim), the done-pending status
+      precondition, the live-claim-group refusal (parallel and batch alike),
+      the operator-supplied terminal-evidence gate (non-empty bounded
+      strings, one naming the claim's session or launch identity), the
+      duplicate-receipt fence over recorded history, and the requeue
+      disposition's durable writes (task pending with the dead-session
+      fields stripped, claim closed, one generation bump, one appended
+      ``done-pending-recovery`` receipt, no claim or launch action). The
+      working tree is preserved byte-for-byte, no lease wait applies, and
+      readiness answers ``direct-continuation`` on the requeued manifest.
+    - Task 2 (defer and abort): the defer disposition's backlog-evidence
+      validation (an existing repository-relative path under
+      ``docs/history/backlog/``), its dependency-ordering rule (defer is
+      valid only for the next provable incomplete task), the ``deferred``
+      status admitted by manifest validation and excluded from the
+      incomplete selection, and the abort disposition's terminal durable
+      writes (task, claim, and ``workflow_state`` aborted under the
+      preserve-and-stop envelope).
+    - Task 3 (CLI and coherence): readiness names ``recover-done-pending``
+      as the done-pending failed condition's recovery action (the frozen
+      commit-pending pin keeps ``preserve-and-reconcile``), and the module
+      CLI's ``recover-done-pending`` operation maps the JSON payload onto
+      the transition for all three dispositions end to end.
+    """
+
+    SESSION_ID = "sess-fixture-dead-worker"
+    TERMINAL_EVIDENCE = [
+        f"worker session {SESSION_ID} observed terminated: supervisor reports the process exited",
+        "no live worker process remains for the claim",
+    ]
+
+    def setUp(self) -> None:
+        # Pin ambient execute-plan env inputs so an exported variable cannot
+        # silently redirect the code under test to a foreign registry.
+        self._saved_env = {key: os.environ.pop(key) for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST") if key in os.environ}
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.state_path = self.root / "runtime_state.json"
+        # Hermetic git: neutralize host global/system config so hooks,
+        # gpgsign, or aliases from the developer machine cannot leak into
+        # the fixture repository; identity is set repo-locally below.
+        self._git_env = dict(os.environ)
+        self._git_env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        self._git_env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "config", "user.name", "Runtime Test"], cwd=self.root, check=True, env=self._git_env)
+        (self.root / ".gitignore").write_text("runtime_state.json\nruntime_state.json.lock\n", encoding="utf-8")
+        subprocess.run(["git", "add", ".gitignore"], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "commit", "-qm", "fixture"], cwd=self.root, check=True, env=self._git_env)
+        # The committed minimal plan Markdown with recognizable task sections
+        # so the readiness operation (the post-requeue continuation witness)
+        # can map task ids to plan sections.
+        self.plan_file = "fixture-plan.md"
+        (self.root / self.plan_file).write_text(
+            "# Fixture Plan\n"
+            "\n"
+            "### Task 3: recovery candidate\n"
+            "\n"
+            "- [ ] step one\n"
+            "\n"
+            "### Task 4: follower\n"
+            "\n"
+            "- [ ] step two\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", self.plan_file], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "commit", "-qm", "fixture plan"], cwd=self.root, check=True, env=self._git_env)
+        runtime.create_manifest(
+            self.state_path,
+            "fixture-plan",
+            [
+                {"id": "task-3", "number": 3, "status": "pending", "checkbox": False, "allowed_paths": ["task-3.txt"]},
+                {"id": "task-4", "number": 4, "status": "pending", "checkbox": False, "allowed_paths": ["task-4.txt"]},
+            ],
+            repo_root=self.root,
+        )
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+        os.environ.update(self._saved_env)
+        for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST"):
+            if key not in self._saved_env:
+                os.environ.pop(key, None)
+
+    def _git(self, *args, cwd=None):
+        # Hermetic git subprocess for fixture sites: the pinned _git_env
+        # neutralizes host global/system config, and the asserted exit keeps
+        # fixture setup failures loud. Returns the CompletedProcess.
+        return subprocess.run(["git", *args], cwd=cwd or self.root, env=self._git_env, capture_output=True, text=True, check=True)
+
+    def _git_stdout(self, *args, cwd=None):
+        completed = self._git(*args, cwd=cwd)
+        return completed.stdout.strip()
+
+    def driver(self, **kwargs):
+        return runtime.RuntimeDriver(
+            self.state_path,
+            plan_slug="fixture-plan",
+            owner="recovery-owner",
+            repo_root=self.root,
+            commit_lookup=lambda _commit: False,
+            **kwargs,
+        )
+
+    def seed_done_pending(self, task="task-3", *, status="done-pending", token=None, group_id=None, extra_claim=None):
+        # Seed a fenced launched claim on `task` resting at the done boundary:
+        # matching owner/token/generation identity, a fresh lease timestamp
+        # (younger than CLAIM_LEASE_SECONDS — the terminal evidence, never a
+        # lease wait, is what authorizes recovery), a policy-token scope, the
+        # matching launch-record snapshot, and the dead worker's session
+        # fields on the task (session_id plus a non-resumable blocked receipt)
+        # exactly as the wedged done-pending shape carries them.
+        head = self._git_stdout("rev-parse", "HEAD")
+        state = runtime.load_manifest(self.state_path)
+        state["checkpoints"] = {}
+        allowed_paths = [f"{task}.txt"]
+        claim = {
+            "token": token or f"seed-{task}",
+            "generation": 0,
+            "owner": "recovery-owner",
+            "timestamp": runtime._now(),
+            "state": "launched",
+            "task_id": task,
+            "allowed_paths": allowed_paths,
+            "launched_at": 111.0,
+            "baseline_revision": head,
+            "policy_token": {"allowed_paths": allowed_paths},
+            "launch_record": {"baseline_revision": head, "generation": 0, "launched_at": 111.0},
+        }
+        if group_id:
+            claim["group_id"] = group_id
+        if extra_claim:
+            claim.update(extra_claim)
+        state["claims"][task] = claim
+        state["tasks"][task]["status"] = status
+        state["tasks"][task]["session_id"] = self.SESSION_ID
+        state["tasks"][task]["resume_allowed"] = False
+        state["tasks"][task]["blocked_receipt"] = {
+            "reason_code": "commit-pending",
+            "evidence": ["worktree is not clean at the done boundary"],
+        }
+        runtime._safe_write_json(self.state_path, state)
+        return claim["token"]
+
+    def seed_live_group(self, group_id, kind):
+        # Attach an active claim group that owns the done-pending task-3 claim
+        # plus a sibling task-4 member claim. Parallel shape: both members
+        # launched on their own sessions. Batch shape: the contract's
+        # checkpoint-success rest — the anchor member (task-3) sits at
+        # done-pending with its claim live while the group stays active and
+        # the later member stays staged.
+        state = runtime.load_manifest(self.state_path)
+        if kind == runtime.GROUP_KIND_PARALLEL:
+            group = {
+                "group_id": group_id,
+                "state": "active",
+                "kind": runtime.GROUP_KIND_PARALLEL,
+                "members": ["task-3", "task-4"],
+                "anchor": None,
+                "active_member": None,
+                "generation": 0,
+            }
+            sibling_claim = {
+                "token": "sibling-token",
+                "generation": 0,
+                "owner": "recovery-owner",
+                "timestamp": runtime._now(),
+                "state": "launched",
+                "task_id": "task-4",
+                "group_id": group_id,
+                "allowed_paths": ["task-4.txt"],
+                "launched_at": 111.0,
+                "launch_record": {"baseline_revision": "", "generation": 0, "launched_at": 111.0},
+            }
+            state["tasks"]["task-4"]["status"] = "launched"
+        else:
+            group = {
+                "group_id": group_id,
+                "state": "active",
+                "members": ["task-3", "task-4"],
+                "anchor": "task-3",
+                "active_member": "task-3",
+                "generation": 0,
+            }
+            sibling_claim = {
+                "token": "sibling-token",
+                "generation": 0,
+                "owner": "recovery-owner",
+                "timestamp": runtime._now(),
+                "state": "staged",
+                "task_id": "task-4",
+                "group_id": group_id,
+                "member_ordinal": 2,
+                "attempt": 0,
+                "allowed_paths": ["task-4.txt"],
+            }
+            state["tasks"]["task-4"]["status"] = "pending"
+        state["claim_groups"][group_id] = group
+        state["claims"]["task-4"] = sibling_claim
+        runtime._safe_write_json(self.state_path, state)
+
+    def rewrite_manifest(self, mutate):
+        # Fixture-side hand seeding (test-only; the contract forbids the
+        # driver from hand-editing machine state, never the test): load,
+        # mutate, and persist the manifest wholesale.
+        state = runtime.load_manifest(self.state_path)
+        mutate(state)
+        runtime._safe_write_json(self.state_path, state)
+
+    def recovery_events(self, state):
+        return [event for event in state.get("history", []) if event.get("event") == "done-pending-recovery"]
+
+    def test_recover_requeue_returns_done_pending_task_to_pending_under_new_generation(self):
+        driver = self.driver()
+        token = self.seed_done_pending()
+        generation_before = runtime.load_manifest(self.state_path)["generation"]
+        outcome = driver.recover_done_pending("task-3", token, "requeue", list(self.TERMINAL_EVIDENCE))
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertEqual(outcome["reason_code"], "requeued")
+        # No claim or launch action: launching the requeued task is the
+        # ordinary claim path's job.
+        self.assertEqual(outcome["actions"], [])
+        state = runtime.load_manifest(self.state_path)
+        task = state["tasks"]["task-3"]
+        self.assertEqual(task["status"], "pending")
+        for field in ("session_id", "resume_allowed", "blocked_receipt"):
+            self.assertNotIn(field, task)
+        self.assertEqual(state["claims"]["task-3"]["state"], "closed")
+        # The manifest generation incremented exactly once.
+        self.assertEqual(state["generation"], generation_before + 1)
+        recoveries = self.recovery_events(state)
+        self.assertEqual(len(recoveries), 1)
+        receipt = recoveries[0]
+        self.assertEqual(receipt["task_id"], "task-3")
+        self.assertEqual(receipt["token"], token)
+        self.assertEqual(receipt["generation"], generation_before)
+        self.assertEqual(receipt["disposition"], "requeue")
+        self.assertEqual(receipt["terminal_evidence"], capabilities.bounded_evidence(list(self.TERMINAL_EVIDENCE)))
+
+    def test_recover_requires_exact_claim_identity(self):
+        driver = self.driver()
+        token = self.seed_done_pending()
+        # Variant A: a wrong token never matches the live claim.
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_done_pending("task-3", "wrong-token", "requeue", list(self.TERMINAL_EVIDENCE))
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "stale-claim")
+        joined = " | ".join(str(item) for item in outcome["evidence"])
+        self.assertIn("identity", joined)
+        self.assertIn("identity mismatch: token", joined)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        # Variant B: a claim generation stale against the manifest generation
+        # is the same exact-identity refusal.
+        self.rewrite_manifest(lambda state: state.update({"generation": 1}))
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_done_pending("task-3", token, "requeue", list(self.TERMINAL_EVIDENCE))
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertEqual(outcome["reason_code"], "stale-claim")
+        joined = " | ".join(str(item) for item in outcome["evidence"])
+        self.assertIn("identity mismatch: generation", joined)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_recover_requires_terminal_evidence(self):
+        driver = self.driver()
+        token = self.seed_done_pending()
+        # Variant A: an empty evidence list is refused outright.
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_done_pending("task-3", token, "requeue", [])
+        self.assertEqual(outcome["status"], "blocked")
+        joined = " | ".join(str(item) for item in outcome["evidence"])
+        self.assertIn("terminal evidence", joined)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        # Variant B: evidence that names no session or launch identity of the
+        # claim proves nothing about THIS worker's terminality.
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_done_pending(
+            "task-3",
+            token,
+            "requeue",
+            ["supervisor observed the worker process exit with no live process remaining"],
+        )
+        self.assertEqual(outcome["status"], "blocked")
+        joined = " | ".join(str(item) for item in outcome["evidence"])
+        self.assertIn("terminal evidence", joined)
+        self.assertIn("session or launch identity", joined)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "done-pending")
+        self.assertEqual(self.recovery_events(state), [])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_recover_refused_outside_done_pending(self):
+        driver = self.driver()
+        token = self.seed_done_pending(status="claimed")
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_done_pending("task-3", token, "requeue", list(self.TERMINAL_EVIDENCE))
+        self.assertEqual(outcome["status"], "blocked")
+        joined = " | ".join(str(item) for item in outcome["evidence"])
+        self.assertIn("done-pending", joined)
+        self.assertIn("claimed", joined)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_recover_duplicate_receipt_refused(self):
+        driver = self.driver()
+        token = self.seed_done_pending()
+        self.rewrite_manifest(lambda state: state["history"].append({
+            "event": "done-pending-recovery",
+            "task_id": "task-3",
+            "token": token,
+            "generation": 0,
+            "disposition": "requeue",
+            "terminal_evidence": ["an earlier receipt for the same identity"],
+        }))
+        history_before = len(runtime.load_manifest(self.state_path)["history"])
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_done_pending("task-3", token, "requeue", list(self.TERMINAL_EVIDENCE))
+        self.assertEqual(outcome["status"], "blocked")
+        joined = " | ".join(str(item) for item in outcome["evidence"])
+        self.assertIn("duplicate", joined.lower())
+        self.assertIn("done-pending-recovery", joined)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(len(state["history"]), history_before)
+        self.assertEqual(len(self.recovery_events(state)), 1)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_recover_preserves_working_tree_changes(self):
+        driver = self.driver()
+        token = self.seed_done_pending()
+        # Dirty entries inside the allowed paths (the worker's own untracked
+        # artifact) and outside them (an untracked stray plus a tracked
+        # modification of the committed plan file).
+        (self.root / "task-3.txt").write_text("in-scope worker dirt\n", encoding="utf-8")
+        (self.root / "stray-notes.txt").write_text("out-of-scope dirt\n", encoding="utf-8")
+        with (self.root / self.plan_file).open("a", encoding="utf-8") as handle:
+            handle.write("prose appendix, not a checkbox line\n")
+        in_scope_before = (self.root / "task-3.txt").read_bytes()
+        out_scope_before = (self.root / "stray-notes.txt").read_bytes()
+        tracked_before = (self.root / self.plan_file).read_bytes()
+        outcome = driver.recover_done_pending("task-3", token, "requeue", list(self.TERMINAL_EVIDENCE))
+        self.assertEqual(outcome["status"], "success", outcome)
+        # No cleanup action rides the outcome: recovery never touches the
+        # working tree.
+        self.assertEqual(outcome["actions"], [])
+        self.assertEqual((self.root / "task-3.txt").read_bytes(), in_scope_before)
+        self.assertEqual((self.root / "stray-notes.txt").read_bytes(), out_scope_before)
+        self.assertEqual((self.root / self.plan_file).read_bytes(), tracked_before)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "pending")
+
+    def test_recover_skips_lease_wait(self):
+        driver = self.driver()
+        # The claim's lease timestamp is brand new: far younger than
+        # CLAIM_LEASE_SECONDS. The operator's terminal evidence, not a lease
+        # wait, is what authorizes the recovery, so the transition proceeds.
+        token = self.seed_done_pending()
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-3"]
+        self.assertLess(runtime._now() - float(claim["timestamp"]), runtime.CLAIM_LEASE_SECONDS)
+        outcome = driver.recover_done_pending("task-3", token, "requeue", list(self.TERMINAL_EVIDENCE))
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "pending")
+        self.assertEqual(state["claims"]["task-3"]["state"], "closed")
+
+    def test_recover_refused_while_task_in_live_parallel_group(self):
+        driver = self.driver()
+        token = self.seed_done_pending(group_id="group-par")
+        self.seed_live_group("group-par", runtime.GROUP_KIND_PARALLEL)
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_done_pending("task-3", token, "requeue", list(self.TERMINAL_EVIDENCE))
+        self.assertEqual(outcome["status"], "blocked")
+        joined = " | ".join(str(item) for item in outcome["evidence"])
+        self.assertIn("group-par", joined)
+        # The refusal is fence-only: the manifest (including the sibling
+        # member's task and claim) stays byte-identical.
+        self.assertEqual(self.state_path.read_bytes(), before)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-4"]["status"], "launched")
+        self.assertEqual(state["claims"]["task-4"]["token"], "sibling-token")
+        self.assertEqual(state["claims"]["task-4"]["state"], "launched")
+        self.assertEqual(state["tasks"]["task-3"]["status"], "done-pending")
+
+    def test_recover_refused_while_task_in_live_batch_group(self):
+        driver = self.driver()
+        token = self.seed_done_pending(
+            group_id="group-batch",
+            extra_claim={"member_ordinal": 1, "attempt": 1},
+        )
+        # The checkpoint-success shape: the batch anchor rests at done-pending
+        # with its claim live while the group stays active and the later
+        # member stays staged. The refusal must be group-kind-agnostic.
+        self.seed_live_group("group-batch", "batch")
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_done_pending("task-3", token, "requeue", list(self.TERMINAL_EVIDENCE))
+        self.assertEqual(outcome["status"], "blocked")
+        joined = " | ".join(str(item) for item in outcome["evidence"])
+        self.assertIn("group-batch", joined)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["claims"]["task-4"]["state"], "staged")
+        self.assertEqual(state["claim_groups"]["group-batch"]["state"], "active")
+
+    def test_readiness_after_requeue_answers_direct_continuation(self):
+        driver = self.driver()
+        token = self.seed_done_pending()
+        outcome = driver.recover_done_pending("task-3", token, "requeue", list(self.TERMINAL_EVIDENCE))
+        self.assertEqual(outcome["status"], "success", outcome)
+        result = driver.readiness(self.root / self.plan_file)
+        self.assertEqual(result["decision"], "direct-continuation", result)
+        self.assertEqual(result["next_task_id"], "task-3")
+        self.assertEqual(result["failed_conditions"], [])
+
+    def _write_backlog_file(self, relative_path):
+        # Create an existing backlog evidence file inside the fixture repo.
+        # The defer arm validates existence on disk, so the evidence path must
+        # point at a real file the operator recorded before recovering.
+        path = self.root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# Deferred follow-up record\n\nEvidence for {relative_path}.\n", encoding="utf-8")
+        return relative_path
+
+    def test_recover_defer_marks_task_deferred_with_backlog_evidence(self):
+        driver = self.driver()
+        token = self.seed_done_pending()
+        backlog_relative = self._write_backlog_file("docs/history/backlog/2026-09-24-deferred-task-3-follow-up.md")
+        outcome = driver.recover_done_pending("task-3", token, "defer", list(self.TERMINAL_EVIDENCE), backlog_evidence=backlog_relative)
+        self.assertEqual(outcome["status"], "success", outcome)
+        # No claim or launch action: the deferred task is never relaunched.
+        self.assertEqual(outcome["actions"], [])
+        state = runtime.load_manifest(self.state_path)
+        task = state["tasks"]["task-3"]
+        self.assertEqual(task["status"], "deferred")
+        self.assertEqual(state["claims"]["task-3"]["state"], "closed")
+        recoveries = self.recovery_events(state)
+        self.assertEqual(len(recoveries), 1)
+        receipt = recoveries[0]
+        self.assertEqual(receipt["task_id"], "task-3")
+        self.assertEqual(receipt["disposition"], "defer")
+        self.assertEqual(receipt["terminal_evidence"], capabilities.bounded_evidence(list(self.TERMINAL_EVIDENCE)))
+        # The linked backlog evidence is recorded in the receipt.
+        self.assertEqual(receipt["backlog_evidence"], [backlog_relative])
+        # The deferred task is excluded from the incomplete selection:
+        # complete-for-selection, so the next provable task is the following
+        # pending task (pinned end to end by the readiness witness below).
+        self.assertTrue(runtime.RuntimeDriver._task_complete(task))
+
+    def test_recover_defer_requires_existing_backlog_path(self):
+        driver = self.driver()
+        token = self.seed_done_pending()
+        # Variant A: an existing file outside docs/history/backlog/ is not
+        # backlog evidence, no matter that it exists.
+        outside = self._write_backlog_file("notes/defer-evidence.md")
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_done_pending("task-3", token, "defer", list(self.TERMINAL_EVIDENCE), backlog_evidence=outside)
+        self.assertEqual(outcome["status"], "blocked")
+        joined = " | ".join(str(item) for item in outcome["evidence"])
+        self.assertIn("backlog", joined)
+        self.assertIn("docs/history/backlog/", joined)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        # Variant B: a path under docs/history/backlog/ that does not exist
+        # proves no recorded follow-up; the defer is refused too.
+        missing = "docs/history/backlog/2026-09-24-never-written.md"
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_done_pending("task-3", token, "defer", list(self.TERMINAL_EVIDENCE), backlog_evidence=missing)
+        self.assertEqual(outcome["status"], "blocked")
+        joined = " | ".join(str(item) for item in outcome["evidence"])
+        self.assertIn("backlog", joined)
+        self.assertIn("docs/history/backlog/", joined)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "done-pending")
+        self.assertEqual(self.recovery_events(state), [])
+
+    def test_recover_defer_refused_when_earlier_task_incomplete(self):
+        driver = self.driver()
+        # task-4 rests at done-pending while the earlier-ordinal task-3 is
+        # still pending: deferring task-4 would skip a provably incomplete
+        # predecessor, the one dependency-ordering signal the manifest carries.
+        token = self.seed_done_pending(task="task-4")
+        backlog_relative = self._write_backlog_file("docs/history/backlog/2026-09-24-deferred-task-4-follow-up.md")
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_done_pending("task-4", token, "defer", list(self.TERMINAL_EVIDENCE), backlog_evidence=backlog_relative)
+        self.assertEqual(outcome["status"], "blocked")
+        joined = " | ".join(str(item) for item in outcome["evidence"])
+        self.assertIn("dependency ordering", joined)
+        self.assertIn("next provable incomplete task", joined)
+        self.assertIn("task-3", joined)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-4"]["status"], "done-pending")
+        self.assertEqual(state["tasks"]["task-3"]["status"], "pending")
+        self.assertEqual(self.recovery_events(state), [])
+
+    def test_recover_abort_disposition_ends_run(self):
+        driver = self.driver()
+        token = self.seed_done_pending()
+        generation_before = runtime.load_manifest(self.state_path)["generation"]
+        outcome = driver.recover_done_pending("task-3", token, "abort", list(self.TERMINAL_EVIDENCE))
+        # The shared aborted envelope: preserve-and-stop, never resumable, no
+        # claim or launch action returned.
+        self.assertEqual(outcome["status"], "aborted", outcome)
+        self.assertEqual(outcome["reason_code"], "explicit-abort")
+        self.assertEqual(outcome["recovery_action"], "preserve-and-stop")
+        self.assertEqual(outcome["actions"], [])
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "aborted")
+        self.assertEqual(state["claims"]["task-3"]["state"], "aborted")
+        self.assertEqual(state["workflow_state"], "aborted")
+        # The abort disposition writes no generation bump: the run is
+        # terminal, nothing is re-authorized.
+        self.assertEqual(state["generation"], generation_before)
+        recoveries = self.recovery_events(state)
+        self.assertEqual(len(recoveries), 1)
+        receipt = recoveries[0]
+        self.assertEqual(receipt["task_id"], "task-3")
+        self.assertEqual(receipt["disposition"], "abort")
+        self.assertEqual(receipt["terminal_evidence"], capabilities.bounded_evidence(list(self.TERMINAL_EVIDENCE)))
+
+    def test_deferred_status_passes_manifest_validation(self):
+        driver = self.driver()
+        self.rewrite_manifest(lambda state: state["tasks"]["task-3"].update({"status": "deferred"}))
+        # The closed task_states set admits the deferred status: without this
+        # membership, readiness, diagnose, and every refresh_manifest caller
+        # would raise on any post-defer manifest and re-wedge the run.
+        validated = driver.validate_manifest()
+        self.assertEqual(validated["tasks"]["task-3"]["status"], "deferred")
+
+    def test_readiness_after_defer_skips_deferred_task(self):
+        driver = self.driver()
+        token = self.seed_done_pending()
+        backlog_relative = self._write_backlog_file("docs/history/backlog/2026-09-24-deferred-task-3-follow-up.md")
+        outcome = driver.recover_done_pending("task-3", token, "defer", list(self.TERMINAL_EVIDENCE), backlog_evidence=backlog_relative)
+        self.assertEqual(outcome["status"], "success", outcome)
+        result = driver.readiness(self.root / self.plan_file)
+        self.assertEqual(result["decision"], "direct-continuation", result)
+        # The deferred task is absent from the selection: the next provable
+        # task is the following pending task, never the deferred one.
+        self.assertEqual(result["next_task_id"], "task-4")
+        self.assertNotEqual(result["next_task_id"], "task-3")
+        self.assertEqual(result["failed_conditions"], [])
+
+    def test_readiness_names_recovery_operation_for_done_pending(self):
+        # The done-pending failed condition names the bounded recovery
+        # operation as its recovery action: readiness stays read-only and only
+        # gains discoverability. The frozen pre-existing
+        # test_readiness_recovery_on_commit_pending keeps pinning
+        # preserve-and-reconcile for the commit-pending arm.
+        driver = self.driver()
+        self.seed_done_pending()
+        result = driver.readiness(self.root / self.plan_file)
+        self.assertEqual(result["decision"], "recovery", result)
+        self.assertTrue(
+            any(
+                "unresolved done handoff" in item and "done-pending" in item
+                for item in result["failed_conditions"]
+            ),
+            result["failed_conditions"],
+        )
+        self.assertEqual(result["recovery_action"], "recover-done-pending", result)
+
+    def test_cli_recover_done_pending_operation_end_to_end(self):
+        # The CLI operation maps the JSON payload (task id, token,
+        # disposition, terminal evidence, optional backlog evidence) onto the
+        # driver transition, invoked once per disposition: the requeue and
+        # defer dispositions print their success envelopes with exit 0, the
+        # abort disposition prints the aborted envelope with exit 0, and each
+        # disposition's durable writes land in the manifest.
+        backlog_relative = self._write_backlog_file("docs/history/backlog/2026-09-24-deferred-task-3-follow-up.md")
+
+        def invoke(disposition, backlog=None):
+            # Re-create the pristine seeded manifest, then re-apply the wedge,
+            # so every disposition runs from an identical done-pending state.
+            runtime.create_manifest(
+                self.state_path,
+                "fixture-plan",
+                [
+                    {"id": "task-3", "number": 3, "status": "pending", "checkbox": False, "allowed_paths": ["task-3.txt"]},
+                    {"id": "task-4", "number": 4, "status": "pending", "checkbox": False, "allowed_paths": ["task-4.txt"]},
+                ],
+                repo_root=self.root,
+            )
+            token = self.seed_done_pending()
+            payload = {
+                "task_id": "task-3",
+                "token": token,
+                "disposition": disposition,
+                "terminal_evidence": list(self.TERMINAL_EVIDENCE),
+            }
+            if backlog is not None:
+                payload["backlog_evidence"] = backlog
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/execute_plan_runtime.py"),
+                    "--manifest", str(self.state_path),
+                    "--repo-root", str(self.root),
+                    "--owner", "recovery-owner",
+                    "--operation", "recover-done-pending",
+                    "--input", json.dumps(payload),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+        # Requeue: success envelope, the task pending again, the receipt
+        # appended, one generation bump.
+        completed = invoke("requeue")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["reason_code"], "requeued")
+        self.assertEqual(result["disposition"], "requeue")
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "pending")
+        self.assertEqual(state["claims"]["task-3"]["state"], "closed")
+        self.assertEqual(state["generation"], 1)
+        recoveries = self.recovery_events(state)
+        self.assertEqual(len(recoveries), 1)
+        self.assertEqual(recoveries[0]["task_id"], "task-3")
+        self.assertEqual(recoveries[0]["disposition"], "requeue")
+        self.assertEqual(recoveries[0]["terminal_evidence"], capabilities.bounded_evidence(list(self.TERMINAL_EVIDENCE)))
+        # Defer: success envelope, the task deferred, the backlog evidence
+        # recorded in the receipt.
+        completed = invoke("defer", backlog=backlog_relative)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["reason_code"], "deferred")
+        self.assertEqual(result["disposition"], "defer")
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "deferred")
+        self.assertEqual(state["claims"]["task-3"]["state"], "closed")
+        recoveries = self.recovery_events(state)
+        self.assertEqual(len(recoveries), 1)
+        self.assertEqual(recoveries[0]["disposition"], "defer")
+        self.assertEqual(recoveries[0]["backlog_evidence"], [backlog_relative])
+        # Abort: the aborted envelope (preserve-and-stop) still exits 0, and
+        # the aborted workflow persists.
+        completed = invoke("abort")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "aborted")
+        self.assertEqual(result["reason_code"], "explicit-abort")
+        self.assertEqual(result["recovery_action"], "preserve-and-stop")
+        self.assertEqual(result["disposition"], "abort")
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "aborted")
+        self.assertEqual(state["claims"]["task-3"]["state"], "aborted")
+        self.assertEqual(state["workflow_state"], "aborted")
+        recoveries = self.recovery_events(state)
+        self.assertEqual(len(recoveries), 1)
+        self.assertEqual(recoveries[0]["disposition"], "abort")
+        self.assertEqual(recoveries[0]["terminal_evidence"], capabilities.bounded_evidence(list(self.TERMINAL_EVIDENCE)))
+
+
 if __name__ == "__main__":
     unittest.main()

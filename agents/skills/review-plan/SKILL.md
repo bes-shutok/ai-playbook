@@ -22,7 +22,7 @@ Do not use for:
 
 This skill establishes implementation readiness, not implementation completeness. Block only when the plan leaves public behavior contradictory, an invariant without an owner or state path, duplicated security-sensitive ownership, an observable behavior without an acceptance witness, an unsafe fallback or unbounded resource path, or a declared driving force that contradicts the plan's actual content. Record fixture and report mechanics, generated-source details after schema behavior is fixed, CI-helper hardening, and rollout evidence as implementation or activation follow-ups unless they reveal one of those blockers. Use three stages: plan review, implementation/code review, and activation review. Stop plan iterations once the current plan satisfies these blocker criteria and hand off to implementation.
 
-Declaration findings: a missing driving-force line, a missing Gist TLDR, a force outside the taxonomy, a non-principle force without its one-line justification, or a force that contradicts the plan's actual content (declared `simplicity`, adds machinery) is a finding. Pricing: missing/coherent-shape defects are ordinary (non-blocking by default) findings; a force that contradicts the plan's content is blocking.
+Declaration findings: a missing driving-force line, a missing Gist TLDR, a force outside the taxonomy, a non-principle force without its one-line justification, or a force that contradicts the plan's actual content (declared `simplicity`, adds machinery) is a finding. Pricing: a missing driving-force line, a missing Gist TLDR, a force outside the taxonomy, and a non-principle force without its one-line justification are ordinary (non-blocking by default) findings; a force that contradicts the plan's content is blocking.
 
 ## When to Run
 
@@ -268,7 +268,7 @@ After writing the review document:
 2. Fold non-blocking `Critical`, `High`, and material `Medium` findings when they expose a concrete implementation risk.
 3. Treat non-blocking `Low` as optional; do not extend the cycle for document inconsistency without demonstrated behavior impact.
 4. Add a reference line to the plan header: `Plan review: {reviews_dir}/<latest-rN>.md (latest, ready) · …`
-5. Add verification commands for each folded behavioral finding.
+5. Add verification commands for each folded behavioral finding, and when the fold adds or moves a count obligation on a file, its verification includes the joint re-simulation of that file's complete count-gate set over a temp copy carrying all prescribed insertions (plans Validation Commands rule 36).
 6. Update finding triage and Review Statistics. Historical artifacts with older vocabularies remain valid legacy input.
 7. Classify findings located in Completed history artifacts (vocabulary per `doc-hierarchy` "Document states") as immutable context pointing at the current Living SOT: the recommended fix is a pointer, successor, or a successor (`superseded_by`) ownership-registry row recorded from the Living SOT, never an edit to the historical artifact body.
 

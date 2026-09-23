@@ -893,8 +893,18 @@ def scope_classification_problem(plan_text: str) -> str | None:
     the ``###``/``####`` headings starting with ``Task`` or ``Step``
     (shared parser ``_plan_task_sections``); Ship when prose and every
     non-task section are exempt (only task checklist items are read).
-    Checks, first problem in document order wins:
+    Checks, first problem in document order wins (the placement check runs
+    first within each task section; see the (placement) entry):
 
+    (placement) scanned per task section BEFORE the per-item loop: a
+        non-blank line that is not a checkbox item and carries a
+        ``[class: ...]`` token outside backtick spans - the tag sits on
+        a wrapped item's continuation line, where the per-item parser
+        (which reads checkbox-marker lines only) cannot see it. This
+        check runs first within each section because it explains why
+        the item reads untagged: without it the probe would return the
+        misleading untagged reason (a) for the marker line instead of
+        naming the placement.
     (a) a checklist item with no ``[class: ...]`` tag at all - every task
         checklist item must carry ``[class: IMPLEMENTATION_REQUIRED]``
         or ``[class: REPOSITORY_TEST]``; the reason names the task and
@@ -921,6 +931,18 @@ def scope_classification_problem(plan_text: str) -> str | None:
     stripped = _strip_fences(plan_text)
     for title, body in _plan_task_sections(stripped):
         label = _plan_task_label(title)
+        # Placement check (runs before the per-item loop): a tag on a
+        # non-checkbox line is a wrapped item's continuation line, and
+        # it explains why the item reads untagged below.
+        for line in body.splitlines():
+            if not line.strip() or line.strip().startswith("- ["):
+                continue
+            if _CLASSIFICATION_TAG_RE.findall(re.sub(r"`[^`]*`", " ", line)):
+                return (
+                    f"classification tag on a non-checkbox line in "
+                    f"{label}; tags must sit on the item's first "
+                    f"(checkbox-marker) line: {line!r}"
+                )
         for item in _plan_checklist_items(body):
             tags = _CLASSIFICATION_TAG_RE.findall(re.sub(r"`[^`]*`", " ", item))
             if not tags:

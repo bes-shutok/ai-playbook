@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "hooks": {
+    "PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": "~/.codex/hooks/require-luna.py", "timeout": 10}, {"type": "command", "command": "~/.codex/hooks/codex-execute-plan.sh", "timeout": 10}]}],
+    "SubagentStart": [{"hooks": [{"type": "command", "command": "~/.codex/hooks/codex-execute-plan.sh", "timeout": 10}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "~/.codex/hooks/codex-execute-plan.sh", "timeout": 10}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "~/.codex/hooks/codex-execute-plan.sh", "timeout": 10}]}],
+    "Interrupt": [{"hooks": [{"type": "command", "command": "~/.codex/hooks/codex-execute-plan.sh", "timeout": 3}]}],
+    "SessionStart": [{"hooks": [{"type": "command", "command": "~/.codex/hooks/codex-execute-plan.sh", "timeout": 10}]}],
+    "PreCompact": [{"hooks": [{"type": "command", "command": "~/.codex/hooks/codex-execute-plan.sh", "timeout": 10}]}]
+  }
+}

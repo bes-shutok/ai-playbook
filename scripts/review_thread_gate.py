@@ -44,8 +44,9 @@ Marker schema (writer duty: receiving-review; the session identity
 staleness match belongs to the done step, not here):
 ``{"pr": "owner/repo#N", "branch_head": "<sha>", "session_identity":
 "<slug>", "threads": [{"id": "<stable thread id>", "parent_id"?,
-"disposition"?, "reply_body"?}]}``. The gate is read-only: it never
-writes, resolves, or replies to anything.
+"disposition"?, "reply_body"?}]}``. The ``pr`` field carries either the canonical ``owner/repo#N`` string, or the session shape, numeric ``pr`` plus ``repo`` (as ``owner/name``) or ``url`` (a GitHub pull-request URL);
+``--live`` resolves both behind one pure resolver. The gate is read-only:
+it never writes, resolves, or replies to anything.
 """
 
 from __future__ import annotations
@@ -148,17 +149,61 @@ def classify_thread(entry: dict, node: dict | None) -> tuple[bool, str, int]:
     return False, f"{tid}: unanswered automated thread (no verified reply or disposition)", 0
 
 
+def _resolve_live_target(marker: dict) -> tuple[str, str, int, str]:
+    """Resolve the marker's ``pr`` field to (owner, name, number, error).
+
+    Pure: no network access, no process spawns. Accepted shapes,
+    first match wins:
+
+    (a) canonical: ``pr`` is a string containing ``#`` whose base
+        contains ``/`` and whose number part is all digits;
+    (b) session shape with ``repo``: ``pr`` is all digits and ``repo``
+        is ``owner/name`` containing exactly one ``/``;
+    (c) session shape with ``url``: ``pr`` is all digits and ``url`` is
+        a GitHub pull URL whose path after ``github.com/`` is exactly
+        ``<owner>/<name>/pull/<digits>`` with non-empty owner and name
+        and no extra segments.
+
+    On no match returns a nonempty error message and empty identity
+    fields.
+    """
+    pr = marker.get("pr")
+
+    # (a) canonical owner/repo#N string
+    if isinstance(pr, str) and "#" in pr:
+        base, _, number = pr.partition("#")
+        if "/" in base and number.isdigit() and base:
+            owner, _, name = base.partition("/")
+            if owner and name:
+                return owner, name, int(number), ""
+    # (b) numeric pr plus repo
+    repo = marker.get("repo")
+    if isinstance(pr, int) or (isinstance(pr, str) and pr.isdigit()):
+        number = int(pr)
+        if isinstance(repo, str) and repo.count("/") == 1:
+            owner, _, name = repo.partition("/")
+            if owner and name:
+                return owner, name, number, ""
+        # (c) numeric pr plus GitHub pull URL
+        url = marker.get("url")
+        if isinstance(url, str) and url.startswith("https://github.com/"):
+            path = url[len("https://github.com/"):].strip("/")
+            segments = path.split("/")
+            if (
+                len(segments) == 4
+                and segments[2] == "pull"
+                and segments[0] and segments[1] and segments[3].isdigit()
+            ):
+                return segments[0], segments[1], int(segments[3]), ""
+    return "", "", 0, f"marker pr {pr!r} is not resolvable to owner/repo#N; cannot fetch live"
+
+
 def fetch_live(marker: dict) -> str:
     """Fetch the reviewThreads inventory through gh (explicit --live)."""
-    pr = str(marker.get("pr") or "")
-    base, _, number = pr.partition("#")
-    if not number.isdigit() or "/" not in base:
-        print(
-            f"error: marker pr {pr!r} is not owner/repo#N; cannot fetch live",
-            file=sys.stderr,
-        )
+    owner, name, number, error = _resolve_live_target(marker)
+    if error:
+        print(f"error: {error}", file=sys.stderr)
         sys.exit(1)
-    owner, _, name = base.partition("/")
     cmd = [
         "gh", "api", "graphql",
         "-f", f"query={GRAPHQL_QUERY}",

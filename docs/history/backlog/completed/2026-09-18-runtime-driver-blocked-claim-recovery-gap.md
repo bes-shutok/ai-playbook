@@ -1,6 +1,6 @@
 # Backlog: runtime driver offers no pre-lease recovery from a malformed checkpoint that latches a claim blocked
 
-Status: done
+Status: done (executed 2026-09-23 via docs/plans/completed/2026-09-22-execute-plan-driver-batch-3.md)
 Priority: high
 
 Workflow: backlog

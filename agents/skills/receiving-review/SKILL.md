@@ -58,7 +58,7 @@ When a plan is needed, save grouped tasks to `{plans_dir}/<BRANCH-KEY>-<short-ti
 
 ## Review-thread marker
 
-When the session begins processing external PR feedback, write a review-thread marker at `docs/tmp/review-threads/<session-slug>.json` before posting any reply or resolution. The marker carries the PR identity, the branch head, the tracked thread IDs, the per-thread dispositions (updated in the same file as triage decisions land), and the writer's session identity. Session identity derivation, named once here: the slug is derived from the runtime session id at marker-write time and recorded in the marker; done matches the current session's identity against the recorded value, and a marker whose recorded identity does not match is reported as stale and skipped, never gating an unrelated session's done run.
+When the session begins processing external PR feedback, write a review-thread marker at `docs/tmp/review-threads/<session-slug>.json` before posting any reply or resolution. The marker carries the PR identity, the branch head, the tracked thread IDs, the per-thread dispositions (updated in the same file as triage decisions land), and the writer's session identity. Session identity derivation, named once here: the slug is derived from the runtime session id at marker-write time and recorded in the marker; done matches the current session's identity against the recorded value, and a marker whose recorded identity does not match is reported as stale and skipped, never gating an unrelated session's done run. The `pr` field carries either the canonical `owner/repo#N` string, or the session shape: numeric digits plus `repo` (`owner/name`) or `url` (a GitHub pull-request URL); `review_thread_gate.py --live` accepts both.
 
 Replies post idempotently against the marker: before creating a reply, verify the exact existing response is not already present on the thread (an exact-body match marks the reply already posted; never re-post it), and verify attachment by stable thread ID plus parent metadata (the same target-thread verification gate as Feedback-source Workflow step 13).
 
@@ -418,7 +418,7 @@ Every captured item declares its Driving force from this closed set.
 - new-capability: improvement suggestion that adds functionality
 - external: mandated from outside current project priorities
 
-Once the certified plans driving-force metadata plan lands, plans declare a driving force from that skill's own closed set; the plans efficiency tag reads as performance or token-usage, its code-quality force maps to maintainability, and its simplicity force maps here unchanged.
+Plans declare a driving force from the plans skill's own closed set; the plans efficiency tag reads as performance or token-usage, its code-quality force maps to maintainability, its simplicity force maps here unchanged, and its new-capability and external tags carry over verbatim.
 
 Amendment rule: adding a force requires documenting it in this list (tag plus one-line scope) before first use; renaming or removing a force requires a plan. An item fitting no force uses `external` with the concern named in its Problem statement.
 

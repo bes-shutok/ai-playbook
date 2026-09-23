@@ -149,7 +149,7 @@ GitHub Actions is optional; workflows belong in `.github/workflows/` only if the
 |---------------------|-------------|
 | `doc-hierarchy` | Schema reference; migration-complete signal definition |
 | `doc-hierarchy-upkeep` | Runs verify gates after Layer 1/2 edits on migration-complete repos |
-| `bootstrap-ai-playbook` | Default path map applies only after migration-complete signal |
+| `bootstrap-ai-playbook` | Default path map applies only after migration-complete signal; on a repo with no `docs/` tree, before any migration, greenfield bootstrap seeds the canonical map directly when the schema is confirmed, so a later migration finds the doc-key layout already canonical and no-ops on the doc keys (earlier steps still run) |
 | `plans`, `execute-plan`, `learn`, `done`, `docs-branch` | Receive canonical paths written during Steps 5–6 |
 
 ## Related

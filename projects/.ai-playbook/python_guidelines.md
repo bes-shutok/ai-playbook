@@ -931,3 +931,11 @@ Witness: an authoring-time probe loaded a validator script by path; the
 first `exec_module` raised the `dataclasses` `AttributeError` until the
 module was registered in `sys.modules`, and a mid-probe source patch
 crashed again on `importlib.reload` until replaced by a fresh spec load.
+
+## 37. Redirect-Based CLI Capture Does Not Intercept SystemExit; Catch It When Asserting Argparse Exits
+A test helper that wraps a CLI entry point in `contextlib.redirect_stdout`/`redirect_stderr` captures the streams but lets exceptions propagate: `argparse` signals usage errors (`parser.error`, unknown arguments) by raising `SystemExit(2)`, which tears straight through the helper and crashes the calling test instead of yielding a return code to assert. A fixture arm that expects a clean rc comparison then dies with an unhandled `SystemExit` and the suite reports a crash, not a failed assertion.
+- Wrap invocations whose exit status is asserted in `try: rc = main(argv) / except SystemExit as exc: rc = exc.code` (a small local helper per test family is enough; keep stream redirection inside it).
+- The same applies to `raise SystemExit(...)`-style entry points generally: any `main()` that ends with `raise SystemExit(main())` returns fine for rc 0 but raises for non-zero paths.
+- Assert on the captured code AND the redirected stderr text; the code alone cannot distinguish "argparse refused the arguments" from "the command ran and failed".
+
+Witness: a selftest arm drove `main(["--pre-round", plan])` through a redirect-only capture helper; today's argparse rejected the unknown option by raising `SystemExit(2)` through the helper, so the planned RED expectation ("four cleanly failing arm checks") was unreachable and a literal implementation would have crashed the selftest; the fold prescribed the SystemExit-capturing wrapper before the mode existed.

@@ -1,6 +1,6 @@
 # execute-plan driver suite is not concurrency-safe (r5 CC5-1, deferred at round cap)
 
-Status: done
+Status: done (executed 2026-09-23 via docs/plans/completed/2026-09-22-execute-plan-driver-batch-3.md)
 
 Evidence: scripts/test_execute_plan_runtime.py:1112 writes the fixture manifest to a fixed name (runtime_state.json) in the SHARED TMPDIR, outside the per-test temp dir; two simultaneous suite instances clobber it (8 concurrent pair-runs reproduced 11 failures, KeyError 'token' at :1116; leftover file persists in $TMPDIR). Separately, 4 of 8 suite runs during a concurrent peer-validation window returned success-instead-of-blocked from ArchiveGatePreArchiveTest refusal tests (open-claims and commit-pending subtests); the mechanism is unconfirmed (never reproduced serially, ~25 runs) but a wrong-direction result in terminal-gate tests warrants investigation. Serial suite is the Validation GREEN gate and is stable.
 

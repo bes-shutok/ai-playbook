@@ -136,7 +136,7 @@ Templates: [instruction-templates.md](instruction-templates.md).
 
 | Consumer | Integration |
 |----------|-------------|
-| `bootstrap-ai-playbook` | Resolution order and default path map; links here for migration-complete signal; creates `history/backlog/` under an existing Layer 3 root for `{backlog_dir}` |
+| `bootstrap-ai-playbook` | Resolution order and default path map; links here for migration-complete signal; creates `history/backlog/` under an existing Layer 3 root for `{backlog_dir}`; on a greenfield repo with no `docs/` tree, seeds the whole canonical history map when the schema ask is confirmed |
 | `doc-hierarchy-migrate` | Applies schema; writes canonical paths into repo instructions |
 | `doc-hierarchy-upkeep` | Layer 1/2 updates when migration-complete signal is true |
 | `plans`, `execute-plan` | Read `{plans_dir}`, `{backlog_dir}`, `{backlog_completed_dir}`, `{reviews_dir}`, `{tmp_dir}` from `.ai-playbook/facts.md`; `plans` completion transition writes the registry row (freeze) for the completed plan and promoted backlog items |

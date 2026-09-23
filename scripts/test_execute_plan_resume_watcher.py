@@ -2274,6 +2274,185 @@ class RuntimeWatcherIntegrationTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("state_path", err.getvalue())
 
+    def test_schedule_fresh_state_documented_payload_schedules(self) -> None:
+        """The documented plans-watcher-schedule payload (state_path,
+        plan_path, probe_report, plan_slug) schedules on an absent fresh
+        authoring state (the origin item's control case, pinned so the
+        documented shape stays schedulable). Hermeticity mechanism (the r3
+        F22 fake-bootstrap canary being the in-file precedent): the payload
+        carries fixture job_dir/sentinel_path overrides as fixture inputs
+        and the launchctl bootstrap is faked, with the canary asserting the
+        fake is the live seam, so the suite never touches the host launchd
+        domain."""
+        root = self.fixture.root
+        state_path = root / "plan-requirements-fixture-schedule.json"
+        bootstrap_calls: list[str] = []
+
+        def fake_bootstrap(_job):
+            bootstrap_calls.append(str(_job))
+            return True, ""
+
+        original_bootstrap = watcher.launchctl_bootstrap
+        watcher.launchctl_bootstrap = fake_bootstrap
+        self.addCleanup(setattr, watcher, "launchctl_bootstrap", original_bootstrap)
+
+        def run(operation, payload):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = runtime.main(["--operation", operation, "--input", json.dumps(payload), "--repo-root", str(root)])
+            self.assertEqual(code, 0, out.getvalue())
+            return json.loads(out.getvalue())
+
+        documented = {
+            "state_path": str(state_path),
+            "plan_path": str(self.fixture.plan_path),
+            "probe_report": known_continue_report(3_600_000_000),
+            "plan_slug": "fixture-authoring",
+        }
+        # The four documented payload fields, exactly.
+        self.assertEqual(
+            set(documented),
+            {"state_path", "plan_path", "probe_report", "plan_slug"},
+        )
+        self.assertFalse(state_path.exists(), "the control case needs an absent fresh state file")
+        scheduled = run("plans-watcher-schedule", {
+            **documented,
+            # Hermeticity overrides: the fallback chain arms its launchd
+            # job inside the fixture root only.
+            "job_dir": str(root / "launchd"),
+            "sentinel_path": str(root / "budget-resume.sentinel"),
+        })
+        self.assertEqual(scheduled["status"], "success", scheduled)
+        self.assertEqual(scheduled["reason_code"], "resume-watcher-scheduled", scheduled)
+        self.assertTrue(scheduled["cas_applied"], scheduled)
+        receipt = scheduled["resume_watcher"]
+        self.assertEqual(receipt["status"], "pending", receipt)
+        self.assertEqual(receipt["plan_slug"], "fixture-authoring", receipt)
+        # r3 F22 hermeticity canary (plans boundary): the fake bootstrap is
+        # the live seam, not an import-time-frozen real launchctl.
+        self.assertTrue(bootstrap_calls, "launchd bootstrap fake was never invoked; the documented-payload smoke would be mutating the real gui domain")
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["resume_watcher"]["plan_slug"], "fixture-authoring")
+
+    def test_schedule_missing_plan_slug_names_receipt_invalid(self) -> None:
+        """A plans-watcher-schedule payload missing plan_slug fails receipt
+        validation, and the refusal surfaces as watcher-receipt-invalid with
+        the machine trail in evidence, never as watcher-cas-stale (the
+        missing-payload precondition must not masquerade as a
+        compare-and-swap race). Hermetic by construction: the machine blocks
+        before the fallback scheduler chain runs, so no carrier is armed."""
+        root = self.fixture.root
+        state_path = root / "plan-requirements-fixture-schedule-missing.json"
+
+        def run(operation, payload):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = runtime.main(["--operation", operation, "--input", json.dumps(payload), "--repo-root", str(root)])
+            self.assertEqual(code, 0, out.getvalue())
+            return json.loads(out.getvalue())
+
+        blocked = run("plans-watcher-schedule", {
+            "state_path": str(state_path),
+            "plan_path": str(self.fixture.plan_path),
+            "probe_report": known_continue_report(3_600_000_000),
+        })
+        self.assertEqual(blocked["status"], "blocked", blocked)
+        self.assertEqual(blocked["reason_code"], "watcher-receipt-invalid", blocked)
+        self.assertNotEqual(blocked["reason_code"], "watcher-cas-stale", blocked)
+        self.assertFalse(blocked["cas_applied"], blocked)
+        self.assertIn("machine-reason=malformed-result", blocked["evidence"], blocked)
+        self.assertIn(
+            "resume watcher receipt field must be a non-empty string: plan_slug",
+            blocked["evidence"],
+            blocked,
+        )
+        # The machine refused the write, so no pending receipt exists.
+        self.assertFalse(state_path.exists() and bool(json.loads(state_path.read_text(encoding="utf-8")).get("resume_watcher")))
+
+    def test_schedule_cas_refusal_still_watcher_cas_stale(self) -> None:
+        """A genuine compare-and-swap refusal keeps the r3 F7 fence contract:
+        reason_code watcher-cas-stale with cas_applied false and the pending
+        watcher untouched, pinned against overcorrection, and the stale
+        outcome's evidence carries the machine-reason=stale-attempt trail
+        line. Hermetic by construction: the machine blocks before the
+        fallback scheduler chain runs, so no carrier is armed."""
+        root = self.fixture.root
+        state_path = root / "plan-requirements-fixture-schedule-stale.json"
+        clock = self.clock
+        adapter = watcher.PlansAuthoringWatcherAdapter(state_path, repo_root=str(root))
+        # Seed a pending receipt directly through the adapter (the
+        # install_watcher seeding shape); no scheduler chain involved.
+        seeded = adapter.compare_and_swap_schedule(
+            watcher.build_schedule_transition(
+                adapter.read_state(),
+                watcher_id="rw-cas-seed",
+                plan_slug="fixture-authoring",
+                repo_root=str(root),
+                plan_path=str(self.fixture.plan_path),
+                plan_digest=hashlib.sha256(self.fixture.plan_path.read_bytes()).hexdigest(),
+                reset_at_epoch=3_600_000_000,
+                scheduled_at_epoch=int(clock()),
+                binding="primary",
+            )
+        )
+        self.assertEqual(seeded["status"], "success", seeded)
+
+        def schedule_through_arm(schedule_adapter):
+            return watcher.run_cli_watcher_operation(
+                "schedule",
+                {
+                    "state_path": str(state_path),
+                    "plan_path": str(self.fixture.plan_path),
+                    "probe_report": known_continue_report(3_600_000_000),
+                    "plan_slug": "fixture-authoring",
+                    # An automation echo keeps the chain off the launchd
+                    # link even if the machine ever accepted.
+                    "automation": {"scheduled": True, "id": "auto-fixture"},
+                },
+                adapter=schedule_adapter,
+                supersede=adapter.compare_and_swap_supersede,
+                outcome_factory=runtime._outcome,
+                identity_prefix="plans-watcher",
+                plan_slug="fixture-authoring",
+                repo_root=str(root),
+            )
+
+        class ConcurrentWriteAdapter:
+            """Interposes one concurrent machine write (a generation bump,
+            the progress-write shape) between the arm's snapshot read and
+            the compare-and-swap, the deterministic witness of a lost
+            race."""
+
+            def __init__(self, inner: watcher.WatcherStateAdapter) -> None:
+                self._inner = inner
+
+            def read_state(self):
+                return self._inner.read_state()
+
+            def compare_and_swap_schedule(self, transition):
+                with watcher.authoring_state_lock(state_path):
+                    state = json.loads(state_path.read_text(encoding="utf-8"))
+                    state["generation"] = int(state.get("generation", 0)) + 1
+                    state["updated_at"] = float(clock())
+                    runtime._safe_write_json(state_path, state)
+                return self._inner.compare_and_swap_schedule(transition)
+
+            def compare_and_swap_supersede(self, transition):
+                return self._inner.compare_and_swap_supersede(transition)
+
+            def projection(self, snapshot):
+                return self._inner.projection(snapshot)
+
+        stale = schedule_through_arm(ConcurrentWriteAdapter(adapter))
+        self.assertEqual(stale["status"], "blocked", stale)
+        self.assertEqual(stale["reason_code"], "watcher-cas-stale", stale)
+        self.assertFalse(stale["cas_applied"], stale)
+        self.assertIn("machine-reason=stale-attempt", stale["evidence"], stale)
+        self.assertIn("watcher compare-and-swap failed", stale["evidence"], stale)
+        # The pending watcher stays untouched.
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["resume_watcher"]["watcher_id"], "rw-cas-seed", state)
+
     def test_watcher_compare_and_delete_does_not_remove_newer_flag(self) -> None:
         flag = self.fixture.root / "budget-guard.flag"
         expired = int(self.clock()) - 60

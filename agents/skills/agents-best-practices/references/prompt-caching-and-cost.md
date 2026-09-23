@@ -135,7 +135,9 @@ Implementation notes:
 
 ```text
 place cache markers after stable blocks, not before volatile blocks
-respect provider limits on cache breakpoints
+budget at most 4 cache breakpoints per request; the provider's documented contract for excess cache-control blocks is a hard 400 invalid_request_error, and when an assembler emits "Maximum 4 cache breakpoints exceeded (found 5)" and proceeds anyway, breakpoint 5 was dropped and the uncovered segment pays full token cost on every call
+resolve overflow the same way every time: merge or drop the lowest-value candidates by one deterministic rule, same choice for the same context shape, never emit 5
+treat a breakpoint-overflow warning as a budget bug in the assembler; alert on it rather than tolerate it as log noise
 choose short or extended TTL based on expected inter-request gaps
 monitor cache read and cache write token fields
 ```

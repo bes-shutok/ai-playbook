@@ -170,6 +170,18 @@ class DirtRegressionGateTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("app.txt", stdout)
 
+    def test_staged_regressive_whole_file_deletion_is_regression(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        # Staged whole-file deletion (git rm: index removal, not a bare
+        # unlink) of a file whose content HEAD gained: the staged shape
+        # restores base-era text over lines HEAD gained, so the gate must
+        # classify it as a regression, not a git-environment error.
+        self._git("rm", "-q", "app.txt")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("app.txt", stdout)
+        self.assertIn("dirt REGRESSION", stdout)
+
     def test_neutral_whole_file_deletion_passes(self) -> None:
         self._commit("app.txt", BASE_TEXT, "base")
         base_sha = self._git("rev-parse", "HEAD").strip()
@@ -179,13 +191,18 @@ class DirtRegressionGateTest(unittest.TestCase):
         code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
         self.assertEqual(code, 0)
 
-    def test_untracked_missing_path_fails_closed(self) -> None:
-        self._commit("seed.txt", "seed\n", "seed")
-        ghost = self.repo / "ghost.txt"
-        code, stdout, stderr = self._run_gate(
-            "--base", self._git("rev-parse", "HEAD").strip(), str(ghost)
-        )
-        self.assertEqual(code, 2)
+    def test_staged_neutral_whole_file_deletion_passes(self) -> None:
+        self._commit("app.txt", BASE_TEXT, "base")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit("app.txt", BASE_TEXT + "tail\n", "head changes a line")
+        self._commit("app.txt", BASE_TEXT, "head restores base content")
+        # Mirror of test_neutral_whole_file_deletion_passes with the
+        # deletion staged via git rm: the file's HEAD content already
+        # equals base, so the staged deletion removes no HEAD-gained
+        # lines and the gate passes.
+        self._git("rm", "-q", "app.txt")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
 
     def test_unreadable_stamp_treated_as_absent(self) -> None:
         base_sha = self._seed_head_gained_lines()

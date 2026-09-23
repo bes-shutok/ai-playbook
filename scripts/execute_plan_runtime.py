@@ -45,6 +45,16 @@ WORKFLOW_STATES = {"active", "blocked", "complete", "terminal", "aborted"}
 # boundary). Shared by the readiness decision and the reclaim progression
 # guard.
 PROGRESSED_TASK_STATUSES = {"done-pending", "commit-pending", "checkpointed", "complete"}
+# The closed recovery-disposition set for the done-pending recovery
+# transition (``recover_done_pending``): the operator's durable choice for
+# the recovered task. ``requeue`` returns the task to pending under a newly
+# authorized generation; ``defer`` marks the task ``deferred`` with linked
+# backlog evidence; ``abort`` ends the run.
+RECOVERY_DISPOSITIONS = ("requeue", "defer", "abort")
+# The append-only history event recording one done-pending recovery. Its
+# identity (task id plus claim token plus claim generation) fences duplicate
+# receipts: a second recovery of the same wedged claim identity is refused.
+DONE_PENDING_RECOVERY_EVENT = "done-pending-recovery"
 # Claim lease for the reclaim operation: the claim `timestamp` is written once
 # at claim time and never renewed, so a claim is reclaimable only after this
 # many seconds. 14400 (four hours) is an order of magnitude above the
@@ -1094,7 +1104,21 @@ class RuntimeDriver:
 
     @staticmethod
     def _task_complete(task: Mapping[str, Any]) -> bool:
-        return task.get("status") in {"complete", "checkpointed"} or bool(task.get("checkbox"))
+        """True when the task is out of the incomplete selection set.
+
+        ``complete`` and ``checkpointed`` are the done statuses; a truthy
+        ``checkbox`` means the plan itself marks the work done (the seeding
+        boundary). ``deferred`` is complete-for-selection: the done-pending
+        recovery's defer disposition retires the task from the queue and it
+        is never relaunched, so no selection site may pick it up again.
+        ``deferred`` deliberately stays out of PROGRESSED_TASK_STATUSES so
+        readiness condition (c) plan-manifest agreement never demands
+        unchecked-checkbox closure for a task the operator chose not to
+        complete - the recorded recovery receipt, not plan checkboxes, is
+        the deferred task's evidence.
+        """
+
+        return task.get("status") in {"complete", "checkpointed", "deferred"} or bool(task.get("checkbox"))
 
     def _result_error(self, message: str, generation: int | None = None, action_scope: str = "runtime", checkpoint_identity: str = "runtime:malformed") -> dict[str, Any]:
         manifest = load_manifest(self.manifest_path)
@@ -1125,7 +1149,10 @@ class RuntimeDriver:
             raise ValueError("manifest user_interrupt must be an ISO-8601 string or null")
         if not isinstance(value.get("generation"), int) or value["generation"] < 0:
             raise ValueError("manifest generation must be non-negative")
-        task_states = {"pending", "claimed", "launched", "blocked", "done-pending", "commit-pending", "checkpointed", "complete", "aborted"}
+        # `deferred` (the done-pending recovery disposition status) is admitted
+        # here so readiness, diagnose, and every refresh_manifest caller keep
+        # validating a post-defer manifest instead of re-wedging the run.
+        task_states = {"pending", "claimed", "launched", "blocked", "done-pending", "commit-pending", "checkpointed", "complete", "deferred", "aborted"}
         claim_states = {"claimed", "launched", "blocked", "waiting-capacity", "closed", "aborted", "replaced", "staged"}
         for task_id, task in value["tasks"].items():
             if not isinstance(task, Mapping) or task.get("id", task_id) != task_id:
@@ -5214,13 +5241,24 @@ class RuntimeDriver:
                 )
             )
         # (b) No unresolved handoff or fenced claim: no task in done-pending
-        # or commit-pending, no claim in state blocked.
+        # or commit-pending, no claim in state blocked. The done-pending arm
+        # names the driver-owned recovery operation: that wedge's single
+        # sanctioned exit is the operator-invoked recover-done-pending
+        # transition, and readiness only points at it (read-only naming,
+        # never a mutation). The commit-pending arm keeps
+        # preserve-and-reconcile: its wedge exception is the commit-witness
+        # path, not the recovery transition.
         for task in ordered_tasks:
             if task.get("status") in {"done-pending", "commit-pending"}:
+                recovery_action = (
+                    "recover-done-pending"
+                    if task.get("status") == "done-pending"
+                    else "preserve-and-reconcile"
+                )
                 failed.append(
                     (
                         f"unresolved done handoff: task '{task['id']}' is in status '{task.get('status')}'",
-                        "preserve-and-reconcile",
+                        recovery_action,
                     )
                 )
         for claim in claims.values():
@@ -5682,6 +5720,397 @@ class RuntimeDriver:
             replacement_generation=replaced_generation,
             group_id=group_id,
             group_state=str((manifest.get("claim_groups", {}).get(group_id) or {}).get("state", "active")),
+        )
+
+    @_locked_mutation
+    def recover_done_pending(
+        self,
+        task_id: str,
+        token: str,
+        disposition: str,
+        terminal_evidence: Any,
+        backlog_evidence: Any = None,
+    ) -> dict[str, Any]:
+        """Recover a terminal worker's stuck done-pending claim under operator evidence.
+
+        The single sanctioned exit from ``done-pending``. A terminal worker's
+        claim can rest at the done boundary with no incomplete receipt path
+        left: ``record_done`` refuses the incomplete done evidence, ``abort``
+        refuses to regress a claim past its receipt boundary (the r5-F2 wedge
+        exception stays commit-pending-only), and ``reclaim`` admits only
+        tasks outside the progressed statuses behind the lease. This
+        transition closes that deadlock class without any manual
+        machine-manifest edit. Under the manifest lock it admits exactly one
+        shape:
+
+        - exact identity: the live claim's owner, token, and generation must
+          match the call exactly (the shared ``_stale_claim_outcome`` fence);
+        - the task status is ``done-pending``;
+        - no live claim group owns the claim - parallel or batch alike,
+          checked with the group-kind-agnostic ``_claim_owned_by_live_group``
+          predicate; the refusal names the group and leaves the sibling
+          members untouched;
+        - the terminal evidence is a non-empty list of non-empty strings, at
+          least one naming the claim's session or launch identity; per the
+          reclaim liveness precedent (claim records carry no process
+          identity), the transition runs no process-liveness probe and waits
+          out no lease - the operator-supplied evidence is what proves the
+          worker ended;
+        - no ``done-pending-recovery`` receipt with the same task id, token,
+          and generation is already recorded in history (the receipt identity
+          fences duplicate receipts).
+
+        The ``requeue`` disposition reuses the shared
+        ``_reset_task_to_pending`` rotation (the dead session's
+        ``session_id``/``resume_allowed``/``blocked_receipt`` fields
+        stripped), closes the claim, bumps the manifest generation exactly
+        once so the next claim mints a fresh policy token from the reconciled
+        plan section through the seeding boundary (``allowed_paths`` is never
+        edited here), appends the ``done-pending-recovery`` receipt carrying
+        the bounded terminal evidence, and post-validates that the next
+        provable incomplete task is pending or None before the save (the
+        post-acceptance check; a failed check discards every in-memory
+        mutation). No claim or launch action is returned: launching the
+        requeued task is the ordinary claim path's job, never this
+        transition's.
+
+        The ``defer`` disposition marks the task ``deferred`` -
+        complete-for-selection through ``_task_complete``, never relaunched,
+        and deliberately outside PROGRESSED_TASK_STATUSES so readiness
+        condition (c) plan-manifest agreement never demands unchecked-checkbox
+        closure for a task the operator chose not to complete (the recorded
+        receipt is the evidence). It requires backlog evidence: an existing
+        repository-relative file under ``docs/history/backlog/`` (validated
+        fail-closed through the shared ``_safe_relative_path`` path policy),
+        recorded in the receipt. Dependency ordering is validated before any
+        mutation: defer is valid only for the next provable incomplete task,
+        the one machine-provable dependency signal the manifest carries. The
+        claim is closed (a live claim on a non-progressed ``deferred`` task
+        would flip readiness to ``observe-worker``), the receipt is appended,
+        and the shared post-acceptance check runs; no generation bump (the
+        requeued-task re-authorization does not apply to a retired task).
+
+        The ``abort`` disposition ends the run: the same durable writes the
+        wedged-abort path makes (task aborted, claim aborted,
+        ``workflow_state`` aborted), the receipt appended, and the shared
+        post-acceptance validation skipped - the run is terminal, there is no
+        next provable task to prove. The envelope is the shared
+        ``_abort_outcome`` shape (status ``aborted``, reason ``explicit-abort``,
+        recovery action ``preserve-and-stop``) carrying the recovery receipt
+        identity and the abort evidence.
+        """
+
+        manifest = self.refresh_manifest()
+        identity = f"{task_id}:recovery"
+        task = manifest["tasks"].get(task_id)
+        claim = manifest["claims"].get(task_id)
+        claim_generation = int(claim.get("generation", manifest.get("generation", 0))) if isinstance(claim, Mapping) else int(manifest.get("generation", 0))
+        # (1) Exact-identity fence: owner, token, and generation must match
+        # the live claim exactly. Any mismatch (including no live claim at
+        # all) is the resumable stale-claim refusal, and nothing is mutated.
+        mismatched: list[str] = []
+        if not isinstance(claim, Mapping):
+            mismatched.append("claim")
+        else:
+            if claim.get("owner") != self.owner:
+                mismatched.append("owner")
+            if claim.get("token") != token:
+                mismatched.append("token")
+            if claim.get("generation") != manifest.get("generation"):
+                mismatched.append("generation")
+        if mismatched:
+            return _stale_claim_outcome(
+                identity,
+                claim_generation,
+                [
+                    f"recovery refused: claim identity does not match the live claim on task '{task_id}'; exact owner, token, and generation identity is required",
+                    f"identity mismatch: {', '.join(mismatched)}",
+                ],
+            )
+        # (2) Done-pending precondition: the transition exits exactly the
+        # done-pending wedge, never a live claim on a task still in flight.
+        if task is None or task.get("status") != "done-pending":
+            status = str(task.get("status")) if isinstance(task, Mapping) else "unknown"
+            return _stale_claim_outcome(
+                identity,
+                claim_generation,
+                [f"recovery requires task status 'done-pending'; task '{task_id}' is '{status}'"],
+            )
+        # (3) Live-claim-group refusal, group-kind-agnostic: a parallel or
+        # batch group owns its member claims, so a member's recovery would
+        # fight the group protocol; the wedge exception is named for the
+        # operator and the siblings are untouched.
+        group_id = claim.get("group_id")
+        if group_id and self._claim_owned_by_live_group(manifest, claim):
+            return _stale_claim_outcome(
+                identity,
+                claim_generation,
+                [
+                    f"claim is owned by live claim group '{group_id}'; recovery refused",
+                    "the group protocol owns the claim; sibling members are untouched",
+                ],
+            )
+        # (4) Terminal-evidence gate: non-empty bounded strings, at least one
+        # naming the claim's session or launch identity. No liveness probe
+        # and no lease wait: the evidence is the proof.
+        if isinstance(terminal_evidence, str):
+            supplied: list[Any] = [terminal_evidence]
+        elif isinstance(terminal_evidence, (list, tuple)):
+            supplied = list(terminal_evidence)
+        else:
+            supplied = []
+        if not supplied or any(not isinstance(item, str) or not item.strip() for item in supplied):
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                ["terminal evidence is required: a non-empty list of non-empty strings naming the claim's session or launch identity and the observed termination"],
+                "repository-task",
+                identity,
+                claim_generation,
+                "preserve-and-reconcile",
+            )
+        terminal = bounded_evidence(supplied)
+        identity_anchors: list[str] = []
+        for candidate in (task.get("session_id"), claim.get("session_id")):
+            session = str(candidate or "").strip()
+            if session and session not in identity_anchors:
+                identity_anchors.append(session)
+        launch_record = claim.get("launch_record")
+        if isinstance(launch_record, Mapping):
+            baseline = str(launch_record.get("baseline_revision") or "").strip()
+            if baseline and baseline not in identity_anchors:
+                identity_anchors.append(baseline)
+        if not identity_anchors or not any(anchor in item for item in terminal for anchor in identity_anchors):
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                ["terminal evidence must name the claim's session or launch identity and the observed termination"],
+                "repository-task",
+                identity,
+                claim_generation,
+                "preserve-and-reconcile",
+            )
+        # (5) Duplicate-receipt fence: the receipt identity (task id, claim
+        # token, claim generation) is recorded exactly once in history. The
+        # token comparison normalizes through str() because the receipt
+        # stores the string form: a replay with the same non-string token
+        # argument must still match its own recorded receipt.
+        for event in manifest.get("history", []):
+            if (
+                isinstance(event, Mapping)
+                and event.get("event") == DONE_PENDING_RECOVERY_EVENT
+                and event.get("task_id") == task_id
+                and event.get("token") == str(token)
+                and event.get("generation") == claim.get("generation")
+            ):
+                return _outcome(
+                    "blocked",
+                    "precondition-unverified",
+                    [
+                        "duplicate done-pending-recovery receipt refused: a receipt with the same task id, token, and generation is already recorded",
+                    ],
+                    "repository-task",
+                    identity,
+                    claim_generation,
+                    "preserve-and-reconcile",
+                )
+        # (6) Disposition dispatch: the closed disposition set. An unknown
+        # disposition is refused naming the valid set.
+        if disposition not in RECOVERY_DISPOSITIONS:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [
+                    f"unknown recovery disposition '{disposition}'",
+                    f"valid dispositions: {', '.join(RECOVERY_DISPOSITIONS)}",
+                ],
+                "repository-task",
+                identity,
+                claim_generation,
+                "preserve-and-reconcile",
+            )
+        if disposition == "defer":
+            # The defer arm's gates run before any mutation: a refused defer
+            # leaves the manifest byte-identical. (7) Backlog evidence: an
+            # existing repository-relative file under the backlog directory,
+            # normalized fail-closed through the shared path policy.
+            backlog_value = backlog_evidence if isinstance(backlog_evidence, str) else None
+            normalized_backlog = None
+            if backlog_value and backlog_value.strip():
+                try:
+                    candidate = _safe_relative_path(self.repo_root, backlog_value)
+                except ValueError:
+                    candidate = None
+                if candidate is not None and candidate.startswith("docs/history/backlog/") and (self.repo_root / candidate).is_file():
+                    normalized_backlog = candidate
+            if normalized_backlog is None:
+                evidence = [
+                    "defer requires backlog evidence: an existing repository-relative path under docs/history/backlog/ recording the deferred task's follow-up",
+                ]
+                if backlog_value:
+                    evidence.append(
+                        f"backlog evidence refused: '{backlog_value}' is not an existing repository-relative path under docs/history/backlog/"
+                    )
+                return _outcome(
+                    "blocked",
+                    "precondition-unverified",
+                    evidence,
+                    "repository-task",
+                    identity,
+                    claim_generation,
+                    "preserve-and-reconcile",
+                )
+            # (8) Dependency ordering: defer is valid only for the next
+            # provable incomplete task - the ordinal queue order is the only
+            # machine-provable dependency signal in the manifest, and skipping
+            # a provably incomplete predecessor would strand it behind a
+            # terminal-ish status it can never recover from.
+            incomplete = [candidate for candidate in sorted(manifest["tasks"].values(), key=_pending_sort_key) if not self._task_complete(candidate)]
+            if not incomplete or incomplete[0].get("id") != task_id:
+                ahead = str(incomplete[0].get("id")) if incomplete else "none"
+                return _outcome(
+                    "blocked",
+                    "precondition-unverified",
+                    [
+                        f"defer refused: task '{task_id}' is not the next provable incomplete task",
+                        f"dependency ordering: defer is valid only for the next provable incomplete task; task '{ahead}' is ahead of it in queue order",
+                    ],
+                    "repository-task",
+                    identity,
+                    claim_generation,
+                    "preserve-and-reconcile",
+                )
+            # The defer mutations: the task is retired from the queue
+            # (complete-for-selection, never relaunched) and the claim is
+            # closed - a live claim on a non-progressed `deferred` task would
+            # flip readiness to observe-worker. No generation bump: the
+            # requeued-task re-authorization does not apply to a retired task.
+            task["status"] = "deferred"
+            claim["state"] = "closed"
+            manifest.setdefault("history", []).append({
+                "event": DONE_PENDING_RECOVERY_EVENT,
+                "task_id": task_id,
+                "token": str(token),
+                "generation": claim.get("generation"),
+                "disposition": disposition,
+                "terminal_evidence": terminal,
+                "backlog_evidence": bounded_evidence([normalized_backlog]),
+            })
+            # Shared post-acceptance check (the same discard-on-failure
+            # discipline as the requeue arm): after the defer, the next
+            # provable incomplete task in queue order is pending or None.
+            incomplete = [candidate for candidate in sorted(manifest["tasks"].values(), key=_pending_sort_key) if not self._task_complete(candidate)]
+            if incomplete and incomplete[0].get("status") != "pending":
+                return _stale_claim_outcome(
+                    identity,
+                    claim_generation,
+                    [
+                        "recovery post-condition failed: the next provable incomplete task "
+                        f"'{incomplete[0].get('id')}' is not pending after the defer; nothing was persisted",
+                    ],
+                )
+            self._save(manifest)
+            return _outcome(
+                "success",
+                "deferred",
+                [
+                    f"task={task_id}",
+                    f"disposition={disposition}",
+                    f"backlog_evidence={normalized_backlog}",
+                    "done-pending-recovery receipt recorded with the bounded terminal evidence and the backlog evidence",
+                    "task deferred: excluded from the incomplete selection, never relaunched; the run continues with the next provable task",
+                ],
+                "repository-task",
+                identity,
+                claim_generation,
+                "continue-parent",
+                actions=[],
+                recovered_task=task_id,
+                disposition=disposition,
+            )
+        if disposition == "abort":
+            # The abort arm: the run ends. The same durable writes the
+            # wedged-abort path makes (task aborted, claim aborted,
+            # workflow_state aborted), the receipt appended, and the shared
+            # post-acceptance validation skipped - the run is terminal, there
+            # is no next provable task to prove. No generation bump.
+            task["status"] = "aborted"
+            claim["state"] = "aborted"
+            manifest["workflow_state"] = "aborted"
+            manifest.setdefault("history", []).append({
+                "event": DONE_PENDING_RECOVERY_EVENT,
+                "task_id": task_id,
+                "token": str(token),
+                "generation": claim.get("generation"),
+                "disposition": disposition,
+                "terminal_evidence": terminal,
+            })
+            self._save(manifest)
+            return _abort_outcome(
+                identity,
+                claim_generation,
+                [
+                    f"task={task_id}",
+                    f"disposition={disposition}",
+                    "done-pending-recovery receipt recorded with the bounded terminal evidence",
+                    "workflow aborted by the operator's explicit recovery disposition; preserve-and-stop",
+                ],
+                action_scope="repository-task",
+                actions=[],
+                recovered_task=task_id,
+                disposition=disposition,
+            )
+        # The requeue arm: the shared task-to-pending rotation (dead-session
+        # resume fields stripped), the claim closed, one generation bump so
+        # the next claim mints a fresh policy token from the reconciled plan
+        # section, and the immutable receipt. allowed_paths is never edited.
+        self._reset_task_to_pending(task)
+        claim["state"] = "closed"
+        requeue_generation = int(manifest.get("generation", 0)) + 1
+        manifest["generation"] = requeue_generation
+        receipt: dict[str, Any] = {
+            "event": DONE_PENDING_RECOVERY_EVENT,
+            "task_id": task_id,
+            "token": str(token),
+            "generation": claim.get("generation"),
+            "disposition": disposition,
+            "terminal_evidence": terminal,
+        }
+        if backlog_evidence:
+            receipt["backlog_evidence"] = bounded_evidence(backlog_evidence)
+        manifest.setdefault("history", []).append(receipt)
+        # Post-acceptance check: the requeued state must be provable before
+        # it persists - the next incomplete task in queue order is pending
+        # (ours) or None (the run is otherwise complete). A failed check
+        # discards every in-memory mutation: nothing is saved.
+        incomplete = [candidate for candidate in sorted(manifest["tasks"].values(), key=_pending_sort_key) if not self._task_complete(candidate)]
+        if incomplete and incomplete[0].get("status") != "pending":
+            return _stale_claim_outcome(
+                identity,
+                claim_generation,
+                [
+                    "recovery post-condition failed: the next provable incomplete task "
+                    f"'{incomplete[0].get('id')}' is not pending after the requeue; nothing was persisted",
+                ],
+            )
+        self._save(manifest)
+        return _outcome(
+            "success",
+            "requeued",
+            [
+                f"task={task_id}",
+                f"disposition={disposition}",
+                f"generation={requeue_generation}",
+                "done-pending-recovery receipt recorded with the bounded terminal evidence",
+                "task requeued to pending; the next claim mints a fresh policy token from the reconciled plan section",
+            ],
+            "repository-task",
+            identity,
+            requeue_generation,
+            "continue-parent",
+            actions=[],
+            recovered_task=task_id,
+            disposition=disposition,
         )
 
     def selftest(self) -> None:
@@ -6270,6 +6699,36 @@ def _operation_diagnose(args: argparse.Namespace) -> dict[str, Any]:
     return driver.diagnose()
 
 
+def _operation_recover_done_pending(args: argparse.Namespace, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Operator-invoked done-pending recovery (requires a JSON payload): runs before the shared mutating dispatch with the same ``persist_construction=False``, adapter-free driver construction as readiness; recovery performs no adapter I/O, and the locked recovery transition is the operation's single manifest write. The payload carries the task id, the claim token, the disposition, the bounded terminal evidence list, and the optional backlog evidence path for the defer disposition."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("recover-done-pending operation requires a JSON object payload")
+    task_id = str(payload.get("task_id") or "")
+    token = payload.get("token")
+    disposition = str(payload.get("disposition") or "")
+    if not task_id.strip():
+        raise ValueError("recover-done-pending payload requires a non-empty 'task_id'")
+    if token is None or not str(token).strip():
+        raise ValueError("recover-done-pending payload requires a non-empty 'token'")
+    if not disposition.strip():
+        raise ValueError("recover-done-pending payload requires a non-empty 'disposition'")
+    driver = RuntimeDriver(
+        args.manifest,
+        plan_slug=args.plan_slug,
+        owner=args.owner,
+        repo_root=args.repo_root,
+        persist_construction=False,
+    )
+    return driver.recover_done_pending(
+        task_id,
+        str(token),
+        disposition,
+        payload.get("terminal_evidence"),
+        backlog_evidence=payload.get("backlog_evidence"),
+    )
+
+
 def _git_commit_matching_reference(repo_root: Path, reference: str) -> bool:
     """True when a HEAD-reachable commit message contains the fixed string.
 
@@ -6563,9 +7022,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--operation", choices=("create", "claim", "checkpoint", "done", "resume", "continue", "terminal", "precondition", "interrupt", "progress", "readiness", "reclaim", "diagnose", "watcher-schedule", "watcher-supersede", "watcher-fire") + _PLANS_WATCHER_OPERATIONS)
+    parser.add_argument("--operation", choices=("create", "claim", "checkpoint", "done", "resume", "continue", "terminal", "precondition", "interrupt", "progress", "readiness", "reclaim", "diagnose", "recover-done-pending", "watcher-schedule", "watcher-supersede", "watcher-fire") + _PLANS_WATCHER_OPERATIONS)
     parser.add_argument("--predecessors-file", type=Path, help="predecessors JSON document for the manifest-free precondition operation")
-    parser.add_argument("--input", help="JSON object payload (create, checkpoint, done, interrupt, progress, terminal, and the watcher-* and plans-* operations; plans-watcher-schedule takes the FULL probe report as probe_report, or the payload itself, plus plan_path and state_path; the classifier reads status, binding, pause_decision, and the binding limit's reset_at_epoch from limits[], so a subset payload classifies unknown and degrades to the report-only supersede)")
+    parser.add_argument("--input", help="JSON object payload (create, checkpoint, done, interrupt, progress, terminal, recover-done-pending, and the watcher-* and plans-* operations; plans-watcher-schedule takes the FULL probe report as probe_report, or the payload itself, plus plan_path, plan_slug, and state_path; the classifier reads status, binding, pause_decision, and the binding limit's reset_at_epoch from limits[], so a subset payload classifies unknown and degrades to the report-only supersede)")
     parser.add_argument("--plan", help="plan file path for the readiness operation")
     parser.add_argument("--task-id", help="task id for the reclaim operation")
     parser.add_argument("--plan-slug")
@@ -6626,6 +7085,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.operation == "diagnose":
             # Read-only report; _operation_diagnose owns the write-free construction contract.
             result = _operation_diagnose(args)
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        if args.operation == "recover-done-pending":
+            # Operator-invoked recovery; _operation_recover_done_pending owns
+            # the construction contract and the payload mapping.
+            result = _operation_recover_done_pending(args, payload)
             print(json.dumps(result, sort_keys=True))
             return 0
         if args.operation == "precondition":

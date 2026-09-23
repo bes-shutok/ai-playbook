@@ -118,14 +118,14 @@ there and in `skill_gate.py`):
    via the shared `facts_paths.resolve_project_key` (the ONE function both cores
    import; do NOT re-implement) and `session` derives per Terms "Session key"
    (emptiness check FIRST; empty-after-strip -> literal `no-session`; otherwise
-   `sha1(value)[:16]` hex).
-5. CLI: `python3 ~/.ai-playbook/scripts/skill_gate.py --write-marker [--session-id "$SID"]`
-   (bare `--write-marker` defaults to the plans class).
+   `sha1(value)[:16]` hex). In an ad-hoc-worktree session the project key MUST come from the WRITE TARGET's project derivation (the worktree root), never the session's default or primary-checkout cwd; the gate consult keys from the directory its adapter supplies (Claude and Cursor pass the hook payload's cwd, falling back to the write target's dirname when the payload carries none; agy and Codex pass none and the core keys from its own process cwd), so the marker write must key the same write-target derivation the consult will use.
+5. CLI: `python3 ~/.ai-playbook/scripts/skill_gate.py --write-marker [--cwd <write-target project root>] [--session-id "$SID"]`
+   (bare `--write-marker` defaults to the plans class; `--cwd` keys the marker to an explicit project root such as an ad-hoc worktree, independent of the invoking shell's cwd - the core already accepts it for both consult and write).
 6. Acceptance: the marker EXISTS AND `0 <= (now - mtime) <= SKILL_GATE_WINDOW`
    (default 4h, FLAGGED; future-dated/negative delta or `mtime == 0` is STALE ->
    block, M4). ALL agents use the FULL window (r10-M10).
 
-The marker BODY stores the writer's `realpath(cwd)` and the resolved repo-anchor
+The marker BODY stores the keyed root's `realpath` (`start_dir`, which `--cwd` can set) and the resolved repo-anchor
 path as FORENSIC/debug metadata ONLY (it is NOT a checked guard - r7-M4).
 
 The `plans` skill invokes `--write-marker` with the SAME `--session-id "$SID"`

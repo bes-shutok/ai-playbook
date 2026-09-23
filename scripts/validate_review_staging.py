@@ -4815,13 +4815,25 @@ def _panel_profile_record_date(
     reduced path. ``None`` means undated: an undated record never enters
     the panel profile (fail-closed, mirroring the freshness fence's
     treatment of undated surfaces) and keeps the full contract. The
-    filename leg keeps its format-only parse: the filename date surface is
-    validated by its own date-format gates elsewhere.
+    filename leg is aligned to the same fail-closed semantics (review
+    staging leftovers disposition plan, Task 2): the captured date counts
+    only when it is a valid calendar date, so a format-valid but
+    calendar-invalid filename date such as ``2026-01-99`` means "no date"
+    (``None``, never a sidecar fallback) and the record keeps the full
+    contract.
     """
     name_match = (
         re.match(r"(\d{4}-\d{2}-\d{2})", staging_name) if staging_name else None
     )
     if name_match:
+        from datetime import date as _date
+
+        try:
+            _date.fromisoformat(name_match.group(1))
+        except ValueError:
+            # Calendar-invalid (for example month 13): no date, and no
+            # sidecar fallback (the record stays undated, fail-closed).
+            return None
         return name_match.group(1)
     if isinstance(sidecar_payload, dict):
         sidecar_date = sidecar_payload.get("date")
@@ -13961,6 +13973,114 @@ def _selftest_panel_profile(root: Path, check) -> None:
         and "panel profile: stats sidecar carries no verdict"
         in in_window_no_verdict_buf.getvalue()
         and in_window_with_verdict_rc == 0,
+    )
+
+    # Check 7: a calendar-invalid filename date never selects the reduced
+    # path (review staging leftovers disposition plan, Task 2). The
+    # filename leg used to keep a format-only parse, so a record named
+    # 2026-01-99-... sorted inside the fence window and entered the panel
+    # profile even though the date is not a real calendar date. The fixture
+    # is authored in the panel header shape (### N. blocks, never #### F
+    # blocks) so the full contract's extractor recognizes zero finding
+    # blocks; once the filename leg is calendar-strict the record is
+    # undated, keeps the full contract, and fails with the conservation
+    # errors instead. The positive control renames the identical bytes to a
+    # calendar-valid in-window filename date and must pass --hard.
+    def calendar_invalid_markdown() -> str:
+        return (
+            "# Code Review: panel profile calendar-invalid filename date\n"
+            "\n"
+            "## Metadata\n"
+            "- Type: Code Review\n"
+            "- Date: 2026-09-01\n"
+            "- Findings: 1\n"
+            "- Status: STAGED\n"
+            "\n"
+            "## Review Statistics\n"
+            "\n"
+            "### Panel\n"
+            "| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |\n"
+            "|--------|--------|---------------|--------|-----|------|------|----------|\n"
+            "| correctness-completeness | quality | none | complete | 1 | 1 | 0 | no |\n"
+            "\n"
+            "### Counts\n"
+            "- Workers launched: 1\n"
+            "- Staged findings: 1\n"
+            "\n"
+            "### Triage outcomes\n"
+            "Pending triage.\n"
+            "\n"
+            "## Findings\n"
+            "\n"
+            "### 1. Calendar-invalid filename finding (Low)\n"
+            "- Files: `scripts/example.py`\n"
+            "- Body claim: the reviewed change diverges from the documented\n"
+            "  contract on a reachable path.\n"
+            "- Triage: done.\n"
+            "\n"
+            "## Summary\n"
+            "\n"
+            "- Total findings: 1\n"
+            "- By severity: Critical 0, High 0, Medium 0, Low 1\n"
+            "- Blocking: 0\n"
+        )
+
+    def calendar_invalid_sidecar() -> dict:
+        return {
+            "schema_version": 1,
+            "date": "2026-09-01",
+            "verdict": "yes",
+            "panel_mode": "full",
+            "selection_reason": None,
+            "source_digest": "abc123",
+            "escalation_reason": None,
+            "counts": {
+                "workers_launched": 1,
+                "raw_findings": 1,
+                "staged_findings": 1,
+                "discarded": 0,
+            },
+            "findings": [
+                {
+                    "id": 1,
+                    "severity": "Low",
+                    "blocking": False,
+                    "title": "Calendar-invalid filename finding",
+                    "pattern": "quality#example-1",
+                    "workers": ["correctness-completeness"],
+                }
+            ],
+            "overflow": [],
+        }
+
+    calendar_md = calendar_invalid_markdown()
+    calendar_payload = calendar_invalid_sidecar()
+    invalid_path = _write_staging(
+        root,
+        "2026-01-99-panel-profile-calendar-invalid-r1.md",
+        calendar_md,
+        calendar_payload,
+    )
+    with _stderr_captured() as invalid_buf:
+        invalid_rc = main(["--hard", str(invalid_path)])
+    control_path = _write_staging(
+        root,
+        "2026-09-01-panel-profile-calendar-control-r1.md",
+        calendar_md,
+        calendar_payload,
+    )
+    with _stderr_captured() as control_buf:
+        control_rc = main(["--hard", str(control_path)])
+    check(
+        "panel profile: calendar-invalid filename date does not select the reduced path",
+        invalid_rc == 1
+        and "finding conservation: Markdown lists 0 finding(s) but "
+        "sidecar lists 1" in invalid_buf.getvalue()
+        and "sidecar finding id 1 has no matching Markdown #### F block"
+        in invalid_buf.getvalue()
+        and "panel profile: record dated" not in invalid_buf.getvalue()
+        and control_rc == 0
+        and "ERROR:" not in control_buf.getvalue(),
     )
 
 

@@ -24,7 +24,7 @@ Paths resolve from arguments and the repo facts file
 root; conventional repo-relative defaults back a missing key, and no
 machine-specific absolute path is hardcoded. Origins are the backtick
 quoted backlog paths inside the origins paragraph (the header line
-through its first blank line); review, guideline, and script paths quoted
+through its first blank line); a plan may also open its scope with a single `Backlog origin:` line, which this gate parses the same way. Review, guideline, and script paths quoted
 in the same paragraph are ignored. Stdlib only; no network.
 """
 
@@ -61,6 +61,9 @@ STATUS_HEADER_LINES = 15
 ORIGINS_HEADER_RE = re.compile(
     r"^\s*Backlog origins \(scope of record\)\s*:?", re.IGNORECASE
 )
+# Canonized single-origin template form: one `Backlog origin:` line opens
+# the scope instead of the plural block.
+ORIGIN_SINGULAR_RE = re.compile(r"^\s*Backlog origin\s*:\s*(\S+)")
 BACKTICK_SPAN_RE = re.compile(r"`([^`]+)`")
 # Tolerates the corpus shapes ``Status: open``, ``- **Status:** open``,
 # and ``Status: done; plan created ...``: an optional bullet, optional
@@ -158,7 +161,8 @@ def extract_origin_basenames(
 
     The block starts at the "Backlog origins (scope of record)" header
     line and runs through its first blank line (real plans wrap the block
-    across prose continuation lines). Every backtick span on those lines
+    across prose continuation lines); a single `Backlog origin:` line is
+    the other accepted opener, and the singular line ends the origins paragraph. Every backtick span on those lines
     that ends in ``.md`` and names a backlog location contributes its
     basename; a plan with no such block yields an empty list.
     """
@@ -169,6 +173,24 @@ def extract_origin_basenames(
         if not in_block:
             if ORIGINS_HEADER_RE.match(line):
                 in_block = True
+            elif ORIGIN_SINGULAR_RE.match(line):
+                # The singular line ends the origins paragraph.
+                text = (
+                    ORIGIN_SINGULAR_RE.match(line)
+                    .group(1)
+                    .strip()
+                    .strip("`")
+                    .rstrip(".,;:")
+                )
+                if text.endswith(".md") and _is_backlog_ref(
+                    text, backlog_dir, completed_dir
+                ):
+                    name = Path(text.replace(os.sep, "/")).name
+                    if name not in seen:
+                        seen.add(name)
+                        basenames.append(name)
+                    break
+                continue
             else:
                 continue
         elif not line.strip():

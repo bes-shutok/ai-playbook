@@ -5,6 +5,7 @@ Priority: medium
 Workflow: backlog
 Date: 2026-09-22
 Class: operations follow-up from plan 2026-09-21-maintenance-turn-self-scheduling-cadence Task 1
+Disposition: 2026-09-23 (annotated via docs/plans/2026-09-23-p50-scheduler-state-durability-leftovers.md, Task 3 and Ship when): the duplicate-parent tripwire migration arm is the durable carrier; the live listing verification (no-op close or post-migration observation) rides that plan's Ship when. Stays open until the verification.
 
 ## Problem
 

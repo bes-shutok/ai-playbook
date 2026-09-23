@@ -264,6 +264,17 @@ The normal task path is:
 pending -> claimed -> launched -> checkpointed
 ```
 
+`deferred` is the terminal-ish status written only by the done-pending
+recovery transition's `defer` disposition: the task is retired from the
+queue - excluded from the incomplete selection and never relaunched - and
+deliberately stays outside the progressed set, so plan-manifest agreement
+never demands unchecked-checkbox closure for a task the operator chose not
+to complete; the recorded `done-pending-recovery` receipt, not plan
+checkboxes, is the deferred task's evidence. That receipt is the
+append-only history event recording one done-pending recovery: the task
+id, claim token and generation, disposition, the bounded terminal
+evidence, and the linked backlog evidence for a defer. Its identity (task
+id plus token plus generation) fences duplicate receipts.
 `blocked` is resumable only when `resume_allowed: true`. `aborted` is terminal,
 and successful workflow completion is recorded as `workflow_state: complete`
 with the Phase 5 checklist and archived-plan receipt only after the machine
@@ -577,6 +588,7 @@ action, then re-classify the state.
 | `reclaimed` | Expired claim lease (at least `CLAIM_LEASE_SECONDS`) on a claim in `claimed`, `launched`, or `blocked`, with the task outside the progressed set, with the machine `workflow_state` outside the closed non-active set (`aborted`, `complete`, `terminal` - a finished-workflow reclaim is refused with the `explicit-abort` preserve-and-stop envelope before any lease accounting, its evidence naming the finished state), and the claim not a member of a live batch claim group (a live-group member is refused with the resumable `stale-claim` outcome naming the group, r3 F1; the one exit, r4 F2: a live-group member whose task is blocked with `resume_allowed` false reclaims through with no lease wait, and the same compare-and-swap fails its group) | Replace generation and token, mark the old claim `replaced`, reset the task to `pending` with the previous session's resume fields stripped, recorded checkpoints preserved as evidence; on the r4 F2 exit the group is also marked `failed` with its active member cleared and the still-staged member claims closed | 0 | `pending` task under the `replaced` claim; the next claim takes the freed task under a fresh generation; on the r4 F2 exit the staged members' pending tasks also re-enter the individual queue | Re-claim and relaunch the freed task; a post-reclaim checkpoint or launch receipt from the replaced owner fails fenced as `owner-mismatch`, while a late done handoff refuses as unfenced done evidence; the replaced claim is reconciled by rotation and never quarantined at startup; a workflow in the closed non-active set returns `explicit-abort` (preserve-and-stop; the evidence names the finished state) and is never released. |
 | `commit-pending` | Started receipt and task identity | Keep claim fenced during reconciliation | 0 | `blocked`, `checkpointed`, or `aborted` (the wedged-claim abort exit) | Inspect the exact commit before deciding whether work is complete. Abort with the current token is permitted when the recorded commit provably does not exist (the wedged-claim runtime exit; preserve-and-stop). |
 | `done-pending` | Worker checkpoint plus done handoff evidence | Keep claim until done boundary closes | 0 | `blocked` or `checkpointed` | Do not launch the next task until commit (or the documented no-commit justification), checkbox, clean state, and log evidence exist. |
+| `done-pending-recovery` (the operator-invoked `recover-done-pending` operation; the single sanctioned exit from `done-pending`) | Exact claim identity (owner, token, and generation), task status `done-pending`, no live claim group (parallel or batch alike) owning the claim, bounded terminal evidence naming the claim's session or launch identity, and no `done-pending-recovery` receipt already recorded for the same task id, token, and generation | Close the claim under the manifest lock; every refusal - stale identity or wrong status returns the resumable `stale-claim` outcome, the live-group refusal names the group and leaves the sibling members untouched, and the terminal-evidence and duplicate-receipt refusals are blocked `precondition-unverified` - leaves the manifest byte-identical | 0 | `requeue`: task `pending` with the dead-session resume fields stripped under a generation bumped exactly once; `defer`: task `deferred` with the claim closed and the backlog evidence recorded; `abort`: task, claim, and `workflow_state` `aborted` | `requeue`: reconcile the plan section through the skill-gated plan edit first, then let the ordinary claim path relaunch under the fresh policy token; `defer`: continue with the next provable task, never relaunching the deferred task; `abort`: do not resume without a new explicit run. |
 | `committed` | Commit identity, checkbox, clean state, and log evidence | Close matching claim | 0 | `checkpointed` | Record the commit and continue once, idempotently. |
 
 Illegal transitions, unknown statuses, missing evidence, generation mismatch,
@@ -637,6 +649,55 @@ startup reconciliation may complete the checkpoint only after an injected
 repository lookup proves the exact commit identity. Ambiguous live workers,
 owner mismatches, claim-before-launch interruptions, and uncommitted dirty
 worktrees remain quarantined and are never relaunched automatically.
+
+### Terminal-worker done-pending recovery
+
+A terminal worker's claim can rest at the `done-pending` boundary with no
+incomplete receipt path left: `done` refuses the incomplete done evidence,
+abort refuses to regress a claim past its receipt boundary (the wedge
+exception stays commit-pending-only), and `reclaim` admits only tasks
+outside the progressed set behind the lease. The driver-owned
+`recover-done-pending` operation is the single sanctioned exit from that
+wedge; a manual machine-manifest edit never is. The transition runs under
+the manifest lock like every other writer and admits exactly one shape:
+
+- Identity fence: the live claim's owner, token, and generation must match
+  the invocation exactly; any mismatch returns the resumable `stale-claim`
+  outcome with the manifest byte-identical.
+- Terminal-evidence requirement: the operator supplies a non-empty list of
+  bounded evidence strings, at least one naming the claim's session or
+  launch identity and the observed termination. Claim records carry no
+  process identity, so the transition runs no process-liveness probe and
+  waits out no lease - the evidence is the proof the worker ended.
+- Duplicate-receipt fence: the receipt identity (task id, claim token, and
+  claim generation) is recorded in history exactly once; a replay with the
+  same identity is refused with no new history event.
+- Live-group refusal: a claim owned by a live claim group - parallel or
+  batch alike - is refused with the group named and the sibling members
+  untouched; the group protocol owns its members.
+- Working-tree preservation and no relaunch: every disposition preserves
+  the working tree byte-for-byte, returns no claim or launch action, and
+  never relaunches the recovered claim; launching the requeued task is the
+  ordinary claim path's job.
+
+The operator chooses one durable disposition. `requeue` resets the task to
+`pending` with the dead session's resume fields stripped, closes the claim,
+and bumps the generation exactly once, so the next claim mints a fresh
+policy token from the reconciled plan section - the plan/manifest scope
+reconciliation itself happens through the skill-gated plan edit before
+recovery is invoked, and the transition never edits a claim's allowed
+paths. `defer` marks the task `deferred` with an existing
+repository-relative backlog path under `docs/history/backlog/` recorded as
+evidence; it is valid only for the next provable incomplete task (the
+ordinal queue order is the only machine-provable dependency signal), the
+task is excluded from the incomplete selection and never relaunched, and
+the run continues with the following provable task. `abort` ends the run:
+task, claim, and `workflow_state` become `aborted` (the same durable
+writes the wedged-abort path makes, surfaced through the preserve-and-stop
+aborted envelope), with the shared post-acceptance validation skipped
+because the run is terminal. The `requeue` and `defer` dispositions
+post-validate that the next provable incomplete task is pending or none
+before the save; a failed check discards every in-memory mutation.
 
 ## Live-session discovery ladder
 
@@ -743,6 +804,7 @@ are:
 | `readiness` | `readiness` (via `_operation_readiness`; read-only decision, requires `--plan`; `persist_construction=False` construction, the operation writes nothing) |
 | `reclaim` | `reclaim` (via `_operation_reclaim`; lease-gated interrupted-claim recovery, requires `--task-id`; the one lease-waived exit reclaims a non-resumable live-group member and atomically fails its group, r4 F2; `persist_construction=False` construction, the claim compare-and-swap is the operation's single write) |
 | `diagnose` | `diagnose` (via `_operation_diagnose`; read-only first-failed-transition report; `persist_construction=False` construction, the operation writes nothing) |
+| `recover-done-pending` | `recover_done_pending` (via `_operation_recover_done_pending`; operator-invoked done-pending recovery, requires the JSON payload `task_id`, `token`, `disposition`, and `terminal_evidence`, with optional `backlog_evidence` for the defer disposition; `persist_construction=False` construction, the locked recovery transition is the operation's single manifest write; see "Terminal-worker done-pending recovery") |
 
 The address fan-out parent surface is a separate executable boundary (r2
 F9): `python3 scripts/execute_plan_address_fanout.py --operation <op>
@@ -773,7 +835,12 @@ the boundary is a supersede-class boundary superseding an armed watcher
 (pause, wait-for-reset, abort, complete, unknown, weekly-secondary), the outcome also carries the
 `carrier_teardown` receipt the supersede path computes (bootout plus
 sentinel consume, receipt-only, same shape as the `watcher-supersede`
-teardown receipt; null on install and stale boundaries));
+teardown receipt; null on install and stale boundaries)); a
+receipt-validation refusal surfaces as the distinct reason code
+`watcher-receipt-invalid` with `cas_applied` False and the machine trail in
+evidence (machine-reason plus the unsatisfied field the ValueError names),
+never as `watcher-cas-stale`, and the stale outcome's evidence gains the same
+machine-reason trail; the plans boundary returns the same shape;
 `watcher-supersede` returns the driver's compare-and-swap
 outcome (status, reason code, evidence, `resume_watcher` after the clear,
 and `cas_applied`); `watcher-fire` returns the fire decision itself
@@ -828,7 +895,7 @@ over the authoring machine-state JSON named by the payload `state_path`
 (`{tmp_dir}/plan-requirements-<slug>.json`), so no `--manifest` is passed
 and no runtime driver is constructed: `plans-watcher-schedule` (payload
 `state_path`, `plan_path`, the probe report as `probe_report` or the
-payload itself, optional `plan_slug`, `automation`, `job_dir`,
+payload itself, `plan_slug`, `automation`, `job_dir`,
 `sentinel_path`, `boundary_kind`; returns the same envelope shape as
 `watcher-schedule`), `plans-watcher-supersede` (payload `state_path` plus
 `reason`; returns the authoring compare-and-swap outcome with
@@ -980,9 +1047,12 @@ decision whose predicate holds is returned:
   names its witness, and the outcome carries one recovery action:
   `stop-or-recovery` for a machine state that is not `active` and for a
   plan with zero recognizable task sections,
-  `preserve-and-reconcile` for an unresolved handoff, a fenced claim, or an
-  unprovable next task, and `correct-plan-through-skill-gated-plan-edit` for
-  plan-manifest disagreement. When several conditions fail, the outcome
+  `recover-done-pending` for a done-pending handoff (the bounded
+  operator-invoked exit detailed in "Terminal-worker done-pending
+  recovery"; readiness only names the operation and never mutates),
+  `preserve-and-reconcile` for a commit-pending handoff, a fenced claim, or
+  an unprovable next task, and `correct-plan-through-skill-gated-plan-edit`
+  for plan-manifest disagreement. When several conditions fail, the outcome
   carries the recovery action of the first failed condition in evaluation
   order: an empty manifest, then machine state, then unresolved handoff or
   fenced claim, then plan shape or plan-manifest disagreement, then
@@ -1009,7 +1079,10 @@ The five machine-owned conditions:
    first by the terminal-path decision; `aborted` or `blocked` is a failed
    condition naming the machine state with a stop-or-recovery action.
 3. No unresolved handoff or fenced claim exists: no task in `done-pending`
-   or `commit-pending`, and no claim in state `blocked`.
+   or `commit-pending`, and no claim in state `blocked`. A `done-pending`
+   handoff's failed condition names the recovery action
+   `recover-done-pending`; a `commit-pending` handoff keeps
+   `preserve-and-reconcile`.
 4. Plan-manifest agreement. For each manifest task recorded in the
    progressed set (`done-pending`, `commit-pending`, `checkpointed`,
    `complete`), the plan's matching `### Task <N>:` section contains no
