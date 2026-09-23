@@ -1124,6 +1124,10 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         forbidden = ("codex", "cursor", "claude", "zcode", "opencode", "copilot", "gemini", "antigravity", "UserPromptSubmit", "PreToolUse", "PostToolUse", "JSONL", "MCP", "--json")
         for path in shared_files:
             text = path.read_text(encoding="utf-8").lower()
+            # The context.jsonl telemetry filenames are sanctioned path
+            # literals pinned by the P37 context-budget policy; only prose
+            # about the JSONL format itself stays forbidden.
+            text = text.replace("context.jsonl", "context-telemetry-file")
             for term in forbidden:
                 self.assertNotIn(term.lower(), text, path.name)
 
@@ -5093,6 +5097,103 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(result["reason_code"], "stale-claim")
         self.assertTrue(any("waiting-capacity" in item for item in result["evidence"]))
         self.assertEqual(runtime.load_manifest(self.state_path), before)
+
+    def test_reclaim_refusal_names_exhausted_retry_budget(self):
+        # A parked claim whose budget is fully consumed (the park plus three
+        # decrements, attempts_remaining 0, still waiting-capacity) is still
+        # refused, but the refusal names the exhausted budget and the pending
+        # blocked transition instead of the live resume action, and the
+        # manifest stays byte-identical: the exhausted window ends when the
+        # next capacity receipt lands the claim in blocked, whose recovery
+        # machinery applies.
+        self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+        self.rewrite_manifest(lambda state: state["tasks"]["task-4"].update({"status": "launched"}))
+        driver = self.driver()
+        for _ in range(4):
+            driver.record_worker_checkpoint(self.capacity_receipt())
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-4"]
+        self.assertEqual(claim["state"], "waiting-capacity")
+        self.assertEqual(claim["retry_policy"]["attempts_remaining"], 0)
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+        before = runtime.load_manifest(self.state_path)
+        result = driver.reclaim("task-4")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "stale-claim")
+        evidence = "\n".join(result["evidence"])
+        self.assertIn("retry budget exhausted", evidence)
+        self.assertIn("the next capacity receipt transitions the claim to blocked", evidence)
+        self.assertNotIn("live bounded retry policy", evidence)
+        self.assertNotIn("while attempts remain", evidence)
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after, before)
+        self.assertEqual(after["claims"]["task-4"]["state"], "waiting-capacity")
+
+    def test_reclaim_refusal_keeps_live_budget_evidence(self):
+        # A parked claim with budget still live (the single-receipt parked
+        # shape, attempts_remaining 3) keeps the existing refusal evidence:
+        # the live bounded retry policy line and the in-place resume action.
+        self.seed_parked_claim(timestamp=self._expired_lease_timestamp())
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+        result = driver.reclaim("task-4")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "stale-claim")
+        evidence = "\n".join(result["evidence"])
+        self.assertIn("live bounded retry policy; reclaim refused", evidence)
+        self.assertIn("resume in place with continue while attempts remain", evidence)
+
+    def test_unresolved_worker_liveness_keeps_claim_fenced_without_second_launch(self):
+        # Characterization of the bounded worker-liveness fence (green before
+        # any Task 4 change): a worker whose bounded deadline window has
+        # expired (the adapter launch and wait deadlines are both far below
+        # the claim lease) but whose termination or cleanup remains
+        # unresolved - no receipt of any kind landed - is never read as free
+        # capacity. The claim keeps its identity, the lease-gated reclaim is
+        # refused, a second owner cannot claim, and no second launch runs.
+        self.assertGreater(runtime.CLAIM_LEASE_SECONDS, 1500.0)
+        self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+        # The launch record's window is many worker deadlines old yet still
+        # inside the claim lease: past both adapter defaults (900s launch,
+        # 1500s wait), well before the 14400s reclaim lease.
+        expired_worker_window = self.FIXED_NOW - 2000.0
+        self.rewrite_manifest(lambda state: state["claims"]["task-4"].update({
+            "timestamp": expired_worker_window,
+            "launched_at": expired_worker_window,
+        }))
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+        before = runtime.load_manifest(self.state_path)
+        result = driver.reclaim("task-4")
+        # expects: no free-capacity decision and no claim reuse - the
+        # reclaim refuses while the lease holds and the manifest is
+        # byte-identical (no parking, no rotation, no receipt-derived
+        # capacity transition)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "stale-claim")
+        self.assertTrue(any("lease has not expired" in item for item in result["evidence"]), result["evidence"])
+        after_reclaim = runtime.load_manifest(self.state_path)
+        self.assertEqual(after_reclaim, before)
+        self.assertEqual(after_reclaim["claims"]["task-4"]["token"], "seed-task-4")
+        self.assertEqual(after_reclaim["claims"]["task-4"]["state"], "launched")
+        self.assertNotIn("waiting-capacity", {claim.get("state") for claim in after_reclaim["claims"].values()})
+        # expects: no second claim - a second owner's claim is refused
+        # because the unresolved claim still holds the slot
+        second = self.driver(owner="second-owner", clock=lambda: self.FIXED_NOW).claim_next_task()
+        self.assertEqual(second["status"], "blocked")
+        self.assertEqual(second["reason_code"], "stale-claim")
+        self.assertFalse(second.get("claimed"))
+        self.assertTrue(any("another task is already claimed" in item for item in second["evidence"]))
+        # expects: no second launch - the launch entrypoint returns the same
+        # refusal and the adapter is never invoked
+        adapter = FakeAdapter(result={"status": "success", "reason_code": "completed", "evidence": ["x"]})
+        launch = self.driver(adapter=adapter, clock=lambda: self.FIXED_NOW).launch_next_task()
+        self.assertEqual(launch["status"], "blocked")
+        self.assertEqual(launch["reason_code"], "stale-claim")
+        self.assertEqual(adapter.launches, [])
+        # The durable state never moved across all three probes: one claim
+        # row under the original identity and generation.
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(len(after["claims"]), 1)
+        self.assertEqual(after["claims"]["task-4"]["token"], "seed-task-4")
+        self.assertEqual(after["claims"]["task-4"]["generation"], 0)
 
     def test_manifest_validator_accepts_waiting_capacity_state(self):
         # The manifest validator's claim-state set includes waiting-capacity:
@@ -10146,7 +10247,12 @@ class ContractContentParityTest(unittest.TestCase):
         self.assertIn("`mode: bounded-resume`, `max_attempts: 3`, `attempts_remaining: 3`", block)
         self.assertIn("the receipt that arrives with the budget exhausted transitions the claim to `blocked`", block)
         self.assertIn("recovery is the in-place resume", block)
+        self.assertIn("the refusal names the exhausted budget and the pending `blocked` transition", block)
         self.assertIn("A capacity receipt on a live batch-group member never parks", block)
+        self.assertIn(
+            "naming the exhausted budget and the pending `blocked` transition in the exhausted window",
+            self.block_containing("reclaim refuses the parked state while the budget is live"),
+        )
 
     def test_reason_code_list_contains_capacity_unavailable(self):
         block = self.block_containing("The standard reason codes are")

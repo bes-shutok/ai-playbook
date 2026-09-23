@@ -1689,6 +1689,73 @@ class QuotaWindowProbeTest(unittest.TestCase):
             probe.main(["--runtime", "zcode", "--plan-cost", "100.5"])
         self.assertEqual(ctx.exception.code, 2)
 
+    # --- Task 7 (origin 10): wait-window override upper bounds ---
+
+    def test_minutes_before_override_above_cadence_window_refused(self) -> None:
+        # Origin 10: --minutes-before has no upper validation, so an
+        # override can turn the reported wait into hours or days, silently
+        # converting a recoverable pause into an effectively unbounded lane
+        # stall. A value above the cadence window is a usage error (exit 2,
+        # no JSON on stdout) naming the 300-minute cadence-window bound.
+        # The missing --config keeps the RED-stage fallback run hermetic:
+        # before the bound lands the parse succeeds and the probe fails
+        # open to an unknown report instead of reaching a live endpoint.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_config = str(Path(tmpdir) / "missing-config.json")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                with self.assertRaises(SystemExit) as ctx:
+                    probe.main([
+                        "--runtime", "zcode",
+                        "--config", missing_config,
+                        "--minutes-before", "999",
+                    ])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("--minutes-before must be <= 300", err.getvalue())
+        self.assertIn("300-minute cadence window", err.getvalue())
+
+    def test_min_protocol_minutes_override_above_cadence_window_refused(self) -> None:
+        # Same bound for the protocol margin: --min-protocol-minutes only
+        # requires >= 0 today, so 1001 parses and the reported wait grows
+        # unbounded; above the cadence window it is refused exactly like
+        # the oversized --minutes-before override.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_config = str(Path(tmpdir) / "missing-config.json")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                with self.assertRaises(SystemExit) as ctx:
+                    probe.main([
+                        "--runtime", "zcode",
+                        "--config", missing_config,
+                        "--min-protocol-minutes", "1001",
+                    ])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("--min-protocol-minutes must be <= 300", err.getvalue())
+        self.assertIn("300-minute cadence window", err.getvalue())
+
+    def test_override_flags_at_bound_still_parse(self) -> None:
+        # The bound rejects only values ABOVE the cadence window: exactly
+        # 300 stays a legal override for both flags. Otherwise-default
+        # inputs against scrubbed harness env detect no runtime and fail
+        # open to the standard unknown report (exit 1), proving the parse
+        # passed validation with no argparse error.
+        with _scrubbed_harness_env():
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = probe.main([
+                    "--minutes-before", "300",
+                    "--min-protocol-minutes", "300",
+                ])
+        self.assertEqual(code, 1)
+        report = json.loads(out.getvalue())
+        self.assertEqual(report["status"], "unknown")
+        self.assertEqual(
+            report["reasons"],
+            ["no agent runtime detected; pass --runtime explicitly"],
+        )
+
     def test_codex_rollout_margin_threading_reaches_build_report(self) -> None:
         # The codex path threads protocol_minutes_threshold and
         # plan_cost_percent into build_report; dropping either kwarg in the
@@ -2398,6 +2465,43 @@ class QuotaWindowProbeTest(unittest.TestCase):
             int(datetime.fromisoformat(fitted["defer_to"]).timestamp()), monday_end
         )
 
+    def test_straddle_tail_slot_unfit_defers_reset_past_anchored_slot(self) -> None:
+        # F9 tail-band slot-unfit rung: Sunday 2026-09-27 23:45 UTC+8 sits in
+        # the pre-midnight straddle tail band before the midnight-crossing
+        # Monday 00:30-04:30 window start (straddle 60), so the deferred
+        # pricing slot is Monday 04:30. With the reported primary window
+        # resetting Monday 08:00, the fire instant sees 495 minutes (fits
+        # the 300-minute estimate) but the Monday 04:30 slot sees only 210:
+        # the slot is fit-checked before the deferral is blessed, so the
+        # verdict is defer-reset to the containing window's end strictly
+        # after the slot (_fire_at_window_end(slot_epoch, R) = Monday 08:00),
+        # never the slot itself and never defer-peak.
+        self.assertEqual(datetime(2026, 9, 27, tzinfo=TZ8).weekday(), 6)  # Sunday
+        fire = int(datetime(2026, 9, 27, 23, 45, tzinfo=TZ8).timestamp())
+        monday_reset = int(datetime(2026, 9, 28, 8, 0, tzinfo=TZ8).timestamp())
+        monday_slot = int(datetime(2026, 9, 28, 4, 30, tzinfo=TZ8).timestamp())
+        slot_epoch = probe._fire_at_peak_window_end(
+            datetime(2026, 9, 27, 23, 45, tzinfo=TZ8),
+            probe._parse_hhmm("00:30"), probe._parse_hhmm("04:30"), 60,
+        )
+        self.assertEqual(slot_epoch, monday_slot)
+        verdict = probe.evaluate_fire_at(
+            fire, now=fire - 3600, need_minutes=300, straddle_minutes=60,
+            peak_start="00:30", peak_end="04:30",
+            limits=[probe.make_limit("primary", 50.0, monday_reset, now=fire - 3600)],
+        )
+        self.assertEqual(verdict["status"], "ok")
+        self.assertTrue(verdict["peak"])
+        self.assertEqual(verdict["verdict"], "defer-reset")
+        self.assertTrue(verdict["fits"])
+        self.assertEqual(verdict["minutes_remaining_at_fire"], 495)
+        defer_epoch = int(datetime.fromisoformat(verdict["defer_to"]).timestamp())
+        self.assertEqual(
+            defer_epoch, probe._fire_at_window_end(slot_epoch, monday_reset)
+        )
+        self.assertEqual(defer_epoch, monday_reset)
+        self.assertNotEqual(defer_epoch, slot_epoch)
+
     def test_straddle_tail_into_weekend_window_is_not_peak(self) -> None:
         # F9 weekend arm: Friday 23:45 sits in the tail band before a
         # SATURDAY window start (00:30-04:30, straddle 60); the
@@ -2435,6 +2539,24 @@ class QuotaWindowProbeTest(unittest.TestCase):
         )
         self.assertTrue(peak["peak"])
         self.assertEqual(peak["verdict"], "defer-peak")
+        # F9 anchor pin on the boundary: in pure-pricing mode defer_to IS
+        # the pricing slot itself, the window-start day's (Thursday's)
+        # 04:30 end, never a cadence window end. The expected slot is
+        # pinned to a concrete literal (and the helper cross-checked
+        # against it), so an anchor regression of any amount (for example
+        # a one-hour shift of _fire_at_peak_window_end) fails this gate.
+        self.assertEqual(datetime(2026, 9, 24, tzinfo=TZ8).weekday(), 3)  # Thursday
+        thursday_end = int(datetime(2026, 9, 24, 4, 30, tzinfo=TZ8).timestamp())
+        self.assertEqual(
+            int(datetime.fromisoformat(peak["defer_to"]).timestamp()), thursday_end
+        )
+        self.assertEqual(
+            probe._fire_at_peak_window_end(
+                datetime(2026, 9, 23, 23, 30, tzinfo=TZ8),
+                probe._parse_hhmm("00:30"), probe._parse_hhmm("04:30"), 60,
+            ),
+            thursday_end,
+        )
 
     def test_post_midnight_morning_before_start_stays_peak(self) -> None:
         # F9 wrapped-morning arm kept: fire Wednesday 00:10 falls inside

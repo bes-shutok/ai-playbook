@@ -61,7 +61,7 @@ Precedence: when the floor is triggered, it overrides both the focused-round pre
 
 Boundary: a changed normative documentation example alone (docs-only or docs-plus-scripts diffs with no code-mutation signal) escalates `contract-docs` plus `correctness-completeness` coverage but does not trigger the `risk-signal floor`'s worker escalation, so docs-only focused panels stay valid; a living-documentation status claim on such a diff still requires the `doing-code-review` Step 2.5 guideline checks for the changed files' overlay, without adding a `risk` worker. Within execute-plan Step 3.1 item 5, doc/skill-only plans keep grep/hygiene commands as the `testing` worker's primary evidence.
 
-Treat changed dependency coordinates, outbound service URL configuration, and downstream error-response mapping as risk signals even when the diff is small. The shared changed-scope trigger surfaces enumerated in the `doing-code-review` Step 2.5 mandatory-evidence rules are risk signals as well. These signals require the `risk` worker and the guideline checks of the changed files' language overlay (Java/Spring, Kotlin/Spring, or Python) per those mandatory-evidence rules.
+Treat changed dependency coordinates, outbound service URL configuration, and downstream error-response mapping as risk signals even when the diff is small. The shared changed-scope trigger surfaces enumerated in the `doing-code-review` Step 2.5 mandatory-evidence rules are risk signals as well. These signals require the `risk` worker and the guideline checks of the changed files' language overlay per those mandatory-evidence rules; which stacks those overlays enumerate belongs to the consuming orchestrator's mandatory-evidence rules, not this shared catalog.
 
 ### Boundary-contract coverage floor
 
@@ -142,10 +142,10 @@ Scan all changed files, not diff hunks only, for:
 
 | Signal | Examples |
 |--------|----------|
-| Transactional scope | `@Transactional`, `@Lock`, `FOR UPDATE`, isolation level config |
-| Synchronization | `synchronized`, `ReentrantLock`, `Mutex`, virtual-thread pinning risks |
-| Retry / backoff | `RetryTemplate`, `@Retryable`, 429 mapping, circuit breakers |
-| Messaging / async | Kafka/RocketMQ consumers, outbox workers, `@Async`, thread pools |
+| Transactional scope | declarative transaction annotations, row-lock clauses, isolation-level configuration |
+| Synchronization | language lock primitives, mutex types, virtual-thread pinning risks |
+| Retry / backoff | retry-template abstractions, retryable-method annotations, rate-limit response mapping, circuit breakers |
+| Messaging / async | message-broker consumers, outbox workers, async-method annotations, thread pools |
 | Shared mutable state | Cross-request caches with TTL races, compare-and-set upserts, deque queues shared across threads |
 
 **Default skip** when none match in changed files or their direct call paths visible in the diff.

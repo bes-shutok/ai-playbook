@@ -4,6 +4,14 @@ Ubiquitous language for agent workflow and planning in this repository.
 
 ## Language
 
+**Single-operator setup**:
+An agent work environment where one person controls the local machine, project checkouts, and configured tools.
+_Avoid_: shared-agent workstation
+
+**Rejected plan or backlog item**:
+A proposed change explicitly decided against; retain its record under the repository's rejected archive instead of deleting it.
+_Avoid_: completed item
+
 **Executable plan task**:
 A checklist item the default executor can finish now from the target repo and local tooling, without a blocked shared environment or another team's deploy.
 _Avoid_: release gate (as a checkbox), rollout step, staging verification task

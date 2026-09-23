@@ -12,3 +12,5 @@ Expected: when the repo has no docs tree, bootstrap should ask explicitly whethe
 Environment: consumer documentation-only repo, runtime deployment of the playbook, 2026-09-19; observed during a real bootstrap followed by a same-day migration in the same session.
 
 Suspected root area: bootstrap-ai-playbook Path Discovery defaults vs doc-hierarchy canonical layout; the interplay is not encoded in either skill.
+
+Disposition (2026-09-22): Probed 2026-09-23 (`rg -n "plans_dir|reviews_dir" agents/skills/bootstrap-ai-playbook/SKILL.md`): the greenfield fallback's facts-file template still seeds the non-canonical `plans_dir = "docs/plans/"` and `reviews_dir = "docs/reviews/"` TOML keys that doc-hierarchy-migrate step2 forbids. Gap real and unchanged; no plan has executed for it.

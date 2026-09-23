@@ -1477,6 +1477,32 @@ cmd_selftest() {
     echo "selftest OK: merge-wait-acquire --max-wait 0 times out with exit 2"
   fi
 
+  # M10) merge_session_carries_only_merge_lock_keys (origin 6): a fresh
+  # merge-acquire writes a session fence carrying exactly the two MERGE_LOCK_*
+  # identity keys and nothing else. A mis-parameterized writer emitting
+  # DONE_LOCK_* keys into the merge session would still work end to end (the
+  # release and steal paths match only the MERGE_LOCK_ prefix), so the shape
+  # is pinned here -- done fixture 15's shape check, merge-mode keys.
+  if ! (
+    cd "$root"
+    eval "$(mrun merge-acquire --label merge-session-shape)"
+    [[ -f .ai-playbook/merge-lock.session ]] || { echo "selftest FAIL: merge session file missing after merge-acquire" >&2; exit 1; }
+    key_line_count="$(grep -cE '^[A-Z_]+=' .ai-playbook/merge-lock.session || true)"
+    [[ "$key_line_count" -eq 2 ]] || { echo "selftest FAIL: merge session expected 2 key lines, got ${key_line_count}" >&2; exit 1; }
+    merge_key_count="$(grep -c '^MERGE_LOCK_' .ai-playbook/merge-lock.session || true)"
+    [[ "$merge_key_count" -eq 2 ]] || { echo "selftest FAIL: merge session expected 2 MERGE_LOCK_ keys, got ${merge_key_count}" >&2; exit 1; }
+    if grep -q '^DONE_LOCK_' .ai-playbook/merge-lock.session; then
+      echo "selftest FAIL: merge session carries a DONE_LOCK_ key" >&2
+      exit 1
+    fi
+    mrun merge-release-repo >/dev/null
+  ); then
+    echo "selftest FAIL: merge_session_carries_only_merge_lock_keys" >&2
+    fail=1
+  else
+    echo "selftest OK: merge session carries only merge lock keys"
+  fi
+
   rm -rf "$tmp"
   if [[ "$fail" -ne 0 ]]; then
     echo "${PROG}: selftest FAILED" >&2

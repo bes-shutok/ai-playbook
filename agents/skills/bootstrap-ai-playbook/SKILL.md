@@ -111,6 +111,7 @@ Optional keys (discover when present; omit when not found):
 | `caller_catalog` | HTTP/integration samples | Path named in `project_guidelines_rel` |
 | `guidelines_path` | Project guidelines | `project_guidelines_rel` from user facts, then on-disk probe |
 | `team_references_project` | Local project containing team profiles and team/Slack context | User or ownership facts when company-scoped; persist only when the resolved path exists |
+| `friction_audit_dir` | Friction-audit watermark state and digests for the maintenance audit lane | Falls back to `.ai-playbook/friction-audit/` when absent (same resolution pattern as `tmp_dir`); under `.ai-playbook/`, gitignored by the existing `/.ai-playbook/` rule |
 
 ## Path Discovery
 
@@ -192,6 +193,7 @@ Return each resolved path to the caller. Substitute `{plans_dir}`, `{reviews_dir
 | `review-confluence-doc`, `rfc-design` | Read `{reviews_dir}` and `{tmp_dir}` from repo agent facts; primary review staging under `{reviews_dir}/` per `review-staging` (`rfc-design` never uses `{tmp_dir}/rfc-review/`) |
 | `confluence-page-sync` | Reads `{tmp_dir}` from repo agent facts for page-fetch and HTML scratch |
 | `tdd-design` | Reads `{rfcs_dir}` / `{proposals_dir}` from repo agent facts; finished TDDs are Layer 3 history files like RFCs; drafts under `{proposals_dir}` when present |
+| `maintenance` | Reads `friction_audit_dir` and `friction_audit_cadence_days` from repo agent facts for the audit lane; absent keys fall back to the documented defaults |
 
 ## Related
 

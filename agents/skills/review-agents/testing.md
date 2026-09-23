@@ -105,15 +105,15 @@ When a plan decomposes a method into N named private helpers (e.g. `evaluate` �
 
 1. Each helper must be exercised by at least one continue-path test (helper returns "no decision yet", control flow proceeds) AND at least one terminal-path test (helper returns the final decision, control flow stops).
 2. Build a helper × test matrix: rows are helpers, columns are `{continue-path, terminal-path}`. Flag any empty cell.
-3. Short-circuit verification: when a helper returns a terminal decision, downstream helpers must not be invoked. Verify with `verifyNoInteractions` / `verify(..., never())` (Mockito) or equivalent in other frameworks.
+3. Short-circuit verification: when a helper returns a terminal decision, downstream helpers must not be invoked. Verify with a mock-adapter never-invoked verification or the toolchain's equivalent.
 4. A test that exercises only the top-level public method without isolating helper branches is insufficient: a future refactor that inlines a helper could silently drop a branch and tests would still pass.
 
 ## Test Double Surface Coverage
 
 When a plan introduces a hand-rolled test double for an interface (e.g. `RecordingFooService implements FooService`):
 
-1. The double must implement every method of the interface, not just the methods exercised by the test. Compilers enforce this for Java/Kotlin/C#; in dynamic languages (Python, Ruby) the test must include a "double-completeness" assertion.
-2. Methods not exercised by the test should throw `UnsupportedOperationException` (Java/Kotlin), `NotImplementedError` (Python), or equivalent, and fail fast on accidental use. Returning `null` / `Optional.empty()` / a default-constructed value is a defect: it lets tests silently pass when an unrelated production code path stumbles into the unused method.
+1. The double must implement every method of the interface, not just the methods exercised by the test. Statically-typed toolchains enforce this at compile time; dynamically-typed toolchains need an explicit double-completeness assertion in the test.
+2. Methods not exercised by the test should raise the toolchain's canonical not-implemented error type and fail fast on accidental use. Returning `null` / `Optional.empty()` / a default-constructed value is a defect: it lets tests silently pass when an unrelated production code path stumbles into the unused method.
 3. When the interface gains a method later, the test double must be updated in the same change set (compilation forces this for static-typed languages; for dynamic ones, add a CI gate).
 
 ## Actionable fix snippets (code review)
@@ -121,8 +121,8 @@ When a plan introduces a hand-rolled test double for an interface (e.g. `Recordi
 When a finding proposes a concrete test or production code change (any severity):
 
 1. Include a before/after or "could look like" snippet in `body` per `doing-code-review` §4.9.0.
-2. In test examples, build data once (builder/fixture) and assert using getters from that object (`outbox.getCampaignId()`), not a second copy of the same literal in `assertThat(...)`. Duplicated literals let setup and asserts drift independently and can hide mapping bugs.
-3. Point at an existing test in the repo as a pattern when one exists (for example a sibling IT with `ArgumentCaptor`).
+2. In test examples, build data once (builder/fixture) and assert using getters from that object, not a second copy of the same literal in the assertion call. Duplicated literals let setup and asserts drift independently and can hide mapping bugs.
+3. Point at an existing test in the repo as a pattern when one exists (for example a sibling integration test using the repository's argument-capture idiom).
 
 Report problems only. No positive observations.
 

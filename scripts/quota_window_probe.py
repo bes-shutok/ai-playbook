@@ -1131,6 +1131,26 @@ def main(argv: Optional[Sequence[str]] = None,
         return _fire_at_cli(parser, args, now=now)
     if args.min_protocol_minutes < 0:
         parser.error("--min-protocol-minutes must be >= 0")
+    # Origin 10: both wait-window overrides bound at the cadence window.
+    # An override above it can turn the reported wait into hours or days,
+    # silently converting a recoverable pause into an effectively
+    # unbounded lane stall; a wait-for-reset ride-through longer than one
+    # cadence window is meaningless since the window itself resets.
+    cadence_window_minutes = FIRE_AT_CADENCE_SECONDS // 60
+    for override_flag, override_value in (
+        ("--minutes-before", args.minutes_before),
+        ("--min-protocol-minutes", args.min_protocol_minutes),
+    ):
+        if override_value > cadence_window_minutes:
+            parser.error(
+                "{} must be <= {} (the {}-minute cadence window); a "
+                "ride-through longer than one cadence window is meaningless "
+                "since the window itself resets".format(
+                    override_flag,
+                    cadence_window_minutes,
+                    cadence_window_minutes,
+                )
+            )
     if args.plan_cost is not None and not (0 < args.plan_cost <= 100):
         parser.error("--plan-cost must be within (0, 100]")
     try:

@@ -12,7 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "agents/hooks/codex-model-guard/require-luna.py"
-ALLOWED_MODEL = "gpt-5.6-luna"
+ALLOWED_MODEL = "gpt-6-luna"
 
 
 def run_hook(event: object) -> subprocess.CompletedProcess[str]:

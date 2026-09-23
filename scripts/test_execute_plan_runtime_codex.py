@@ -165,6 +165,39 @@ class CodexAdapterTest(unittest.TestCase):
         self.assertEqual(result["retry_policy"]["mode"], "none")
         self.assertTrue(any(call[0] == "cancel" for call in runner.calls))
 
+    def test_cleanup_unverified_timeout_never_relaunches(self):
+        # Characterization of the cleanup fence (green before any Task 4
+        # change): a timed-out worker whose process cleanup cannot be
+        # verified produces the terminal cleanup-unverified receipt with
+        # retry fully disabled, and the adapter never issues a second
+        # process invocation after the cancellation - no automatic relaunch
+        # of the same worker. The claim stays fenced downstream because the
+        # reason code is outside RESUMABLE_REASONS, so the driver's retry
+        # and resume machinery cannot read this receipt as free capacity.
+        runner = RecordedRunner(timeout=True, cleanup_verified=False)
+        adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
+        self.assertEqual(adapter.activation_check()["status"], "success")
+        process_calls_after_activation = len(runner.calls)
+        result = adapter.launch({"id": "task-4"}, "implement task", 1, deadline_seconds=0.01, policy_token=self.policy())
+        # expects: the cleanup-unverified classification, never a plain
+        # timeout and never a success
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "cleanup-unverified")
+        # expects: retry disabled by the full standard shape
+        self.assertEqual(result["retry_policy"], {"mode": "none", "max_attempts": 0, "attempts_remaining": 0})
+        self.assertEqual(result["recovery_action"], "preserve-and-reconcile")
+        # expects: the claim stays fenced - the reason code is outside the
+        # resumable set, so no consumer may treat the timed-out worker's
+        # slot as resumable or relaunchable
+        self.assertNotIn(result["reason_code"], capabilities.RESUMABLE_REASONS)
+        # expects: exactly one launch invocation happened (the activation
+        # probes used --help shapes and do not count), the cancellation ran
+        # once, and no relaunch attempt followed the unverified cleanup
+        launch_calls = [call for call in runner.calls if isinstance(call[0], list) and call[0][:3] == ["codex", "exec", "--json"]]
+        self.assertEqual(len(launch_calls), 1)
+        self.assertEqual([call for call in runner.calls if call[0] == "cancel"], [("cancel", "owned-process-tree")])
+        self.assertEqual(len(runner.calls), process_calls_after_activation + 2)
+
     def test_bounded_timeout_preserves_evidence(self):
         # Regression pin (green before and after the deadline baseline
         # change): a real deadline expiry preserves its evidence instead of

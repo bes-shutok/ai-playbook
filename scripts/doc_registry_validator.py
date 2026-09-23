@@ -41,8 +41,8 @@ Three subcommands plus a hermetic ``--selftest``:
   Mirrors (``docs/history/context/confluence/``) and ephemera
   (``docs/history/reviews/``, ``docs/tmp/``) are exempt. Registered-src
   lifecycle exemption, bounded to the transition: a path whose
-  normalized form equals the ``src`` of a row with ``state`` completed
-  or superseded is licensed ONLY for a clean add or rename (porcelain
+  normalized form equals the ``src`` of a row with ``state`` completed,
+  superseded, or rejected is licensed ONLY for a clean add or rename (porcelain
   staged column exactly ``A`` or ``R`` with a blank second column;
   name-status exactly ``A`` or ``R<digits>``; conflict statuses like
   ``AA``/``AU`` are NOT licensed). An untracked ``??`` on a registered
@@ -97,18 +97,26 @@ Registry file format (Markdown table, one row per document identity):
 - ``identity``: stable kebab-case concept identifier (REQUIRED).
 - ``sot``: ``yes`` when this row declares living-SOT ownership (REQUIRED
   semantics: use ``no`` when it does not).
-- ``state``: ``living`` | ``completed`` | ``superseded`` (REQUIRED).
+- ``state``: ``living`` | ``completed`` | ``superseded`` | ``rejected``
+  (REQUIRED). ``rejected`` marks an archive row for a plan or backlog
+  item moved under a ``rejected/`` directory after an explicit decision
+  against doing the work (docs/plans/rejected/,
+  docs/history/backlog/rejected/).
 - ``archived``: freeze date (``YYYY-MM-DD`` or empty for living rows).
-- ``reason``: why the freeze happened (free text, may be empty).
+  For a ``rejected`` row this is the REJECTION DATE and is REQUIRED: a
+  real calendar date in exact ``YYYY-MM-DD`` form, never empty or
+  partial.
+- ``reason``: why the freeze happened (free text, may be empty). For a
+  ``rejected`` row the rejection reason is REQUIRED (non-empty).
 - ``src``: repo-relative path of the artifact this row registers.
 - ``successor``: identity of the superseding document (``superseded_by``).
 - ``aliases``: comma-separated repo-relative paths that historically
   pointed at this identity.
 - ``audit``: free-text audit note; non-empty on a completed-history row
   is the explicit override that licenses an otherwise immutable write.
-  A non-empty audit cell on a completed/superseded row must begin with
-  the dated confirmation token ``user-approved YYYY-MM-DD:`` (the
-  ADR-0001 user-confirmation precondition made checkable); the date must
+  A non-empty audit cell on a completed/superseded/rejected row must
+  begin with the dated confirmation token ``user-approved YYYY-MM-DD:``
+  (the ADR-0001 user-confirmation precondition made checkable); the date must
   be a real calendar date not in the future (one-day clock skew
   tolerated: an approval legitimately minted today in a timezone ahead
   of the validator host passes near midnight; two or more days ahead
@@ -127,6 +135,11 @@ falls back to the default, so pre-registry repos fail open):
 Immutable completed-history directories (write-gated):
 
 - the resolved ``plans_completed_dir`` and ``backlog_completed_dir``
+- ``docs/plans/rejected/`` and ``docs/history/backlog/rejected/``
+  (rejected archives; the permanence contract both archive READMEs
+  state is enforced here: a body edit or deletion under either dir is
+  a HARD unprotected write, and only the registered rejected row's
+  add/rename freeze move is licensed)
 - ``docs/history/context/`` minus its ``confluence/`` mirror subtree
 - ``docs/history/feature-notes/``
 
@@ -156,6 +169,12 @@ DEFAULT_DOC_REGISTRY_REL = "docs/maintenance/document-registry.md"
 CONTEXT_DIR = "docs/history/context/"
 CONFLUENCE_MIRROR_DIR = "docs/history/context/confluence/"
 FEATURE_NOTES_DIR = "docs/history/feature-notes/"
+# Rejected archives (plans skill / backlog lifecycle): permanent history
+# whose body is frozen exactly like completed history. Hard-coded
+# conventional locations, like CONTEXT_DIR and FEATURE_NOTES_DIR (the
+# sibling-of-completed convention every consumer spells identically).
+PLANS_REJECTED_DIR = "docs/plans/rejected/"
+BACKLOG_REJECTED_DIR = "docs/history/backlog/rejected/"
 EPHEMERA_DIRS = ("docs/history/reviews/", "docs/tmp/")
 
 REGISTRY_COLUMNS = [
@@ -405,7 +424,8 @@ def is_exempt(path: str) -> bool:
 
 
 def is_immutable(path: str, cfg: dict) -> bool:
-    """True when the path is under a completed-history (immutable) dir.
+    """True when the path is under a completed-history (immutable) dir
+    or a rejected archive dir.
 
     Both sides are case-folded first: on case-insensitive filesystems a
     write to a case-variant spelling lands in the immutable dir while
@@ -418,6 +438,8 @@ def is_immutable(path: str, cfg: dict) -> bool:
     immutable_dirs = [
         cfg["plans_completed_dir"],
         cfg["backlog_completed_dir"],
+        PLANS_REJECTED_DIR,
+        BACKLOG_REJECTED_DIR,
         CONTEXT_DIR,
         FEATURE_NOTES_DIR,
     ]
@@ -481,9 +503,27 @@ def is_licensed_transition(change_type: str) -> bool:
                 and change_type[0] in "AR")
 
 
+def rejection_date_valid(text: str) -> bool:
+    """True for a real calendar date in exact ``YYYY-MM-DD`` form.
+
+    The rejection date of a ``state: rejected`` registry row. The exact
+    digit-shape check comes first (``date.fromisoformat`` alone would
+    also accept other ISO spellings, e.g. ``20260923``), then the
+    calendar parse rejects impossible months and days (``2026-13-45``).
+    """
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return False
+    try:
+        datetime.date.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
+
+
 def audit_note_valid(audit: str,
                      today: Optional[datetime.date] = None) -> bool:
-    """A non-empty audit note on a completed/superseded row must begin
+    """A non-empty audit note on a completed/superseded/rejected row
+    must begin
     with the dated confirmation token ``user-approved YYYY-MM-DD:``
     (ADR-0001 user-confirmation precondition). The date must parse
     as a real calendar date (not month 99 / day 99) and must not be in
@@ -510,9 +550,9 @@ def audit_note_valid(audit: str,
 def audit_note_defects(rows: list[dict]) -> list[dict]:
     """Rows whose audit note violates the override-token contract.
 
-    A defect is a row with ``state`` completed or superseded whose
-    non-empty ``audit`` cell fails ``audit_note_valid`` (a self-minted
-    or ill-dated note licenses nothing). ONE shared scan feeds
+    A defect is a row with ``state`` completed, superseded, or rejected
+    whose non-empty ``audit`` cell fails ``audit_note_valid`` (a
+    self-minted or ill-dated note licenses nothing). ONE shared scan feeds
     both ``validate`` and ``check-writes`` so the two subcommands
     detect exactly the same defect set.
     """
@@ -520,7 +560,7 @@ def audit_note_defects(rows: list[dict]) -> list[dict]:
     for row in rows:
         state = row.get("state", "").strip().lower()
         audit = row.get("audit", "").strip()
-        if state in ("completed", "superseded") and audit \
+        if state in ("completed", "superseded", "rejected") and audit \
                 and not audit_note_valid(audit):
             defects.append(row)
     return defects
@@ -689,12 +729,30 @@ def cmd_validate(root: Path, cfg: dict, out: io.StringIO) -> int:
                   file=out)
             hard += 1
         state = row.get("state", "").strip().lower()
-        if state and state not in ("living", "completed", "superseded"):
+        if state and state not in ("living", "completed", "superseded", "rejected"):
             print("HARD invalid state value '%s' in registry row (src=%s);"
-                  " expected living, completed, or superseded"
+                  " expected living, completed, superseded, or rejected"
                   % (row.get("state", ""), row.get("src", "") or "?"),
                   file=out)
             hard += 1
+        if state == "rejected":
+            # Rejected archive rows carry the decision metadata: a real
+            # rejection date in the archived column and a non-empty
+            # rejection reason (docs/plans/rejected/README.md).
+            date_value = row.get("archived", "").strip()
+            if not rejection_date_valid(date_value):
+                print("HARD rejected registry row requires a real"
+                      " YYYY-MM-DD rejection date in the archived column"
+                      " (src=%s; got %r)"
+                      % (row.get("src", "") or "?", date_value),
+                      file=out)
+                hard += 1
+            if not row.get("reason", "").strip():
+                print("HARD rejected registry row requires a non-empty"
+                      " rejection reason in the reason column (src=%s)"
+                      % (row.get("src", "") or "?"),
+                      file=out)
+                hard += 1
         ident = row.get("identity", "").strip()
         if ident:
             by_identity.setdefault(ident, []).append(row)
@@ -750,10 +808,10 @@ def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, Optional[st
 
     ``entries`` pairs each raw path with its optional change type
     (``None`` for letter-less argv/bare-stdin lines). Registered-src
-    exemption is bounded to the add/rename transition: a completed
-    or superseded src with an ``A``/``R`` letter is the licensed
-    archive move; any other letter is a HARD unprotected write; no
-    letter passes at warn tier with a verify duty. Three further
+    exemption is bounded to the add/rename transition: a completed,
+    superseded, or rejected src with an ``A``/``R`` letter is the
+    licensed archive move; any other letter is a HARD unprotected write;
+    no letter passes at warn tier with a verify duty. Three further
     warn tiers bound the HARD tiers, each with an explicit duty: an
     untracked entry resolving to an existing directory under an
     immutable root warns with a stage-the-move duty; on folding
@@ -791,9 +849,10 @@ def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, Optional[st
               % (src, ", ".join(sorted(src_idents[src]))), file=out)
 
     # Registered-src lifecycle exemption, bounded to the transition:
-    # the src of a completed or superseded row is licensed only for the
-    # add/rename change type (the plans and rfc-design completion
-    # transitions); body edits and deletions stay gated.
+    # the src of a completed, superseded, or rejected row is licensed
+    # only for the add/rename change type (the plans and rfc-design
+    # completion transitions and the rejection freeze move); body edits
+    # and deletions stay gated.
     # The exemption compares the UNFOLDED normalized path
     # against the registry src's stored spelling (byte equality); the
     # fold still classifies the immutable-directory prefix and feeds
@@ -820,7 +879,7 @@ def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, Optional[st
             note_hard += 1
         if not src or src in multi_claimed:
             continue
-        if state in ("completed", "superseded"):
+        if state in ("completed", "superseded", "rejected"):
             lifecycle_srcs.add(src_norm)
             lifecycle_folded.setdefault(src, src_norm)
             if audit:
@@ -857,8 +916,9 @@ def cmd_check_writes(root: Path, cfg: dict, entries: list[tuple[str, Optional[st
             if change_type is not None and is_licensed_transition(
                     change_type):
                 print("licensed lifecycle add: %s is the registered src"
-                      " of a completed/superseded registry row and the"
-                      " change type (%s) is the add/rename transition"
+                      " of a completed/superseded/rejected registry row"
+                      " and the change type (%s) is the add/rename"
+                      " transition"
                       % (rel, change_type), file=out)
                 continue
             if change_type is None:

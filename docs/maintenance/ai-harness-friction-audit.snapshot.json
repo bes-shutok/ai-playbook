@@ -1,0 +1,85 @@
+{
+  "capture": {
+    "capture_date_partial": true,
+    "captured_at_local": "2026-09-23T14:02:17+01:00",
+    "timezone": "Europe/Lisbon",
+    "window_end_local_exclusive": "2026-09-24T00:00:00+01:00",
+    "window_start_local": "2026-08-25T00:00:00+01:00"
+  },
+  "content_sha256": "e98fd39f93e451c373e3a29da41399de9adc56a1d101f34c0ce71f78d42f84ab",
+  "coverage": {
+    "checkout_roots_scanned": 57,
+    "filesystem_walk_errors": 0,
+    "unique_git_repositories": 52,
+    "workspace_roots_found": 2,
+    "workspace_roots_readable": 2
+  },
+  "privacy": {
+    "machine_paths_included": false,
+    "personal_or_customer_identifiers_included": false,
+    "project_or_repository_names_included": false,
+    "raw_source_text_included": false
+  },
+  "schema_version": 1,
+  "sources": {
+    "S1_local_event_store": {
+      "filter": "event timestamp in [window_start_local, window_end_local_exclusive)",
+      "row_count": 357766
+    },
+    "S2_local_task_history": {
+      "filter": "turn start timestamp in [window_start_local, window_end_local_exclusive)",
+      "status_counts": {
+        "completed": 2931,
+        "failed": 132,
+        "in_progress": 9,
+        "interrupted": 428
+      },
+      "turn_count": 3500
+    },
+    "S3_local_hook_log": {
+      "dates_with_entries": 15,
+      "line_count": 4808,
+      "window_dates": 30
+    },
+    "S4_review_sidecars": {
+      "attempt_count": 887,
+      "attempt_outcomes": {
+        "cancelled": 1,
+        "complete": 857,
+        "failed": 12,
+        "timeout": 17
+      },
+      "attempts_with_elapsed_seconds": 820,
+      "dated_file_copies": 6935,
+      "elapsed_median_seconds": 10,
+      "elapsed_p90_seconds": 18,
+      "failed_or_timed_out_attempts": 29,
+      "failure_class_counts": {
+        "orchestrator_output_capture": 6,
+        "orchestrator_wait_timeout": 10,
+        "provider_inactivity_timeout": 3,
+        "provider_rate_limited": 1,
+        "provider_timeout": 2,
+        "provider_unavailable": 2,
+        "worker_timeout": 5
+      },
+      "unique_content_records_sha256": 1434
+    },
+    "S5_host_runtime_aggregate": {
+      "agent_delegation_calls": 4877,
+      "errors": 261,
+      "joined_tool_seconds": 1717199,
+      "largest_duration_categories": [
+        "agent delegation",
+        "result polling",
+        "interactive prompts",
+        "unattributed shell execution",
+        "named shell-command groups"
+      ],
+      "scriptable_candidates_passing_threshold": 0,
+      "window_dates": 31,
+      "window_end": "2026-09-23",
+      "window_start": "2026-08-24"
+    }
+  }
+}

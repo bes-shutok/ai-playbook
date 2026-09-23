@@ -19,3 +19,5 @@ Make the context assembly emit at most 4 breakpoints: merge the two least-valuab
 - A 24-hour log window shows zero breakpoint-overflow warnings.
 - No cache-hit regression on long sessions (spot-check token usage per turn before/after).
 - Warn-level log volume drops by roughly a third.
+
+Disposition (2026-09-22): Probed 2026-09-23 (`rg -ln "cache breakpoint" agents projects`): the sole living-surface match is the repo's prompt-caching reference doc `agents/skills/agents-best-practices/references/prompt-caching-and-cost.md`; the breakpoint-overflowing assembler is the agent harness context assembler, outside this repository, so no repo-side fix exists.

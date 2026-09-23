@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Block Codex work and worker launches unless they use GPT-5.6 Luna."""
+"""Block Codex work and worker launches unless they use GPT-6 Luna."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 
-ALLOWED_MODEL = "gpt-5.6-luna"
+ALLOWED_MODEL = "gpt-6-luna"
 TAIL_BYTES = 1024 * 1024
 HEAD_BYTES = 256 * 1024
 WORKER_TOOL_MARKERS = ("spawn_agent", "spawn-agent", "subagent")

@@ -4,6 +4,7 @@ Status: done (delivered by docs/plans/completed/2026-09-21-scheduler-maintenance
 Priority: high
 Workflow: backlog
 Date: 2026-09-20
+Disposition: 2026-09-22 (annotated via docs/plans/2026-09-22-p36-scheduler-durability-audit.md, origin ledger): owned-elsewhere, delivered: the work lives in docs/plans/completed/2026-09-21-scheduler-maintenance-loop-quality-gates.md (executed 2026-09-22), which delivered scripts/check_plan_origins_closed.py plus the maintenance-survey warn.
 
 ## Problem
 

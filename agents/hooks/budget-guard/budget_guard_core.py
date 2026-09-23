@@ -38,13 +38,21 @@ EXIT_OK = 0
 GUARD_LOCK_NAME = "budget-guard.lock"
 
 # The rate-limited decision log: JSON lines recording what each invocation
-# decided. Block decisions and errors always append; allow decisions append
-# at most one heartbeat line per hook per day (the first invocation of the
-# day). Best-effort only: the log never changes the hook's decision or exit
-# code. Overridable with --hook-outcomes-log.
+# decided. Every append (block lines, error lines, and the daily allow
+# heartbeat) is skipped when the shared guard lock cannot be acquired;
+# allow decisions append at most one heartbeat line per hook per day (the
+# first invocation of the day). Best-effort only: the log never changes the
+# hook's decision or exit code. Overridable with --hook-outcomes-log.
 HOOK_OUTCOMES_LOG_PATH = pathlib.Path(
     "~/.ai-playbook/runtime/hook-outcomes.log"
 )
+
+# Decision-log byte bounds: the append path rotates the log in place once
+# it exceeds _LOG_MAX_BYTES, keeping only the trailing _LOG_TAIL_BYTES, and
+# the allow-path rate check reads at most the same trailing window instead
+# of the whole file. Both run under the already-held shared guard lock.
+_LOG_MAX_BYTES = 262144
+_LOG_TAIL_BYTES = 65536
 
 # Module-level date source for the heartbeat rate check (is today's
 # heartbeat line already logged). The test suite overrides this to freeze
@@ -138,26 +146,40 @@ def write_marker_best_effort(path: pathlib.Path, reset_at_epoch: int) -> None:
         pass  # Anti-thrash only; the block is the safety effect.
 
 
-def _heartbeat_logged_today(log_path: pathlib.Path, hook_id: str) -> bool:
-    """Whether the log already holds today's heartbeat line for this hook.
+def _read_log_tail(log_path: pathlib.Path, max_bytes: int) -> str:
+    """Return at most the log's trailing max_bytes, read seek-based.
 
-    The caller holds the shared guard lock, so the read and the append that
-    may follow it cannot interleave a same-day duplicate. A missing,
-    unreadable, corrupted (undecodable bytes), or malformed log counts as
-    not-logged: the worst case is a duplicate heartbeat line, never a
-    changed decision or an escaped error-line flood.
+    Only the tail is read, never the whole file: the consumer (the rate
+    check) only needs the most recent lines, and decision lines are short.
+    A missing, unreadable, or mid-rotation log yields the empty string, and
+    undecodable bytes are replaced rather than raised, so a corrupted log
+    still reads as not-logged downstream instead of raising into the
+    decision path.
+    """
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            end = handle.tell()
+            handle.seek(max(0, end - max_bytes))
+            data = handle.read(max_bytes)
+    except OSError:
+        return ""
+    return data.decode("utf-8", errors="replace")
+
+
+def _heartbeat_logged_today(log_path: pathlib.Path, hook_id: str) -> bool:
+    """Whether the log's trailing window holds today's heartbeat line.
+
+    Reads at most the trailing _LOG_TAIL_BYTES (seek-based) instead of the
+    whole file: lines are short and a today-heartbeat, when present, is
+    near the end. The caller holds the shared guard lock, so the read and
+    the append that may follow it cannot interleave a same-day duplicate.
+    A missing, unreadable, corrupted (undecodable bytes), or malformed log
+    counts as not-logged: the worst case is a duplicate heartbeat line,
+    never a changed decision or an escaped error-line flood.
     """
     today = DATE_SOURCE().isoformat()
-    try:
-        with log_path.open("r", encoding="utf-8") as handle:
-            text = handle.read()
-    except (OSError, ValueError):
-        # ValueError covers UnicodeDecodeError from a corrupted (non-UTF-8)
-        # log: treating it as not-logged lets the heartbeat be written
-        # instead of raising into main()'s guard and self-flooding the log
-        # with one error line per invocation.
-        return False
-    for line in text.splitlines():
+    for line in _read_log_tail(log_path, _LOG_TAIL_BYTES).splitlines():
         line = line.strip()
         if not line:
             continue
@@ -175,11 +197,45 @@ def _heartbeat_logged_today(log_path: pathlib.Path, hook_id: str) -> bool:
     return False
 
 
+def _rotate_log_if_oversized(log_path: pathlib.Path) -> None:
+    """Rewrite the log in place keeping only its trailing _LOG_TAIL_BYTES.
+
+    Called from the append path while the caller holds the shared guard
+    lock, so no other writer can interleave between the size check and the
+    rewrite. A log at or below _LOG_MAX_BYTES is untouched byte-for-byte.
+    Raises OSError on failure so the append-path caller's best-effort guard
+    appends nothing: a rotation failure never changes the hook's decision.
+    """
+    try:
+        size = log_path.stat().st_size
+    except FileNotFoundError:
+        return  # No log yet; nothing to rotate, the append creates it.
+    if size <= _LOG_MAX_BYTES:
+        return
+    with log_path.open("r+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        end = handle.tell()
+        handle.seek(max(0, end - _LOG_TAIL_BYTES))
+        tail = handle.read(_LOG_TAIL_BYTES)
+        # The seek-based tail read may start mid-line; align the first
+        # retained byte to the next line boundary so every retained line
+        # stays a complete JSON record.
+        newline = tail.find(b"\n")
+        if newline != -1:
+            tail = tail[newline + 1:]
+        handle.seek(0)
+        handle.write(tail)
+        handle.truncate(len(tail))
+
+
 def _append_outcome_line(log_path: pathlib.Path, hook_id: str, event: str,
                          decision: str, started: float,
                          **extra) -> None:
     """Append one JSON outcome line; the caller holds the shared guard lock.
 
+    Before appending, the log is rotated in place when it exceeds
+    _LOG_MAX_BYTES (keeping the trailing _LOG_TAIL_BYTES); a rotation
+    failure raises into the same best-effort guard and appends nothing.
     The write is best-effort and swallows every OSError: a logging failure
     never changes the hook's own decision or exit code. Error lines carry
     the failure kind, the message text, and the exit code the invocation
@@ -195,6 +251,7 @@ def _append_outcome_line(log_path: pathlib.Path, hook_id: str, event: str,
     record.update(extra)
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_log_if_oversized(log_path)
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
     except OSError:

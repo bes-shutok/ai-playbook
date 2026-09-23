@@ -84,6 +84,14 @@ class PlanOriginsClosedTest(unittest.TestCase):
             f"# Backlog: {name}\n\nStatus: done\n\nbody\n",
         )
 
+    def _rejected_top(self, name: str) -> Path:
+        # The rejected archive twin: moved under rejected/ with the
+        # decision recorded in the status line.
+        return self._write(
+            self.backlog / "rejected" / name,
+            f"# Backlog: {name}\n\nStatus: rejected (2026-09-23; fixture reason)\n\nbody\n",
+        )
+
     def _plan(self, name: str, origins: list[str] | None) -> Path:
         lines = ["# Plan: fixture", ""]
         if origins:
@@ -178,6 +186,56 @@ class PlanOriginsClosedTest(unittest.TestCase):
         proc = self._run("--plan", str(plan))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("no origins block", proc.stdout)
+
+    def test_rejected_plan_and_backlog_origins_are_closed(self) -> None:
+        # An origin moved under the backlog rejected/ archive classifies
+        # as closed: the mixed plan fails only on the live open straggler
+        # (no live-origin false positive), and a rejected-only origins
+        # block passes. A rejected control plan under the plans rejected/
+        # directory gates like any plan; its rejected origin passes.
+        self._archived(ALPHA)
+        self._rejected_top(BETA)
+        self._open_top(GAMMA)
+        mixed = self._plan(
+            "2026-09-22-fixture-rejected-origins.md",
+            [
+                f"docs/history/backlog/{ALPHA}",
+                f"docs/history/backlog/{BETA}",
+                f"docs/history/backlog/{GAMMA}",
+            ],
+        )
+        proc = self._run("--plan", str(mixed))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(f"straggler: {GAMMA}", proc.stdout)
+        # The rejected origin is never named: it left the top level
+        # through the documented rejected archive.
+        self.assertNotIn(BETA, proc.stdout)
+        self.assertNotIn(ALPHA, proc.stdout)
+        rejected_only = self._plan(
+            "2026-09-22-fixture-rejected-only.md",
+            [f"docs/history/backlog/{BETA}"],
+        )
+        proc = self._run("--plan", str(rejected_only))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("straggler", proc.stdout)
+        # A plan living under the plans rejected/ archive directory is
+        # gated like any plan; its rejected origin stays closed there.
+        rejected_plan_dir = self.root / "docs" / "plans" / "rejected"
+        plan_lines = [
+            "# Plan: fixture in the rejected archive",
+            "",
+            f"Backlog origins (scope of record): `docs/history/backlog/{BETA}`.",
+            "",
+        ]
+        rejected_plan_dir.mkdir(parents=True, exist_ok=True)
+        (rejected_plan_dir / "2026-09-22-fixture-rejected-plan.md").write_text(
+            "\n".join(plan_lines), encoding="utf-8"
+        )
+        proc = self._run(
+            "--plan", str(rejected_plan_dir / "2026-09-22-fixture-rejected-plan.md")
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("straggler", proc.stdout)
 
     def test_unrelated_plans_stragglers_do_not_block(self) -> None:
         clean = self._plan("2026-09-22-fixture-clean.md", None)

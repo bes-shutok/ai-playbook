@@ -64,7 +64,7 @@ that case removal is skipped so the newer window stays enforced.
 
 ## Decision log
 
-Decision log `~/.ai-playbook/runtime/hook-outcomes.log` (overridable with `--hook-outcomes-log`) appends one JSON line per outcome under the shared guard lock: `block` lines (appended on every block decision (a lock-acquisition failure skips the line)), `error` lines (an unexpected exception on the decision path, carrying the failure kind, the message text, and the fail-open exit code the invocation returns), and a daily `heartbeat` allow line rate-limited to the first allow invocation per hook per day; every write is best-effort, and a skipped or failed line (including a lock-acquisition failure) never changes the hook's decision or exit code.
+Decision log `~/.ai-playbook/runtime/hook-outcomes.log` (overridable with `--hook-outcomes-log`) appends one JSON line per outcome under the shared guard lock: `block` lines (appended on every block decision (a lock-acquisition failure skips the line)), `error` lines (an unexpected exception on the decision path, carrying the failure kind, the message text, and the fail-open exit code the invocation returns), and a daily `heartbeat` allow line rate-limited to the first allow invocation per hook per day; every write is best-effort, and a skipped or failed line (including a lock-acquisition failure) never changes the hook's decision or exit code. Test suites pass --hook-outcomes-log pointing into their own temporary directory; no suite writes the live log.
 
 ## Shared guard lock and atomic cleanup contract
 

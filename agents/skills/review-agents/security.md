@@ -58,16 +58,16 @@ Review code for security vulnerabilities and unsafe practices.
 2. Do NOT recommend HSTS unless explicitly asked - it has lasting side effects and can cause outages
 3. `Secure` cookie flag only when TLS is guaranteed; flag absence is not a finding for dev/staging
 
-## Python-Specific (FastAPI / Django / Flask)
+## Web-framework configuration defaults
 
-1. No `DEBUG=True` or auto-reload in production config
-2. FastAPI: `TrustedHostMiddleware` or equivalent for Host header validation
-3. FastAPI: auth enforced via dependencies (not per-route ad-hoc checks that can be forgotten)
-4. Django: never disable `CsrfViewMiddleware` or add blanket `@csrf_exempt`
-5. Django: use ORM queries, not raw SQL with string formatting
-6. Flask: no `app.run(debug=True)` in production; use production WSGI server
+1. No debug mode or auto-reload in production config
+2. Host-header validation via the framework's trusted-host middleware or the toolchain's equivalent
+3. Auth enforced via the framework's dependency-injection request guards (not per-route ad-hoc checks that can be forgotten)
+4. Never disable the framework's CSRF middleware or add blanket CSRF exemptions
+5. Use the framework's ORM/query layer, not raw SQL built with string formatting
+6. No debug-mode application runner in production; use the toolchain's production application server
 7. All frameworks: request size limits configured (body + multipart) to prevent memory DoS
-8. Unsafe deserialization: no `pickle.loads`, `yaml.load` (use `safe_load`), or `eval` on untrusted data
+8. Unsafe deserialization: no unsafe object-deserialization helpers or dynamic evaluation of untrusted data (use the toolchain's safe-mode loaders)
 9. SSRF: validate/allowlist URLs before outbound requests with user-supplied targets
 10. File uploads: validate content type, enforce size limits, never serve from upload path without sanitization
 

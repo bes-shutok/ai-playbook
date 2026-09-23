@@ -120,6 +120,18 @@ V1_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 # 2026-09-08), so same-day records stay exempt and only post-landing
 # records require the fields.
 EXTENDED_SIDECAR_MIN_DATE = "2026-09-09"
+# Panel profile fence (review staging and infra quality plan, Task 5). A
+# record whose date (the staging filename's leading ``YYYY-MM-DD`` date,
+# falling back to the sidecar ``date`` field) is ON OR BEFORE
+# PANEL_PROFILE_MAX_DATE validates in hard mode ONLY against the documented
+# anti-stub core (the reduced path); every other gate runs in warning mode
+# and never contributes to the exit code. The constant is inclusive so both
+# witnessed panel-era record shapes qualify (the 2026-09-19 header-shaped
+# record and the 2026-09-18 phase3 pipe-table records). Outside the window
+# nothing changes. The record date alone selects the path: no schema
+# routing and no per-gate waiver list exist, because era-mismatched format
+# conformance is exactly what the window exists to excuse.
+PANEL_PROFILE_MAX_DATE = "2026-09-19"
 # Coverage obligation fence (review-runner bounded-timeout plan, Task 2).
 # A version-1 record whose ``date`` is on or after COVERAGE_SIDECAR_MIN_DATE
 # must carry a valid ``coverage`` object when ``source_kind`` is ``plan``
@@ -808,10 +820,21 @@ def extract_findings_section(content: str) -> str | None:
     return re.split(r"\n## ", findings_section, maxsplit=1)[0]
 
 
-def split_finding_blocks(content: str) -> list[str]:
-    findings_section = extract_findings_section(content)
-    if findings_section is None:
-        return []
+def split_finding_blocks(content: str, *, panel_profile: bool = False) -> list[str]:
+    # Panel profile (review staging and infra quality plan, Task 5): with
+    # ``panel_profile`` the WHOLE document is scanned instead of the
+    # ``## Findings`` section (the conservation leg must see round-append
+    # sections, which the Findings-section extractor stops at the next
+    # ``## `` heading) and the panel header shapes ``### N. <title>
+    # (Severity)`` and ``### R<N>-F<M>. <title> (Severity)`` are recognized
+    # as finding-header boundaries. The keyword defaults off, so
+    # current-format splitting is byte-for-byte unchanged.
+    if panel_profile:
+        findings_section = content
+    else:
+        findings_section = extract_findings_section(content)
+        if findings_section is None:
+            return []
     # Legacy findings use "### 1." or "### F1". Current grouped findings use
     # severity headings plus "#### F1." entries.
     # r5 F8: the current-format split is fence-aware. A ``#### F<N>.`` line
@@ -822,8 +845,17 @@ def split_finding_blocks(content: str) -> list[str]:
     # ``classify_fence_lines`` classifier (single fence state machine).
     lines = findings_section.splitlines(keepends=True)
     header_re = re.compile(r"^####\s+F\d+\.")
+    panel_header_re = (
+        re.compile(
+            r"^###\s+(?:(\d+)|R\d+-F(\d+))\.\s+.+\((Critical|High|Medium|Low)\)\s*$"
+        )
+        if panel_profile
+        else None
+    )
 
     def is_finding_header(line: str) -> bool:
+        if panel_header_re is not None and panel_header_re.match(line):
+            return True
         return header_re.match(line) is not None
 
     def boundary_indices(events: list[tuple[str, object]]) -> list[int]:
@@ -868,7 +900,10 @@ def split_finding_blocks(content: str) -> list[str]:
 
 
 def parse_markdown_findings(
-    content: str, warn: Callable[[str], None] | None = None
+    content: str,
+    warn: Callable[[str], None] | None = None,
+    *,
+    panel_profile: bool = False,
 ) -> list[dict]:
     """Parse current-format Markdown findings into ``{id, severity, blocking,
     triage, pattern}`` dicts, one per ``#### F<N>.`` block.
@@ -890,10 +925,21 @@ def parse_markdown_findings(
     unclosed-fence fallback warning is surfaced through the optional ``warn``
     callback, which receives the message once per parsing pass of the
     Findings section; ``None`` (the default) means fully silent.
+
+    ``panel_profile`` opts in to the panel-profile parse used by the
+    date-fenced reduced validator path: the WHOLE document is scanned (not
+    just the ``## Findings`` section, so round-append sections are included)
+    and the panel header shapes ``### N. <title> (Severity)`` and
+    ``### R<N>-F<M>. <title> (Severity)`` open findings whose severity comes
+    from the parenthesized suffix. The keyword defaults off, so
+    current-format parsing is byte-for-byte unchanged.
     """
-    findings_section = extract_findings_section(content)
-    if findings_section is None:
-        return []
+    if panel_profile:
+        findings_section = content
+    else:
+        findings_section = extract_findings_section(content)
+        if findings_section is None:
+            return []
     parsed: list[dict] = []
     current: dict | None = None
     # r3 F2: metadata bullets are read ONLY between the finding header and the
@@ -918,10 +964,20 @@ def parse_markdown_findings(
     # the staging format cannot inject a phantom finding.
     severity_re = re.compile(r"^###\s+(Critical|High|Medium|Low)\b")
     finding_header_re = re.compile(r"^####\s+F(\d+)\.")
+    panel_header_re = (
+        re.compile(
+            r"^###\s+(?:(\d+)|R\d+-F(\d+))\.\s+.+\((Critical|High|Medium|Low)\)\s*$"
+        )
+        if panel_profile
+        else None
+    )
 
     def is_reset_heading(line: str) -> bool:
-        # The parser's reset heading set: severity-group headings and finding
-        # headers, NOT generic ``####`` sub-headings (r3 F2).
+        # The parser's reset heading set: severity-group headings, finding
+        # headers, and (panel profile only) panel headers, NOT generic
+        # ``####`` sub-headings (r3 F2).
+        if panel_header_re is not None and panel_header_re.match(line):
+            return True
         return bool(severity_re.match(line) or finding_header_re.match(line))
 
     def apply_events(
@@ -946,6 +1002,21 @@ def parse_markdown_findings(
                 if sev_match:
                     cur_severity = sev_match.group(1)
                     continue
+                if panel_header_re is not None:
+                    panel_match = panel_header_re.match(line)
+                    if panel_match:
+                        if cur is not None:
+                            scanned.append(cur)
+                        cur = {
+                            "id": int(
+                                panel_match.group(1) or panel_match.group(2)
+                            ),
+                            "severity": panel_match.group(3),
+                            "blocking": None,
+                            "triage": None,
+                        }
+                        metadata_open = True
+                        continue
                 block_match = finding_header_re.match(line)
                 if block_match:
                     if cur is not None:
@@ -4435,7 +4506,8 @@ def validate_current_payload(
         ):
             result.add_error(
                 f"current finding {display} has invalid confidence "
-                f"(expected one of {sorted(VALID_CONFIDENCE)})"
+                f"(expected one of {sorted(VALID_CONFIDENCE)}); "
+                "map to the closed confidence enum (hypothesis, strong-evidence, verified); do not downgrade"
             )
         for field_name in REQUIRED_CURRENT_FINDING_FIELDS:
             if field_name not in finding:
@@ -4724,6 +4796,228 @@ def detect_solo_collapse(staging_path: Path, content: str) -> bool:
     if present_complete == 0 and folded_or_skipped >= 4:
         return True
     return False
+
+
+def _panel_profile_record_date(
+    staging_name: str, sidecar_payload: object
+) -> str | None:
+    """Record date for the ``PANEL_PROFILE_MAX_DATE`` fence (review staging
+    and infra quality plan, Task 5; r1 F3 fail-closed sidecar fallback).
+
+    The staging filename's leading ``YYYY-MM-DD`` date, falling back to the
+    sidecar ``date`` field when the filename carries no parseable leading
+    date. The fallback fails closed (r1 F3): the sidecar date counts only
+    when it strictly matches ``YYYY-MM-DD`` (ASCII digits, the
+    ``V1_DATE_RE`` shape) and is a valid calendar date; anything else means
+    "no date". A lexicographic compare against the fence constant is only
+    calendar-honest for real calendar dates, so a fake value such as
+    ``2026-01-99`` (which sorts inside the window) must not select the
+    reduced path. ``None`` means undated: an undated record never enters
+    the panel profile (fail-closed, mirroring the freshness fence's
+    treatment of undated surfaces) and keeps the full contract. The
+    filename leg keeps its format-only parse: the filename date surface is
+    validated by its own date-format gates elsewhere.
+    """
+    name_match = (
+        re.match(r"(\d{4}-\d{2}-\d{2})", staging_name) if staging_name else None
+    )
+    if name_match:
+        return name_match.group(1)
+    if isinstance(sidecar_payload, dict):
+        sidecar_date = sidecar_payload.get("date")
+        if (
+            isinstance(sidecar_date, str)
+            and V1_DATE_RE.match(sidecar_date) is not None
+        ):
+            from datetime import date as _date
+
+            try:
+                _date.fromisoformat(sidecar_date)
+            except ValueError:
+                # Calendar-invalid (for example month 13): no date.
+                return None
+            return sidecar_date
+    return None
+
+
+def _has_prefixed_h2_section(content: str, label: str) -> bool:
+    """Heading-text PREFIX match for the anti-stub core's section legs: a
+    level-2 heading whose text starts with ``label`` counts as present, so
+    the suffixed era headings the witnesses carry (for example
+    ``## Findings (zero blocking)``) satisfy the Findings leg, and the
+    Metadata leg applies the same prefix principle."""
+    return (
+        re.search(
+            rf"^## {re.escape(label)}(?:[ \t].*)?$", content, re.MULTILINE
+        )
+        is not None
+    )
+
+
+def _validate_panel_profile_record(
+    path: Path,
+    record_date: str,
+    sidecar_read: _SidecarRead,
+    shadow_result: ValidationResult,
+    source_hint: str | None = None,
+) -> ValidationResult:
+    """Reduced validator path selected by the ``PANEL_PROFILE_MAX_DATE``
+    fence (review staging and infra quality plan, Task 5).
+
+    Reached from the hard-mode entry (``main``) when a hard-mode record's
+    date (staging filename date, falling back to the fail-closed sidecar
+    ``date`` fallback) is on or before the constant, whether or not the
+    full contract run passed: the full-contract run arrives as
+    ``shadow_result``. r1 F1: the profile path is record-date-gated only,
+    so the anti-stub core applies to every in-window record, including one
+    the full contract would accept whose sidecar-verdict leg the full
+    contract leaves optional. Runs ONLY
+    the anti-stub core as errors: (a) the Markdown and sidecar pair
+    parses; (b) a ``## Metadata`` section and a ``## Findings`` section
+    exist (heading-text prefix match); (c) the sidecar carries a verdict;
+    (d) the sidecar's counts agree with its own findings array length when
+    both are present; and (e) finding conservation by document order over
+    every recognized finding block in the WHOLE document, the Findings
+    section plus round-append sections. Leg (e) never goes through the
+    Findings-section extractor, which stops at the next ``## `` heading and
+    would miss round-append blocks; the panel-profile keyword is threaded
+    into the parser and splitter call sites instead. When the document
+    parses into zero recognized blocks while the sidecar lists findings,
+    the unparsed conservation leg is reported as a warning (the pipe-table
+    era layout), never an error. Every other gate's errors arrive demoted
+    from ``shadow_result`` as warnings and never contribute to the exit
+    code. An in-window record that passes the full contract reaches this
+    path too (r1 F1) and can still fail it through leg (c); validating
+    current-format in-window records by the reduced set is a documented
+    consequence of the fence.
+    """
+    result = ValidationResult(path=path)
+    payload = sidecar_read.payload
+    sidecar_name = stats_sidecar_path(path).name
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        result.add_error(f"panel profile: cannot re-read the staging doc: {exc}")
+        content = ""
+
+    # (a) the Markdown and sidecar pair parses. The Markdown half already
+    # parsed (the caller read ``content`` before selecting this path).
+    if not sidecar_read.exists:
+        result.add_error(
+            f"panel profile: stats sidecar {sidecar_name!r} is missing; the "
+            "Markdown and sidecar pair must both parse"
+        )
+    elif sidecar_read.error is not None or payload is None:
+        result.add_error(
+            f"panel profile: stats sidecar {sidecar_name!r} does not parse: "
+            f"{sidecar_read.error}"
+        )
+
+    # (b) a Metadata section and a Findings section exist (prefix match).
+    if not _has_prefixed_h2_section(content, "Metadata"):
+        result.add_error(
+            "panel profile: missing ## Metadata section (heading-text "
+            "prefix match)"
+        )
+    if not _has_prefixed_h2_section(content, "Findings"):
+        result.add_error(
+            "panel profile: missing ## Findings section (heading-text "
+            "prefix match, so suffixed era headings count)"
+        )
+
+    # (c) the sidecar carries a verdict.
+    verdict_present = (
+        isinstance(payload, dict)
+        and isinstance(payload.get("verdict"), str)
+        and payload["verdict"].strip() != ""
+    )
+    if (
+        sidecar_read.exists
+        and sidecar_read.error is None
+        and not verdict_present
+    ):
+        result.add_error("panel profile: stats sidecar carries no verdict")
+
+    sidecar_findings: list | None = None
+    if isinstance(payload, dict):
+        findings_value = payload.get("findings")
+        if isinstance(findings_value, list):
+            sidecar_findings = findings_value
+        # (d) the sidecar's counts agree with its own findings array length
+        # when both are present.
+        counts_value = payload.get("counts")
+        if (
+            isinstance(counts_value, dict)
+            and "staged_findings" in counts_value
+            and sidecar_findings is not None
+        ):
+            if counts_value["staged_findings"] != len(sidecar_findings):
+                result.add_error(
+                    "panel profile: finding conservation: "
+                    f"counts.staged_findings="
+                    f"{counts_value['staged_findings']!r} but the sidecar "
+                    f"findings array has {len(sidecar_findings)} finding(s)"
+                )
+
+    # (e) whole-document conservation by document order over every
+    # recognized finding block, the Findings section plus round-append
+    # sections (panel-profile keyword threaded at both call sites).
+    parsed_findings = parse_markdown_findings(content, panel_profile=True)
+    recognized_blocks = split_finding_blocks(content, panel_profile=True)
+    if sidecar_findings is not None and (parsed_findings or sidecar_findings):
+        if not parsed_findings and not recognized_blocks:
+            result.add_warning(
+                "panel profile: unparsed conservation leg: the document "
+                "parses into 0 recognized finding blocks while the sidecar "
+                f"lists {len(sidecar_findings)} finding(s); reported as a "
+                "warning (pipe-table era layout), never an error"
+            )
+        else:
+            block_count = len(recognized_blocks) or len(parsed_findings)
+            if block_count != len(sidecar_findings):
+                result.add_error(
+                    "panel profile: finding conservation: Markdown lists "
+                    f"{block_count} whole-document finding block(s) but the "
+                    f"sidecar lists {len(sidecar_findings)}"
+                )
+            else:
+                for position, (md, sc) in enumerate(
+                    zip(parsed_findings, sidecar_findings), start=1
+                ):
+                    if not isinstance(sc, dict):
+                        continue
+                    md_severity = md.get("severity")
+                    sc_severity = sc.get("severity")
+                    if (
+                        md_severity is not None
+                        and sc_severity is not None
+                        and md_severity != sc_severity
+                    ):
+                        result.add_error(
+                            "panel profile: finding conservation: finding "
+                            f"at document position {position} severity "
+                            f"disagrees (Markdown {md_severity!r}, sidecar "
+                            f"{sc_severity!r})"
+                        )
+
+    # Warning-not-error plumbing: the full contract ran once into
+    # ``shadow_result``; its errors are demoted to warnings and never
+    # contribute to the exit code; its own warnings pass through. A demoted
+    # stale-digest error keeps the F7 hint naming the source flag and the
+    # hashed source path so the diagnostic value survives the demotion.
+    for shadow_error in shadow_result.errors:
+        message = (
+            "panel profile: record dated "
+            f"{record_date} (on or before PANEL_PROFILE_MAX_DATE "
+            f"{PANEL_PROFILE_MAX_DATE}); current-contract error reported as "
+            f"a warning: {shadow_error}"
+        )
+        if source_hint and "source_digest is stale" in shadow_error:
+            message += source_hint
+        result.add_warning(message)
+    for shadow_warning in shadow_result.warnings:
+        result.add_warning(shadow_warning)
+    return result
 
 
 def validate_staging_file(
@@ -6663,20 +6957,95 @@ _SOURCE_FLAG_TABLE = (
 # Per-kind selftest fixtures for _selftest_source_cli, keyed by source_kind:
 # (artifact filename, artifact bytes, mutation bytes, staging-doc stem,
 #  other-file name, other-file bytes). Kinds come from _SOURCE_FLAG_TABLE.
+# The staging stems are dated AFTER PANEL_PROFILE_MAX_DATE (r1 F1): the
+# pins exercise the full-contract CLI digest wiring through main(--hard),
+# and once the panel profile became date-gated an in-window record
+# validates only against the reduced anti-stub path, which would bypass
+# that wiring (the original 2026-07-17 stems predate the fence and were
+# re-dated for exactly this reason). Post-window dates keep the full
+# contract, so the fixture builder below upgrades the clear-review base to
+# the full current format the post-window gates demand (sidecar date, the
+# extended freshness fields, the record-kind twin, and the plan-kind
+# coverage object); without the upgrade the pins would fail on those
+# unrelated families instead of the digest wiring.
 _SOURCE_CLI_FIXTURES = {
     "plan": (
         "plan.md", b"# Plan\n## Tasks\n1. do foo\n", b"\nfolded F1\n",
-        "2026-07-17-plan-review-cli-r1", "other.md", b"# Not the plan\n",
+        "2026-09-22-plan-review-cli-r1", "other.md", b"# Not the plan\n",
     ),
     "rfc": (
         "rfc.md", b"# RFC\n## Goals\n1. do foo\n", b"\nfolded F1\n",
-        "2026-07-17-rfc-review-cli-r1", "other-rfc.md", b"# Not the rfc\n",
+        "2026-09-22-rfc-review-cli-r1", "other-rfc.md", b"# Not the rfc\n",
     ),
     "document": (
         "doc.md", b"# Doc\n## Steps\n1. do foo\n", b"\nupdated section\n",
-        "2026-07-17-confluence-review-cli-r1", "other-doc.md", b"# Not the doc\n",
+        "2026-09-22-confluence-review-cli-r1", "other-doc.md", b"# Not the doc\n",
     ),
 }
+
+# The date the _selftest_source_cli fixture records carry (after the
+# PANEL_PROFILE_MAX_DATE window; see _SOURCE_CLI_FIXTURES above).
+_POST_WINDOW_FIXTURE_DATE = "2026-09-22"
+
+
+def _post_window_fixture_payload(kind: str) -> dict:
+    """Full-current-format sidecar for a post-window fixture record.
+
+    Adds every date-fenced field the post-window contract demands on top
+    of the canonical current-format clear-review base: the sidecar
+    ``date``, the four extended freshness fields, and ``record_kind``
+    (canonical). The plan kind additionally carries the required
+    ``coverage`` object (canonical plan records dated on or after
+    ``COVERAGE_SIDECAR_MIN_DATE``); the other source kinds stay
+    coverage-free (the obligation is plan-scoped).
+    """
+    payload = json.loads(json.dumps(_current_clear_payload()))
+    payload["date"] = _POST_WINDOW_FIXTURE_DATE
+    payload["review_mode"] = "targeted"
+    payload["risk_signals"] = []
+    payload["prior_findings_filter"] = False
+    payload["last_fix_commit"] = None
+    payload["record_kind"] = "canonical"
+    if kind == "plan":
+        payload["coverage"] = {
+            "outcome": "clean",
+            "material_lens_set": sorted(
+                {
+                    lens
+                    for lenses in REQUIRED_PANEL_LENSES.values()
+                    for lens in lenses
+                }
+            ),
+            "completed": sorted(
+                {
+                    lens
+                    for lenses in REQUIRED_PANEL_LENSES.values()
+                    for lens in lenses
+                }
+            ),
+            "missing": [],
+        }
+    return payload
+
+
+def _post_window_fixture_markdown(kind: str, title: str = "cli") -> str:
+    """Markdown twin of ``_post_window_fixture_payload``: the clear-review
+    base plus the freshness Metadata lines, the ``Record kind:`` twin line,
+    and (plan kind) the ``Coverage:`` outcome line."""
+    meta_lines = [
+        "- Review mode: targeted",
+        "- Changed-risk signals: none",
+        "- Prior findings supplied as filter: no",
+        "- Last fix commit: none",
+        "- Record kind: canonical",
+    ]
+    if kind == "plan":
+        meta_lines.append("- Coverage: clean")
+    return _current_clear_markdown(title).replace(
+        "- Panel mode: full",
+        "- Panel mode: full\n" + "\n".join(meta_lines),
+        1,
+    )
 
 
 def _selftest_source_cli(root: Path, check) -> None:
@@ -6707,11 +7076,11 @@ def _selftest_source_cli(root: Path, check) -> None:
         other_path = root / other_name
         other_path.write_bytes(other_bytes)
 
-        payload = json.loads(json.dumps(_current_clear_payload()))
+        payload = _post_window_fixture_payload(kind)
         payload["source_digest"] = src_digest
         payload["source_kind"] = kind
         staging = _write_staging(
-            root, f"{stem}.md", _current_clear_markdown("cli"), payload,
+            root, f"{stem}.md", _post_window_fixture_markdown(kind), payload,
         )
 
         # Case A (discriminating): point the flag at the CORRECT artifact ->
@@ -6756,12 +7125,12 @@ def _selftest_source_cli(root: Path, check) -> None:
         # prose (r4 F1: this case now runs for every kind; the rfc/doc
         # families used a 'plan'-declared sidecar, the plan kind uses 'rfc').
         declared_kind = "rfc" if kind == "plan" else "plan"
-        payload_mismatch = json.loads(json.dumps(_current_clear_payload()))
+        payload_mismatch = _post_window_fixture_payload(declared_kind)
         payload_mismatch["source_digest"] = src_digest
         payload_mismatch["source_kind"] = declared_kind
         staging_mismatch = _write_staging(
             root, f"{stem}-mismatch.md",
-            _current_clear_markdown("cli"), payload_mismatch,
+            _post_window_fixture_markdown(declared_kind), payload_mismatch,
         )
         with _stderr_captured() as buf2:
             rc_kind_mismatch = main(
@@ -11621,6 +11990,77 @@ def _selftest_coverage_contract(root: Path, check) -> None:
         res.errors == [],
     )
 
+    # Positive attempts-telemetry fixture: a verdict-yes clean round whose
+    # coverage carries two attempts (first failed with a failure class,
+    # second complete and contributing the full material lens set) plus a
+    # retry budget with positive per-attempt and per-worker ceilings
+    # passes. Regression fixture for the attempts-loop outcome shadowing
+    # fix: the loop-local attempt outcome name must stay un-shadowed, or
+    # the verdict cross-checks at the end of validate_coverage_contract
+    # would read the last attempt's outcome instead of the coverage
+    # outcome and fail this clean round.
+    attempts_telemetry = {
+        "outcome": "clean",
+        "material_lens_set": lens_set,
+        "completed": lens_set,
+        "missing": [],
+        "attempts": [
+            {
+                "attempt_id": "att1",
+                "started_at": "2026-09-16T10:00:00Z",
+                "deadline": "2026-09-16T10:15:00Z",
+                "elapsed": 14,
+                "outcome": "failed",
+                "failure_class": "provider-timeout",
+                "attempt_number": 1,
+            },
+            {
+                "attempt_id": "att2",
+                "started_at": "2026-09-16T10:15:00Z",
+                "deadline": "2026-09-16T10:30:00Z",
+                "elapsed": 12,
+                "outcome": "complete",
+                "attempt_number": 2,
+                "contributed_coverage": True,
+                "lenses": lens_set,
+            },
+        ],
+        "retry_budget": {
+            "per_attempt_timeout_minutes": 15,
+            "per_worker_max": 2,
+        },
+    }
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, attempts_telemetry, verdict="yes"),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: verdict-yes with attempts telemetry passes",
+        res.errors == [],
+    )
+
+    # Negative: the same fixture shape with a genuine coverage-level
+    # outcome mismatch (coverage outcome failed against verdict yes)
+    # still fails with attempts present, and the verdict cross-check
+    # error names the coverage-level outcome, never an attempt's.
+    mismatch = json.loads(json.dumps(attempts_telemetry))
+    mismatch["outcome"] = "failed"
+    res = ValidationResult(Path("x"))
+    validate_coverage_contract(
+        _coverage_fixture_payload(base, mismatch, verdict="yes"),
+        res,
+        coverage_exempt=False,
+    )
+    check(
+        "coverage contract: genuine verdict and outcome mismatch still fails with attempts present",
+        any(
+            "verdict 'yes' requires coverage outcome" in e and "'failed'" in e
+            for e in res.errors
+        ),
+    )
+
     # A valid post-constant inherited link (linked round shows the lens
     # covered in completed) passes.
     linked_ok_payload = _coverage_fixture_payload(
@@ -13174,6 +13614,356 @@ def _selftest_prompt_scope_accounting(root: Path, check) -> None:
         )
 
 
+def _selftest_panel_profile(root: Path, check) -> None:
+    """Date-fenced reduced path and panel-shape conservation (review
+    staging and infra quality plan, Task 5).
+
+    Fixtures are derived from the two witnessed panel-era shapes: the
+    2026-09-19 header-shaped record (``### N.`` blocks under ``## Findings``
+    plus ``### R<N>-F<M>.`` blocks under a ``## Round 2 (r2)`` round-append
+    section, sidecar ids 1..N mirroring the witnessed record) and the
+    2026-09-18 phase3 pipe-table records (suffixed ``## Findings (zero
+    blocking)`` heading, pipe-table rows, version-1 sidecar without a
+    ``date`` field). Check 6 (r1 F1) additionally uses the shared
+    post-window full-current-format fixture builder so it can prove the
+    reduced set engages even on a record the full contract passes.
+    """
+
+    def header_shape_markdown(date: str) -> str:
+        main_blocks = "\n".join(
+            f"### {i}. Header-shaped finding number {i} (Low)\n"
+            "- Files: `scripts/example.py`\n"
+            f"- Body claim for finding {i}: the reviewed change diverges\n"
+            "  from the documented contract on a reachable path.\n"
+            "- Triage: done."
+            for i in range(1, 6)
+        )
+        round_two_blocks = "\n".join(
+            f"### R2-F{m}. Round-two header-shaped finding {m} (Low)\n"
+            "- Files: `scripts/example.py`\n"
+            f"- Body claim for round-two finding {m}.\n"
+            "- Triage: done."
+            for m in range(1, 5)
+        )
+        return (
+            "# Code Review: panel profile witnessed header shape\n"
+            "\n"
+            "## Metadata\n"
+            "- Type: Code Review\n"
+            f"- Date: {date}\n"
+            "- Findings: 9\n"
+            "- Status: STAGED\n"
+            "\n"
+            "## Review Statistics\n"
+            "\n"
+            "### Panel\n"
+            "| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |\n"
+            "|--------|--------|---------------|--------|-----|------|------|----------|\n"
+            "| correctness-completeness | quality, implementation | none | complete | 2 | 1 | 1 | no |\n"
+            "| testing | testing | none | complete | 1 | 1 | 0 | no |\n"
+            "| design-simplicity | architecture, simplification | none | complete | 1 | 1 | 0 | no |\n"
+            "| contract-docs | documentation | none | complete | 1 | 0 | 1 | no |\n"
+            "| risk | security | none | complete | 1 | 1 | 0 | no |\n"
+            "\n"
+            "### Counts\n"
+            "- Workers launched: 5\n"
+            "- Staged findings: 9\n"
+            "\n"
+            "### Triage outcomes\n"
+            "Pending triage.\n"
+            "\n"
+            "## Findings\n"
+            "\n"
+            f"{main_blocks}\n"
+            "\n"
+            "## Summary\n"
+            "\n"
+            "- Total findings: 9\n"
+            "- By severity: Critical 0, High 0, Medium 0, Low 9\n"
+            "- Blocking: 0\n"
+            "\n"
+            "## Round 2 (r2)\n"
+            "\n"
+            f"- Date: {date}\n"
+            "- Findings: 4 (all Low; 0 blocking)\n"
+            "\n"
+            f"{round_two_blocks}\n"
+            "\n"
+            "### Round 2 triage outcomes\n"
+            "| Worker | Lens | Staged | Fixed | Dropped | Deferred | Pending |\n"
+            "|--------|------|--------|-------|---------|----------|---------|\n"
+            "| round-2-fix-pass | unknown | 4 | 4 | 0 | 0 | 0 |\n"
+        )
+
+    def header_shape_sidecar(date: str, finding_count: int = 9) -> dict:
+        return {
+            "schema_version": 1,
+            "date": date,
+            "verdict": "yes",
+            "panel_mode": "full",
+            "selection_reason": None,
+            "source_digest": "abc123",
+            "escalation_reason": None,
+            "counts": {
+                "workers_launched": 5,
+                "raw_findings": 12,
+                "staged_findings": finding_count,
+                "discarded": 0,
+            },
+            "findings": [
+                {
+                    "id": i,
+                    "severity": "Low",
+                    "blocking": False,
+                    "title": f"Header-shaped finding {i}",
+                    "pattern": f"quality#example-{i}",
+                    "workers": ["correctness-completeness"],
+                }
+                for i in range(1, finding_count + 1)
+            ],
+            "overflow": [],
+        }
+
+    def phase3_markdown() -> str:
+        return (
+            "# Code Review r2: panel profile phase3 pipe-table shape\n"
+            "\n"
+            "## Metadata\n"
+            "- Review mode: targeted\n"
+            "- Round: 2\n"
+            "- Witness ledger: N/A (zero blocking round)\n"
+            "\n"
+            "## Findings (zero blocking)\n"
+            "\n"
+            "| id | Sev | Blocking | Status | Triage | Title |\n"
+            "|----|-----|----------|--------|--------|-------|\n"
+            "| CC2-1 | Medium | false | done | fixed | First pipe-table finding row |\n"
+            "| T2-1 | Low | false | done | fixed | Second pipe-table finding row |\n"
+        )
+
+    def phase3_sidecar() -> dict:
+        return {
+            "schema_version": 1,
+            "verdict": "no",
+            "review_mode": "targeted",
+            "review_round": 2,
+            "source_kind": "plan",
+            "findings": [
+                {
+                    "id": "CC2-1",
+                    "severity": "Medium",
+                    "blocking": False,
+                    "status": "done",
+                },
+                {
+                    "id": "T2-1",
+                    "severity": "Low",
+                    "blocking": False,
+                    "status": "done",
+                },
+            ],
+        }
+
+    # Check 1: the witnessed header-shape record, dated on the fence
+    # constant, passes --hard under the reduced path with whole-document
+    # conservation enforced (nine blocks recognized across the Findings
+    # section and the Round 2 round-append section). The exit code and the
+    # warnings are asserted through main(), the hard-mode entry where the
+    # profile branch lives.
+    witnessed_md = header_shape_markdown("2026-09-19")
+    witnessed_payload = header_shape_sidecar("2026-09-19")
+    witnessed_path = _write_staging(
+        root,
+        "2026-09-19-panel-profile-witnessed-header-shape-r1.md",
+        witnessed_md,
+        witnessed_payload,
+    )
+    with _stderr_captured() as witnessed_buf:
+        witnessed_rc = main(["--hard", str(witnessed_path)])
+    check(
+        "panel profile: witnessed header-shape record on or before "
+        "2026-09-19 passes --hard",
+        witnessed_rc == 0
+        and "ERROR:" not in witnessed_buf.getvalue()
+        and "unparsed conservation leg" not in witnessed_buf.getvalue(),
+    )
+
+    # Check 2: the phase3 pipe-table shape, dated in-window, passes --hard
+    # under the reduced path with the unparsed conservation leg reported as
+    # a warning (pipe-table rows parse into zero recognized blocks while
+    # the sidecar lists findings).
+    phase3_path = _write_staging(
+        root,
+        "2026-09-18-panel-profile-phase3-pipe-table-r2.md",
+        phase3_markdown(),
+        phase3_sidecar(),
+    )
+    with _stderr_captured() as phase3_buf:
+        phase3_rc = main(["--hard", str(phase3_path)])
+    check(
+        "panel profile: phase3-shape pipe-table record passes under the "
+        "reduced path",
+        phase3_rc == 0
+        and "ERROR:" not in phase3_buf.getvalue()
+        and "unparsed conservation leg" in phase3_buf.getvalue(),
+    )
+
+    # Check 3: both shapes re-dated after the window keep failing their
+    # current-contract error families (the full path, never the profile).
+    post_witness_path = _write_staging(
+        root,
+        "2026-09-20-panel-profile-post-window-witness-r1.md",
+        header_shape_markdown("2026-09-20"),
+        header_shape_sidecar("2026-09-20"),
+    )
+    with _stderr_captured() as post_witness_buf:
+        post_witness_rc = main(["--hard", str(post_witness_path)])
+    post_phase3_path = _write_staging(
+        root,
+        "2026-09-20-panel-profile-post-window-phase3-r2.md",
+        phase3_markdown(),
+        {**phase3_sidecar(), "date": "2026-09-20"},
+    )
+    with _stderr_captured() as post_phase3_buf:
+        post_phase3_rc = main(["--hard", str(post_phase3_path)])
+    check(
+        "panel profile: both shapes after the window still fail",
+        post_witness_rc == 1
+        and "finding conservation: Markdown lists 0 finding(s) but sidecar "
+        "lists 9" in post_witness_buf.getvalue()
+        and post_phase3_rc == 1
+        and "missing canonical pattern" in post_phase3_buf.getvalue(),
+    )
+
+    # Check 4: a stub in-window record still fails the anti-stub core.
+    # Three arms: missing Metadata section, missing Findings section,
+    # sidecar without a verdict.
+    stub_no_meta_path = _write_staging(
+        root,
+        "2026-09-19-panel-profile-stub-no-meta-r1.md",
+        header_shape_markdown("2026-09-19").replace(
+            "## Metadata\n", "## Notes\n", 1
+        ),
+        header_shape_sidecar("2026-09-19"),
+    )
+    with _stderr_captured() as stub_no_meta_buf:
+        stub_no_meta_rc = main(["--hard", str(stub_no_meta_path)])
+    stub_no_findings_payload = json.loads(json.dumps(witnessed_payload))
+    stub_no_findings_path = _write_staging(
+        root,
+        "2026-09-19-panel-profile-stub-no-findings-r1.md",
+        header_shape_markdown("2026-09-19").replace(
+            "## Findings\n", "## Results\n", 1
+        ),
+        stub_no_findings_payload,
+    )
+    with _stderr_captured() as stub_no_findings_buf:
+        stub_no_findings_rc = main(["--hard", str(stub_no_findings_path)])
+    stub_no_verdict_payload = json.loads(json.dumps(witnessed_payload))
+    del stub_no_verdict_payload["verdict"]
+    stub_no_verdict_path = _write_staging(
+        root,
+        "2026-09-19-panel-profile-stub-no-verdict-r1.md",
+        header_shape_markdown("2026-09-19"),
+        stub_no_verdict_payload,
+    )
+    with _stderr_captured() as stub_no_verdict_buf:
+        stub_no_verdict_rc = main(["--hard", str(stub_no_verdict_path)])
+    check(
+        "panel profile: a stub in-window record still fails the anti-stub "
+        "core",
+        stub_no_meta_rc == 1
+        and "missing ## Metadata section" in stub_no_meta_buf.getvalue()
+        and stub_no_findings_rc == 1
+        and "missing ## Findings section" in stub_no_findings_buf.getvalue()
+        and stub_no_verdict_rc == 1
+        and "carries no verdict" in stub_no_verdict_buf.getvalue(),
+    )
+
+    # Check 5: count agreement is still enforced when the document parses:
+    # a sidecar carrying one more finding than the Markdown headers errors
+    # through the whole-document conservation leg.
+    count_mismatch_path = _write_staging(
+        root,
+        "2026-09-19-panel-profile-count-mismatch-r1.md",
+        header_shape_markdown("2026-09-19"),
+        header_shape_sidecar("2026-09-19", finding_count=10),
+    )
+    with _stderr_captured() as count_mismatch_buf:
+        count_mismatch_rc = main(["--hard", str(count_mismatch_path)])
+    check(
+        "panel profile: count agreement still enforced when parseable",
+        count_mismatch_rc == 1
+        and "panel profile: finding conservation: Markdown lists 9 "
+        "whole-document finding block(s) but the sidecar lists 10"
+        in count_mismatch_buf.getvalue(),
+    )
+
+    # Check 6 (r1 F1): the reduced set validates an in-window record even
+    # when the full contract passes it. Three arms over one
+    # full-current-format record shape (the post-window fixture builder,
+    # whose only contract-relevant variable below is the sidecar verdict
+    # and the record date):
+    #   post-window, no verdict -> exit 0: the full contract passes without
+    #                             a verdict (the verdict is optional
+    #                             there), so the record shape is
+    #                             full-contract-valid minus the verdict;
+    #   in-window,  no verdict  -> exit 1 with the leg (c) error: the
+    #                             profile path ran on a record the full
+    #                             contract would accept and failed it;
+    #   in-window,  with verdict -> exit 0: the same record clears the
+    #                             reduced set once the verdict is present,
+    #                             so the failure above is the profile's
+    #                             verdict leg, not the record shape.
+    import hashlib as _hashlib
+
+    def full_pass_payload(*, with_verdict: bool, date_value: str) -> dict:
+        payload = _post_window_fixture_payload("code")
+        payload["date"] = date_value
+        payload["source_digest"] = _hashlib.sha256(
+            b"panel profile full-pass fixture"
+        ).hexdigest()
+        if with_verdict:
+            payload["verdict"] = "yes"
+        return payload
+
+    post_full_pass_path = _write_staging(
+        root,
+        f"{_POST_WINDOW_FIXTURE_DATE}-panel-profile-full-pass-no-verdict-r1.md",
+        _post_window_fixture_markdown("code", title="panel-profile-full-pass"),
+        full_pass_payload(with_verdict=False, date_value=_POST_WINDOW_FIXTURE_DATE),
+    )
+    with _stderr_captured() as post_full_pass_buf:
+        post_full_pass_rc = main(["--hard", str(post_full_pass_path)])
+    in_window_no_verdict_path = _write_staging(
+        root,
+        "2026-09-19-panel-profile-full-pass-no-verdict-r1.md",
+        _post_window_fixture_markdown("code", title="panel-profile-full-pass"),
+        full_pass_payload(with_verdict=False, date_value="2026-09-19"),
+    )
+    with _stderr_captured() as in_window_no_verdict_buf:
+        in_window_no_verdict_rc = main(["--hard", str(in_window_no_verdict_path)])
+    in_window_with_verdict_path = _write_staging(
+        root,
+        "2026-09-19-panel-profile-full-pass-with-verdict-r1.md",
+        _post_window_fixture_markdown("code", title="panel-profile-full-pass"),
+        full_pass_payload(with_verdict=True, date_value="2026-09-19"),
+    )
+    with _stderr_captured() as in_window_with_verdict_buf:
+        in_window_with_verdict_rc = main(
+            ["--hard", str(in_window_with_verdict_path)]
+        )
+    check(
+        "panel profile: in-window record validated by the reduced set even "
+        "when the full contract passes",
+        post_full_pass_rc == 0
+        and in_window_no_verdict_rc == 1
+        and "panel profile: stats sidecar carries no verdict"
+        in in_window_no_verdict_buf.getvalue()
+        and in_window_with_verdict_rc == 0,
+    )
+
+
 def run_selftest() -> int:
     import tempfile
 
@@ -13234,6 +14024,7 @@ def run_selftest() -> int:
                 "prompt_scope_accounting",
                 _selftest_prompt_scope_accounting,
             ),
+            ("panel_profile", _selftest_panel_profile),
         ):
             fn(root, check)
 
@@ -13394,6 +14185,42 @@ def main(argv: list[str] | None = None) -> int:
         expected_digest=expected_digest,
         source_kind=source_kind,
     )
+    # Panel profile date branch (review staging and infra quality plan,
+    # Task 5; r1 F1 date-gated): a hard-mode record whose date (staging
+    # filename date, falling back to the fail-closed sidecar ``date``
+    # fallback) is on or before PANEL_PROFILE_MAX_DATE validates ONLY
+    # against the anti-stub core, regardless of whether the full contract
+    # run passed or failed. The full contract has already run once above;
+    # its result arrives in _validate_panel_profile_record as warnings
+    # (warning-not-error plumbing) and the exit code keys on the anti-stub
+    # core alone. Running the reduced path for every in-window record is
+    # what the record-date-gate-only invariant and the skill paragraph
+    # promise: an in-window record the full contract accepts still faces
+    # the anti-stub verdict leg (r1 F1). A record dated after the window
+    # and an undated record never enter this branch and keep the full
+    # contract unchanged.
+    if args.hard:
+        profile_sidecar_read = _read_stats_sidecar(stats_sidecar_path(target))
+        profile_date = _panel_profile_record_date(
+            target.name, profile_sidecar_read.payload
+        )
+        if (
+            profile_date is not None
+            and profile_date <= PANEL_PROFILE_MAX_DATE
+        ):
+            profile_source_hint = None
+            if source_flag_name and _SOURCE_PATH_FOR_ERROR:
+                profile_source_hint = (
+                    f"; or {source_flag_name} points at the wrong file "
+                    f"(hashed: {_SOURCE_PATH_FOR_ERROR})"
+                )
+            result = _validate_panel_profile_record(
+                target,
+                profile_date,
+                profile_sidecar_read,
+                result,
+                source_hint=profile_source_hint,
+            )
     if args.json:
         print(json.dumps(result.to_dict(), indent=2))
     else:

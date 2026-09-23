@@ -3,6 +3,8 @@
 
 Given a plan path, answers: does the latest review of these exact plan bytes
 report ready=yes with zero unresolved blocking findings and a valid sidecar?
+A plan under the plans dir's ``rejected/`` archive is never active-ready:
+it is excluded with its own named reason before any review checks run.
 
 Exit 0 only when every readiness condition passes; otherwise prints the FIRST
 failed condition and exits 1. Digest, schema, sidecar-path, and review-parsing
@@ -1001,11 +1003,21 @@ def evaluate_readiness(
     if not resolved.is_file():
         return False, f"plan file does not exist: {resolved}"
     try:
-        resolved.relative_to(plans_dir)
+        rel_to_plans = resolved.relative_to(plans_dir)
     except ValueError:
         return False, (
             f"plan file resolves outside plans_dir: {resolved} "
             f"is not under {plans_dir}"
+        )
+    # Rejected archive: a plan under the plans dir's rejected/ subdirectory
+    # is a recorded decision against doing the work. It is excluded from
+    # active-plan readiness (fail-closed for direct invocations; the done
+    # sweep's candidate derivation excludes the archive before this gate
+    # runs). See docs/plans/rejected/README.md.
+    if rel_to_plans.parts and rel_to_plans.parts[0] == "rejected":
+        return False, (
+            f"plan file sits under the rejected archive directory "
+            f"({plans_dir / 'rejected'}): excluded from active-plan readiness"
         )
 
     # r6 Z5: a configured-but-missing reviews_dir is a wiring failure with

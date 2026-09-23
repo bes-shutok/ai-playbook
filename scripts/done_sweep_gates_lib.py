@@ -496,6 +496,16 @@ def derive_plan_readiness_candidates(ctx: GateContext) -> PlanReadinessDerivatio
         completed_prefix = str(
             ctx.plans_completed_dir.resolve().relative_to(ctx.repo_root.resolve())
         )
+    # Rejected archive: docs/plans/rejected/ holds plans rejected by
+    # explicit decision. It is archive surface like the completed dir:
+    # never a readiness candidate, and only its OWN deliverable lines are
+    # pruned (see docs/plans/rejected/README.md).
+    rejected_dir = ctx.plans_dir / "rejected"
+    rejected_prefix = None
+    if _is_relative_to(rejected_dir, ctx.repo_root):
+        rejected_prefix = str(
+            rejected_dir.resolve().relative_to(ctx.repo_root.resolve())
+        )
 
     deliverables: list[str] = []
     deliverables_path = ctx.done_session_dir / "plan-deliverables.txt"
@@ -514,20 +524,24 @@ def derive_plan_readiness_candidates(ctx: GateContext) -> PlanReadinessDerivatio
     under_completed = (
         lambda p: completed_prefix is not None and p.startswith(completed_prefix + "/")
     )
+    under_rejected = (
+        lambda p: rejected_prefix is not None and p.startswith(rejected_prefix + "/")
+    )
+    under_archive = lambda p: under_completed(p) or under_rejected(p)
 
     candidates: set[str] = set()
     archived: list[str] = []
     exempted: list[str] = []
 
     for rel in ordinary:
-        if under_completed(rel) or not under_plans(rel):
+        if under_archive(rel) or not under_plans(rel):
             continue
         if (ctx.repo_root / rel).exists():
             candidates.add(rel)
 
     deliverables_set = set(deliverables)
     for rel in ignored:
-        if under_completed(rel) or not under_plans(rel):
+        if under_archive(rel) or not under_plans(rel):
             continue
         if rel in deliverables_set:
             candidates.add(rel)
@@ -546,7 +560,7 @@ def derive_plan_readiness_candidates(ctx: GateContext) -> PlanReadinessDerivatio
             candidates.add(rel)
 
     for rel in deliverables:
-        if under_completed(rel):
+        if under_archive(rel):
             archived.append(rel)
             continue
         if not (ctx.repo_root / rel).exists():

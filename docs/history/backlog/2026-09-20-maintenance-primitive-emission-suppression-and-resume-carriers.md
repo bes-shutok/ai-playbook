@@ -3,6 +3,7 @@
 Status: open
 Priority: medium
 Workflow: backlog
+Disposition: 2026-09-22 (annotated via docs/plans/2026-09-22-p36-scheduler-durability-audit.md, origin ledger): owned-elsewhere, the work lives in docs/plans/2026-09-21-scheduler-maintenance-loop-quality-hygiene.md Task 7 "Emission-suppression discipline and headless resume recipe" (certified, pending execution): the overlay dispatch-discipline witness, the headless resume recipe, the one-sentence budget-gate additions.
 
 ## Observed vs expected
 

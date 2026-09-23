@@ -47,7 +47,7 @@ Without this trace, the finding cannot be validated. Verify the race window is a
 ## Downstream Idempotency and Deduplication
 
 Before claiming a race condition causes "duplicate X delivered to users":
-1. Search for downstream dedup/idempotency guards (Redis SET NX, unique constraints, claim-before-send patterns)
+1. Search for downstream dedup/idempotency guards (a distributed lock store's set-if-absent primitive, unique constraints, claim-before-send patterns)
 2. If a dedup guard exists and is not bypassed by the race, the impact is **congestion/wasted work** (Low), not **user-facing duplication** (High)
 3. State the actual user-visible impact in the finding. "Duplicate event published to MQ" is not the same as "duplicate notification sent to user" when a dedup guard sits between them
 
@@ -55,7 +55,7 @@ Before claiming a race condition causes "duplicate X delivered to users":
 
 When claiming a lock TTL can be exceeded by a batch loop:
 1. Identify the per-item I/O operations inside the loop (lock acquire, MQ publish, HTTP call, DB write)
-2. Estimate per-item cost (e.g. Redis RTT ~2-5ms, MQ publish ~2-5ms)
+2. Estimate per-item cost (e.g. remote lock-store round-trip of a few milliseconds, broker publish ~2-5ms)
 3. Multiply: items × per-item cost vs lock lease
 4. If the estimate is well under the lease (e.g. 10s vs 60s), the race requires severe network degradation; downgrade severity accordingly and suggest a duration metric rather than a code fix
 

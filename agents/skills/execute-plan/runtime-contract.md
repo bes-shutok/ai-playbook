@@ -192,7 +192,12 @@ through the registry with its fallback; it never silently skips one.
    fails closed as `blocked` or `error`, never as a degraded success,
    and preserves the claim for a corrected re-submission; evidence
    naming paths outside the task scope fails closed as a contract
-   violation. Recovery: re-run the validation commands and re-submit the
+   violation. The envelope's plan-criterion coverage must be complete
+   across the task's acceptance criteria the implement step owns
+   (`Commit:` lines and done-step-owned checklist items excluded); a
+   coverage set that omits an implement-owned acceptance criterion is a
+   malformed receipt failing closed under the same refusal semantics.
+   Recovery: re-run the validation commands and re-submit the
    evidence envelope under the live claim.
 
 4. **Interruption reconciliation.** After any interruption, the profile
@@ -217,7 +222,7 @@ Every adapter result is translated into exactly these fields:
 | --- | --- |
 | `status` | One of `success`, `contract-violation`, `blocked`, `aborted`, or `error`. |
 | `reason_code` | Closed reason identifying the result condition. |
-| `evidence` | Non-empty, bounded references proving the result. |
+| `evidence` | Non-empty, bounded references proving the result; its plan-criterion coverage must be complete per the completeness obligation in the Worker execution contract (principle 3). |
 | `action_scope` | The repository or gated action that was attempted. |
 | `checkpoint_identity` | Stable task and worker checkpoint identity. |
 | `generation` | Non-negative claim generation used for fencing. |
@@ -298,12 +303,20 @@ state whose standard recovery machinery then applies. While the budget
 remains, recovery is the in-place resume: a continue relaunches the same
 claim under the same token and generation (no second claim row, no reclaim
 rotation), and reclaim refuses a parked claim with evidence naming
-`waiting-capacity` while the retry policy is live. A `waiting-capacity` claim
+`waiting-capacity` while the retry budget is live; in the exhausted window
+(attempts_remaining 0, before the next capacity receipt lands the claim in
+`blocked`) the refusal names the exhausted budget and the pending `blocked`
+transition instead. A `waiting-capacity` claim
 at the queue head routes the readiness decision to `recovery` with
 `preserve-and-reconcile` through the unprovable-next-task condition (the
 parked task is not claimable; the condition text is unchanged). A capacity
 receipt on a live batch-group member never parks: it keeps the existing
 blocked shape under the group path, and the group fences are untouched.
+A structured rate-limited end with an open task claim
+resolves the claim per the budget-pause precedent (park or close; the
+blocked-claim resume operation does not apply on resume); a claim-less
+end has no receipt carrier and
+its waiting-for-capacity derivation reads the recorded stop lines.
 The durable claim record contains `token`, `generation`, `owner`, and
 `timestamp`. The driver writes the claim before launch and revalidates the
 generation before any mutation and before commit handoff. When no owner is
@@ -557,7 +570,7 @@ action, then re-classify the state.
 | `aborted` | Explicit stop receipt and owner | Release only the matching claim | 0 | `aborted` | Do not resume without a new explicit run. |
 | `error` | Runtime error code and bounded evidence | Preserve generation for reconciliation | Numeric profile budget | `blocked` or terminal after budget exhaustion | Reconcile, then retry only within the numeric budget. |
 | `timeout` | Deadline, operation, and cancellation evidence | Do not take over an ambiguous live claim | 0 | `blocked`, `resume_allowed: true` | Verify process cleanup before any later claim. |
-| `capacity-unavailable` | Capacity receipt with bounded evidence, on a single-task claim (a live batch-group member keeps the existing blocked shape) | Claim parks `waiting-capacity` keeping token, generation, and launch record, with the bounded retry policy on the claim; the receipt arriving with the budget exhausted moves the claim to `blocked` | bounded-resume (`attempts_remaining: 3`) | `waiting-capacity`, then `blocked` after exhaustion | Resume the same claim with `continue` (same token and generation, no second claim row); reclaim refuses the parked state while the budget is live; after exhaustion the blocked-state recovery applies. |
+| `capacity-unavailable` | Capacity receipt with bounded evidence, on a single-task claim (a live batch-group member keeps the existing blocked shape) | Claim parks `waiting-capacity` keeping token, generation, and launch record, with the bounded retry policy on the claim; the receipt arriving with the budget exhausted moves the claim to `blocked` | bounded-resume (`attempts_remaining: 3`) | `waiting-capacity`, then `blocked` after exhaustion | Resume the same claim with `continue` (same token and generation, no second claim row); reclaim refuses the parked state while the budget is live, naming the exhausted budget and the pending `blocked` transition in the exhausted window; after exhaustion the blocked-state recovery applies. |
 | `dirty-worktree` | Paths and clean-state evidence | Preserve claim and quarantine generation | 0 | `blocked`, `resume_allowed: false` | Require explicit reconciliation before relaunch. |
 | `cleanup-required` | Ambient noise paths on the pre-launch startup path | Preserve claim and quarantine generation | 0 | `blocked`, `resume_allowed: true` | Remove allowlisted ambient entries or resume after cleanup. |
 | `cleanup-unverified` | Owned process and failed termination evidence | Preserve claim; never take over | 0 | `blocked`, `resume_allowed: false` | Require operator cleanup verification; do not retry. |
@@ -585,7 +598,13 @@ silently redefine the documented runtime set.
 The executable driver is `scripts/execute_plan_runtime.py`. It is intentionally
 small and standard-library-only so every supported host can use the same state
 machine. The authoritative machine manifest is
-`{tmp_dir}/execute-plan/<plan-slug>/runtime_state.json`; the human-facing
+`{tmp_dir}/execute-plan/<plan-slug>/runtime_state.json`; the machine manifest
+`runtime_state.json` and its `runtime_state.json.lock` are
+intentionally untracked live run state wherever they live: the canonical home is
+`{tmp_dir}/execute-plan/<plan-slug>/` inside the gitignored `docs/tmp/`, and a
+manifest at the repository root (a relative `--manifest` path) is live state
+too, so implement workers, reviewers, and done runs must never classify or
+delete these files as dirt or hygiene violations; the human-facing
 `manifest.md` is an orchestrator-maintained audit receipt and is never used as
 the source of truth. The runtime driver does not write or authorize from that
 Markdown receipt. Machine-manifest writes are atomic, mode `0600`, and fenced

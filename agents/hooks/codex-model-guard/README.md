@@ -1,7 +1,7 @@
 # Codex Luna model guard
 
 This Codex-specific hook enforces a single model policy for the parent session
-and workers: `gpt-5.6-luna`.
+and workers: `gpt-6-luna`.
 
 The guard has two checks:
 
@@ -17,7 +17,7 @@ The Codex user configuration should also set:
 
 ```toml
 [agents]
-default_subagent_model = "gpt-5.6-luna"
+default_subagent_model = "gpt-6-luna"
 ```
 
 The configuration is the default, not the enforcement boundary. The hook is

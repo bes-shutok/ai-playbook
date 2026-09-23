@@ -5,6 +5,7 @@ Status: open
 Priority: medium
 
 Workflow: backlog
+Disposition: 2026-09-22 (annotated via docs/plans/2026-09-22-p36-scheduler-durability-audit.md, origin ledger): split out-of-cluster, stays open for its own future plan (skill or checklist candidate per the acceptance below); the measurement (zero new duplicate-entry corrections) rides the docs/plans/2026-09-21-scheduler-maintenance-loop-quality-hygiene.md audit lane in the meantime; grouping this item under loop durability was an audit-source artifact, not a topical match.
 
 ## What was witnessed
 

@@ -28,8 +28,8 @@ When new config fields, parameters, or data schema fields are added:
 ## Same-change-set inventory (schema and config shape)
 
 When the diff adds or renames DB tables/indexes, or documents a constrained config shape:
-- Is the operator/local verify inventory updated in the same change set (for example `docker/verify-local-schema.sh` expected tables/indexes)?
-- Does the earliest startup gate (`EnvironmentPostProcessor`, `@PostConstruct` on `@ConfigurationProperties`, or fail-fast binder) enforce documented formats (ISO alpha-2, enum set, regex), or can a bad value pass trim/uppercase and fail later with a vague error?
+- Is the operator/local verify inventory updated in the same change set (the repository's verify-script expected tables/indexes)?
+- Does the earliest startup gate (a pre-boot environment post-processor, a fail-fast initializer on configuration properties, or a fail-fast binder) enforce documented formats (ISO alpha-2, enum set, regex), or can a bad value pass trim/uppercase and fail later with a vague error?
 
 ## Runtime wiring trace (evidence requirement)
 

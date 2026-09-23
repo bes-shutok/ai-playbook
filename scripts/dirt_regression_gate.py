@@ -108,18 +108,25 @@ def classify_path(path: str, base: str, cwd: Path) -> tuple[bool, str]:
     """Classify one restored path. Returns (is_regression, detail)."""
     repo_root = Path(_git("rev-parse", "--show-toplevel", cwd=cwd).strip())
     resolved = Path(path).resolve()
-    if not resolved.is_file():
-        tracked = _git("ls-files", "--", path, cwd=cwd).strip()
-        if not tracked:
-            raise RuntimeError(f"path does not exist or is not a tracked file: {path}")
-        # tracked and absent from the worktree: a whole-file deletion in the
-        # dirt; git diff HEAD classifies it (removal-only hunk of HEAD-gained
-        # lines is a regression, the added-line condition holds vacuously)
     try:
         repo_rel = resolved.relative_to(repo_root)
     except ValueError:
         raise RuntimeError(f"path not inside repository {repo_root}: {path}")
     repo_rel_posix = PurePosixPath(repo_rel).as_posix()
+    if not resolved.is_file():
+        tracked = _git("ls-files", "--", path, cwd=cwd).strip()
+        # A staged whole-file deletion (post-deletion `git add` sweep or
+        # `git rm`) removes the path from the index while HEAD still tracks
+        # it: an ordinary dirt shape the recipes' file enumeration picks up.
+        # Classify it through `git diff HEAD` below like any other deletion
+        # instead of misreporting it as a git-environment error; only a path
+        # HEAD never tracked fails closed here.
+        head_tracks = _git_ok("cat-file", "-e", f"HEAD:{repo_rel_posix}", cwd=cwd)
+        if not tracked and not head_tracks:
+            raise RuntimeError(f"path does not exist or is not a tracked file: {path}")
+        # absent from the worktree: a whole-file deletion in the dirt; git
+        # diff HEAD classifies it (removal-only hunk of HEAD-gained lines is
+        # a regression, the added-line condition holds vacuously)
 
     base_set = set(_blob_lines(base, repo_rel_posix, cwd))
     head_lines = _blob_lines("HEAD", repo_rel_posix, cwd)

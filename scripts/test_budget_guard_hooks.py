@@ -554,6 +554,135 @@ class BudgetGuardHookTest(unittest.TestCase):
             self.assertIn('"decision": "block"', out.getvalue())
         self.assertFalse(refused_log.exists())
 
+    def _seed_filler_line(self, day, payload_chars: int = 256) -> str:
+        # One synthetic non-heartbeat outcome line, bulked to a known size
+        # with a payload field; still a parseable JSON record like the core
+        # appends.
+        return json.dumps({
+            "ts": day.isoformat() + "T00:00:00+00:00",
+            "hook": "zcode",
+            "event": "block",
+            "decision": "block",
+            "payload": "x" * payload_chars,
+        })
+
+    def _seed_heartbeat_line(self, day) -> str:
+        # A synthetic today-heartbeat record the core's rate check matches
+        # (event=heartbeat, hook=<runtime>, ts starting with today).
+        return json.dumps({
+            "ts": day.isoformat() + "T01:00:00+00:00",
+            "hook": "zcode",
+            "event": "heartbeat",
+            "decision": "allow",
+        })
+
+    def test_decision_log_rotation_caps_size(self) -> None:
+        # Rotation cap: a pre-seeded ~300 KiB log (seeded via the suite's
+        # --hook-outcomes-log temp override convention; never the live log)
+        # is rewritten in place by the next append: one allow invocation
+        # appends and leaves the file at or below _LOG_MAX_BYTES plus the
+        # single appended line, with the newest line present in the
+        # retained tail.
+        log = self.tmp / "hook-outcomes.log"
+        flag = self.tmp / "absent.flag"  # Absent flag: fail-open allow.
+        day = datetime.now().date()
+        filler = self._seed_filler_line(day)
+        # 800 lines at ~380 bytes each is roughly 300 KiB: over the 256 KiB
+        # rotate trigger (262144 bytes, the core's _LOG_MAX_BYTES). Literal
+        # bounds here so the pre-implementation RED run fails on the size
+        # assertions, not on a missing symbol. Precondition guard, so a
+        # constant change cannot silently void the test.
+        log.write_text("\n".join([filler] * 800) + "\n", encoding="utf-8")
+        seed_size = log.stat().st_size
+        self.assertGreater(seed_size, 262144)
+
+        out = io.StringIO()
+        with mock.patch.object(budget_guard_core, "DATE_SOURCE", lambda: day), \
+                contextlib.redirect_stdout(out):
+            code = budget_guard_core.main(
+                ["--runtime", "zcode", "--flag-path", str(flag),
+                 "--hook-outcomes-log", str(log)]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue(), "")
+
+        text = log.read_text(encoding="utf-8")
+        final_line = text.splitlines()[-1]
+        # At or below the cap (262144, the core's _LOG_MAX_BYTES) plus the
+        # one appended line.
+        self.assertLessEqual(
+            log.stat().st_size,
+            262144 + len(final_line.encode("utf-8")) + 1,
+        )
+        # The newest line (the heartbeat just appended) is present in the
+        # retained tail: rotation kept the file's tail and appended after it.
+        record = json.loads(final_line)
+        self.assertEqual(record["event"], "heartbeat")
+        self.assertEqual(record["decision"], "allow")
+        self.assertEqual(record["hook"], "zcode")
+        # Rotation keeps whole lines: every retained line still parses.
+        for line in text.splitlines():
+            json.loads(line)
+
+    def test_rate_check_reads_tail_not_full_file(self) -> None:
+        # Tail-read rate check: the allow path decides from the log's
+        # trailing 64 KiB window, not the whole file. Half one: a trailing
+        # window carrying today's heartbeat still rate-limits a same-day
+        # allow (no second heartbeat). Half two: the post-rotation state (a
+        # today-heartbeat pushed out of the trailing window by later lines)
+        # lets the next allow append the heartbeat again.
+        log = self.tmp / "hook-outcomes.log"
+        flag = self.tmp / "absent.flag"  # Absent flag: fail-open allow.
+        day = datetime.now().date()
+
+        def allow() -> None:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = budget_guard_core.main(
+                    ["--runtime", "zcode", "--flag-path", str(flag),
+                     "--hook-outcomes-log", str(log)]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(out.getvalue(), "")
+
+        def today_heartbeat_count() -> int:
+            return sum(
+                1
+                for line in log.read_text(encoding="utf-8").splitlines()
+                if (record := json.loads(line)).get("event") == "heartbeat"
+                and record.get("ts", "")[:10] == day.isoformat()
+            )
+
+        # Half one: the trailing window carries today's heartbeat (it is the
+        # last line), so the same-day allow appends no second heartbeat.
+        filler = self._seed_filler_line(day)
+        heartbeat = self._seed_heartbeat_line(day)
+        log.write_text(filler + "\n" + heartbeat + "\n", encoding="utf-8")
+        with mock.patch.object(budget_guard_core, "DATE_SOURCE", lambda: day):
+            allow()
+        self.assertEqual(today_heartbeat_count(), 1)
+        self.assertEqual(len(log.read_text(encoding="utf-8").splitlines()), 2)
+
+        # Half two: the log is in the post-rotation shape - a
+        # today-heartbeat followed by enough later lines to push it out of
+        # the trailing 64 KiB window (65536 bytes, the core's
+        # _LOG_TAIL_BYTES) while staying under the 256 KiB rotate trigger,
+        # so this half isolates the tail read from rotation. Literal bounds
+        # here for the same RED-run reason as the rotation test above.
+        bulk = self._seed_filler_line(day)
+        log.write_text(
+            heartbeat + "\n" + "\n".join([bulk] * 270) + "\n",
+            encoding="utf-8",
+        )
+        self.assertGreater(log.stat().st_size, 65536)
+        self.assertLess(log.stat().st_size, 262144)
+        with mock.patch.object(budget_guard_core, "DATE_SOURCE", lambda: day):
+            allow()
+        # The tail carries no today-heartbeat, so the allow appends one.
+        self.assertEqual(today_heartbeat_count(), 2)
+        final = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual(final["event"], "heartbeat")
+
     def test_core_blocks_without_any_socket(self) -> None:
         # In-process network-abstinence arm: the core's full blocking path
         # (live flag, no fired marker) runs to a block decision while any

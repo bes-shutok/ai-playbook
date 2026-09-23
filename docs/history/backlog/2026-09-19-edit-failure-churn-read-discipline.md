@@ -25,3 +25,5 @@ Skill-level pins (no PreToolUse hook - the hot-path budget was explicitly reject
 
 - Edit error rate below 2% over a 7-day window (from 6.3%).
 - Zero "File has not been read yet" failures inside single-owner runs (the class should be fully eliminated by the pin; only peer-interference classes remain).
+
+Disposition (2026-09-22): Probed 2026-09-23 (`rg -n "read-before-edit|modified since read" agents/skills/execute-plan agents/skills/done`): clean no-match, no pins exist. Unfixed, real, candidate for a future skill-pin plan.

@@ -124,14 +124,19 @@ Workers that own a log path **update it before returning** (create or append per
 
 Include enough detail for `learn` to extract friction and corrections; not just a one-line status.
 
-A worker pass that reports `success` records the machine-verifiable evidence envelope in its `Commands run` and `Full return payload` sections: the identity of each validating command, the working directory it ran in, its exit status, the output identity of the captured output, the selected test identities, the changed paths measured against the launch baseline, and the plan-criterion coverage those changes satisfy. The parent accepts success only from that envelope (per the machine-verifiable evidence obligation in `agents/skills/execute-plan/runtime-contract.md`); a log path or a narrative claim alone never advances a task.
+A worker pass that reports `success` records the machine-verifiable evidence envelope in its `Commands run` and `Full return payload` sections: the identity of each validating command, the working directory it ran in, its exit status, the output identity of the captured output, the selected test identities, the changed paths measured against the launch baseline, and the plan-criterion coverage those changes satisfy; the coverage must be complete across the task's acceptance criteria the implement step owns (an implement-owned criterion without a coverage mapping routes the return to blocked, never a silent omission). The parent accepts success only from that envelope (per the machine-verifiable evidence obligation in `agents/skills/execute-plan/runtime-contract.md`); a log path or a narrative claim alone never advances a task.
 
 ## Machine state and receipt ownership
 
 The structured machine manifest at
 `{tmp_dir}/execute-plan/<PLAN_SLUG>/runtime_state.json` is the sole source of
 truth for task selection, claims, checkpoints, reload, resume, normalized
-outcomes, and terminal state. The runtime driver owns its schema, atomic
+outcomes, and terminal state. The machine manifest `runtime_state.json` and its
+`runtime_state.json.lock` are intentionally untracked live run state wherever
+they live (the canonical home is `{tmp_dir}/execute-plan/<PLAN_SLUG>/` inside
+the gitignored `docs/tmp/`; a manifest at the repository root is live state
+too), and implement workers, reviewers, and done runs must never delete these
+files as dirt or hygiene violations. The runtime driver owns its schema, atomic
 locking, generation fencing, reload validation, and transitions. The parent
 must call the driver after every checkpoint and must resume from the first
 incomplete step.

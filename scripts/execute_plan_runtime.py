@@ -5318,7 +5318,8 @@ class RuntimeDriver:
         replaced claim is reconciled by rotation and never quarantined at
         startup. Every refusal (before expiry, unknown task, closed or
         replaced or aborted claim, parked ``waiting-capacity`` claim with a
-        live retry policy, progressed task) fails closed with the
+        live retry policy or an exhausted retry budget, progressed task)
+        fails closed with the
         resumable ``stale-claim`` outcome and never mutates the manifest;
         for a reclaimable claim on a task outside the progressed set, a
         workflow in the closed non-active set returns the preserve-and-stop
@@ -5348,13 +5349,35 @@ class RuntimeDriver:
             # live worker: it stays outside the reclaimable set while its
             # bounded retry policy is live, and recovery is the in-place
             # resume (continue relaunches the same claim), never a rotation.
+            # In the exhausted window (attempts_remaining 0, before the next
+            # capacity receipt lands the claim in blocked) the refusal names
+            # the exhausted budget and the pending transition instead; an
+            # absent or malformed retry_policy keeps the live-budget evidence
+            # rather than crashing the branch.
+            retry_policy = claim.get("retry_policy")
+            attempts_remaining = (
+                retry_policy.get("attempts_remaining")
+                if isinstance(retry_policy, Mapping)
+                else None
+            )
+            if (
+                isinstance(attempts_remaining, int)
+                and not isinstance(attempts_remaining, bool)
+                and attempts_remaining <= 0
+            ):
+                evidence = [
+                    "claim state 'waiting-capacity' is parked with its retry budget exhausted; reclaim refused",
+                    "the next capacity receipt transitions the claim to blocked, whose recovery machinery applies",
+                ]
+            else:
+                evidence = [
+                    "claim state 'waiting-capacity' is parked on a live bounded retry policy; reclaim refused",
+                    "resume in place with continue while attempts remain",
+                ]
             return _stale_claim_outcome(
                 str(claim.get("token", f"{task_id}:reclaim")),
                 int(claim.get("generation", manifest.get("generation", 0))),
-                [
-                    "claim state 'waiting-capacity' is parked on a live bounded retry policy; reclaim refused",
-                    "resume in place with continue while attempts remain",
-                ],
+                evidence,
             )
         if task is None or not isinstance(claim, Mapping) or claim.get("state") not in RECLAIMABLE_CLAIM_STATES:
             state = claim.get("state") if isinstance(claim, Mapping) else "none"

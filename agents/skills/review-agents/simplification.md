@@ -109,7 +109,7 @@ If nothing to cut: `Lean already. Ship.` (report zero simplification findings; d
 ### `stdlib:` / `native:` reinvented wheels
 
 - Hand-rolled validators, parsers, or formatters when stdlib or platform APIs exist
-- Date/time libraries imported for a single format call when `Intl` / `java.time` / equivalent suffices
+- Date/time libraries imported for a single format call when the platform's locale-aware formatting library suffices
 - Custom cache classes when bounded in-process caching (`lru_cache`, Caffeine, etc.) covers the need
 
 ### Other patterns (assign best-fit tag)
@@ -135,7 +135,7 @@ L12-38: stdlib: 27-line validator class. `"@" in email` or library equivalent, 1
 ```
 
 ```
-L4: native: moment.js imported for one format call. Intl.DateTimeFormat, 0 deps.
+L4: native: single-purpose date-formatting library imported for one format call. The platform's locale-aware date formatter, 0 deps.
 ```
 
 ```

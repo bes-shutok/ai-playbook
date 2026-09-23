@@ -7,7 +7,9 @@
 # by, SKILL.md runtime-agnosticism, the pricing cache home, the schema-4 state
 # contract, the state-durability loop_mode/pending_rearm contract, the pricing
 # seed presence, and the budget-gate resume mirrors in
-# the execute-plan and plans skills. Exit 0 = all pins hold; exit 1 with
+# the execute-plan and plans skills, and the discovery-ladder rung 1
+# workflow_state bound (terminal-or-complete before a no-live-session closure).
+# Exit 0 = all pins hold; exit 1 with
 # PIN FAIL lines otherwise. Repo-relative paths only; run from anywhere.
 set -u
 fail=0
@@ -86,6 +88,35 @@ expect_absent() { # expect_absent <description> <pattern> <file>: rc 0 = fail, r
 #       Task 1): the recognition title is form-independent, the cadence
 #       parenthetical is deleted from the recipe, and the cadence pin is
 #       rescoped to the never-dark fallback branch (exactly once).
+#   the one-recorded-mutation carve-out pin spans (zcode.md: the anchor
+#       'One-recorded-mutation carve-out' and the twelve obligation spans
+#       pinned beside it; prompt-templates.md: "the overlay's
+#       one-recorded-mutation carve-out" and "and this session owns that
+#       record"): their superseding origin is plan
+#       2026-09-21-loop-guard-one-recorded-mutation-carve-out (Tasks 1-2
+#       landed the spans, Task 3 pins each at its count; a wording change to
+#       any pinned span is a change to that plan's prescribed text, so
+#       reconcile the pin and the text in the same edit and record the
+#       superseding origin).
+#   the toolset-precheck re-needle and the audit-lane pin spans (SKILL.md:
+#       the Step 5 needle 'Ladder precheck: after the quota leg (for a
+#       clocked dispatch)' replacing the aliasing generic 'ladder precheck'
+#       presence pin, where the generic phrase stands 3 times in SKILL.md
+#       and stays legal, only unpinned; 'when due and lanes allow, dispatch
+#       at most one audit child' at exactly 1 whole-file; the
+#       friction_audit_cadence_days row at exactly 1 in the Configuration
+#       section and the execute|author|audit kind literal at exactly 2 in
+#       the State file section, both region-scoped because the Task 2
+#       Revisions-ledger entry quotes both literals verbatim; the Step 5
+#       region's 'or the dispatch decision (for an idle-time dispatch)' at
+#       exactly 1; zcode.md: 'clocked-primitives-absent' and
+#       'idle-primitive-absent' at exactly 2 each and the '## Audit recipe'
+#       heading at exactly 1): their superseding origin is plan
+#       2026-09-21-scheduler-maintenance-loop-quality-hygiene (Tasks 1-5
+#       landed the spans, Task 6 pinned them, 2026-09-23; a wording change
+#       to any pinned span is a change to that plan's prescribed text, so
+#       reconcile the pin and the text in the same edit and record the
+#       superseding origin).
 #   Executed RED/GREEN evidence for these pins (scratch regressions, failing
 #       pin lines, sweep rcs): plan
 #       2026-09-18-maintenance-loop-residuals-occupancy-anchors-rearm-wording,
@@ -114,7 +145,12 @@ pin "step 6 carries forward externally written values" grep -qF 'carry forward t
 # rewrite that drops the enumeration tail stays green without this membership pin
 pin "carry-forward names the state-durability fields" grep -qF 'plus `loop_mode` and `pending_rearm`' "$S"
 pin "starvation releases only the starved lane" grep -qF 'releases only the starved lane' "$S"
-pin "five sanctioned writer classes" grep -qF 'five sanctioned writer classes' "$S"
+# 2026-09-23 sequential landing discipline Task 1: the writer-class count moved
+# from five to six (the completing authoring child's self-landing record joined
+# as a new named class); the old literal is frozen absent so the count cannot
+# silently revert
+pin "six sanctioned writer classes" grep -qF 'six sanctioned writer classes' "$S"
+expect_absent "superseded five sanctioned writer classes literal" 'five sanctioned writer classes' "$S"
 pin "execution-child progress counts checked checkboxes" grep -qF 'checked-checkbox count' "$S"
 # the corrected checkbox regex literal is pinned region-scoped to the failure-detection
 # section in the python block below (a whole-file grep is satisfied by the Revisions-ledger copy)
@@ -129,6 +165,12 @@ pin "idle occupancy join mirrored in SKILL.md" grep -qF 'whose target carries th
 # file sections below (count and body-scoped absence in the python block)
 pin "G3b guard present"      grep -qF 'G3b (landing in flight)' "$S"
 pin "pricing note read-back"  grep -qF 'note surfaces in the survey read-back' "$S"
+# P37 (plan 2026-09-22-p37-context-budget-probes-and-runtime-state, Task 6):
+# the State-file advisory note must name the merge lock among the joint-state
+# safety sources, and the G3b final-slot effect span it already carries stays
+# pinned (the wiring landed before the pin; the pin protects it).
+pin "state-file note names the merge lock" grep -qF 'the done-lock, the merge lock, and claim checks' "$S"
+pin "G3b final-slot effect named in the state-file note" grep -qF 'the `G3b` final-slot effect' "$S"
 # --- state durability contract (scheduler/maintenance state durability plan, Task 6) ---
 # The loop_mode and pending_rearm prose surfaces. The paragraph openers and the
 # Step 3 enforcement spans below are unique-span whole-file greps (measured
@@ -160,7 +202,7 @@ pin "starvation beats pricing never fit" grep -qF 'starvation beats pricing, nev
 # still plan-uncovered, and in-session authoring primitive)
 pin "D2 quota-signal decision input" grep -qF "quota leg's probe report as a required decision input" "$S"
 pin "authoring stand-down gate span" grep -qF 're-check the assigned backlog item is still plan-uncovered under the resolved plans directory' "$P"
-python3 - "$S" <<'EOF'
+python3 - "$S" <<'EOF' || fail=1  # r7 F1: propagate the block status; without this the block is fail-open at the exit-code surface
 import json, re, sys
 s = open(sys.argv[1]).read()
 def need(text, anchor):
@@ -303,6 +345,20 @@ if not watchdog_class or "and clears `pending_rearm` in that same recovery edit"
     print("PIN FAIL: watchdog writer class lacks the pending_rearm recovery clear membership"); sys.exit(1)
 if not rot_class or "the `loop_mode` write/replace" not in rot_class:
     print("PIN FAIL: rearm-on-touch writer class lacks the loop_mode write/replace membership"); sys.exit(1)
+# loop liveness durable carriers and park coverage plan: the watchdog
+# escalation park coverage hole (state-durability review r1 F11). Writer-side
+# needles, region-scoped per class line and per field paragraph line so the
+# closed enumerations cannot drop the watchdog and stay green; the class-line
+# membership reuses the watchdog_class extraction of the r5 F2 block above.
+if not watchdog_class or "parks `pending_rearm` with its paired payload copy" not in watchdog_class:
+    print("PIN FAIL: watchdog writer class lacks the escalation park write membership"); sys.exit(1)
+pr_line = ""
+for line in s.split("\n"):
+    if line.startswith("`pending_rearm` is the re-arm intent record"):
+        pr_line = line
+        break
+if not pr_line or "and the idle-time watchdog escalation (a refused re-arm" not in pr_line:
+    print("PIN FAIL: pending_rearm paragraph lacks the watchdog escalation writer"); sys.exit(1)
 # placement pin (review r1 T2): state-first ordering inside the Step 0
 # rearm-on-touch bullet; the consult anchor and the listing-gate anchor are
 # both fail-closed so a reworded bullet cannot pass vacuously, and the order
@@ -491,6 +547,30 @@ pin "reduced toolset precheck routing duty" grep -qF 'payload duties precheck be
 # moved with the wording in the same edit.
 pin "loop guard park-write span" grep -qF "write \`pending_rearm\` plus the assembled parent payload copy under the identity-bound payload filename derived per the \`pending_rearm\` field paragraph (the rearm kind) in that same targeted state edit" "$Z"
 
+# --- one-recorded-mutation carve-out pins (plan
+# 2026-09-21-loop-guard-one-recorded-mutation-carve-out, Task 3) ---
+# Count-gated pins for the overlay's carve-out obligations (the Task 1 spans
+# of the same plan). Each span below is unique-span whole-file (measured on
+# the post-Task-1 tree: each occurs exactly once in zcode.md), so a count of
+# exactly 1 fails both a deletion of that obligation and a stray duplicate
+# copy. The escalation-note recovery duty and the single-call decision-write
+# mandate live in the re-arm hygiene paragraph (the recipe section); the
+# other eleven spans live in the dispatch-discipline bullet.
+[ "$(grep -oF 'One-recorded-mutation carve-out' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: carve-out anchor count"; fail=1; }
+[ "$(grep -oF 'exactly ONE mutating call implementing that recorded decision' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: single-call bound count"; fail=1; }
+[ "$(grep -oF 'never curtails an advancing dispatch' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: advancing-dispatch scoping count"; fail=1; }
+[ "$(grep -oF 'The bound counts decided mutations, not primitive calls' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: bound unit clause count"; fail=1; }
+[ "$(grep -oF 'any refusal after that single call takes the existing escalation paths' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: escalation-routing count"; fail=1; }
+[ "$(grep -oF "must stop touching automation primitives immediately after it regardless of the call's outcome" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: stop-bound tail count"; fail=1; }
+[ "$(grep -oF "the loop's signature appeared (two listings, no mutating step between them)" "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: guard-signature restatement count"; fail=1; }
+[ "$(grep -oF 'a state-first write that preceded the first listing' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: state-first gate count"; fail=1; }
+[ "$(grep -oF 'a decision recorded only in chat narration does not qualify' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: narration-exclusion count"; fail=1; }
+[ "$(grep -oF 'or the pending record it takes as its own' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: decision-ownership count"; fail=1; }
+[ "$(grep -oF 'an explicit user instruction to proceed outranks them' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: operator-override count"; fail=1; }
+[ "$(grep -oF 'records its decided re-arm in the state file before its first primitive call' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: single-call decision-write mandate count"; fail=1; }
+[ "$(grep -oF 'must name the mechanical recovery' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: escalation-note recovery duty count"; fail=1; }
+[ "$fail" -eq 1 ] && exit 1
+
 # --- quota-aligned cadence pins (plan 2026-09-21-maintenance-turn-self-scheduling-cadence, Task 1) ---
 # Count-gated pins for the overlay's cadence rule and Turn-start carrier re-arm
 # duty. Each span below is unique-span whole-file (measured on the post-Task-1
@@ -498,7 +578,7 @@ pin "loop guard park-write span" grep -qF "write \`pending_rearm\` plus the asse
 # both a deletion and a stray duplicate copy; the fallback cadence literal is
 # rescoped here to exactly once (the never-dark fallback branch is its only
 # legal home after the fixed cadence was superseded).
-python3 - "$Z" <<'EOF'
+python3 - "$Z" <<'EOF' || fail=1  # r7 F1: propagate the block status; without this the block is fail-open at the exit-code surface
 import sys
 z = open(sys.argv[1]).read()
 def one(span):
@@ -550,7 +630,7 @@ rc=$?
 # 2026-09-21-maintenance-turn-self-scheduling-cadence; review r1 flagged that
 # freeze as claimed but unenforced, and the two expect_absent pins after this
 # block enforce it.
-python3 - "$P" <<'EOF'
+python3 - "$P" <<'EOF' || fail=1  # r7 F1: propagate the block status; without this the block is fail-open at the exit-code surface
 import sys
 p = open(sys.argv[1]).read()
 def two(span):
@@ -589,7 +669,7 @@ expect_absent "superseded parent_automation_id-only re-arm closing must be absen
 #       recurring fallback record; the form is the cadence rule's) of plan
 #       2026-09-21-maintenance-turn-self-scheduling-cadence, Task 3.
 expect_absent "superseded recurring-parent definitional wording must be absent from SKILL.md" "the recurring parent automation's id" "$S"
-python3 - "$S" <<'EOF'
+python3 - "$S" <<'EOF' || fail=1  # r7 F1: propagate the block status; without this the block is fail-open at the exit-code surface
 import sys
 s = open(sys.argv[1]).read()
 def one(span):
@@ -636,6 +716,20 @@ expect_absent "superseded fire-time sentence must be absent from prompt-template
 expect_absent "superseded unscoped success-via-existing clause must be absent from prompt-templates.md" 'counts as success only after one more listing confirms an ENABLED automation with that title and prompt opening is present; on that success-via-existing path' "$P"
 expect_absent "superseded listing-driven rearm wording must be absent from prompt-templates.md" 'list once more immediately before the create' "$P"
 
+# --- blueprint carve-out reference parity pins (plan
+# 2026-09-21-loop-guard-one-recorded-mutation-carve-out, Task 3) ---
+# Count-gated pins for the carve-out reference sentence Task 2 of the same
+# plan landed inside both byte-identical FIRST ACTION re-arm paragraphs. Each
+# span below occurs exactly twice in prompt-templates.md (once per paragraph;
+# the deviation-list entries paraphrase and must not carry the spans, or
+# these counts drift), so a count of exactly 2 fails a deletion in either
+# paragraph and a stray duplicate copy; combined with the blueprint
+# integrity block's byte-identity parity this is the byte-parity guarantee
+# per span.
+[ "$(grep -oF "the overlay's one-recorded-mutation carve-out" "$P" | wc -l | tr -d ' ')" -eq 2 ] || { echo "PIN FAIL: blueprint carve-out reference count"; fail=1; }
+[ "$(grep -oF 'and this session owns that record' "$P" | wc -l | tr -d ' ')" -eq 2 ] || { echo "PIN FAIL: blueprint ownership clause count"; fail=1; }
+[ "$fail" -eq 1 ] && exit 1
+
 # Context-budget plan Task 4: the checkpoint duty paragraph added to each
 # blueprint body. The anchor 'after each blueprint step block' occurs in BOTH
 # blueprints, so each pin stretches to the blueprint-unique telemetry record
@@ -662,8 +756,22 @@ pin "authoring blueprint claim duty" grep -qF 'authoring-claims' "$P"
 pin "foreign-claim clobber-witness span present" grep -qF "never clobber the first writer's witness" "$P"
 pin "overlay names the concrete claim directory" grep -qF 'docs/tmp/authoring-claims/' "$Z"
 
+# --- authoring claim hardening (P36 scheduler durability and audit plan, Task 3) ---
+# Presence canaries only (whole-file, satisfiable by a single occurrence); the
+# blueprint integrity block below pins the four added fragments region-scoped
+# to the authoring body's two claim paragraphs (the AUTHORING CLAIM duty
+# paragraph and the foreign-claim gate paragraph share vocabulary, so a
+# whole-file grep cannot tell them apart) with exactly-once file-wide counts,
+# so a stray copy in the sibling claim paragraph or the deviation-list ledger
+# entry fails there (the ledger entry paraphrases the spans and must not carry
+# them).
+pin "claim create noclobber recipe present" grep -qF 'set -C; printf' "$P"
+pin "takeover re-read-before-delete span present" grep -qF 're-reads the claim file immediately before the unlink' "$P"
+pin "ownership re-check stand-down clause present" grep -qF 'stands this session down from authoring the item' "$P"
+pin "unparseable-session-line disposition present" grep -qF 'no parseable session: line is treated as foreign' "$P"
+
 # --- prompt-templates.md blueprint integrity ---
-python3 - "$P" "$Z" "$D" <<'EOF'
+python3 - "$P" "$Z" "$D" <<'EOF' || fail=1  # r7 F1: propagate the block status; without this the block is fail-open at the exit-code surface
 import re, sys
 p, z, d = open(sys.argv[1]).read(), open(sys.argv[2]).read(), open(sys.argv[3]).read()
 def norm(t): return " ".join(t.split())
@@ -807,6 +915,11 @@ for line in z.split("\n"):
         break
 if not watchdog_line or "and `pending_rearm`" not in watchdog_line:
     print("PIN FAIL: watchdog bullet lacks the rearm_note-and-pending_rearm recovery clear span"); sys.exit(1)
+# loop liveness durable carriers and park coverage plan: the bullet's level-2
+# escalation carries the park write (region-scoped to the one bullet line the
+# block above already extracts, so a stray copy elsewhere cannot satisfy it).
+if not watchdog_line or "escalation plus the watchdog park write" not in watchdog_line:
+    print("PIN FAIL: watchdog bullet lacks the level-2 escalation park write span"); sys.exit(1)
 # review r5 F2: the recipe gate's mode-value phrasing (the landed r4 wording),
 # region-scoped to the recipe section (the Step 0 removal trigger and the
 # Revisions ledger paraphrase the same gate on other surfaces, so a whole-file
@@ -861,9 +974,53 @@ if len(exec_bodies) != 1:
     print("PIN FAIL: could not uniquely identify the execution blueprint body"); sys.exit(1)
 if "authoring-claims" in exec_bodies[0] or "authoring-claims" in inner:
     print("PIN FAIL: execution blueprint carries the authoring-claims literal (a foreign-claim false trip would stall G1a)"); sys.exit(1)
+# execution-integrity worker-evidence plan Task 3: the payload tail claim
+# duty. Scoped to the Schedule-at paragraph itself (distinct from the
+# whole-body authoring pin above): the payload paragraph is what scheduled
+# sessions actually receive, so its own claim sentences are pinned here and
+# their omission cannot regress silently.
+payload_paras = [q for q in p.split("\n") if "the following task: Using the plans skill" in q]
+if len(payload_paras) != 1:
+    print("PIN FAIL: authoring payload paragraph matched %d lines, expected exactly 1" % len(payload_paras)); sys.exit(1)
+for needle in ("docs/tmp/authoring-claims/", "updated:", "refresh", "closeout", "delete"):
+    if needle not in payload_paras[0]:
+        print("PIN FAIL: payload tail claim paragraph missing %s" % needle); sys.exit(1)
 for para in paras:
     if "authoring-claims" in para:
         print("PIN FAIL: claim duty/gate must stay outside the shared re-arm FIRST ACTION span"); sys.exit(1)
+# P36 scheduler durability and audit plan Task 3: the claim-protocol
+# hardening. The four added fragments are pinned region-scoped to the authoring
+# body's two claim paragraphs, located by their unique openers inside
+# auth_bodies[0] (the deviation list sits outside the fences, so a ledger copy
+# cannot satisfy the region membership); each fragment is also asserted exactly
+# once file-wide, so deleting it, duplicating it into the sibling claim
+# paragraph, or carrying it in the deviation-list ledger entry all fail here.
+cduty_at = auth_bodies[0].find("AUTHORING CLAIM, the claim file this session writes before any plan work")
+if cduty_at == -1:
+    print("PIN FAIL: AUTHORING CLAIM duty paragraph missing from the authoring body"); sys.exit(1)
+cduty = auth_bodies[0][cduty_at:auth_bodies[0].find("\n\n", cduty_at)]
+gate_at = auth_bodies[0].find("Before writing anything: verify no merge or rebase is in progress")
+if gate_at == -1:
+    print("PIN FAIL: foreign-claim gate paragraph missing from the authoring body"); sys.exit(1)
+gate = auth_bodies[0][gate_at:auth_bodies[0].find("\n\n", gate_at)]
+for desc, frag, region in (
+    ("noclobber create recipe",
+     "set -C; printf '%s\\n' <frontmatter lines> > \"<primary-root>/docs/tmp/authoring-claims/<backlog-item-basename>.md\"",
+     cduty),
+    ("takeover re-read-before-delete",
+     "re-reads the claim file immediately before the unlink and deletes it only while it still names the same foreign session id with a stale updated: line",
+     gate),
+    ("ownership re-check stand-down",
+     "a foreign id at an ownership re-check stands this session down from authoring the item",
+     cduty),
+    ("unparseable-session-line disposition",
+     "a claim file with no parseable session: line is treated as foreign",
+     gate),
+):
+    if p.count(frag) != 1:
+        print("PIN FAIL: %s fragment count %d != 1 in prompt-templates.md" % (desc, p.count(frag))); sys.exit(1)
+    if frag not in region:
+        print("PIN FAIL: %s fragment missing from its owning claim paragraph" % desc); sys.exit(1)
 EOF
 rc=$?
 [ "$rc" -ne 0 ] && fail=1
@@ -878,13 +1035,117 @@ pin "done-skill rearm-on-touch pointer" grep -qF 'rearm-on-touch check defined i
 # --- budget-gate resume mirrors (P6 origins 1-2) ---
 E="$repo/agents/skills/execute-plan/SKILL.md"
 PL="$repo/agents/skills/plans/SKILL.md"
-for f in "$E" "$PL"; do
+R="$repo/agents/skills/review-loop/SKILL.md"
+RC="$repo/agents/skills/execute-plan/runtime-contract.md"
+for f in "$E" "$PL" "$R" "$RC"; do
   [ -f "$f" ] || { echo "missing $f"; fail=1; }
 done
 [ "$fail" -eq 1 ] && exit 1
 pin "resume-fit --fire-at check at resume-scheduling boundaries" grep -qF -- '--fire-at mode with the scheduled resume time as the fire instant' "$E"
 pin "resume-pricing defers to the reported defer_to" grep -qF 'on exit 2 (defer-peak, a fitting slot inside the weekday peak window), schedule the watcher at the reported defer_to' "$E"
 pin "plans budget gate mirrors the canonical resume checks" grep -qF 'The canonical resume-fit and resume-pricing checks apply at this boundary' "$PL"
+
+# --- budget-gate resume fallback preservation pins (plan 2026-09-21-budget-gate-resume-fallbacks, Task 1) ---
+# Freeze-literal origin note: the preservation spans' origin is plan
+# docs/plans/2026-09-21-budget-gate-resume-fallbacks.md; their text was landed
+# by commit e71fd55a (the quota-aware-scheduling-semantics delivery), and the
+# two re-frozen mirror spans (the mirror carrier-aware record span and the
+# mirror host idle-time automation rung span) had their current literal wording
+# shaped by commit 8a77ec46 (commit dated 2026-09-22; re-freeze recorded 2026-09-23). A wording change to any
+# pinned span is a change to that plan's prescribed text, so reconcile the pin
+# and the text in the same edit and record the superseding origin.
+# Count-gated (not the grep -qF `pin` helper) so drift fails in either
+# direction: exactly 1 fails a deletion and a stray duplicate copy; the mirror
+# rung span is count-gated at exactly 3. Reuses the $E and $PL variables the
+# mirrors block above sets.
+n="$(grep -oF -- 'The create carries the canonical lineage-cap branch' "$E" | wc -l | tr -d ' ')"; [ "$n" -eq 1 ] || { echo "PIN FAIL: preservation: canonical lineage-cap branch span count $n != 1"; fail=1; }
+n="$(grep -oF -- 'Resume carrier fallback ordering (canonical)' "$E" | wc -l | tr -d ' ')"; [ "$n" -eq 1 ] || { echo "PIN FAIL: preservation: Resume carrier fallback ordering heading span count $n != 1"; fail=1; }
+n="$(grep -oF -- 'the OffPeakCreate rung first' "$E" | wc -l | tr -d ' ')"; [ "$n" -eq 1 ] || { echo "PIN FAIL: preservation: OffPeakCreate pause rung span count $n != 1"; fail=1; }
+n="$(grep -oF -- "wired via the driver's scheduler chain" "$E" | wc -l | tr -d ' ')"; [ "$n" -eq 1 ] || { echo "PIN FAIL: preservation: launchd wired mark span count $n != 1"; fail=1; }
+n="$(grep -oF -- 'the prompt must carry the reset epoch and a wait instruction' "$E" | wc -l | tr -d ' ')"; [ "$n" -eq 1 ] || { echo "PIN FAIL: preservation: OffPeakCreate prompt contract span count $n != 1"; fail=1; }
+n="$(grep -oF -- 'or when the OffPeakCreate rung carries the resume' "$E" | wc -l | tr -d ' ')"; [ "$n" -eq 1 ] || { echo "PIN FAIL: preservation: canonical carrier-aware record span count $n != 1"; fail=1; }
+n="$(grep -oF -- 'or when the host idle-time automation rung carries the resume' "$PL" | wc -l | tr -d ' ')"; [ "$n" -eq 1 ] || { echo "PIN FAIL: preservation: mirror carrier-aware record span count $n != 1"; fail=1; }
+n="$(grep -oF -- "deletes the session's own completed spawner record and retries the create once" "$PL" | wc -l | tr -d ' ')"; [ "$n" -eq 1 ] || { echo "PIN FAIL: preservation: mirror lineage-cap branch span count $n != 1"; fail=1; }
+n="$(grep -oF -- 'host idle-time automation rung' "$PL" | wc -l | tr -d ' ')"; [ "$n" -eq 3 ] || { echo "PIN FAIL: preservation: mirror OffPeakCreate rung span count $n != 3"; fail=1; }
+
+# --- rate-limited end claim boundary, receipt carrier, and recovery marker (P37 rate-pressure ingestion and quota scheduling plan, Task 1) ---
+pin "rate-limited end resolves its open claim" grep -qF 'the end resolves an open task claim' "$E"
+pin "claim-less end derives from stop lines" grep -qF 'claim-less rate-limited end has no receipt carrier' "$E"
+pin "post-backoff success writes a recovery marker" grep -qF 'writes the recovery marker line' "$E"
+pin "state table derives the claim-less case" grep -qF 'for a claim-less rate-limited end, the recorded rate-limited stop lines' "$E"
+pin "contract mirrors the claim boundary" grep -qF 'resolves the claim per the budget-pause precedent' "$RC"
+pin "contract derives the claim-less case from stop lines" grep -qF 'its waiting-for-capacity derivation reads the recorded stop lines' "$RC"
+# --- backoff floor and scaled panel bounds (P37 rate-pressure ingestion and quota scheduling plan, Task 2) ---
+pin "resume backoff carries a floor" grep -qF 'after a backoff of at least 60 seconds' "$E"
+pin "serialized cap doubles panel bounds" grep -qF 'while the shaped fan-out cap is 1, panel wall-clock bounds double' "$E"
+# --- writer/ingester stop-line token format (P37 rate-pressure ingestion and quota scheduling plan, Task 3) ---
+pin "stop line token format pinned" grep -qF 'a line-initial rate_limited: token followed by an ISO timestamp' "$E"
+pin "ingestion mirrors the stop-line token format" grep -qF 'a line-initial rate_limited: token followed by an ISO timestamp' "$S"
+# --- dedup ledger decoupled from the capped array (P37 rate-pressure ingestion and quota scheduling plan, Task 4) ---
+pin "dedup consults the rolling ledger" grep -qF 'the dedup consults the rolling ledger' "$S"
+pin "ledger rides the same 24-hour window" grep -qF 'pruned to the same 24-hour window' "$S"
+pin "step 6 carries the dedup ledger" grep -qF 'plus `rate_limited_events` and the dedup ledger' "$S"
+pin "dedup ledger declared in the schema block" grep -qF '"rate_limited_dedup_ledger"' "$S"
+# --- lost-update enumeration and define-once rate_pressure (P37 rate-pressure ingestion and quota scheduling plan, Task 5) ---
+pin "lost-update enumeration names the rate rail" grep -qF 'the rate-pressure rail' "$S"
+pin "rate_pressure defined once in the schema block" grep -qF 'the derived count defined in State file' "$S"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- cap-semantics policy cluster (plan
+# 2026-09-22-p37-context-budget-probes-and-runtime-state, Task 1) ---
+# Heading anchors for the two sections other files navigate by (characterization:
+# both hold today) and the capped-rung policy pins over the Above 85% bullet of
+# the Context budget checkpoints section in execute-plan.
+pin "context checkpoints section anchored" grep -qF '### Context budget checkpoints' "$E"
+pin "measurement primitive section anchored" grep -qF '## Context measurement primitive' "$Z"
+pin "capped rung degrades to shedding" grep -qF 'a capped rung degrades to the 70-85% shedding rung' "$E"
+pin "capped record action vocabulary" grep -qF 'action: capped' "$E"
+pin "compaction completion timing pinned" grep -qF 'increments only when the compaction completes' "$E"
+pin "terminal rung after consecutive capped checkpoints" grep -qF 'three consecutive capped above-85% checkpoints' "$E"
+# P37 Task 2 (dual-lane coordination and archive vocabulary): review-loop's
+# round-boundary checkpoint subordination to the execute-plan ladder, and the
+# child telemetry lanes' live paths kept as their analysis home in execute-plan.
+pin "review-loop ladder precedence" grep -qF 'authoritative for ladder actions' "$R"
+pin "review-loop first-record baseline" grep -qF 'the first record review-loop appends for a run is the baseline' "$R"
+pin "child lanes analysis home" grep -qF 'as their analysis home' "$E"
+# P37 Task 3 (tmp-dir substitution sentence): the Telemetry bullet's
+# substitution rule scoped to every telemetry path this policy names, with the
+# maintenance blueprints' payload paths recorded as the pinned literal exception.
+pin "telemetry substitution rule scopes this policy's paths" grep -qF 'governs every telemetry path this policy names' "$E"
+# P37 Task 4 (turn-usage live verification): the measurement primitive section
+# must name the store's turn_usage table (the live-verified source or the
+# recorded negative, per the variant applied).
+pin "measurement primitive names turn_usage" grep -qF 'turn_usage' "$Z"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- discovery ladder rung 1 bound (P36 scheduler durability and audit plan, Task 5) ---
+# The rung 1 closure sentence is bounded to a terminal or complete workflow_state
+# before it may close no-live-session, and an absent or non-terminal workflow_state
+# falls through to rung 2's heartbeat signals. Presence canaries below are
+# whole-file; the python block re-asserts both spans region-scoped to the
+# Live-session discovery ladder section with exactly-once file-wide counts (the
+# workflow-state table and rung 2's heartbeat prose share vocabulary, so a
+# whole-file grep cannot tell the owning bullet from a stray copy; deleting the
+# bound or the fall-through clause empties the span and fails there).
+pin "rung 1 terminal-or-complete workflow_state bound present" grep -qF 'is terminal or complete' "$E"
+pin "rung 1 fall-through clause present" grep -qF 'rung 1 does not close the question and the ladder falls through to rung 2' "$E"
+python3 - "$E" <<'EOF' || fail=1  # r7 F1: propagate the block status; without this the block is fail-open at the exit-code surface
+import sys
+e = open(sys.argv[1]).read()
+if "## Live-session discovery ladder" not in e:
+    print("PIN FAIL: Live-session discovery ladder section missing from execute-plan SKILL.md"); sys.exit(1)
+ladder = e.split("## Live-session discovery ladder", 1)[1].split("\n## ", 1)[0]
+for desc, span in (
+    ("rung 1 terminal-or-complete workflow_state bound", "is terminal or complete"),
+    ("rung 1 fall-through to rung 2", "rung 1 does not close the question and the ladder falls through to rung 2"),
+):
+    if e.count(span) != 1:
+        print("PIN FAIL: %s count %d != 1 in execute-plan SKILL.md" % (desc, e.count(span))); sys.exit(1)
+    if span not in ladder:
+        print("PIN FAIL: %s missing from the Live-session discovery ladder section" % desc); sys.exit(1)
+EOF
+rc=$?
+[ "$rc" -ne 0 ] && fail=1
 [ "$fail" -eq 1 ] && exit 1
 
 # --- trigger-verb contract surfaces (schedule-vs-execute verb contract plan, Task 3) ---
@@ -897,10 +1158,76 @@ pin "zcode.md interactive dispatch template anchored" grep -qF 'Interactive disp
 [ "$fail" -eq 1 ] && exit 1
 
 # --- toolset precheck surfaces (scheduler ops contract plan, Task 4) ---
-pin "SKILL.md step 5 ladder-precheck precondition anchored" grep -qF 'ladder precheck' "$S"
+# Pin-vacuity fixes (plan 2026-09-21-scheduler-maintenance-loop-quality-hygiene,
+# Task 6, 2026-09-23): the SKILL.md pin below is re-needled from the generic
+# 'ladder precheck' phrase (measured 2026-09-23: 3 occurrences in SKILL.md,
+# the operative Step 5 precondition plus two scoping notes, so the presence
+# pin aliases and stayed green with the precondition deleted; the phrase
+# stays legal in SKILL.md and is deliberately not frozen absent, only
+# unpinned) to the distinctive Step 5 needle quoted verbatim from the Task 5
+# rephrase, which matches only the operative precondition (measured: 1
+# occurrence). The stand-down-reason pins convert from presence to
+# per-occurrence counts (measured 2026-09-23: 2 occurrences each in
+# zcode.md, both normative, so a presence pin was satisfiable by either
+# occurrence alone; a single deletion now trips the count).
+pin "SKILL.md step 5 ladder-precheck precondition anchored" grep -qF 'Ladder precheck: after the quota leg (for a clocked dispatch)' "$S"
 pin "zcode.md Ladder precheck bullet anchored" grep -qF 'Ladder precheck' "$Z"
-pin "clocked-lane stand-down reason pinned" grep -qF 'clocked-primitives-absent' "$Z"
-pin "idle-lane stand-down reason pinned" grep -qF 'idle-primitive-absent' "$Z"
+[ "$(grep -oF 'clocked-primitives-absent' "$Z" | wc -l | tr -d ' ')" -eq 2 ] || { echo "PIN FAIL: clocked-lane stand-down reason count"; fail=1; }
+[ "$(grep -oF 'idle-primitive-absent' "$Z" | wc -l | tr -d ' ')" -eq 2 ] || { echo "PIN FAIL: idle-lane stand-down reason count"; fail=1; }
+[ "$fail" -eq 1 ] && exit 1
+
+# --- audit-lane pins (plan 2026-09-21-scheduler-maintenance-loop-quality-hygiene, Task 6) ---
+# The same distinctive spans the plan's Validation Commands gate, pinned so a
+# deletion of the operative audit-lane text fails (the spans landed in Tasks
+# 1-5 of the same plan; Task 6 pins them, dated 2026-09-23). The lane
+# paragraph's operative span is count-gated at exactly 1 whole-file (the
+# Task 2 ledger entry paraphrases it and must never quote it). The
+# friction_audit_cadence_days row and the execute|author|audit kind literal
+# are quoted verbatim by the Task 2 Revisions-ledger entry, so bare presence
+# greps would be satisfied by the ledger copy after an operative deletion;
+# they are pinned region-scoped to their owning sections instead
+# (Configuration table row: exactly 1; State file section: exactly 2, the
+# children-entry schema line and the `pending_dispatch` field paragraph,
+# both normative arms). The overlay's recipe heading is count-gated at
+# exactly 1 (zcode.md carries no ledger copy). The Step 5
+# dispatch-class-neutral rephrase span is count-gated to exactly 1
+# region-scoped between the '### Step 5: scheduling' and
+# '### Step 6: state update' headings, so the Task 5 sentence cannot be
+# deleted or duplicated in the region without tripping the pin.
+[ "$(grep -oF 'when due and lanes allow, dispatch at most one audit child' "$S" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: audit lane operative span count"; fail=1; }
+python3 - "$S" "$Z" <<'EOF' || fail=1  # r7 F1: propagate the block status; without this the block is fail-open at the exit-code surface
+import sys
+s, z = open(sys.argv[1]).read(), open(sys.argv[2]).read()
+def region(text, start, end, desc):
+    if start not in text:
+        print("PIN FAIL: %s region start anchor missing: %s" % (desc, start)); sys.exit(1)
+    rest = text.split(start, 1)[1]
+    if end not in rest:
+        print("PIN FAIL: %s region end anchor missing: %s" % (desc, end)); sys.exit(1)
+    return rest.split(end, 1)[0]
+# the Configuration table row (the ledger entry quotes the key, so the pin
+# is region-scoped to the Configuration section)
+conf = region(s, "## Configuration (from facts document)", "\n## ", "Configuration")
+n = conf.count("friction_audit_cadence_days")
+if n != 1:
+    print("PIN FAIL: friction_audit_cadence_days row count %d != 1 in the Configuration section" % n); sys.exit(1)
+# the kind enum literal (exactly 2 normative arms: the children-entry schema
+# line and the pending_dispatch field paragraph; the ledger copy sits
+# outside this region)
+state = region(s, "## State file", "\n## ", "State file")
+n = state.count("execute|author|audit")
+if n != 2:
+    print("PIN FAIL: execute|author|audit kind literal count %d != 2 in the State file section" % n); sys.exit(1)
+# the Step 5 region's dispatch-class-neutral rephrase span
+step5 = region(s, "### Step 5: scheduling", "### Step 6: state update", "Step 5")
+n = step5.count("or the dispatch decision (for an idle-time dispatch)")
+if n != 1:
+    print("PIN FAIL: Step 5 rephrase span count %d != 1 in the Step 5 region" % n); sys.exit(1)
+# the overlay's audit recipe section heading
+n = z.count("## Audit recipe")
+if n != 1:
+    print("PIN FAIL: ## Audit recipe heading count %d != 1 in zcode.md" % n); sys.exit(1)
+EOF
 [ "$fail" -eq 1 ] && exit 1
 
 # --- mechanical gates wiring pins (scheduler-maintenance-loop-quality-gates plan, Task 8) ---
@@ -924,6 +1251,154 @@ pin "receiving-review review-thread marker duty wired" grep -qF 'write a review-
 pin "review-plan rule 5 vendored landing clause wired" grep -qF 'vendored-sync backlog item' "$RP"
 pin "AGENTS.md vendored landing mirror clause wired" grep -qF 'land the vendored copy in the same run' "$A"
 [ "$fail" -eq 1 ] && exit 1
+
+# --- sequential landing discipline pins (plan
+# 2026-09-22-sequential-landing-discipline-no-dispatch-before-squash, Task 5) ---
+# Whole-file pins below cover operative spans; Revisions-ledger entries
+# paraphrase, never quote, them (the four spans the Task 2 ledger entry did
+# quote are region-scoped in the python block below per the r6 F1 fold;
+# landed_path and branch_tip are deliberately not single-occurrence).
+# Region-scoped and count pins live in the python block at the end of this
+# section. Flip-probe outcomes for every pin here are recorded in the Task 5
+# commit message body (each pin's failure direction simulated once against a
+# mutated temp copy).
+# the three fleet-invariant needles are region-scoped to the Invariants section
+# in the python block below (the Task 1 Revisions ledger entry paraphrases them,
+# so whole-file greps would be satisfied by the changelog copy)
+pin "pending_landing schema literal" grep -qF '"pending_landing": null' "$S"
+pin "pending_landing field paragraph opener" grep -qF 'is the deferred-landing intent record' "$S"
+pin "record shape landed_path" grep -qF 'landed_path' "$S"
+pin "record shape branch_tip" grep -qF 'branch_tip' "$S"
+pin "record shape attempts" grep -qF '"attempts": 0' "$S"
+pin "carry-forward opener unchanged" grep -qF 'carry forward the values' "$S"
+pin "human-clear landing addition" grep -qF 'deletes the per-run note in the same action' "$S"
+pin "completion-work gate set: gmail-author" grep -qF 'gmail-author' "$S"
+pin "peer-byte guard" grep -qF "no staged path outside the branch's changed paths" "$S"
+pin "labeled stash" grep -qF 'git stash push -m' "$S"
+pin "stash untracked-flag prohibition" grep -qF 'never uses `-u`' "$S"
+pin "stash failure path leaves stash in place" grep -qF 'leaves the stash in place' "$S"
+pin "release on every completion-work exit" grep -qF 'every completion-work exit' "$S"
+pin "index-preserving stash restore" grep -qF 'git stash pop --index' "$S"
+# --- sequential landing discipline blueprint pins (prompt-templates.md) ---
+pin "blueprint landed-commit verification" grep -qF 'verify the landed commit on main' "$P"
+pin "successor own-landing conjunct" grep -qF 'its own landing is not verified on main' "$P"
+pin "successor outstanding-record conjunct" grep -qF 'an outstanding pending_landing record' "$P"
+pin "execution deferred-landing record lane literal" grep -qF '"lane": "execute"' "$P"
+pin "authoring stranding record lane literal" grep -qF '"lane": "author"' "$P"
+pin "lock-timeout record duty" grep -qF 'the lock-acquire timeout path' "$P"
+pin "authoring record duty span" grep -qF 'before ending, write the pending_landing record' "$P"
+pin "blueprint conflict cleanup" grep -qF 'git reset --merge' "$P"
+pin "record-before-release ordering" grep -qF 'before releasing the lock' "$P"
+pin "successor chain-nothing anchor intact" grep -qF 'Chain nothing, and end, when any of these holds' "$P"
+python3 - "$S" "$P" <<'PYSEQ' || fail=1  # r7 F1: propagate the block status; without this the block is fail-open at the exit-code surface
+import sys
+s, p = open(sys.argv[1]).read(), open(sys.argv[2]).read()
+fail = 0
+def check(cond, desc):
+    global fail
+    if not cond:
+        print("PIN FAIL: " + desc); fail = 1
+# pending_landing must be named across schema, carry-forward, writer classes,
+# Step 1, and Step 3 (whole-file count floor)
+n = s.count("pending_landing")
+check(n >= 5, f"pending_landing count {n} < 5 in SKILL.md")
+# r6 F1 fold: the four needles below are quoted verbatim by the Task 2
+# Revisions ledger entry, so they are pinned region-scoped to their owning
+# regions (Step 5, State file section, Step 3) rather than whole-file
+a = s.index("### Step 5: scheduling"); b = s.index("### Step 6: state update")
+check("pre-dispatch landing gate" in s[a:b], "Step 5 region missing: pre-dispatch landing gate")
+a = s.index("Each non-turn write is a targeted field edit"); b = s.index("- The `children` array")
+check("re-evaluate their precondition" in s[a:b], "State file region missing: re-evaluate their precondition")
+a = s.index("### Step 3: decision"); b = s.index("### Step 4: quota leg")
+for needle in ["temporary worktree", "git reset --merge"]:
+    check(needle in s[a:b], "Step 3 region missing: " + needle)
+# Invariants-region needles (the fleet-rule bullet lives only there)
+a = s.index("## Invariants"); b = s.index("## Revisions")
+inv = s[a:b]
+for needle in ["post-review, pre-landed state", "zero outstanding unlanded runs",
+               "no surviving repo-matching"]:
+    check(needle in inv, "Invariants region missing: " + needle)
+# Step 1-region needles (the read-back and reconciliation bullets live only there)
+a = s.index("### Step 1: survey"); b = s.index("### Step 2: guards")
+st1 = s[a:b]
+for needle in ["re-creates the pending_landing record from the note",
+               "delete the note of the cleared record",
+               "landed-commit test", "reflog", "re-targets",
+               "pending-landing-orphaned"]:
+    check(needle in st1, "Step 1 region missing: " + needle)
+# ordering: the read-back anchor precedes the pending-dispatch reader opening,
+# both inside the Step 1 region (fail-closed on either anchor missing)
+check("run the landed-commit test for its" in st1, "Step 1 read-back anchor missing")
+check("- Pending dispatch:" in st1, "Step 1 reader anchor missing")
+if "run the landed-commit test for its" in st1 and "- Pending dispatch:" in st1:
+    check(st1.index("run the landed-commit test for its") < st1.index("- Pending dispatch:"),
+          "Step 1 read-back does not precede the pending-dispatch reader")
+# Step 3-region needles (the landing gate and completion work live only there)
+a = s.index("### Step 3: decision"); b = s.index("### Step 4: quota leg")
+st3 = s[a:b]
+for needle in ["landing-completion",
+               "pending-landing (primary occupied by peer session)",
+               "pending-landing (outstanding unlanded run)",
+               "pending-landing-stuck", "pending-landing-stash-left",
+               "re-runs the same gate set"]:
+    check(needle in st3, "Step 3 region missing: " + needle)
+# blueprint body-scoped counts (per the F8 precedent: the deviation-list
+# paraphrase must never satisfy a body count). The authoring body runs from
+# the '## Authoring child' heading to the '## Execution child' heading; the
+# execution body runs from there to end of file.
+aa = p.index("## Authoring child"); ea = p.index("## Execution child")
+auth, exe = p[aa:ea], p[ea:]
+for name, body in (("authoring", auth), ("execution", exe)):
+    c = body.count("pending-landing-<plan-slug>")
+    check(c == 1, f"{name} blueprint pending-landing-<plan-slug> count {c} != 1")
+g = p.count("never overwrites an existing record")
+check(g >= 2, f"occupied-field guard count {g} < 2 in prompt-templates.md")
+ga, ge = auth.count("never overwrites an existing record"), exe.count("never overwrites an existing record")
+check(ga >= 1 and ge >= 1, f"occupied-field guard body counts author={ga} execute={ge}")
+if fail:
+    sys.exit(1)
+PYSEQ
+[ "$fail" -eq 1 ] && exit 1
+
+# --- quota-blind dispatch primitive choice pins (plan
+# 2026-09-21-quota-blind-dispatch-primitive-choice, Task 4) ---
+# Pins for the quota-state-aware authoring carrier selection, the grep-able
+# quota_signal record token, and the idle authoring payload's
+# re-verification stand-down gate. Presence pins are fixed-string greps in
+# the file's standard idiom. Two pins deviate from plain whole-file greps,
+# each for a reason this plan's own Task 4 wording requires, implemented in
+# the file's closest established idiom:
+#   - "carrier-selection rule present": the Revisions ledger entry quotes the
+#     gate 1 span verbatim, so a whole-file grep would stay green when the
+#     operative D2 rule sentence is deleted, and the Task 4 mutation probe
+#     (removing that sentence) must flip the pin; it is therefore pinned
+#     region-scoped to the Step 3 decision region in the python block below
+#     (the r2 F7 precedent for ledger-carried spans).
+#   - "covered-stand-down marker schema parity": exactly-once per file is
+#     required (the SKILL.md machine-test prescription and the blueprint's
+#     write prescription must not drift), so the carve-out block's count
+#     idiom is used, one count pin per file, instead of an exists-style grep.
+pin "authoring payload re-verification gate" grep -qF 're-verify the target backlog item still sits at the backlog top level and is still plan-uncovered' "$P"
+pin "quota signal token documented" grep -qF 'quota_signal=' "$S"
+pin "in-session marker documented" grep -qF '(in-session)' "$S"
+pin "decision-time probe binding" grep -qF 'the signal is derived at decision time' "$S"
+pin "in-session lane hold branch" grep -qF 'idle-listing attribution inapplicable' "$S"
+pin "quota signal slug vocabulary" grep -qF 'probe-scarce, probe-near-reset' "$S"
+[ "$(grep -oF '{"item": "<backlog item path>", "reason": "<covered|gone>", "date": "<iso date>"}' "$S" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: covered-stand-down marker schema parity (SKILL.md) count != 1"; fail=1; }
+[ "$(grep -oF '{"item": "<backlog item path>", "reason": "<covered|gone>", "date": "<iso date>"}' "$P" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: covered-stand-down marker schema parity (prompt-templates.md) count != 1"; fail=1; }
+python3 - "$S" <<'EOF' || fail=1  # r7 F1: propagate the block status; without this the block is fail-open at the exit-code surface
+import sys
+s = open(sys.argv[1]).read()
+if "### Step 3: decision" not in s or "### Step 4" not in s:
+    print("PIN FAIL: carrier-selection rule region anchors missing (Step 3/Step 4)"); sys.exit(1)
+step3 = s.split("### Step 3: decision")[1].split("### Step 4")[0]
+if "quota-state-aware carrier-selection rule" not in step3:
+    print("PIN FAIL: carrier-selection rule present (the operative D2 sentence is gone from the Step 3 decision region; the Revisions ledger quotes the span, so a whole-file grep cannot guard it)"); sys.exit(1)
+EOF
+rc=$?
+[ "$rc" -ne 0 ] && fail=1
+[ "$fail" -eq 1 ] && exit 1
+
 
 echo "maintenance pins: all hold"
 exit 0

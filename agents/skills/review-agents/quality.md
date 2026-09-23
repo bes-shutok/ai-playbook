@@ -31,7 +31,7 @@ For value objects, records, structs, or commands whose constructor / init block 
 
 ## Naming and Structural Clarity
 
-Structural clarity stays in this agent. Comment and doc **prose** (redundant inline comments, verbose Javadoc, stale task tags) is owned by `documentation.md` phase 2.
+Structural clarity stays in this agent. Comment and doc **prose** (redundant inline comments, verbose API-documentation comments, stale task tags) is owned by `documentation.md` phase 2.
 
 1. Naming consistency: new names follow existing codebase conventions
 2. Redundant words: if a word is in the package/interface name, do not repeat it in the class name

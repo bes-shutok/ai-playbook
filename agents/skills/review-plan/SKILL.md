@@ -20,7 +20,9 @@ Do not use for:
 
 ## Plan-review boundary
 
-This skill establishes implementation readiness, not implementation completeness. Block only when the plan leaves public behavior contradictory, an invariant without an owner or state path, duplicated security-sensitive ownership, an observable behavior without an acceptance witness, or an unsafe fallback or unbounded resource path. Record fixture and report mechanics, generated-source details after schema behavior is fixed, CI-helper hardening, and rollout evidence as implementation or activation follow-ups unless they reveal one of those blockers. Use three stages: plan review, implementation/code review, and activation review. Stop plan iterations once the current plan satisfies these blocker criteria and hand off to implementation.
+This skill establishes implementation readiness, not implementation completeness. Block only when the plan leaves public behavior contradictory, an invariant without an owner or state path, duplicated security-sensitive ownership, an observable behavior without an acceptance witness, an unsafe fallback or unbounded resource path, or a declared driving force that contradicts the plan's actual content. Record fixture and report mechanics, generated-source details after schema behavior is fixed, CI-helper hardening, and rollout evidence as implementation or activation follow-ups unless they reveal one of those blockers. Use three stages: plan review, implementation/code review, and activation review. Stop plan iterations once the current plan satisfies these blocker criteria and hand off to implementation.
+
+Declaration findings: a missing driving-force line, a missing Gist TLDR, a force outside the taxonomy, a non-principle force without its one-line justification, or a force that contradicts the plan's actual content (declared `simplicity`, adds machinery) is a finding. Pricing: missing/coherent-shape defects are ordinary (non-blocking by default) findings; a force that contradicts the plan's content is blocking.
 
 ## When to Run
 
@@ -49,6 +51,7 @@ This skill establishes implementation readiness, not implementation completeness
    test runs in its owning task gate. Report any mismatch as implementation, testing, documentation,
    or consistency finding according to the missing element.
 7. **Unresolved decision-point audit**: flag for the correctness-completeness worker: (a) plan tasks that implement one of multiple plausible designs where the plan records neither a decision-point receipt nor a `none remain` grill result; (b) a cleanup plan lacking a scope ledger or a grill result while material ownership, preservation, or history-strategy choices remain open; (c) a material candidate appearing in the branch diff or task scope with no keep/remove/defer disposition and no evidence or explicit-confirmation basis; a generic `user confirmed` or `behavior unchanged` phrase is not a basis. Each hit is a correctness-completeness finding.
+8. **Declaration audit**: check the plan's header region for the `Driving force:` line per the plans skill template and the first line of `## Gist & Examples`; classify per the Declaration findings paragraph and flag for the correctness-completeness worker.
 
 ## Step 2: Launch Workers in Parallel
 

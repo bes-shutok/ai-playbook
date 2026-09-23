@@ -187,6 +187,16 @@ Do **not** drop a finding that asks to strengthen `## Validation Commands` solel
 
 Findings excluded under a SKIP condition or deferred by the user remain valid work unless the exclusion reason is invalidity (YAGNI, technically incorrect, false positive); capture those as backlog items per **Backlog capture for valid findings not fixed in scope** below.
 
+## Triage class (real vs formal)
+
+Classify each finding real or formal per guidelines rule 68 before severity ranking. Real means a witnessed failure, recovered wall-clock or token cost, or correctness of behavior. Formal means gates-on-gates, naming/wording/pin audits, vacuity checks, or hypothetical-input hardening. The class routes findings; it never re-ranks them, and severity calibration is untouched.
+
+Routing: a formal finding under a profile whose `deferred_classes` includes `formal-hardening` (including the default profile, per guidelines rule 68) routes to **Backlog capture** with its class and a one-line deferral reason per the existing deferral-line convention, never folded at exit.
+
+This section bounds **Default: address all findings regardless of severity** the same way the existing execute-plan Phase 3 two-class bound does in the section above. A blocking formal finding is never silently backlogged: it follows the blocking re-evaluation procedure of **Fix-risk triage when fixes regenerate findings**.
+
+Consultation rule (cross-profile dispositions): deferring a security or correctness finding on a company-profile project, or folding one on a personal-profile project, is surfaced to the user instead of decided silently. In a non-interactive run, record it returned-for-ask per review-staging's receiving-review consumer row.
+
 ## Triage Decision Rule
 
 When classifying findings for user questions (design decisions, architectural changes, refactors):
@@ -464,7 +474,7 @@ Provider for `{plans_dir}` when saving grouped fix tasks and for `{backlog_dir}`
 Triage updates **Triage outcomes** and finding **Triage** fields; preserves immutable synthesis statistics from the review pass. The triage update ends with a `--hard` validator gate (final step of **Staging doc triage outcomes**) before the staging doc is handed back to the orchestrator.
 
 ### With `doc-hierarchy` + `plans` skills (backlog lifecycle)
-**Backlog capture** items written under `{backlog_dir}` use the `doc-hierarchy` pre-plan backlog format; promotion to a plan and archival to `backlog_completed_dir` follow those skills, not this one.
+**Backlog capture** items written under `{backlog_dir}` use the `doc-hierarchy` pre-plan backlog format; promotion to a plan and archival to `backlog_completed_dir` follow those skills, not this one. When a decision rejects the work outright (a decision against doing it, not a deferral), route the item to the backlog `rejected/` archive through those same skills: record the decision inline as `Status: rejected (YYYY-MM-DD; reason)`, preserve the full body content, and append one ownership-registry row with `state: rejected`, the rejection date, and the reason.
 
 ### With `execute-plan` skill
 Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review`. Triage is authoritative for exit: implement valid fixes, mark `drop` or `done`, and leave only validated unresolved issues at `pending`. The orchestrator counts unresolved findings with `blocking: true`, not severity alone. Accepted fixes identify every owning or affected worker for the targeted follow-up. Phase 3 Hard Gate 23 applies **Fix-risk triage when fixes regenerate findings** before further folding; the focused verification round's worker composition follows `review-panel-selection.md`.
@@ -477,7 +487,10 @@ The Step 1.2b intermediate task review is a second consumer; execute-plan Step 1
 Done is the gate consumer for the review-thread marker this skill writes: it gates its run on the closure state that marker records before reporting completion. Marker format, session identity, and the idempotent-reply duties above stay owned by this skill; the consuming step's mechanics are done's.
 
 ### With `review-loop` skill
-Orchestration rule 4 applies **Fix-risk triage when fixes regenerate findings** in a regenerating loop; the triage classes and fix-vs-backlog decisions feed its exit report and **Backlog capture** tally.
+Orchestration rule 4 applies **Fix-risk triage when fixes regenerate findings** in a regenerating loop; the triage classes and fix-vs-backlog decisions feed its exit report and **Backlog capture** tally. The loop's triage step applies **Triage class (real vs formal)** before the fix-vs-defer decision.
+
+### With `maintenance` skill
+The maintenance survey resolves each open backlog item's profile and class per **Triage class (real vs formal)** (profile per guidelines rule 68), records the class in its survey output, and groups plan families profile-aware. This skill owns the per-finding classification and the cross-profile consultation procedure.
 
 ### With `review-reconciliation` skill
 Use reconciliation for recurring-root, contradictory-artifact, or evidence-ownership analysis. This skill retains fix-vs-backlog triage and does not treat reconciliation's artifact changes as independently reviewed; the original review orchestrator must run the next fresh round.

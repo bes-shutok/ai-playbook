@@ -63,11 +63,11 @@ If changes relate to an existing plan:
 
 ### Module README vs deployable README scope
 
-When a doc finding covers how modules are composed or wired (Maven dependencies, Modulith `::api` boundaries, `ModuleBoundariesTest`, which module imports which):
+When a doc finding covers how modules are composed or wired (dependency coordinates, module-boundary tests and API-surface annotations, which module imports which):
 
 - Prefer the **deployable/composition README** (e.g. `app/README.md`) as the comment target or fix location.
 - Module READMEs should describe what that module owns and exposes (public API packages, domain boundaries), not duplicate composition mechanics already documented at the app layer.
-- If a module README bullet repeats a Module boundaries section plus Modulith syntax, suggest removing the duplicate from the module README rather than expanding it.
+- If a module README bullet repeats a module boundaries section plus framework-specific boundary syntax, suggest removing the duplicate from the module README rather than expanding it.
 
 ### Module high-level tasks (implementation vs docs drift)
 
@@ -79,9 +79,9 @@ When review finds current code behavior that module docs, BFF contracts, or high
 
 ### Ops / local bootstrap inventory (phase 1)
 
-When a change adds or renames migration-owned tables or indexes that local Docker bootstrap depends on:
+When a change adds or renames migration-owned tables or indexes that a local container-based bootstrap depends on:
 
-- Flag missing updates to operator verify scripts (for example `docker/verify-local-schema.sh` `EXPECTED_TABLES` / `EXPECTED_INDEXES`) and `docker-compose.yml` volume mounts for new migration files.
+- Flag missing updates to the repository's operator verify scripts (expected-table/index inventories) and local compose/bootstrap volume mounts for new migration files.
 - Treat a green verify script that omits a required object as missing documentation/ops inventory, not only as an implementation gap.
 
 ### Normative example replay (phase 1)
@@ -107,7 +107,7 @@ When reviewing a plan or RFC draft:
 
 Run this phase when the diff, plan body, or RFC draft contains added or modified human-readable prose. Also run it ad hoc on the specific documents and comments named by review feedback (see `receiving-review` **Documentation and Comment Findings**); in that mode the named artifacts are the scope and no diff is required.
 
-Review **prose in the artifact**: inline comments (any length), block comments, docstrings, Javadoc/KDoc, module headers, README/markdown sections, OpenAPI description fields, plan task prose, and RFC section bullets.
+Review **prose in the artifact**: inline comments (any length), block comments, docstrings, the toolchain's canonical API-documentation comment format, module headers, README/markdown sections, OpenAPI description fields, plan task prose, and RFC section bullets.
 
 ### Core principle: code is the single source of truth
 
@@ -144,7 +144,7 @@ Flag when prose **only describes what** the code does:
 
 **Keep without flagging** when prose documents **why** (non-obvious constraint, framework limitation, accepted tradeoff, regulatory rule, performance rationale) and that rationale is not expressible as a better name or extraction.
 
-**Keep without flagging** when prose is **normative contract text** (OpenAPI descriptions, public API Javadoc/KDoc that external consumers read, user-facing README instructions).
+**Keep without flagging** when prose is **normative contract text** (OpenAPI descriptions, public API contract comments in the toolchain's canonical format that external consumers read, user-facing README instructions).
 
 **Keep without flagging** when prose links to a **shared, reachable** design doc (Confluence URL, wiki) per project convention; do not flag gitignored local paths the team cannot read.
 
@@ -208,7 +208,7 @@ Also apply doc-type rules:
 
 Apply to prose in living Layer 1/2 documentation (overviews, architecture and maintenance topics) alongside the decision-order gates above; these checks stage findings, they do not reorder the gates.
 
-- **Ticket-as-gate:** Living Layer 1/2 prose must not use an issue key (for example `PROJ-1234`) as the primary gate label; prefer a durable capability name plus an optional RFC/ADR link, and keep issue keys in Layer 3 history, plans, backlog, and tracker workflow surfaces.
+- **Ticket-as-gate:** Living Layer 1/2 prose must not use an issue key (for example `PROJ-1234`) as the primary gate label; prefer a durable capability name plus an optional RFC/ADR link, and keep issue keys in Layer 3 history, plans, backlog, and tracker workflow surfaces. <!-- portability: abstract --> issue-key shape is an abstract illustration owned by the orchestrator layer
 - **Second wire SOT:** When a caller catalog restates OpenAPI schemas, enums, or status maps, stage `catalog is second wire SOT; thin-index to OpenAPI` (replace restated tables with a pointer plus audience-specific delta), not `update the catalog table to match`.
 - **Authority roles:** OpenAPI wire shape, workflow/domain Layer 2 rules, API examples, glossary entries, ADRs, and historical documents are separate authorities; duplicated normative prose within one authority consolidates to its owning document, while cross-authority references are pointers, not second SOTs. Do not flag legitimate audience-specific content as duplication.
 - **Consolidation finding shape:** When the same normative workflow rule appears in several living documents, stage one consolidation finding that names the proposed canonical owner from the documentation hierarchy and replaces peer copies with audience-specific pointers or deltas.

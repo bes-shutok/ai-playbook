@@ -128,7 +128,7 @@ success | blocked
 - Output identity: reference to the captured fresh output (log section or path)
 - Selected test identities: which tests the commands selected
 - Changed paths: every path changed against the pre-task baseline
-- Plan-criterion coverage: which task criteria each changed path satisfies
+- Plan-criterion coverage: which task criteria each changed path satisfies; map every acceptance criterion the implement step owns, and an implement-owned criterion this return cannot satisfy routes the return to `status=blocked` with a Blockers entry naming the criterion, never a silent omission
 
 ### Implemented clauses
 - (list each `- [ ]` item you completed)
@@ -212,7 +212,7 @@ success | blocked
 - Command identity: the member's task-local validating command, verbatim
 - Working directory, exit status, output identity, selected test identities
 - Changed paths: every path changed against the moving baseline
-- Plan-criterion coverage: which task criteria each changed path satisfies
+- Plan-criterion coverage: which task criteria each changed path satisfies; map every acceptance criterion the implement step owns, and an implement-owned criterion this return cannot satisfy routes the return to `status=blocked` with a Blockers entry naming the criterion, never a silent omission
 
 ### Implemented clauses (active member)
 - (list each `- [ ]` item you completed)

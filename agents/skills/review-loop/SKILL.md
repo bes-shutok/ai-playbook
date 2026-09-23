@@ -51,13 +51,13 @@ If `git diff ${BASE_BRANCH}...HEAD | wc -c` exceeds `review_large_diff_bytes` (d
 | Step | Skill | What happens |
 |------|-------|----------------|
 | 1 | `doing-code-review` | Branch review mode; staging doc **before** reporting to user |
-| 2 | Triage | Count findings still `pending` with `blocking: true` |
+| 2 | Triage | Count findings still `pending` with `blocking: true`; classify each finding real vs formal per receiving-review (**Triage class (real vs formal)**) before severity ranking |
 | 3 | `receiving-review` | Only if step 2 count > 0; fix or `drop` each finding; update staging doc statuses; after fixes land, run the **Generalize-on-fix** step from `receiving-review`; capture valid findings not fixed in this run as durable backlog items per `receiving-review` **Backlog capture** |
 | 4 | `done` | learn → docs-branch → commit (authorized per iteration) |
 
 **Do not** merge step 3 fixes into the same round's step 1 verdict. Step 1's output is **provisional findings before fixes**.
 
-**Context budget checkpoint (round boundary):** the orchestrator applies the execute-plan `Context budget checkpoints` policy at each round boundary (after the round's step 4, before the next round's step 1): measure context size, log one telemetry record with `skill: review-loop` to the run's telemetry file `docs/tmp/review-loop/<branch-slug>/context.jsonl`, and act per that policy's threshold ladder; review-loop does not restate the ladder.
+**Context budget checkpoint (round boundary):** the orchestrator applies the execute-plan `Context budget checkpoints` policy at each round boundary (after the round's step 4, before the next round's step 1): measure context size, log one telemetry record with `skill: review-loop` to the run's telemetry file `docs/tmp/review-loop/<branch-slug>/context.jsonl`, and act per that policy's threshold ladder; review-loop does not restate the ladder. Under execute-plan Phase 3 the parent's after-review-round checkpoint is authoritative for ladder actions: review-loop only logs its per-skill record and takes no ladder action of its own, and the first record review-loop appends for a run is the baseline for its own compactions_to_date comparison.
 
 ## Staging doc (required every round)
 
@@ -70,6 +70,8 @@ Path pattern:
 `<branch-slug>`: current branch with `/` → `-`, lowercased (e.g. `PROJ-1234-segments-docs-design-rfc`).
 
 Before workers launch, run the record selection helper (`scripts/review_record_selection.py select`) to pick this round's record path and write only the helper-emitted paths (per `review-staging`; on a `new-round` decision run the helper's `backup` subcommand first and record the backup path in Metadata).
+
+Records past the retention window are pruned with `scripts/review_retention.py`: run the dry run first, then prune only through its manifest-gated, pairing-aware path so each staging doc and its `.stats.json` sidecar are removed as one unit.
 
 Each doc **must** include (full `review-staging` hierarchy; **no stub or verdict-only files**):
 
@@ -193,7 +195,7 @@ If no base is named or the diff is large (>10 kB), the loop asks you to confirm 
 Step 1 each round: branch review mode; staging doc before reporting. Diff scope is committed `BASE...HEAD` only.
 
 ### Consumes `receiving-review` skill
-Step 3 when blocking findings remain: triage and fix; update staging statuses. Valid findings not fixed in the run are captured as durable backlog items per its **Backlog capture** rule; the exit report includes the fixed-vs-backlogged tally. Orchestration rule 4 applies its **Fix-risk triage when fixes regenerate findings** section before further folding in a regenerating loop.
+Step 3 when blocking findings remain: triage and fix; update staging statuses. Valid findings not fixed in the run are captured as durable backlog items per its **Backlog capture** rule; the exit report includes the fixed-vs-backlogged tally. Orchestration rule 4 applies its **Fix-risk triage when fixes regenerate findings** section before further folding in a regenerating loop. The step-3 triage pass applies the class step before the fix-vs-defer decision, and formal findings follow the class routing instead of the fix-everything default.
 
 An orchestrated loop may fan the step-3 receiving-review pass per the execute-plan Step 3.3 fan-out contract (file affinity, cap of three, parent merge, one commit per round); the standalone default stays the single step-3 pass.
 

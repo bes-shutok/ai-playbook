@@ -905,3 +905,29 @@ archive gate; a manifest carrying the key with a `null` value passed
 loading and crashed the gate with `AttributeError` on `None.items()`. The
 fix added an explicit mapping check at load time while keeping the absent
 key legal, preserving the `.get` consumer idiom.
+
+## 36. Register a Spec-Loaded Module in `sys.modules` Before `exec_module`
+
+Loading a script by path (`importlib.util.spec_from_file_location` +
+`module_from_spec` + `exec_module`) fails at import time on modern Python
+(3.14 observed) when the loaded module defines `@dataclass` classes:
+dataclass introspection resolves the class's module via
+`sys.modules[cls.__module__]`, which is `None` for a module that was never
+registered, raising `AttributeError: 'NoneType' object has no attribute
+'__dict__'` from inside `dataclasses.py`.
+
+- Register the module object under the spec's name BEFORE executing:
+  `mod = importlib.util.module_from_spec(spec); sys.modules[spec.name] =
+  mod; spec.loader.exec_module(mod)`.
+- `importlib.reload()` does not work on such modules either ("spec not
+  found"): to re-execute changed source, load a FRESH module under a new
+  spec/name instead of reloading the old object.
+- The same registration is what makes `pickle`, dataclass forward
+  references, and introspection helpers work for path-loaded modules; a
+  probe that patches a file and re-executes it needs the fresh-load shape,
+  not a reload.
+
+Witness: an authoring-time probe loaded a validator script by path; the
+first `exec_module` raised the `dataclasses` `AttributeError` until the
+module was registered in `sys.modules`, and a mid-probe source patch
+crashed again on `importlib.reload` until replaced by a fresh spec load.

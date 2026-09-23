@@ -7,8 +7,10 @@ origins actually left the backlog top level:
 
 - Archive gate (``--plan <path>``): extract THAT plan's origins-block
   basenames and exit 1 listing the stragglers of that plan only. An
-  origin passes when the file sits under the completed directory or the
-  top-level item's header carries ``Status: closed`` or ``Status: done``.
+  origin passes when the file sits under the completed directory, under
+  the backlog directory's ``rejected/`` archive (an explicit decision
+  against the work), or the top-level item's header carries
+  ``Status: closed`` or ``Status: done``.
   A plan with no origins block passes trivially (nothing to verify).
   ``--warn`` downgrades the arm to warn-and-exit-0.
 - Corpus scan (no ``--plan``): walk every archived plan under the plans
@@ -45,6 +47,9 @@ except ImportError:  # pragma: no cover
 DEFAULT_BACKLOG_DIR = "docs/history/backlog"
 DEFAULT_COMPLETED_DIR = "docs/history/backlog/completed"
 DEFAULT_PLANS_DIR = "docs/plans/completed"
+# Rejected archive: a top-level backlog item moved here after an explicit
+# decision against the work counts as closed (never a live straggler).
+REJECTED_DIR_NAME = "rejected"
 
 # A backlog item's closure declaration lives in its header region: the
 # first STATUS_HEADER_LINES lines of the top-level item file. The region
@@ -70,7 +75,7 @@ STATUS_CLOSED_VALUE_RE = re.compile(
     r"^(?:closed|done)(?![A-Za-z0-9_-])", re.IGNORECASE
 )
 
-PASS_STATES = ("completed", "closed")
+PASS_STATES = ("completed", "closed", "rejected")
 
 
 def _warn(message: str) -> None:
@@ -135,10 +140,14 @@ def _is_backlog_ref(
     if any(part == "backlog" for part in parts):
         return True
     # Facts-renamed backlog homes: a basename that exists in the resolved
-    # top-level backlog or completed directory is a backlog reference too.
+    # top-level backlog or completed directory is a backlog reference too
+    # (the rejected archive counts as well: an origin quoted after the
+    # item was already rejected still names a backlog location).
     name = parts[-1] if parts else ""
     return bool(name) and (
-        (backlog_dir / name).is_file() or (completed_dir / name).is_file()
+        (backlog_dir / name).is_file()
+        or (completed_dir / name).is_file()
+        or (backlog_dir / REJECTED_DIR_NAME / name).is_file()
     )
 
 
@@ -183,6 +192,9 @@ def classify_origin(
     """Return (state, detail) for one origin basename.
 
     States: ``completed`` (file sits under the completed directory),
+    ``rejected`` (file sits under the backlog directory's ``rejected/``
+    archive: an explicit decision against the work, closed like any
+    other disposition),
     ``closed`` (top-level item header carries Status: closed/done),
     ``open`` (top-level item without a closure declaration), and
     ``missing`` (neither archived nor present at the top level; something
@@ -195,6 +207,14 @@ def classify_origin(
         )
         if found is not None:
             return "completed", "archived under the completed directory"
+    rejected_dir = backlog_dir / REJECTED_DIR_NAME
+    if rejected_dir.is_dir():
+        found = next(
+            (p for p in sorted(rejected_dir.rglob(basename)) if p.is_file()),
+            None,
+        )
+        if found is not None:
+            return "rejected", "archived under the rejected directory"
     top = backlog_dir / basename
     if top.is_file():
         try:

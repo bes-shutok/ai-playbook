@@ -14,6 +14,9 @@ Two subcommands with two distinct postures (never swapped):
 - ``check-restored`` (warn-and-continue): after the sync's restore-fill
   leg, witness each restored plan file; a file whose bytes do not match the
   certification digest prints a warn line and the command always exits 0.
+  A restored path under an archive subdirectory (``completed/``,
+  ``deferred/``, ``rejected/``) is classified as archived and skipped
+  with an info line: frozen history is never a certified-plan witness.
 
 The two postures also diverge on an unreadable plan file (an OSError from
 the per-file digest read): ``guard`` prints a named warn and exits
@@ -41,6 +44,18 @@ from pathlib import Path
 
 ROUND_RE = re.compile(r"^[rR](\d+)$")
 DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+
+# Archive subdirectories of the plans dir. A plan under any of them is
+# archived surface: the guard's shared-name intersection is top-level
+# only, so archived copies are never compared, and the check-restored
+# witness skips them (``rejected/`` is the explicit decision-against
+# archive; see docs/plans/rejected/README.md).
+ARCHIVED_PLAN_DIR_NAMES = ("completed", "deferred", "rejected")
+
+
+def is_archived_plan(path: Path) -> bool:
+    """True when the plan path sits under a named archive subdirectory."""
+    return any(part in ARCHIVED_PLAN_DIR_NAMES for part in path.parts[:-1])
 
 
 def feature_slug(plan_name: str) -> str:
@@ -131,7 +146,9 @@ def latest_certified_sidecar(
 
 
 def top_level_plan_names(plans_dir: Path) -> set[str]:
-    """Top-level ``.md`` filenames only; subdirectories (completed/) excluded."""
+    """Top-level ``.md`` filenames only; the archive subdirectories
+    (``completed/``, ``deferred/``, ``rejected/``) and every other
+    subdirectory are excluded, so archived plans are never compared."""
     if not plans_dir.is_dir():
         return set()
     return {
@@ -217,6 +234,12 @@ def cmd_check_restored(args: argparse.Namespace) -> int:
         path = Path(file_arg)
         if not path.is_file():
             print(f"WARN: check-restored: restored plan file missing: {path}", file=sys.stderr)
+            continue
+        if is_archived_plan(path):
+            # An archived copy (completed/, deferred/, rejected/) is frozen
+            # history, not an active certified plan: classify it and skip
+            # the certified-digest witness instead of warning.
+            print(f"INFO: archived plan copy, certified-digest witness skipped: {path}")
             continue
         certified = latest_certified_sidecar(sidecars, feature_slug(path.name))
         if certified is None:

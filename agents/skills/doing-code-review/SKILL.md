@@ -712,6 +712,8 @@ The `- Record kind: canonical` template value stays bare: copy it verbatim, beca
 - `post`: approved for PR comment (PR staged mode)
 - `edit`: user modified Comment before post (PR staged mode)
 
+**Staging record header Status transitions (posting):** the header value `STAGED (not yet posted)` moves to `POSTED` only through the posting step's landing verification, when every intended finding is live on the pull request. When findings remain unlanded after the recovery pass, the header moves to `INCOMPLETE (posting incomplete; unlanded findings remain pending)` and the unlanded findings keep Status `pending`; a later posting pass re-runs the verification and may move `INCOMPLETE` to `POSTED`. The submission call's own success response is never evidence of `POSTED`. After posting, landed findings carry the per-finding Status `posted`; the list's `post` value records pre-posting approval.
+
 After triage, update `## Review Statistics` → **Triage outcomes** and each finding's **Triage** per `review-staging`. Update the required `.stats.json` sidecar alongside the staging doc.
 
 **Triage presentation freeze** (see `review-agents/severity-calibration.md` § Ordering): do not reshuffle Findings by blocking, blast radius, reachability, or confidence during triage. Keep ascending finding-ID order within each severity section. When a finding's severity changes, move only that block into the matching `###` section.
@@ -730,14 +732,15 @@ When the user says "post comments", "post the review", or "post approved":
 1. Read the staging doc from the review session path, or resolve exactly one `{reviews_dir}/*-PR-<number>-*.md`
 2. Collect all findings with `status: post` or `status: edit` (or `pending` when the user explicitly approves posting all pending)
 3. For each finding, read the `#### Comment` block verbatim; verify `File`/`Line` are in diff hunks (§4.9); post via `github-pr-workflow` as inline comments
-4. Update the staging doc: change Status header to `POSTED`, mark posted findings as `posted`, keep dropped findings as `drop`
-5. Report which findings were posted and which were dropped
+4. **Post-submission landing verification (mandatory; never skipped, even when the submission call reports success):** build the intended set: one entry per posted finding with its `File`, `Line`, and a distinctive body fragment of its `#### Comment` text (for example the first sentence). Fetch the live pull-request review comments with the `github-pr-workflow` "Fetch existing review comments before active review" primitive. When the posting used one review submission that returned a review id and this is the first verification run, first narrow to the comments whose `pull_request_review_id` matches that id; in any later verification run after individual re-posts, match against all review comments, because individually posted comments do not carry the batch submission's review id; when the posting returned no review id, match against all review comments. The same all-comments match applies when findings were posted across multiple review submissions. A finding has landed only when the live collection contains a comment with the same path, the same line, and the distinctive body fragment (treat the comment's recorded commit as informational; head may have moved). Every intended finding must land; an intended-vs-landed count comparison is the minimum evidence. This verification applies to GitHub PR postings only; branch reviews have no remote landing to verify.
+5. When every intended finding has landed, update the staging doc: change the Status header to `POSTED`, mark posted findings as `posted`, keep dropped findings as `drop`, then report which findings were posted and which were dropped.
+6. When any finding did not land (silent batch drop), recover: re-post each missing finding individually through the pull-request review-comments endpoint (`POST repos/{owner}/{repo}/pulls/{pull_number}/comments` with `commit_id` (the head commit sha the PR is pinned to), `path`, `line`, `side: "RIGHT"`, `body`; one call per finding), then re-run step 4 over the full intended set. When the re-run verifies every finding, continue with step 5. When findings are still missing after this one recovery pass, set the staging doc's Status header to `INCOMPLETE`, leave the unlanded findings' Status as `pending`, and report the review as incomplete: name each finding that did not land. Never mark the staging record `POSTED` while any intended finding is missing, and never treat the submission response alone as completion.
 
 ### Direct Mode (skip staging)
 
 When the user explicitly says "post directly", "skip staging", or "review and post":
 - Post findings immediately to GitHub (legacy behavior)
-- Still write the staging doc as a record with all findings marked as `posted`
+- Still write the staging doc as a record; for PR postings, mark findings as `posted` only after the same post-submission landing verification passes, and record an unlanded finding per the posting step's incomplete outcome (header `INCOMPLETE`, finding left `pending`)
 
 **For branch reviews (not GitHub PRs)**: Direct mode is the default behavior since there is no PR to post to. The staging doc is the complete deliverable; always write it with findings marked as `posted`.
 

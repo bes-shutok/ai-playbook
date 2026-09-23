@@ -195,6 +195,31 @@ class DocsBranchPlanGuardTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("REFUSE:", out)
 
+    def test_guard_ignores_rejected_subdir(self) -> None:
+        # A plan moved under rejected/ is archive surface: the guard never
+        # compares it (same posture as completed/), and check-restored
+        # classifies an archived copy as archived and skips the
+        # certified-digest witness instead of warning on a mismatch.
+        self._write_plan(self.branch, CERTIFIED_TEXT, sub="rejected")
+        self._write_plan(self.incoming, OLDER_TEXT, sub="rejected")
+        self._write_sidecar(
+            f"2026-09-19-plan-review-{FEATURE}-r1.stats.json",
+            slug=FEATURE,
+            round_="r1",
+            digest=self.cert_digest,
+        )
+        code, out, _err = self._run_guard()
+        self.assertEqual(code, 0)
+        self.assertNotIn("REFUSE:", out)
+        # Archived classification: the restored rejected/ copy is exempt
+        # from the certified-digest witness (named skip, never a warn).
+        rejected_copy = self.branch / PLANS_REL / "rejected" / PLAN_NAME
+        code, out, _err = self._run_check_restored(str(rejected_copy))
+        self.assertEqual(code, 0)
+        self.assertNotIn("WARN:", out)
+        self.assertIn("archived", out.lower())
+        self.assertIn(str(rejected_copy), out)
+
     def test_guard_prefix_digest_sidecar(self) -> None:
         self._write_plan(self.branch, CERTIFIED_TEXT)
         self._write_plan(self.incoming, OLDER_TEXT)
@@ -204,6 +229,68 @@ class DocsBranchPlanGuardTest(unittest.TestCase):
             round_="r1",
             digest=self.cert_digest[:16],
         )
+        code, out, _err = self._run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("REFUSE:", out)
+
+    def test_unrelated_peer_artifacts_do_not_block_completion(self) -> None:
+        # Task 4 characterization probe (green on the current implementation:
+        # no unrelated-peer false block exists in the guard). Unrelated
+        # peer-owned artifacts in the shared checkout - a tracked file with
+        # divergent bytes on the two sides, ignored scratch files, peer
+        # review sidecars for other slugs (higher round), a malformed
+        # sidecar, a nested peer staging record, and a peer-owned new
+        # top-level plan present only in the incoming snapshot - never
+        # produce a stale-baseline refusal for this task's identical shared
+        # plan bytes. The second arm pins that the certified-downgrade
+        # boundary for the shared plan itself is not weakened by any of that
+        # peer noise.
+        self._write_plan(self.branch, CERTIFIED_TEXT)
+        self._write_plan(self.incoming, CERTIFIED_TEXT)
+        self._write_sidecar(
+            f"2026-09-19-plan-review-{FEATURE}-r1.stats.json",
+            slug=FEATURE,
+            round_="r1",
+            digest=self.cert_digest,
+        )
+        # Peer-owned tracked file, divergent on the two sides.
+        (self.branch / "docs").mkdir(exist_ok=True)
+        (self.branch / "docs" / "peer-notes.md").write_text("branch side\n", encoding="utf-8")
+        (self.incoming / "docs").mkdir(exist_ok=True)
+        (self.incoming / "docs" / "peer-notes.md").write_text("incoming side\n", encoding="utf-8")
+        # Peer-owned ignored scratch, present on both sides.
+        (self.branch / ".peer-scratch").write_text("scratch\n", encoding="utf-8")
+        (self.incoming / ".peer-scratch").write_text("scratch\n", encoding="utf-8")
+        # Peer review artifacts: a sidecar for another slug at a higher
+        # round, a malformed sidecar, and a nested peer staging record.
+        self._write_sidecar(
+            "2026-09-19-plan-review-other-feature-r9.stats.json",
+            slug="other-feature",
+            round_="r9",
+            digest=self.older_digest,
+        )
+        (self.reviews / "peer-broken.stats.json").write_text("{not json", encoding="utf-8")
+        staging = self.reviews / "staging"
+        staging.mkdir()
+        (staging / "2026-09-21-branch-review-r2.md").write_text(
+            "peer review record\n", encoding="utf-8"
+        )
+        # A peer-owned new top-level plan, incoming only, with its own
+        # sidecar: never a shared name, so never compared.
+        peer_plan = self.incoming / PLANS_REL / "2026-09-23-peer-plan.md"
+        peer_plan.write_text("# Peer plan\n", encoding="utf-8")
+        self._write_sidecar(
+            "2026-09-23-plan-review-peer-plan-r1.stats.json",
+            slug="peer-plan",
+            round_="r1",
+            digest=_digest("# Peer plan\n"),
+        )
+        code, out, _err = self._run_guard()
+        self.assertEqual(code, 0)
+        self.assertNotIn("REFUSE:", out)
+        # Protection preserved: the same peer noise does not weaken the
+        # certified-downgrade refusal for the shared task-owned plan.
+        self._write_plan(self.incoming, OLDER_TEXT)
         code, out, _err = self._run_guard()
         self.assertEqual(code, 1)
         self.assertIn("REFUSE:", out)

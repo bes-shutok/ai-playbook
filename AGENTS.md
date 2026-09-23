@@ -53,6 +53,7 @@ bash ~/.ai-playbook/scripts/scan-public-hygiene.sh   # from instructions repo ro
 - For `learn` flows, confirm lessons are placed in the correct scope and do not duplicate guidance.
 - When reviewing uncommitted changes for confidential data, path leakage, or naming issues, inspect the actual changed file set from `git status --short`, including untracked files, before narrowing the review to a subset of files.
 - Before committing skill or instruction changes, run the hygiene scan from `public_hygiene_scan_script` in user facts (exit 0 required). Deny patterns: `public_hygiene_patterns_file` (template: `docs/scan-public-hygiene.patterns.example`). Personal contact email is allowed only in `LICENSE.txt` copyright lines.
+- Whenever a change touches `agents/skills/review-agents/`, run `python3 scripts/check_review_agent_portability.py` (exit 0 required) to keep the shared catalogs free of stack-specific tokens (mirrors the hygiene-scan mandate).
 
 ## Agent-Specific Runtime Safety
 - Before host-level changes (package installs, shell profile edits), state execution context (host vs sandbox), expected impact, and rollback plan.

@@ -29,11 +29,10 @@ marker WRITE RECIPE sections below). An ABSENT marker ALWAYS blocks; the gate
 consults NO second signal. Recovery from a transient/unwritable/divergently-resolved store
 is via `skill_gate --doctor` (Mon1), NOT a gate-side bypass.
 
-The marker is a **consent reminder, NOT a security boundary** (THREAT-MODEL
-note, r6-L2): it is forgeable by any process with write access to the runtime
-dir. This is accepted because the protected files (plan files) are already
-fully writable by the same user; the gate exists to make the "did the plans
-skill run?" question loud, not to defend against a hostile agent.
+The marker is a **consent reminder, NOT a security boundary** (r6-L2): the
+gate exists to make the "did the plans skill run?" question loud. The
+protected files (plan files) are already fully writable in the operator's own
+checkout, so the gate is workflow discipline, not a security control.
 
 ## jq-free / python-parse convention
 

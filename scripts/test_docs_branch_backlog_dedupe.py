@@ -35,8 +35,10 @@ BASE_ITEM = (
     "Durable rule two: surface deeper mismatches instead of deleting them.\n"
 )
 
-# Same body as BASE_ITEM with only the Status line changed: the archive
-# move is expected to rewrite exactly that line, so the pair must sweep.
+# Same body as BASE_ITEM with only the Status line changed: the bodies
+# match once Status lines are dropped, but the Status values differ, so
+# the pair is a surface-and-keep case, never a removal. When both copies
+# carry the same variant, Status values are equal and the pair sweeps.
 STATUS_VARIANT = BASE_ITEM.replace("Status: done", "Status: in-progress")
 
 # Same Status line as BASE_ITEM but a drifted body line: a deeper
@@ -57,6 +59,7 @@ class BacklogDedupeTest(unittest.TestCase):
         self.backlog = self.wt / "docs" / "history" / "backlog"
         (self.backlog / "completed").mkdir(parents=True)
         (self.backlog / "deferred").mkdir(parents=True)
+        (self.backlog / "rejected").mkdir(parents=True)
 
     def _write(self, path: Path, text: str) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,6 +74,9 @@ class BacklogDedupeTest(unittest.TestCase):
 
     def _deferred(self, name: str) -> Path:
         return self.backlog / "deferred" / name
+
+    def _rejected(self, name: str) -> Path:
+        return self.backlog / "rejected" / name
 
     def _sweep(self) -> tuple[int, str, str]:
         proc = subprocess.run(
@@ -109,16 +115,44 @@ class BacklogDedupeTest(unittest.TestCase):
         self.assertIn("REMOVED", out)
         self.assertIn("2026-09-10-example.md", out)
 
-    def test_removes_when_twin_differs_only_in_status_line(self) -> None:
+    def test_status_only_difference_keeps_both(self) -> None:
+        # Inverted by the status-match fix: a re-opened item whose top
+        # copy differs from its archived twin only in the Status value is
+        # a legitimate live copy, so both copies survive and the sweep
+        # reports an informational surface-and-keep line, not the
+        # mismatch warning and not a removal.
         self._write(self._top("2026-09-10-example.md"), STATUS_VARIANT)
         self._write(self._completed("2026-09-10-example.md"), BASE_ITEM)
         code, out, err = self._sweep()
         self.assertEqual(code, 0)
         self.assertEqual(err, "")
-        self.assertFalse(self._top("2026-09-10-example.md").exists())
+        self.assertIn("KEPT", out)
+        self.assertIn("2026-09-10-example.md", out)
+        self.assertNotIn("REMOVED", out)
+        self.assertEqual(
+            self._top("2026-09-10-example.md").read_text(encoding="utf-8"),
+            STATUS_VARIANT,
+        )
         self.assertEqual(
             self._completed("2026-09-10-example.md").read_text(encoding="utf-8"),
             BASE_ITEM,
+        )
+
+    def test_matching_status_removed(self) -> None:
+        # Equal bodies and equal Status values: the stale top-level copy
+        # is removed even when the shared Status is not the BASE_ITEM
+        # default, so the status agreement requirement does not narrow
+        # the existing sweep.
+        self._write(self._top("2026-09-10-example.md"), STATUS_VARIANT)
+        self._write(self._completed("2026-09-10-example.md"), STATUS_VARIANT)
+        code, out, err = self._sweep()
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        self.assertFalse(self._top("2026-09-10-example.md").exists())
+        self.assertTrue(self._completed("2026-09-10-example.md").exists())
+        self.assertEqual(
+            self._completed("2026-09-10-example.md").read_text(encoding="utf-8"),
+            STATUS_VARIANT,
         )
         self.assertIn("REMOVED", out)
         self.assertIn("2026-09-10-example.md", out)
@@ -174,6 +208,39 @@ class BacklogDedupeTest(unittest.TestCase):
         )
         self.assertEqual(
             self._deferred("b-item.md").read_text(encoding="utf-8"),
+            BASE_ITEM,
+        )
+
+    def test_rejected_twin_same_rules(self) -> None:
+        # A rejected backlog twin follows the same matching and mismatch
+        # rules as completed/deferred: a top-level copy matching its
+        # rejected twin in body and Status is a stale duplicate of the
+        # archive move and is removed from the overlay; a Status-only
+        # difference or a drifted body is retained and surfaced, never
+        # deleted.
+        # Removal arm: an identical rejected twin sweeps the top copy.
+        self._write(self._top("r-item.md"), BASE_ITEM)
+        self._write(self._rejected("r-item.md"), BASE_ITEM)
+        # Surfacing arm: a rejected twin with a drifted body is kept.
+        self._write(self._top("s-item.md"), BODY_MISMATCH)
+        self._write(self._rejected("s-item.md"), BASE_ITEM)
+        code, out, err = self._sweep()
+        self.assertEqual(code, 0)
+        self.assertFalse(self._top("r-item.md").exists())
+        self.assertEqual(
+            self._rejected("r-item.md").read_text(encoding="utf-8"),
+            BASE_ITEM,
+        )
+        self.assertIn("REMOVED", out)
+        self.assertIn("r-item.md", out)
+        self.assertIn("WARN", err)
+        self.assertIn("s-item.md", err)
+        self.assertEqual(
+            self._top("s-item.md").read_text(encoding="utf-8"),
+            BODY_MISMATCH,
+        )
+        self.assertEqual(
+            self._rejected("s-item.md").read_text(encoding="utf-8"),
             BASE_ITEM,
         )
 

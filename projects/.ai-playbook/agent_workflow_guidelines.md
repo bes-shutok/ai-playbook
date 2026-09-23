@@ -1116,3 +1116,17 @@ Treat agent memory files (for example the host's persistent memory index and top
 67.3. **Canonical values live in the facts document.** For repeated workflows, persist canonical values in the project facts document and copy from there instead of re-deriving them on every pass. Copying a persisted canonical value removes the re-derivation step where transcription errors are born.
 
 **Why this matters:** the 2026-09-19 corrections-mining pass over 1,776 typed prompts (2026-07-17 to 09-19) names data-entry accuracy as the highest-stakes correction class: about 8 corrections between Jul 25 and Sep 13, all in transcription-shaped work. Witnesses recorded in `docs/history/backlog/2026-09-19-transcription-cross-check-before-write.md`: the same residency form section filled twice with swapped and shifted fields ("country and id are now filled twice... the name again in the lower part where the date should be"), the same invoice listed twice as two line items (`2026-09-10_bcp_dd_proof_46.82_a` and `..._b`), and a wrong amount carried into a summary ("sorry, not 37, the one of 32.9"). The same pass showed personal-admin repos run roughly twice the correction rate of the skill repo (7.5-10.3% vs 4.4-4.7%): extraction-and-transcription is where the agent is least reliable without a cross-check.
+
+## 68. Project-Priority Profiles: Per-Project Deferral Classes
+
+Each project's facts document carries that project's priority profile under a `## Priority profile` heading with two keys: `priority_order` (the ranked list of finding priorities for that project) and `deferred_classes` (the list of deferral class slugs; initial vocabulary `formal-hardening`, `security-hardening`, `prose-polish`; a project may declare others).
+
+**Default profile.** An unspecified project falls back to the section 64 ordering with formal-hardening defer-by-default; the profile's `priority_order` defaults to the section 64 principle ordering (efficiency, token usage, simplicity, code quality).
+
+**Security rule.** `security-hardening` is a deferral class, not a severity lens: a security finding's severity calibrates normally per `review-agents/severity-calibration.md`, and the class governs deferral routing only.
+
+**Section 64 interaction.** A declared `priority_order` supersedes the section 64 ranking for that project only; the global ordering stays the fallback and is never rewritten by a profile. The section 64 code-quality proviso carries: a deferral whose cost is real code quality records that cost in the deferral line and is revived deliberately once the cost compounds.
+
+**Consultation rule.** On a company-profile project, priority conflicts that would defer security or correctness findings are consulted with the user each time rather than decided silently; the mirror case, folding a security or correctness finding on a personal-profile project, is consulted the same way. The operationalization (classification before severity, deferral routing, cross-profile consultation procedure) lives in the receiving-review skill's `## Triage class (real vs formal)` section; the maintenance survey and selection apply it per guidelines and record each item's class.
+
+**Witnesses.** The origin backlog item `docs/history/backlog/2026-09-21-project-priority-profiles.md` and the 2026-09-12 amendment note in section 64 are this rule's witnesses: the same finding is defer-by-default on a personal repo and fix-by-default on a company repo, and the global-only ranking had wrongly parked code-quality items.

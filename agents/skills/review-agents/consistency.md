@@ -33,7 +33,7 @@ Pattern tags: `consistency#<kebab-slug>`.
 1. A rule, decision, or contract restated in two or more places in the artifact with diverging wording; propose consolidating into the single owning section and linking from the copies.
 2. The artifact declares a source of truth (glossary, schema, config shape) and then contradicts it in task prose.
 3. Measured counts or inventories asserted in prose that the artifact's own referenced source disagrees with; require a re-measurement, not a re-assertion.
-4. Ticket-as-gate drift: a living artifact gates behavior on an issue key (for example `PROJ-1234`) whose churn is unrelated to the capability it names; stage one SOT-drift finding proposing the durable capability name, not per-surface staleness findings; canonical gates in `documentation.md` Living-doc gates.
+4. Ticket-as-gate drift: a living artifact gates behavior on an issue key (for example `PROJ-1234`) whose churn is unrelated to the capability it names; stage one SOT-drift finding proposing the durable capability name, not per-surface staleness findings; canonical gates in `documentation.md` Living-doc gates. <!-- portability: abstract --> issue-key shape is an abstract illustration owned by the orchestrator layer
 5. Wire-contract duplication: a caller catalog restates OpenAPI schemas, enums, or status maps; stage one fan-out finding that thin-indexes the catalog to the OpenAPI definition, not one finding per restated row; canonical gates in `documentation.md` Living-doc gates.
 
 ## Invalid validation claims
