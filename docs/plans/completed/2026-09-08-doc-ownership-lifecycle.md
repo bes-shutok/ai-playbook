@@ -219,3 +219,7 @@ Files:
 - Pre-registry repos fail open; the validator never auto-reclassifies a living document (grill decisions 3 and 4).
 - The migration/instructions repo stays out of `verify-doc-hierarchy.sh` scope; the validator must work on any repo with resolved facts paths (ADR-0003).
 - Push, branch, review, and user-approval authorization are unchanged (backlog non-goal).
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-08-document-ownership-and-archive-lifecycle.md: disposition folded into 2026-09-08-doc-ownership-lifecycle.md (2026-09-25); per-item file deleted.

@@ -215,3 +215,7 @@ Files:
 - [x] Run the full `## Validation Commands` block → expect exit 0 on the implemented tree (including `bash -n` syntax check of the block itself before running it).
 - [x] Inventory check: `git diff --stat` touches only `scripts/summarize_review_stats.py` and `scripts/validate_review_staging.py`; anything else is investigated before commit.
 - [x] Note for completion (Plan Lifecycle): the four backlog origin files move to `docs/history/backlog/completed/` with `Status: done` in the completion pass; the F4 half of `2026-08-28-summarizer-cli-followups.md` is already recorded as completed in that file's Problem section.
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-02-summarizer-hardening-round-2-r5-residuals.md: disposition folded into 2026-09-02-summarizer-hardening-round-2.md (2026-09-25); per-item file deleted.

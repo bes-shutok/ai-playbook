@@ -128,3 +128,7 @@ Files:
 ### Task 2: Final validation
 
 - [x] Run the full Validation Commands block from the repo root against the post-task tree → expect exit code 0 (no commit; validation only)
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-04-reviewconfluence-doc-441-shared-remedy-tail.md: disposition folded into 2026-09-05-rcd-441-shared-remedy-dedupe.md (2026-09-25); per-item file deleted.

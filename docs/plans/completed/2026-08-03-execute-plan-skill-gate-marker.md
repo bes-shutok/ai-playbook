@@ -150,3 +150,25 @@ Files:
 - [x] Reference the README as the single source; do not inline `SKILL_GATE_WINDOW`, hash derivation, or marker filename templates beyond pointing at the recipe.
 - [x] Run → expect: Validation Commands succeed (including Recovery-scoped greps and per-path structural checks).
 - [x] Commit: `execute-plan: refresh skill-gate marker before plan-file edits`
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-07-plans-confidence-gate-plan-execution-checks.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-10-execute-plan-quota-window-pause-resume.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-14-execute-plan-batched-implement-launch.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-14-execute-plan-mid-round-quota-resume-watcher.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-15-budget-gate-plan-review-exit-residue.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-16-execute-plan-conditional-readiness-gate.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-16-execute-plan-review-evidence-and-manifest-gate.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-17-execute-plan-scope-and-release-gate-separation.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-18-execute-plan-archived-sidecar-claim-immutable-history.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-18-execute-plan-recurrence-relay-consumer-seam.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-18-execute-plan-sidecar-boundary-sentence-dedup.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-18-execute-plan-worktree-gitignored-bootstrap-gap.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-19-plan-authoring-skill-invocation-pin.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-20-executed-plan-origins-left-open-no-gate.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-22-execute-plan-worker-evidence-verification-gate.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-23-execute-plan-skill-telemetry-jsonl-runtime-name-violation.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-23-execute-plan-unlanded-plan-worktree-cherry-pick.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-23-skill-gate-marker-worktree-project-key.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-03-execute-plan-wording-pass.md: disposition folded into 2026-08-03-execute-plan-skill-gate-marker.md (2026-09-25); per-item file deleted.

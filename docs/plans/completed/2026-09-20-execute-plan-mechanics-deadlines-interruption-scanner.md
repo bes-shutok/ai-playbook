@@ -351,3 +351,7 @@ Files:
 - [x] Run the Task 6 dedicated probes and the Task 7 and Task 8 contract-parity probes (each defined in its own task) as one fail-closed block; expect zero misses [class: REPOSITORY_TEST]
 - [x] Confirm the six origin backlog items are still present and unmodified under `docs/history/backlog/` [class: REPOSITORY_TEST]
 - [x] Commit (only if the sweep produced fixes): `test: execute-plan mechanics final validation sweep` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-17-execute-plan-interruption-root-cause-inventory.md: disposition folded into 2026-09-20-execute-plan-mechanics-deadlines-interruption-scanner.md (2026-09-25); per-item file deleted.

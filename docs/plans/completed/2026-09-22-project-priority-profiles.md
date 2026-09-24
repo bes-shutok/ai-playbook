@@ -231,3 +231,7 @@ Files:
 - [ ] Run the public hygiene scan (`bash scripts/scan-public-hygiene.sh` from the repo root) → expect exit 0. [class: REPOSITORY_TEST]
 - [ ] Run `python3 scripts/plan_readiness.py docs/plans/2026-09-22-project-priority-profiles.md` → expect exit 0 after the review loop closes with a matching sidecar digest. [class: REPOSITORY_TEST]
 - [ ] Commit any residual wording fixes from this sweep: `plans: priority-profiles validation sweep fixes` (skip when nothing changed). [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-21-project-priority-profiles.md: disposition folded into 2026-09-22-project-priority-profiles.md (2026-09-25); per-item file deleted.

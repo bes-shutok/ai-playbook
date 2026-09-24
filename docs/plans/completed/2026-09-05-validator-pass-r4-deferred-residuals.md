@@ -260,3 +260,10 @@ Files:
 - [x] Run the full `## Validation Commands` block from the repo root → expect all gates green, exit 0
 - [x] Run `scripts/check-no-em-dash.sh file scripts/validate_review_staging.py projects/.ai-playbook/python_guidelines.md` → expect exit 0
 - [x] Commit: none (no-op task; nothing to commit if all green)
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-04-validator-pass-r4-deferred-parser-warning-side-effect.md: disposition folded into 2026-09-05-validator-pass-r4-deferred-residuals.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-04-validator-pass-r4-deferred-severity-seed-symmetry.md: disposition folded into 2026-09-05-validator-pass-r4-deferred-residuals.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-04-validator-pass-r4-deferred-stderr-capture-helper.md: disposition folded into 2026-09-05-validator-pass-r4-deferred-residuals.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-04-validator-pass-r4-deferred-guidelines-typo.md: disposition folded into 2026-09-05-validator-pass-r4-deferred-residuals.md (2026-09-25); per-item file deleted.

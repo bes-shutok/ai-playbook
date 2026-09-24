@@ -358,3 +358,8 @@ Files: none (gates only)
   report the open origins (informational), and the archive step's own gate run must exit 0
 - [x] Run `python3 scripts/plan_readiness.py docs/plans/2026-09-22-loop-liveness-durable-carriers-park-coverage.md` [class: REPOSITORY_TEST]
   → expect exit 0 on the final plan bytes
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-21-watchdog-escalation-park-coverage.md: disposition folded into 2026-09-22-loop-liveness-durable-carriers-park-coverage.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-21-loop-mode-durable-carrier.md: disposition folded into 2026-09-22-loop-liveness-durable-carriers-park-coverage.md (2026-09-25); per-item file deleted.

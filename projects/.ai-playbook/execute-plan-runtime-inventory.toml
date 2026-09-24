@@ -173,6 +173,41 @@ runtime_id = "codex"
 adapter = "~/.codex/hooks/plan-readiness.sh"
 event = "final-response"
 
+[[execute_plan_hooks]]
+event = "PreToolUse"
+capability = "deny-mismatched-worker-model"
+fallback = "block worker launch when selected policy cannot be verified"
+
+[[execute_plan_hooks]]
+event = "SubagentStart"
+capability = "record-bound-worker-identity"
+fallback = "refuse missing or ambiguous launch binding"
+
+[[execute_plan_hooks]]
+event = "SubagentStop"
+capability = "bounded-worker-continuation"
+fallback = "preserve hard blocks and exhausted budget"
+
+[[execute_plan_hooks]]
+event = "Stop"
+capability = "bounded-parent-continuation"
+fallback = "preserve hard blocks and exhausted budget"
+
+[[execute_plan_hooks]]
+event = "Interrupt"
+capability = "best-effort-interruption-snapshot"
+fallback = "recover through SessionStart reconciliation"
+
+[[execute_plan_hooks]]
+event = "SessionStart"
+capability = "reconcile-before-resume"
+fallback = "suppress continuation when reconciliation fails"
+
+[[execute_plan_hooks]]
+event = "PreCompact"
+capability = "persist-interruption-snapshot"
+fallback = "recover through SessionStart reconciliation"
+
 [[hook_profiles]]
 agent = "agy"
 hook = "plan-readiness"

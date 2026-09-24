@@ -191,7 +191,9 @@ Findings excluded under a SKIP condition or deferred by the user remain valid wo
 
 Classify each finding real or formal per guidelines rule 68 before severity ranking. Real means a witnessed failure, recovered wall-clock or token cost, or correctness of behavior. Formal means gates-on-gates, naming/wording/pin audits, vacuity checks, or hypothetical-input hardening. The class routes findings; it never re-ranks them, and severity calibration is untouched.
 
-Routing: a formal finding under a profile whose `deferred_classes` includes `formal-hardening` (including the default profile, per guidelines rule 68) routes to **Backlog capture** with its class and a one-line deferral reason per the existing deferral-line convention, never folded at exit.
+**Shared-skill consumer defects:** a backlog or finding that fixes shared skills (`plans`, `execute-plan`, `review-agents`, `receiving-review`, and siblings) so **consumer projects** that run those skills stop failing is **real**, even when the item lives in the personal skills repo and the skills repo's priority profile would otherwise treat similar hygiene as `formal-hardening`. Witnessed consumer failure (false-green done, missed door, Phase 3 vs external bot gap) is enough; do not reclassify as formal because the skills repo itself is a pet/personal profile.
+
+Routing: a formal finding under a profile whose `deferred_classes` includes `formal-hardening` (including the default profile, per guidelines rule 68) routes to **Backlog capture** with its class and a one-line deferral reason per the existing deferral-line convention, never folded at exit. Shared-skill consumer defects (previous paragraph) are never routed through that formal-hardening deferral.
 
 This section bounds **Default: address all findings regardless of severity** the same way the existing execute-plan Phase 3 two-class bound does in the section above. A blocking formal finding is never silently backlogged: it follows the blocking re-evaluation procedure of **Fix-risk triage when fixes regenerate findings**.
 
@@ -376,21 +378,25 @@ The mechanical second line of defense is `scripts/check_backlog_inbox_location.p
 
 Destination, in order:
 
-1. `{backlog_dir}` pre-plan file (key from `.ai-playbook/facts.md`; promote via the `plans` skill when scheduled, move to `backlog_completed_dir` on completion per `doc-hierarchy` and `plans`)
+1. `{backlog_dir}` pre-plan file (key from `.ai-playbook/facts.md`; promote via the `plans` skill when scheduled; on completion fold disposition into `{plans_completed_dir}` and delete the file per `doc-hierarchy` and `plans`; do not keep per-item archives under `backlog_completed_dir`)
 2. Module high-level tasks doc on module-split repos (per `doing-code-review` Step 5.1), only when project guidelines name an existing doc for that module; never create a new doc to hold backlog items.
 3. Project issue tracker via its workflow skill (for example `jira-workflow`) when the project tracks backlog there; external write, so create tickets only on explicit user request or standing pre-authorization
 4. No destination resolves: ask the user where to record; never silently fall back to chat, the staging doc, `docs/tmp/` (ephemeral), or a newly invented location such as `docs/maintenance/` (Layer 2 living ops, not a backlog inbox).
 
-Required content per item (`{backlog_dir}/YYYY-MM-DD-<slug>.md`; one finding or shared root cause per file; keep the Status/Workflow header lines so `plans`-skill promotion applies):
+Required content per item (`{backlog_dir}/YYYY-MM-DD-<slug>.md`; keep the Status/Workflow header lines so `plans`-skill promotion applies):
 
+Prefer **one file per shared root cause or work-type theme** when several deferred findings will share one plan (for example typed ports, harness hygiene). Do not create a new micro-file when an open consolidated SOT already covers that work type; append a row to that SOT instead. When consolidating existing micro-items into a theme SOT (same session or same branch), merge content and **delete** the absorbed files in the same change set. Never leave `Status: Superseded` stubs that only point at the SOT.
+
+Each new or updated item still carries:
 - Problem statement with evidence: what is wrong and the observed or realistic consequence
 - Exact location: file path with line or anchor, or contract/doc section
 - Suggested fix, or the options considered when the fix is a design choice
 - Severity and source reference: staging doc path, round, finding id, capture hygiene check verdict
 - Why not fixed now: the scope boundary or decision, and who made it
 - Driving force: the primary force tag from the Backlog driving-force taxonomy, plus a secondary force when one exists
+- When the item fixes shared skills used by other repos: `Priority: critical` (or high) plus a `Consumer urgency:` line stating that consumer projects that run the skill need the fix, and that the skills-repo personal priority profile must not park or defer it as formal-hardening for the skills repo alone
 
-Capture sources: review-fix cycles and execute-plan Step 1.2b intermediate task reviews; both record the Driving force line on every captured item.
+Capture sources: review-fix cycles and execute-plan Step 1.2b intermediate task reviews; both record the Driving force line on every captured item. learn Step 1.8 skill-usage captures in the skills repo follow the same Consumer urgency rule when the defect harms consumer runs.
 
 Before the item counts as captured, run the public-hygiene scanner over the composed draft while it is still uncommitted (capture hygiene check):
 
@@ -446,7 +452,11 @@ This is the sibling rule to **Agent corpus feedback** above: that section genera
 
 ## Fix-risk triage when fixes regenerate findings
 
-When a review-fix cycle keeps regenerating findings, stop folding mechanically and audit the findings before the next fix pass. The trigger is operational: two consecutive rounds in which at least one new finding lands on files modified by the prior round's fixes. Before applying the classifications below, invoke `review-reconciliation` when the recurrence, ownership, or evidence cannot be explained from the current round alone. Pass the chronological review artifacts and sidecars, triage and fix history, current source digest, and permitted mutation scope. Record the per-family regression chain on the affected findings' Analysis sections so a rule 2 refusal stays auditable. This bounds the **Default: address all findings** rule (which back-references this section): an unbounded fold loop can damage more than the findings it resolves.
+When a review-fix cycle keeps regenerating findings, stop folding mechanically and audit the findings before the next fix pass. The trigger is operational when **any** of these hold: (a) two consecutive rounds in which at least one new finding lands on files modified by the prior round's fixes; (b) an external PR reviewer (bot or human) keeps opening related threads on the same component family after agent replies; (c) the user reports that recent fixes created more issues than they closed. Before applying the classifications below, invoke `review-reconciliation` when the recurrence, ownership, or evidence cannot be explained from the current round alone. Pass the chronological review artifacts and sidecars, triage and fix history, current source digest, and permitted mutation scope. Record the per-family regression chain on the affected findings' Analysis sections so a rule 2 refusal stays auditable. This bounds the **Default: address all findings** rule (which back-references this section): an unbounded fold loop can damage more than the findings it resolves.
+
+**Invariant closure before more microfixes:** when the thrash is one component family with half-closed contracts (parallel helpers, lying API names, multi-step terminal paths), do not keep comment-driven patches. Draft the smallest set of closed invariants that collapse the family into one door (one atomic API, one domain guard, one truthful finder), present them to the user when interactive, then implement that closure as one change set. Pause re-requesting external review until those invariants land. Soft or ops residuals stay backlog, not more surgery.
+
+**Sibling / proactive scan bound:** a user ask to scan sibling classes after each finding stays valid for *detection*, but do not expand the *fix* blast radius while invariants for that family are still open. Record sibling hits as candidates under the same invariant closure; fix them only after the door exists, or backlog them with the regression chain.
 
 Classify each remaining finding and record the class next to it:
 
@@ -457,7 +467,7 @@ Classify each remaining finding and record the class next to it:
 Then decide fix vs backlog per finding:
 
 1. **Prefer additive fail-closed fixes.** A guard that rejects previously mishandled input has a near-zero regression surface. A structural rework of the same site has a larger one; do not choose it late in a regenerating loop.
-2. **Refuse further surgery on a regressing component family.** Once fixes to one component family have themselves regressed in consecutive rounds, do not attempt another structural change there in this run. Fix a live blocking defect only with the minimal additive change; backlog the rest with the regression chain recorded.
+2. **Refuse further surgery on a regressing component family.** Once fixes to one component family have themselves regressed in consecutive rounds, do not attempt another structural change there in this run. Prefer the **Invariant closure** path above when the family needs a contract door; otherwise fix a live blocking defect only with the minimal additive change and backlog the rest with the regression chain recorded.
 3. **Fail-closed defects on rule-violating input are backlog material**, not fix material: when a validator or tool correctly rejects input that violates its documented contract, the residual defect is hardening, not a live bug.
 4. **Flag the fix scope for the orchestrator's focused targeted review**: record which findings were fixed and which workers' domains the fixes touched, so the orchestrator can compose the focused round per `review-panel-selection.md` (Targeted follow-ups); the triage agent does not launch review rounds.
 
@@ -474,7 +484,7 @@ Provider for `{plans_dir}` when saving grouped fix tasks and for `{backlog_dir}`
 Triage updates **Triage outcomes** and finding **Triage** fields; preserves immutable synthesis statistics from the review pass. The triage update ends with a `--hard` validator gate (final step of **Staging doc triage outcomes**) before the staging doc is handed back to the orchestrator.
 
 ### With `doc-hierarchy` + `plans` skills (backlog lifecycle)
-**Backlog capture** items written under `{backlog_dir}` use the `doc-hierarchy` pre-plan backlog format; promotion to a plan and archival to `backlog_completed_dir` follow those skills, not this one. When a decision rejects the work outright (a decision against doing it, not a deferral), route the item to the backlog `rejected/` archive through those same skills: record the decision inline as `Status: rejected (YYYY-MM-DD; reason)`, preserve the full body content, and append one ownership-registry row with `state: rejected`, the rejection date, and the reason.
+**Backlog capture** items written under `{backlog_dir}` use the `doc-hierarchy` pre-plan backlog format; promotion to a plan and completion disposal (fold into completed plan, then delete) follow those skills, not this one. When a decision rejects the work outright (a decision against doing it, not a deferral), route the item to the backlog `rejected/` archive through those same skills: record the decision inline as `Status: rejected (YYYY-MM-DD; reason)`, preserve the full body content, and append one ownership-registry row with `state: rejected`, the rejection date, and the reason.
 
 ### With `execute-plan` skill
 Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review`. Triage is authoritative for exit: implement valid fixes, mark `drop` or `done`, and leave only validated unresolved issues at `pending`. The orchestrator counts unresolved findings with `blocking: true`, not severity alone. Accepted fixes identify every owning or affected worker for the targeted follow-up. Phase 3 Hard Gate 23 applies **Fix-risk triage when fixes regenerate findings** before further folding; the focused verification round's worker composition follows `review-panel-selection.md`.

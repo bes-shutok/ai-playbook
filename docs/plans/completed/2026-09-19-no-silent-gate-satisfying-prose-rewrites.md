@@ -186,3 +186,7 @@ Files:
 
 - [x] Run the full Validation Commands block from the repository root and confirm it prints `VALIDATION OK` with exit 0; every gate that was RED at authoring time is GREEN now [class: REPOSITORY_TEST]
 - [x] If a uniqueness gate fails because a prescribed commit subject landed twice (a retried or non-amended task commit), squash or amend the duplicates so each prescribed subject appears exactly once and re-run the block; amend only this plan's own task commits, never a peer's [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-19-gate-driven-silent-prose-edits.md: disposition folded into 2026-09-19-no-silent-gate-satisfying-prose-rewrites.md (2026-09-25); per-item file deleted.

@@ -235,3 +235,7 @@ Recorded during the Phase 3 review loop (r1 panel + r2 targeted pass), supersedi
 - r3 F1: the Step 2.62 content-confirmation sentence (prescribed verbatim by Task 2) over-claimed identity strength: the echo prints only the marker path, so epoch and PID have no gate-time comparison witness. Reworded in `agents/skills/done/SKILL.md` to the checkable form (a recorded `$REPO_TOP` matching this repo is the confirmable field; epoch and PID are recorded for post-hoc audit); the pinned `a content mismatch applies the same no-prune rule` clause is unchanged.
 - r3 F2: the r1 F3 fold bullet above originally said the clause was "appended to the Step 0 content-bearing sentence"; corrected to "appended after".
 - r4 F1: the Step 0 content-bearing prose now says "the trailing-slash-stripped resolved `$REPO_TOP`" to match the snippet's `${REPO_TOP%/}` literal.
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-04-done-4c-mutation-append-wording.md: disposition folded into 2026-09-06-done-skill-validator-wording-trio.md (2026-09-25); per-item file deleted.

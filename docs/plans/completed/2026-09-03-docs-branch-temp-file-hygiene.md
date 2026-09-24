@@ -311,3 +311,7 @@ Files:
 - [x] Run → expect GREEN: full Validation Commands block passes from a clean shell (`bash -n` included)
 - [x] `git status --short` shows no unintended files staged; any modification to files outside the Review Scope (e.g. parallel-session changes to other skills) is NOT part of this plan and must not be committed
 - [x] Commit (only if Task 3 made edits): `docs-branch: temp-file hygiene certification fixes` (condition false: Task 3 made no edits, certification green on the Task 2 commit)
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-08-31-docs-branch-temp-file-hygiene.md: disposition folded into 2026-09-03-docs-branch-temp-file-hygiene.md (2026-09-25); per-item file deleted.

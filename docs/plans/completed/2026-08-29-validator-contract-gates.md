@@ -205,3 +205,7 @@ Files: none (verification only)
 
 - [x] Run the full `## Validation Commands` block → expect `SELFTEST OK` (exit 0)
 - [x] `git status --short` → expect clean after Task 7's commit; no untracked residue in `scripts/`
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-08-28-validator-contract-enforcement-gaps.md: disposition folded into 2026-08-29-validator-contract-gates.md (2026-09-25); per-item file deleted.

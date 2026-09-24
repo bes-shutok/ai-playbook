@@ -266,3 +266,8 @@ Files:
 - [x] Run the pin-versus-prescribed-text audit: every pinned sentence in this plan occurs verbatim at its target or is an authored-today phrase recorded in the authoring execution record; all counts re-derived; classification [class: REPOSITORY_TEST]
 - [x] Run the public hygiene scan from the repository root; expect exit 0; classification [class: REPOSITORY_TEST]
 - [x] Commit (if anything moved): `chore: batch 2 phase 2 final sweep` [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-19-schedule-vs-execute-verb-contract.md: disposition folded into 2026-09-19-execute-plan-driver-residuals-batch-2-phase-2-contract-prose.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-17-execute-plan-worker-deadline-contract.md: disposition folded into 2026-09-19-execute-plan-driver-residuals-batch-2-phase-2-contract-prose.md (2026-09-25); per-item file deleted.

@@ -83,9 +83,49 @@ When a value crosses a framework, database, serializer, or mapper boundary:
    pair was validated.
 3. Require boundary tests for the smallest value, precision edge, null, empty,
    and mismatched-pair cases when reachable.
+4. **Addressable domain narrowing:** when a port accepts `long` / `BIGINT` but
+   SQL, `set_bit`, byte[] capacity, or a cast narrows to 32-bit / `Integer`
+   domain, require one shared guard at every write and size path (materialize,
+   grow, capacity, poison, set-bit). Parallel ad-hoc checks that miss one
+   caller are incomplete. Pattern: `quality#addressable-domain-door`.
+5. **Numeric overflow on range math:** unchecked `long` addition for range
+   ends, bit lengths, or pad sizes near `MAX_VALUE` must fail closed before
+   persistence. Pattern: `quality#range-overflow`.
+6. **Typed catalog enumeration door:** when a loop materializes, floors, or
+   enqueues from a catalog, require the key source to be the typed or
+   published definition set, never a wider all-keys helper, unless the plan
+   explicitly documents the wider set. The finding body names both enumeration
+   APIs and cites one illegal key the wide API admits and the typed API
+   excludes. Pattern: `quality#typed-catalog-enumeration-door`.
 
 When a change persists multiple facts or updates dependency-driven state,
 enumerate every changed fact, published predicate, downstream job source, and
 dependency key. Compare the persisted set with the fan-out set passed to
 coordinators or queues; a successful write with an incomplete fan-out is a
 stale-derived-state bug.
+
+## Port API truth
+
+When a persistence port method's name or parameters imply a scope (per user,
+per seat, per key), verify the SQL predicates match that scope. A finder that
+ignores a parameter or returns sibling-range history under a per-seat API is a
+correctness defect, not a naming nit. Pattern: `quality#port-api-truth`.
+
+## Opaque identifier parsing
+
+When parsing catalog keys, event names, or dotted identifiers:
+
+1. Do not truncate opaque names at the last `.` unless the contract defines a
+   namespace separator and validates that shape.
+2. Prefer family-aware token search (`lastIndexOf` of the operator family)
+   after the family is known; whole-key `indexOf` of operator tokens misparses
+   when identifiers embed the same substring.
+3. Pattern: `quality#opaque-key-parse`.
+
+## MyBatis side-effect SELECT
+
+A `@Select` used only for a side effect (for example `pg_advisory_xact_lock`)
+must not declare a mapped `void` return that still consumes a JDBC
+result. Prefer `@Update` / `@Select` with an explicit ignore mapping pattern
+already used in the repo, or a non-void type the driver can discard safely.
+Pattern: `quality#mybatis-void-select`.

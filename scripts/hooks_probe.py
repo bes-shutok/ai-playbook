@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -929,7 +930,38 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run in-memory selftests.",
     )
+    parser.add_argument("--repo-only", action="store_true", help="inspect explicit repository fixtures without reading host state")
+    parser.add_argument("--inventory", type=Path)
+    parser.add_argument("--hooks-root", type=Path)
     ns = parser.parse_args(args)
+
+    if ns.repo_only:
+        if ns.inventory is None or ns.hooks_root is None:
+            parser.error("--repo-only requires --inventory and --hooks-root")
+        repo_root = Path(__file__).resolve().parents[1]
+        try:
+            inventory_path = (repo_root / ns.inventory).resolve() if not ns.inventory.is_absolute() else ns.inventory.resolve()
+            hooks_root = (repo_root / ns.hooks_root).resolve() if not ns.hooks_root.is_absolute() else ns.hooks_root.resolve()
+            if repo_root not in inventory_path.parents or repo_root not in hooks_root.parents:
+                raise ValueError("explicit repository-only path escapes the canonical repository root")
+            with inventory_path.open("rb") as stream:
+                inventory = tomllib.load(stream)
+            routes = inventory.get("execute_plan_hooks")
+            definitions_path = hooks_root / "hooks.json.example"
+            definitions = _read_json(definitions_path)
+            if not isinstance(routes, list) or not isinstance(definitions, dict):
+                raise ValueError("versioned lifecycle inventory or hook fixture is missing")
+            required = {str(row.get("event")) for row in routes if isinstance(row, dict)}
+            configured = set(definitions.get("hooks", {}))
+            if required != configured:
+                raise ValueError(f"lifecycle route mismatch: inventory={sorted(required)} hooks={sorted(configured)}")
+            if not (hooks_root / "codex_execute_plan_hook.py").is_file() or not (hooks_root / "codex.sh").is_file():
+                raise ValueError("lifecycle dispatcher artifacts are missing")
+            print(json.dumps({"status": "PASS", "mode": "repo-only", "routes": sorted(required), "inventory": str(inventory_path), "hooks_root": str(hooks_root)}, sort_keys=True))
+            return 0
+        except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+            print(json.dumps({"status": "FAIL", "mode": "repo-only", "error": str(exc)}, sort_keys=True))
+            return 1
 
     if ns.all:
         results = probe_all()

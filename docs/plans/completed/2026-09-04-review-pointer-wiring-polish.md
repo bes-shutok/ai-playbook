@@ -180,3 +180,8 @@ Files:
 - [x] `bash -n` the Validation Commands block → expect no syntax errors
 - [x] Run the full Validation Commands block from the repository root → expect `ALL VALIDATIONS PASSED`
 - [x] `git status --short` → expect only the five in-scope skill files modified (plus this plan's own artifacts); `agents/skills/review-staging/SKILL.md` unmodified; `scripts/plan_readiness.py` untouched
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-15-maintenance-review-r4-polish-residue.md: disposition folded into 2026-09-04-review-pointer-wiring-polish.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-08-28-review-pointer-wiring-polish.md: disposition folded into 2026-09-04-review-pointer-wiring-polish.md (2026-09-25); per-item file deleted.

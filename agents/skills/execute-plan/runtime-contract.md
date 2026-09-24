@@ -239,6 +239,30 @@ Two legacy hesitation reason codes, `permission-request` and
 `conversational-hesitation`, are translated to `worker-hesitation` with
 status `contract-violation` before the closed-set check.
 
+### Verification evidence envelope
+
+Tasks may declare immutable `required_criteria` and `verification_commands`
+when the manifest is created. The manifest stores a canonical
+`evidence_contract_digest` over those fields and each task's path allowlist;
+checkboxes and task status are excluded. The driver runs a declared command
+itself with argv execution in the repository root, records the exit status,
+output digest, selected test identity, baseline and changed committed paths,
+the declared allowlist, a digest of allowlisted source contents, covered criteria, and the active task, token,
+generation, and launch identity. Receipts are persisted under the manifest
+lock. A successful worker result for a task with required criteria is
+accepted only when matching driver captured receipts cover every required
+criterion and match the active claim, evidence contract digest, and current
+allowlisted source snapshot. The done boundary also requires the task commit's
+allowlisted source snapshot to match the captured evidence. Uncommitted
+worktree paths are diagnostic only; the done boundary checks the task's own
+commit path set against its allowlist.
+
+Production `create` requests must supply non-empty criteria and verification
+commands for every task. The seeded manifest enables evidence enforcement, so
+a task without configured criteria cannot pass through the adapter result
+path. The `verify` CLI operation accepts a task ID and declared command ID and
+asks the driver to capture and persist the receipt for the active claim.
+
 The standard reason codes are `completed`, `worker-hesitation`,
 `contract-violation`, `approval-required`, `timeout`, `dirty-worktree`,
 `cleanup-required`, `cleanup-unverified`, `malformed-result`, `owner-mismatch`,
@@ -334,6 +358,26 @@ generation before any mutation and before commit handoff. When no owner is
 supplied, the driver derives the owner identity from the machine manifest so
 separate driver processes operating on one manifest share one owner; a
 per-invocation owner is used only for a manifest that has none yet.
+
+Before automatic replacement after a terminal worker interruption, the
+idempotent `reconcile-interruption` operation accepts an `idempotency_key`,
+`task_id`, exact `claim_token`, and exact `generation`. Under the manifest
+lock it accepts only a non-resumable blocked timeout, shutdown, or
+interruption receipt and requires a fresh, valid provider inventory proving
+no worker is live. It removes only the matching launch reservation, preserves
+all worktree contents, closes the old claim as `replaced`, and returns the
+task to `pending` for the normal fresh-identity claim path. Replaying the
+same key returns the recorded outcome without another transition. Missing,
+malformed, unavailable, or live-worker evidence preserves the claim and
+reservation and refuses automatic continuation. `continue`, `resume`, and a
+resume-watcher fire run reconciliation before launching or clearing watcher
+guards. If the claim has a registered worker, reconciliation requires a
+matching verified terminal lifecycle receipt to release its worker capacity;
+an empty inventory cannot retire a registered worker and instead leaves it
+quarantined. If the launch never registered a worker, a fresh valid empty
+inventory is the provider witness that no owned process remains. The normal
+`reconcile_startup` path continues to own commit recovery and follows this
+interruption check on continuation.
 
 The claim `timestamp` is written once at claim time and never renewed for a
 single-task claim; a batch member's timestamp is refreshed at activation
@@ -547,24 +591,15 @@ this path is verified against the claim's launch baseline exactly as the done
 handoff verifies it: an out-of-scope or escaping committed path blocks the
 reconciliation with the same boundary outcome the done handoff produces.
 
-Before launch only, the startup dirty-worktree gate tolerates ambient noise: a
-dirty worktree consisting purely of untracked allowlisted entries (the
-`.DS_Store` family: `.DS_Store`, `.DS_Store?`, `._.DS_Store`) blocks with the
-resumable `cleanup-required` reason instead of the non-resumable
-`dirty-worktree`. Anything outside the allowlist, including
-tracked modifications, keeps the hard block on the same path. File mtime is
-never the ambient-versus-worker discriminator because a worker can forge it:
-after the claim's launch record exists, a tracked out-of-scope change is
-indistinguishable from a worker-caused escape and stays non-resumably
-blocked even when it wears an ambient name (r2 F2). The checkpoint scope
-witness consults the allowlist only as a resumable downgrade when every
-out-of-scope path is proven untracked by the same porcelain witness
-(``??`` status) and matches the allowlist; a tracked out-of-scope
-modification, a quoted or malformed path rendering, or any witness failure
-keeps the non-resumable contract violation. Tasks already
-progressed past launch (done-pending, checkpointed, complete) defer the
-startup dirty-worktree check; ambient or worker dirt in that window is
-enforced by the done-boundary clean-state witness instead.
+Startup reconciliation does not block on repository-wide dirty worktree
+state. Manual edits and peer-session changes may coexist with execution.
+Dirty worktree state does not block startup, worker checkpoints, or the done
+boundary. The done boundary still verifies the paths in the task's actual
+commit against its authorized paths. The done workflow stages explicit paths
+and commits with an explicit pathspec, so unrelated manual changes and
+peer-staged changes remain outside the current task's commit. Same-path
+concurrent edits remain an attribution concern and are recorded in the
+backlog for a future shared ownership mechanism.
 
 ## Transition table
 
@@ -582,14 +617,14 @@ action, then re-classify the state.
 | `error` | Runtime error code and bounded evidence | Preserve generation for reconciliation | Numeric profile budget | `blocked` or terminal after budget exhaustion | Reconcile, then retry only within the numeric budget. |
 | `timeout` | Deadline, operation, and cancellation evidence | Do not take over an ambiguous live claim | 0 | `blocked`, `resume_allowed: true` | Verify process cleanup before any later claim. |
 | `capacity-unavailable` | Capacity receipt with bounded evidence, on a single-task claim (a live batch-group member keeps the existing blocked shape) | Claim parks `waiting-capacity` keeping token, generation, and launch record, with the bounded retry policy on the claim; the receipt arriving with the budget exhausted moves the claim to `blocked` | bounded-resume (`attempts_remaining: 3`) | `waiting-capacity`, then `blocked` after exhaustion | Resume the same claim with `continue` (same token and generation, no second claim row); reclaim refuses the parked state while the budget is live, naming the exhausted budget and the pending `blocked` transition in the exhausted window; after exhaustion the blocked-state recovery applies. |
-| `dirty-worktree` | Paths and clean-state evidence | Preserve claim and quarantine generation | 0 | `blocked`, `resume_allowed: false` | Require explicit reconciliation before relaunch. |
-| `cleanup-required` | Ambient noise paths on the pre-launch startup path | Preserve claim and quarantine generation | 0 | `blocked`, `resume_allowed: true` | Remove allowlisted ambient entries or resume after cleanup. |
+| `dirty-worktree` | No startup dirty-worktree refusal is emitted | No claim mutation | 0 | Not emitted by startup reconciliation | Uncommitted paths are excluded from the task commit by explicit pathspecs. |
+| `cleanup-required` | No startup ambient-noise refusal is emitted | No claim mutation | 0 | Not emitted by startup reconciliation | Uncommitted paths are excluded from the task commit by explicit pathspecs. |
 | `cleanup-unverified` | Owned process and failed termination evidence | Preserve claim; never take over | 0 | `blocked`, `resume_allowed: false` | Require operator cleanup verification; do not retry. |
 | `reclaimed` | Expired claim lease (at least `CLAIM_LEASE_SECONDS`) on a claim in `claimed`, `launched`, or `blocked`, with the task outside the progressed set, with the machine `workflow_state` outside the closed non-active set (`aborted`, `complete`, `terminal` - a finished-workflow reclaim is refused with the `explicit-abort` preserve-and-stop envelope before any lease accounting, its evidence naming the finished state), and the claim not a member of a live batch claim group (a live-group member is refused with the resumable `stale-claim` outcome naming the group, r3 F1; the one exit, r4 F2: a live-group member whose task is blocked with `resume_allowed` false reclaims through with no lease wait, and the same compare-and-swap fails its group) | Replace generation and token, mark the old claim `replaced`, reset the task to `pending` with the previous session's resume fields stripped, recorded checkpoints preserved as evidence; on the r4 F2 exit the group is also marked `failed` with its active member cleared and the still-staged member claims closed | 0 | `pending` task under the `replaced` claim; the next claim takes the freed task under a fresh generation; on the r4 F2 exit the staged members' pending tasks also re-enter the individual queue | Re-claim and relaunch the freed task; a post-reclaim checkpoint or launch receipt from the replaced owner fails fenced as `owner-mismatch`, while a late done handoff refuses as unfenced done evidence; the replaced claim is reconciled by rotation and never quarantined at startup; a workflow in the closed non-active set returns `explicit-abort` (preserve-and-stop; the evidence names the finished state) and is never released. |
 | `commit-pending` | Started receipt and task identity | Keep claim fenced during reconciliation | 0 | `blocked`, `checkpointed`, or `aborted` (the wedged-claim abort exit) | Inspect the exact commit before deciding whether work is complete. Abort with the current token is permitted when the recorded commit provably does not exist (the wedged-claim runtime exit; preserve-and-stop). |
-| `done-pending` | Worker checkpoint plus done handoff evidence | Keep claim until done boundary closes | 0 | `blocked` or `checkpointed` | Do not launch the next task until commit (or the documented no-commit justification), checkbox, clean state, and log evidence exist. |
+| `done-pending` | Worker checkpoint plus done handoff evidence | Keep claim until done boundary closes | 0 | `blocked` or `checkpointed` | Do not launch the next task until commit (or the documented no-commit justification), checkbox, task-scoped commit-path evidence, and log evidence exist. |
 | `done-pending-recovery` (the operator-invoked `recover-done-pending` operation; the single sanctioned exit from `done-pending`) | Exact claim identity (owner, token, and generation), task status `done-pending`, no live claim group (parallel or batch alike) owning the claim, bounded terminal evidence naming the claim's session or launch identity, and no `done-pending-recovery` receipt already recorded for the same task id, token, and generation | Close the claim under the manifest lock; every refusal - stale identity or wrong status returns the resumable `stale-claim` outcome, the live-group refusal names the group and leaves the sibling members untouched, and the terminal-evidence and duplicate-receipt refusals are blocked `precondition-unverified` - leaves the manifest byte-identical | 0 | `requeue`: task `pending` with the dead-session resume fields stripped under a generation bumped exactly once; `defer`: task `deferred` with the claim closed and the backlog evidence recorded; `abort`: task, claim, and `workflow_state` `aborted` | `requeue`: reconcile the plan section through the skill-gated plan edit first, then let the ordinary claim path relaunch under the fresh policy token; `defer`: continue with the next provable task, never relaunching the deferred task; `abort`: do not resume without a new explicit run. |
-| `committed` | Commit identity, checkbox, clean state, and log evidence | Close matching claim | 0 | `checkpointed` | Record the commit and continue once, idempotently. |
+| `committed` | Commit identity, checkbox, task-scoped commit-path evidence, and log evidence | Close matching claim | 0 | `checkpointed` | Record the commit and continue once, idempotently; unrelated dirty paths do not block it. |
 
 Illegal transitions, unknown statuses, missing evidence, generation mismatch,
 malformed approval data, and cleanup uncertainty fail closed. The transition
@@ -625,15 +660,13 @@ by a generation token and owner claim.
 The driver accepts adapter results only after closed-result validation and
 default-deny policy validation. It persists a worker checkpoint as
 `done-pending`; it cannot select or launch another task until the existing
-`done` workflow supplies commit identity, the completed checkbox, clean-state
-evidence, and the preceding worker log evidence. For a claim with a recorded
-launch baseline, the done boundary verifies the committed artifact instead of
-trusting the attestation: the commit must be a descendant of the baseline,
-`git diff --name-only <baseline> <commit>` must stay inside the token's
-allowed paths, and the worktree must be clean per the git witness rather than
-the worker-asserted `clean_state`; a violation refuses with `commit-pending`
-semantics and `resume_allowed: false`. The driver records those
-facts and never creates commits itself. Replaying the same checkpoint or done
+`done` workflow supplies commit identity, the completed checkbox, and the
+preceding worker log evidence. For a claim with a recorded launch baseline,
+the done boundary verifies the committed artifact instead of trusting the
+attestation: the commit must be a descendant of the baseline, and its own
+first-parent change set must stay inside the token's allowed paths. The whole
+worktree need not be clean. The driver records those facts and never creates
+commits itself. Replaying the same checkpoint or done
 receipt is idempotent.
 
 The driver treats worker hesitation about an already-authorized repository
@@ -641,8 +674,8 @@ operation as `contract-violation`, never as a user-question state. Genuine
 approval requests preserve the exact action scope, use a zero retry budget, and
 remain `blocked` until the external gate is resolved. Unknown result fields,
 invalid action scope, generation mismatch, path traversal, network attempts,
-protected-file attempts, dirty worktrees, and unverified process cleanup fail
-closed while preserving the manifest.
+protected-file attempts, and unverified process cleanup fail closed while
+preserving the manifest. Dirty worktree state is not a refusal condition.
 
 When a process ends between commit creation and checkpoint persistence,
 startup reconciliation may complete the checkpoint only after an injected
@@ -669,6 +702,13 @@ the manifest lock like every other writer and admits exactly one shape:
   launch identity and the observed termination. Claim records carry no
   process identity, so the transition runs no process-liveness probe and
   waits out no lease - the evidence is the proof the worker ended.
+  A bare evidence string is deliberately normalized to a one-element list.
+  The identity anchors resolve through the claim's group launch record for
+  group members, not only the claim's own record. The `requeue`
+  disposition carries optional backlog evidence only through the same
+  validated gate the defer disposition uses: an existing
+  repository-relative path under `docs/history/backlog/`; anything else is
+  refused before the receipt is recorded.
 - Duplicate-receipt fence: the receipt identity (task id, claim token, and
   claim generation) is recorded in history exactly once; a replay with the
   same identity is refused with no new history event.
@@ -698,6 +738,26 @@ aborted envelope), with the shared post-acceptance validation skipped
 because the run is terminal. The `requeue` and `defer` dispositions
 post-validate that the next provable incomplete task is pending or none
 before the save; a failed check discards every in-memory mutation.
+
+Three recovery guarantees complete the contract. First, every recovery
+transition (`recover-done-pending`, handoff recovery, interrupted-task
+adoption) validates its resulting manifest through the same worker-schema
+validation the next launch runs BEFORE persistence; a validation failure
+persists nothing - the manifest file stays byte-identical to its
+pre-transition bytes (the byte-identical rollback guarantee), so recovery
+can never succeed into a manifest the next launch refuses. Second, a
+historical terminal worker record whose identity no longer matches its
+task's claim is accepted only when a `done-pending-recovery` receipt in
+history matches the record's original claim identity (task id, claim token,
+launch generation); a rotation without that receipt backing is refused, and
+an ambiguous handoff with no receipt still follows the existing
+reconciliation path instead of the new exception. Third, the read-only
+`preflight` operation proves the next task claimable before any claim is
+created or rotated: it reports plan-versus-claim scope drift with the plan
+paths and the machine-seeded scopes side by side, re-validates the recorded
+approval receipt where one is seeded, and names one canonical continuation
+command, and it never mutates state - a failing preflight leaves every
+claim and handoff retryable.
 
 ## Live-session discovery ladder
 
@@ -753,21 +813,12 @@ and allowed-path policy as execution-boundary data. It must not receive raw
 unmediated commands. A runtime that cannot enforce the envelope and token
 boundary returns `blocked: runtime-policy-unavailable` before launch.
 
-Post-launch results are checked again. Direct shell operations and indirect
-shell or path traversal attempts fail closed as `contract-violation`. An action
-target outside the token's allowed paths, or an unlisted policy-file change,
-cannot be converted into a successful checkpoint. The driver enforces this
-with a git witness: it records a baseline revision on the claim at launch
-(blocking with `worktree-witness-unavailable` when HEAD cannot be resolved,
-never storing an empty baseline) and, before accepting a success checkpoint,
-compares the union of `git diff --name-only` against that baseline and the
-untracked entries of `git status --porcelain --untracked-files=all` with the
-token's allowed paths, resolving symlinks so an in-scope path replaced by an
-out-of-repository symlink is a violation. Git invocations disable
-`core.quotePath` so names compare literally. An out-of-scope change returns
-`blocked: contract-violation`; a broken witness, or a recorded baseline with
-an empty scope, returns `blocked: worktree-witness-unavailable`. Both fail
-closed.
+Post-launch results are checked again for valid claim identity and normalized
+result shape. Dirty and untracked worktree paths do not block a checkpoint.
+The done boundary validates the actual commit's first-parent path set against
+the task's authorized paths. Git invocations disable `core.quotePath` so
+committed path names compare literally. Uncommitted paths are not staged by
+the done workflow's explicit path selection.
 
 ## Driver entrypoint and reload contract
 
@@ -790,6 +841,7 @@ are:
 | --- | --- |
 | `create` | `create_manifest` (via `_operation_create`; seeding only, runs before any driver construction) |
 | `claim` | `claim_next_task` |
+| `verify` | `capture_verification_evidence` (runs a declared verification command and persists its claim-bound receipt) |
 | `checkpoint` | `record_worker_checkpoint` |
 | `done` | `record_done` |
 | `resume` | `resume` (also writes the peer-resume marker a scheduled watcher stands down on) |
@@ -987,24 +1039,18 @@ HEAD-reachable commit, verified by the driver's commit lookup and the done
 boundary witnesses. A task whose plan section carries no `Commit:` line (a
 read-only verification gate with nothing to commit) records the no-commit
 justification instead: `commit_identity` set to the exact literal `none`
-after stripping. The driver never consults the commit lookup for `none`; it
-proves the state itself: a dirty entry inside the claim's allowed paths
-refuses as `commit-pending`, a dirty entry outside them is tolerated only
-when its working-tree diff over that tracked Markdown file is
-checkbox-marker-only with paired-line identity (the Step 1.3 flip on the
-executing plan file is the sanctioned case; a content rewrite never
-satisfies the shape), every other dirty entry refuses as `commit-pending`
-with the clean-state evidence, and when the claim carries a baseline
-revision the driver requires HEAD to equal it, so a worker that committed
-changes cannot report `none` past its baseline. The same tolerated-entry
-classification applies at the checkpoint scope witness, the real-identity
-done tail, and the resume reconciliation dirty gate, so the riding flip
-never wedges the next receipt; the flips ride uncommitted and land with the
-run's end-of-run plan-state handling. The none completion records `none` as
-the task's completion identity and in the `done-commit` history event, and
-hands the group advance the current HEAD revision as the next claim's
-baseline. Checkbox-flip commits manufactured to satisfy the boundary are
-not part of the contract.
+after stripping. The driver never consults the commit lookup for `none` and
+does not require a clean worktree or unchanged HEAD for a no-commit outcome.
+For a real commit, it verifies the commit identity and checks only that
+commit's first-parent changed paths against the task's allowed paths. The
+recorded baseline must be an ancestor of that commit, or share a merge base
+when concurrent checkout activity caused branch divergence; unrelated
+histories remain blocked. Configured verification evidence must still match
+the committed source snapshot. Other session or manual changes remain outside
+the task commit. The none completion
+records `none` as the task's completion identity and in the `done-commit`
+history event, and hands the group advance the current HEAD revision as the
+next claim's baseline.
 
 ### Readiness decision
 

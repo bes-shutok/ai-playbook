@@ -23,3 +23,7 @@ Log hook outcomes (hook name, event, decision, duration) at a rate-limited debug
 - A deliberate budget-guard block appears in the log with its decision.
 - A killed hook produces a diagnosable record (exit code/stderr) on its next firing.
 - A down daemon-backed hook is visible via the heartbeat within one day.
+
+## Evidence
+
+- 2026-09-23 friction-audit cold start (7-day log corpus 2026-09-17..23): 375 `hook.run.failed` events. 352-event burst on 2026-09-18 alone (five-plus sessions), all `PreToolUse` hook index 1.0 = the budget-guard `hooks/budget-guard/zcode.sh` wrapper, durations 14-17 ms with `context.error` null — a failing hook produces no failure detail, exactly the diagnosability gap this item owns (its acceptance calls for exit code/stderr on the next firing). Post-burst days return to low single digits (14 events over 09-20..23), consistent with a deployment-day defect self-resolving, while the no-detail logging gap remains.

@@ -158,3 +158,10 @@ Except where an item says otherwise (scratch-only), every checklist item in this
 - [x] Arm-name preservation: regenerate the name set into `docs/tmp/decision-marker-names.after` and run `comm -23 docs/tmp/decision-marker-names.before docs/tmp/decision-marker-names.after`; expect EMPTY output (no name removed), and `comm -13` shows exactly the seven new names (`backtick_info_opener_is_paragraph_passes`, `crlf_fenced_quote_passes`, `tab_indented_closer_line_is_content_fails`, `tab_indented_fence_line_is_content_passes`, `trailer_after_backtick_block_with_stray_tildes_passes`, `trailer_after_unicode_separator_close_stays_fenced`, `trailer_inside_tilde_close_with_info_text_fails`)
 - [x] Scope check: `git log --name-only <base>..HEAD` over the commits this plan created lists only `scripts/plan_readiness.py` over the base recorded by Task 1: git log --name-only "$(cat docs/tmp/trailer-gate-base-sha.txt)"..HEAD
 - [x] Delete the scratch files `docs/tmp/decision-marker-names.before`, `docs/tmp/decision-marker-names.after`, `docs/tmp/trailer-gate-base-sha.txt`, and any replay-probe scratch
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-09-trailer-gate-meta-guard-witness.md: disposition folded into 2026-09-09-plan-readiness-trailer-gate-r5-deferrals.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-09-trailer-gate-plan-r5-base-sha-scratch.md: disposition folded into 2026-09-09-plan-readiness-trailer-gate-r5-deferrals.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-09-trailer-gate-tilde-side-arm-coverage.md: disposition folded into 2026-09-09-plan-readiness-trailer-gate-r5-deferrals.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-07-plan-readiness-trailer-gate-r5-deferrals.md: disposition folded into 2026-09-09-plan-readiness-trailer-gate-r5-deferrals.md (2026-09-25); per-item file deleted.

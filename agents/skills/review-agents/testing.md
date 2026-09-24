@@ -145,6 +145,13 @@ configuration boundary, or test runner hook:
    that always requires a full manifest is a runner defect, not a reason to
    weaken test selection. Stage `testing#runner-contract-unverified` when the
    selector and verifier populations differ.
+5. **Helper path retarget after a door:** when the task diff adds or tightens
+   a fail-closed door on a mutator, require (a) a grep of test helpers for the
+   newly banned path, (b) same-change-set retarget or update of every helper
+   still calling it, and (c) a green run of the owning integration class for
+   the guarded module, not only the unit suite. Stage the pattern when helpers
+   keep the rejected path while the unit suite is green.
+   Pattern: `testing#helper-path-retarget-after-door`.
 
 ## Changed-code family inventory
 

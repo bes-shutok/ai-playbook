@@ -301,3 +301,8 @@ Files:
 - [x] Register the living audit report; given the report created by this task, expects a `living` registry row accepted by `scripts/doc_registry_validator.py` and editable during later tasks. [class: IMPLEMENTATION_REQUIRED]
 - [x] Complete the audit report; given the completed baseline, Task 2's ai-playbook item decisions, Task 3's policy changes, and final validation results, expects the report to record evidence-backed decisions, affected adapters only where changed, before/after stop categories, preserved safeguards, unresolved runtime-only causes, and the passing Task 3 policy-contract result. Keep exact item-by-item lifecycle decisions in this plan and their normal archive locations; include only anonymized categories or aggregate counts in the report. Rerun the embedded privacy scan and the report's aggregate reconciliation after appending the implementation record. Do not add project-specific examples or reopen cross-workspace discovery. [class: IMPLEMENTATION_REQUIRED]
 - [x] Update skill catalog; given any skill names or paths changed, expects `README.md` to match the actual catalog. [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-23-single-user-host-harness-security-check-audit.md: disposition folded into 2026-09-23-ai-harness-friction-audit.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-18-detect-current-ai-harness.md: disposition folded into 2026-09-23-ai-harness-friction-audit.md (2026-09-25); per-item file deleted.

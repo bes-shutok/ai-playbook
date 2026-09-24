@@ -11,6 +11,10 @@ manifest_filename = "runtime_state.json"
 telemetry_manifest = "manifest.md"
 commit_owner = "existing done workflow"
 
+[runtime_modules]
+worker_registry = "scripts/execute_plan_worker_registry.py"
+capabilities = "scripts/runtime_capabilities.py"
+
 [adapters.codex]
 entrypoint = "scripts/execute_plan_runtime_codex.py:CodexAdapter"
 adapter_version = "1.0"

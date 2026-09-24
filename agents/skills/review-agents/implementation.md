@@ -29,6 +29,26 @@ When new config fields, parameters, or data schema fields are added:
 
 When the diff adds or renames DB tables/indexes, or documents a constrained config shape:
 - Is the operator/local verify inventory updated in the same change set (the repository's verify-script expected tables/indexes)?
+
+## Query order and index match
+
+When a new or changed mapper query adds `ORDER BY` / filter expressions used on
+every poll or recovery path:
+
+1. Confirm an existing index matches the leading order/filter columns, or the
+   same change set adds one.
+2. Flag whole-table order on a large backlog table with only a mismatched
+   composite index as a scalability defect (`implementation#order-index-match`).
+3. When migrations drop an index, grep remaining queries that depended on it.
+
+## Queue / job type doors
+
+When a generic enqueue API accepts typed jobs:
+
+1. Restricted job kinds (immutable range, coalescing batch, poison seats) must
+   only enter through the dedicated port method that enforces those invariants.
+2. Dedupe-race lookups must reject foreign job types occupying the same key.
+3. Pattern: `implementation#typed-enqueue-door`.
 - Does the earliest startup gate (a pre-boot environment post-processor, a fail-fast initializer on configuration properties, or a fail-fast binder) enforce documented formats (ISO alpha-2, enum set, regex), or can a bad value pass trim/uppercase and fail later with a vague error?
 
 ## Runtime wiring trace (evidence requirement)

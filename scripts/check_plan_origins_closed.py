@@ -80,6 +80,40 @@ STATUS_CLOSED_VALUE_RE = re.compile(
 
 PASS_STATES = ("completed", "closed", "rejected")
 
+# The plan-side "## Origins dispositions" section (case-insensitive
+# heading) lists one disposition line per origin; its backtick backlog
+# paths are the undercount warning's comparison set.
+_DISPOSITIONS_HEADING_RE = re.compile(
+    r"^\s*#{0,6}\s*origins\s+dispositions\s*:?\s*$", re.IGNORECASE
+)
+
+
+def _dispositions_basenames(
+    plan_text: str, backlog_dir: Path, completed_dir: Path
+) -> list[str]:
+    """Backlog basenames listed in the plan's origins-dispositions section."""
+    names: list[str] = []
+    seen: set[str] = set()
+    in_section = False
+    for line in plan_text.splitlines():
+        if _DISPOSITIONS_HEADING_RE.match(line):
+            in_section = True
+            continue
+        if in_section:
+            if line.strip().startswith("#") and not _DISPOSITIONS_HEADING_RE.match(line):
+                break  # next heading ends the section
+            for span in BACKTICK_SPAN_RE.findall(line):
+                text = span.strip()
+                if not text.endswith(".md"):
+                    continue
+                if not _is_backlog_ref(text, backlog_dir, completed_dir):
+                    continue
+                name = Path(text.replace(os.sep, "/")).name
+                if name and name not in seen:
+                    seen.add(name)
+                    names.append(name)
+    return names
+
 
 def _warn(message: str) -> None:
     print(f"warning: {message}", file=sys.stderr)
@@ -169,10 +203,14 @@ def extract_origin_basenames(
     basenames: list[str] = []
     seen: set[str] = set()
     in_block = False
+    items_seen = False
+    blanks_before_items = 0
     for line in plan_text.splitlines():
+        header_just_matched = False
         if not in_block:
             if ORIGINS_HEADER_RE.match(line):
                 in_block = True
+                header_just_matched = True
             elif ORIGIN_SINGULAR_RE.match(line):
                 # The singular line ends the origins paragraph.
                 text = (
@@ -194,7 +232,16 @@ def extract_origin_basenames(
             else:
                 continue
         elif not line.strip():
-            break  # first blank line ends the origins paragraph
+            # Blank-line grammar: exactly ONE blank line is tolerated
+            # between the header line and the first list item (the
+            # witnessed frozen archived plan carries that shape); any
+            # blank line after list items begin ends the block.
+            if items_seen or blanks_before_items >= 1:
+                break
+            blanks_before_items += 1
+            continue
+        if not header_just_matched:
+            items_seen = True
         for span in BACKTICK_SPAN_RE.findall(line):
             text = span.strip()
             if not text.endswith(".md"):
@@ -267,6 +314,17 @@ def run_plan_mode(
     if not basenames:
         print("check_plan_origins_closed: no origins block; nothing to verify")
         return 0
+    # Dispositions undercount warning (never exit-affecting): when the
+    # plan's origins-dispositions section lists more basenames than the
+    # origins block parsed, the block was likely misread (witnessed
+    # blank-line trap), so say so loudly.
+    listed = _dispositions_basenames(text, backlog_dir, completed_dir)
+    if len(listed) > len(basenames):
+        _warn(
+            f"{plan_path.name}: origins dispositions list {len(listed)} "
+            f"basenames but the origins block parsed {len(basenames)}; "
+            f"check the origins block for a parser undercount"
+        )
     stragglers: list[tuple[str, str]] = []
     for name in basenames:
         state, detail = classify_origin(name, backlog_dir, completed_dir)

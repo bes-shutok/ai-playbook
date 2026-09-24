@@ -351,3 +351,7 @@ Files:
 - [x] Run → expect GREEN: full Validation Commands block passes from a clean shell (`bash -n` included)
 - [x] `git status --short` shows no unintended files staged; parallel sessions share this checkout: any file this task did not create or edit (e.g. a peer session's plan or review artifacts) is NOT part of this plan and must not be committed
 - [ ] Commit (only if Task 3 made edits): `docs-branch: trap-before-restore-region certification fixes`
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-04-docs-branch-trap-before-restore-region.md: disposition folded into 2026-09-05-docs-branch-trap-before-restore-region.md (2026-09-25); per-item file deleted.

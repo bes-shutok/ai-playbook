@@ -446,3 +446,116 @@ coverage.
 
 **Verify:** `FlywayIT` (or equivalent) asserts current applied versions and
 loads only live migration resources.
+
+## 21. PostgreSQL data-modifying CTEs share one statement snapshot
+
+In PostgreSQL, every sub-statement of a single SQL statement (including
+data-modifying CTEs that `DELETE` / `UPDATE` then check "what remains") sees
+**one** snapshot taken at the start of the statement. Rows deleted or updated
+earlier in the same statement are still visible to later CTEs and the outer
+query when those later parts re-read the same table.
+
+**Failure mode:** a completion predicate such as "no remaining child rows" runs
+in the same statement that deletes those children, still sees the pre-delete
+rows, and refuses to mark the parent `DONE` (or marks it incorrectly).
+
+**Required pattern:**
+- Exclude the row(s) being deleted or transitioned in this statement from
+  "empty remaining work" / "no open children" predicates (for example
+  `WHERE id <> current_id` or an equivalent anti-join to the deleted set).
+- Prefer locking the parent row first, then delete children, then apply the
+  final status transition under predicates that cannot false-negative on the
+  in-statement deletes.
+- Cover the race with a database-backed test that reclaims or retries while
+  the completing statement runs, not only a unit mock of the mapper.
+
+**Verify:** after a successful complete path, assert no child claim/pending rows
+remain and the parent reaches the terminal status in one statement.
+
+## 22. Capacity and throughput ITs must discriminate on the real entry path
+
+When an IT claims to prove capacity, sustained RPS, or a large baseline size,
+it must invoke the production entry path under test (for example the scheduler
+`poll` / process loop), measure real duration and work completed, and fail
+closed when duration or processed count is zero or absent. Do not green the
+test with `Math.max` floors, always-true size assertions, or fixtures that never
+call the entry path.
+
+**Failure mode:** a capacity IT passes on empty work, mocked timing floors, or
+unused injected collaborators, so a broken poll/process path still looks proven.
+
+**Required pattern:**
+- Call the real entry method the production scheduler uses.
+- Assert measured duration and processed count are positive (or document an
+  honest non-vacuous extrapolation from a measured representative fixture).
+- Keep operational release gates (for example a named RPS floor) separate from
+  Testcontainers paths that cannot honestly meet them; do not invent floors that
+  hide zero work.
+
+**Verify:** a deliberate zero-work or never-called poll path fails the IT.
+
+## 23. One-shot init latches must wait for real success
+
+When a singleton scheduler or worker uses a boolean (or similar) latch for
+deferred one-shot init (catalog materialize, warm cache, first-ACTIVE import),
+set the latch only after the init path returns successful non-empty work. Do not
+latch when the precondition is absent or the loader returns empty: a later poll
+must still complete init.
+
+**Failure mode:** latching on the first empty or not-ready attempt permanently
+skips init for the process lifetime. Shared `@SpringBootTest` contexts keep that
+sticky latch across IT methods, so later tests look broken unless they call the
+init path directly. The same shared-context stickiness applies to production
+`@PreDestroy` / disposable admission fences: a method that drives the live fence
+leaves CONTINUE (or equivalent) rejected for every later method on that context.
+
+**Required pattern:**
+- Gate the latch on a successful non-empty outcome.
+- Cover false→true once and empty-result no-latch with units.
+- In shared Boot ITs, reset the latch between tests or document an explicit init
+  call as isolation, and backlog a cold-path IT that does not bypass.
+- When an IT asserts a short wall-clock delay window, capture the probe Instant
+  before expensive setup that can consume that window.
+- When an IT drives a production shutdown admission fence, reopen admission
+  between methods (package-visible test hook + `@BeforeEach` / finally) or use
+  `@DirtiesContext`; cover reopen with a unit that fences then reopens.
+
+**Verify:** empty materialize does not latch; a later successful materialize runs
+once; a short delay assert still holds after catalog materialize when the probe
+was captured first; after a PreDestroy fence IT, a later method can still admit
+continuations when reopen (or context refresh) ran.
+
+## 24. Hot-path partial indexes must match equality filters
+
+When a claim, poll, or reclaim query filters on equality predicates beyond the
+status column (for example `job_type = '…'`), the matching partial index
+`WHERE` clause must include those predicates, and the index key order should
+follow the query's `ORDER BY`. An index that covers only `status = 'PENDING'`
+forces a filter after the scan once unclaimable sibling types accumulate.
+
+**Failure mode:** Correct functional claim with growing latency as skipped row
+types pile up under the same status.
+
+**Required pattern:**
+- Align new or changed claim SQL with a dedicated partial index in the same
+  change set (test Flyway + docker init mounts when the repo uses them).
+- Cover the index definition in a schema resource or Flyway IT assert so a
+  future filter change cannot leave the old index silently mismatched.
+
+**Verify:** `pg_indexes.indexdef` (or migration text) contains each equality
+filter from the claim CTE; a mixed-type PENDING fixture still claims only the
+intended type.
+
+
+## 25. Fail-closed gates that read Tomcat Micrometer gauges must prove usable values
+
+When admission, pause, or saturation logic fail-closes on Micrometer gauges such as `tomcat.threads.config.max` and `tomcat.threads.busy`, treat meter presence alone as insufficient.
+
+**Failure mode:** Gauges are absent (MBean registry off by default) or present with sentinel `-1` under some Boot/Tomcat executor bindings. Fail-closed code then skips all work forever while the process looks healthy.
+
+**Required pattern:**
+- On every target runtime (local JAR, UAT, production), assert finite positive gauge values with matching tag sets before enabling a pause-when-saturated style gate.
+- Document a disposable-local escape (disable the pause) separately from the production fix; do not ship the local escape as the prod overlay.
+- If MBean registry enablement still yields `-1`, plan an alternate saturation signal or a Boot-compatible binder rather than assuming the meter names alone are enough.
+
+**Verify:** Prometheus or MeterRegistry shows finite positive max and busy (busy in `[0, max]`); with pause on, a quiet process still claims when below threshold; with meters missing or `-1`, the distinct unavailable warning fires and skip is expected until fixed.

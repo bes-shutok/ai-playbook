@@ -407,3 +407,10 @@ Files:
 
 - [x] Run the full Validation Commands block above → expect exit 0 with `VALIDATION OK` (Gate A suites green; Gate B count exactly 20 (re-baselined 19 to 20, effe76dc); Gates C-H green; Gate I format scans clean)
 - [x] Verify every checkbox in this plan is `[x]`; commit any residual checkbox updates: `test: final validation sweep green (task 9; validation block exit 0; checkboxes [x])`
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-15-budget-gate-midrun-pause-resume.md: disposition folded into 2026-09-17-budget-gate-pause-mechanics-drive.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-15-budget-gate-pause-protocol-timing.md: disposition folded into 2026-09-17-budget-gate-pause-mechanics-drive.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-20-budget-probe-imminent-reset-pause-bug.md: disposition folded into 2026-09-17-budget-gate-pause-mechanics-drive.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-12-budget-gate-secondary-pause-record-wording.md: disposition folded into 2026-09-17-budget-gate-pause-mechanics-drive.md (2026-09-25); per-item file deleted.

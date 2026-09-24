@@ -172,3 +172,9 @@ Files:
 - [x] Move `docs/history/backlog/2026-08-28-fence-scanner-family.md` to `docs/history/backlog/completed/` (all three defects closed by this plan)
 - [x] Edit `docs/history/backlog/2026-08-28-review-doc-wording-fixes.md` to record F11 fixed by this plan (with the plan filename) and that F6 remains open
 - [x] Commit: `docs: close fence-scanner backlog item, record F11 fix`
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-08-29-fence-scanner-followups.md: disposition folded into 2026-08-28-fence-scanner-consolidation.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-08-31-fence-scanner-round-2.md: disposition folded into 2026-08-28-fence-scanner-consolidation.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-08-28-fence-scanner-family.md: disposition folded into 2026-08-28-fence-scanner-consolidation.md (2026-09-25); per-item file deleted.

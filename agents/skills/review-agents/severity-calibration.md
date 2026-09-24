@@ -49,8 +49,8 @@ Apply in order; the first match wins:
 ### Examples by review type
 
 **Code review** (`doing-code-review`):
-- Blocking: a null dereference on a request-handling path; an API response field renamed without a compat shim; deletion of the only assertion guarding a money-movement path.
-- Non-blocking: a variable name that could be clearer; a missing test for a path already guarded elsewhere; a simplification opportunity.
+- Blocking: a null dereference on a request-handling path; an API response field renamed without a compat shim; deletion of the only assertion guarding a money-movement path; a job-queue CTE that deletes claims when the optimistic UPDATE matches zero rows; a scheduler permit acquired before claim and not released on exception; permanently invalid seats requeued as infinite `PARTIAL`; a `BIGINT` write path that narrows to 32-bit/`set_bit` without a shared domain door.
+- Non-blocking: a variable name that could be clearer; a missing test for a path already guarded elsewhere; a simplification opportunity; ops-only rolling-migration prose when code already has a dated backlog item and no live dual-write window in this digest.
 
 **Plan review** (`review-plan`):
 - Blocking: a task whose validation command does not actually verify the task's claim; a task that contradicts an earlier task's contract; a missing rollback step in a migration plan.

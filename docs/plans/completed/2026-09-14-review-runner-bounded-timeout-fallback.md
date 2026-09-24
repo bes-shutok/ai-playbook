@@ -269,3 +269,7 @@ Files:
 - [x] Run → expect GREEN, whole block: execute the full `## Validation Commands` block and record exit 0 with every gate green
 - [x] Record the discriminating rollout witness: count plan-source sidecars dated on or after `COVERAGE_SIDECAR_MIN_DATE` that carry a `coverage` object versus those that do not, and record both numbers in the session log; also run `python3 scripts/plan_readiness.py --sweep` and record the informational verdict-coverage line as context only (it tracks verdict-field share, not coverage adoption; no exit-code gate)
 - [x] Commit: `review-runner: document coverage rollout and legacy compatibility`
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-14-review-runner-bounded-timeout-fallback.md: disposition folded into 2026-09-14-review-runner-bounded-timeout-fallback.md (2026-09-25); per-item file deleted.

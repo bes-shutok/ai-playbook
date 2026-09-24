@@ -405,3 +405,11 @@ Files:
 - `agents/skills/execute-plan/SKILL.md`: seeding path naming and contract summary shrink (Tasks 8, 10).
 - `agents/hooks/*/README.md` and `README.md`: capability-boundary pointers and catalog row move (Task 10).
 - No new documentation files; no README config section changes.
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-10-execute-plan-runtime-r6-findings.md: disposition folded into 2026-09-10-execute-plan-runtime-residuals.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-11-execute-plan-runtime-residuals-recert-nonconvergence.md: disposition folded into 2026-09-10-execute-plan-runtime-residuals.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-19-execute-plan-live-session-check-runtime-ambiguity.md: disposition folded into 2026-09-10-execute-plan-runtime-residuals.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-21-r429-execute-plan-ratelimit-end-residuals.md: disposition folded into 2026-09-10-execute-plan-runtime-residuals.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-09-execute-plan-runtime-r4-deferred-findings.md: disposition folded into 2026-09-10-execute-plan-runtime-residuals.md (2026-09-25); per-item file deleted.

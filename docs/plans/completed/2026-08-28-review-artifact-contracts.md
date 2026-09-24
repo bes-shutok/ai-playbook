@@ -173,3 +173,7 @@ Files:
 - [x] Run `git diff --check`; expects no whitespace errors.
 - [x] Run `( cd "$(git rev-parse --show-toplevel)" && bash ~/.ai-playbook/scripts/scan-public-hygiene.sh )`; expects exit code 0 and no sensitive or project-specific additions.
 - [x] Commit: `review: verify artifact contract updates`
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-16-review-artifact-overwrite-guard.md: disposition folded into 2026-08-28-review-artifact-contracts.md (2026-09-25); per-item file deleted.

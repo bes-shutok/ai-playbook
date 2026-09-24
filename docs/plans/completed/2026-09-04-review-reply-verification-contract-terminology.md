@@ -226,3 +226,8 @@ Files: none (validation only)
 - [x] Run `bash scripts/check-instruction-size.sh` (or the repo's equivalent gate) if it covers the edited skill files; resolve any size-gate finding by consolidation, not by weakening rules.
 - [x] On the completion pass (all tasks `[x]`), move the backlog origin file to `docs/history/backlog/completed/` and mark it `Status: done`, per the backlog header's workflow line and the plans Plan Lifecycle.
 - [x] Commit (only if the prior items produced no changes; otherwise fold into the fix commit): `chore: validate review-reply gates`
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-16-review-record-kinds-and-sidecar-contract.md: disposition folded into 2026-09-04-review-reply-verification-contract-terminology.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-08-17-review-reply-verification-and-contract-terminology.md: disposition folded into 2026-09-04-review-reply-verification-contract-terminology.md (2026-09-25); per-item file deleted.

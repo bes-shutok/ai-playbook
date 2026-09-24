@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "plan_slug": "fixture-plan",
+  "generation": 4,
+  "workflow_state": "active",
+  "run_writer_id": "run-writer-fixture",
+  "parent_session_id": "parent-session-fixture",
+  "tasks": {
+    "task-4a": {
+      "id": "task-4a",
+      "number": 4,
+      "status": "claimed",
+      "checkbox": false,
+      "allowed_paths": ["task-4a.txt"]
+    },
+    "task-4b": {
+      "id": "task-4b",
+      "number": 5,
+      "status": "claimed",
+      "checkbox": false,
+      "allowed_paths": ["task-4b.txt"]
+    }
+  },
+  "claims": {
+    "task-4a": {
+      "task_id": "task-4a",
+      "owner": "owner-task-4a",
+      "claim_owner_id": "owner-task-4a",
+      "claim_token": "ct4a",
+      "token": "ct4a",
+      "generation": 3,
+      "state": "launched",
+      "group_id": "parallel-fixture-group",
+      "member_ordinal": 1
+    },
+    "task-4b": {
+      "task_id": "task-4b",
+      "owner": "owner-task-4b",
+      "claim_owner_id": "owner-task-4b",
+      "claim_token": "ct4b",
+      "token": "ct4b",
+      "generation": 4,
+      "state": "launched",
+      "group_id": "parallel-fixture-group",
+      "member_ordinal": 2
+    }
+  },
+  "claim_groups": {
+    "parallel-fixture-group": {
+      "group_id": "parallel-fixture-group",
+      "members": ["task-4a", "task-4b"],
+      "active_member": "task-4a",
+      "state": "active",
+      "generation": 4,
+      "anchor": "task-4a"
+    }
+  },
+  "workers": {
+    "worker-task-4a": {
+      "worker_id": "worker-task-4a",
+      "task_id": "task-4a",
+      "claim_token": "ct4a",
+      "claim_owner_id": "owner-task-4a",
+      "generation": 3,
+      "provider_session_id": "provider-session-task-4a",
+      "command_identity": "opaque-command-task-4a",
+      "process_identity": {"pid": 4711, "start_time": "start-4711"},
+      "launch_id": "launch-task-4a",
+      "capacity_entry_id": "capacity-task-4a",
+      "state": "active",
+      "started_at": 100.0
+    },
+    "worker-task-4b": {
+      "worker_id": "worker-task-4b",
+      "task_id": "task-4b",
+      "claim_token": "ct4b",
+      "claim_owner_id": "owner-task-4b",
+      "generation": 4,
+      "provider_session_id": "provider-session-task-4b",
+      "command_identity": "opaque-command-task-4b",
+      "process_identity": {"pid": 4712, "start_time": "start-4712"},
+      "launch_id": "launch-task-4b",
+      "capacity_entry_id": "capacity-task-4b",
+      "state": "active",
+      "started_at": 101.0
+    }
+  },
+  "capacity": {
+    "version": 1,
+    "entries": {
+      "capacity-task-4a": {
+        "capacity_entry_id": "capacity-task-4a",
+        "worker_id": "worker-task-4a",
+        "counts_toward_capacity": true,
+        "state": "live"
+      },
+      "capacity-task-4b": {
+        "capacity_entry_id": "capacity-task-4b",
+        "worker_id": "worker-task-4b",
+        "counts_toward_capacity": true,
+        "state": "live"
+      }
+    }
+  },
+  "checkpoints": {},
+  "capabilities": {},
+  "history": []
+}

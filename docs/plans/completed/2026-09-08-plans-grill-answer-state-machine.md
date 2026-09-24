@@ -234,3 +234,7 @@ Files: none (verification only)
 - [x] Run `bash scripts/scan-public-hygiene.sh` from the repository root → expect exit 0
 - [x] Capture a backlog item under `docs/history/backlog/` recording that `agents/skills/grilling/` and `agents/skills/grill-with-docs/` now carry a deliberate local fork of upstream-vendored skills (the answer-state, opt-in-phrase, receipts, and consolidated-assumptions-list rules), so a future upstream `rsync --delete` sync re-applies or consciously drops these rules instead of silently losing them
 - [x] Commit any remaining unstaged plan-owned files: `plans: grill-answer state machine validation and hygiene pass`
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-08-plans-grill-answer-required-readiness-gate.md: disposition folded into 2026-09-08-plans-grill-answer-state-machine.md (2026-09-25); per-item file deleted.

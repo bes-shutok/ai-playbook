@@ -1403,6 +1403,7 @@ def run_cli_watcher_operation(
     identity_prefix: str,
     plan_slug: str = "",
     repo_root: str = "",
+    reconcile_interruption: Callable[[], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The ONE CLI handler for the schedule / supersede / fire arms (r3 F4).
 
@@ -1587,6 +1588,18 @@ def run_cli_watcher_operation(
                 int(snapshot.get("generation", 0)),
                 "preserve-and-reconcile",
             )
+        if reconcile_interruption is not None:
+            candidate = evaluate_fire(adapter, receipt)
+            if candidate.get("decision") == "resume":
+                reconciled = reconcile_interruption()
+                if not isinstance(reconciled, Mapping) or reconciled.get("status") != "success":
+                    return {
+                        **dict(reconciled or {}),
+                        "decision": "refuse",
+                        "reason": "interruption-reconciliation-failed",
+                        "guards_cleared": False,
+                        "relaunch": False,
+                    }
         flag_default = DEFAULT_FLAG_PATH
         decision = fire_watcher(
             adapter,

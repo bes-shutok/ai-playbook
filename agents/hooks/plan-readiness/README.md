@@ -50,17 +50,12 @@ validate_review_staging.py never imports plan_readiness.
 
 ## Current host limitation (documented, not hidden)
 
-Hosts differ in what final-response events they expose. Claude Code ships a
-blocking Stop-adjacent event (the `Stop` hook can block the turn's final
-response); the current Codex host cannot block the final response: its config
-surface carries only `post_tool_use` (which cannot block) and one-shot
-`SessionStart` arrays, with no stop/final-response event to register a blocker
-against. The capability is recorded as UNSUPPORTED per agent in
-`scripts/hooks_probe.py` (see the table below) because no adapter is
-implemented in this install for ANY host (including Claude): the scope decision
-is to ship the enforcement unwired and flip rows via the wiring recipe when an
-adapter is actually built. Hosts that do expose a stop-adjacent event are the
-natural first candidates for that recipe.
+Codex `Stop` and `SubagentStop` hooks can return a blocking decision. Their
+blocking response is supported for continuation and worker lifecycle policy;
+it does not make `Interrupt` a blocking event. `Interrupt` is a best-effort
+snapshot point, and `SessionEnd` has no blocking response. This plan-readiness
+adapter remains unwired here, so its registry row continues to describe the
+plan-readiness capability rather than execute-plan lifecycle hooks.
 
 This is also a payload rule: whether a host event can enforce the policy is
 governed by the hook capability boundary stated once in
@@ -71,10 +66,7 @@ of truth; the capability probe reports missing adapter, missing registration,
 unsupported event, and degraded fallback separately and fails closed for
 malformed adapter data.
 
-**Round-4 adjudication:** the plan-review r4 round raised that Claude Code
-ships a blocking `Stop` event, contradicting an earlier "no supported host
-ships such an event" claim. This wording resolves that finding: the honest
-statement is host divergence plus unwired-by-scope, not universal absence.
+The lifecycle hook capability is distinct from plan-readiness wiring.
 
 ## Compensating enforcement until a host event exists
 

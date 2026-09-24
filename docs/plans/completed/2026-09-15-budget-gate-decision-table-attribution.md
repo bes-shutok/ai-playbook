@@ -221,3 +221,7 @@ Files:
 - [x] Commit: `docs: origin item superseded by proactive attribution isolation`
 
 r1/r2 note (2026-09-18): the item's current text supersedes the quoted snapshots above (row-3 negation relocated to the post-table paragraph; contingency/abort branches extended); the Validation Commands block is the only normative matcher. The Task 4 quote also omits the item's second supersession sentence ("The imperative paragraph below is retained as historical record only: it is not a live instruction, and the sibling item's procedure is the only current isolation procedure."), added by r1 F6; the r2 pass additionally qualified the first supersession sentence to read-only isolation (session checks plus marker and hooks-trust baselines) with the hooks.json disable row-2-contingency-only.
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-13-budget-gate-decision-table-attribution.md: disposition folded into 2026-09-15-budget-gate-decision-table-attribution.md (2026-09-25); per-item file deleted.

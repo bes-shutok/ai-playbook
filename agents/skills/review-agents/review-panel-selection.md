@@ -56,6 +56,7 @@ Before any focused selection is honored, derive risk signals from the plan's exp
 
 - One or more risk signals: the worker set must include `correctness-completeness`, `testing`, `contract-docs`, and `risk`.
 - Two or more risk signals: the full five-worker panel (adding `design-simplicity`).
+- Catalog / helper door change: when the diff changes a materialize / floor / catalog loop, or pairs a production guard change with shared test helper edits, the `testing` and `correctness-completeness` (quality) workers must run the catalog-enumeration check (`quality#typed-catalog-enumeration-door`) and the helper-retarget check (`testing#helper-path-retarget-after-door`), naming both pattern ids.
 
 Precedence: when the floor is triggered, it overrides both the focused-round preference in the late-loop paragraph of `### Targeted follow-ups` and the `## Focused panels` section above; a focused panel is not valid for that round even when the fixes are narrowly scoped.
 
@@ -147,8 +148,12 @@ Scan all changed files, not diff hunks only, for:
 | Retry / backoff | retry-template abstractions, retryable-method annotations, rate-limit response mapping, circuit breakers |
 | Messaging / async | message-broker consumers, outbox workers, async-method annotations, thread pools |
 | Shared mutable state | Cross-request caches with TTL races, compare-and-set upserts, deque queues shared across threads |
+| Job / claim SQL | claim generation columns, `PARTIAL`/`FAILED`/`DONE` transitions, cleanup CTEs that delete claims beside an optimistic UPDATE, scheduler permit/lease acquire before claim |
+| Domain narrowing | `BIGINT`/`long` values cast or bound into 32-bit SQL/`set_bit`/byte[] capacity on write paths |
 
 **Default skip** when none match in changed files or their direct call paths visible in the diff.
+
+**SQL CTE deep-read:** when any changed file is a MyBatis mapper (annotation or XML) with multi-CTE claim/job transitions, the `risk`/`concurrency` worker must read the full statement bodies (not hunk-only) and apply `concurrency#cleanup-gated-on-update`, `concurrency#terminal-not-partial`, and `concurrency#claim-generation` before returning zero findings on that family.
 
 **execute-plan override:** When Phase 3 scope includes concurrency, transactional mutators, `FOR UPDATE`, or race ITs, load `premortem` in `risk` even on quiet follow-up rounds unless the user said `skip premortem`.
 

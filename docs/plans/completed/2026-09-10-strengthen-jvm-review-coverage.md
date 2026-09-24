@@ -279,3 +279,9 @@ Files: none (verification only).
 
 - [x] Run the Validation Commands block from the repo root; expect exit 0 with `VALIDATION PASS: jvm review coverage wiring complete`.
 - [x] No commit; verification only.
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-10-strengthen-jvm-review-coverage.md: disposition folded into 2026-09-10-strengthen-jvm-review-coverage.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-10-widen-guideline-review-coverage-beyond-jvm.md: disposition folded into 2026-09-10-strengthen-jvm-review-coverage.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-10-jvm-review-coverage-r1-residuals.md: disposition folded into 2026-09-10-strengthen-jvm-review-coverage.md (2026-09-25); per-item file deleted.

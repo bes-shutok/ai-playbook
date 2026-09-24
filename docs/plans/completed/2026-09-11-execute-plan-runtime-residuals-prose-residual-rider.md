@@ -222,3 +222,7 @@ Files:
 - No new documentation files; no README or config section changes.
 - The fold target's own documentation tasks (`runtime-contract.md`, hook READMEs, catalog) belong to the fold target's execution, not this plan; this plan only sharpens the prose that prescribes them.
 - The only doc-adjacent surfaces are the fold target itself and the rider item's lifecycle move, both explicit must-fix paths above.
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-10-execute-plan-runtime-residuals-plan-prose-residuals.md: disposition folded into 2026-09-11-execute-plan-runtime-residuals-prose-residual-rider.md (2026-09-25); per-item file deleted.

@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
-"""Block Codex work and worker launches unless they use GPT-6 Luna."""
+"""Enforce Codex's selected default subagent model before worker launch."""
 
 from __future__ import annotations
 
 import json
 import os
 import sys
+import tomllib
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 
-ALLOWED_MODEL = "gpt-6-luna"
-TAIL_BYTES = 1024 * 1024
-HEAD_BYTES = 256 * 1024
-WORKER_TOOL_MARKERS = ("spawn_agent", "spawn-agent", "subagent")
+WORKER_TOOL_MARKERS = ("agent", "spawn_agent", "spawn-agent", "subagent")
 
 
 def transcript_path(value: object) -> Path | None:
@@ -57,25 +55,15 @@ def model_from_lines(lines: list[str]) -> str | None:
     return latest
 
 
-def active_model(path: Path | None) -> str | None:
-    if path is None or not path.is_file():
+def selected_subagent_model(path: Path | None) -> str | None:
+    if path is None:
         return None
-
     try:
         with path.open("rb") as stream:
-            stream.seek(0, os.SEEK_END)
-            size = stream.tell()
-            stream.seek(max(0, size - TAIL_BYTES))
-            tail = stream.read().decode("utf-8", errors="replace")
-            model = model_from_lines(tail.splitlines())
-            if model is not None:
-                return model
-
-            stream.seek(0)
-            head = stream.read(HEAD_BYTES).decode("utf-8", errors="replace")
-            return model_from_lines(head.splitlines())
-    except OSError:
+            value = tomllib.load(stream).get("agents", {}).get("default_subagent_model")
+    except (OSError, tomllib.TOMLDecodeError, AttributeError):
         return None
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def worker_tool_name(event: dict[str, object]) -> str:
@@ -87,8 +75,7 @@ def worker_tool_name(event: dict[str, object]) -> str:
 
 
 def explicit_worker_model(event: dict[str, object]) -> str | None:
-    tool_name = worker_tool_name(event)
-    if not any(marker in tool_name for marker in WORKER_TOOL_MARKERS):
+    if worker_tool_name(event) not in WORKER_TOOL_MARKERS:
         return None
 
     for key in ("tool_input", "input", "arguments"):
@@ -96,13 +83,6 @@ def explicit_worker_model(event: dict[str, object]) -> str | None:
         if model is not None:
             return model
     return None
-
-
-def active_event_model(event: dict[str, object]) -> str | None:
-    model = event.get("model")
-    if isinstance(model, str):
-        return model
-    return active_model(transcript_path(event.get("transcript_path")))
 
 
 def block(event: str, reason: str) -> None:
@@ -129,30 +109,18 @@ def main() -> int:
         event = {}
 
     event_name = str(event.get("hook_event_name", ""))
+    if worker_tool_name(event) not in WORKER_TOOL_MARKERS:
+        return 0
+    model = selected_subagent_model(Path(os.environ["CODEX_CONFIG"]) if os.environ.get("CODEX_CONFIG") else Path.home() / ".codex" / "config.toml")
     requested_model = explicit_worker_model(event)
-    if requested_model is not None and requested_model != ALLOWED_MODEL:
-        block(
-            event_name,
-            f"Blocked: worker requested model {requested_model}, but this setup "
-            f"permits only {ALLOWED_MODEL}.",
-        )
-        return 0
-
-    model = active_event_model(event)
-    if model == ALLOWED_MODEL:
-        return 0
-
     if model is None:
-        reason = (
-            "Blocked: Codex could not verify that the active model is "
-            f"{ALLOWED_MODEL}. Select Luna and retry."
-        )
-    else:
-        reason = (
-            f"Blocked: active model is {model}, but this setup permits only "
-            f"{ALLOWED_MODEL}. Select Luna and retry."
-        )
-    block(event_name, reason)
+        block(event_name, "Blocked: selected subagent model policy is missing or malformed.")
+        return 0
+    if requested_model is None:
+        block(event_name, "Blocked: worker launch has no direct, nonempty model or selected policy correlation.")
+        return 0
+    if requested_model != model:
+        block(event_name, f"Blocked: worker requested model {requested_model}, but selected subagent model is {model}.")
     return 0
 
 

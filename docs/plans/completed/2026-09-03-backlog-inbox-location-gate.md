@@ -292,3 +292,15 @@ Files:
 - [x] Run → expect GREEN: Validation Commands 6 and 7.
 - [x] Run → expect GREEN: full Validation Commands block, all commands.
 - [x] Commit: `docs: catalog backlog inbox location gate + receiving-review note`
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-03-backlog-gate-absolute-home-fixture.md: disposition folded into 2026-09-03-backlog-inbox-location-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-03-backlog-gate-collapse-classification-tail.md: disposition folded into 2026-09-03-backlog-inbox-location-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-03-backlog-gate-hot-dirs-facts-key.md: disposition folded into 2026-09-03-backlog-inbox-location-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-03-backlog-gate-parser-unavailable-fixture.md: disposition folded into 2026-09-03-backlog-inbox-location-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-03-backlog-gate-symlink-dir-bypass.md: disposition folded into 2026-09-03-backlog-inbox-location-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-07-backlog-gate-r5-doc-drift.md: disposition folded into 2026-09-03-backlog-inbox-location-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-07-backlog-gate-windows-portability.md: disposition folded into 2026-09-03-backlog-inbox-location-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-16-review-backlog-redaction-gate.md: disposition folded into 2026-09-03-backlog-inbox-location-gate.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-08-30-backlog-inbox-location-gate.md: disposition folded into 2026-09-03-backlog-inbox-location-gate.md (2026-09-25); per-item file deleted.

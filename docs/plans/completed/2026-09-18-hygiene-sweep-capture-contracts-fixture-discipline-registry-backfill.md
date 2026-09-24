@@ -259,3 +259,7 @@ Files:
 
 - [x] Run the complete Validation Commands block from the repository root; expect exit 0 with `validation: all hold`; note that gate 3's fixture sweep must find zero offenders after Task 2 and gate 4 must find zero unregistered wave files after Task 8 [class: REPOSITORY_TEST]
 - [x] Commit (only if any validation-driven fix left an uncommitted edit): `hygiene: P13 validation sweep fixes` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-18-verification-fixture-teardown-discipline.md: disposition folded into 2026-09-18-hygiene-sweep-capture-contracts-fixture-discipline-registry-backfill.md (2026-09-25); per-item file deleted.

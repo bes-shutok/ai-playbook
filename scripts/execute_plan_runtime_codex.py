@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import fcntl
 import os
 import signal
+import shlex
 import subprocess
+import tempfile
 import time
 import tomllib
 from pathlib import Path
@@ -161,6 +165,8 @@ class CodexAdapter:
         launch_deadline: float | None = None,
         wait_deadline: float | None = None,
         approval_receipt: Path | str | None = None,
+        process_snapshot: Any | None = None,
+        capacity_lock_path: Path | str | None = None,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
         self.runner = runner
@@ -177,6 +183,23 @@ class CodexAdapter:
             self.approval_verified = approval_verified
         self.activation_receipt: dict[str, Any] | None = None
         self.executable = executable
+        if process_snapshot is not None:
+            self.process_snapshot = process_snapshot
+        elif runner is _subprocess_runner:
+            self.process_snapshot = self._system_process_snapshot
+        else:
+            # An injected runner is a hermetic test boundary. Its empty
+            # inventory is explicit; tests for unavailable or occupied
+            # capacity inject a process_snapshot witness.
+            self.process_snapshot = lambda: subprocess.CompletedProcess([], 0, "1 Mon Jan 01 00:00:00 2024 test-runner\\n", "")
+        self._test_capacity_lock_dir = None
+        if capacity_lock_path is not None:
+            self.capacity_lock_path = Path(capacity_lock_path)
+        elif runner is _subprocess_runner:
+            self.capacity_lock_path = Path.home() / ".codex" / "execute-plan" / "codex-capacity.lock"
+        else:
+            self._test_capacity_lock_dir = tempfile.TemporaryDirectory(prefix="execute-plan-codex-capacity-")
+            self.capacity_lock_path = Path(self._test_capacity_lock_dir.name) / "capacity.lock"
         manifest_values: dict[str, Any] = {}
         manifest_path = os.environ.get("EXECUTE_PLAN_PACKAGE_MANIFEST")
         if manifest_path:
@@ -201,6 +224,11 @@ class CodexAdapter:
         except (TypeError, ValueError):
             return default
         return number if number > 0 and number != float("inf") else default
+
+    def __del__(self) -> None:
+        test_lock_dir = getattr(self, "_test_capacity_lock_dir", None)
+        if test_lock_dir is not None:
+            test_lock_dir.cleanup()
 
     def _run(self, argv: list[str], deadline: float, operation: str, policy_token: Mapping[str, Any] | None = None) -> dict[str, Any]:
         if any(flag in argv for flag in DANGEROUS_FLAGS):
@@ -266,6 +294,117 @@ class CodexAdapter:
             "approval_receipt": self.approval_receipt_path or "test-injected",
         }
         return result
+
+    @staticmethod
+    def normalize_observation(kind: str, state: str, *, provider_session_id: str | None = None, process_identity: Mapping[str, Any] | None = None, observed_at: float | None = None, freshness_window: float = 30.0) -> dict[str, Any]:
+        """Translate Codex host facts into the neutral observation port."""
+        if state not in {"available", "terminal", "stale", "unavailable", "malformed", "timed-out", "unsupported"}:
+            state = "malformed"
+        effect = "release" if state == "terminal" else "retain" if state == "available" else "quarantine"
+        return {"version": 1, "observation_kind": str(kind), "state": state, "observed_at": float(observed_at if observed_at is not None else time.monotonic()), "freshness_window": float(freshness_window), "provider_identity": {"session_id": provider_session_id} if provider_session_id else {}, "process_identity": dict(process_identity or {}), "capacity_slot_effect": effect}
+
+    def observe_inventory(self) -> dict[str, Any]:
+        """Return a fresh inventory of active Codex CLI execution processes.
+
+        ``ps`` is the host process table, not a session-history database. A
+        successful, completely parsed snapshot can prove that no adapter-owned
+        ``codex exec`` process is active; command failure or malformed output
+        remains unavailable. The process start time fences PID reuse.
+        """
+        try:
+            snapshot = self.process_snapshot()
+            if not isinstance(snapshot, subprocess.CompletedProcess) or snapshot.returncode != 0:
+                raise ValueError("process snapshot command failed")
+            inventory = self._parse_process_snapshot(str(snapshot.stdout))
+        except (OSError, TypeError, ValueError, subprocess.SubprocessError):
+            return self.normalize_observation("inventory", "unavailable") | {"inventory": None}
+        return self.normalize_observation("inventory", "available") | {"inventory": inventory}
+
+    @staticmethod
+    def _system_process_snapshot() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["/bin/ps", "-ww", "-axo", "pid=,lstart=,command="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2.0,
+        )
+
+    @staticmethod
+    def _parse_process_snapshot(output: str) -> list[dict[str, Any]]:
+        if not output.strip():
+            raise ValueError("empty process snapshot")
+        inventory: list[dict[str, Any]] = []
+        for line in output.splitlines():
+            fields = line.split(None, 6)
+            if len(fields) != 7:
+                raise ValueError("malformed process row")
+            command = fields[6]
+            if "codex" not in command.lower():
+                continue
+            try:
+                pid = int(fields[0])
+                argv = shlex.split(command)
+            except (ValueError, TypeError) as exc:
+                raise ValueError("malformed process row") from exc
+            if pid <= 0 or not argv:
+                raise ValueError("malformed process identity")
+            start_time = " ".join(fields[1:6])
+            codex_index = next(
+                (index for index, value in enumerate(argv[:-1]) if Path(value).name in {"codex", "codex.exe"}),
+                None,
+            )
+            if codex_index is None or argv[codex_index + 1] != "exec":
+                continue
+            invocation = argv[codex_index + 2:]
+            if not invocation or not (invocation[0] == "--json" or (invocation[0] == "resume" and "--json" in invocation[1:])):
+                continue
+            identity = {"pid": pid, "start_time": start_time}
+            session_suffix = hashlib.sha256(start_time.encode("utf-8")).hexdigest()[:12]
+            inventory.append({
+                "provider_session_id": f"codex-process-{pid}-{session_suffix}",
+                "process_identity": identity,
+            })
+        return inventory
+
+    def _with_capacity_fence(self, operation: str, generation: int, task_id: str, invoke: Any, policy_token: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Serialize process discovery and launch/resume across local runs."""
+        try:
+            self.capacity_lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            descriptor = os.open(self.capacity_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError:
+            return self._blocked("capacity-unavailable", ["Codex capacity lock is unavailable"], generation=generation, checkpoint=f"{task_id}:{operation}")
+        try:
+            try:
+                os.fchmod(descriptor, 0o600)
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return self._blocked("capacity-unavailable", ["another Codex worker holds the host capacity reservation"], generation=generation, checkpoint=f"{task_id}:{operation}")
+            except OSError:
+                return self._blocked("capacity-unavailable", ["Codex capacity lock is unavailable"], generation=generation, checkpoint=f"{task_id}:{operation}")
+            observation = self.observe_inventory()
+            if observation.get("state") != "available":
+                return self._blocked("capacity-unavailable", ["Codex process inventory is unavailable"], generation=generation, checkpoint=f"{task_id}:{operation}")
+            inventory = observation.get("inventory") or []
+            allowed = policy_token.get("parallel_member_processes", []) if isinstance(policy_token, Mapping) else []
+            allowed_keys = {json.dumps(item, sort_keys=True) for item in allowed if isinstance(item, Mapping)}
+            unrelated = [item for item in inventory if json.dumps(item.get("process_identity", {}), sort_keys=True) not in allowed_keys]
+            if unrelated:
+                return self._blocked("capacity-unavailable", [f"Codex process inventory reports {len(unrelated)} unrelated execution process(es)"], generation=generation, checkpoint=f"{task_id}:{operation}")
+            result = invoke()
+            if isinstance(result, dict) and result.get("status") == "success" and operation == "launch":
+                after = self.observe_inventory()
+                if after.get("state") == "available":
+                    prior_keys = {json.dumps(item.get("process_identity", {}), sort_keys=True) for item in inventory}
+                    started = [item for item in after.get("inventory", []) if json.dumps(item.get("process_identity", {}), sort_keys=True) not in prior_keys]
+                    if len(started) == 1:
+                        result["process_identity"] = {"provider": "codex", **dict(started[0].get("process_identity", {}))}
+            return result
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
 
     def _blocked(self, reason: str, evidence: list[str], scope: str = "repository-task", checkpoint: str = "codex:adapter", generation: int = 0) -> dict[str, Any]:
         return {
@@ -357,6 +496,15 @@ class CodexAdapter:
         """
 
         raw = dict(host_result)
+        event_type = raw.get("type")
+        if event_type == "turn.completed":
+            raw.update({"status": "success", "reason_code": "completed"})
+            raw.setdefault("evidence", ["Codex emitted turn.completed"])
+        elif event_type in {"turn.failed", "error"}:
+            failure = raw.get("error")
+            message = failure.get("message") if isinstance(failure, Mapping) else None
+            raw.update({"status": "blocked", "reason_code": "runtime-error"})
+            raw.setdefault("evidence", [f"Codex emitted {event_type}", str(message or "Codex turn failed")])
         batch_progress = raw.get("batch_progress")
         normalized_progress: dict[str, Any] | None = None
         if batch_progress is not None:
@@ -405,6 +553,13 @@ class CodexAdapter:
         translated = self.translate_host_result(final, generation, task_id)
         if thread_id:
             translated["session_id"] = str(thread_id)
+            translated["provider_session_id"] = str(thread_id)
+            translated["worker_id"] = f"worker-{task_id}-{thread_id}"
+            translated["launch_id"] = hashlib.sha256(f"{task_id}:{thread_id}:{generation}".encode()).hexdigest()[:24]
+            translated["capacity_entry_id"] = f"capacity-{task_id}-{thread_id}"
+            translated["command_identity"] = hashlib.sha256(" ".join(argv).encode()).hexdigest()[:24]
+            translated["process_identity"] = {"provider": "codex", "session_id": str(thread_id)}
+            translated["observed_at"] = time.monotonic()
         return translated
 
     @staticmethod
@@ -420,8 +575,13 @@ class CodexAdapter:
         argv = [self.executable, "exec", "--json", "-C", str(self.repo_root), prompt]
         if self.activation_receipt is None:
             return self._blocked("runtime-policy-unavailable", ["adapter activation receipt is missing"], generation=generation, checkpoint=f"{task_id}:policy")
-        result = self._invoke_and_translate(argv, self._finite(deadline_seconds, self.launch_deadline), "launch", generation, task_id, policy_token=policy_token)
-        return result
+        return self._with_capacity_fence(
+            "launch",
+            generation,
+            task_id,
+            lambda: self._invoke_and_translate(argv, self._finite(deadline_seconds, self.launch_deadline), "launch", generation, task_id, policy_token=policy_token),
+            policy_token,
+        )
 
     def wait(self, session_id: str, generation: int = 1, task_id: str | None = None, deadline_seconds: float | None = None, policy_token: Mapping[str, Any] | None = None) -> dict[str, Any]:
         task_id = task_id or self._task_from_session(session_id)
@@ -430,7 +590,12 @@ class CodexAdapter:
         if not capabilities.validate_policy_token(policy_token, repo_root=str(self.repo_root), generation=generation):
             return self._blocked("runtime-policy-unavailable", ["missing or invalid driver policy token"], generation=generation, checkpoint=f"{task_id}:policy")
         argv = [self.executable, "exec", "resume", session_id, "--json"]
-        return self._invoke_and_translate(argv, self._finite(deadline_seconds, self.wait_deadline), "wait", generation, task_id, policy_token=policy_token)
+        return self._with_capacity_fence(
+            "wait",
+            generation,
+            task_id,
+            lambda: self._invoke_and_translate(argv, self._finite(deadline_seconds, self.wait_deadline), "wait", generation, task_id, policy_token=policy_token),
+        )
 
     def resume(self, session_id: str, prompt: str, generation: int, task_id: str | None = None, deadline_seconds: float | None = None, policy_token: Mapping[str, Any] | None = None) -> dict[str, Any]:
         task_id = task_id or self._task_from_session(session_id)
@@ -439,7 +604,12 @@ class CodexAdapter:
         if not capabilities.validate_policy_token(policy_token, repo_root=str(self.repo_root), generation=generation):
             return self._blocked("runtime-policy-unavailable", ["missing or invalid driver policy token"], generation=generation, checkpoint=f"{task_id}:policy")
         argv = [self.executable, "exec", "resume", session_id, "--json", prompt]
-        return self._invoke_and_translate(argv, self._finite(deadline_seconds, self.wait_deadline), "resume", generation, task_id, policy_token=policy_token)
+        return self._with_capacity_fence(
+            "resume",
+            generation,
+            task_id,
+            lambda: self._invoke_and_translate(argv, self._finite(deadline_seconds, self.wait_deadline), "resume", generation, task_id, policy_token=policy_token),
+        )
 
     @staticmethod
     def _task_from_session(session_id: str) -> str:

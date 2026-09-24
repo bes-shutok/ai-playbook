@@ -175,3 +175,7 @@ Prescribed text P4 (doc-hierarchy SKILL.md, identity-derivation sentence, full r
 - Closure stays agent-prompted and user-confirmed; the identity confirmation at closure is not dropped (doc-ownership-lifecycle Task 6 requirement).
 - No concrete identity value, example identity, or path-derived identity is pinned in the skill text; the wiring references the header by name (`Capability identity:`), never by commit- or environment-specific values.
 - Completed-history immutability is untouched: this plan edits only Living SOT skill files and the item's own lifecycle metadata immediately before its archive move.
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-10-rfc-design-create-mode-identity-header-wiring.md: disposition folded into 2026-09-12-rfc-design-create-mode-identity-header-wiring.md (2026-09-25); per-item file deleted.

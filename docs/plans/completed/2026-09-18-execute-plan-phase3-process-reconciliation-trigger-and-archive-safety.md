@@ -216,3 +216,10 @@ Files:
 - [x] Run the Task 4 destination-hygiene sweep: `grep -rnE 'plans_completed([^_]|$)' agents/skills/execute-plan agents/skills/plans agents/skills/done scripts/execute_plan_runtime.py`; fix any archive destination constructed from the bare folder name (execute-plan surfaces in this task; plans/done hits as plan-related fixes with a one-line justification or a backlog capture), leaving zero hits
 - [x] Extract the Validation Commands bash block from this plan file, run `bash -n` on it, and execute it → expect GREEN on the full block (suite, all obligation probes, hygiene sweep)
 - [x] Commit: `skills: execute-plan archive lifecycle gate and staged terminal contract`
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-18-execute-plan-review-reconciliation-trigger-not-invoked.md: disposition folded into 2026-09-18-execute-plan-phase3-process-reconciliation-trigger-and-archive-safety.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-18-execute-plan-test-suite-concurrency-safety.md: disposition folded into 2026-09-18-execute-plan-phase3-process-reconciliation-trigger-and-archive-safety.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-22-execute-plan-handoff-claim-owner-reconciliation.md: disposition folded into 2026-09-18-execute-plan-phase3-process-reconciliation-trigger-and-archive-safety.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-18-execute-plan-archive-before-task-completion.md: disposition folded into 2026-09-18-execute-plan-phase3-process-reconciliation-trigger-and-archive-safety.md (2026-09-25); per-item file deleted.

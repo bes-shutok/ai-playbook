@@ -96,3 +96,23 @@ For compare-and-set updates, deduplication, reconciliation, or job queues:
    worker turn.
 4. Verify first-write-wins audit semantics; after evidence is recorded, only an
    identical retry may succeed.
+5. **Optimistic transition + cleanup CTEs:** when a SQL statement updates a
+   job/claim row and also deletes or releases claim/pending rows, gate the
+   cleanup CTE on the update returning the matched row (`updated` /
+   `RETURNING`). A DELETE that runs when the optimistic predicates match zero
+   rows is a lost-ownership bug. Pattern: `concurrency#cleanup-gated-on-update`.
+6. **Claim generation fence:** every claim INSERT, heartbeat, and pending
+   delete that owns durable work must predicate on the coordinator's current
+   `(job_id, claim_generation)` (or equivalent). A reclaim that bumps
+   generation must make older generation writers fail closed.
+7. **Terminal vs retryable failure:** permanently invalid payload, domain, or
+   poison seats must take a terminal fail path (attempts exhausted or
+   fail-closed terminal API), not infinite `PARTIAL` / requeue. Multi-step
+   terminal outcomes (status + claim release + pending delete) belong in one
+   transaction or one atomic port method. Pattern:
+   `concurrency#terminal-not-partial`.
+8. **In-process admission permits:** when a scheduler acquires a semaphore /
+   lease / permit before durable claim or submit, every non-submit path
+   (empty claim, DB exception, rejection, checkpoint failure) must release in
+   `finally` (or equivalent). Distributed-lock finally rules alone do not
+   cover JVM permits. Pattern: `concurrency#permit-finally`.

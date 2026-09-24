@@ -243,3 +243,9 @@ Files:
 - [x] Run the whole `## Validation Commands` block top to bottom and record each command's outcome in the task log (whole-suite state: every command exits 0) [class: REPOSITORY_TEST]
 - [x] Negated residue sweep over the touched skills: no remaining `sidecar field + Metadata` over-claim on the two narrowed rows and no retrofit-script language introduced by this plan (the plan's own bytes are the checker literal for these phrases and are excluded from the sweep) [class: REPOSITORY_TEST]
 - [ ] Commit only if the sweep fixed residue: `docs: review staging infra quality final sweep (task 7)` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-19-review-staging-canonical-pattern-retrofit.md: disposition folded into 2026-09-22-review-staging-infra-quality.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-19-review-staging-integration-points-row-accuracy.md: disposition folded into 2026-09-22-review-staging-infra-quality.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-18-review-staging-synthesis-friction-undocumented-gates.md: disposition folded into 2026-09-22-review-staging-infra-quality.md (2026-09-25); per-item file deleted.

@@ -295,3 +295,7 @@ Files:
 - [x] Run the full Validation Commands block → expect GREEN on the post-Task-5 tree (every probe green; no interim scoping).
 - [x] Mechanical audit: extract each pinned span from Tasks 1-5 and confirm it occurs exactly once in its target file (the expect_once probes already enforce this; confirm no pin was edited after the last green run).
 - [x] Commit via the done workflow (learn, gates, docs-branch) or `plans: certify phase3 residue pass` if nothing new to commit.
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-02-phase3-residue-pass-r5-residuals.md: disposition folded into 2026-09-02-phase3-residue-pass.md (2026-09-25); per-item file deleted.

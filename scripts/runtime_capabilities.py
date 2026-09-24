@@ -31,6 +31,7 @@ DEFAULT_INVENTORY_PATH = ROOT / "projects/.ai-playbook/execute-plan-runtime-inve
 # adapter import them from here; no other module may define or assign them.
 MAX_EVIDENCE_BYTES = 4096
 MAX_EVIDENCE_ITEM_BYTES = 512
+EVIDENCE_ENVELOPE_VERSION = 1
 CAPABILITY_OWNER = "registry"
 CAPABILITY_NAMES = {
     "parent_continuation",
@@ -143,6 +144,94 @@ def bounded_evidence(items: Any, limit: int = MAX_EVIDENCE_BYTES) -> list[str]:
             result.append(text)
             used += len(text)
     return result or ["evidence unavailable"]
+
+
+def normalize_evidence_envelope(value: Any) -> dict[str, Any]:
+    """Validate and normalize independently captured verification evidence.
+
+    This validates shape only. The runtime driver must bind the envelope to
+    the active claim and authorize its paths and criteria before accepting it.
+    """
+    required = {
+        "version", "command", "working_directory", "exit_status", "output_digest", "stdout_digest", "stderr_digest",
+        "selected_tests", "baseline_paths", "changed_paths", "allowed_paths", "criteria",
+        "verified_by", "task_id", "claim_token", "generation", "launch_id", "evidence_contract_digest", "source_digest",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("evidence envelope has missing or unknown fields")
+    if value["version"] != EVIDENCE_ENVELOPE_VERSION:
+        raise ValueError("unsupported evidence envelope version")
+    command = value["command"]
+    if not isinstance(command, list) or not command or any(not isinstance(part, str) or not part for part in command):
+        raise ValueError("evidence command must be a non-empty argv list")
+    if len(command) > 32 or any(len(part.encode("utf-8")) > MAX_EVIDENCE_ITEM_BYTES for part in command):
+        raise ValueError("evidence command exceeds the bounded schema limit")
+    if not isinstance(value["working_directory"], str) or not value["working_directory"]:
+        raise ValueError("evidence working_directory must be non-empty")
+    if isinstance(value["exit_status"], bool) or not isinstance(value["exit_status"], int):
+        raise ValueError("evidence exit_status must be an integer")
+    if not isinstance(value["output_digest"], str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value["output_digest"]):
+        raise ValueError("evidence output_digest must be a sha256 identity")
+    for field in ("stdout_digest", "stderr_digest"):
+        if not isinstance(value[field], str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value[field]):
+            raise ValueError(f"evidence {field} must be a sha256 identity")
+    if value["verified_by"] != "runtime-driver":
+        raise ValueError("evidence must be captured by the runtime driver")
+    for field in ("task_id", "claim_token", "launch_id", "evidence_contract_digest"):
+        if not isinstance(value[field], str) or not value[field]:
+            raise ValueError(f"evidence {field} must be non-empty")
+    if not isinstance(value["source_digest"], str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value["source_digest"]):
+        raise ValueError("evidence source_digest must be a sha256 identity")
+    if isinstance(value["generation"], bool) or not isinstance(value["generation"], int) or value["generation"] < 0:
+        raise ValueError("evidence generation must be a non-negative integer")
+    normalized: dict[str, Any] = {"version": EVIDENCE_ENVELOPE_VERSION, "command": [_redact(part) for part in command], "working_directory": value["working_directory"], "exit_status": value["exit_status"], "output_digest": value["output_digest"], "stdout_digest": value["stdout_digest"], "stderr_digest": value["stderr_digest"], "verified_by": "runtime-driver", "task_id": value["task_id"], "claim_token": value["claim_token"], "generation": value["generation"], "launch_id": value["launch_id"], "evidence_contract_digest": value["evidence_contract_digest"], "source_digest": value["source_digest"]}
+    for key in ("selected_tests", "baseline_paths", "changed_paths", "allowed_paths", "criteria"):
+        items = value[key]
+        if not isinstance(items, list) or len(items) > 100 or any(not isinstance(item, str) or not item or len(item.encode("utf-8")) > MAX_EVIDENCE_ITEM_BYTES for item in items):
+            raise ValueError(f"evidence {key} must be a list of non-empty strings")
+        if len(items) != len(set(items)):
+            raise ValueError(f"evidence {key} contains duplicates")
+        normalized[key] = sorted(_redact(item) for item in items)
+    if not normalized["selected_tests"]:
+        raise ValueError("evidence must identify at least one selected test")
+    if len(json.dumps(normalized, sort_keys=True).encode("utf-8")) > MAX_EVIDENCE_BYTES:
+        raise ValueError("evidence envelope exceeds the bounded schema limit")
+    return normalized
+
+
+def evidence_contract_digest(tasks: Mapping[str, Mapping[str, Any]]) -> str:
+    """Digest only immutable evidence requirements, excluding task progress."""
+    contract = []
+    for task_id, task in sorted(tasks.items()):
+        criteria = task.get("required_criteria", [])
+        commands = task.get("verification_commands", [])
+        allowed = task.get("allowed_paths", task.get("files", []))
+        if not isinstance(criteria, list) or any(not isinstance(item, str) or not item for item in criteria):
+            raise ValueError(f"task {task_id} required_criteria must be a list of non-empty strings")
+        if len(criteria) != len(set(criteria)):
+            raise ValueError(f"task {task_id} required_criteria contains duplicates")
+        if not isinstance(commands, list) or any(not isinstance(item, Mapping) for item in commands):
+            raise ValueError(f"task {task_id} verification_commands must be a list of mappings")
+        canonical_commands = []
+        command_ids = set()
+        for item in commands:
+            command_id, argv, criterion_ids = item.get("id"), item.get("argv"), item.get("criteria", [])
+            if not isinstance(command_id, str) or not command_id or not isinstance(argv, list) or not argv or any(not isinstance(arg, str) or not arg for arg in argv):
+                raise ValueError(f"task {task_id} has an invalid verification command")
+            if command_id in command_ids:
+                raise ValueError(f"task {task_id} has duplicate verification command IDs")
+            command_ids.add(command_id)
+            if not isinstance(criterion_ids, list) or any(not isinstance(value, str) or not value for value in criterion_ids):
+                raise ValueError(f"task {task_id} command criteria must be non-empty strings")
+            if len(criterion_ids) != len(set(criterion_ids)):
+                raise ValueError(f"task {task_id} command criteria contains duplicates")
+            canonical_commands.append({"id": command_id, "argv": argv, "criteria": sorted(set(criterion_ids))})
+        command_criteria = {criterion for command in canonical_commands for criterion in command["criteria"]}
+        if not set(criteria).issubset(command_criteria) or command_criteria - set(criteria):
+            raise ValueError(f"task {task_id} required criteria and command criteria must match")
+        contract.append({"task_id": task_id, "criteria": sorted(set(criteria)), "commands": sorted(canonical_commands, key=lambda command: command["id"]), "allowed_paths": sorted(set(str(path) for path in allowed))})
+    data = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
 
 
 def load_inventory(path: Path | str | None = None) -> dict[str, Any]:
@@ -747,11 +836,13 @@ def _probe_loaded_package(destination: Path) -> subprocess.CompletedProcess[str]
             "-c",
             (
                 "import runtime_capabilities as c; "
+                "import execute_plan_worker_registry as w; "
+                "assert callable(w.validate_provider_observation); "
                 "i=c.load_inventory(); "
                 "assert 'codex' in i['runtimes']; "
                 "a=c.resolve_adapter('codex', '.'); "
                 "assert callable(a.launch) and callable(a.resume); "
-                "print('loaded runtime registry and adapter probe: ok')"
+                "print('loaded runtime registry, worker reducer, and adapter probe: ok')"
             ),
         ],
         cwd=destination,
@@ -792,6 +883,7 @@ def stage_package(source_root: Path | str, target_root: Path | str) -> Path:
     for relative in (
         "execute_plan_runtime.py",
         "execute_plan_runtime_codex.py",
+        "execute_plan_worker_registry.py",
         "runtime_capabilities.py",
     ):
         shutil.copy2(ROOT / "scripts" / relative, runtime_dir / relative)

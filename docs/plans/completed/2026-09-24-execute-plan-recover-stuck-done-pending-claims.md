@@ -154,3 +154,9 @@ Files:
 - [x] Update `agents/skills/execute-plan/SKILL.md`: the readiness decision table's unresolved-blocker row references `recover-done-pending` as the bounded exit for a terminal worker's done-pending claim; the `recovering` orchestration state row and the Orchestrator Responsibilities recovery guidance name the operation and repeat the manual-manifest-edit prohibition [class: IMPLEMENTATION_REQUIRED]
 - [x] Run → expect GREEN: the focused class passes (18/18), the full runtime suite passes from `scripts/`, and the plan's Validation Commands block exits 0 end to end [class: REPOSITORY_TEST]
 - [x] Commit: `feat: recover-done-pending CLI operation with contract and skill coherence` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-24-done-pending-recovery-r1-low-findings.md: disposition folded into 2026-09-24-execute-plan-recover-stuck-done-pending-claims.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-24-execute-plan-recover-stuck-done-pending-claims.md: disposition folded into 2026-09-24-execute-plan-recover-stuck-done-pending-claims.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-20-execute-plan-done-boundary-forces-commits-on-verification-only-tasks.md: disposition folded into 2026-09-24-execute-plan-recover-stuck-done-pending-claims.md (2026-09-25); per-item file deleted.

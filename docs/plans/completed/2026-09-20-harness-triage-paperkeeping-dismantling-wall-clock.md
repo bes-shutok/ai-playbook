@@ -538,3 +538,8 @@ Files:
 - [x] Verify the consolidation end state: every import-level consumer still resolves (`python3 -c "import sys; sys.path.insert(0, 'scripts'); import skill_gate"` and the hub selftests), no lessons module retains a `__main__` dispatch (the G13 gate), and any caller the sweep still finds that cannot switch is reported rather than silently left on a dead entry path; run `python3 scripts/lessons.py selftest --all`; expect GREEN [class: REPOSITORY_TEST]
 - [x] Run the full python suite set from Evaluation Criteria and `bash scripts/check_maintenance_pins.sh`; expect GREEN [class: REPOSITORY_TEST]
 - [x] Commit: `scripts+skills: staging validator shrink and single lessons entry point` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-18-harness-wall-clock-speedups.md: disposition folded into 2026-09-20-harness-triage-paperkeeping-dismantling-wall-clock.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-18-harness-paperkeeping-triage-dismantle.md: disposition folded into 2026-09-20-harness-triage-paperkeeping-dismantling-wall-clock.md (2026-09-25); per-item file deleted.

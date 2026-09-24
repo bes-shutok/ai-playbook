@@ -291,3 +291,8 @@ Disposition (recorded here so the fold scope is auditable): rider budget-gate-pa
 - [x] Run, expect the G7 pins GREEN (they are green-today for the three attribution needles and red-today until the branch sentence lands): the Validation Commands block [class: REPOSITORY_TEST]
 - [x] Run the whole Validation Commands block and expect `VALIDATION OK` (all tasks landed) [class: REPOSITORY_TEST]
 - [x] Commit: `docs: not-intentional-divergence branch in the budget-guard protocol` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-18-maintenance-quota-aware-lane-decisions.md: disposition folded into 2026-09-20-quota-aware-scheduling-semantics.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-16-quota-aware-fire-time.md: disposition folded into 2026-09-20-quota-aware-scheduling-semantics.md (2026-09-25); per-item file deleted.

@@ -58,6 +58,8 @@ Before Step 0, in a repository that resolves the maintenance skill, run the rear
 
 Parallel agent sessions on the **same git repository** must not run `learn`, `docs-branch`, or project commits at the same time. Acquire an exclusive per-repo lock **before** Step 1.
 
+**Lock matrix (two lock families, one script):** the done lock stays keyed **per-worktree** (`git rev-parse --show-toplevel`) and serializes one checkout's done run end to end (sweep gates, learn, project commits); the merge lock (the `merge-*` commands of the same script) is keyed **per-repository** (the resolved git common dir, shared by every linked worktree of one repository) and serializes only shared-checkout critical sections: the Step 2 docs-branch sync and ad-hoc-worktree migration, plus landing critical sections owned by other workflows. Authoring work confined to separate worktrees requires neither lock: per-worktree done runs do not contend with each other, and their shared-checkout writes meet only inside the merge lock's critical sections. The lock commands, exit codes, and stale/steal semantics are owned by the `scripts/done-lock.sh` usage text (the merge lock's canonical home); the maintenance overlay's Merge landing lock paragraph (`agents/skills/maintenance/zcode.md`) mirrors the same semantics for the scheduler lanes. This skill links to both and does not restate them.
+
 1. From the project git root (`git rev-parse --show-toplevel`), run **`status`** first (non-blocking) so a held lock is visible before waiting.
 
 2. Acquire with a **short agent wait** (do not use the script default 7200s in agent sessions):
@@ -119,6 +121,39 @@ MARKER="$(cd "$(dirname "$MARKER")" && pwd)/$(basename "$MARKER")"
 printf '%s\n' "$(date -u +%s) ${REPO_TOP%/} $$" > "$MARKER" && printf 'run-start marker: %s\n' "$MARKER"
 ```
 
+**Run manifest:** immediately after the marker, write the run manifest record next to it under `{tmp_dir}/done-session/` (filename pattern `run-manifest-<run_id>.json`). The manifest is this run's ownership record: it carries a unique `run_id`, the marker filename it extends, the `start_commit` (HEAD at Step 0), the pre-existing dirt snapshot, the plan and review paths this run owns, the review candidates explicitly marked foreign, the `adopted_from` link (null unless an adoption was passed), and a `complete` flag written false. Resolve the sweep-gates lib repo-local first (a repo-local `scripts/done_sweep_gates_lib.py` wins; otherwise derive the deployed lib path from the sweep-gates script default), then invoke the writer:
+
+```bash
+REPO_TOP="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+LIB="$REPO_TOP/scripts/done_sweep_gates_lib.py"
+if [ ! -f "$LIB" ]; then
+  LIB="${DONE_SWEEP_GATES_SCRIPT:-$HOME/.ai-playbook/scripts/done_sweep_gates.sh}"
+  LIB="${LIB%done_sweep_gates.sh}done_sweep_gates_lib.py"
+fi
+WM_OUT="$(python3 "$LIB" write-manifest \
+  --owned-plan <plan-path-this-run-finalizes> \
+  --owned-review <review-staging-doc-this-run-finalizes> \
+  --foreign-review <peer-staging-candidate>)"
+printf '%s\n' "$WM_OUT"
+MANIFEST="$(printf '%s\n' "$WM_OUT" | sed -n 's/^manifest: //p')"
+RUN_ID="$(printf '%s\n' "$WM_OUT" | sed -n 's/^run_id: //p')"
+if [ -z "$MANIFEST" ] || [ -z "$RUN_ID" ]; then
+  echo "run manifest: writer left no manifest/run_id echo to capture; aborting Step 0" >&2
+  exit 1
+fi
+# Export the audit variables the owned-commits ledger append (Step 1)
+# enumerates from: MANIFEST and RUN_ID are parsed from the writer's echoed
+# "manifest:" and "run_id:" stdout lines; start_commit is read back from
+# the manifest JSON. Re-derive them the same way when re-exporting in
+# one-shot shells.
+START_COMMIT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["start_commit"])' "$MANIFEST")"
+printf 'start_commit: %s\n' "$START_COMMIT"
+```
+
+Pass `--owned-plan` once per plan this run finalizes, `--owned-review` once per review staging doc this run finalizes, and `--foreign-review` once per staging candidate the operator recognizes as a peer's artifact. For bulk answers the two affordances replace one-flag-per-path enumeration (F13 field witness: a reviews directory holding hundreds of prior-session staging docs): `--claim-none` asserts this run owns no staging doc of its own and marks every unclaimed candidate foreign (each recorded in the manifest's `foreign_review_paths` for audit; it conflicts with `--owned-review` and with an adopted manifest that owns staging docs, aborting with a named ownership-conflict error), and `--foreign-review-from <file>` bulk-loads foreign paths one per line from a file, merged with the same dedup as `--foreign-review`. Pass `--adopt <run_id>` only when the operator explicitly adopts a prior interrupted run's boundary; nothing is adopted implicitly. The writer enforces claim-or-foreign over every staging candidate on disk at Step 0: a candidate that is neither owned nor foreign aborts Step 0 with a named error and no manifest (the error names both bulk affordances), so classify every candidate before invoking. The write is fail-loud: an unwritable done-session directory aborts Step 0 with a clear error, mirroring the marker recipe's failure stance. Keep the echoed manifest path and run_id in chat context: they join the marker path as the run's audit record, and the owned-commits ledger rule (Step 1) plus the Step 6 finalize consume this record. Keep the exported `START_COMMIT` with them: an empty value there must skip the ledger append (below), never enumerate from an empty base. Treat the echo capture as part of the write: after the writer has run, an empty captured `MANIFEST` or `RUN_ID` must abort Step 0 with the block's named error, never leave the ledger append and the Step 6 finalize silently disabled.
+
+**Adopted-run re-derivation (adoption boundary):** an adopted interrupted run re-derives its remaining work against the current default branch before any staging: a fresh diff of the run branch tip versus the current default-branch tip, recomputed at adoption time, which is the what-would-transplanting-change view that exposes a stale-base inversion. The prior session's working-tree diff, index state, or exported patch is never transplanted into this checkout, because a stale-base diff re-applied onto an advanced default branch materializes as a reverse-squash revert set (witness: the 2026-09-25 rule29 restaging, recorded in the backlog archive). The adoption continues only after the re-derived work plan is recorded in the session notes beside the run manifest reference and the Step 3 Reverse-squash arm passes on the first staged set.
+
 Keep the echoed marker path in chat context as this run's audit record. The sweep gates derive the session window mechanically from the `run-start-*` markers under `{tmp_dir}/done-session/` (the newest content-confirmed marker is the current run; the newest strictly older one is the previous-run anchor), which is the mechanical counterpart of the echo: when fewer than two markers are content-confirmable at gate time, the window is unanchorable (conservative gating) and the docs-tmp-sweep gate prunes no `run-start-*` markers this run; never guess by recency. This rule is the Step 0 echo-loss fallback that the plan-readiness gate back-references.
 
 ## Step 1: Run Learn
@@ -126,6 +161,27 @@ Keep the echoed marker path in chat context as this run's audit record. The swee
 Invoke the `learn` skill now to extract lessons and update the documentation corpus before committing.
 
 **Learn-owned commits in this step:** learn may commit its own skills-repo artifacts during this step (its Step 1.8 backlog items and skill-placement edits); that is expected and does not double-commit, because Step 4 sees only non-learn leftovers plus the failed-capture set, and no-ops when clean.
+
+**Owned-commits ledger (Step 1 site; the same rule applies after every project commit from here on, Step 3 included):** after the learn-owned commits above and before the pre-docs sweep gate run, append every commit this run has created and not yet recorded to `{tmp_dir}/done-session/owned-commits-<run_id>.txt` (create the file if missing), so a multi-commit learn phase (backlog commit plus skill-placement commit) lands every sha, not only the newest. Enumerate with the last appended sha as the base, falling back to the Step 0 manifest's `start_commit` when the ledger is still empty; a run with no manifest from Step 0, or a manifest echo whose `start_commit` is missing or empty, skips the append with a one-line note (an empty BASE would make the range enumerate nothing and silently append no shas):
+
+```bash
+# RUN_ID and START_COMMIT come from the Step 0 manifest echo (the
+# run-manifest-<run_id>.json audit record); TMP_DIR from the Step 0 marker
+# block. Re-export all three from chat context in one-shot shells.
+if [ -z "${RUN_ID:-}" ]; then
+  echo "owned-commits: no run manifest from Step 0; ledger append skipped"
+elif [ -z "${START_COMMIT:-}" ]; then
+  echo "owned-commits: START_COMMIT missing from the Step 0 manifest echo; ledger append skipped"
+else
+  LEDGER="${TMP_DIR%/}/done-session/owned-commits-${RUN_ID}.txt"
+  touch "$LEDGER"
+  LAST="$(tail -n 1 "$LEDGER")"
+  BASE="${LAST:-${START_COMMIT}}"
+  git rev-list --reverse "${BASE}..HEAD" >> "$LEDGER"
+fi
+```
+
+The ledger is the gate-side record of which commits between the manifest's start commit and HEAD this run owns; keep it one sha per line and never edit a recorded line.
 
 **If `learn` reports a blocked state** (Step 6.6 user-corpus violation: a strict-tagged `UL#N` lesson is missing its `**Principle:** Family X` tag, or the gate script returned non-zero on the adopted corpus), release the lock via Step 6 and return `blocked` WITHOUT proceeding to Step 2 commit. `learn` is invoked here as a SKILL (a sub-procedure), not as a subprocess whose exit code this step checks, so the gate's block decision lives in `learn`'s Step 6.6 text and propagates here through `learn`'s returned state. The operator fixes the user corpus out-of-band (classify the listed `UL#N` via learn/generalize, or run `lessons.py adopt --tag-unclassified <user_corpus>` manually) before the next `done`.
 
@@ -141,7 +197,7 @@ bash "${DONE_SWEEP_GATES_SCRIPT:-${HOME}/.ai-playbook/scripts/done_sweep_gates.s
 
 Gates run in this order: plan-readiness, confluence-hygiene, doc-registry, backlog-inbox, review-thread closure (a session-level conditional gate the runner does not execute; apply it in-session per its bullet below before continuing), review-staging, vim-swap-sweep, docs-tmp-sweep. The runner derives every session-scoped input mechanically (it cannot read chat context): the session window anchors on the `run-start-*` markers under `{tmp_dir}/done-session/` (the newest content-confirmed marker is the current run, the newest strictly older one is the previous-run anchor, and fewer than two confirmable markers means an unanchorable window with conservative gating), and candidates come from `{tmp_dir}/done-session/plan-deliverables.txt` plus the porcelain and ignored-matching git arms. **Exit 0:** continue immediately to Step 2. **Failure:** every gate reports even after an earlier failure; fix what the report flags using the per-gate guidance below and re-run the runner until it exits 0.
 
-- **plan-readiness** (a gated plan's latest review does not cover its current bytes): refuse to finalize; require a fresh `review-plan` round (after any plan edit that changes the digest) before re-running the gate; passed, manifest-exempted, and archived plans have their deliverable lines pruned by the runner. A plan archived under the plans `rejected/` directory (an explicit decision against the work; see that archive's README) is not a gated candidate at all: the runner excludes it like a completed-plan archive and prunes only its own deliverable lines. **Deployment-gap signature (narrow):** a deployment gap is ONLY (a) the validator file itself missing or unopenable, or (b) a `ModuleNotFoundError` in the output. For either: stop and report the wiring gap, and never use the recorded-stop exception for it; manual remedy: `cp scripts/plan_readiness.py ~/.ai-playbook/scripts/` plus siblings (the script imports `validate_review_staging.py` and `facts_paths.py` from its own directory, so copy all three; the deployed `facts_paths.py` may be a symlink, keep it one, e.g. `cp -P`, do not dereference it into a second copy). Any OTHER non-zero exit that prints no `readiness FAILED:` line (validator crash, traceback, unexpected output) is NOT covered by that copy remedy: investigate the validator before re-running the gate. **Recorded-stop exception:** the only permitted way past a failed gate is when the user explicitly chooses to stop without finalization and that choice is recorded in the session log. In that case do not commit the plan deliverable: record the excluded plan path in the session log and, in this session's later commit-all steps, exclude exactly that path plus its review artifacts (the review Markdown and `.stats.json` sidecar under `{reviews_dir}`) when staging, then continue with the remaining hygiene steps and report the recorded stop in Step 7; also remove every line listing the excluded path from `{tmp_dir}/done-session/plan-deliverables.txt` so it does not reappear as a gate target.
+- **plan-readiness** (a gated plan's latest review does not cover its current bytes): refuse to finalize; require a fresh `review-plan` round (after any plan edit that changes the digest) before re-running the gate; passed, manifest-exempted, and archived plans have their deliverable lines pruned by the runner. The same validator also runs at authoring time as the structural-only pre-round gate (plans rule 29, `--pre-round`); a structural-clean pre-round pass means this exit gate re-proves only the review-record bindings (sidecar schema, source_kind, digest, verdict, zero blocking). A plan archived under the plans `rejected/` directory (an explicit decision against the work; see that archive's README) is not a gated candidate at all: the runner excludes it like a completed-plan archive and prunes only its own deliverable lines. **Deployment-gap signature (narrow):** a deployment gap is ONLY (a) the validator file itself missing or unopenable, or (b) a `ModuleNotFoundError` in the output. For either: stop and report the wiring gap, and never use the recorded-stop exception for it; manual remedy: `cp scripts/plan_readiness.py ~/.ai-playbook/scripts/` plus siblings (the script imports `validate_review_staging.py` and `facts_paths.py` from its own directory, so copy all three; the deployed `facts_paths.py` may be a symlink, keep it one, e.g. `cp -P`, do not dereference it into a second copy). Any OTHER non-zero exit that prints no `readiness FAILED:` line (validator crash, traceback, unexpected output) is NOT covered by that copy remedy: investigate the validator before re-running the gate. **Recorded-stop exception:** the only permitted way past a failed gate is when the user explicitly chooses to stop without finalization and that choice is recorded in the session log. In that case do not commit the plan deliverable: record the excluded plan path in the session log and, in this session's later commit-all steps, exclude exactly that path plus its review artifacts (the review Markdown and `.stats.json` sidecar under `{reviews_dir}`) when staging, then continue with the remaining hygiene steps and report the recorded stop in Step 7; also remove every line listing the excluded path from `{tmp_dir}/done-session/plan-deliverables.txt` so it does not reappear as a gate target.
 - **confluence-hygiene:** never delete `*-cf-out.md` until audit confirms the content is already represented in the docs hierarchy or is a stale duplicate. NEEDS_UPGRADE: promote first (mirror at `docs/history/context/confluence/{page_id}-{slug}.md` with standard frontmatter, manifest `layer2_targets`, or the spike sync ledger). UNMAPPED: route manually (new manifest entry, mirror file, or Layer 2 doc); do not delete. On `validate` failure: fix the mirror frontmatter and filenames, the manifest rows, and the mirror index; after a live push, refresh mirror bodies, bump manifest versions, and set `sync_status: synced` in the same session (never leave truncated wiki pages; republish the full body). **Deployment gap:** when `confluence-mirror-hygiene.sh` is absent from every resolved path while a run-when trigger is live, the gate fails rc 1 as a deployment gap; deploy the script to the runtime home `scripts/` directory and re-run, and never use the recorded-stop exception for a deployment gap.
 - **doc-registry:** warn-only findings (legacy files without registry entries, multiply-claimed srcs) do not block: report them, and clear a standing-override's audit note after the licensed write lands. Hard findings (registry parse errors, invalid `sot`/`state` values, malformed audit-note tokens, duplicate identities or SOT declarations, successor cycles, unprotected writes to completed-history paths): fix the registry row or move the change into the living SOT instead of editing a completed artifact. An absent validator is fail-open (reported once, non-blocking). **Stale-deployment signature:** a doc-registry failure printing `invalid state value` on a state value the repo-copy validator accepts is a stale runtime-home validator, not a registry defect: redeploy with `cp scripts/doc_registry_validator.py ~/.ai-playbook/scripts/` and re-run the gate; the same redeploy covers the silent direction (a pre-fix deployed copy lacks the rejected-archive immutability and licensed-transition coverage, so a body edit or deletion under a rejected archive passes the gate silently until redeploy); never route a stale deployment to the investigate path or the recorded-stop exception. The runner's check-writes stdin union carries git's change-type letters verbatim (porcelain `XY PATH` rows with renames as `R  old -> new`, the committed-since-session-start name-status rows, and ignored files as bare rows); the letters are what bind the registered-src exemption to the archive transition, so the union is never downgraded to name-only paths.
 - **backlog-inbox:** genuine backlog material moves into the resolved `{backlog_dir}` per `receiving-review` Backlog capture (rename to `YYYY-MM-DD-<slug>.md` when needed); a legitimate Layer 2 doc that merely trips the filename shape is renamed to a compliant name, asking the user when the run is interactive; never a silent move that misfiles real content.
@@ -158,7 +214,33 @@ Invoke the `docs-branch` skill now. When the session runs in an ad-hoc worktree,
 1. Snapshot all configured gitignored shadow paths (`docs/`, `.github/docs/`, `.ai-playbook/`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `COPILOT.md`, plus repo `extra_shadow_dirs`) while leaving the live checkout on the current branch.
 2. Sync those files to the permanent `docs` orphan branch through a temporary `git worktree`, creating it if it doesn't exist.
 
-**After docs-branch completes, immediately continue to Step 2.5.** Do not stop or wait for user input; the workflow is continuous and all steps should execute in sequence.
+**Repo merge lock (acquire before the migration and the sync):** the worktree migration and the docs-branch sync are shared-checkout critical sections: the migration writes the main checkout's review staging docs and session logs, and the sync writes the `docs` orphan branch that every worktree of the repository shares. Both run under the repository-keyed merge lock, the `merge-*` family of the same lock script; its canonical semantics (per-repository keying from the git common dir, bounded wait, token-fenced release from the exported `MERGE_LOCK_DIR` and `MERGE_LOCK_TOKEN`) live in the `scripts/done-lock.sh` usage text, mirrored for the scheduler lanes by the maintenance overlay's Merge landing lock paragraph. Acquire once per done run, before the migration when the session runs in an ad-hoc worktree and before the docs-branch sync in every mode, and hold the exports across the migration and the sync:
+
+```bash
+LOCK_SCRIPT="${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}"
+if ! MERGE_EXPORTS="$("$LOCK_SCRIPT" merge-wait-acquire --label done-docs-sync --max-wait 300)"; then
+  "$LOCK_SCRIPT" merge-status >&2
+  echo "merge-lock: blocked after 300s; a landing or a peer docs sync holds the repo merge lock" >&2
+  exit 2
+fi
+eval "$MERGE_EXPORTS"
+# Print the exports: the release runs in a LATER shell call whose env is
+# fresh, and merge-release-repo refuses to source the session fence, so the
+# token must survive here in chat context to be re-exported there. That
+# later shell no longer has this LOCK_SCRIPT variable; the release command
+# re-derives the script path from the same DONE_LOCK_SCRIPT override variable
+# (same default), so
+# only MERGE_LOCK_DIR and MERGE_LOCK_TOKEN need to survive.
+printf '%s\n' "$MERGE_EXPORTS"
+if [[ -z "${MERGE_LOCK_DIR:-}" || -z "${MERGE_LOCK_TOKEN:-}" ]]; then
+  echo "merge-lock: acquire succeeded without lock exports" >&2
+  exit 1
+fi
+```
+
+On timeout, return `blocked` keeping every artifact of the run (run-start marker, run manifest, owned-commits ledger, created commits, and an ad-hoc worktree with its review docs), mirroring the Step 0 done-lock stance, and release the done lock per Step 6 before reporting. In one-shot shell calls, pin `MERGE_LOCK_HOLDER_PID` to a long-lived process (for example the agent runtime), the same pinning discipline as the done lock's Variant B, so the hold survives the acquiring call and cannot be reclaimed mid-section.
+
+**After docs-branch completes, run the verification below, release the merge lock per the release rule at the end of this step, then immediately continue to Step 2.5.** Do not stop or wait for user input; the workflow is continuous and all steps should execute in sequence.
 
 > All implementation details, edge cases, and the full bash script live in `docs-branch/SKILL.md`. Refer there for the canonical script when executing.
 
@@ -189,6 +271,17 @@ If any gitignored path that existed before docs-branch is now missing, restore i
 git checkout refs/heads/docs -- <missing-path>
 git restore --staged <missing-path>
 ```
+
+**Merge-lock release (every exit path):** release with `merge-release-repo` using the exported `MERGE_LOCK_DIR` and `MERGE_LOCK_TOKEN`, re-exporting both from the acquire output in the releasing shell (the release requires the env and refuses to source the session fence). The release is explicit, never a stray-trap, mirroring the Step 0 done-lock Variant B discipline, and it runs on EVERY exit path: after the verification above on success; on any migration or sync failure, before reporting the failure; and as interruption cleanup when the run is interrupted while holding the lock (the explicit release from session context; when the session itself died holding the lock, name the held label `done-docs-sync` and `MERGE_LOCK_DIR` in the outcome so the holder state is inspectable):
+
+The release command re-derives the lock script path itself (same default and the same `DONE_LOCK_SCRIPT` override variable the acquire block resolves, falling back to `~/.ai-playbook/scripts/done-lock.sh`), because the acquire shell's `LOCK_SCRIPT` variable does not survive into the later releasing shell; only `MERGE_LOCK_DIR` and `MERGE_LOCK_TOKEN` must be re-exported from the acquire output. The same command (and the same default) is the interruption-cleanup arm: run it verbatim from session context when the run is interrupted while holding the lock.
+
+```bash
+MERGE_LOCK_DIR="${MERGE_LOCK_DIR:?}" MERGE_LOCK_TOKEN="${MERGE_LOCK_TOKEN:?}" \
+  "${DONE_LOCK_SCRIPT:-${HOME}/.ai-playbook/scripts/done-lock.sh}" merge-release-repo
+```
+
+If the release itself fails (token mismatch or missing env), run `merge-status`, report the holder state, and never re-acquire to fix it.
 
 ## Step 2.5: Roll Back Formatting-Only Changes
 
@@ -308,9 +401,13 @@ python3 "${LESSON_SCOPE_SCRIPT:-${HOME}/.ai-playbook/scripts/check_lesson_scope.
    4. **Commit boundary:** the project witness and the company guidelines change are committed in the same pass ONLY when both were intentionally produced by the same workflow (`learn` placed them deliberately). done must not move or duplicate lessons to reconcile placements.
 4b. **Session-touched project lessons corpus (non-ignored):** After Step 1 (`learn`), if this session created or updated the project lessons file (`docs/maintenance/development_lessons.md`, or `PROJECT_CORPUS_REL` from `lessons_recall.py`) and `git check-ignore` does **not** match it, **stage and commit it on the feature branch** with the other session changes. Untracked (`??`) is not a skip reason. Syncing the same path to the orphan `docs` branch in Step 2 does **not** replace the feature-branch commit. Only gitignored corpora stay docs-branch-only.
 5. Stage relevant non-ignored files (including 4b when it applies). Prefer adding specific files by name; never a directory-wide add (no `git add -A` or `git add .`) unless the user explicitly requests it. On a shared checkout, also give the commit itself an explicit pathspec (`git commit -m "..." -- <paths>`), because a peer's staged-but-uncommitted entries sit in the shared index and a pathspec-less commit sweeps them (witnessed 2026-09-18: a learn commit naming its own two files swept a peer's staged backlog item). The inverse is equally binding: a pathspec commit builds from HEAD plus the named paths only, so it excludes your own staged changes outside the pathspec. After `git mv`, pass both the old and the new paths (or, when the index holds only your staged renames, commit the index state with a plain `git commit`) and verify the commit with `git show --stat -M` records the rename rather than a bare create. And immediately before any `--amend` on a shared branch, re-run `git log -1 --oneline`: a peer commit landing between your commands turns the amend into a rewrite of their commit (new sha under their message, your staged leftovers inside); if that happened, verify the tree and stop rewriting (witnessed 2026-09-18, see user-corpus lesson #371).
+
+**Reverse-squash arm (immediately before each commit):** after staging this session's files and immediately before each `git commit`, probe the guard copy (test -f on the repo-local `scripts/reverse_squash_guard.py` first, then on the deployed `$HOME/.ai-playbook/scripts/reverse_squash_guard.py`) and run the probed copy with `check-staged` from the repo root (`python3 scripts/reverse_squash_guard.py check-staged` when the repo-local probe hit); exit 1 means the staged set carries a reverse-squash signature (an archive-dir egress deletion or rename, or a diffstat mirror of one commit reachable from HEAD): print the detector output, unstage the refused set, and rebuild it from the intended edits; never commit the refused set; when the refused set is transplanted stale dirt rather than this session's intended edits, stop and surface the conflict for reconciliation in the Step 7 outcome report instead of restaging; when the findings are mirror-only and the deliberate-revert intent is recorded in the session notes, re-running with `--ack <sha>` naming the mirrored commit suppresses the mirror finding, and the acknowledged sha is written to the session notes at ack time and reported in the Step 7 outcome report (archive-egress findings are never ackable). Exit 2 is a tool failure: stop and report. When neither probe hits (cold start), print `reverse-squash guard absent; check skipped` and continue.
+
 6. Write a concise commit message. If there is a story key, prefix with `[<STORY-KEY>]`; otherwise use a plain descriptive subject. Focus on the "why" not the "what". When the item 4a audit fired the drift witness, the commit body includes the `lesson-scope-audit:` body line exactly as specified in item 4a. When the audited corpus path is gitignored (no Step 3 corpus commit exists), the witness append on the docs branch carries the line instead; the append failure is a manual follow-up reported in the Step 7 outcome report and never blocks the Step 3 commit path.
 7. Commit using a HEREDOC. **Never** add `Co-Authored-By:` or `Co-authored-by:` trailers or use `git commit --trailer` for agent attribution. See user `AGENTS.md` (Git Commit Trailer Policy). If your IDE adds co-author trailers automatically, disable agent attribution in its settings.
 8. Run `git status` after the commit to confirm success.
+9. **Owned-commits ledger append (Step 3 site):** after each project commit in this step, apply the Step 1 owned-commits ledger rule (same `owned-commits-<run_id>.txt` file, same `git rev-list --reverse` enumeration with the last appended sha as the base) so every commit this step creates is recorded; skip with the one-line note when the run has no manifest or its echo lacks `start_commit`.
 
 ### Commit message format
 
@@ -377,6 +474,32 @@ Do not push. These are local-only docs repositories.
 
 **Always run Step 6 before Step 7**, including when Steps 1–5 failed or returned early. This lets a waiting parallel `done` resume.
 
+**Manifest finalize (immediately before the release):** set the run manifest's `complete` flag to true so this run is not left looking interrupted; a run that dies before Step 6 leaves `complete` false, which is the interrupted-run signal the next Step 0 reports (a retry continues an interrupted run's boundary only through an explicit `adopted_from` adoption). Resolve `$LIB` exactly as in Step 0 (a repo-local `scripts/done_sweep_gates_lib.py` wins; otherwise derive the deployed lib path from the sweep-gates script default) and finalize with the Step 0 run_id. A missing manifest is tolerated with a one-line note and never blocks the release:
+
+```bash
+REPO_TOP="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+LIB="$REPO_TOP/scripts/done_sweep_gates_lib.py"
+if [ ! -f "$LIB" ]; then
+  LIB="${DONE_SWEEP_GATES_SCRIPT:-$HOME/.ai-playbook/scripts/done_sweep_gates.sh}"
+  LIB="${LIB%done_sweep_gates.sh}done_sweep_gates_lib.py"
+fi
+# RUN_ID from the Step 0 manifest echo (chat context), same re-export
+# discipline as the lock token.
+if [ -z "${RUN_ID:-}" ]; then
+  echo "finalize-manifest: no run manifest from Step 0; nothing to finalize"
+else
+  # The lib answers exit 0 with a note for a run without a manifest (the
+  # only nothing-to-finalize path); any non-zero exit is a real failure and
+  # must abort, never be masked as "nothing to finalize".
+  python3 "$LIB" finalize-manifest --run-id "$RUN_ID"
+  finalize_rc=$?
+  if [ "$finalize_rc" -ne 0 ]; then
+    echo "finalize-manifest: FAILED (exit $finalize_rc); the run manifest finalize did not complete" >&2
+    exit "$finalize_rc"
+  fi
+fi
+```
+
 From the project git root, release with **`DONE_LOCK_DIR` and `DONE_LOCK_TOKEN` from your Step 0 acquire** (re-export from that tool output if the shell lost env). In Variant B environments re-export both values from your Step 0 acquire output (chat context) before releasing. `release-repo` requires those env vars and refuses to load the shared session file. The lock session/metadata shape is token-only as of the 2026-09-11 done-lock change; no generation export is involved:
 
 ```bash
@@ -401,6 +524,7 @@ If release fails (token mismatch, env missing), run `status` from the project ro
 - Skills / shared docs repos: commits created or none.
 - Lock: confirm `status` shows **free** after Step 6.
 - If `blocked` at Step 0, learn, or the Step 3 item 4a lesson scope audit: state why and what the user should run (`stale-clean`, fix corpus, classify the duplicated lesson, retry).
+- Turn-end reason: in the run's final report, when the session executed under a standing queue-drain directive (recorded in the orchestrator's handoff context or the session's standing directive to execute plans), the report states the turn-end reason as a guard fire (a quota pause or near-reset with the Budget gate's constants on the interactive lane, a landing-gate hold reported by `scripts/done-lock.sh` merge-status, a lane hold from the scheduler guards, provider rate pressure with its structured rate-limited end) or an empty queue (no digest-intact open plan remains); a user interrupt or explicit abort is always sanctioned as well, and a request for the user to confirm starting the next plan is never a sanctioned turn end under such a directive.
 
 When the session used a passive review workflow, distinguish local finalization from
 review finalization. Before reporting completion, re-check the live review state and
@@ -424,7 +548,7 @@ Each execute-plan `done` sub-agent still runs Step 0 and Step 6. Sequential task
 **Batch implement launches (Step 1.2 batch contract):** when the orchestrator launched several file-disjoint tasks as one batch, `done` still runs **per member task, in document order**, never once for the batch. Each member's `done` reads only **its own** `task-<N>-implement.log.md` as the preceding-step log, exactly as the single-task flow does. The member's done staging receipt is **member-scoped**: the driver's claim-group protocol fences the handoff to that member's own canonical allowed paths against its moving baseline (the pre-batch launch baseline for the first member; the immediately preceding member's commit for later members, r1 F27), so a member done that touches another member's file is rejected by the driver before any commit is recorded. Members between the first and the last advance only through the driver's typed `resume_member` action on the group's one anchor session; the batch never produces a batch-level commit, and the orchestrator's generic next-task claim stays suppressed until the group closes. **Parallel-group launches (Step 1.2 parallel-group contract):** the per-member rule carries over when the members implemented concurrently instead: each member has its own session, claim, policy token, and `task-<N>-implement.log.md`, and per-member `done` still runs one at a time in document order with the same member-scoped receipt, so the group closes on the last member commit with no group-level commit.
 
 ### With `review-staging` skill
-The pre-docs sweep gate run's review-staging gate validates session-touched staging docs under `{reviews_dir}/` before docs-branch sync (candidates: porcelain plus ignored-matching paths restricted to the session window, filtered by the validator's `is_staging_review_path`; include `*review*.md`, PR staging (`*-PR-*` / `PR-<n>-...`), and any path the predicate accepts, never only `*review*.md`). Complete Metadata, Review Statistics, and Findings with Comment/Analysis before continuing; do not sync stub staging docs.
+The pre-docs sweep gate run's review-staging gate validates this run's staging docs under `{reviews_dir}/` before docs-branch sync (candidates: `manifest-owned` review paths from the Step 0 run manifest when one is present, with the session-window porcelain plus ignored-matching fallback when it is not, filtered by the validator's `is_staging_review_path`; staging docs the manifest does not claim are reported as foreign and preserved, never validated as this run's own; include `*review*.md`, PR staging (`*-PR-*` / `PR-<n>-...`), and any path the predicate accepts, never only `*review*.md`). Complete Metadata, Review Statistics, and Findings with Comment/Analysis before continuing; do not sync stub staging docs.
 
 ### With `receiving-review` skill (review-thread closure gate)
 `receiving-review`'s marker duty is the provider: a passive-review session writes the review-thread marker at feedback-processing start and keeps per-thread dispositions in it. `done` is the gate consumer: the pre-docs sweep's review-thread-closure gate runs `scripts/review_thread_gate.py` only for a marker whose recorded session identity matches the current session, failing closed while closure is not established. This skill does not restate the marker schema or reply idempotence rules (owned by `receiving-review`).
@@ -435,6 +559,7 @@ The pre-docs sweep gate run's docs-tmp-sweep gate sweeps `{tmp_dir}` entries who
 ## Rules
 
 - Always acquire the Step 0 project lock before learn or any project-side commit steps; always release it in Step 6 (`release-repo` from project git root).
+- Wrap the Step 2 ad-hoc-worktree migration and docs-branch sync in the repository-keyed merge lock (`merge-wait-acquire --label done-docs-sync --max-wait 300`) and release it with `merge-release-repo` on every exit path; never enter either critical section unlocked, and never re-acquire to fix a failed release (run `merge-status` and report the holder state instead).
 - Never skip Step 6 or Step 7, even for "just commit" or empty working tree runs.
 - Always run learn before committing; lessons must be captured first.
 - Never skip the learn step even if the user says "just commit".

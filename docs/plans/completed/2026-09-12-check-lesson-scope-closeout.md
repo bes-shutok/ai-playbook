@@ -199,3 +199,8 @@ Files:
 - [x] exception confirmed by user: "Standing pre-authorization: accept all recommended options and suggestions throughout without asking me." (2026-09-12 scheduled authoring prompt, automation-c1c77b40); item: create the runtime validator symlink; target/environment: `~/.ai-playbook/scripts/` on the machine running execution; confirmation time/session: 2026-09-12, authoring session for this plan; why executable now: the repo copy exists at `scripts/check_lesson_scope.py`, the runtime dir exists on this machine with the all-symlink registry model (23 sibling symlinks verified 2026-09-12), and the consumer (done 4a) runs on this machine; completion evidence: `test -L` plus the fixture trio through the runtime path exiting 0/1/2, both in this task's checklist and in Validation Commands check 5.
 - [x] Verify with `test -L` and `readlink` that the path is a symlink resolving into the repo checkout (Validation Commands check 5 does this fail-closed).
 - [x] Run the full Validation Commands block; expect exit 0 end to end including the runtime fixture trio.
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-12-check-lesson-scope-runtime-deployment.md: disposition folded into 2026-09-12-check-lesson-scope-closeout.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-12-check-lesson-scope-residual-hardening.md: disposition folded into 2026-09-12-check-lesson-scope-closeout.md (2026-09-25); per-item file deleted.

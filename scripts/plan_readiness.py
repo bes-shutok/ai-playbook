@@ -260,8 +260,24 @@ def _strip_fences(text: str) -> str:
     inline triple backtick can never pair with a later fence opener to
     delete real content.
     """
+    stripped, _unclosed = _scan_fences(text)
+    return stripped
+
+
+def _scan_fences(text: str) -> tuple[str, int | None]:
+    """Fence scanner core shared by ``_strip_fences`` and the balance probe.
+
+    Returns ``(stripped_text, unclosed_opener_line)``: the stripped text is
+    byte-identical to what ``_strip_fences`` has always produced, and
+    ``unclosed_opener_line`` is the 1-based source line number of an opener
+    that never closed (``None`` when every fence closes). The scanner
+    semantics below are the ones ``_strip_fences`` documents; this core
+    only adds the opener line bookkeeping.
+    """
     out = []
     fence = None  # (fence character, opener run length) when open
+    opener_line: int | None = None
+    line_no = 0
     # r5 F7: split on "\n" ONLY — splitlines() also splits on CR, VT, FF,
     # and the Unicode separators U+0085/U+2028/U+2029, letting a separator
     # embedded inside a fence-character run fabricate a parser-line closer.
@@ -270,6 +286,7 @@ def _strip_fences(text: str) -> str:
     # (a match-only strip would leave the "\r" in the emitted line and
     # falsely reject CRLF plans at ``[ \t]*$`` anchors).
     for raw in text.split("\n"):
+        line_no += 1
         line = raw[:-1] if raw.endswith("\r") else raw
         stripped = line.lstrip()
         lead_ws = line[: len(line) - len(stripped)]
@@ -285,6 +302,7 @@ def _strip_fences(text: str) -> str:
                 m = None
             if m:
                 fence = (m.group(1)[0], len(m.group(1)))
+                opener_line = line_no
             else:
                 out.append(line)
             continue
@@ -295,8 +313,28 @@ def _strip_fences(text: str) -> str:
             and len(m.group(1)) >= fence[1]
         ):
             fence = None
+            opener_line = None
         # Any other line is fence content: dropped, not emitted.
-    return "\n".join(out)
+    return "\n".join(out), opener_line
+
+
+def fence_balance_problem(plan_text: str) -> str | None:
+    """Reason when the document carries an unclosed fence delimiter line.
+
+    Both readiness entries surface this BEFORE any probe evaluates the
+    stripped text: an unterminated fence makes ``_strip_fences`` drop
+    everything it swallowed, so probes would silently score only the
+    document prefix. The reason names the offending opener's 1-based line
+    number (the same scanner the stripper uses, so the two can never
+    disagree about balance).
+    """
+    _stripped, opener_line = _scan_fences(plan_text)
+    if opener_line is None:
+        return None
+    return (
+        f"unclosed fence opener at line {opener_line} (no matching "
+        f"closer); refusing to evaluate probes over truncated text"
+    )
 
 
 def decision_marker_problem(plan_text: str) -> str | None:
@@ -1126,6 +1164,17 @@ def evaluate_readiness(
         plan_bytes = resolved.read_bytes()
     except OSError as exc:
         return False, f"cannot read plan bytes to compute digest: {exc}"
+    # Structural fence-balance gate (unconditional, before ANY probe or the
+    # digest gate evaluates the plan): an unterminated fence makes the
+    # stripper drop everything it swallowed, so probes would silently score
+    # only the document prefix. Decode defensively here: an undecodable plan
+    # keeps its own later reason family.
+    try:
+        _fence_problem = fence_balance_problem(plan_bytes.decode("utf-8"))
+    except UnicodeDecodeError:
+        _fence_problem = None
+    if _fence_problem is not None:
+        return False, _fence_problem
     expected_digest = vrs.compute_source_digest("plan", plan_bytes)
 
     # 3. Shared sidecar gate: the SAME validation the staging validator runs
@@ -1347,6 +1396,92 @@ def run_sweep(reviews_dir: Path) -> int:
     return 0
 
 
+def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
+    """Structural-only pre-round authoring gate (plans rule 29).
+
+    Runs the four review-record-independent probes over the plan bytes in
+    gate order (``decision_marker_problem``, ``review_scope_problem``,
+    ``plan_ownership_problem``, ``scope_classification_problem``) with NO
+    sidecar-date gating and NO review-record consultation: the tolerated
+    no-review-artifact/missing-sidecar class is respected by construction
+    (this function never opens ``reviews_dir`` or any sidecar). All clean
+    prints the OK line and exits 0; the FIRST failing condition prints
+    ``readiness PRE-ROUND FAILED: <reason>`` to stderr and exits 1.
+
+    The first-step path semantics (directory, missing, outside plans_dir,
+    rejected archive) restate ``evaluate_readiness`` step 1 with its exact
+    reason strings so both invocations report the same first-step failure
+    for the same input; the shared gate itself is untouched (additive
+    branch only). Plan bytes must decode as UTF-8; the decode failure
+    carries its own reason here because the full gate's wording is tied to
+    its date-gated probes.
+    """
+    plans_dir = plans_dir.expanduser().resolve()
+    resolved = plan_path.expanduser().resolve()
+
+    # Mirror evaluate_readiness step 1 exactly: same checks in the same
+    # order, and byte-identical reason strings.
+    reason: str | None = None
+    if resolved.is_dir():
+        reason = f"plan path is not a file: {resolved}"
+    elif not resolved.is_file():
+        reason = f"plan file does not exist: {resolved}"
+    else:
+        try:
+            rel_to_plans = resolved.relative_to(plans_dir)
+        except ValueError:
+            reason = (
+                f"plan file resolves outside plans_dir: {resolved} "
+                f"is not under {plans_dir}"
+            )
+        else:
+            # Rejected archive: same exclusion as the full gate's step 1.
+            if rel_to_plans.parts and rel_to_plans.parts[0] == "rejected":
+                reason = (
+                    f"plan file sits under the rejected archive directory "
+                    f"({plans_dir / 'rejected'}): excluded from active-plan "
+                    f"readiness"
+                )
+    if reason is not None:
+        print(f"readiness PRE-ROUND FAILED: {reason}", file=sys.stderr)
+        return 1
+
+    try:
+        plan_text = resolved.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        print(
+            f"readiness PRE-ROUND FAILED: cannot read plan bytes (not "
+            f"valid UTF-8): {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Gate order, first problem wins; each probe stays the single owner
+    # of its check (no logic re-implemented here). The fence-balance probe
+    # runs FIRST: an unterminated fence makes the stripper drop everything
+    # it swallowed, so no later probe may evaluate the truncated text.
+    problem = fence_balance_problem(plan_text)
+    if problem is None:
+        problem = decision_marker_problem(plan_text)
+    if problem is None:
+        problem = review_scope_problem(plan_text)
+    if problem is None:
+        problem = plan_ownership_problem(
+            plan_text, repo_root(plans_dir.parent)
+        )
+    if problem is None:
+        problem = scope_classification_problem(plan_text)
+    if problem is not None:
+        print(f"readiness PRE-ROUND FAILED: {problem}", file=sys.stderr)
+        return 1
+
+    print(
+        "readiness PRE-ROUND OK: structural checks clean "
+        "(review record not consulted)"
+    )
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -1383,7 +1518,22 @@ def main(argv: list[str] | None = None) -> int:
         "anomalies (Summary text contains ready= but the total rule finds "
         "no verdict token); exit 0 when none, exit 1 listing them",
     )
+    parser.add_argument(
+        "--pre-round",
+        action="store_true",
+        help="Run the structural-only pre-round gate (plans rule 29) over "
+        "the plan: the four review-record-independent probes with no "
+        "sidecar-date gating and no review-record consultation",
+    )
     args = parser.parse_args(argv)
+
+    # Parse-time mutual exclusion (plans rule 29): --pre-round composes
+    # with neither --selftest nor --sweep; the combination is a usage
+    # error (exit 2) decided before any mode runs.
+    if args.pre_round and args.selftest:
+        parser.error("--pre-round must not be combined with --selftest")
+    if args.pre_round and args.sweep:
+        parser.error("--pre-round must not be combined with --sweep")
 
     compat_error = _check_sibling_compat()
     if compat_error is not None:
@@ -1441,6 +1591,12 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+
+    if args.pre_round:
+        # Structural-only pre-round gate (plans rule 29): probes over the
+        # plan bytes only; the review record is never consulted. The full
+        # gate below is untouched (additive branch only).
+        return run_pre_round(anchor_at_root(args.plan_path), plans_dir)
 
     # The plan-path argument anchors like relative facts values: CWD
     # PREFERENCE first (a path that exists relative to the process cwd wins,
@@ -2465,8 +2621,10 @@ def _selftest_decision_marker(plans_dir: Path, reviews_dir: Path, check) -> None
             "missing decision-points trailer",
         ),
         # (r2 F1): an unterminated fence
-        # fails CLOSED: the fence-state parser stays open to end of input
-        # and drops everything it swallowed.
+        # fails CLOSED. Since the fence-balance gate landed, the FIRST
+        # failure is the fence-balance probe naming the opener line (the
+        # trailer probe never sees the truncated text anymore); the arm
+        # still pins fail-closedness at the same gate entry.
         (
             "trailer_unterminated_fence_fails",
             (
@@ -2476,7 +2634,7 @@ def _selftest_decision_marker(plans_dir: Path, reviews_dir: Path, check) -> None
             ),
             "2026-09-08",
             False,
-            "missing decision-points trailer",
+            "unclosed fence opener at line 7",
         ),
         # (r2 F1): a fenced
         # ``## `` heading line must not truncate the section; a real
@@ -2692,7 +2850,7 @@ def _selftest_decision_marker(plans_dir: Path, reviews_dir: Path, check) -> None
             ),
             "2026-09-08",
             False,
-            "missing decision-points trailer",
+            "unclosed fence opener at line 3",
         ),
         # (r4 F1): a closer line
         # carrying info text (```` ``` note ````) is fence CONTENT, not a
@@ -4530,6 +4688,178 @@ def _selftest_scope_classification(
     _clean_reviews_dir(reviews_dir)
 
 
+def _selftest_pre_round(
+    root: Path, plans_dir: Path, reviews_dir: Path, check
+) -> None:
+    """Pre-round family: the structural-only ``--pre-round`` invocation.
+
+    The fixture text mirrors the section order the four structural
+    probes read: a ``# Plan:`` title, ``## Assumptions`` closing with
+    the plain none-remain trailer line, the ``### Task 1`` section
+    (``Files:`` list matching the Review Scope entries, every checklist
+    item classified, including the per-task Commit line), and only then
+    the ``## Review Scope`` section. The order is load-bearing:
+    ``md_section`` ends a ``##`` section only at the next ``## ``
+    heading, so a Review Scope section placed before the task section
+    swallows it and the path-kind probe misreads the Production-code
+    path as Documentation-listed. The composed text is proven clean by
+    direct probe calls before any CLI arm runs; the CLI arms pin the
+    pre-round exit contract: structural probes only (the tolerated
+    no-review-artifact/missing-sidecar class never blocks), a stripped
+    classification tag blocks, and ``--pre-round`` composes with neither
+    ``--selftest`` nor ``--sweep`` (parse-time usage error).
+
+    Every CLI invocation goes through a local SystemExit-capturing
+    wrapper: argparse raises ``SystemExit`` through
+    ``_selftest_run_main`` (usage errors, and until the ``--pre-round``
+    mode exists its unrecognized-option error too); the wrapper catches
+    it and uses ``exc.code`` as the rc. The temp facts block is removed
+    on exit so the later CLI family's fresh ``.ai-playbook`` creation
+    stays valid.
+    """
+    trailer = "Decision points requiring a grill: none remain."
+    commit_item = (
+        "- [ ] Commit: `feat: pre-round structural gate` "
+        "[class: IMPLEMENTATION_REQUIRED]"
+    )
+
+    def _pre_round_clean_plan_text() -> str:
+        return (
+            "# Plan: pre-round fixture\n\n"
+            f"## Assumptions\n\n{trailer}\n\n"
+            "### Task 1: Create the pre-round gate\n\n"
+            "Files:\n\n"
+            "- scripts/pre_round_gate.py *(new)*\n"
+            "- docs/pre-round-gate.md *(new)*\n\n"
+            "- [ ] Add the `scripts/pre_round_gate.py` gate behind the "
+            "`--pre-round` flag. [class: IMPLEMENTATION_REQUIRED]\n"
+            f"{commit_item}\n\n"
+            "## Review Scope\n\n"
+            "**Production code:**\n\n"
+            "- scripts/pre_round_gate.py *(new)*\n\n"
+            "**Documentation:**\n\n"
+            "- docs/pre-round-gate.md *(new)*\n"
+        )
+
+    def run_main(argv: list[str]) -> tuple[int, str, str]:
+        # argparse raises SystemExit through _selftest_run_main; the
+        # wrapper catches it and uses exc.code as the rc.
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                rc = main(argv)
+            except SystemExit as exc:
+                rc = exc.code
+        return rc, out.getvalue(), err.getvalue()
+
+    plan_text = _pre_round_clean_plan_text()
+    plan = plans_dir / "2026-09-01-pre-round-feature.md"
+    plan.write_text(plan_text, encoding="utf-8")
+
+    # Fixture proof, direct probe calls (no CLI): the composed text must
+    # pass all four structural probes before the CLI arms run.
+    probe_reasons = {
+        "decision_marker": decision_marker_problem(plan_text),
+        "review_scope": review_scope_problem(plan_text),
+        "plan_ownership": plan_ownership_problem(
+            plan_text, repo_root(plans_dir.parent)
+        ),
+        "scope_classification": scope_classification_problem(plan_text),
+    }
+    check(
+        "selftest#pre_round/fixture_probes_clean",
+        not any(probe_reasons.values()),
+        f"probe_reasons={probe_reasons}",
+    )
+
+    facts_dir = root / ".ai-playbook"
+    prev_cwd = os.getcwd()
+    os.chdir(root)  # main() anchors facts resolution at the process cwd
+    try:
+        facts_dir.mkdir(exist_ok=True)
+        (facts_dir / "facts.md").write_text(
+            "# facts\n\n```toml\n"
+            'plans_dir = "plans"\n'
+            'reviews_dir = "reviews"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+
+        # structural_only_pass: the clean fixture plan passes the
+        # structural-only invocation; the review record is not consulted.
+        rc, out, err = run_main(["--pre-round", str(plan)])
+        check(
+            "selftest#pre_round/structural_only_pass",
+            rc == 0 and "readiness PRE-ROUND OK" in out,
+            f"rc={rc} out={out!r} err={err!r}",
+        )
+
+        # missing_sidecar_tolerated: with an emptied reviews dir the
+        # no-review-artifact class never blocks the pre-round invocation,
+        # while the full gate over the same tree fails on it.
+        _clean_reviews_dir(reviews_dir)
+        pre_round_rc, pre_out, pre_err = run_main(
+            ["--pre-round", str(plan)]
+        )
+        full_rc, full_out, full_err = run_main([str(plan)])
+        check(
+            "selftest#pre_round/missing_sidecar_tolerated",
+            pre_round_rc == 0
+            and full_rc == 1
+            and "no review artifact" in full_err,
+            f"pre_round_rc={pre_round_rc} pre_out={pre_out!r} "
+            f"pre_err={pre_err!r} full_rc={full_rc} "
+            f"full_err={full_err!r}",
+        )
+
+        # structural_failure_blocking: the per-task Commit checklist line
+        # stripped of its classification tag blocks with the
+        # classification-tag problem named on stderr.
+        broken_text = plan_text.replace(
+            commit_item,
+            "- [ ] Commit: `feat: pre-round structural gate`",
+        )
+        broken_problem = scope_classification_problem(broken_text)
+        plan.write_text(broken_text, encoding="utf-8")
+        rc, out, err = run_main(["--pre-round", str(plan)])
+        check(
+            "selftest#pre_round/structural_failure_blocking",
+            broken_problem is not None
+            and "no [class:" in broken_problem
+            and rc == 1
+            and "readiness PRE-ROUND FAILED" in err
+            and "classification tag" in err,
+            f"rc={rc} probe={broken_problem!r} err={err!r}",
+        )
+
+        # mutual_exclusion: --pre-round composes with neither --selftest
+        # nor --sweep; both combinations are parse-time usage errors
+        # (exit 2 naming the invalid combination).
+        rc, out, err = run_main(["--pre-round", str(plan), "--selftest"])
+        selftest_mix = (rc, err)
+        rc, out, err = run_main(["--pre-round", str(plan), "--sweep"])
+        sweep_mix = (rc, err)
+        check(
+            "selftest#pre_round/mutual_exclusion",
+            selftest_mix[0] == 2
+            and "--pre-round must not be combined with --selftest"
+            in selftest_mix[1]
+            and sweep_mix[0] == 2
+            and "--pre-round must not be combined with --sweep"
+            in sweep_mix[1],
+            f"selftest_mix={selftest_mix!r} sweep_mix={sweep_mix!r}",
+        )
+    finally:
+        os.chdir(prev_cwd)
+        # Leave no facts block behind: the CLI family below creates
+        # .ai-playbook fresh (plain mkdir, no exist_ok).
+        facts_md = facts_dir / "facts.md"
+        if facts_md.exists():
+            facts_md.unlink()
+        if facts_dir.is_dir() and not any(facts_dir.iterdir()):
+            facts_dir.rmdir()
+
+
 def _selftest_accepted_state(
     plans_dir: Path, reviews_dir: Path, check
 ) -> None:
@@ -5216,6 +5546,7 @@ def run_selftest() -> int:
         _selftest_review_scope(plans_dir, reviews_dir, check)
         _selftest_plan_ownership(root, plans_dir, reviews_dir, check)
         _selftest_scope_classification(plans_dir, reviews_dir, check)
+        _selftest_pre_round(root, plans_dir, reviews_dir, check)
         _selftest_accepted_state(plans_dir, reviews_dir, check)
         _selftest_cli(root, plans_dir, reviews_dir, check)
         _selftest_sweep(root, plans_dir, reviews_dir, check)

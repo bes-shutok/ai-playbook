@@ -208,3 +208,7 @@ Files: none (gates only)
 - [x] Run the complete Validation Commands block from the repo root → expect exit 0 with `ALL GATES GREEN`; on any failure, fix the offending span in the owning file and re-run the block
 - [x] Run `git diff --name-only <session-base>..HEAD -- agents/skills/` (the base sha Task 1 recorded) → expect exactly `agents/skills/learn/SKILL.md` and `agents/skills/done/SKILL.md`; any further `agents/skills/` path in that diff belongs to a peer session: report it and leave it untouched, never stage or revert it
 - [x] No commit; the validation task leaves the tree with the four task commits in place
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-12-company-master-scoping-loop-residuals.md: disposition folded into 2026-09-14-company-master-scoping-loop-residuals.md (2026-09-25); per-item file deleted.

@@ -163,12 +163,12 @@ pin "step 6 carries forward externally written values" grep -qF 'carry forward t
 # rewrite that drops the enumeration tail stays green without this membership pin
 pin "carry-forward names the state-durability fields" grep -qF 'plus `loop_mode` and `pending_rearm`' "$S"
 pin "starvation releases only the starved lane" grep -qF 'releases only the starved lane' "$S"
-# 2026-09-23 sequential landing discipline Task 1: the writer-class count moved
-# from five to six (the completing authoring child's self-landing record joined
-# as a new named class); the old literal is frozen absent so the count cannot
+# 2026-09-25 parked-dependency visibility Task 6: the writer-class count moved
+# from six to seven (the execute-plan serialization-boundary write joined as a
+# new named class); the old literal is frozen absent so the count cannot
 # silently revert
-pin "six sanctioned writer classes" grep -qF 'six sanctioned writer classes' "$S"
-expect_absent "superseded five sanctioned writer classes literal" 'five sanctioned writer classes' "$S"
+pin "seven sanctioned writer classes" grep -qF 'seven sanctioned writer classes' "$S"
+expect_absent "superseded six sanctioned writer classes literal" 'six sanctioned writer classes' "$S"
 pin "execution-child progress counts checked checkboxes" grep -qF 'checked-checkbox count' "$S"
 # the corrected checkbox regex literal is pinned region-scoped to the failure-detection
 # section in the python block below (a whole-file grep is satisfied by the Revisions-ledger copy)
@@ -795,8 +795,12 @@ pin "execution blueprint checkpoint duty" test "$(grep -oF 'after each blueprint
 # describe (the pin pair above keeps its prescribed names for the execute-plan
 # telemetry coupling sentence).
 pin "authoring slice payload-region wording" grep -qF 'observed dispatch practice transmits the authoring blueprint' "$S"
-pin "payload re-arm sentence set count" test "$(grep -oF 'restore the maintenance loop parent state-first, without listing first' "$P" | wc -l | tr -d ' ')" -eq 1
-pin "FINAL STEP compaction sentence count" test "$(grep -oF 'FINAL STEP, after the report: compact this session' "$P" | wc -l | tr -d ' ')" -eq 3
+# 2026-09-25 parked-dependency visibility Task 6: the unblock template's
+# recipe-delegating re-arm sentences take the count to 2
+pin "payload re-arm sentence set count" test "$(grep -oF 'restore the maintenance loop parent state-first, without listing first' "$P" | wc -l | tr -d ' ')" -eq 2
+# 2026-09-25 parked-dependency visibility Task 6: the unblock template's
+# closing park-discharge and compaction duties take the counts up by one each
+pin "FINAL STEP compaction sentence count" test "$(grep -oF 'FINAL STEP, after the report: compact this session' "$P" | wc -l | tr -d ' ')" -eq 4
 
 # --- authoring claim file surfaces (scheduler ops lanes and durability plan, Task 1) ---
 # The 2026-09-18 authoring-lane collision (automation-343ce2b0 vs a foreign
@@ -839,8 +843,8 @@ def need(text, anchor):
     if anchor not in text:
         print("PIN FAIL: missing anchor %s" % anchor); sys.exit(1)
 need(p, "<prompt for the scheduled session>"); need(p, "</prompt>")
-if p.count("<prompt for the scheduled session>") != 1 or p.count("</prompt>") != 1:
-    print("PIN FAIL: execution dispatch-slice tags not exactly one pair"); sys.exit(1)
+if p.count("<prompt for the scheduled session>") != 1 or p.count("</prompt>") != 2:
+    print("PIN FAIL: execution dispatch-slice tag counts drifted (expected 1 opener + 2 closers: the blueprint pair plus the unblock wrapper's closer)"); sys.exit(1)
 inner = p.split("<prompt for the scheduled session>")[1].split("</prompt>")[0]
 for needle in ("FIRST ACTION", "{some_plan}", "{REPO_ROOT}", "SUCCESSOR DISPATCH", "this is a resume run"):
     if needle not in inner:
@@ -1490,7 +1494,27 @@ pin "P54 able-session predicate literal" grep -qF 'able-session predicate' "$S"
 pin "P54 discharge field predicate" grep -qF 'pending_rearm or pending_dispatch' "$S"
 pin "P54 discharge duty anchor" grep -qF 'park-discharge duty' "$S"
 pin "P54 discharge operative phrase" grep -qF 'discharges the parked intents in the same session before ending, guard-bound' "$S"
-[ "$(grep -cF 'CLOSING PARK DISCHARGE DUTY' "$P")" -eq 2 ] || { echo "PIN FAIL: P54 blueprint discharge anchor count != 2"; fail=1; }
+[ "$(grep -cF 'CLOSING PARK DISCHARGE DUTY' "$P")" -eq 3 ] || { echo "PIN FAIL: blueprint discharge anchor count != 3"; fail=1; }
+# 2026-09-25 parked-dependency visibility Task 6: the new unblock wrapper is
+# count-pinned at exactly one opener beside the existing wrapper-count pin
+pin "parked-dependency unblock wrapper count" test "$(grep -oF '<prompt for the parked-dependency unblock session>' "$P" | wc -l | tr -d ' ')" -eq 1
+# --- parked-dependency visibility pins (plan 2026-09-25-parked-dependency-visibility.md Task 6) ---
+pin "parked_dependencies schema literal" grep -qF '"parked_dependencies": [],' "$S"
+pin "parked_dependencies field paragraph opener" grep -qF 'parked_dependencies is the ordered array of parked-dependency ledger entries' "$S"
+pin "parked_dependencies occurrence floor" test "$(grep -oF 'parked_dependencies' "$S" | wc -l | tr -d ' ')" -ge 5
+pin "parked-dependency survey arm anchor" grep -qF 'parked-dependency liveness arm' "$S"
+pin "parked-dependency survey state vocabulary" grep -qF 'waiting, stale, or actionable' "$S"
+pin "D1 live-entry skip span" grep -qF 'live parked_dependencies entry' "$S"
+pin "parked-dependency carry-forward span" grep -qF 'plus `parked_dependencies` (the boundary-write, unblock-clear, and survey-clear writers above, so the rewrite must carry the field)' "$S"
+pin "execute-plan boundary-writer span" grep -qF 'parked-dependency ledger entry' "$E"
+pin "unblock-template opener span" grep -qF 'parked-dependency unblock dispatch' "$P"
+pin "dependency-branch landing-race discipline span" grep -qF 'actual pre-landing main' "$P"
+pin "Step 5 unblock-dispatch slice sentence" grep -qF "the content of the unblock template's own" "$S"
+pin "SUCCESSOR DISPATCH amended skip clause" grep -qF 'a live `parked_dependencies` entry (any entry not yet cleared by the State file field paragraph' "$P"
+pin "deferred landing-duty dependency-branch record identity" grep -qF 'Dependency-landing record identity' "$P"
+pin "unblock-child progress witness span" grep -qF 'manifest refreshes count as progress for unblock children' "$S"
+pin "lane-hold unblock completion-evidence span" grep -qF 'ledger entry cleared plus the serialized plan present in `execution_queue`' "$S"
+pin "deferred outcome_reason schema note value" grep -qF 'the value `deferred` per the parked-dependency unblock deferral' "$S"
 # --- P54 execution queue and priority pins (plan ... Task 3) ---
 pin "P54 execution_queue schema line" grep -qF '"execution_queue": []' "$S"
 pin "P54 execution_priority schema line" grep -qF '"execution_priority": null' "$S"
@@ -1674,6 +1698,74 @@ expect_absent "retired strictly-sequential execution sentence must be absent fro
 expect_absent "retired strictly-sequential clocked-child stance parenthetical must be absent from SKILL.md" 'strictly sequential clocked-child stance is unchanged' "$S"
 [ "$fail" -eq 1 ] && exit 1
 
+
+# --- Live-vs-archive basename gate (plans-lifecycle integrity, 2026-09-25) ---
+# Additive read-only section: for each live root, assert no basename also
+# exists in its archive subtrees (completed/, deferred/, rejected/ where
+# present). PINS_DUPLICATE_ROOT overrides the scanned root for THIS section
+# only (fixture proving); the default root is the git toplevel exactly as
+# every pinned span above uses. Implemented as a function taking the root as
+# its argument so the inline selftest below can call it directly on a fixture
+# (never a whole-suite re-invocation, which would die for the wrong reason on
+# a temp fixture or recurse on an in-repo one).
+check_live_vs_archive_duplicates() { # $1 = root to scan
+  local root="$1"
+  local live_root archive_dir base rc=0
+  for live_root in "docs/history/backlog" "docs/plans"; do
+    [ -d "$root/$live_root" ] || continue
+    # Collect archive basenames under the root's archive subtrees.
+    for archive_dir in completed deferred rejected; do
+      [ -d "$root/$live_root/$archive_dir" ] || continue
+      while IFS= read -r base; do
+        [ -n "$base" ] || continue
+        if [ -f "$root/$live_root/$base" ]; then
+          echo "PIN FAIL: live-vs-archive basename twin: $live_root/$base also archived at $live_root/$archive_dir/$base"
+          rc=1
+        fi
+      done < <(find "$root/$live_root/$archive_dir" -name "*.md" -type f -exec basename {} \;)
+    done
+  done
+  return "$rc"
+}
+
+DUPLICATE_ROOT="${PINS_DUPLICATE_ROOT:-$repo}"
+if ! check_live_vs_archive_duplicates "$DUPLICATE_ROOT"; then
+  fail=1
+fi
+
+# Lasting failure-arm guard: run the same function against a synthetic
+# fixture (a live basename duplicated into a fake archive subtree) and
+# require the non-zero result and the offending-pairs message naming the
+# fixture pair; a selftest failure fails the suite.
+DUPLICATE_FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/pins-duplicate-fixture.XXXXXX")"
+mkdir -p "$DUPLICATE_FIXTURE/docs/history/backlog/completed" "$DUPLICATE_FIXTURE/docs/history/backlog"
+echo fixture > "$DUPLICATE_FIXTURE/docs/history/backlog/completed/2026-01-01-fake-twin.md"
+echo fixture > "$DUPLICATE_FIXTURE/docs/history/backlog/2026-01-01-fake-twin.md"
+DUPLICATE_OUT="$(check_live_vs_archive_duplicates "$DUPLICATE_FIXTURE" 2>&1)"
+DUPLICATE_RC=$?
+rm -rf "$DUPLICATE_FIXTURE"
+if [ "$DUPLICATE_RC" -eq 0 ]; then
+  echo "PIN FAIL: live-vs-archive selftest: synthetic twin pair did not fail (rc 0)"
+  fail=1
+elif ! printf '%s' "$DUPLICATE_OUT" | grep -q "2026-01-01-fake-twin.md"; then
+  echo "PIN FAIL: live-vs-archive selftest: refusal output does not name the fixture pair"
+  fail=1
+fi
+
+[ "$fail" -eq 1 ] && exit 1
+
+# --- quota display staleness and refresh-cadence pins (plan
+# 2026-09-25-quota-display-refresh-cadence.md) ---
+[ "$(grep -oF 'Sidebar display staleness and operator refresh cadence' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: quota sidebar-staleness bullet count != 1"; fail=1; }
+[ "$(grep -oF 'Quota display caveat' "$S" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: quota display caveat bullet count != 1"; fail=1; }
+[ "$fail" -eq 1 ] && exit 1
+
+# --- execution queue-drain turn-end and taxonomy-parity pins (plan
+# 2026-09-25-execution-lane-queue-drain-continuation.md) ---
+E="$repo/agents/skills/execute-plan/SKILL.md"
+[ "$(grep -oF 'a request for the user to confirm starting the next plan is never a sanctioned turn end' "$D" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: queue-drain turn-end bullet count != 1"; fail=1; }
+[ "$(grep -oF 'a guard fire (a quota pause or near-reset with the Budget gate' "$E" | wc -l | tr -d ' ')" -eq 1 ] && [ "$(grep -oF 'a guard fire (a quota pause or near-reset with the Budget gate' "$D" | wc -l | tr -d ' ')" -eq 1 ] && [ "$(grep -oF 'a landing-gate hold reported by `scripts/done-lock.sh` merge-status, a lane hold from the scheduler guards, provider rate pressure with its structured rate-limited end) or an empty queue (no digest-intact open plan remains); a user interrupt or explicit abort is always sanctioned as well' "$E" | wc -l | tr -d ' ')" -eq 1 ] && [ "$(grep -oF 'a landing-gate hold reported by `scripts/done-lock.sh` merge-status, a lane hold from the scheduler guards, provider rate pressure with its structured rate-limited end) or an empty queue (no digest-intact open plan remains); a user interrupt or explicit abort is always sanctioned as well' "$D" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: queue-drain taxonomy parity span count != 1"; fail=1; }
+[ "$fail" -eq 1 ] && exit 1
 
 echo "maintenance pins: all hold"
 exit 0

@@ -278,3 +278,8 @@ Files: none (verification only)
 
 - [x] Run the whole Validation Commands block from the repository root; expect exit 0 and the trailing `VALIDATION: all green` line; record any failure and fix in its owning task before re-running [class: REPOSITORY_TEST]
 - [x] Run `python3 scripts/plan_readiness.py docs/plans/2026-09-20-merge-landing-lock-grouping.md` after the final review digest binds; expect exit 0 (certification gate, re-run by the orchestrator after every fold) [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-20-merge-lock-guard-wiring-residuals.md: disposition folded into 2026-09-20-merge-landing-lock-grouping.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-20-default-branch-merge-serialization-lock.md: disposition folded into 2026-09-20-merge-landing-lock-grouping.md (2026-09-25); per-item file deleted.

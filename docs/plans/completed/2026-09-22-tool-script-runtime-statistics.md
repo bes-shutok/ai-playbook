@@ -332,3 +332,7 @@ Files:
 ## Plan Lifecycle note
 
 This plan is measurement and cadence only: when completed, the miner, the rider, and the demonstration artifacts exist; candidate replacements filed by the rider are future backlog items with their own lifecycle, never work of this plan.
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-22-tool-runtime-statistics-and-scriptable-replacement.md: disposition folded into 2026-09-22-tool-script-runtime-statistics.md (2026-09-25); per-item file deleted.

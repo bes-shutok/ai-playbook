@@ -94,6 +94,8 @@ For every changed normative example in the diff (request/response samples, confi
 
 Use pattern `documentation#missing-example-replay` when a changed example is neither validated nor inventoried, and `documentation#prose-example-conflict` when an example contradicts the rule it documents.
 
+A class-level comment whose only content is plan-slice identity (`P0.n`-style slice ids), a ticket key, or "this PR adds" narrative is a prose-delivery-slice-meta finding (Medium when it is the only class comment); require behavior-facing prose or deletion. This is distinct from the deferred relocatable identifier-inventory class and is not merged with it. Pattern: `documentation#prose-delivery-slice-meta`.
+
 ### Plan / RFC prose (phase 1)
 
 When reviewing a plan or RFC draft:

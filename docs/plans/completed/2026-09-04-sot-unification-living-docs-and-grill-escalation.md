@@ -276,3 +276,9 @@ Files: none (validation only)
 - [x] Run the full Validation Commands block from the repo root → expect exit 0 with `ALL VALIDATION CHECKS PASSED` (all five task commits exist by this point).
 - [x] Verify each of the five per-task commit subjects matches `git log --format=%s` output; the block's Task 6 section already fails closed on a missing subject, so this is covered by the run above; additionally confirm `git status` shows no unstaged edits to the nine must-fix files.
 - [x] No commit (no file changes in this task).
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-04-sot-unification-review-and-plan-workflows.md: disposition folded into 2026-09-04-sot-unification-living-docs-and-grill-escalation.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-05-plans-scope-extension-requires-grill-with-docs.md: disposition folded into 2026-09-04-sot-unification-living-docs-and-grill-escalation.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-02-living-docs-capability-names-and-openapi-wire-sot.md: disposition folded into 2026-09-04-sot-unification-living-docs-and-grill-escalation.md (2026-09-25); per-item file deleted.

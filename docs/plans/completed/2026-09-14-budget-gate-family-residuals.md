@@ -289,3 +289,9 @@ Files:
 - [x] Run the full Validation Commands block → every gate green (on the pre-Task-6 tree gate 9 is RED-today; at this point it is GREEN; the only tolerated suite failure anywhere is the pinned runtime baseline)
 - [x] Record the completion-pass disposition in the task log: at plan completion, move exactly these backlog items to the backlog completed directory with `Status: done`: 2026-09-12-budget-gate-secondary-pause-record-wording.md, 2026-09-12-runtime-test-git-env-coverage.md, 2026-09-11-quota-probe-calibration-fallback.md, 2026-09-14-budget-guard-deployed-hook-copies.md, 2026-09-14-budget-probe-codex-fail-open-diagnostics-collapse.md, 2026-09-14-budget-probe-vacuous-resourcewarning-witness.md; leave 2026-09-13-codex-deny-envelope-verification.md and 2026-09-13-budget-gate-decision-table-attribution.md open in the backlog directory (live drive pending)
 - [x] Commit: none (checklist-only task; the disposition executes during the completion pass)
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-18-budget-gate-attribution-r5-residuals.md: disposition folded into 2026-09-14-budget-gate-family-residuals.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-20-context-budget-checkpoint-policy-residuals.md: disposition folded into 2026-09-14-budget-gate-family-residuals.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-14-budget-gate-family-residuals-gate-precision.md: disposition folded into 2026-09-14-budget-gate-family-residuals.md (2026-09-25); per-item file deleted.

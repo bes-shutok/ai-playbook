@@ -186,3 +186,8 @@ Files:
 - [x] Commit: `plans: cap uncounted gate/timeout re-entries in prescribed counting paragraph`
 
 Superseded 2026-09-03: code-review r2 re-folded the inserted sentences (the stop counts every re-entry in the round, counted re-entries never reset the counter, the cap sentence is qualified as max_review_rounds-only, and the counter sentence was reworded); the executed state is the prescribed Task 2f text in the residue-pass plan at this branch's HEAD.
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-17-maintenance-r5-doc-consistency-residuals.md: disposition folded into 2026-09-02-r5-residuals-fixes.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-06-done-marker-r5-residuals.md: disposition folded into 2026-09-02-r5-residuals-fixes.md (2026-09-25); per-item file deleted.

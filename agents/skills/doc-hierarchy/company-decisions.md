@@ -49,6 +49,7 @@ Per team agreement: a **high-level service overview**, not an in-depth feature c
 - Locations:
   - `docs/architecture/`, seven canonical files (see [SKILL.md](SKILL.md) target layout).
   - `docs/maintenance/`, runbooks, optional Grafana dashboard exports under `docs/maintenance/dashboards/` (index from `architecture/operational-guides.md`), `project-guidelines.md`, `company-guidelines.md` mirror, human best practices, wire catalogs (`api-reference.md`, BFF/sync contracts). No `docs/examples/` tree (caller catalog lives in `maintenance/api-reference.md`).
+  - **Laptop how-to vs ops runbook:** disposable Compose/JAR recipes, smoke curls, and local escape hatches belong in `docs/maintenance/local-development.md` (or the service equivalent). Production/UAT release checks, SRE ticket owners, and runtime tunables belong in `docs/architecture/operational-guides.md`. Do not paste the same multi-step bash recipe under both; architecture may keep a one-line pointer. Witness: dual Local enablement recipe across ops and local-dev on a migration-complete service (2026-09-25).
   - **Repo agent runtime (not Layer 2):** `.ai-playbook/`, gitignored; bootstrap writes `repo_facts_rel` (`.ai-playbook/facts.md`) with TOML path keys plus Jira ledger prose. Durable FACT claims belong in Layer 2 `docs/architecture/*.md`; `.ai-playbook/facts.md` holds index stubs only after Step 5b.
 
 ### Ephemeral / tooling (not layers)
@@ -87,6 +88,7 @@ OR
 [ ] README updated (Layer 1, only if service overview scope changed)
 [ ] Architecture/maintenance docs updated (Layer 2)
 [ ] Historical docs added/updated (Layer 3)
+[ ] No duplicated disposable-local recipe across operational-guides and local-development (one home + pointer)
 ```
 
 ## PR description rules

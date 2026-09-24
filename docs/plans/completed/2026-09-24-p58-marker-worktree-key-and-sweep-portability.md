@@ -255,3 +255,7 @@ Files: none (verification only; no commit belongs to this task)
 
 - [x] Run → expect GREEN (all gates, final tree; the readiness gate passes here because the review sidecar for the final bytes exists by this point): the full `## Validation Commands` block exits 0 [class: REPOSITORY_TEST]
 - [x] Record the receipts (suite outputs, probe counts, readiness verdict, hygiene exit code) in the session notes beside the authoring-time execution record [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-23-host-entrypoint-sweep-portability.md: disposition folded into 2026-09-24-p58-marker-worktree-key-and-sweep-portability.md (2026-09-25); per-item file deleted.

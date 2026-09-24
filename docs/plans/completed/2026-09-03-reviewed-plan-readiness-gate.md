@@ -424,3 +424,19 @@ Files:
 - [x] Run the full Validation Commands block → expect the closing
   `ALL VALIDATION COMMANDS PASSED` line
 - [x] Commit: `test: reviewed-plan readiness gate validation pass`
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-03-plan-readiness-same-n-tie-break-fixture.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-04-deploy-plan-readiness-runtime-copy.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-04-plan-readiness-sidecar-verdict-field.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-05-plan-readiness-readme-eligibility-positivity-clause.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-05-plan-readiness-selftest-fixture-runner-extraction.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-05-plan-readiness-task5-fence-annotation.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-06-plan-readiness-selftest-write-clean-state-privacy-rename.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-06-plan-readiness-verdict-token-comment-eligibility-wording.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-09-plan-readiness-deduplicate-date-guards.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-09-plan-readiness-scope-category-label-grammar.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-13-plan-readiness-path-shape-suffix-and-markup-tails.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-13-plan-readiness-solo-witness-gaps.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-08-31-reviewed-plan-readiness-gate.md: disposition folded into 2026-09-03-reviewed-plan-readiness-gate.md (2026-09-25); per-item file deleted.

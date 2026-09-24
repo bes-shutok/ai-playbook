@@ -152,3 +152,7 @@ Files: none new.
 - [x] Run `bash -n` over the Validation Commands block and run a pin-vs-prescription audit: for each pinned span in the Validation Commands, verify it occurs in the prescribed task text (occurrences inside the Validation Commands block itself are the checker's own literals and do not count toward the audit).
 - [x] Run the public hygiene scan (exit 0 required).
 - [x] Stage ONLY this plan's files (the five skill files plus this plan); leave the foreign modified `scripts/plan_readiness.py` unstaged. Commit: `skills: complete returned-for-ask semantics (scope, record, pre-fold ask gate)`
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-08-28-returned-for-ask-semantics.md: disposition folded into 2026-09-04-returned-for-ask-semantics.md (2026-09-25); per-item file deleted.

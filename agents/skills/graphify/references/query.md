@@ -20,9 +20,9 @@ if not Path('graphify-out/graph.json').exists():
 ```
 If it fails, stop and tell the user to run `/graphify <path>` first.
 
-### Step 0 — Constrained query expansion (REQUIRED before traversal)
+### Step 0 - Constrained query expansion (REQUIRED before traversal)
 
-graphify's `query` CLI matches nodes via case-folded substring + IDF — there is **no stemming, no synonyms, no cross-language match** inside the binary, and the inline fallback below matches the same way. If the user's question uses different language or different domain vocabulary than the graph's labels (user says "обработчик" / graph says "handler"; user says "authentication" / graph says "Guardian"), the literal matcher returns 0 hits and the answer collapses to noise.
+graphify's `query` CLI matches nodes via case-folded substring + IDF: there is **no stemming, no synonyms, no cross-language match** inside the binary, and the inline fallback below matches the same way. If the user's question uses different language or different domain vocabulary than the graph's labels (user says "обработчик" / graph says "handler"; user says "authentication" / graph says "Guardian"), the literal matcher returns 0 hits and the answer collapses to noise.
 
 Fix this **without inventing tokens** by expanding the query against the actual graph vocabulary first:
 
@@ -47,7 +47,7 @@ print(f'vocab: {len(vocab)} tokens')
 
 2. Read `graphify-out/.vocab.txt`. Then for the user's question, select **up to 12 tokens from this exact list** that semantically match the query intent. Hard constraints:
    - You MUST pick only tokens present in the vocabulary file. Do NOT invent tokens.
-   - If a query concept has no plausible token in the vocab, skip it — do not substitute a near-synonym from training memory.
+   - If a query concept has no plausible token in the vocab, skip it; do not substitute a near-synonym from training memory.
    - If **no** vocab tokens match the query at all, output an empty list and tell the user the corpus has no relevant vocabulary for this question. Do not fabricate a search.
    - Translate cross-language: Russian "аутентификация" → look for `auth`, `credential`, `token`, `security` IFF present in vocab.
    - Morphology: "handlers" maps to `handler` IFF present; "todos" maps to `todo` IFF present.
@@ -56,11 +56,11 @@ print(f'vocab: {len(vocab)} tokens')
 ```
 Query expanded to (from graph vocab, N tokens): [token1, token2, ...]
 ```
-If the list is empty, say so plainly and stop — do not proceed to traversal.
+If the list is empty, say so plainly and stop; do not proceed to traversal.
 
-### Step 1 — Traversal
+### Step 1 - Traversal
 
-Build the **expanded query string** by joining the selected tokens with spaces. Use this string as `QUESTION` below — NOT the original user question. (The original question is preserved only for `save-result` at the end.)
+Build the **expanded query string** by joining the selected tokens with spaces. Use this string as `QUESTION` below, NOT the original user question. (The original question is preserved only for `save-result` at the end.)
 
 Prefer the CLI when it is installed:
 ```bash
@@ -165,6 +165,64 @@ print(output)
 
 Replace `QUESTION` with the **expanded** query string, `MODE` with `bfs` or `dfs`, and `BUDGET` with the token budget (default `2000`, or whatever `--budget N` specifies). Then answer based on the subgraph output above, using only what the graph contains.
 
+### Step 1.5 - Resolve abstractions to implementations (REQUIRED for code graphs)
+
+Interfaces, ports, sealed types, and abstract classes win the label match because every caller imports them, so a raw traversal answers with the *contract* and never reads the code that actually does the work. Before you answer, expand every abstract type in your start nodes and traversal output to its concrete subtypes.
+
+Prefer the CLI (reverse traversal over `implements` / `inherits`):
+```bash
+graphify affected "TypeName" --relation implements --relation inherits --depth 2
+```
+
+Inline fallback (also catches nested sealed variants and `Impl`/`Default`/`Adapter` siblings the extractor can miss):
+```bash
+$(cat graphify-out/.graphify_python) -c "
+import json, re
+from pathlib import Path
+
+TYPES = ['TypeName']  # the abstract types matched by Step 1
+
+data = json.loads(Path('graphify-out/graph.json').read_text(encoding='utf-8'))
+nodes = {n['id']: n for n in data['nodes']}
+by_label = {}
+for n in data['nodes']:
+    by_label.setdefault(n.get('label',''), []).append(n)
+
+for want in TYPES:
+    ids = {n['id'] for n in by_label.get(want, [])}
+    if not ids:
+        print(f'{want}: no such node'); continue
+    impls, nested = [], []
+    for e in data['links']:
+        rel = e.get('relation')
+        if e.get('target') in ids and rel in ('implements','inherits'):
+            impls.append((rel, nodes.get(e['source'], {})))
+        elif e.get('source') in ids and rel == 'contains':
+            nested.append(nodes.get(e['target'], {}))
+    heur = [n for lbl, ns in by_label.items() for n in ns
+            if re.fullmatch(rf'{re.escape(want)}Impl|Default{re.escape(want)}|{re.escape(want)}Adapter', lbl)]
+    print(f'== {want}')
+    for rel, n in impls:
+        kind = 'test-double' if '/test/' in (n.get('source_file') or '') else 'production'
+        print(f'  [{rel}/{kind}] {n.get(\"label\")} {n.get(\"source_file\")}:{n.get(\"source_location\")}')
+    for n in nested:
+        if n.get('id') not in {x['id'] for _, x in impls if x}:
+            print(f'  [contains-candidate] {n.get(\"label\")} {n.get(\"source_file\")}:{n.get(\"source_location\")}')
+    for n in heur:
+        print(f'  [name-heuristic] {n.get(\"label\")} {n.get(\"source_file\")}:{n.get(\"source_location\")}')
+    if not (impls or nested or heur):
+        print('  (no subtypes in graph)')
+"
+```
+
+Then fold the result into the traversal subgraph and obey these rules when answering:
+
+- **Answer from the implementation, not the contract.** If a matched type has subtypes, cite the implementation(s) that carry the behavior with their `source_file:source_location`. An interface signature alone is never a complete answer to "how does X work".
+- **Name every implementation**, and label those whose `source_file` sits under a test path (`/test/`, `/tests/`, `_test.`, `*Test`, `*IT`) as test doubles: do not present a fake or recording stub as the production behavior.
+- **Before claiming a type has no implementation**, check `contains` edges from it and open the source file. Extraction misses some nested `sealed interface ... permits` variants (the record gets a `contains` edge but no `implements` edge), so an empty `implements` set is not proof.
+- **Traverse one level further when the subtype is itself abstract** (`--depth 2` above already does this for the CLI path).
+- If the question is about a call chain, re-run the traversal from each implementation node, because call edges into an interface method stop at the declaration, so the behavior lives one hop away in the subtype.
+
 After writing the answer, save it back into the graph so it improves future queries. Include the expanded tokens inside the `--answer` text (e.g. `"Expanded from original query via vocab: [tokens]. Then traversed..."`) so the next `--update` extracts the expansion history as a graph node:
 
 ```bash
@@ -173,11 +231,11 @@ $(cat graphify-out/.graphify_python) -m graphify save-result --question "ORIGINA
 
 Replace `ORIGINAL_QUESTION` with the user's verbatim question, `ANSWER` with your full answer text (containing the expanded-token trace), `NODE1 NODE2` with the list of node labels you cited. This closes the feedback loop: the next `--update` will extract this Q&A as a node in the graph.
 
-**Work memory (self-improving loop).** Add an `--outcome` so future sessions learn from this one — append `--outcome useful|dead_end|corrected` to the `save-result` command (and `--correction "the right answer"` when correcting):
+**Work memory (self-improving loop).** Add an `--outcome` so future sessions learn from this one, append `--outcome useful|dead_end|corrected` to the `save-result` command (and `--correction "the right answer"` when correcting):
 
-- `useful` — the cited nodes answered the question well (they become *preferred sources*).
-- `dead_end` — the question/path led nowhere; don't re-derive it next time.
-- `corrected` — the saved answer was wrong; `--correction` records what was right.
+- `useful`, the cited nodes answered the question well (they become *preferred sources*).
+- `dead_end`, the question/path led nowhere; don't re-derive it next time.
+- `corrected`, the saved answer was wrong; `--correction` records what was right.
 
 At the **start** of graph work, refresh and read the lessons: run `graphify reflect --if-stale` (cheap, deterministic, no LLM; `--if-stale` makes it a no-op when `LESSONS.md` is already newer than every input, e.g. when the git hook just refreshed it), then read `graphify-out/reflections/LESSONS.md`. It lists **preferred sources** (start there), **known dead ends** (skip them), and prior **corrections**. Running `reflect` yourself keeps the lessons current even without the git hook installed; if the post-commit hook *is* installed, `--if-stale` means your session-start run costs almost nothing.
 
@@ -252,6 +310,8 @@ $(cat graphify-out/.graphify_python) -m graphify save-result --question "Path fr
 ---
 
 ## For /graphify explain
+
+If the explained node is an interface, port, sealed type, or abstract class, run **Step 1.5** on it and include its implementations in the explanation. Explaining a contract without naming what implements it is an incomplete answer.
 
 Give a plain-language explanation of a single node - everything connected to it. Prefer the CLI when installed:
 

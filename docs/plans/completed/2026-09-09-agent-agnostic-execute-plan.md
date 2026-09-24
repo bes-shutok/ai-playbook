@@ -281,3 +281,7 @@ Files:
 - [x] Run `python3 scripts/plan_readiness.py docs/plans/2026-09-09-agent-agnostic-execute-plan.md` after the final review artifact is staged; expect the exact current plan digest, complete scope closure, and `ready=yes`.
 - [x] Run → expect GREEN: the complete `## Validation Commands` block from this plan, from the ai-playbook repository root; every self-test, portability scan, and hygiene check passes.
 - [x] Commit: `docs: document agent-agnostic execute-plan runtime`
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-09-agent-agnostic-plan-prose-accuracy-residuals.md: disposition folded into 2026-09-09-agent-agnostic-execute-plan.md (2026-09-25); per-item file deleted.

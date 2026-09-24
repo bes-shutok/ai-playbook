@@ -234,3 +234,7 @@ Files:
 
 - [x] Run the full Validation Commands block; expect exit 0 on every check [class: REPOSITORY_TEST]
 - [x] Verify the plan digest: `shasum -a 256 docs/plans/2026-09-20-execute-plan-worker-liveness.md` matches the final certification round's sidecar `source_digest` [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-20-execute-plan-implement-worker-stall-timeout-undefined.md: disposition folded into 2026-09-20-execute-plan-worker-liveness.md (2026-09-25); per-item file deleted.

@@ -141,3 +141,8 @@ Files:
 This task is read-only: it runs the Validation Commands block; no file edits, no commit.
 
 - [x] Run the entire Validation Commands block → expect exit 0: both suites green, the HOME-pinned selftest green, the quotePath pin green at 4, and all three dissolved-machinery sweeps clean
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-20-execute-plan-blocked-claim-wedge-no-driver-recovery.md: disposition folded into 2026-09-12-execute-plan-driver-residuals.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-12-execute-plan-driver-residuals-plan-wording-precision.md: disposition folded into 2026-09-12-execute-plan-driver-residuals.md (2026-09-25); per-item file deleted.

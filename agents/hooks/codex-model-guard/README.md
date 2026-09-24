@@ -1,28 +1,40 @@
-# Codex Luna model guard
+# Codex selected subagent model guard
 
-This Codex-specific hook enforces a single model policy for the parent session
-and workers: `gpt-6-luna`.
+This Codex-specific hook enforces the user's selected subagent model from
+`~/.codex/config.toml` (`[agents].default_subagent_model`). It does not constrain
+the parent session's active model.
 
 The guard has two checks:
 
-1. It reads the active transcript model and fails closed when the model cannot
-   be verified. When Codex provides its direct hook-input `model` field, that
-   stable field is authoritative; transcript parsing is only a compatibility
-   fallback.
-2. On worker-launch tool events, it rejects an explicit non-Luna model before
-   the worker is created. This covers a launch-time override even when the
-   parent session itself is running on Luna.
+1. On a worker launch, it requires a direct nonempty model in the
+   current hook input and compares it with the selected subagent model.
+   A launch is recognized by exact worker-creation tool identities: the
+   lowercased tool name must equal one of `agent`, `spawn_agent`,
+   `spawn-agent`, `subagent`. A tool whose name merely contains one of
+   those fragments (for example `manage_agent_pool` or `send_to_agent`)
+   is not a launch.
+2. Missing or malformed policy, missing event model, and a mismatch fail
+   closed before invocation. Transcript history and the parent's active model
+   cannot authorize a worker launch. Lifecycle operations such as wait,
+   inspect, send, and close are not worker creations and stay callable
+   without a launch model field.
+
+Decision table:
+
+| Tool name | Launch? | Rule |
+|---|---|---|
+| `agent`, `spawn_agent`, `spawn-agent`, `subagent` (exact) | yes | requires a direct nonempty model equal to the selected policy |
+| any other name, including names merely containing `agent`/`subagent` fragments | no | allowed without a model field |
 
 The Codex user configuration should also set:
 
 ```toml
 [agents]
-default_subagent_model = "gpt-6-luna"
+default_subagent_model = "<user-selected-model>"
 ```
 
-The configuration is the default, not the enforcement boundary. The hook is
-the enforcement boundary because an explicit worker model can otherwise
-override the default.
+The configuration is the policy source. The hook checks explicit worker
+launch requests against it.
 
 ## Host wiring
 

@@ -19,3 +19,7 @@ Either persist the referenced row before the model-selection row (fix the FK ord
 
 - Zero `persist_failed` events over a 72-hour window.
 - Resumed sessions keep their selected model, or the write is gone from the code path.
+
+## Evidence
+
+- 2026-09-23 friction-audit cold start (7-day log corpus 2026-09-17..23, `friction_audit_quant.py`): `session.model_selection.persist_failed` fired 332 times across the window; sampled line (2026-09-23T06:04:33Z) shows `error: "FOREIGN KEY constraint failed"`, `modelId: "GLM-5.3-Flash"`, `providerId: "account:zai-individual-coding-plan"`. The failure is ongoing, not a one-day burst, and the acceptance gate's 72-hour zero-`persist_failed` window is currently far from met.

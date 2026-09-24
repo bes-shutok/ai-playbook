@@ -222,3 +222,7 @@ Files:
 - [x] Run → expect GREEN: Validation commands G5 through G8 pass per file exactly once; G1 through G4, G9, and G10 still pass (no code change in this task)
 - [x] Re-read each of the four inserted paragraphs against its own section's neighboring prose and adjust only the inserted paragraphs where they contradict what the section already says (the surrounding prose is frozen by the Review Scope)
 - [x] Commit: `skills: skip the budgeting rule family on unsupported harnesses`
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-18-skip-unsupported-harness-budgeting.md: disposition folded into 2026-09-18-harness-detection-and-budgeting-skip.md (2026-09-25); per-item file deleted.

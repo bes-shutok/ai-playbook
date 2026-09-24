@@ -399,3 +399,10 @@ Files:
 - [x] Run the full Validation Commands block → expect exit 0 (all three suites green, syntax gate clean, ordering chain OK, all sixteen wiring pins hit) [class: REPOSITORY_TEST]
 - [x] Run the public hygiene scan and the no-em-dash scan over the touched paths → expect exit 0 both (`bash ~/.ai-playbook/scripts/scan-public-hygiene.sh` from the repo root; `"${HOME}/.ai-playbook/scripts/check-no-em-dash.sh" touched`) [class: REPOSITORY_TEST]
 - [x] Fix any residual the block surfaces, re-run the block to exit 0, and commit any fix: `chore: final validation for docs-branch sync and worktree lifecycle safety` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-18-docs-branch-sync-reverts-certified-plan-bytes.md: disposition folded into 2026-09-19-docs-branch-sync-and-worktree-lifecycle-safety.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-18-worktree-closeout-migrate-review-docs.md: disposition folded into 2026-09-19-docs-branch-sync-and-worktree-lifecycle-safety.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-19-docs-branch-sync-backlog-duplicate-sweep.md: disposition folded into 2026-09-19-docs-branch-sync-and-worktree-lifecycle-safety.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-15-drift-witness-docs-branch-sync-fallback.md: disposition folded into 2026-09-19-docs-branch-sync-and-worktree-lifecycle-safety.md (2026-09-25); per-item file deleted.

@@ -49,7 +49,11 @@ Declaration findings: a missing driving-force line, a missing Gist TLDR, a force
    documentation artifact, and validation command named in a task, verify the same work is present
    in the task's Files list, the global Review Scope, the implementation step, and that each named
    test runs in its owning task gate. Report any mismatch as implementation, testing, documentation,
-   or consistency finding according to the missing element.
+   or consistency finding according to the missing element. When a task lists both
+   `operational-guides.md` and `local-development.md`, flag any plan step that pastes the same
+   disposable Compose/JAR recipe into both; laptop how-to belongs only in local-development,
+   ops keeps production/UAT checks plus a one-line pointer (`doc-hierarchy` company-decisions;
+   ai-playbook backlog `2026-09-25-layer2-laptop-vs-ops-recipe-home.md`).
 7. **Unresolved decision-point audit**: flag for the correctness-completeness worker: (a) plan tasks that implement one of multiple plausible designs where the plan records neither a decision-point receipt nor a `none remain` grill result; (b) a cleanup plan lacking a scope ledger or a grill result while material ownership, preservation, or history-strategy choices remain open; (c) a material candidate appearing in the branch diff or task scope with no keep/remove/defer disposition and no evidence or explicit-confirmation basis; a generic `user confirmed` or `behavior unchanged` phrase is not a basis. Each hit is a correctness-completeness finding.
 8. **Declaration audit**: check the plan's header region for the `Driving force:` line per the plans skill template and the first line of `## Gist & Examples`; classify per the Declaration findings paragraph and flag for the correctness-completeness worker.
 

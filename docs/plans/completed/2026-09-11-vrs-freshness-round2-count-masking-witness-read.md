@@ -185,3 +185,9 @@ Files: none (verification only)
 
 - [x] Run the entire `## Validation Commands` block from the repository root → expect every command GREEN (including the archived freshness plan's block rerun verbatim and the plan_readiness selftest)
 - [x] Run `python3 scripts/validate_review_staging.py --selftest` once more standalone → expect exit 0
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-11-vrs-clean-verdict-staged-count-masking.md: disposition folded into 2026-09-11-vrs-freshness-round2-count-masking-witness-read.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-11-vrs-freshness-witness-sidecar-read-consolidation.md: disposition folded into 2026-09-11-vrs-freshness-round2-count-masking-witness-read.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-08-vrs-witness-twin-single-call.md: disposition folded into 2026-09-11-vrs-freshness-round2-count-masking-witness-read.md (2026-09-25); per-item file deleted.

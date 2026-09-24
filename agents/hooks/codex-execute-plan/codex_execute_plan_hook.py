@@ -53,23 +53,36 @@ def main() -> int:
     if name == "SubagentStart":
         agent_id = event.get("agent_id")
         parent = event.get("session_id")
+        turn_id = event.get("turn_id")
+        tool_use_id = event.get("tool_use_id")
+        model = event.get("model")
         bindings = []
         for key, intent in state.get("handoff_intents", {}).items():
             binding = intent.get("prelaunch_binding") if isinstance(intent, dict) else None
-            if isinstance(binding, dict) and not binding.get("consumed") and binding.get("parent_session_id") == parent:
+            if (
+                isinstance(binding, dict)
+                and not binding.get("consumed")
+                and binding.get("parent_session_id") == parent
+                and binding.get("turn_id") == turn_id
+                and binding.get("tool_use_id") == tool_use_id
+                and binding.get("expected_model") == model
+            ):
                 bindings.append((key, intent, binding))
-        if len(bindings) != 1 or not isinstance(agent_id, str) or not agent_id or not isinstance(event.get("agent_type"), str) or not isinstance(event.get("model"), str):
+        if (
+            len(bindings) != 1
+            or not all(isinstance(value, str) and value.strip() for value in (parent, turn_id, tool_use_id, model, agent_id, event.get("agent_type")))
+        ):
             emit({"decision": "block", "reason": "missing or ambiguous pre-launch binding"})
             return 2
         _, intent, binding = bindings[0]
         successor = intent.get("successor", {})
         payload = {"task_id": successor.get("task_id"), "run_writer_id": binding.get("run_writer_id"),
-                   "parent_session_id": parent, "turn_id": event.get("turn_id"), "tool_use_id": event.get("tool_use_id"),
+                   "parent_session_id": parent, "turn_id": turn_id, "tool_use_id": tool_use_id,
                    "claim_owner_id": binding.get("claim_owner_id"), "claim_token": binding.get("claim_token"),
                    "generation": binding.get("generation"), "launch_id": binding.get("launch_id"),
                    "expected_model": binding.get("expected_model"), "worker_id": agent_id,
                    "provider_session_id": event.get("agent_session_id") or agent_id,
-                   "agent_type": event.get("agent_type"), "model": event.get("model"),
+                   "agent_type": event.get("agent_type"), "model": model,
                    "repo_root": str(root), "manifest_path": str(manifest)}
         operation = "worker-start"
     elif name in {"SessionStart", "PreCompact", "Interrupt"}:

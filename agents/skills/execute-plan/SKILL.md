@@ -61,6 +61,18 @@ The orchestration state is derived, never invented: read it from machine `workfl
 
 The transition loop is mandatory: after every worker return, review result, quota decision, and user status question the orchestrator selects and starts the next action before control returns. Async join: no final response while any launched worker of this run lacks a durably recorded outcome in the machine manifest (every live claim closed or its task terminal); mirror that join state into the session manifest and logs. The terminal gate refuses completion when review freshness or verification evidence is invalid, per the Phase 5 checklist and the Step 0.5 digest rule.
 
+**Serialization-boundary ledger write:** when a run ends at a plan-task boundary whose gate recorded a wait on an unlanded branch or origin ref (the Task-1 drift-gate shape), the run writes or refreshes the parked-dependency ledger entry for the (plan, blocked_on) pair in one targeted state edit addressed to the primary checkout's `.ai-playbook/scheduler-state.json` (the P57 `worktree` field writer's explicit-rooted precedent): `blocked_on` is the bare ref name the boundary task records as its wait, namespace prefixes stripped; the entry sets `boundary_arm` to the recording task's identifier and keeps the earliest `since` on refresh; the run records the write in `manifest.md` and reports it. The write happens only when the primary checkout path resolves AND the state file already exists (the file's existence is the loop's own run-here predicate, so a repo that never ran the loop never gains a schema-partial state file); a run that cannot resolve the primary checkout path or finds no state file records the skip in `manifest.md` and writes nothing.
+
+**Resume decision table** (one supported action per condition; the machine manifest decides, never manual machine-state edits):
+
+| Condition | The one next action |
+|---|---|
+| Plan digest unchanged since the recorded claim/recovery state | Resume claim/recovery state only through the driver (`readiness` then `continue`/recovery operation); never a repeated whole-plan review |
+| Plan-prose mismatch or scope drift reported | Stop before claim consumption; run the read-only `preflight` operation to name the drift side by side, then repair through the skill-gated plan-edit path - never relaunch or re-seed a claim to mask prose drift |
+| Retryable pre-launch refusal (capacity, activation evidence missing or stale, policy unavailable) | Retry the claim or launch after the named evidence is available; the claim and handoff stay retryable |
+| Ambiguous post-launch state (no receipt-backed terminal record) | Driver recovery path (`recover-done-pending` with bounded terminal evidence, handoff recovery, interruption reconciliation) - never a manual manifest edit |
+| Unrelated validation or hygiene failure during recovery | Record as a separate follow-up; it does not invalidate the active task's correctness or commit scope |
+
 **Announcement is not execution.** Saying you are using this skill does not satisfy it. The parent agent must run the Phase 1 loop (implement sub-agent → verify → Step 1.2b intermediate review → refresh marker → mark checkboxes → **done sub-agent** → report) for **each** task. Passing tests or marking all checkboxes in one parent session is **not** a substitute for per-task `done` commits.
 
 ## Live-session discovery ladder
@@ -622,6 +634,7 @@ Pass: plan file path, task number/title, full task section text, `## Validation 
 - For every admitted exception clause, verify the named `completion evidence` instead of requiring repository implementation. If that evidence does not exist, keep the clause unchecked and stop.
 - RED/GREEN steps followed when the task specifies TDD (`Run → expect RED`, `Run → expect GREEN`).
 - Validation command(s) from the plan pass with fresh output.
+- Door-change tasks (the task diff adds or tightens a fail-closed door on a mutator): the exit criteria additionally require the helper grep for the newly banned path, the same-change-set helper retarget in the task's `Files:` set, and a green run of the owning integration class; when the plan's Validation Commands omit the owning class for a door-change task, the orchestrator records incomplete evidence (the done launch is blocked as a malformed receipt), never success.
 - No unrelated files changed outside the task's `Files:` list (unless the plan explicitly requires cross-file wiring).
 
 If the sub-agent reports failure, never returns (a stall under the Timeout clause below), or tests do not pass: do not mark checkboxes; do not launch `done`. Diagnose and immediately launch a focused fix sub-agent or perform the bounded inline recovery, then re-run implement verification. Do not ask the user for a routine restart confirmation; pause only when the recovery budget, a hard gate, or explicit user direction requires it.
@@ -726,7 +739,7 @@ Run after all tasks are implemented and final validation passes.
 | **Full-panel budget** | At most five full-panel rounds; ask before a sixth |
 | **Total-round budget** | At most `max_review_rounds` review rounds in the whole Phase 3 loop (default 5), counting full-panel and focused rounds alike; ask at the cap |
 | **Escalation budget** | At most one escalation worker in the active review run |
-| **Residual-acceptance exit** | When a reconciliation pass or the fix-risk triage produces a named fix set, the orchestrator may propose the bounded exit; a standing instruction or explicit user grant records `residual_policy:` in the manifest BEFORE the verification round runs (the named finding set, the grant's source, and the date); the exit is one address pass for the named set plus ONE focused targeted round composed per `review-panel-selection` Targeted follow-ups; findings in the named set must reach fixed or dropped; any NEW blocking finding outside the set becomes a durable backlog item with an owner and a trigger instead of another round; the exit report lists the backlogged residuals with their item paths |
+| **Residual-acceptance exit** | When a reconciliation pass or the fix-risk triage produces a named fix set, the orchestrator may propose the bounded exit; a standing instruction or explicit user grant records `residual_policy:` in the manifest BEFORE the verification round runs (the named finding set, the grant's source, and the date); the exit is one address pass for the named set plus ONE focused targeted round composed per `review-panel-selection` Targeted follow-ups; findings in the named set must reach fixed or dropped; any NEW blocking finding outside the set becomes a durable backlog item with an owner and a trigger instead of another round; the exit report lists the backlogged residuals with their item paths. **Do not** record a blanket `Medium→backlog` residual policy for the lost-work family: `concurrency#*` (which subsumes the currently enumerated `concurrency#cleanup-gated-on-update`, `concurrency#permit-finally`, and `concurrency#terminal-not-partial` entries), `quality#addressable-domain-door`, `quality#port-api-truth`, `quality#typed-catalog-enumeration-door`, and `implementation#typed-enqueue-door`; the family stays fix-or-block unless the user names each finding id in the residual set |
 
 Track in `manifest.md`:
 
@@ -988,9 +1001,13 @@ git ls-files -- {plans_dir}/<filename>.md   # must print nothing after staging t
 
 If `git ls-files` still lists the active path, the archive is incomplete (destination added without source deleted). Fix with a true rename or an explicit delete of the active path before Phase 5. Do not treat "completed/ file exists" as sufficient while the old path remains tracked. (UL#193)
 
+**Move-with-mutation discipline (the archive commit's shape):** the archived plan snapshot is produced by mutating the live plan file in place and the live path is deleted or renamed in the same commit (`git mv`), never by writing a new `completed/<basename>` file alongside a surviving live twin. The failure signature is an added archive file (`A`) whose basename has no matching delete or rename (`D`/`R`) of the live path in the same commit; a surviving live twin re-presents executed work as open in the queue and is a defect the executor fixes before commit. A legitimate revival routes through the normal lifecycle and never lands a live-plus-archive pair.
+
+**Routed-without-discharge check (same step):** before the archive commit, verify every item or plan entering an archive in this commit is discharged: an item whose content still asserts `Status: open`, or a plan whose required checkboxes are still unchecked, fails the archive step with an explicit message naming the file; discharge (mark done, record the disposition, or tick the boxes) happens before the route, so the receiving-review incident class (archived bytes asserting open work) is caught at route time rather than discovered later.
+
 Include the plan move in a commit immediately after the last Step 3.4 `done` (same `done` sub-agent scope if uncommitted, or a follow-up `done` if needed).
 
-**Promoted backlog item (when applicable):** when the completed plan promoted a `{backlog_dir}` item (the plan header references a backlog file per `plans` **Backlog origin**), `git mv` that item to `{backlog_completed_dir}/` in the same archive commit and mark it `Status: done` in the same edit, per `plans` **Plan Lifecycle**. Before marking an origin `Status: done`, diff its findings against the landed task edits AND the plan Assumptions: the header list can be a superset when assumptions scope items out to another owner; leave a partially covered origin open with a note. Skip when the plan has no backlog origin.
+**Promoted backlog item (when applicable):** when the completed plan promoted a `{backlog_dir}` item (the plan header references a backlog file per `plans` **Backlog origin**), in the same archive commit fold disposition into the completed plan under `{plans_completed_dir}/` and **delete** the backlog file, per `plans` **Plan Lifecycle**. Do not `git mv` dated items into `{backlog_completed_dir}/`. Before deleting an origin, diff its findings against the landed task edits AND the plan Assumptions: the header list can be a superset when assumptions scope items out to another owner; leave a partially covered origin open with a note. Skip when the plan has no backlog origin.
 
 **Origins-closure check (archive gate):** after the move and before the archive commit, run `python3 scripts/check_plan_origins_closed.py --plan <plan-being-archived>` in `--plan` mode: stragglers of that plan (its own origins-block basenames still open at the backlog top level) are dispositioned in the same archive commit per the promoted-backlog rule above (marked done, or recorded why open with a note), mirroring the completeness gate's ordered-transition posture. Corpus-wide stragglers are never this gate's blocker: the maintenance survey's warn arm owns them.
 
@@ -1060,6 +1077,43 @@ if [ "$GIT_DIR_P" != "$GIT_COMMON_P" ]; then
 fi
 ```
 
+**Tracked-dirt inversion check (between migration and removal):** the migrate operation copies only the configured gitignored review directories; a tracked diff in the source worktree (staged or unstaged entries for tracked paths in `git status --porcelain`) is outside its contract and must never be transplanted into the main checkout index. When a linked worktree carries tracked entries, diff the worktree against the main checkout HEAD and pass the diff through the reverse-squash guard before any manual move or removal decision; on a refusal, leave the worktree in place and surface the conflict for reconciliation:
+
+```bash
+GIT_DIR_P="$(cd "$(git rev-parse --git-dir)" && pwd)"
+GIT_COMMON_P="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
+if [ "$GIT_DIR_P" = "$GIT_COMMON_P" ]; then
+  echo "not a linked worktree; tracked-dirt inversion check not applicable"
+elif [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "no tracked dirt; tracked-dirt inversion check not applicable"
+else
+  MAIN_ROOT="$(cd "$(dirname "$GIT_COMMON_P")" && pwd)"
+  MAIN_HEAD="$(git -C "$MAIN_ROOT" rev-parse HEAD)"
+  GUARD=""
+  [ -f "$MAIN_ROOT/scripts/reverse_squash_guard.py" ] && GUARD="$MAIN_ROOT/scripts/reverse_squash_guard.py"
+  if [ -z "$GUARD" ] && [ -f "$HOME/.ai-playbook/scripts/reverse_squash_guard.py" ]; then GUARD="$HOME/.ai-playbook/scripts/reverse_squash_guard.py"; fi
+  if [ -z "$GUARD" ]; then
+    echo "reverse-squash guard absent; tracked-dirt check skipped"
+  else
+    DIFF_FILE="$(mktemp "${TMPDIR:-/tmp}/closeout-diff.XXXXXX")"
+    if git -c core.quotePath=false diff -M "$MAIN_HEAD" >"$DIFF_FILE"; then
+      GUARD_RC=0
+      python3 "$GUARD" check-diff --against "$MAIN_HEAD" --repo "$MAIN_ROOT" <"$DIFF_FILE" || GUARD_RC=$?
+      rm -f "$DIFF_FILE"
+      case "$GUARD_RC" in
+        0) echo "ok: no reverse-squash signature in tracked dirt" ;;
+        1) echo "reverse-squash refusal: do NOT transplant or remove; reconcile the tracked diff first" >&2; exit 1 ;;
+        *) echo "reverse-squash guard tool failure (rc $GUARD_RC); do NOT remove the worktree; stop and report" >&2; exit 1 ;;
+      esac
+    else
+      rm -f "$DIFF_FILE"
+      echo "diff production failed; do NOT transplant or remove the worktree; report instead" >&2
+      exit 1
+    fi
+  fi
+fi
+```
+
 **Removal (orchestrator runs directly; not a sub-agent; only after terminal receipt):**
 
 ```bash
@@ -1075,6 +1129,8 @@ test ! -e "{tmp_dir}/execute-plan/<PLAN_SLUG>" && echo "tmp cleanup OK"
 ```
 
 Report successful plan completion to the user, including the verified terminal-receipt fields, the Phase 3 fixed-vs-backlogged findings tally (backlog item paths for valid findings not fixed on the branch), and that session tmp logs and any review diff snapshots under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` were removed. The exit report and any user-facing completion summary must carry every `release blocker owned elsewhere` row from the staging doc's `## Release-gate ledger` verbatim (the ledger is a handoff artifact, never authorization to expand the plan). Review staging docs under `{reviews_dir}/` are **not** deleted by this step (separate lifecycle). Only after the terminal receipt was written and re-read may the parent send its final response for the execute-plan request.
+
+**Queue-drain continuation (interactive execution under a standing execution directive):** when this run executes under a standing user directive to execute plans (a queue-drain directive, for example "execute plans one by one in order of urgency"), the verified landing and the completed closeout above are NOT a turn end: the orchestrator immediately re-surveys the plans directory for the next digest-intact open plan under the scheduler's D1 selection discipline, whose procedure of record is the maintenance skill's Step 3 D1 rule (the execution queue head and priority ordering from the scheduler state file, outstanding-landing resolution first, skipping memory-index dependency-blocked marks, live parked_dependencies entries, and externally-gated plans per the External-gate header classification) and continues executing it in the same turn, running the full execute-plan flow per plan. Before executing the next plan, the chaining start writes and honors the execution-claim protocol whose procedure of record is the maintenance prompt template's EXECUTION CLAIM paragraph: a noclobber claim file under the primary checkout's literal `docs/tmp/execution-claims/` root (the witness the scheduler's discovery arms read), refreshing its `updated:` at every phase boundary, at every task completion inside the implementation loop, and at every review-round iteration (a refresh recreates the claim file when a takeover unlinked it), and deleting it at closeout and owned stand-down; a fresh foreign claim on the same plan is a guard-fire stop, not a wait, and a chained session that cannot honor the refresh duty does not chain. The sanctioned inter-plan turn ends are a guard fire (a quota pause or near-reset with the Budget gate's constants on the interactive lane, a landing-gate hold reported by `scripts/done-lock.sh` merge-status, a lane hold from the scheduler guards, provider rate pressure with its structured rate-limited end) or an empty queue (no digest-intact open plan remains); a user interrupt or explicit abort is always sanctioned as well. A confirmation ask to the user is never a sanctioned inter-plan stop; the guard reason, stated in the final report, is. This rule governs only the boundary between plans: the next plan's own Phase 0 gates (branch setup among them) operate per their own rules and are not inter-plan stops. This paragraph changes no review gate, landing gate, or one-execution-child guard: every plan still passes the full chain, and the same turn simply chains into the next plan instead of stopping to ask.
 
 ## Sub-Agent Launch Rules
 
@@ -1125,7 +1181,7 @@ Report successful plan completion to the user, including the verified terminal-r
 20. **Skill-gate marker before plan-file edits**; before any plan Markdown edit (Step 1.3, Step 0.4b path rewrites, Recovery checkbox marking, or any other plan-content edit), apply **Plan-file edits (skill-gate)**. Do not bypass or weaken skill-gate. Phase 4 `git mv` alone does not need a marker refresh. In Recovery, mark that task's checkboxes before launching `done`.
 21. **Inclusion Hard Gate before implementation**; Phase 1: classify every unchecked item before Step 1.2. Recovery: classify every checklist item including already `[x]`. While ownership, target, or evidence source is unclear, do **not** open interactive exception; use only Move to Ship when or Stop. On other `inclusion-check failure` outcomes: move explicit prose to **Ship when** after creating the heading or renaming narrative `Release gates` content; admit a **release gate** (never an external prerequisite) only via ask-then-write of a current bound exception receipt plus **why executable now** and `completion evidence`; or stop with a recorded hard-gate reason. Forbid delete-without-Ship-when and silent skip-`[x]`.
 22. **Parent-orchestrated Phase 3 panel**; the execute-plan parent runs `doing-code-review` and launches lens workers directly. Do not nest a "Code Review" sub-agent that re-orchestrates the panel when the parent can fan out. Write the review heartbeat log before waiting. Enforce the 20-minute Step 3.1 artifact timeout.
-23. **Fix-risk triage before more folding**; when fixes keep regenerating findings across rounds, apply `receiving-review` **Fix-risk triage when fixes regenerate findings** before folding further, and verify scoped fixes with the focused targeted round composed per `review-panel-selection.md` (Targeted follow-ups).
+23. **Fix-risk triage before more folding**; when fixes keep regenerating findings across rounds, apply `receiving-review` **Fix-risk triage when fixes regenerate findings** before folding further, and verify scoped fixes with the focused targeted round composed per `review-panel-selection.md` (Targeted follow-ups). Fix-regeneration thrash after external review-bot comments routes through the closed pattern doors in the lens files and `receiving-review` **Fix-risk triage when fixes regenerate findings** (its "Invariant closure before more microfixes" paragraph) before further microfix rounds.
 24. **Reconciliation before continued churn**; the Phase 3 trigger is evaluated mechanically every round (Step 3.2) with the `recurrence_groups` manifest line as its witness, and invocation happens in-loop before the next panel, not only at the cap: while an instance is `triggered`, invoke `review-reconciliation` before another panel or fold. The execute-plan parent remains the original orchestrator and must run the fresh normal panel after any reconciliation change.
 25. **Intermediate review before done**; launch the Step 1.4 `done` sub-agent only after the task's `inter_review` manifest line records verdict `clean` or `backlogged-candidates` with every recorded backlog path captured, unless the `Intermediate reviews: off` opt-out or the Recovery carve-out applies (Step 1.2b does not run on the Recovery path); a `failed-relaunch-exhausted` verdict stops the run for user direction instead of launching done.
 

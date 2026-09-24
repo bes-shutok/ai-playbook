@@ -264,3 +264,8 @@ Files:
 - [x] Near the `max_full_panel_rounds` configuration row, add this exact alignment: "A review round is one review pass regardless of panel mode; full-panel and focused rounds both count; this skill keeps its full-panel-only budget."
 - [x] Commit: `skills: review-loop round-definition alignment with Phase 3 budget`
 - [x] With ALL plan edits committed, run the FULL Validation Commands block → expect `ALL VALIDATION COMMANDS PASS` (groups `[1]`-`[7]`, including the adjacency checks, the superseded-clause probe, the tool-agnosticism sweep over committed and working-tree state (its failure direction was verified manually on 2026-09-01 with a synthetic added line), and the instruction-size gate)
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-02-phase3-churn-control-r1-review-residuals.md: disposition folded into 2026-09-01-phase3-review-churn-control.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-02-phase3-churn-control-certification-residuals.md: disposition folded into 2026-09-01-phase3-review-churn-control.md (2026-09-25); per-item file deleted.

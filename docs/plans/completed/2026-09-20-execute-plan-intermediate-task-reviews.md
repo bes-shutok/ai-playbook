@@ -222,3 +222,7 @@ Files:
 
 - [x] Run the whole `## Validation Commands` block → expect exit 0 with `ALL VALIDATION GATES PASSED` [class: REPOSITORY_TEST]
 - [x] Run the no-em-dash scan and the public-hygiene scan over the six changed files → expect pass [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-16-execute-plan-interrupted-task-ownership-recovery.md: disposition folded into 2026-09-20-execute-plan-intermediate-task-reviews.md (2026-09-25); per-item file deleted.

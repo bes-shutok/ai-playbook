@@ -158,3 +158,7 @@ Files:
 ## Residual review findings (at-cap finalize, 2026-09-19)
 
 Review loop r1-r5 (artifacts at docs/reviews/2026-09-19-plan-review-plan-driving-force-and-gist-tldr-metadata-r1..r5.md). Every blocking finding from r1-r4 and r5's two (F1 boundary-paragraph reconciliation: the sixth blocker family is now prescribed verbatim; F2 Task 2's instruction sentence is now prescribed verbatim with both pinned literals quoted) were folded. The cap was reached, so the final fold set has NOT been re-reviewed by a fresh round: the latest sidecar (r5) digest precedes the final plan bytes, so `plan_readiness.py` reports the sidecar stale and the execution PRE-STEP must run a fresh certification round before dispatch. No other residuals are open.
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-18-plan-driving-force-and-gist-tldr-metadata.md: disposition folded into 2026-09-19-plan-driving-force-and-gist-tldr-metadata.md (2026-09-25); per-item file deleted.

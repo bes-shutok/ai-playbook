@@ -63,5 +63,101 @@ class ScopeClassificationPlacementTest(unittest.TestCase):
         self.assertIn("carries no", reason)
 
 
+# --------------------------------------------------------------------------- #
+# Fence-balance structural failure (both readiness entries, CLI level).
+# --------------------------------------------------------------------------- #
+
+import contextlib
+import io
+import json
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
+import plan_readiness
+
+FACTS_BODY = (
+    "# facts\n\n```toml\n"
+    'plans_dir = "plans"\n'
+    'reviews_dir = "reviews"\n'
+    "```\n"
+)
+
+# A plan whose structural probes all pass cleanly, plus a trailing fenced
+# block whose closer was dropped. The opener's line number is asserted
+# verbatim in the failure message.
+BALANCED_PLAN = (
+    "# P\n\n"
+    "## Assumptions\n\n"
+    "Decision points requiring a grill: none remain.\n\n"
+    "## Tasks\n\n"
+    "### Task 1: Do the thing\n\n"
+    "- [ ] Write the module. [class: IMPLEMENTATION_REQUIRED]\n"
+)
+UNCLOSED_TAIL = "\n```bash\necho never closed\n"
+
+
+class PlanReadinessFenceBalanceTest(unittest.TestCase):
+    """An unclosed fence fails closed naming the opener line; a balanced
+    document runs the structural probes over the full text."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="fence-balance-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        (self.root / "plans").mkdir()
+        (self.root / "reviews").mkdir()
+
+    def _run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.chdir(self.root)
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = plan_readiness.main(argv)
+        finally:
+            os.chdir(prev)
+        return rc, out.getvalue(), err.getvalue()
+
+    def _write_fixture(self, plan_text: str) -> Path:
+        plan, _ = plan_readiness._write_clean_state(
+            self.root / "plans",
+            self.root / "reviews",
+            plan_text=plan_text,
+            date="2026-09-25",
+        )
+        return plan
+
+    def test_unclosed_fence_fails_closed_naming_line(self):
+        plan_text = BALANCED_PLAN + UNCLOSED_TAIL
+        opener_line = plan_text.split("\n").index("```bash") + 1
+        plan = self._write_fixture(plan_text)
+        rc, out, err = self._run_main([str(plan)])
+        self.assertNotEqual(rc, 0, (out, err))
+        self.assertIn("unclosed fence", err)
+        self.assertIn(f"line {opener_line}", err)
+        # Pre-round entry: same structural failure through the pre-round
+        # channel, before any probe evaluates the stripped text.
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertNotEqual(rc, 0, (out, err))
+        self.assertIn(
+            f"readiness PRE-ROUND FAILED: unclosed fence opener at line "
+            f"{opener_line}",
+            err,
+        )
+
+    def test_balanced_fences_still_pass(self):
+        plan = self._write_fixture(BALANCED_PLAN)
+        rc, out, err = self._run_main([str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertNotIn("unclosed fence", err)
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+
+
 if __name__ == "__main__":
     unittest.main()

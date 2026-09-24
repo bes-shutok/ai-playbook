@@ -338,3 +338,9 @@ Files: none (validation only)
 - [x] Run the full Validation Commands block → every command exits 0.
 - [x] `git status --porcelain` shows only this plan's files modified relative to the session's own commits.
 - [x] Commit (only if earlier tasks left any unstaged plan-owned change): `doc-registry: residual close-out final validation`
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-10-doc-registry-validator-argparse-cli-rewrite.md: disposition folded into 2026-09-13-doc-registry-validator-residuals.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-13-doc-registry-r5-prose-residuals.md: disposition folded into 2026-09-13-doc-registry-validator-residuals.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-10-doc-registry-r7-residuals.md: disposition folded into 2026-09-13-doc-registry-validator-residuals.md (2026-09-25); per-item file deleted.

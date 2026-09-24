@@ -10,7 +10,10 @@ import os
 import re
 import json
 import shutil
+import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -149,6 +152,208 @@ def find_forbidden_shared_terms(
 
 
 class RuntimeCapabilitiesTest(unittest.TestCase):
+    def test_evidence_envelope_requires_driver_captured_machine_fields(self):
+        evidence = {
+            "version": 1,
+            "command": ["python3", "-m", "unittest", "test_runtime_capabilities"],
+            "working_directory": "/repo/scripts",
+            "exit_status": 0,
+            "output_digest": "sha256:" + "a" * 64,
+            "stdout_digest": "sha256:" + "b" * 64,
+            "stderr_digest": "sha256:" + "c" * 64,
+            "selected_tests": ["EvidenceVerifierTest.test_accepts_command_identity_and_criterion_coverage"],
+            "baseline_paths": ["scripts/runtime_capabilities.py"],
+            "changed_paths": ["scripts/runtime_capabilities.py"],
+            "allowed_paths": ["scripts/runtime_capabilities.py"],
+            "criteria": ["criterion-1"],
+            "verified_by": "runtime-driver",
+            "task_id": "task-4",
+            "claim_token": "claim-4",
+            "generation": 1,
+            "launch_id": "launch-4",
+            "evidence_contract_digest": "c" * 64,
+            "source_digest": "sha256:" + "d" * 64,
+        }
+        self.assertEqual(capabilities.normalize_evidence_envelope(evidence), evidence)
+        for field in ("command", "working_directory", "exit_status", "output_digest", "stdout_digest", "stderr_digest", "selected_tests", "changed_paths", "criteria"):
+            malformed = dict(evidence)
+            malformed.pop(field)
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                capabilities.normalize_evidence_envelope(malformed)
+
+    def test_evidence_envelope_rejects_worker_authored_facts_and_failed_commands(self):
+        evidence = {
+            "version": 1,
+            "command": ["pytest"],
+            "working_directory": "/repo",
+            "exit_status": 0,
+            "output_digest": "sha256:" + "b" * 64,
+            "stdout_digest": "sha256:" + "b" * 64,
+            "stderr_digest": "sha256:" + "c" * 64,
+            "selected_tests": ["test_a"],
+            "baseline_paths": [],
+            "changed_paths": [],
+            "allowed_paths": ["a.py"],
+            "criteria": ["criterion-1"],
+            "verified_by": "worker",
+            "task_id": "task-4",
+            "claim_token": "claim-4",
+            "generation": 1,
+            "launch_id": "launch-4",
+            "evidence_contract_digest": "c" * 64,
+            "source_digest": "sha256:" + "d" * 64,
+        }
+        with self.assertRaisesRegex(ValueError, "runtime driver"):
+            capabilities.normalize_evidence_envelope(evidence)
+        evidence["verified_by"] = "runtime-driver"
+        evidence["exit_status"] = "0"
+        with self.assertRaisesRegex(ValueError, "integer"):
+            capabilities.normalize_evidence_envelope(evidence)
+
+    def test_evidence_contract_digest_ignores_progress_and_tracks_contract(self):
+        tasks = {"4": {"required_criteria": ["green"], "verification_commands": [{"id": "unit", "argv": ["python3", "-m", "unittest"], "criteria": ["green"]}], "allowed_paths": ["a.py"], "status": "pending", "checkbox": False}}
+        initial = capabilities.evidence_contract_digest(tasks)
+        tasks["4"].update({"status": "complete", "checkbox": True})
+        self.assertEqual(capabilities.evidence_contract_digest(tasks), initial)
+        tasks["4"]["required_criteria"] = ["green", "hygiene"]
+        tasks["4"]["verification_commands"][0]["criteria"] = ["green", "hygiene"]
+        self.assertNotEqual(capabilities.evidence_contract_digest(tasks), initial)
+
+    def test_driver_evidence_is_bound_to_allowlisted_source_contents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            git_env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+            subprocess.run(["git", "init", "-q"], cwd=root, env=git_env, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, env=git_env, check=True)
+            subprocess.run(["git", "config", "user.name", "Runtime Test"], cwd=root, env=git_env, check=True)
+            source = root / "task.py"
+            source.write_text("print('initial')\n", encoding="utf-8")
+            subprocess.run(["git", "add", "task.py"], cwd=root, env=git_env, check=True)
+            subprocess.run(["git", "commit", "-qm", "base"], cwd=root, env=git_env, check=True)
+            manifest_path = root / "runtime_state.json"
+            task = {
+                "id": "task-1", "status": "pending", "allowed_paths": ["task.py"],
+                "required_criteria": ["tests-green"],
+                "verification_commands": [
+                    {"id": "unit", "argv": [os.sys.executable, "-c", "print('ok')"], "criteria": ["tests-green"]},
+                    {"id": "fail", "argv": [os.sys.executable, "-c", "raise SystemExit(2)"], "criteria": ["tests-green"]},
+                ],
+            }
+            runtime.create_manifest(manifest_path, "evidence-source", [task], repo_root=root)
+            state = runtime.load_manifest(manifest_path)
+            state["evidence_enforcement"] = True
+            state["claims"]["task-1"] = {
+                "task_id": "task-1", "state": "launched", "token": "claim-token", "generation": 1,
+                "launch_id": "launch-id", "allowed_paths": ["task.py"], "baseline_revision": "",
+            }
+            runtime._safe_write_json(manifest_path, state)
+            source.write_text("print('verified')\n", encoding="utf-8")
+            baseline = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, env=git_env, capture_output=True, text=True, check=True).stdout.strip()
+            driver = runtime.RuntimeDriver(manifest_path, owner="test-owner", repo_root=root)
+            result = {
+                "status": "success", "reason_code": "completed", "evidence": ["worker receipt"],
+                "action_scope": "repository-task", "checkpoint_identity": "task-1:worker",
+                "generation": 1, "claim_token": "claim-token",
+            }
+            before_narrative = manifest_path.read_bytes()
+            narrative = driver.validate_adapter_result(result)
+            self.assertEqual(narrative["reason_code"], "malformed-result")
+            self.assertEqual(manifest_path.read_bytes(), before_narrative)
+            captured = driver.capture_verification_evidence("task-1", "unit")
+            self.assertEqual(captured["status"], "success", captured)
+            self.assertEqual(driver.validate_adapter_result(result)["status"], "success")
+            failed_command = driver.capture_verification_evidence("task-1", "fail")
+            self.assertEqual(failed_command["reason_code"], "contract-violation")
+            valid_state = runtime.load_manifest(manifest_path)
+            for field, value in (("working_directory", str(root / "wrong")), ("criteria", []), ("verified_by", "worker"), ("launch_id", "other-launch"), ("exit_status", 2)):
+                with self.subTest(field=field):
+                    altered_state = copy.deepcopy(valid_state)
+                    altered_state["verification_evidence"]["task-1"]["unit"][field] = value
+                    runtime._safe_write_json(manifest_path, altered_state)
+                    before = manifest_path.read_bytes()
+                    refused = driver.validate_adapter_result(result)
+                    self.assertEqual(refused["status"], "blocked")
+                    self.assertEqual(manifest_path.read_bytes(), before)
+            runtime._safe_write_json(manifest_path, valid_state)
+            subprocess.run(["git", "add", "task.py"], cwd=root, env=git_env, check=True)
+            subprocess.run(["git", "commit", "-qm", "verified"], cwd=root, env=git_env, check=True)
+            commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, env=git_env, capture_output=True, text=True, check=True).stdout.strip()
+            self.assertEqual(driver._task_source_digest(["task.py"], revision=commit), captured["envelope"]["source_digest"])
+            state = runtime.load_manifest(manifest_path)
+            state["claims"]["task-1"].update({"baseline_revision": baseline, "policy_token": {"allowed_paths": ["task.py"]}})
+            runtime._safe_write_json(manifest_path, state)
+            with mock.patch.object(driver, "_claim_drift_outcome", return_value=None):
+                self.assertIsNone(driver._done_boundary_block(state["claims"]["task-1"], commit, "task-1:done", 1, state))
+            source.write_text("print('after')\n", encoding="utf-8")
+            subprocess.run(["git", "add", "task.py"], cwd=root, env=git_env, check=True)
+            subprocess.run(["git", "commit", "-qm", "unverified"], cwd=root, env=git_env, check=True)
+            changed_commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, env=git_env, capture_output=True, text=True, check=True).stdout.strip()
+            with mock.patch.object(driver, "_claim_drift_outcome", return_value=None):
+                refused_commit = driver._done_boundary_block(state["claims"]["task-1"], changed_commit, "task-1:done", 1, state)
+            self.assertEqual(refused_commit["reason_code"], "commit-pending")
+            stale = driver.validate_adapter_result(result)
+            self.assertEqual(stale["status"], "blocked")
+            self.assertEqual(stale["reason_code"], "malformed-result")
+
+    def test_two_drivers_cannot_reserve_the_same_last_capacity_slot(self):
+        class InventoryAdapter:
+            def observe_inventory(self):
+                return {"version": 1, "observation_kind": "inventory", "state": "available", "observed_at": time.monotonic(), "freshness_window": 30, "capacity_slot_effect": "retain", "inventory": []}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            git_env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+            subprocess.run(["git", "init", "-q"], cwd=root, env=git_env, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, env=git_env, check=True)
+            subprocess.run(["git", "config", "user.name", "Runtime Test"], cwd=root, env=git_env, check=True)
+            (root / ".gitignore").write_text("runtime_state.json\nruntime_state.json.lock\n", encoding="utf-8")
+            subprocess.run(["git", "add", ".gitignore"], cwd=root, env=git_env, check=True)
+            subprocess.run(["git", "commit", "-qm", "base"], cwd=root, env=git_env, check=True)
+            manifest_path = root / "runtime_state.json"
+            runtime.create_manifest(manifest_path, "capacity-race", [
+                {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["task-1.txt"]},
+                {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["task-2.txt"]},
+            ], repo_root=root)
+            first_driver = runtime.RuntimeDriver(manifest_path, owner="race-test", repo_root=root, adapter=InventoryAdapter())
+            claimed = first_driver.claim_parallel_group(["task-1", "task-2"])
+            self.assertEqual(claimed["status"], "success")
+            claims = runtime.load_manifest(manifest_path)["claims"]
+            barrier = threading.Barrier(2)
+            outcomes = {}
+
+            def reserve(task_id):
+                barrier.wait(timeout=2)
+                driver = runtime.RuntimeDriver(manifest_path, owner="race-test", repo_root=root, adapter=InventoryAdapter())
+                outcomes[task_id] = driver._mark_claim_launched(claims[task_id], task_id, {"allowed_paths": [f"{task_id}.txt"]})
+
+            workers = [threading.Thread(target=reserve, args=(task_id,)) for task_id in ("task-1", "task-2")]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=5)
+            self.assertTrue(all(not worker.is_alive() for worker in workers))
+            self.assertEqual(sum(outcome is None for outcome in outcomes.values()), 1, outcomes)
+            self.assertEqual(sum(isinstance(outcome, dict) and outcome.get("status") == "blocked" for outcome in outcomes.values()), 1, outcomes)
+            reservations = runtime.load_manifest(manifest_path)["capacity"]["reservations"]
+            self.assertEqual(len(reservations), 1)
+
+    def test_startup_reconciliation_ignores_unrelated_dirty_worktree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "runtime_state.json"
+            runtime.create_manifest(
+                manifest_path,
+                "dirty-startup",
+                [{"id": "task-1", "status": "pending", "allowed_paths": ["owned.py"]}],
+            )
+            driver = runtime.RuntimeDriver(manifest_path, repo_root=root)
+            with mock.patch.object(driver, "_git_worktree_dirty", return_value=True), mock.patch.object(
+                driver, "_git_worktree_entries", return_value=[("??", "manual-change.py")]
+            ):
+                result = driver.reconcile_startup()
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["reason_code"], "completed")
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.inventory = capabilities.load_inventory(INVENTORY_PATH)

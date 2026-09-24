@@ -215,3 +215,7 @@ Files:
 
 - [x] Run the whole `## Validation Commands` block from the repository root; expect every command GREEN, and record the first actually-failing gate with its exit code if any command fails instead of predicting a pass [class: REPOSITORY_TEST]
 - [x] Confirm the plan's own insertions are em-dash-free with `bash scripts/check-no-em-dash.sh added-lines --base "$BASE_SHA"` (the base recorded in Task 1; at Task 8 the working-tree diff against HEAD is empty because every task committed, so the base-relative diff is the only scan that observes this plan's insertions), and `bash scripts/scan-public-hygiene.sh` exits 0 [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-10-runtime-budget-guard-hooks.md: disposition folded into 2026-09-22-p37-context-budget-probes-and-runtime-state.md (2026-09-25); per-item file deleted.

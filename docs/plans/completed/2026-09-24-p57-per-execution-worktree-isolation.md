@@ -293,3 +293,8 @@ Files:
 - [x] Run → expect GREEN: `python3 scripts/plan_readiness.py docs/plans/2026-09-24-p57-per-execution-worktree-isolation.md` (already inside the block; the standalone run is the certification oracle the done handoff records). [class: REPOSITORY_TEST]
 - [x] Verify the Review Scope's out-of-scope set is untouched: `git diff --name-only` over the branch lists exactly `agents/skills/maintenance/SKILL.md`, `agents/skills/maintenance/zcode.md`, `agents/skills/maintenance/prompt-templates.md`, `scripts/check_maintenance_pins.sh`, and this plan file. [class: REPOSITORY_TEST]
 - [x] Commit (if any gate fix produced bytes): `fix: P57 validation closeout` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-24-reinstate-per-execution-adhoc-worktree-isolation.md: disposition folded into 2026-09-24-p57-per-execution-worktree-isolation.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-18-overlapping-execution-children-worktree-isolation.md: disposition folded into 2026-09-24-p57-per-execution-worktree-isolation.md (2026-09-25); per-item file deleted.

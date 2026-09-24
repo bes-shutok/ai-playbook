@@ -316,3 +316,7 @@ Files:
 - [x] Run → expect GREEN: full Validation Commands block, exit 0 [class: REPOSITORY_TEST]
 - [x] Run → expect GREEN: `python3 scripts/plan_readiness.py docs/plans/2026-09-21-scheduler-maintenance-loop-quality-hygiene.md` exits 0 [class: REPOSITORY_TEST]
 - [x] Commit: `feat: friction-audit lane, pin precision, emission discipline, dedupe status match, b2p2 closures` [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-23-loop-quality-hygiene-review-r1-deferred-lows.md: disposition folded into 2026-09-21-scheduler-maintenance-loop-quality-hygiene.md (2026-09-25); per-item file deleted.

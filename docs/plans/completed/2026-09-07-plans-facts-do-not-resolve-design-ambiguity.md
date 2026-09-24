@@ -456,3 +456,9 @@ Files: none new (validation only; fixes commit to the owning file)
 - [x] Verify scope integrity of this plan's own commits: with `<base>` recorded before Task 1's commit, `git log --format:'' --name-only <base>..HEAD | sort -u` must equal the plan's declared artifact set: the union of the task Files lists, this plan document, and this plan's review artifacts; the done commit-all path must be fenced by enumerating any additional paths the done step commits; any extra path in this plan's commit history is a defect to fix before completion.
 - [x] Verify no concurrent peer state was consumed: the commit half is proven by the scope-integrity check above; the working-tree half is proven by never staging, committing, checkout-reverting, or otherwise touching any path this plan never declares. The peer committing or reworking its own files mid-execution is expected and harmless; the invariant binds only this plan's actions.
 - [x] Commit any validation-driven fixes individually to their owning files; expect none needed.
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-07-plans-facts-do-not-resolve-design-ambiguity.md: disposition folded into 2026-09-07-plans-facts-do-not-resolve-design-ambiguity.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-20-plans-watcher-schedule-payload-contract-ambiguity.md: disposition folded into 2026-09-07-plans-facts-do-not-resolve-design-ambiguity.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-05-plans-session-constraints-not-plan-constraints.md: disposition folded into 2026-09-07-plans-facts-do-not-resolve-design-ambiguity.md (2026-09-25); per-item file deleted.

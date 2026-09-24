@@ -234,3 +234,7 @@ Files:
 - [x] Arming drill, unusable-probe fixture: with a status-unknown fixture report, record that the recurring fallback is created instead and no chain record exists [class: REPOSITORY_TEST]
 - [x] Run → expect GREEN: full Validation Commands block, exit 0 [class: REPOSITORY_TEST]
 - [x] Run → expect GREEN: `python3 scripts/plan_readiness.py docs/plans/2026-09-21-maintenance-turn-self-scheduling-cadence.md` exits 0 [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-21-maintenance-turn-self-scheduling-cadence.md: disposition folded into 2026-09-21-maintenance-turn-self-scheduling-cadence.md (2026-09-25); per-item file deleted.

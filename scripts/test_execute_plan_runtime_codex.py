@@ -85,6 +85,20 @@ class LongWaitRunner(RecordedRunner):
 
 
 class CodexAdapterTest(unittest.TestCase):
+    def test_translates_terminal_exec_json_events(self):
+        adapter = CodexAdapter(Path.cwd(), runner=lambda *_args, **_kwargs: {"returncode": 0, "stdout": ""})
+        completed = adapter.translate_host_result({"type": "turn.completed", "usage": {}}, 3, "task-4")
+        self.assertEqual(completed["status"], "success")
+        self.assertEqual(completed["reason_code"], "completed")
+        self.assertEqual(completed["evidence"], ["Codex emitted turn.completed"])
+
+        failed = adapter.translate_host_result(
+            {"type": "turn.failed", "error": {"message": "worker failed"}}, 3, "task-4"
+        )
+        self.assertEqual(failed["status"], "blocked")
+        self.assertEqual(failed["reason_code"], "runtime-error")
+        self.assertIn("worker failed", failed["evidence"])
+
     def setUp(self) -> None:
         # Pin ambient execute-plan env inputs (hermeticity).
         self._saved_env = {key: os.environ.pop(key) for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST") if key in os.environ}
@@ -116,6 +130,127 @@ class CodexAdapterTest(unittest.TestCase):
         approval = adapter.translate_host_result({"status": "approval-required", "action_scope": "external-write:publish"}, 1, "task-4")
         self.assertEqual(approval["status"], "blocked")
         self.assertEqual(approval["retry_policy"]["mode"], "none")
+
+    def test_launch_receipt_exposes_identity_needed_to_consume_handoff_binding(self):
+        adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True)
+        self.assertEqual(adapter.activation_check()["status"], "success")
+        p = self.policy()
+        receipt = adapter.launch({"id": "task-4"}, "implement task", 1, policy_token=p)
+        self.assertEqual(receipt["status"], "success")
+        for field in ("provider_session_id", "worker_id", "launch_id", "capacity_entry_id", "command_identity", "process_identity", "observed_at"):
+            self.assertTrue(receipt.get(field), field)
+
+    def test_observe_inventory_accepts_an_empty_successful_process_snapshot(self):
+        completed = subprocess.CompletedProcess([], 0, "  101 Tue Sep 22 11:41:37 2026 /sbin/launchd\n", "")
+        adapter = CodexAdapter("/repo", runner=RecordedRunner(), process_snapshot=lambda: completed)
+
+        observation = adapter.observe_inventory()
+
+        self.assertEqual(observation["state"], "available")
+        self.assertEqual(observation["inventory"], [])
+        self.assertEqual(observation["capacity_slot_effect"], "retain")
+
+    def test_observe_inventory_reports_codex_exec_pid_and_start_time(self):
+        completed = subprocess.CompletedProcess(
+            [],
+            0,
+            "  320 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec interactive\n"
+            "  321 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec --json -C /repo implement\n"
+            "  322 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec resume session-id --json\n",
+            "",
+        )
+        adapter = CodexAdapter("/repo", runner=RecordedRunner(), process_snapshot=lambda: completed)
+
+        observation = adapter.observe_inventory()
+
+        self.assertEqual(observation["state"], "available")
+        self.assertEqual(len(observation["inventory"]), 2)
+        worker = observation["inventory"][0]
+        self.assertEqual(worker["process_identity"], {"pid": 321, "start_time": "Tue Sep 22 11:41:37 2026"})
+        self.assertTrue(worker["provider_session_id"].startswith("codex-process-321-"))
+
+    def test_inventory_ignores_unrelated_process_command_with_unbalanced_quote(self):
+        completed = subprocess.CompletedProcess(
+            [],
+            0,
+            "  101 Tue Sep 22 11:41:37 2026 /sbin/launchd --note 'unfinished\n"
+            "  321 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec --json -C /repo implement\n",
+            "",
+        )
+        adapter = CodexAdapter("/repo", runner=RecordedRunner(), process_snapshot=lambda: completed)
+
+        observation = adapter.observe_inventory()
+
+        self.assertEqual(observation["state"], "available")
+        self.assertEqual(len(observation["inventory"]), 1)
+        self.assertEqual(observation["inventory"][0]["process_identity"]["pid"], 321)
+
+    def test_observe_inventory_fails_closed_for_failed_or_malformed_process_snapshot(self):
+        failed = subprocess.CompletedProcess([], 1, "", "ps failed")
+        malformed = subprocess.CompletedProcess([], 0, "not a process row\n", "")
+
+        for snapshot in (failed, malformed):
+            with self.subTest(snapshot=snapshot):
+                adapter = CodexAdapter("/repo", runner=RecordedRunner(), process_snapshot=lambda value=snapshot: value)
+                observation = adapter.observe_inventory()
+                self.assertEqual(observation["state"], "unavailable")
+                self.assertIsNone(observation["inventory"])
+
+    def test_launch_refuses_when_capacity_lock_is_already_held(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "capacity.lock"
+            runner = RecordedRunner()
+            adapter = CodexAdapter(
+                "/repo",
+                runner=runner,
+                approval_verified=True,
+                process_snapshot=lambda: subprocess.CompletedProcess([], 0, "  101 Tue Sep 22 11:41:37 2026 /sbin/launchd\n", ""),
+                capacity_lock_path=lock_path,
+            )
+            self.assertEqual(adapter.activation_check()["status"], "success")
+            lock_path.touch()
+            import fcntl
+            with lock_path.open("r+") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                result = adapter.launch({"id": "task-4"}, "implement task", 1, policy_token=self.policy())
+
+        self.assertEqual(result["reason_code"], "capacity-unavailable")
+        self.assertFalse(any(isinstance(call[0], list) and call[2] == "launch" for call in runner.calls))
+
+    def test_launch_refuses_when_process_inventory_contains_active_codex_worker(self):
+        snapshot = subprocess.CompletedProcess(
+            [],
+            0,
+            "  321 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec --json -C /repo implement\n",
+            "",
+        )
+        runner = RecordedRunner()
+        adapter = CodexAdapter("/repo", runner=runner, approval_verified=True, process_snapshot=lambda: snapshot)
+        self.assertEqual(adapter.activation_check()["status"], "success")
+
+        result = adapter.launch({"id": "task-4"}, "implement task", 1, policy_token=self.policy())
+
+        self.assertEqual(result["reason_code"], "capacity-unavailable")
+        self.assertFalse(any(isinstance(call[0], list) and call[2] == "launch" for call in runner.calls))
+
+    def test_parallel_group_allows_registered_member_but_blocks_unrelated_process(self):
+        process = {"pid": 41, "start_time": "Tue Sep 22 11:41:37 2026"}
+        snapshot = subprocess.CompletedProcess([], 0, "  41 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec --json -C /repo implement\n", "")
+        runner = RecordedRunner()
+        adapter = CodexAdapter("/repo", runner=runner, approval_verified=True, process_snapshot=lambda: snapshot)
+        self.assertEqual(adapter.activation_check()["status"], "success")
+        policy = self.policy() | {"generation": 2, "parallel_member_processes": [process]}
+
+        allowed = adapter.launch({"id": "task-5"}, "implement task", 2, policy_token=policy)
+
+        self.assertEqual(allowed["status"], "success", allowed)
+        self.assertTrue(any(isinstance(call[0], list) and call[2] == "launch" for call in runner.calls))
+        other_runner = RecordedRunner()
+        other = CodexAdapter("/repo", runner=other_runner, approval_verified=True, process_snapshot=lambda: snapshot)
+        self.assertEqual(other.activation_check()["status"], "success")
+        refused = other.launch({"id": "task-5"}, "implement task", 2, policy_token=self.policy() | {"generation": 2})
+        self.assertEqual(refused["reason_code"], "capacity-unavailable")
+        self.assertFalse(any(isinstance(call[0], list) and call[2] == "launch" for call in other_runner.calls))
 
     def test_batch_progress_translation_and_anchor_resume(self):
         # given: a host envelope with ordered member progress, attempt, batch
@@ -344,7 +479,11 @@ class CodexAdapterTest(unittest.TestCase):
                 owned = _process_tree_pids(child.pid)
                 # No descendants, but identity capture is exercised on live PIDs.
                 self.assertIsInstance(owned, dict)
-                self.assertTrue(_pid_identity_matches(child.pid, subprocess.run(["ps", "-p", str(child.pid), "-o", "lstart="], capture_output=True, text=True).stdout.strip()))
+                try:
+                    process_start = subprocess.run(["ps", "-p", str(child.pid), "-o", "lstart="], capture_output=True, text=True, check=True, timeout=2).stdout.strip()
+                except (OSError, subprocess.SubprocessError) as exc:
+                    self.skipTest(f"host process inventory unavailable: {type(exc).__name__}")
+                self.assertTrue(_pid_identity_matches(child.pid, process_start))
                 self.assertFalse(_pid_identity_matches(child.pid, "Mon Jan  1 00:00:00 1999"))
             finally:
                 child.terminate()
@@ -363,12 +502,13 @@ class CodexAdapterTest(unittest.TestCase):
                 runner = RecordedRunner(timeout=True, cleanup_verified=True)
                 adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
                 self.assertEqual(adapter.activation_check()["status"], "success")
-                result = adapter._timeout_result(
-                    {"handle": child, "owned_pids": {child.pid: "Mon Jan  1 00:00:00 1999"}},
-                    "launch",
-                    1,
-                    "task-4:worker",
-                )
+                with mock.patch("execute_plan_runtime_codex._pid_identity_matches", return_value=False):
+                    result = adapter._timeout_result(
+                        {"handle": child, "owned_pids": {child.pid: "Mon Jan  1 00:00:00 1999"}},
+                        "launch",
+                        1,
+                        "task-4:worker",
+                    )
                 self.assertEqual(result["status"], "blocked")
                 self.assertEqual(result["reason_code"], "timeout")
                 self.assertTrue(any(call[0] == "cancel" for call in runner.calls))
@@ -630,22 +770,20 @@ class CodexAdapterTest(unittest.TestCase):
         self.assertEqual(adapter.wait_deadline, 42.0)
 
     def test_package_manifest_pins_cross_runtime_baseline(self):
-        # The shipped package manifest pins the cross-runtime deadline
-        # baseline and the runtime contract names the same values: the two
-        # surfaces drift together or this pin fails. Parse the manifest the
-        # way test_package_manifest_ambient_read parses manifest documents.
+        # The shipped package manifest and Codex adapter profile are the
+        # two host-specific deadline surfaces and must stay in sync.
         repo_root = Path(__file__).resolve().parents[1]
         manifest_path = repo_root / "agents/skills/execute-plan/package-manifest.toml"
         with manifest_path.open("rb") as stream:
             values = tomllib.load(stream).get("adapters", {}).get("codex", {})
         self.assertEqual(values.get("launch_deadline_seconds"), 900)
         self.assertEqual(values.get("wait_deadline_seconds"), 1500)
-        contract_text = (repo_root / "agents/skills/execute-plan/runtime-contract.md").read_text(encoding="utf-8")
+        profile_text = (repo_root / "agents/skills/execute-plan/runtime-adapters/codex.md").read_text(encoding="utf-8")
         baseline_lines = [
-            line for line in contract_text.splitlines()
+            line for line in profile_text.splitlines()
             if "`launch_deadline_seconds = 900`" in line and "`wait_deadline_seconds = 1500`" in line
         ]
-        self.assertTrue(baseline_lines, "contract baseline sentence naming both deadline values is missing")
+        self.assertTrue(baseline_lines, "Codex adapter profile baseline naming both deadline values is missing")
 
     def test_omitted_manifest_keys_fall_back_to_contract_baseline(self):
         # A manifest document whose [adapters.codex] block omits both

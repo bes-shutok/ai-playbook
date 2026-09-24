@@ -172,3 +172,8 @@ Review loop r1-r5 (artifacts at docs/reviews/2026-09-19-plan-review-maintenance-
 ## Execution addendum (r1, 2026-09-20)
 
 Executed same day on branch 2026-09-19-maintenance-park-guard-externally-gated-plans (base dd1fac85b2d84a026ad8e1686896f157e80300a3 - the literal BASE for the commit-scope gates above, now inlined into the block; the gitignored tmp file holds this same sha). Deviation of record: the plan checkboxes said the additive schema fields ride "under schema 3"; the live schema is 4, so the delivered text says "additive under schema 4 (no version bump)" - the no-bump semantic is preserved. Review r1 (fresh-adversarial full panel, 5 lenses): 2 blocking findings (missing Revisions/schema-changelog entry; the decision-order gate's grep class not portable to native BSD grep - corrected in place this round, same semantics) + 10 non-blocking findings, all folded in the r1 address pass; 2 deferrals backlogged (third machine conjunct for the stand-down carve-out; parameterized park-proposal note-type convention).
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-18-maintenance-park-guard-externally-gated-plans.md: disposition folded into 2026-09-19-maintenance-park-guard-externally-gated-plans.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-17-maintenance-preservation-pins-discriminating-guard.md: disposition folded into 2026-09-19-maintenance-park-guard-externally-gated-plans.md (2026-09-25); per-item file deleted.

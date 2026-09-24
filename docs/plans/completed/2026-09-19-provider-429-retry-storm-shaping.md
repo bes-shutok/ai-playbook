@@ -124,3 +124,7 @@ Files:
 - [x] Add the structured reporting contract: when a run cannot proceed because of rate limiting, it ends with the plan unarchived, the machine manifest left active, and the report naming a structured `rate_limited` reason (so the scheduler's re-queue semantics and post-mortems see it), never with a generic failure. [class: IMPLEMENTATION_REQUIRED]
 - [x] Witness: the cap default (3), the halving (floor 1), and the structured reason each have a dedicated needle, and the no-relaunch clause has its own dedicated needle. [class: REPOSITORY_TEST]
 - [x] Commit: `execute-plan: fan-out cap and rate-limited reporting` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-19-provider-429-retry-storm-shaping.md: disposition folded into 2026-09-19-provider-429-retry-storm-shaping.md (2026-09-25); per-item file deleted.

@@ -304,5 +304,98 @@ class PlanOriginsClosedTest(unittest.TestCase):
         self.assertIn("no origins block; nothing to verify", proc.stdout)
 
 
+class OriginsBlockGrammarTest(unittest.TestCase):
+    """Origins-block grammar: blank-line tolerance and the undercount
+    warning, exercised through the module parser and the --plan CLI."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="origins-grammar-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.backlog = self.root / "docs" / "history" / "backlog"
+        self.completed = self.backlog / "completed"
+        self.completed.mkdir(parents=True)
+        sys.path.insert(0, str(SCRIPT_PATH.parent))
+        import check_plan_origins_closed as gate
+
+        self.gate = gate
+
+    def _plan(self, name: str, text: str) -> Path:
+        path = self.root / name
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _archived(self, name: str) -> None:
+        (self.completed / name).write_text("# archived\n", encoding="utf-8")
+
+    def test_blank_line_between_header_and_list_tolerated(self):
+        self._archived(ALPHA)
+        self._archived(BETA)
+        text = (
+            "Backlog origins (scope of record):\n"
+            "\n"
+            f"- `{ALPHA}`\n"
+            f"- `{BETA}`\n"
+            "\n"
+            "## Tasks\n"
+        )
+        names = self.gate.extract_origin_basenames(
+            text, self.backlog, self.completed
+        )
+        self.assertEqual(names, [ALPHA, BETA])
+
+    def test_blank_line_between_bullets_ends_block(self):
+        self._archived(ALPHA)
+        self._archived(BETA)
+        text = (
+            "Backlog origins (scope of record):\n"
+            f"- `{ALPHA}`\n"
+            "\n"
+            f"- `{BETA}`\n"
+        )
+        names = self.gate.extract_origin_basenames(
+            text, self.backlog, self.completed
+        )
+        self.assertEqual(names, [ALPHA])
+
+    def test_dispositions_undercount_warning(self):
+        self._archived(ALPHA)
+        self._archived(BETA)
+        self._archived(GAMMA)
+        # The blank line after the first bullet ends the origins block, so
+        # the parser sees one origin while the dispositions section lists
+        # three; the --plan gate warns naming both counts and exits 0.
+        text = (
+            "Backlog origins (scope of record):\n"
+            f"- `{ALPHA}`\n"
+            "\n"
+            f"- `{BETA}`\n"
+            f"- `{GAMMA}`\n"
+            "\n"
+            "## Origins dispositions\n\n"
+            f"- `{ALPHA}`: routed done\n"
+            f"- `{BETA}`: routed done\n"
+            f"- `{GAMMA}`: routed done\n"
+        )
+        plan = self._plan("2026-09-25-fixture-undercount.md", text)
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--repo-root",
+                str(self.root),
+                "--plan",
+                str(plan),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("warning", combined)
+        self.assertIn("1", combined)
+        self.assertIn("3", combined)
+
+
 if __name__ == "__main__":
     unittest.main()

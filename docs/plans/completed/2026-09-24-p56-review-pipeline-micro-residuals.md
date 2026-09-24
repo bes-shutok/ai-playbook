@@ -332,3 +332,7 @@ Files:
 - `2026-09-23-dfm-cr-f9-pricing-phrase-clarity.md`: fixed by Task 6
 - `2026-09-23-loop-guard-unit-clause-recycling-leg-wording.md`: fixed by Task 7 (the origin's "update the two identical pins" leg resolves to: both existing pins survive verbatim and one successor pin is added; the "plan freeze literal" leg resolves to recorded drift per the archived-bytes invariant)
 - `2026-09-23-dfm-r6-gate-comment-misgrouping.md`: no fix by record (origin's own moot/next-natural-edit framing; precise fix text preserved here and in the item; verification only, Task 8)
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-21-durability-review-residuals.md: disposition folded into 2026-09-24-p56-review-pipeline-micro-residuals.md (2026-09-25); per-item file deleted.

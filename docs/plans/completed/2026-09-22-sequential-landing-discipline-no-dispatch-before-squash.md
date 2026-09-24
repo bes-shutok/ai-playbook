@@ -241,3 +241,9 @@ Files:
 - [x] Run → expect GREEN: the full Validation Commands block from a clean shell, exit 0 [class: REPOSITORY_TEST]
 - [x] Run → expect GREEN: `python3 scripts/plan_readiness.py docs/plans/2026-09-22-sequential-landing-discipline-no-dispatch-before-squash.md` exits 0 [class: REPOSITORY_TEST]
 - [x] Commit: `feat: sequential landing discipline for the maintenance loop (no dispatch before the previous run's squash lands)` [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-19-scheduler-toolset-precheck-before-dispatch.md: disposition folded into 2026-09-22-sequential-landing-discipline-no-dispatch-before-squash.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-21-sequential-landing-discipline-no-dispatch-before-squash.md: disposition folded into 2026-09-22-sequential-landing-discipline-no-dispatch-before-squash.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-16-peak-window-dispatch-discipline.md: disposition folded into 2026-09-22-sequential-landing-discipline-no-dispatch-before-squash.md (2026-09-25); per-item file deleted.

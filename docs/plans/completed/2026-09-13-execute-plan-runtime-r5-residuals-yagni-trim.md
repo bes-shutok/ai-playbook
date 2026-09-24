@@ -363,3 +363,11 @@ Files:
 - [x] Run the complete `## Validation Commands` block (three suites, em-dash scan, all structural gates) → expect every command green
 - [x] Run → expect GREEN: `python3 scripts/test_execute_plan_runtime.py` (135 tests total: the suite carries 118 on main, this run adds seventeen witnesses (Tasks 1, 2, 3, 6, the r1 missing-identity witness, the r2 closed-claim wedge-boundary and startup degrade-arm witnesses, plus the r3 abort TOCTOU, foreign-claim identity-before-fence, wedge-degrade, claim-key routing, and evidence-truncation witnesses), while Task 4's rename and Task 8's in-place rework are both net zero), `python3 scripts/test_runtime_capabilities.py`, `python3 scripts/test_execute_plan_runtime_codex.py`
 - [x] No commit; the tree is final for review
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-09-execute-plan-runtime-r5-deferred-findings.md: disposition folded into 2026-09-13-execute-plan-runtime-r5-residuals-yagni-trim.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-11-ambient-noise-pattern-trim-yagni.md: disposition folded into 2026-09-13-execute-plan-runtime-r5-residuals-yagni-trim.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-12-execute-plan-runtime-r5-remaining-residuals.md: disposition folded into 2026-09-13-execute-plan-runtime-r5-residuals-yagni-trim.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-14-runtime-r5-trim-review-exit-residuals.md: disposition folded into 2026-09-13-execute-plan-runtime-r5-residuals-yagni-trim.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-05-vrs-residuals-plan-r5-cosmetic-lows.md: disposition folded into 2026-09-13-execute-plan-runtime-r5-residuals-yagni-trim.md (2026-09-25); per-item file deleted.

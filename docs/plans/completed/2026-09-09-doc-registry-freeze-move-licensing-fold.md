@@ -150,3 +150,10 @@ Files:
 
 - [x] Run the Validation Commands block end to end → expect GREEN (the argparse pin flips green with Task 2; both fixture pins flipped green with Task 1).
 - [x] Commit audit: each of this plan's commits shows only `scripts/doc_registry_validator.py` in `git show --name-only --format= <sha>`; a foreign commit swept into the range since `BASE_SHA` is joint state (report it, never rewrite it).
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-10-doc-registry-follow-up-plan-orphaned-diff-channel.md: disposition folded into 2026-09-09-doc-registry-freeze-move-licensing-fold.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-11-doc-registry-fold-exit-surface-exception-coverage.md: disposition folded into 2026-09-09-doc-registry-freeze-move-licensing-fold.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-13-doc-registry-cli-doc-precision.md: disposition folded into 2026-09-09-doc-registry-freeze-move-licensing-fold.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-09-doc-registry-freeze-move-licensing.md: disposition folded into 2026-09-09-doc-registry-freeze-move-licensing-fold.md (2026-09-25); per-item file deleted.

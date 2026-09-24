@@ -22,3 +22,7 @@ A daily cluster of session-store integrity events around subagent records (2026-
 - A 7-day log window shows zero `persisted_missing` events for completed subagents.
 - A forced empty-resume produces a visible repair/tombstone record, not a blank replay.
 - The scheduler's darkness detection has a store-level witness to distinguish "child outlived parent record" from "parent actually died".
+
+## Evidence
+
+- 2026-09-23 friction-audit cold start (7-day log corpus 2026-09-17..23): `zcode_protocol.session.persisted_missing` 142, `session.require_missing` 81, `v4.gateway_error` 172, `hydrate_runtime_missing` 10. The races continue at scale across the whole window rather than being confined to the 2026-09-19 mining sample.

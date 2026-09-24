@@ -1,7 +1,7 @@
 # Backlog: review agents miss dual-surface parity, conversion floors, and relocatable comment inventories
 
 Status: open
-Priority: deferred (formal-hardening triage 2026-09-22, user directive: on this personal/pet repo formal fixes defer — no witnessed failure; defensive shape/bounded-read refusals, contract wording, stale doc lines, derive-don't-index recurrence, catalog completeness parity, SOT consolidation gates and framework/runner contract machinery audit other gates or add mechanism without a witnessed miss. Revive only on a witnessed mis-fire or a project-priority-profile change.
+Priority: deferred (formal-hardening triage 2026-09-22, user directive: on this personal/pet repo formal fixes defer unless witnessed mis-fire; conversion floors and relocatable comment inventories still lack a playbook-local witness. **Partial witness 2026-09-25:** catalog all-keys vs typed definitions enumeration failed in a consumer bitmap/scheduler PR; tracked as open sibling `docs/history/backlog/2026-09-25-review-typed-catalog-enumeration-door.md` only. Do not revive this whole deferred bundle for that miss.)
 
 Workflow: backlog
 Source: 2026-09-18 post-merge PR bot review on a long execute-plan + review-loop branch; six unresolved threads were shapes the internal panel and loop never staged. Fixes and lessons landed first; this item tracks corpus upgrades so the same miss classes do not recur.

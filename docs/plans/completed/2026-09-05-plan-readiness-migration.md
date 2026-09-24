@@ -292,3 +292,7 @@ Files: none (checks only)
 - [x] Run the full `## Validation Commands` block from the repo root; every check exits 0 (selftests, sweep over the live corpus, doc greps, forbidden-pattern sweeps, hygiene scan)
 - [x] `python3 scripts/plan_readiness.py --sweep` output shows the live corpus coverage count N/M on one line and exits 0
 - [x] If any check fails: fix and re-run the whole block; only then report the task complete (no commit line unless a fix was needed; a fix commit reuses the owning task's commit prefix)
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-05-plan-readiness-migration-r5-residuals.md: disposition folded into 2026-09-05-plan-readiness-migration.md (2026-09-25); per-item file deleted.

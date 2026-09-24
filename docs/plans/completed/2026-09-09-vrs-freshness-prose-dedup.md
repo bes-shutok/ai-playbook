@@ -313,3 +313,10 @@ Files: none (verification only)
 
 - [x] Run the entire `## Validation Commands` block from the repository root → expect every command GREEN
 - [x] Run `python3 scripts/validate_review_staging.py --selftest` once more standalone → expect exit 0
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-08-vrs-freshness-fence-single-helper.md: disposition folded into 2026-09-09-vrs-freshness-prose-dedup.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-08-vrs-freshness-value-gate-tails.md: disposition folded into 2026-09-09-vrs-freshness-prose-dedup.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-08-vrs-verdict-scoping-dedup.md: disposition folded into 2026-09-09-vrs-freshness-prose-dedup.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-08-skill-prose-dedup-pointers.md: disposition folded into 2026-09-09-vrs-freshness-prose-dedup.md (2026-09-25); per-item file deleted.

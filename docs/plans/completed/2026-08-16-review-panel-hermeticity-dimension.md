@@ -491,3 +491,7 @@ def main() -> int:
 - [ ] Run → expect GREEN
 - [ ] Commit: `feat: demo report batch runner`
 ````
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-08-16-review-panel-hermeticity-dimension.md: disposition folded into 2026-08-16-review-panel-hermeticity-dimension.md (2026-09-25); per-item file deleted.

@@ -233,3 +233,16 @@ Files:
 - [x] Add the mechanically testable truth table as a short fenced list beside the auto-path (nine positive/negative rows: clean master, clean main, dirty tracked trunk, untracked content on trunk, non-empty ignored content on trunk, non-trunk base, detached HEAD, existing destination, ambiguous target or history-rewriting operation).
 - [x] Run the Task 8 greps; RED before, GREEN after.
 - [x] Commit: `skills: fail-closed auto-branch from clean trunk`
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-07-plan-review-scope-path-category-validation.md: disposition folded into 2026-09-08-execute-plan-fresh-review-coverage-gaps.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-08-execute-plan-fresh-review-coverage-gaps.md: disposition folded into 2026-09-08-execute-plan-fresh-review-coverage-gaps.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-10-jvm-review-coverage-plan-residual-probe-friction.md: disposition folded into 2026-09-08-execute-plan-fresh-review-coverage-gaps.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-14-execute-plan-parallel-review-address-workers.md: disposition folded into 2026-09-08-execute-plan-fresh-review-coverage-gaps.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-14-review-runner-coverage-plan-residuals.md: disposition folded into 2026-09-08-execute-plan-fresh-review-coverage-gaps.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-16-review-staging-coverage-attempt-shadowing.md: disposition folded into 2026-09-08-execute-plan-fresh-review-coverage-gaps.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-16-review-validator-coverage-attempts-shadowing.md: disposition folded into 2026-09-08-execute-plan-fresh-review-coverage-gaps.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-17-execute-plan-bound-review-loop-and-plan-freeze.md: disposition folded into 2026-09-08-execute-plan-fresh-review-coverage-gaps.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-18-execute-plan-residual-acceptance-exit-for-review-loops.md: disposition folded into 2026-09-08-execute-plan-fresh-review-coverage-gaps.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-01-execute-plan-five-review-cap-vs-focused-churn.md: disposition folded into 2026-09-08-execute-plan-fresh-review-coverage-gaps.md (2026-09-25); per-item file deleted.

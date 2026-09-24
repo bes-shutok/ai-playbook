@@ -255,3 +255,7 @@ Files:
 - [x] Extract the Validation Commands bash block from this plan file, run `bash -n` on it, and execute it → expect the full block GREEN (selftest, all obligation probes, hygiene sweeps) [class: IMPLEMENTATION_REQUIRED]
 - [x] Verify the composition ordering note survives in the plan header and Assumptions (execution sequenced after P9; Phase 0 drift re-baseline of the shared sections) [class: IMPLEMENTATION_REQUIRED]
 - [x] Commit: `plans: P11 orchestration plan validation sweep` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-17-execute-plan-single-authority-and-ownership-validation.md: disposition folded into 2026-09-18-execute-plan-orchestration-authority-loop-bounds-release-gates.md (2026-09-25); per-item file deleted.

@@ -297,3 +297,8 @@ Files: none expected (residual fixes land in the files above)
 
 - [x] Run the full Validation Commands block from the repo root → expect every command green
 - [x] Commit residual validation fixes, if any: `fix: lesson scope audit residue`
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-10-learn-company-vs-project-placement-gate.md: disposition folded into 2026-09-09-learn-company-scope-placement.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-09-learn-company-scope-placement.md: disposition folded into 2026-09-09-learn-company-scope-placement.md (2026-09-25); per-item file deleted.

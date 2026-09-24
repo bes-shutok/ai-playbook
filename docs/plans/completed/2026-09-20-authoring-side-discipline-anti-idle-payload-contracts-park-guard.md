@@ -285,3 +285,8 @@ Files:
 
 - [x] Run `bash gates.sh` with no argument → expect every gate GREEN on the final tree; G7a runs the full driver suite, G7b the readiness gate against the certified sidecar (runs only after the review loop completes; at authoring time it fails on the missing sidecar, the expected pre-certification state), G7c the em-dash scan over the plan, G7d the public hygiene scan over the tree. [class: REPOSITORY_TEST]
 - [x] Confirm no commit is needed; this task lands no bytes of its own. [class: REPOSITORY_TEST]
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-22-maintenance-authoring-slice-whole-body-vs-payload-practice.md: disposition folded into 2026-09-20-authoring-side-discipline-anti-idle-payload-contracts-park-guard.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-20-plans-review-subagent-anti-idle-discipline.md: disposition folded into 2026-09-20-authoring-side-discipline-anti-idle-payload-contracts-park-guard.md (2026-09-25); per-item file deleted.

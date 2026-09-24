@@ -459,3 +459,7 @@ Files:
 - [x] Run the full Validation Commands block, segments [A] through [E], from the repository root → expect exit 0: both selftest modes `ALL PASS`, both preservation checks clean with exactly the declared additions (7 decision_marker, 12 review_scope), SKILL.md pointer pinned and stale date gone, archived-plan chain pinned, and every commit this plan created touching only the declared files (the executing plan file itself is admitted for per-task checkbox bookkeeping — execute-plan's Step 1.3 checkbox edits land in each task's commit by design (this run's Tasks 1 and 3 carried theirs in adjacent docs commits; execution correction 2026-09-13)
 - [x] Confirm the mutation-probe records exist in the task log for every probe of Tasks 2 and 3 (each probe's failing set includes the named arm)
 - [x] Delete the scratch files `docs/tmp/plan-readiness-tail-base-sha.txt`, `docs/tmp/decision-marker-names.before`, `docs/tmp/decision-marker-names.after`, `docs/tmp/review-scope-names.before`, `docs/tmp/review-scope-names.after`, and the requirements buffer `docs/tmp/plan-requirements-plan-readiness-trailer-tail.md`
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-09-plan-readiness-scope-token-heuristic-tail.md: disposition folded into 2026-09-09-plan-readiness-trailer-tail.md (2026-09-25); per-item file deleted.

@@ -228,3 +228,8 @@ grep -Fq 'head -n 1' "$F" || fail "r2 head -n 1"
 grep -Fq 'case "$TMP_DIR"' "$F" || fail "r2 relative-path anchor"
 echo "ADDENDUM PROBES OK"
 ```
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-04-done-plan-deliverable-append-dedupe.md: disposition folded into 2026-09-04-done-deliverables-log-dedupe-and-anchors.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-04-done-deliverables-removal-undergate.md: disposition folded into 2026-09-04-done-deliverables-log-dedupe-and-anchors.md (2026-09-25); per-item file deleted.

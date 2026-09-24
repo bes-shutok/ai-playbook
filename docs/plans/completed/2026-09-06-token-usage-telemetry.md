@@ -195,3 +195,7 @@ Files:
 - [x] Run every Validation Command in order → expect each GREEN, including the three pinned greps that were RED before Tasks 2-3 and the negated never-estimate sweep
 - [x] Confirm zero sidecars were modified anywhere in the working tree (`git status --short` shows no `.stats.json` paths); reason: historical sidecars are immutable inputs
 - [x] Commit (if any residue from Tasks 1-3): `chore: token telemetry validation residue`
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-20-turn-usage-token-probe.md: disposition folded into 2026-09-06-token-usage-telemetry.md (2026-09-25); per-item file deleted.

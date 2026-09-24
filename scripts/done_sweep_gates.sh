@@ -11,6 +11,7 @@
 #   done_sweep_gates.sh pre-docs     # done Steps 1.5, 2.65, 2.648, 2.645, 2.64, 2.63, 2.62 gates
 #   done_sweep_gates.sh pre-commit   # done Steps 2.7 (mechanical half), 2.76, 2.8 gates
 #   done_sweep_gates.sh list-gates   # print the ten absorbed gate ids in phase order
+#   done_sweep_gates.sh write-manifest [flags...]   # done Step 0 manifest write (full flag vector forwarded)
 #
 # Run from the project git root (or set DONE_SWEEP_REPO_ROOT). Path resolution
 # anchors at the repo root via scripts/facts_paths.py helpers; validator
@@ -22,7 +23,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: done_sweep_gates.sh <pre-docs|pre-commit|list-gates>
+Usage: done_sweep_gates.sh <pre-docs|pre-commit|list-gates|write-manifest>
 
 Phases:
   pre-docs     plan-readiness, confluence-hygiene, doc-registry, backlog-inbox,
@@ -31,6 +32,10 @@ Phases:
   pre-commit   sensitive-data-scan, em-dash-scan, instruction-size
                (done Steps 2.7 mechanical half, 2.76, 2.8)
   list-gates   print the ten absorbed gate ids in phase order
+  write-manifest
+               done Step 0 run manifest write; the FULL argument vector is
+               forwarded to the lib (e.g. --adopt, --owned-review,
+               --foreign-review, --claim-none, --foreign-review-from)
 
 Environment:
   DONE_SWEEP_REPO_ROOT     repo anchor override (default: git toplevel of cwd)
@@ -42,7 +47,7 @@ EOF
 main() {
   local phase_arg="${1:-}"
   case "$phase_arg" in
-    pre-docs|pre-commit|list-gates) ;;
+    pre-docs|pre-commit|list-gates|write-manifest) ;;
     -h|--help) usage; return 0 ;;
     "")
       usage >&2
@@ -62,7 +67,10 @@ main() {
     echo "done_sweep_gates: lib not found next to the runner: $lib" >&2
     return 2
   fi
-  exec python3 "$lib" "$phase_arg"
+  # F2: forward the FULL argument vector so flags survive the wrapper (a
+  # phase-only forward would silently drop --adopt and the F13 bulk flags on
+  # exactly the interrupted-run flow they serve).
+  exec python3 "$lib" "$@"
 }
 
 main "$@"

@@ -283,3 +283,11 @@ Each entry below quotes the r5 item's numbering; every edit stays inside the spa
 - [x] Record the observed rc of each section-3 sweep as 1 (the superseded wordings absent after Tasks 1 and 2), witnessing the sweeps' discriminating behavior rather than assuming it [class: REPOSITORY_TEST]
 - [x] Confirm the pins suite output names no missing-file error for the read-only done-skill pin target, and that the suite's runtime-agnostic SKILL.md check still passes after Tasks 1, 2, and 5 [class: REPOSITORY_TEST]
 - [x] Commit (only if any validation-driven fix left an uncommitted edit): `maintenance: P12 validation sweep fixes` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+- docs/history/backlog/completed/2026-09-17-maintenance-intra-payload-ordering-anchors.md: disposition folded into 2026-09-18-maintenance-loop-residuals-occupancy-anchors-rearm-wording.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-17-maintenance-lane-occupancy-repo-scoping.md: disposition folded into 2026-09-18-maintenance-loop-residuals-occupancy-anchors-rearm-wording.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-17-step0-rearm-trigger-state-first-wording.md: disposition folded into 2026-09-18-maintenance-loop-residuals-occupancy-anchors-rearm-wording.md (2026-09-25); per-item file deleted.
+- docs/history/backlog/completed/2026-09-23-loop-guard-unit-clause-recycling-leg-wording.md: disposition folded into 2026-09-18-maintenance-loop-residuals-occupancy-anchors-rearm-wording.md (2026-09-25); per-item file deleted.
+
+- docs/history/backlog/completed/2026-09-15-maintenance-rearm-action-selection-loop.md: disposition folded into 2026-09-18-maintenance-loop-residuals-occupancy-anchors-rearm-wording.md (2026-09-25); per-item file deleted.

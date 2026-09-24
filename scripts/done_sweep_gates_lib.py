@@ -26,7 +26,12 @@ Contract:
   ``{tmp_dir}/done-session/`` where the newest content-confirmed marker is the
   current run and the newest strictly older one is the previous-run anchor;
   fewer than two confirmable markers means an unanchorable window and
-  conservative gating applies;
+  conservative gating applies; the doc-registry committed-changes baseline
+  anchors on the active run manifest's ``start_commit`` when a manifest is
+  present (``ORIG_HEAD`` fallback otherwise), classifies
+  ``start_commit..HEAD`` through the owned-commits ledgers of the run and
+  every ``adopted_from`` ancestor, and keeps the ignored arm window-anchored
+  in every branch (never narrowed to manifest claims);
 - paths resolve via the ``facts_paths.py`` helpers with the repo root as
   anchor; validator scripts resolve env override first, then the repo-local
   ``scripts/`` copy, then the deployed runtime home copy;
@@ -39,17 +44,29 @@ Hermeticity knobs (used by the tests; harmless in production):
 
 Stdlib only plus the repo-local ``facts_paths`` and ``validate_review_staging``
 (the staging-path predicate is imported, never re-implemented).
+
+The ``write-manifest`` sub-command writes the done Step 0 run manifest record
+(``run-manifest-<run_id>.json`` next to the run-start marker); it owns no
+gate and does not touch the gate registry. It also reports interrupted runs
+(root-matched manifests whose ``complete`` flag is still false and which no
+other manifest adopts): a retry continues an interrupted run's boundary only
+through an explicit ``--adopt <run_id>`` boundary copy, never implicitly.
+The ``finalize-manifest`` sub-command sets a run manifest's ``complete`` flag
+to true in place (done Step 6, immediately before the done-lock release).
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
 import shutil
+import stat as stat_module
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -350,6 +367,302 @@ def _marker_records_other_repo(path: Path, repo_root: Path) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Run manifest (done Step 0 ownership record).
+# --------------------------------------------------------------------------- #
+MANIFEST_SCHEMA_VERSION = 1
+
+
+@dataclass
+class RunManifest:
+    """The Step 0 record next to the run-start marker: run identity, the
+    boundary (start commit plus pre-existing dirt), the run-owned plan and
+    review paths, explicitly foreign review artifacts, the explicit adoption
+    link, and the completion flag (false until the run finalizes)."""
+
+    schema: int
+    run_id: str
+    marker: str
+    created_epoch: float
+    repo_root: str
+    pid: int
+    start_commit: str
+    start_porcelain: list[str]
+    owned_plan_paths: list[str]
+    owned_review_paths: list[str]
+    foreign_review_paths: list[str]
+    adopted_from: Optional[str]
+    complete: bool
+
+    def as_dict(self) -> dict:
+        return {
+            "schema": self.schema,
+            "run_id": self.run_id,
+            "marker": self.marker,
+            "created_epoch": self.created_epoch,
+            "repo_root": self.repo_root,
+            "pid": self.pid,
+            "start_commit": self.start_commit,
+            "start_porcelain": list(self.start_porcelain),
+            "owned_plan_paths": list(self.owned_plan_paths),
+            "owned_review_paths": list(self.owned_review_paths),
+            "foreign_review_paths": list(self.foreign_review_paths),
+            "adopted_from": self.adopted_from,
+            "complete": self.complete,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> Optional["RunManifest"]:
+        """Tolerant parse: a schema mismatch or a missing identity field
+        degrades to None (the documented conservative fallback), never an
+        exception."""
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("schema") != MANIFEST_SCHEMA_VERSION:
+            return None
+        run_id = payload.get("run_id")
+        marker = payload.get("marker")
+        start_commit = payload.get("start_commit")
+        repo_root = payload.get("repo_root")
+        created_epoch = payload.get("created_epoch")
+        if not isinstance(run_id, str) or not run_id:
+            return None
+        if not isinstance(marker, str) or not marker:
+            return None
+        if not isinstance(start_commit, str) or not start_commit:
+            return None
+        if not isinstance(repo_root, str) or not repo_root:
+            return None
+        # F3: bool is an int subtype; a corrupt `true` must degrade to the
+        # None path like any other type error, never coerce to 1.0 / 1.
+        if isinstance(created_epoch, bool) or not isinstance(
+            created_epoch, (int, float)
+        ):
+            return None
+
+        def str_list(key: str) -> list[str]:
+            value = payload.get(key)
+            if not isinstance(value, list):
+                return []
+            return [item for item in value if isinstance(item, str)]
+
+        adopted = payload.get("adopted_from")
+        if not isinstance(adopted, str):
+            adopted = None
+        return cls(
+            schema=MANIFEST_SCHEMA_VERSION,
+            run_id=run_id,
+            marker=marker,
+            created_epoch=float(created_epoch),
+            repo_root=repo_root,
+            pid=(
+                payload.get("pid")
+                if isinstance(payload.get("pid"), int)
+                and not isinstance(payload.get("pid"), bool)
+                else -1
+            ),
+            start_commit=start_commit,
+            start_porcelain=str_list("start_porcelain"),
+            owned_plan_paths=str_list("owned_plan_paths"),
+            owned_review_paths=str_list("owned_review_paths"),
+            foreign_review_paths=str_list("foreign_review_paths"),
+            adopted_from=adopted,
+            complete=bool(payload.get("complete", False)),
+        )
+
+
+def _new_run_id(now: Optional[float] = None) -> str:
+    """Unique within and across runs: UTC second stamp plus a random suffix."""
+    stamp = datetime.fromtimestamp(
+        time.time() if now is None else now, tz=timezone.utc
+    ).strftime("%Y%m%dT%H%M%SZ")
+    return stamp + "-" + uuid.uuid4().hex[:12]
+
+
+def _manifest_path(done_session_dir: Path, run_id: str) -> Path:
+    return done_session_dir / f"run-manifest-{run_id}.json"
+
+
+def write_run_manifest(manifest: RunManifest, done_session_dir: Path) -> Path:
+    """Serialize the record and atomically replace the final file: a reader
+    observes either the absent or the complete manifest, never a partial one."""
+    done_session_dir.mkdir(parents=True, exist_ok=True)
+    final = _manifest_path(done_session_dir, manifest.run_id)
+    tmp = done_session_dir / (final.name + ".tmp")
+    payload = json.dumps(manifest.as_dict(), indent=2, sort_keys=True) + "\n"
+    try:
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, final)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return final
+
+
+def _manifest_root_matches(recorded_root: str, repo_root: Path) -> bool:
+    """Content-confirmed root matching: the same realpath rule the run-start
+    markers apply, so a manifest from another checkout of the same repo is
+    never this run's record."""
+    try:
+        return os.path.realpath(recorded_root) == os.path.realpath(str(repo_root))
+    except OSError:
+        return False
+
+
+def load_run_manifest(
+    done_session_dir: Path,
+    repo_root: Path,
+    window: SessionWindow,
+    warnings: Optional[list[str]] = None,
+) -> Optional[RunManifest]:
+    """Return the manifest bound to the window's newest content-confirmed
+    marker, root-matched content-wise. None when there is no current marker,
+    no manifest, a foreign repo_root, a schema mismatch, or an unreadable
+    record (conservative fallback downstream); never raises.
+
+    F10: an unparseable or schema-invalid ``run-manifest-*.json`` is never
+    silently skipped - when ``warnings`` is a list, each skipped corrupt
+    record is named (file plus reason) so an undead run leaves a trace."""
+    if window is None or window.current is None:
+        return None
+    if not done_session_dir.is_dir():
+        return None
+    marker_name = window.current.path.name
+    best: Optional[RunManifest] = None
+    for path in sorted(done_session_dir.glob("run-manifest-*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            if warnings is not None:
+                warnings.append(
+                    f"corrupt run manifest skipped: {path.name} "
+                    f"(unparseable: {exc})"
+                )
+            continue
+        manifest = RunManifest.from_dict(payload)
+        if manifest is None:
+            if warnings is not None:
+                warnings.append(
+                    f"corrupt run manifest skipped: {path.name} "
+                    "(schema or field validation failed)"
+                )
+            continue
+        if manifest.marker != marker_name:
+            continue
+        if not _manifest_root_matches(manifest.repo_root, repo_root):
+            continue
+        if best is None or manifest.created_epoch > best.created_epoch:
+            best = manifest
+    return best
+
+
+def _dedup_preserving_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            ordered.append(item)
+    return ordered
+
+
+def _read_manifest_by_run_id(
+    done_session_dir: Path, run_id: str
+) -> Optional[RunManifest]:
+    """Parse ``run-manifest-<run_id>.json``; None when the run_id is empty or
+    not a bare filename, the file is absent, unreadable, or a schema
+    mismatch; never raises."""
+    if not run_id or Path(run_id).name != run_id:
+        return None
+    path = _manifest_path(done_session_dir, run_id)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return RunManifest.from_dict(payload)
+
+
+def _detect_interrupted_runs(
+    done_session_dir: Path, repo_root: Path, warnings: Optional[list[str]] = None
+) -> list[RunManifest]:
+    """Every root-matched manifest whose ``complete`` flag is still false and
+    which no other manifest adopts (an ``adopted_from`` link names it): the
+    interrupted runs this Step 0 reports. A finalized (``complete`` true)
+    manifest is never an orphan - that is what keeps a completed commit-less
+    run from misfiring the detection - and adoption is itself the suppression
+    record. Unreadable and foreign-root records are skipped, never raised;
+    a corrupt record is named through ``warnings`` when provided (F10)."""
+    manifests: list[RunManifest] = []
+    if not done_session_dir.is_dir():
+        return manifests
+    for path in sorted(done_session_dir.glob("run-manifest-*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            if warnings is not None:
+                warnings.append(
+                    f"corrupt run manifest skipped: {path.name} "
+                    f"(unparseable: {exc})"
+                )
+            continue
+        manifest = RunManifest.from_dict(payload)
+        if manifest is None:
+            if warnings is not None:
+                warnings.append(
+                    f"corrupt run manifest skipped: {path.name} "
+                    "(schema or field validation failed)"
+                )
+            continue
+        if not _manifest_root_matches(manifest.repo_root, repo_root):
+            continue
+        manifests.append(manifest)
+    adopted = {m.adopted_from for m in manifests if m.adopted_from}
+    return [m for m in manifests if not m.complete and m.run_id not in adopted]
+
+
+def _adopted_chain_run_ids(
+    done_session_dir: Path, manifest: RunManifest, repo_root: Optional[Path] = None
+) -> tuple[list[str], list[str]]:
+    """The run's run_id followed by every ``adopted_from`` ancestor, oldest
+    last: the ownership chain whose owned-commits ledgers the gate-side
+    classification consults. A missing ancestor manifest ends the walk (its
+    own ledger still counts, named by the link); a cycle is cut, never
+    walked forever.
+
+    F5: when ``repo_root`` is given, each ancestor manifest's recorded repo
+    root is verified against it; a foreign-root ancestor ends the walk with a
+    named warning. Stopping can only narrow the OWNED (checked) set - never
+    suppress a check - and the walk stops rather than trusting a record from
+    another repository.
+
+    Returns ``(chain, warnings)``."""
+    chain = [manifest.run_id]
+    warnings: list[str] = []
+    seen = {manifest.run_id}
+    parent_id = manifest.adopted_from
+    while parent_id and parent_id not in seen:
+        parent = _read_manifest_by_run_id(done_session_dir, parent_id)
+        if parent is not None and repo_root is not None and not _manifest_root_matches(
+            parent.repo_root, repo_root
+        ):
+            warnings.append(
+                "adopted-chain ancestor "
+                f"{parent_id} records a different repo root ({parent.repo_root}); "
+                "ending the walk there (foreign-root records are never trusted; "
+                "the narrowed owned set only over-checks, never suppresses)"
+            )
+            break
+        chain.append(parent_id)
+        seen.add(parent_id)
+        parent_id = parent.adopted_from if parent is not None else None
+    return chain, warnings
+
+
+# --------------------------------------------------------------------------- #
 # Git status parsing helpers (porcelain + ignored-matching arms).
 # --------------------------------------------------------------------------- #
 def _porcelain_lines(ctx: GateContext, pathspec: str) -> list[str]:
@@ -410,14 +723,35 @@ def _session_ignored_paths(ctx: GateContext, paths: list[str]) -> list[str]:
     return filtered
 
 
+def _unquote_porcelain_path(path: str) -> str:
+    """Strip git's C-style quoting from a porcelain path (F9): git wraps a
+    path with special characters in double quotes and escapes ``"`` ``\\``
+    tab newline CR inside, so the verbatim row keeps literal quote characters
+    that no filesystem path carries."""
+    if len(path) >= 2 and path.startswith('"') and path.endswith('"'):
+        body = path[1:-1]
+        return (
+            body.replace("\\\\", "\x00")
+            .replace('\\"', '"')
+            .replace("\\t", "\t")
+            .replace("\\n", "\n")
+            .replace("\\r", "\r")
+            .replace("\x00", "\\")
+        )
+    return path
+
+
 def _porcelain_paths(ctx: GateContext, pathspec: str) -> tuple[list[str], list[str]]:
     """Porcelain plus ignored-matching arms over a pathspec; returns
     (tracked_or_untracked_paths, ignored_paths).
 
     Name-only convenience over ``_porcelain_lines``: status letters are
-    stripped and a rename row keeps only its new side. Gates whose
-    contract needs the change types (doc-registry check-writes stdin)
-    must use ``_porcelain_lines`` + ``_ignored_paths`` instead.
+    stripped and a rename row keeps only its new side; a C-style-quoted row
+    (git quotes paths with special characters) is unquoted so the real
+    filesystem name survives (F9 - a quoted rename destination must stay in
+    the claim-or-foreign universe). Gates whose contract needs the change
+    types (doc-registry check-writes stdin) must use ``_porcelain_lines`` +
+    ``_ignored_paths`` instead, which carry rows verbatim.
     """
     ordinary: list[str] = []
     proc = ctx.git("status", "--porcelain", "-uall", "--", pathspec)
@@ -431,7 +765,7 @@ def _porcelain_paths(ctx: GateContext, pathspec: str) -> tuple[list[str], list[s
         if " -> " in rest:
             rest = rest.split(" -> ", 1)[1]
         if xy != "!!":
-            ordinary.append(rest)
+            ordinary.append(_unquote_porcelain_path(rest))
     return ordinary, _ignored_paths(ctx, pathspec)
 
 
@@ -786,6 +1120,202 @@ def gate_confluence_hygiene(ctx: GateContext) -> GateResult:
 # --------------------------------------------------------------------------- #
 # Gate: doc-registry (done Step 2.648).
 # --------------------------------------------------------------------------- #
+def _owned_commits_ledger_path(done_session_dir: Path, run_id: str) -> Path:
+    """A run's owned-commits ledger written by the done skill (Step 1 and
+    Step 3 commit sites), keyed by that run's run_id."""
+    return done_session_dir / f"owned-commits-{run_id}.txt"
+
+
+def _cumulative_range_rows(ctx: GateContext, base: str) -> Optional[list[str]]:
+    """The cumulative ``base..HEAD`` name-status rows, or None when the range
+    itself is unreadable (the shared conservative-fallback feeder for the
+    committed arm)."""
+    proc = ctx.git("diff", "--name-status", "--no-renames", base, "HEAD")
+    if proc.returncode != 0:
+        return None
+    return [line for line in proc.stdout.splitlines() if line.strip()]
+
+
+def _full_head_tree_rows(ctx: GateContext) -> list[str]:
+    """Every committed file in HEAD as ``A<TAB>path`` rows (HEAD's tree
+    diffed against the empty tree): the last conservative tier when neither
+    the window nor its base is readable, so the committed arm cannot be
+    emptied by a git failure."""
+    empty_tree = ctx.git("hash-object", "-t", "tree", os.devnull)
+    if empty_tree.returncode != 0:
+        return []
+    proc = ctx.git(
+        "diff", "--name-status", "--no-renames", empty_tree.stdout.strip(), "HEAD"
+    )
+    if proc.returncode != 0:
+        return []
+    return [line for line in proc.stdout.splitlines() if line.strip()]
+
+
+def _classify_committed_range(
+    ctx: GateContext, base: str, ledger_paths: list[Path]
+) -> tuple[list[str], list[str]]:
+    """Classify ``base..HEAD`` commits through the owned-commits ledgers.
+
+    ``ledger_paths`` carries the active run's ledger plus every ``adopted_from``
+    ancestor's ledger (the adoption chain), so commits an adopted interrupted
+    run already made stay owned for the adopting retry.
+
+    Returns ``(owned_rows, report_lines)``: the owned commits' own name-status
+    rows (the same ``A/M/D<TAB>path`` form the cumulative range diff uses)
+    plus non-failing report lines. A reachable ledger entry is owned; a
+    ledger entry not reachable from HEAD is stale-reported and skipped; a
+    window commit absent from every ledger is foreign: excluded from the write
+    set with a named report line (foreign artifacts are preserved and
+    reported, never gate failures). A git failure keeps the conservative
+    inclusion (the cumulative range rows, then the full HEAD tree when the
+    base itself is unreadable) rather than silently narrowing the protection
+    surface: on any window-level git failure no owned/foreign classification
+    runs at all. The same stance applies to an unreadable ledger: a ledger
+    that exists but cannot be read (permissions, a non-regular file in its
+    place) is not proof of an empty record, so its name is reported and the
+    conservative cumulative range rows are kept instead of classifying
+    against a partial ownership record; only an absent ledger counts as an
+    empty one.
+    """
+    report: list[str] = []
+    rev_list = ctx.git("rev-list", f"{base}..HEAD")
+    if rev_list.returncode != 0:
+        # Conservative fallback (the window-level twin of the per-commit
+        # diff-tree fallback below): the window itself is unreadable, so
+        # classification must not run; the cumulative range rows over-include
+        # instead of silently dropping the entire committed arm.
+        report.append(
+            "committed window unreadable (rev-list failed); keeping the "
+            f"conservative cumulative range rows ({base}..HEAD)"
+        )
+        rows = _cumulative_range_rows(ctx, base)
+        if rows is not None:
+            return rows, report
+        # The base itself is unreadable (for example a corrupt manifest
+        # start_commit): fall through to the full HEAD tree.
+        report.append(
+            "cumulative range diff failed too; keeping the conservative "
+            "full-HEAD-tree rows so the committed arm stays checked"
+        )
+        return _full_head_tree_rows(ctx), report
+    window_commits = [
+        line.strip() for line in rev_list.stdout.splitlines() if line.strip()
+    ]
+    raw_entries: list[str] = []
+    seen_entries: set[str] = set()
+    unreadable_ledgers: list[Path] = []
+    for ledger_path in ledger_paths:
+        # F11: lstat instead of exists() - a dangling symlink (or a stat
+        # denial) must read as present-but-unreadable, never as an absent
+        # (empty) ledger folding the run's own commits into the foreign set.
+        try:
+            ledger_stat = ledger_path.lstat()
+        except FileNotFoundError:
+            # An absent ledger is an empty one (the run recorded no commits
+            # yet), not an unreadable one.
+            continue
+        except OSError:
+            unreadable_ledgers.append(ledger_path)
+            continue
+        if not stat_module.S_ISREG(ledger_stat.st_mode):
+            unreadable_ledgers.append(ledger_path)
+            continue
+        try:
+            ledger_lines = [
+                line.strip()
+                for line in ledger_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        except OSError:
+            unreadable_ledgers.append(ledger_path)
+            continue
+        for entry in ledger_lines:
+            if entry not in seen_entries:
+                seen_entries.add(entry)
+                raw_entries.append(entry)
+    if unreadable_ledgers:
+        # A ledger is the ownership record: when one in the chain exists but
+        # cannot be read, every window commit is potentially owned, so
+        # classifying against the remaining readable ledgers could misreport
+        # the run's own ledger-claimed commits as foreign and narrow the
+        # check-write surface. Keep the conservative inclusion instead (the
+        # ledger-read twin of the window-level fallback above): the
+        # cumulative range rows over-include rather than silently dropping
+        # owned writes.
+        for ledger_path in unreadable_ledgers:
+            report.append(
+                "owned-commits ledger unreadable; keeping the conservative "
+                f"cumulative range rows ({base}..HEAD) instead of classifying "
+                f"against a partial ownership record: {ledger_path}"
+            )
+        rows = _cumulative_range_rows(ctx, base)
+        if rows is not None:
+            return rows, report
+        report.append(
+            "cumulative range diff failed too; keeping the conservative "
+            "full-HEAD-tree rows so the committed arm stays checked"
+        )
+        return _full_head_tree_rows(ctx), report
+    ledger: set[str] = set()
+    for entry in raw_entries:
+        resolved = ctx.git("rev-parse", "-q", "--verify", f"{entry}^{{commit}}")
+        if resolved.returncode != 0:
+            report.append(
+                "stale owned-commits ledger entry skipped (sha not "
+                f"resolvable as a commit): {entry}"
+            )
+            continue
+        ledger.add(resolved.stdout.strip())
+    owned_rows: list[str] = []
+    for commit in window_commits:
+        if commit not in ledger:
+            report.append(
+                "foreign commit excluded from the registry write set (owner "
+                f"class: foreign or peer run): {commit}"
+            )
+            continue
+        # ``-m`` makes merge commits contribute their rows too (the diff vs
+        # each parent); without it diff-tree emits nothing for a merge and an
+        # owned merge's writes silently leave the check surface. Combined
+        # with ``--root`` the flag is inert for normal and root commits.
+        show = ctx.git(
+            "diff-tree",
+            "--root",
+            "--no-commit-id",
+            "--name-status",
+            "--no-renames",
+            "-m",
+            "-r",
+            commit,
+        )
+        if show.returncode != 0:
+            # Conservative fallback: over-include the whole range rather than
+            # silently dropping an owned commit's writes from the check.
+            cumulative = _cumulative_range_rows(ctx, base)
+            if cumulative is not None:
+                owned_rows.extend(cumulative)
+            continue
+        owned_rows.extend(line for line in show.stdout.splitlines() if line.strip())
+    for entry in sorted(ledger):
+        ancestor = ctx.git("merge-base", "--is-ancestor", entry, "HEAD")
+        if ancestor.returncode == 1:
+            report.append(
+                "stale owned-commits ledger entry skipped (not reachable from "
+                f"HEAD): {entry}"
+            )
+        elif ancestor.returncode != 0:
+            # A git failure is not a staleness answer: exit 1 is the only
+            # clean ``is not an ancestor`` verdict, so any other failure
+            # keeps the entry reachable and reports unknown reachability
+            # instead of claiming stale.
+            report.append(
+                "owned-commits ledger reachability unknown (merge-base "
+                f"failed; the entry stays checked as reachable): {entry}"
+            )
+    return owned_rows, report
+
+
 def gate_doc_registry(ctx: GateContext) -> GateResult:
     gate = "doc-registry"
     validator = ctx.resolve_script(
@@ -813,13 +1343,49 @@ def gate_doc_registry(ctx: GateContext) -> GateResult:
             warnings=[],
         )
 
-    session_head_file = ctx.done_session_dir / "session-start-head.txt"
+    # Committed-changes baseline: the active run manifest's start_commit when
+    # a manifest is present (per-run boundary, so a failed earlier run can
+    # never widen this run's checked set), else the conservative ORIG_HEAD
+    # fallback (legacy tree, foreign repo, interrupted write). The committed
+    # window is classified through the owned-commits ledgers of the run and
+    # every adopted_from ancestor (an adopted interrupted run's commits stay
+    # owned for the adopting retry); the ignored arm stays window-anchored in
+    # every branch (never narrowed to manifest claims).
+    window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+    warnings: list[str] = []
+    manifest = load_run_manifest(
+        ctx.done_session_dir, ctx.repo_root, window, warnings=warnings
+    )
+    owned_rows: Optional[list[str]] = None
     base = "ORIG_HEAD"
-    if session_head_file.is_file():
-        try:
-            base = session_head_file.read_text(encoding="utf-8").strip() or base
-        except OSError:
-            base = "ORIG_HEAD"
+    if manifest is not None:
+        base = manifest.start_commit
+        if manifest.start_porcelain:
+            warnings.append(
+                "pre-existing dirt recorded at Step 0 (reported, never "
+                "attributed to this run): "
+                + " | ".join(manifest.start_porcelain)
+            )
+        chain, chain_warnings = _adopted_chain_run_ids(
+            ctx.done_session_dir, manifest, repo_root=ctx.repo_root
+        )
+        warnings.extend(chain_warnings)
+        if manifest.adopted_from:
+            warnings.append(
+                "adopted boundary: this run continues interrupted run "
+                f"{manifest.adopted_from}; owned-commits ledgers consulted "
+                "for the full adoption chain: " + ", ".join(chain)
+            )
+        rows, ledger_lines = _classify_committed_range(
+            ctx,
+            base,
+            [
+                _owned_commits_ledger_path(ctx.done_session_dir, run_id)
+                for run_id in chain
+            ],
+        )
+        owned_rows = rows
+        warnings.extend(ledger_lines)
     verify = ctx.git("rev-parse", "-q", "--verify", f"{base}^{{commit}}")
     if verify.returncode != 0:
         base = ctx.git("rev-parse", "HEAD").stdout.strip()
@@ -827,15 +1393,20 @@ def gate_doc_registry(ctx: GateContext) -> GateResult:
     # Change-typed union, never a name-only downgrade (base Step 2.648):
     # porcelain rows carry their XY status letters verbatim (a rename row
     # is ``R  old -> new`` so the validator's parse_change_line gates both
-    # sides), the committed-since-session-start rows keep their
-    # ``A/M/D<TAB>path`` name-status form, and ignored files (which have
-    # no change type) stay bare rows.
+    # sides), committed rows keep their ``A/M/D<TAB>path`` name-status form
+    # (the manifest branch contributes the owned commits' own rows, with the
+    # conservative cumulative/full-tree fallback when git cannot classify;
+    # the no-manifest branch keeps the cumulative ``base..HEAD`` diff), and
+    # ignored files (which have no change type) stay bare rows.
     porcelain_rows = _porcelain_lines(ctx, ".")
     ignored = _session_ignored_paths(ctx, _ignored_paths(ctx, "."))
-    name_status_proc = ctx.git("diff", "--name-status", "--no-renames", base, "HEAD")
-    name_status = [
-        row for row in name_status_proc.stdout.splitlines() if row.strip()
-    ]
+    if owned_rows is not None:
+        name_status = owned_rows
+    else:
+        name_status_proc = ctx.git("diff", "--name-status", "--no-renames", base, "HEAD")
+        name_status = [
+            row for row in name_status_proc.stdout.splitlines() if row.strip()
+        ]
     union = sorted(set(porcelain_rows) | set(ignored) | set(name_status))
     arm_note = "check-writes skipped (no changed files)"
     if union:
@@ -855,20 +1426,12 @@ def gate_doc_registry(ctx: GateContext) -> GateResult:
                 1,
                 "doc registry check-writes flagged protected writes: "
                 + " | ".join(tail_rows),
-                warnings=[],
+                warnings=warnings,
             )
         arm_note = f"check-writes ok over {len(union)} changed paths"
 
-    # Re-anchor the session base for the next run (fail-closed by design).
-    head = ctx.git("rev-parse", "HEAD").stdout.strip()
-    if head:
-        try:
-            ctx.done_session_dir.mkdir(parents=True, exist_ok=True)
-            session_head_file.write_text(head + "\n", encoding="utf-8")
-        except OSError:
-            pass
     return GateResult(
-        gate, 0, f"doc registry: validate ok; {arm_note}", warnings=[]
+        gate, 0, f"doc registry: validate ok; {arm_note}", warnings=warnings
     )
 
 
@@ -901,15 +1464,12 @@ def gate_backlog_inbox(ctx: GateContext) -> GateResult:
 # --------------------------------------------------------------------------- #
 # Gate: review-staging (done Step 2.64).
 # --------------------------------------------------------------------------- #
-def derive_review_staging_candidates(ctx: GateContext) -> list[Path]:
-    """Porcelain plus ignored-matching paths under reviews_dir, filtered by the
-    validator's own staging-path predicate and restricted to the session
-    window. Never a bare glob, never chat recall."""
-    window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
-    if not window.anchored or window.start_epoch is None:
-        return []
-    start = window.start_epoch
-    end = time.time() + 1.0
+def _all_staging_review_paths(ctx: GateContext) -> list[Path]:
+    """Every on-disk staging doc under reviews_dir per the porcelain plus
+    ignored-matching arms, filtered by the validator's own staging-path
+    predicate only (NO session-window mtime filter): this is the Step 0
+    claim-or-foreign enumeration universe, and the windowed derivation below
+    narrows it."""
     reviews_rel = (
         ctx.reviews_dir.relative_to(ctx.repo_root)
         if _is_relative_to(ctx.reviews_dir, ctx.repo_root)
@@ -929,19 +1489,149 @@ def derive_review_staging_candidates(ctx: GateContext) -> list[Path]:
             continue
         if not vrs.is_staging_review_path(absolute):
             continue
+        candidates.append(absolute)
+    return sorted(candidates)
+
+
+@dataclass
+class ReviewStagingScope:
+    """The review-staging gate's scoped inputs: the candidates this run
+    validates plus report lines for everything excluded (foreign artifacts
+    and vanished owned reviews). Report lines become gate warnings: foreign
+    artifacts are preserved and reported, never gate failures, and a deleted
+    review is reported, never silently skipped."""
+
+    candidates: list[Path]
+    report_lines: list[str]
+    manifest_scoped: bool
+
+
+def _window_review_candidates(
+    ctx: GateContext, window: SessionWindow
+) -> list[Path]:
+    """The no-manifest fallback arm (legacy behavior, byte-for-byte):
+    porcelain plus ignored-matching paths under reviews_dir, filtered by the
+    validator's own staging-path predicate and restricted to the session
+    window mtime fence. Demoted to the fallback once a run manifest is
+    present; unchanged when no manifest exists."""
+    if not window.anchored or window.start_epoch is None:
+        return []
+    start = window.start_epoch
+    end = time.time() + 1.0
+    candidates: list[Path] = []
+    for absolute in _all_staging_review_paths(ctx):
         try:
             mtime = absolute.stat().st_mtime
         except OSError:
             continue
         if start <= mtime <= end:
             candidates.append(absolute)
-    return sorted(candidates)
+    return candidates
+
+
+def _manifest_review_rel(ctx: GateContext, recorded: str) -> str:
+    """Normalize a manifest review path entry (repo-relative or absolute) to
+    a repo-relative posix string, so gate-time comparisons match the writer's
+    verbatim records."""
+    path = Path(recorded)
+    if not path.is_absolute():
+        path = ctx.repo_root / path
+    try:
+        return path.resolve().relative_to(ctx.repo_root).as_posix()
+    except (ValueError, OSError):
+        return path.as_posix()
+
+
+def derive_review_staging_scope(ctx: GateContext) -> ReviewStagingScope:
+    """Scope the review-staging gate through the run manifest.
+
+    Manifest branch: the run's owned review paths that exist on disk are the
+    candidates (fail-closed for claimed artifacts: a manifest-owned review is
+    validated regardless of its mtime, so the session window never shields
+    it); an owned path no longer on disk gets a vanish report line; the
+    manifest's foreign-review list and every staging candidate unseen since
+    Step 0 (predicate-matched on disk, neither owned nor foreign-marked: it
+    appeared after Step 0's claim-or-foreign enumeration) go to the
+    foreign-excluded side list with named report lines, and their files stay
+    byte-identical on disk. No manifest (legacy tree, foreign repo,
+    interrupted write): the conservative window-mtime fallback arm.
+    """
+    window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+    manifest = load_run_manifest(ctx.done_session_dir, ctx.repo_root, window)
+    if manifest is None:
+        return ReviewStagingScope(
+            _window_review_candidates(ctx, window), [], False
+        )
+    report: list[str] = []
+    unique: dict[str, Path] = {}
+    for recorded in manifest.owned_review_paths:
+        normalized = _manifest_review_rel(ctx, recorded)
+        if normalized in unique:
+            continue
+        absolute = ctx.repo_root / normalized
+        if absolute.is_file():
+            unique[normalized] = absolute
+        else:
+            report.append(
+                "manifest-owned review no longer on disk (vanished since "
+                "Step 0; reported, never silently skipped): " + normalized
+            )
+    foreign_norm = {
+        _manifest_review_rel(ctx, recorded)
+        for recorded in manifest.foreign_review_paths
+    }
+    for absolute in _all_staging_review_paths(ctx):
+        normalized = _manifest_review_rel(ctx, str(absolute))
+        if normalized in unique:
+            continue
+        if normalized in foreign_norm:
+            report.append(
+                "foreign staging doc excluded from validation (owner class: "
+                "peer artifact, marked foreign at Step 0; file preserved): "
+                + normalized
+            )
+        else:
+            report.append(
+                "foreign staging doc excluded from validation (owner class: "
+                "peer artifact, unseen since Step 0; file preserved): "
+                + normalized
+            )
+    candidates = [unique[key] for key in sorted(unique)]
+    return ReviewStagingScope(candidates, report, True)
+
+
+def derive_review_staging_candidates(ctx: GateContext) -> list[Path]:
+    """The review-staging gate's candidates: the run manifest's owned review
+    paths when a manifest is present, else the legacy porcelain plus
+    ignored-matching paths under reviews_dir restricted to the session window
+    and filtered by the validator's own staging-path predicate. Never a
+    bare glob, never chat recall.
+
+    F4/F8 branch asymmetry, deliberate and fail-closed: in the manifest
+    branch, an owned path that exists on disk is validated on existence alone
+    (is_file), regardless of the staging-path predicate - over-validation
+    can only over-check a claimed artifact, never suppress a check - while
+    the fallback window arm applies the staging-path predicate to each
+    candidate."""
+    return derive_review_staging_scope(ctx).candidates
 
 
 def gate_review_staging(ctx: GateContext) -> GateResult:
     gate = "review-staging"
-    candidates = derive_review_staging_candidates(ctx)
+    scope = derive_review_staging_scope(ctx)
+    candidates = scope.candidates
+    warnings = list(scope.report_lines)
     if not candidates:
+        if warnings:
+            # Foreign-excluded and vanished lines still report on an
+            # otherwise empty run: never silently dropped, never a failure.
+            return GateResult(
+                gate,
+                0,
+                "review-staging: no owned staging candidates to validate; "
+                "excluded artifacts preserved and reported as warnings",
+                warnings=warnings,
+            )
         return GateResult(
             gate,
             0,
@@ -959,7 +1649,7 @@ def gate_review_staging(ctx: GateContext) -> GateResult:
             "review-staging validator absent but session-touched staging "
             "candidates exist (fail-closed, matching the skill's "
             "|| exit 1): " + ", ".join(str(p) for p in candidates),
-            warnings=[],
+            warnings=warnings,
         )
     failed: list[str] = []
     for candidate in candidates:
@@ -974,15 +1664,19 @@ def gate_review_staging(ctx: GateContext) -> GateResult:
             gate,
             1,
             "review-staging validation failed for: " + ", ".join(failed),
-            warnings=[],
+            warnings=warnings,
         )
-    return GateResult(
-        gate,
-        0,
-        f"review-staging validation passed for {len(candidates)} session-touched "
-        "staging doc(s)",
-        warnings=[],
-    )
+    if scope.manifest_scoped:
+        message = (
+            f"review-staging validation passed for {len(candidates)} "
+            "manifest-owned staging doc(s)"
+        )
+    else:
+        message = (
+            f"review-staging validation passed for {len(candidates)} "
+            "session-touched staging doc(s)"
+        )
+    return GateResult(gate, 0, message, warnings=warnings)
 
 
 # --------------------------------------------------------------------------- #
@@ -1512,11 +2206,307 @@ def phase_exit(results: list[GateResult]) -> int:
 
 def _usage() -> str:
     return (
-        "usage: done_sweep_gates.sh <pre-docs|pre-commit|list-gates>\n"
+        "usage: done_sweep_gates.sh "
+        "<pre-docs|pre-commit|list-gates|write-manifest|finalize-manifest>\n"
         "phases: pre-docs (done Steps 1.5..2.62 gates), pre-commit (done "
         "Steps 2.7/2.76/2.8 mechanical gates)\n"
-        "list-gates prints the ten absorbed gate ids in phase order"
+        "list-gates prints the ten absorbed gate ids in phase order\n"
+        "write-manifest writes the done Step 0 run manifest record "
+        "(run-manifest-<run_id>.json under the done-session directory), "
+        "reporting interrupted runs (complete=false, never finalized; "
+        "continued only via an explicit --adopt boundary copy)\n"
+        "finalize-manifest sets a run manifest's complete flag to true in "
+        "place (done Step 6; --run-id required; a missing manifest is a "
+        "named not-found note, not a failure)"
     )
+
+
+def _cli_fail(message: str) -> int:
+    print(message, file=sys.stderr)
+    return 1
+
+
+def _cmd_write_manifest(argv: list[str]) -> int:
+    """Write the done Step 0 run manifest record.
+
+    Derives run_id, the newest content-confirmed run-start marker, the HEAD
+    start commit, the porcelain dirt snapshot, and the repo root itself, then
+    enforces claim-or-foreign over the staging candidates on disk (predicate
+    matched, NOT window filtered: Step 0 is the enumeration universe). Any
+    uncovered candidate aborts with a named error and no manifest. Prints the
+    manifest path plus run_id (the run's audit record).
+
+    Interrupted-run reporting: every root-matched manifest whose ``complete``
+    flag is still false and which no other manifest adopts is reported as an
+    interrupted run (a finalized manifest is never an orphan). Without
+    ``--adopt`` the new manifest keeps the new run's own HEAD boundary;
+    adoption is explicit only: ``--adopt <run_id>`` copies the interrupted
+    run's boundary (start_commit plus owned paths, foreign markings included)
+    verbatim and records ``adopted_from``, and the adopted link suppresses the
+    orphan report for later runs.
+    """
+    parser = argparse.ArgumentParser(
+        prog="done_sweep_gates.py write-manifest",
+        description="Write the done Step 0 run manifest record.",
+    )
+    parser.add_argument(
+        "--owned-plan", action="append", default=[], metavar="PATH",
+        help="plan path this run finalizes (repeatable)",
+    )
+    parser.add_argument(
+        "--owned-review", action="append", default=[], metavar="PATH",
+        help="review staging doc this run finalizes (repeatable)",
+    )
+    parser.add_argument(
+        "--foreign-review", action="append", default=[], metavar="PATH",
+        help="staging candidate recognized as a peer's artifact (repeatable)",
+    )
+    parser.add_argument(
+        "--foreign-review-from", default=None, metavar="FILE",
+        help="bulk-load foreign paths one per line from FILE (F13; merged "
+        "into --foreign-review with the same dedup)",
+    )
+    parser.add_argument(
+        "--claim-none", action="store_true",
+        help="this run owns no staging doc: mark every unclaimed candidate "
+        "foreign (F13; conflicts with an adopted manifest that owns staging "
+        "docs or with --owned-review)",
+    )
+    parser.add_argument(
+        "--adopt", default=None, metavar="RUN_ID",
+        help="explicitly adopt a prior interrupted run's boundary",
+    )
+    args = parser.parse_args(argv)
+
+    # F13 bulk load: one path per line, blank lines skipped, merged into the
+    # repeatable --foreign-review list with the same dedup downstream.
+    if args.foreign_review_from:
+        try:
+            bulk_lines = Path(args.foreign_review_from).read_text(
+                encoding="utf-8"
+            ).splitlines()
+        except OSError as exc:
+            return _cli_fail(
+                "write-manifest: cannot read --foreign-review-from file "
+                f"{args.foreign_review_from}: {exc}"
+            )
+        args.foreign_review.extend(
+            line.strip() for line in bulk_lines if line.strip()
+        )
+    if args.claim_none and args.owned_review:
+        return _cli_fail(
+            "write-manifest: ownership-conflict: --claim-none asserts this "
+            "run owns no staging doc, but --owned-review names "
+            + ", ".join(args.owned_review)
+        )
+
+    root = os.environ.get("DONE_SWEEP_REPO_ROOT")
+    ctx = GateContext.discover(Path(root) if root else None)
+    window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+    if window.current is None:
+        return _cli_fail(
+            "write-manifest: no content-confirmed run-start marker under "
+            f"{ctx.done_session_dir}; write the marker before the manifest"
+        )
+    head = ctx.git("rev-parse", "HEAD")
+    start_commit = head.stdout.strip()
+    if head.returncode != 0 or not start_commit:
+        return _cli_fail(
+            "write-manifest: cannot resolve the HEAD start commit: "
+            + (head.stderr.strip() or "git rev-parse failed")
+        )
+
+    # Explicit adoption: the target must be a readable, root-matched,
+    # not-yet-finalized manifest; its boundary (start_commit and owned paths,
+    # plus its foreign markings) is carried verbatim into the new record.
+    adopted: Optional[RunManifest] = None
+    if args.adopt:
+        candidate = _read_manifest_by_run_id(ctx.done_session_dir, args.adopt)
+        if candidate is None or not _manifest_root_matches(
+            candidate.repo_root, ctx.repo_root
+        ):
+            return _cli_fail(
+                f"write-manifest: cannot adopt {args.adopt}: no readable, "
+                "root-matched run manifest for that run_id under "
+                f"{ctx.done_session_dir}"
+            )
+        if candidate.complete:
+            return _cli_fail(
+                f"write-manifest: cannot adopt {args.adopt}: that run already "
+                "finalized (complete=true); only an interrupted (complete="
+                "false) run can be adopted"
+            )
+        verify = ctx.git(
+            "rev-parse", "-q", "--verify", candidate.start_commit + "^{commit}"
+        )
+        if verify.returncode != 0:
+            return _cli_fail(
+                f"write-manifest: cannot adopt {args.adopt}: the recorded "
+                f"start_commit {candidate.start_commit} does not resolve in "
+                "this repository"
+            )
+        adopted = candidate
+
+    # F13 composition rule: --claim-none with an adopted manifest that itself
+    # owns staging docs is a named ownership conflict, never a silent flip of
+    # the adopted owned paths to foreign.
+    if args.claim_none and adopted is not None and adopted.owned_review_paths:
+        return _cli_fail(
+            "write-manifest: ownership-conflict: --claim-none asserts this "
+            "run owns no staging doc, but the adopted run "
+            f"{adopted.run_id} owns: " + ", ".join(adopted.owned_review_paths)
+        )
+
+    # Interrupted-run report: surfaced for an explicit decision, never
+    # implicitly adopted. The adopted target prints its own line.
+    corrupt_warnings: list[str] = []
+    for orphan in _detect_interrupted_runs(
+        ctx.done_session_dir, ctx.repo_root, warnings=corrupt_warnings
+    ):
+        if adopted is not None and orphan.run_id == adopted.run_id:
+            print(
+                "interrupted run: adopting the boundary of "
+                f"{orphan.run_id} (start_commit and owned paths carried "
+                "verbatim from its manifest)"
+            )
+            continue
+        print(
+            "interrupted run: "
+            f"{_manifest_path(ctx.done_session_dir, orphan.run_id).name} "
+            "(complete=false, never finalized); this run keeps its own HEAD "
+            f"boundary; pass --adopt {orphan.run_id} to continue that run's "
+            "boundary"
+        )
+    for line in corrupt_warnings:
+        # F10: a corrupt record in the done-session dir is reported, never
+        # silently skipped (an undead run leaves a trace).
+        print(line)
+
+    if adopted is not None:
+        start_commit = adopted.start_commit
+        owned_plan_paths = _dedup_preserving_order(
+            list(args.owned_plan) + list(adopted.owned_plan_paths)
+        )
+        owned_review_paths = _dedup_preserving_order(
+            list(args.owned_review) + list(adopted.owned_review_paths)
+        )
+        foreign_review_paths = _dedup_preserving_order(
+            list(args.foreign_review) + list(adopted.foreign_review_paths)
+        )
+    else:
+        owned_plan_paths = _dedup_preserving_order(list(args.owned_plan))
+        owned_review_paths = _dedup_preserving_order(list(args.owned_review))
+        foreign_review_paths = _dedup_preserving_order(list(args.foreign_review))
+
+    start_porcelain = _porcelain_lines(ctx, ".")
+
+    # Claim-or-foreign over the Step 0 enumeration universe: every staging
+    # candidate on disk must be either claimed (the run's own --owned-review
+    # plus the adopted run's inherited claims) or explicitly marked a peer's
+    # artifact (--foreign-review plus inherited foreign markings); fail loud
+    # otherwise, and never write a partial ownership record.
+    def real(path: str) -> str:
+        return os.path.realpath(str(ctx.repo_root / path))
+
+    owned_real = {real(p) for p in owned_review_paths}
+    foreign_real = {real(p) for p in foreign_review_paths}
+    uncovered = [
+        str(candidate)
+        for candidate in _all_staging_review_paths(ctx)
+        if real(str(candidate)) not in owned_real
+        and real(str(candidate)) not in foreign_real
+    ]
+    if uncovered:
+        if args.claim_none:
+            # F13: the run owns no staging doc, so every unclaimed candidate
+            # is marked foreign (each recorded in foreign_review_paths for
+            # audit, repo-relative like the --foreign-review inputs) instead
+            # of aborting one flag per path.
+            def repo_relative(candidate: str) -> str:
+                try:
+                    return str(Path(candidate).relative_to(ctx.repo_root))
+                except ValueError:
+                    return candidate
+
+            foreign_review_paths = _dedup_preserving_order(
+                foreign_review_paths + [repo_relative(c) for c in uncovered]
+            )
+        else:
+            return _cli_fail(
+                "write-manifest: claim-or-foreign violation: staging review "
+                "candidate(s) on disk are neither owned nor foreign: "
+                + ", ".join(uncovered)
+                + " (bulk answers: --claim-none when this run owns no "
+                "staging doc, or --foreign-review-from <file> with one path "
+                "per line)"
+            )
+
+    manifest = RunManifest(
+        schema=MANIFEST_SCHEMA_VERSION,
+        run_id=_new_run_id(),
+        marker=window.current.path.name,
+        created_epoch=time.time(),
+        repo_root=str(ctx.repo_root),
+        pid=os.getpid(),
+        start_commit=start_commit,
+        start_porcelain=start_porcelain,
+        owned_plan_paths=owned_plan_paths,
+        owned_review_paths=owned_review_paths,
+        foreign_review_paths=foreign_review_paths,
+        adopted_from=args.adopt,
+        complete=False,
+    )
+    try:
+        path = write_run_manifest(manifest, ctx.done_session_dir)
+    except OSError as exc:
+        return _cli_fail(f"write-manifest: cannot write the run manifest: {exc}")
+    print(f"manifest: {path}")
+    print(f"run_id: {manifest.run_id}")
+    return 0
+
+
+def _cmd_finalize_manifest(argv: list[str]) -> int:
+    """Set the run manifest's ``complete`` flag to true in place (done Step 6,
+    immediately before the done-lock release): the run reached the end, so it
+    is never an interrupted run for a later Step 0. A missing (or foreign-
+    rooted) manifest gets an explicit not-found note with a zero exit: the
+    Step 6 recipe's tolerance clause, a run without a manifest skips
+    finalization without failing."""
+    parser = argparse.ArgumentParser(
+        prog="done_sweep_gates.py finalize-manifest",
+        description="Set the run manifest's complete flag to true in place.",
+    )
+    parser.add_argument(
+        "--run-id", required=True, metavar="RUN_ID",
+        help="the run_id recorded when Step 0 wrote the manifest",
+    )
+    args = parser.parse_args(argv)
+
+    root = os.environ.get("DONE_SWEEP_REPO_ROOT")
+    ctx = GateContext.discover(Path(root) if root else None)
+    manifest = _read_manifest_by_run_id(ctx.done_session_dir, args.run_id)
+    if manifest is None or not _manifest_root_matches(
+        manifest.repo_root, ctx.repo_root
+    ):
+        print(
+            "finalize-manifest: no run manifest found for run_id "
+            f"{args.run_id} under {ctx.done_session_dir} (nothing to "
+            "finalize; a run without a manifest skips finalization)"
+        )
+        return 0
+    if manifest.complete:
+        print(
+            f"finalize-manifest: run {manifest.run_id} is already complete; "
+            "nothing to do"
+        )
+        return 0
+    manifest.complete = True
+    try:
+        path = write_run_manifest(manifest, ctx.done_session_dir)
+    except OSError as exc:
+        return _cli_fail(f"finalize-manifest: cannot rewrite the run manifest: {exc}")
+    print(f"finalize-manifest: run {manifest.run_id} marked complete in {path}")
+    return 0
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -1529,6 +2519,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         for gate_id in PRE_DOCS_GATES + PRE_COMMIT_GATES:
             print(gate_id)
         return 0
+    if command == "write-manifest":
+        return _cmd_write_manifest(args[1:])
+    if command == "finalize-manifest":
+        return _cmd_finalize_manifest(args[1:])
     if command in PHASES:
         root = os.environ.get("DONE_SWEEP_REPO_ROOT")
         ctx = GateContext.discover(Path(root) if root else None)

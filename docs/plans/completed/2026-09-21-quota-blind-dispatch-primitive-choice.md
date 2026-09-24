@@ -221,3 +221,7 @@ Files:
 - [x] Run → expect GREEN: the whole Validation Commands block (gates 1 to 12) exits 0 with VALIDATION OK [class: REPOSITORY_TEST]
 - [x] Run the no-em-dash scan and the public hygiene scan over the changed files; both exit 0 [class: REPOSITORY_TEST]
 - [x] Commit: `skills: quota-state-aware authoring carrier selection + idle payload re-verification gate` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-19-quota-blind-dispatch-primitive-choice.md: disposition folded into 2026-09-21-quota-blind-dispatch-primitive-choice.md (2026-09-25); per-item file deleted.

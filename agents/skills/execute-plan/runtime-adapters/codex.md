@@ -122,6 +122,21 @@ the terminal receipts received, and the host's live session and process
 state. The witness, not a cached count, decides whether a launch
 proceeds or returns `capacity-unavailable`.
 
+The initial host inventory is a bounded `ps` snapshot of active `codex exec
+--json` and `codex exec resume ... --json` processes. A successful, completely
+parsed snapshot may prove an empty inventory; command failure, timeout, or a
+malformed row is `unavailable`, never an empty list. Each process is keyed by
+PID plus its host start-time identity so PID reuse cannot match a prior
+observation. Any observed process not already represented by a live registry
+entry consumes capacity and blocks a new launch. Launch and resume hold the
+same owner-only host lock while rechecking the process snapshot and running
+the command, so two execute-plan runs cannot both act on the same empty
+snapshot. Failure to acquire the lock or re-observe inventory fails closed.
+The neutral driver also records an in-flight launch reservation under the
+manifest lock before adapter I/O. This serializes launch windows for runtimes
+that cannot reserve provider capacity natively; the reservation is removed
+after the adapter call returns and remains durable across a parent crash.
+
 Refusal semantics (mirroring the neutral contract):
 
 - **Stale inventory**: a worker recorded in the worker registry that the
@@ -157,13 +172,16 @@ Success requires machine-verifiable evidence. The verifier accepts a
 worker result only when the evidence envelope names the identity of each
 validating command, the working directory it ran in, its exit status,
 the output identity of the captured result, the selected test
-identities, the changed paths measured against the launch baseline and
-contained in the token's allowed paths, and the plan-criterion coverage
-the changes satisfy. A log path, a narrative claim, or an attestation
-without command identity is refused as a malformed receipt and fails
-closed; changed paths outside the task scope fail closed as a contract
-violation. Recovery: re-run the validation commands and re-submit the
-evidence envelope under the live claim.
+identities, changed-path observations, the allowlisted source-content digest,
+and the plan-criterion coverage the changes satisfy. Path observations are
+diagnostic; uncommitted or out-of-scope worktree changes do not block launch,
+checkpoint, or completion. Verification receipts become stale when allowlisted
+source contents change, and the done boundary requires the task commit's
+allowlisted source snapshot to match the verified snapshot. It checks only the
+task commit's own paths against its allowlist. A log path, a narrative claim, or an attestation without command
+identity is refused as a malformed receipt and fails closed. Recovery: re-run
+the validation commands and re-submit the evidence envelope under the live
+claim.
 
 ## Interruption reconciler
 
@@ -179,10 +197,16 @@ relaunch:
    session and process state against it.
 4. Witness the worktree against the claim's launch baseline.
 
-Only a reconciled state relaunches. A non-resumable interruption state -
-unverified process cleanup, an unresolved approval gate, or worktree
-drift that cannot be attributed to a proven source - stays blocked with
-`resume_allowed: false` until the named recovery action resolves it. The
+Only a reconciled state relaunches. For a terminal timeout or shutdown,
+the driver invokes `reconcile-interruption` with the exact claim identity.
+The adapter's fresh inventory must prove the owned process is gone before
+the driver releases that launch reservation. An unavailable, malformed, or
+live-process observation stays blocked with `resume_allowed: false` and keeps
+capacity quarantined. An unresolved approval gate is never cleared by
+interruption reconciliation and stays blocked until its named recovery action
+resolves it.
+Uncommitted or foreign worktree changes are diagnostic and do not block
+resume; the done boundary checks the task's own committed paths. The
 reconciler records what it proved, releases the capacity of workers
 whose terminal events closed, quarantines what it could not prove, and
 hands the parent one reconciled capacity witness.

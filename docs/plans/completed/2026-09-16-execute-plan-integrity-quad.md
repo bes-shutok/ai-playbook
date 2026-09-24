@@ -235,3 +235,7 @@ Files:
 - [x] Run the full Validation Commands block from the repository root → expect exit 0 on every gate
 - [x] Run → expect GREEN: `python3 scripts/test_execute_plan_runtime.py` (whole suite, including the neutrality scan over the edited skill bodies)
 - [x] No commit expected; if any must-fix file drifted after its task commit, return it to that task's owner step instead of committing here
+
+## Disposition of migrated backlog items
+
+- docs/history/backlog/completed/2026-09-16-execute-plan-terminal-completion-integrity.md: disposition folded into 2026-09-16-execute-plan-integrity-quad.md (2026-09-25); per-item file deleted.
