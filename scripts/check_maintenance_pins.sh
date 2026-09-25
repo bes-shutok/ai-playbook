@@ -18,7 +18,8 @@ S="$repo/agents/skills/maintenance/SKILL.md"
 Z="$repo/agents/skills/maintenance/zcode.md"
 P="$repo/agents/skills/maintenance/prompt-templates.md"
 D="$repo/agents/skills/done/SKILL.md"
-for f in "$S" "$Z" "$P" "$D"; do
+E="$repo/agents/skills/execute-plan/SKILL.md"
+for f in "$S" "$Z" "$P" "$D" "$E"; do
   [ -f "$f" ] || { echo "missing $f"; fail=1; }
 done
 [ "$fail" -eq 1 ] && exit 1
@@ -74,7 +75,7 @@ expect_absent_flat() { # expect_absent_flat <description> <pattern> <file>
 #   'when the automation listing shows no ENABLED parent' (SKILL.md):
 #       superseded by the P12 origin 4 state-first Step 0 rewrite (same plan, Task 2).
 #   'plus a path under the resolved `plans_dir` (SKILL.md Configuration;
-#       default `docs/plans/`).' (zcode.md): superseded by the same P12
+#       default `docs/history/plans/`).' (zcode.md): superseded by the same P12
 #       origin 1 containment extension of the execution-child marker.
 #   'a rollback create refusal means the child create actually succeeded: ...'
 #       (zcode.md) and 'counts as success only after one more listing confirms
@@ -102,7 +103,7 @@ expect_absent_flat() { # expect_absent_flat <description> <pattern> <file>
 #       prescribed unchanged in its owning plan).
 #   'Maintenance scheduler turn (every 2 hours)' (zcode.md recipe title):
 #       superseded by the quota-aligned cadence plan
-#       (docs/plans/2026-09-21-maintenance-turn-self-scheduling-cadence.md,
+#       (docs/history/plans/2026-09-21-maintenance-turn-self-scheduling-cadence.md,
 #       Task 1): the recognition title is form-independent, the cadence
 #       parenthetical is deleted from the recipe, and the cadence pin is
 #       rescoped to the never-dark fallback branch (exactly once).
@@ -145,7 +146,6 @@ pin "G1a guard present"      grep -qF 'G1a (authoring lane)' "$S"
 pin "per-lane cap wording"   grep -qF 'at most one child per lane per scheduler turn' "$S"
 pin "idle-time floor exemption" grep -qF 'exempt from the 5-minute floor' "$S"
 pin "pricing rule pointer"   grep -qF 'usage-pricing rule' "$S"
-pin "execution lane never idle-dispatched" grep -qF 'never dispatched through a primitive without a clock' "$S"
 pin "state-file lane arm present" grep -qF 'State-file arm' "$S"
 pin "idle children in the lane arm" grep -qF 'null `fire_at`' "$S"
 pin "tripwire self-heal present" grep -qF 'Self-heal arm' "$S"
@@ -167,8 +167,27 @@ pin "starvation releases only the starved lane" grep -qF 'releases only the star
 # from six to seven (the execute-plan serialization-boundary write joined as a
 # new named class); the old literal is frozen absent so the count cannot
 # silently revert
-pin "seven sanctioned writer classes" grep -qF 'seven sanctioned writer classes' "$S"
+# 2026-09-26 P64 Task 2: the count moved again, from seven to eight (the
+# cycle-gate write class joined); the seven literal joined the six literal in
+# the frozen-absent set, and the Task 2 companion pins sit directly below so a
+# single RED run witnesses the amended count pins and the new presence pins
+# together (the suite's later exit checkpoints would otherwise cut the run
+# short before they execute)
+pin "eight sanctioned writer classes" grep -qF 'eight sanctioned writer classes' "$S"
 expect_absent "superseded six sanctioned writer classes literal" 'six sanctioned writer classes' "$S"
+expect_absent "superseded seven sanctioned writer classes literal" 'seven sanctioned writer classes' "$S"
+# --- durable cycle gate pins (plan
+# 2026-09-26-p64-execution-lane-liveness-long-session-continuity.md, Task 2) ---
+# Presence pins are dedicated fixed-string greps that fail when their span is
+# deleted: the resting JSON literal, the section anchor other files navigate
+# by, and the eighth writer-class bullet in SKILL.md, plus the overlay's
+# continuation-resume classification bullet and its field naming in zcode.md.
+pin "authoring_cycle_gate resting JSON literal" grep -qF '"authoring_cycle_gate": null' "$S"
+pin "cycle gate section anchored" grep -qF '## Cycle gate (durable pacing between cycles)' "$S"
+pin "cycle-gate write class named" grep -qF 'cycle-gate write class' "$S"
+pin "continuation-summary resume classification in zcode" grep -qF 'continuation-summary resume' "$Z"
+pin "zcode overlay names the authoring_cycle_gate field" grep -qF 'authoring_cycle_gate' "$Z"
+[ "$fail" -eq 1 ] && exit 1
 pin "execution-child progress counts checked checkboxes" grep -qF 'checked-checkbox count' "$S"
 # the corrected checkbox regex literal is pinned region-scoped to the failure-detection
 # section in the python block below (a whole-file grep is satisfied by the Revisions-ledger copy)
@@ -526,7 +545,7 @@ pin "fallback cadence pinned (never-dark fallback branch, exactly once)" grep -q
 pin "peak window UTC+8 anchor"   grep -qF '14:00-18:00 UTC+8' "$Z"
 pin "never pin local hours"      grep -qF 'never pin local hours' "$Z"
 pin "execution-child marker repo containment" grep -qF 'and the resolved repository root (the relative plans-dir substring alone' "$Z"
-expect_absent "superseded uncontained execution-child marker wording must be absent from zcode.md" 'plus a path under the resolved `plans_dir` (SKILL.md Configuration; default `docs/plans/`).' "$Z"
+expect_absent "superseded uncontained execution-child marker wording must be absent from zcode.md" 'plus a path under the resolved `plans_dir` (SKILL.md Configuration; default `docs/history/plans/`).' "$Z"
 pin "zcode tripwire shape excludes the title conjunct" grep -qF 'title conjunct is deliberately not required' "$Z"
 # scheduler ops lanes and durability plan Task 4 (2026-09-19): the recycling
 # update call is demoted to a verified-only optimization leg, so the old
@@ -775,7 +794,7 @@ expect_absent "superseded listing-driven rearm wording must be absent from promp
 # blueprints, so each pin stretches to the blueprint-unique telemetry record
 # span (same twice-needle trap as the F8 note above): reverting one body while
 # the other keeps the duty must still fail. P51 origin 2 (plan
-# docs/plans/2026-09-23-p51-plans-authoring-surface-hygiene.md Task 2) retyped
+# docs/history/plans/2026-09-23-p51-plans-authoring-surface-hygiene.md Task 2) retyped
 # both pins from presence greps to count gates (the pin helper carrying the
 # count as its command): the authoring span occurs exactly 2 times in
 # prompt-templates.md (body + the payload paragraph's compact mirror), the
@@ -1105,7 +1124,6 @@ pin "done-skill rearm-on-touch pointer" grep -qF 'rearm-on-touch check defined i
 [ "$fail" -eq 1 ] && exit 1
 
 # --- budget-gate resume mirrors (P6 origins 1-2) ---
-E="$repo/agents/skills/execute-plan/SKILL.md"
 PL="$repo/agents/skills/plans/SKILL.md"
 R="$repo/agents/skills/review-loop/SKILL.md"
 RC="$repo/agents/skills/execute-plan/runtime-contract.md"
@@ -1129,7 +1147,7 @@ pin "dfm r2 F1 successor driving-principles enumeration" grep -qF 'four driving 
 
 # --- budget-gate resume fallback preservation pins (plan 2026-09-21-budget-gate-resume-fallbacks, Task 1) ---
 # Freeze-literal origin note: the preservation spans' origin is plan
-# docs/plans/2026-09-21-budget-gate-resume-fallbacks.md; their text was landed
+# docs/history/plans/2026-09-21-budget-gate-resume-fallbacks.md; their text was landed
 # by commit e71fd55a (the quota-aware-scheduling-semantics delivery), and the
 # two re-frozen mirror spans (the mirror carrier-aware record span and the
 # mirror host idle-time automation rung span) had their current literal wording
@@ -1711,7 +1729,7 @@ expect_absent "retired strictly-sequential clocked-child stance parenthetical mu
 check_live_vs_archive_duplicates() { # $1 = root to scan
   local root="$1"
   local live_root archive_dir base rc=0
-  for live_root in "docs/history/backlog" "docs/plans"; do
+  for live_root in "docs/history/backlog" "docs/history/plans"; do
     [ -d "$root/$live_root" ] || continue
     # Collect archive basenames under the root's archive subtrees.
     for archive_dir in completed deferred rejected; do
@@ -1762,9 +1780,54 @@ fi
 
 # --- execution queue-drain turn-end and taxonomy-parity pins (plan
 # 2026-09-25-execution-lane-queue-drain-continuation.md) ---
-E="$repo/agents/skills/execute-plan/SKILL.md"
 [ "$(grep -oF 'a request for the user to confirm starting the next plan is never a sanctioned turn end' "$D" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: queue-drain turn-end bullet count != 1"; fail=1; }
 [ "$(grep -oF 'a guard fire (a quota pause or near-reset with the Budget gate' "$E" | wc -l | tr -d ' ')" -eq 1 ] && [ "$(grep -oF 'a guard fire (a quota pause or near-reset with the Budget gate' "$D" | wc -l | tr -d ' ')" -eq 1 ] && [ "$(grep -oF 'a landing-gate hold reported by `scripts/done-lock.sh` merge-status, a lane hold from the scheduler guards, provider rate pressure with its structured rate-limited end) or an empty queue (no digest-intact open plan remains); a user interrupt or explicit abort is always sanctioned as well' "$E" | wc -l | tr -d ' ')" -eq 1 ] && [ "$(grep -oF 'a landing-gate hold reported by `scripts/done-lock.sh` merge-status, a lane hold from the scheduler guards, provider rate pressure with its structured rate-limited end) or an empty queue (no digest-intact open plan remains); a user interrupt or explicit abort is always sanctioned as well' "$D" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: queue-drain taxonomy parity span count != 1"; fail=1; }
+[ "$fail" -eq 1 ] && exit 1
+
+# --- execution-lane carrier-selection ordering pins (plan
+# 2026-09-26-p64-execution-lane-liveness-long-session-continuity.md, Task 1) ---
+# Companion pins for the execution lane's ordered carrier ladder (the SKILL.md
+# Step 3 ordering bullet and the zcode.md Execution-lane fallback legs bullet).
+# Presence pins are dedicated fixed-string greps that fail when their span is
+# deleted; the ordering sequence is count-gated at exactly once whole-file in
+# SKILL.md (the grep -oF | wc -l count form), so the Task 1 Revisions-ledger
+# entry or any later edit restating the sequence verbatim fails the suite.
+# Absence pins are case-sensitive fixed-string checks with the three-way
+# polarity above (rc 1 = clean, rc >= 2 = grep error fails), freezing the four
+# retired absolute wordings out of their files; the deleted idle-dispatched
+# presence pin's retirement is owned by the no-clock absence pin below.
+pin "Execution-lane carrier-selection ordering present" grep -qF 'Execution-lane carrier-selection ordering' "$S"
+pin "ordering sequence literal present" grep -qF 'clocked, then idle, then in-session, then park-with-carrier' "$S"
+pin "ordering sequence exactly-once count" test "$(grep -oF 'clocked, then idle, then in-session, then park-with-carrier' "$S" | wc -l | tr -d ' ')" -eq 1
+pin "in-session execution dispatch leg present" grep -qF 'in-session execution dispatch' "$S"
+pin "Execution-lane fallback legs overlay bullet present" grep -qF 'Execution-lane fallback legs' "$Z"
+pin "park launchd resume-carrier pairing present" grep -qF 'pairs the park with the launchd resume carrier' "$Z"
+expect_absent "retired execution-lane never-routed-in-session wording must be absent from SKILL.md" 'the execution lane is never routed in-session' "$S"
+expect_absent "retired overlay never-routes-in-session wording must be absent from zcode.md" 'The execution lane never routes in-session' "$Z"
+expect_absent "retired no-clock execution dispatch wording must be absent from SKILL.md" 'never dispatched through a primitive without a clock' "$S"
+expect_absent "retired clocked-only trap-sentence wording must be absent from zcode.md" 'stays clocked-only' "$Z"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- task-boundary compaction duty and queue-drain fold pins (plan
+# 2026-09-26-p64-execution-lane-liveness-long-session-continuity.md, Task 3) ---
+# Companion pins for the task-boundary compaction duty and the densified
+# execution-claim refresh record. The two P pins are count-gated at exactly
+# once whole-file (the grep -oF | wc -l count form) so the deviation-ledger
+# entry (which names the anchors by description only) or any stray duplicate
+# copy fails the suite; the E presence pins are dedicated fixed-string greps
+# that fail when their span is deleted. The header-loop presence pin guards the
+# pins suite's own $E existence check (a missing execute-plan SKILL.md must
+# fail loudly as missing, not as per-pin grep errors). The absence pin is a
+# case-sensitive fixed-string check with the three-way polarity above
+# (rc 1 = clean, rc >= 2 = grep error fails), freezing the retired
+# one-execution-child guard wording out of the execute-plan skill after the
+# queue-drain fold named the asserted-unchanged guard family instead.
+pin "execution blueprint task-boundary compaction paragraph anchor" test "$(grep -oF 'TASK-BOUNDARY COMPACTION' "$P" | wc -l | tr -d ' ')" -eq 1
+pin "densified execution-claim refresh record exactly-once" test "$(grep -oF 'at every task completion inside the implementation loop' "$P" | wc -l | tr -d ' ')" -eq 1
+pin "execute-plan task-boundary compaction duty policy anchor" grep -qF 'Task-boundary compaction duty' "$E"
+pin "queue-drain fold names the asserted-unchanged guard family" grep -qF 'lane guard and the P54 fleet cap' "$E"
+pin "pins header existence loop covers E" grep -qF 'for f in "$S" "$Z" "$P" "$D" "$E"' "${BASH_SOURCE[0]}"
+expect_absent "retired one-execution-child guard wording must be absent from the execute-plan skill" 'one-execution-child guard' "$E"
 [ "$fail" -eq 1 ] && exit 1
 
 echo "maintenance pins: all hold"

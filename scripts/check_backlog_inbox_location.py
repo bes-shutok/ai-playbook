@@ -799,7 +799,7 @@ def _selftest_main_repo(root: Path, check) -> None:
     _write(repo, "docs/architecture/BACKLOG-notes.md")
 
     # Rule-2 violation (both tokens outside the backlog home); committed.
-    _write(repo, "docs/plans/2026-09-03-x-deferred-backlog.md")
+    _write(repo, "docs/history/plans/2026-09-03-x-deferred-backlog.md")
 
     # Carve-out discriminators under docs/tmp that MUST FAIL:
     # segment boundary (execute-plan-sibling is not execute-plan) and
@@ -855,7 +855,7 @@ def _selftest_main_repo(root: Path, check) -> None:
         "docs/architecture/deferred-queue-design.md": 1,
         "docs/maintenance/sub/sub-deferred-backlog.md": 1,
         "docs/architecture/BACKLOG-notes.md": 1,
-        "docs/plans/2026-09-03-x-deferred-backlog.md": 2,
+        "docs/history/plans/2026-09-03-x-deferred-backlog.md": 2,
         "docs/tmp/execute-plan-sibling/evil-backlog.md": 1,
         "docs/tmp/notes/plan-requirements-fake/evil-backlog.md": 1,
         "docs/maintenance/untracked-deferred-inbox.md": 1,
@@ -921,7 +921,7 @@ def _selftest_factsless_repo(root: Path, check) -> None:
     repo = root / "factsless"
     repo.mkdir()
     _git(repo, "init", "-q")
-    _write(repo, "docs/plans/fallback-deferred-backlog.md")
+    _write(repo, "docs/history/plans/fallback-deferred-backlog.md")
     # Both tokens inside the FALLBACK home: guards the exclusion on the
     # default-home resolution path (no facts keys).
     _write(repo, "docs/history/backlog/fallback-ok-deferred-backlog.md")
@@ -931,7 +931,7 @@ def _selftest_factsless_repo(root: Path, check) -> None:
     code, stdout, stderr = _run_script(repo)
     check(code == 1, f"factsless repo: expected exit 1, got {code}")
     check(
-        "docs/plans/fallback-deferred-backlog.md: rule 2" in stdout,
+        "docs/history/plans/fallback-deferred-backlog.md: rule 2" in stdout,
         f"factsless repo: rule-2 fallback violation missing (stdout: {stdout!r})",
     )
     check(
@@ -963,14 +963,14 @@ def _selftest_blank_key_repo(root: Path, check) -> None:
         'backlog_completed_dir = "docs/history/backlog/completed/"\n'
         "```\n",
     )
-    _write(repo, "docs/plans/blank-key-deferred-backlog.md")
+    _write(repo, "docs/history/plans/blank-key-deferred-backlog.md")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "init")
 
     code, stdout, stderr = _run_script(repo)
     check(code == 1, f"blank-key repo: expected exit 1, got {code} (stdout: {stdout!r})")
     check(
-        "docs/plans/blank-key-deferred-backlog.md: rule 2" in stdout,
+        "docs/history/plans/blank-key-deferred-backlog.md: rule 2" in stdout,
         f"blank-key repo: rule-2 violation missing (stdout: {stdout!r})",
     )
     check(
@@ -1000,14 +1000,14 @@ def _selftest_degenerate_home_repo(root: Path, check) -> None:
             'backlog_completed_dir = "docs/history/backlog/completed/"\n'
             "```\n",
         )
-        _write(repo, "docs/plans/degenerate-deferred-backlog.md")
+        _write(repo, "docs/history/plans/degenerate-deferred-backlog.md")
         _git(repo, "add", "-A")
         _git(repo, "commit", "-q", "-m", "init")
 
         code, stdout, stderr = _run_script(repo)
         check(code == 1, f"{name}: expected exit 1, got {code} (stdout: {stdout!r})")
         check(
-            "docs/plans/degenerate-deferred-backlog.md: rule 2" in stdout,
+            "docs/history/plans/degenerate-deferred-backlog.md: rule 2" in stdout,
             f"{name}: rule-2 violation missing (stdout: {stdout!r})",
         )
         check(
@@ -1125,7 +1125,7 @@ def _selftest_absolute_home_repo(root: Path, check) -> None:
     repo = run_case(
         "abs-outside", str(outside), str(outside)
     )
-    _write(repo, "docs/plans/outside-home-deferred-backlog.md")
+    _write(repo, "docs/history/plans/outside-home-deferred-backlog.md")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "init")
     code, stdout, stderr = _run_script(repo)
@@ -1134,12 +1134,12 @@ def _selftest_absolute_home_repo(root: Path, check) -> None:
         f"abs-outside: expected exit 1, got {code} (stdout: {stdout!r})",
     )
     check(
-        "docs/plans/outside-home-deferred-backlog.md: rule 2" in stdout,
+        "docs/history/plans/outside-home-deferred-backlog.md: rule 2" in stdout,
         f"abs-outside: rule-2 violation missing (stdout: {stdout!r})",
     )
     check(
         "outside-home" not in stdout.replace(
-            "docs/plans/outside-home-deferred-backlog.md", ""
+            "docs/history/plans/outside-home-deferred-backlog.md", ""
         ),
         f"abs-outside: outside-home leaked into stdout (stdout: {stdout!r})",
     )
@@ -1152,7 +1152,7 @@ def _selftest_absolute_home_repo(root: Path, check) -> None:
     fakehome = root / "fakehome"
     _write(fakehome, "tilde-home/tilde-pair-deferred-backlog.md")
     repo = run_case("tilde", "~/tilde-home", "~/tilde-home/done")
-    _write(repo, "docs/plans/tilde-home-deferred-backlog.md")
+    _write(repo, "docs/history/plans/tilde-home-deferred-backlog.md")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "init")
     code, stdout, stderr = _run_script(
@@ -1163,7 +1163,7 @@ def _selftest_absolute_home_repo(root: Path, check) -> None:
         f"tilde: expected exit 1, got {code} (stdout: {stdout!r})",
     )
     check(
-        "docs/plans/tilde-home-deferred-backlog.md: rule 2" in stdout,
+        "docs/history/plans/tilde-home-deferred-backlog.md: rule 2" in stdout,
         f"tilde: rule-2 violation missing (stdout: {stdout!r})",
     )
     check(
@@ -1184,7 +1184,7 @@ def _selftest_absolute_home_repo(root: Path, check) -> None:
     _write(outside2, "outside-link-pair-deferred-backlog.md")
     repo = run_case("abs-outside-link", "home-link", "home-link/done")
     (repo / "home-link").symlink_to(outside2)
-    _write(repo, "docs/plans/victim-deferred-backlog.md")
+    _write(repo, "docs/history/plans/victim-deferred-backlog.md")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "init")
     code, stdout, stderr = _run_script(repo)
@@ -1193,7 +1193,7 @@ def _selftest_absolute_home_repo(root: Path, check) -> None:
         f"abs-outside-link: expected exit 1, got {code} (stdout: {stdout!r})",
     )
     check(
-        "docs/plans/victim-deferred-backlog.md: rule 2" in stdout,
+        "docs/history/plans/victim-deferred-backlog.md: rule 2" in stdout,
         f"abs-outside-link: rule-2 violation missing (stdout: {stdout!r})",
     )
     check(
@@ -1213,7 +1213,7 @@ def _selftest_absolute_home_repo(root: Path, check) -> None:
     # rule 2 on the whole tracked tree.
     repo = run_case("abs-rootlink", "rootlink", "rootlink/done")
     (repo / "rootlink").symlink_to(".")
-    _write(repo, "docs/plans/rootlink-deferred-backlog.md")
+    _write(repo, "docs/history/plans/rootlink-deferred-backlog.md")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "init")
     code, stdout, stderr = _run_script(repo)
@@ -1222,7 +1222,7 @@ def _selftest_absolute_home_repo(root: Path, check) -> None:
         f"abs-rootlink: expected exit 1, got {code} (stdout: {stdout!r})",
     )
     check(
-        "docs/plans/rootlink-deferred-backlog.md: rule 2" in stdout,
+        "docs/history/plans/rootlink-deferred-backlog.md: rule 2" in stdout,
         f"abs-rootlink: rule-2 violation missing (stdout: {stdout!r})",
     )
     check(
@@ -1680,7 +1680,7 @@ def _selftest_hot_dir_symlink_repo(root: Path, check) -> None:
     repo = run_case("symlink-escape")
     outside = root / "outside-dir"
     _write(outside, "outside-deferred-backlog.md")
-    _write(repo, "docs/plans/hide/hidden-backlog-notes.md")
+    _write(repo, "docs/history/plans/hide/hidden-backlog-notes.md")
     link(repo, "docs/maintenance/outsidelink", str(outside))
     link(repo, "docs/maintenance/escapelink", "../plans/hide")
     _git(repo, "add", "-A")
@@ -1729,7 +1729,7 @@ def _selftest_hot_dir_symlink_repo(root: Path, check) -> None:
 
     # file-link parity: a symlinked file reports under its link basename.
     repo = run_case("symlink-file-link")
-    _write(repo, "docs/plans/plain-notes.txt")
+    _write(repo, "docs/history/plans/plain-notes.txt")
     link(repo, "docs/maintenance/filelink-deferred-backlog.md", "../plans/plain-notes.txt")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "init")
@@ -1890,7 +1890,7 @@ def _selftest_nested_git_repo(root: Path, check) -> None:
             'backlog_completed_dir = "docs/history/backlog/completed/"\n'
             "```\n",
         )
-        _write(repo, "docs/plans/plain-notes.md")
+        _write(repo, "docs/history/plans/plain-notes.md")
         _git(repo, "add", "-A")
         _git(repo, "commit", "-q", "-m", "init")
         return repo

@@ -1,11 +1,12 @@
 # Backlog: delete the completed-backlog corpus from the docs branch
 
-Status: open
+Status: closed
 Workflow: backlog
 Source: 2026-09-25 operator directive — completed backlog items must not be kept on main or the docs branch in this or any other project; completed plans carry all needed info.
 Severity: Low
 Priority: medium
 Driving force: simplicity
+Disposition: 2026-09-25 (routed via docs/plans/2026-09-25-docs-branch-shadow-candidate-inclusion-and-completed-corpus-deletion.md, Task 7): closed by that plan's Task 6 — the docs-branch corpus was emptied with the README restored (docs-branch commit 89261aaa; `git ls-tree -r refs/heads/docs --name-only` filtered to docs/history/backlog/completed/ shows README.md only) and main's inbox was reconciled to the empty-inbox policy on the working branch (working-branch commit cbcb9135: fold-then-delete of the six stale re-entries with the covering registry audit note); live needle re-verified on the execution base: completed/ holds README.md only on both sides.
 Exact location: `docs/history/backlog/completed/` on the `docs` branch (306 dated item files as of 2026-09-25, plus the README); the main-branch twin of this corpus is covered by the open plan `docs/plans/2026-09-25-backlog-completed-archive-policy.md` (fold-then-delete migration, authored and ready).
 
 ## Problem

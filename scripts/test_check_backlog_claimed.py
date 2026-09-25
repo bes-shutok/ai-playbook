@@ -4,9 +4,9 @@
 Exercises ``check_backlog_claimed.py`` end-to-end through its CLI against
 fixture plans directories built under ``mkdtemp`` and torn down in
 ``tearDown``. Each case owns its fixture, so the suite never reads or
-mutates the real ``docs/plans/`` tree.
+mutates the real ``docs/history/plans/`` tree.
 
-Covered contract (plan docs/plans/2026-09-23-p51-plans-authoring-surface-hygiene.md,
+Covered contract (plan docs/history/plans/2026-09-23-p51-plans-authoring-surface-hygiene.md,
 Task 1): an origin-list claim in a top-level plan is reported as
 ``CLAIMED <stem> -> <plan-path>:<line>`` with exit 1; unclaimed stems exit
 0; the date-stripped stem form matches an undated reference; a stem

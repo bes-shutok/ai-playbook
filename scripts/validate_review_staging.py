@@ -12607,7 +12607,7 @@ def _selftest_record_kind_contract(root: Path, check) -> None:
     worker_payload["worker"] = "correctness-completeness"
     worker_payload["lens"] = "quality"
     worker_payload["status"] = "complete"
-    worker_payload["source_ref"] = "docs/plans/sample-plan.md"
+    worker_payload["source_ref"] = "docs/history/plans/sample-plan.md"
     ok_path = stage_supplemental(
         "worker-ok",
         worker_payload,
@@ -12618,7 +12618,7 @@ def _selftest_record_kind_contract(root: Path, check) -> None:
                 "- Worker: correctness-completeness",
                 "- Lens: quality",
                 "- Worker status: complete",
-                "- Source: docs/plans/sample-plan.md",
+                "- Source: docs/history/plans/sample-plan.md",
             ),
         ),
     )
@@ -12635,7 +12635,7 @@ def _selftest_record_kind_contract(root: Path, check) -> None:
     worker_payload["worker"] = "correctness-completeness"
     worker_payload["lens"] = "quality"
     worker_payload["status"] = "complete"
-    worker_payload["source_ref"] = "docs/plans/sample-plan.md"
+    worker_payload["source_ref"] = "docs/history/plans/sample-plan.md"
     ok_path = stage_supplemental(
         "worker-clean",
         worker_payload,
@@ -12646,7 +12646,7 @@ def _selftest_record_kind_contract(root: Path, check) -> None:
                 "- Worker: correctness-completeness",
                 "- Lens: quality",
                 "- Worker status: complete",
-                "- Source: docs/plans/sample-plan.md",
+                "- Source: docs/history/plans/sample-plan.md",
             ),
         ),
     )
@@ -12663,7 +12663,7 @@ def _selftest_record_kind_contract(root: Path, check) -> None:
     worker_payload = supplemental_payload("worker-evidence")
     worker_payload["lens"] = "quality"
     worker_payload["status"] = "complete"
-    worker_payload["source_ref"] = "docs/plans/sample-plan.md"
+    worker_payload["source_ref"] = "docs/history/plans/sample-plan.md"
     ok_path = stage_supplemental(
         "worker-missing-field",
         worker_payload,
@@ -12674,7 +12674,7 @@ def _selftest_record_kind_contract(root: Path, check) -> None:
                 "- Worker: correctness-completeness",
                 "- Lens: quality",
                 "- Worker status: complete",
-                "- Source: docs/plans/sample-plan.md",
+                "- Source: docs/history/plans/sample-plan.md",
             ),
         ),
     )
@@ -12695,7 +12695,7 @@ def _selftest_record_kind_contract(root: Path, check) -> None:
     worker_payload["worker"] = "correctness-completeness"
     worker_payload["lens"] = "quality"
     worker_payload["status"] = "complete"
-    worker_payload["source_ref"] = "docs/plans/sample-plan.md"
+    worker_payload["source_ref"] = "docs/history/plans/sample-plan.md"
     ok_path = stage_supplemental(
         "worker-status-collision",
         worker_payload,
@@ -12706,7 +12706,7 @@ def _selftest_record_kind_contract(root: Path, check) -> None:
                 "- Worker: correctness-completeness",
                 "- Lens: quality",
                 "- Status: STAGED",
-                "- Source: docs/plans/sample-plan.md",
+                "- Source: docs/history/plans/sample-plan.md",
             ),
         ),
     )
@@ -12728,7 +12728,7 @@ def _selftest_record_kind_contract(root: Path, check) -> None:
     worker_payload["worker"] = "correctness-completeness"
     worker_payload["lens"] = "quality"
     worker_payload["status"] = "complete"
-    worker_payload["source_ref"] = "docs/plans/sample-plan.md"
+    worker_payload["source_ref"] = "docs/history/plans/sample-plan.md"
     ok_path = stage_supplemental(
         "worker-source-collision",
         worker_payload,

@@ -44,6 +44,22 @@ docs_branch_add_shadow_candidate() {
   EXTRA_SHADOW_DIRS+=("$_candidate")
 }
 
+# Coverage-scoped descendant-ignored candidate probe. Arms in order:
+# (1) bare check-ignore: the ignore rule matches the candidate path itself;
+# (2) tracked-content gate: a candidate with any tracked file under it never
+#     takes the fallback, so tracked wholesale roots keep today's inclusion
+#     paths and the fallback can never newly stage tracked content;
+# (3) descendant-ignored fallback for untracked candidates whose ignore
+#     coverage lives only in descendants (rules such as docs/history/reviews/**
+#     match children but not the candidate path): the fixed-string needle
+#     matches the collapsed candidate entry and strict descendants only, and
+#     its trailing slash rejects collapsed ancestors and prefix-siblings.
+docs_branch_candidate_ignored() {
+  git check-ignore -q "$1" && return 0
+  git ls-files --error-unmatch -- "$1" >/dev/null 2>&1 && return 1
+  git ls-files --others --ignored --exclude-standard --directory -- "$1/" | grep -qF -e "$1/"
+}
+
 docs_branch_append_extra_shadow_dirs_from_facts() {
   _facts_file="$1"
   [ -f "$_facts_file" ] || return 0
@@ -100,27 +116,44 @@ Snapshot all gitignored LLM artifact paths before syncing them to the `docs` bra
 ```bash
 SNAPSHOT_TMP=$(mktemp -d)
 SNAPSHOT_PATHS=()
+# Fences run as separate tool calls and do not share variables; define the
+# docs-branch name here (Step 2 assigns the same value in its own fence).
+DOCS_BRANCH="docs"
 # Build SHADOW_CANDIDATES per Documentation paths section above
 for p in "${SHADOW_CANDIDATES[@]}"; do
   clean="${p%/}"
-  if [ -e "$clean" ] && git check-ignore -q "$clean"; then
+  if [ -e "$clean" ] && docs_branch_candidate_ignored "$clean"; then
     SNAPSHOT_PATHS+=("$p")
     parent=$(dirname "$clean")
     mkdir -p "${SNAPSHOT_TMP}/${parent}"
     cp -Rp "$clean" "${SNAPSHOT_TMP}/${parent}/"
-  elif [ -e "$clean" ] && ! git ls-files --error-unmatch -- "$clean" >/dev/null 2>&1; then
+  elif [ -e "$clean" ] && ! git ls-files --error-unmatch -- "$clean" >/dev/null 2>&1 && \
+       ! git ls-tree -r --name-only "refs/heads/${DOCS_BRANCH}" -- "$clean" 2>/dev/null | grep -q .; then
     # Loud skip: the candidate is still never staged (skip semantics unchanged),
     # but lost ignore coverage must name itself instead of vanishing quietly.
-    # The arm fires only for disk-only content: a tracked unignored candidate is
-    # intentionally not shadow content (ignore-else-track covers it), so no warning.
-    echo "docs-branch: shadow candidate '$clean' exists but is not gitignored (git check-ignore rejects it); NOT synced to the docs branch shadow. Add the ignore rule to .gitignore or correct the facts reviews_dir/tmp_dir key, then re-run." >&2
+    # The arm fires only for true zero coverage: the helper returned nonzero, the
+    # candidate is disk-only (no tracked content under it; ignore-else-track keeps
+    # tracked candidates silent), and the docs-branch tree does not track it
+    # either (a branch-tracked candidate is wholesale-synced by Step 2's mirror
+    # arm, so warning it would be false).
+    echo "docs-branch: shadow candidate '$clean' exists but is not gitignored (zero ignore coverage: git check-ignore rejects the path and no rule covers anything under it). Add the ignore rule to .gitignore, or add it to .git/info/exclude as the local-only fallback when .gitignore cannot be committed, or set the extra_shadow_dirs facts key when this is an extra shadow root whose ignore coverage drifted, or correct the facts reviews_dir/tmp_dir key, then re-run." >&2
+  elif [ -e "$clean" ] && \
+       git ls-files --error-unmatch -- "$clean" >/dev/null 2>&1 && \
+       git ls-files --others --exclude-standard -- "$clean" | grep -q . && \
+       ! git ls-tree -r --name-only "refs/heads/${DOCS_BRANCH}" -- "$clean" 2>/dev/null | grep -q .; then
+    # Partially tracked: the candidate holds tracked content (ignore-else-track
+    # keeps it out of the shadow, unchanged) alongside untracked content nothing
+    # will sync: the candidate is absent from the docs-branch tree, so Step 2's
+    # mirror arm never wholesale-copies it and its untracked remainder would
+    # vanish unnamed. Warning only; no inclusion change.
+    echo "docs-branch: shadow candidate '$clean' contains both tracked and untracked files but is not tracked on the docs branch; the untracked files inside are NOT shadowed and will not reach the docs branch." >&2
   fi
 done
 [ -e ".claude" ] && SNAPSHOT_PATHS+=(".claude/")
 rm -rf "${SNAPSHOT_TMP}"
 ```
 
-A candidate that exists but fails the check-ignore gate is skipped with the loud warning above, never a silent skip, because the reviews-dir shadow is the only durable copy of review records and lost ignore coverage must name itself, while an unignored but git-tracked candidate stays silently out of the shadow by design (ignore-else-track: tracked content is product content, not a shadow target).
+A candidate with zero ignore coverage at any level, no tracked content under it, and no docs-branch presence is skipped with the loud warning above, never a silent skip, because the reviews-dir shadow is the only durable copy of review records and lost ignore coverage must name itself. A candidate whose ignore coverage lives only in descendants (rule shapes that match children but not the candidate path itself) is included by the fallback probe (untracked roots only; the tracked-content gate keeps tracked wholesale roots on their existing inclusion paths). A candidate already tracked on the docs branch is re-included by Step 2's mirror arm (branch continuity) and wholesale-synced. Tracked candidates keep ignore-else-track unchanged (tracked content is product content, not a shadow target), and never-tracked unignored content inside a tracked, unbranched candidate is named by the partial-track warning above rather than lost unnamed.
 
 ## Step 1.5: Preserve Active Execute-Plan Session Logs (when present)
 
@@ -134,7 +167,7 @@ Reference (for reading only, use Step 2 script):
 
 ## Step 2: Sync to the `docs` Branch
 
-Create or update the single `docs` branch only when at least one of the candidate paths is both present on disk and gitignored. Skip entirely when the only ignored path is `.claude/` or another local agent config directory, those stay local-only.
+Create or update the single `docs` branch only when at least one of the candidate paths is both present on disk and gitignored — descendant-only ignore coverage counts for untracked roots (a rule that matches only the root's children, such as `docs/history/reviews/**`, qualifies through the shared candidate probe's descendant-ignored fallback). Skip entirely when the only ignored path is `.claude/` or another local agent config directory, those stay local-only.
 
 A single permanent `docs` branch is used regardless of which feature branch is active, keeping the full doc history in one place without per-branch fragmentation. Create it as an **orphan** on first use so it carries no code history.
 
@@ -149,6 +182,8 @@ If the repository already contains any `docs/...` branches, stop and consolidate
 ```bash
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 DOCS_BRANCH="docs"
+# Build SHADOW_CANDIDATES per Documentation paths section above (the assembled
+# section also defines the shared candidate-ignored probe used below).
 
 docs_branch_under_tracked_subtree() {
   _candidate_path="$1"
@@ -216,7 +251,7 @@ trap docs_branch_cleanup EXIT INT TERM
 # plan file's older bytes over the newer certified shape the branch holds.
 # The certification digest comes from the plan's latest review sidecar.
 _ORD_TOP="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-_plans_dir_ord="docs/plans"
+_plans_dir_ord="docs/history/plans"
 _reviews_dir_ord="${REVIEWS_DIR:-docs/reviews}"
 if [ -f .ai-playbook/facts.md ]; then
   _pd_cfg=$(awk 'BEGIN{F3=sprintf("%c%c%c",96,96,96)} $0 ~ "^"F3"toml"{f=1;next} f && $0 ~ "^"F3{exit} f && /^plans_dir[[:space:]]*=/{gsub(/^plans_dir[[:space:]]*=[[:space:]]*"/,""); gsub(/".*/,""); print; exit}' .ai-playbook/facts.md)
@@ -309,9 +344,13 @@ fi
 # staged deletion), so only it survives to trap removal; cleanup covers the SHADOW_PATHS-empty early exit.
 
 SHADOW_PATHS=()
+# Arm precedence pinned: a candidate ignored at bare OR descendant level (the
+# shared probe helper) takes the include arm and never reaches the mirror arm;
+# the elif is reachable only when the helper returned nonzero (branch
+# continuity for candidates the branch already tracks).
 for candidate in "${SHADOW_CANDIDATES[@]}"; do
   clean="${candidate%/}"
-  if [ -e "$clean" ] && git check-ignore -q "$clean"; then
+  if [ -e "$clean" ] && docs_branch_candidate_ignored "$clean"; then
     SHADOW_PATHS+=("$candidate")
   elif git show-ref --verify --quiet "refs/heads/${DOCS_BRANCH}" && \
        git ls-tree -r --name-only "refs/heads/${DOCS_BRANCH}" -- "$clean" 2>/dev/null | grep -q .; then
@@ -390,7 +429,15 @@ if git for-each-ref --format='%(refname)' 'refs/heads/docs/*' | grep -q .; then
 fi
 
 if git show-ref --verify --quiet "refs/heads/${DOCS_BRANCH}"; then
-  git worktree add "$DOCS_WORKTREE" "$DOCS_BRANCH"
+  if ! git worktree add "$DOCS_WORKTREE" "$DOCS_BRANCH"; then
+    # Lost the worktree race (the docs branch is already checked out in another
+    # worktree). Continuing would overlay into a plain directory and die at
+    # commit with misleading errors; fail here instead, naming the holder.
+    echo "ERROR: git worktree add failed for branch '${DOCS_BRANCH}' (already checked out?); holder per git worktree list:" >&2
+    git worktree list >&2
+    echo "Remedies in order: (1) intact-but-dead worktree holding the branch: git worktree remove <dir>; (2) stale gitdir entries only (the directory is already gone): git worktree prune" >&2
+    exit 1
+  fi
 else
   git worktree add --detach "$DOCS_WORKTREE" HEAD
   (
@@ -628,7 +675,7 @@ sync_rc=$?
 exit "$sync_rc"
 ```
 
-Failure semantics (sync): every failure path in the block is loud on stderr and splits into two classes. Exit 1 abort paths (nothing is staged or committed when they trip): the hygiene gate (a deny-pattern or absolute-home-path match in `.ai-playbook/facts.md` aborts the staging subshell, and the block tail re-raises that status so a hygiene-aborted sync reports failure to the caller instead of silent success), and the certified-downgrade refusal (exit 1, before staging), which enforces the Certified-plan ordering Rules bullet by refusing any overlay write that would replace plan bytes matching the latest certified sidecar digest with bytes that do not match it. Warn-and-continue paths (the sync completes, and the skip is never silent): the certified-plan guard script missing (the sync proceeds without the ordering check), the dedupe script missing or the backlog duplicate sweep failing (the sync proceeds without dedupe), and the restored-plan witness warnings when a restore fills a plan file whose bytes do not match the latest certified sidecar digest.
+Failure semantics (sync): every failure path in the block is loud on stderr and splits into two classes. Exit 1 abort paths (nothing is staged or committed when they trip): the hygiene gate (a deny-pattern or absolute-home-path match in `.ai-playbook/facts.md` aborts the staging subshell, and the block tail re-raises that status so a hygiene-aborted sync reports failure to the caller instead of silent success), and the certified-downgrade refusal (exit 1, before staging), which enforces the Certified-plan ordering Rules bullet by refusing any overlay write that would replace plan bytes matching the latest certified sidecar digest with bytes that do not match it, and the docs-branch `git worktree add` refusal (exit 1, before staging, naming the holder per `git worktree list` with the two leak remedies in order). Warn-and-continue paths (the sync completes, and the skip is never silent): the certified-plan guard script missing (the sync proceeds without the ordering check), the dedupe script missing or the backlog duplicate sweep failing (the sync proceeds without dedupe), and the restored-plan witness warnings when a restore fills a plan file whose bytes do not match the latest certified sidecar digest.
 
 > **Note:** When `docs/` is also a directory on the working branch, `git log --oneline docs` is ambiguous. Always use `git log --oneline refs/heads/docs --` to reference the branch unambiguously.
 
@@ -714,7 +761,7 @@ This only works when an old `git stash push --all` run happened after the files 
 
 - Never use `docs/master`, `docs/<feature>`, or any other `docs/...` shadow branches. The only valid shadow branch name is exactly `docs`.
 - If any `refs/heads/docs/*` branches already exist, consolidate them into the single `docs` branch and delete the namespaced branches before the next sync. Do not keep using them as a workaround.
-- **Before running this skill, verify all candidate files are gitignored** (`git check-ignore -q <file>`). Repo `.gitignore` should include `/.ai-playbook/` (repo root only; see `bootstrap-ai-playbook`). If a file is untracked but not gitignored and you cannot commit `.gitignore`, add the path to `.git/info/exclude` (local-only fallback) before running the skill.
+- **Before running this skill, verify all candidate files are gitignored** (`git check-ignore -q <file>`; descendant-only ignore coverage counts for untracked roots: a rule shape such as `docs/history/reviews/**` matches only children and leaves the root itself unmatched, and the skill's candidate probe includes such an untracked root via its descendant-ignored fallback). Repo `.gitignore` should include `/.ai-playbook/` (repo root only; see `bootstrap-ai-playbook`). If a file is untracked but not gitignored and you cannot commit `.gitignore`, add the path to `.git/info/exclude` (local-only fallback) before running the skill.
 - Never switch the live project checkout to the `docs` branch during sync. Use a temporary `git worktree` for all `docs` branch operations.
 - Run Step 2's script as a **single shell invocation**: never split across tool calls. Do not use `path` as a loop variable (zsh special variable).
 - The `docs` branch is **never pushed to remote**: local safety net only.

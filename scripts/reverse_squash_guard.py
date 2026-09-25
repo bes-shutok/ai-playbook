@@ -15,7 +15,7 @@ import re
 import subprocess
 import sys
 
-ARCHIVE_DIRS = ("docs/plans/completed/", "docs/history/backlog/completed/")
+ARCHIVE_DIRS = ("docs/history/plans/completed/", "docs/history/backlog/completed/")
 MIRROR_SCAN_SINCE = "30.days"
 MIRROR_SCAN_MAX_COMMITS = 2000
 MIRROR_FLOOR = 2

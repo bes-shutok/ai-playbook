@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hermetic pytest suite for the done sweep gate runner lib (plan Task 1).
 
-Plan: docs/plans/2026-09-20-harness-triage-paperkeeping-dismantling-wall-clock.md,
+Plan: docs/history/plans/2026-09-20-harness-triage-paperkeeping-dismantling-wall-clock.md,
 section "Task 1: Done sweep gate runner script". Every test below mirrors one
 plan checkbox one-for-one and carries the plan's class tag in its docstring
 (`[class: REPOSITORY_TEST]`).
@@ -100,8 +100,8 @@ def write_facts(root: Path) -> Path:
     facts = facts_dir / "facts.md"
     facts.write_text(
         "```toml\n"
-        'plans_dir = "docs/plans/"\n'
-        'plans_completed_dir = "docs/plans/completed/"\n'
+        'plans_dir = "docs/history/plans/"\n'
+        'plans_completed_dir = "docs/history/plans/completed/"\n'
         'backlog_dir = "docs/history/backlog/"\n'
         'reviews_dir = "docs/reviews/"\n'
         'tmp_dir = "docs/tmp/"\n'
@@ -338,12 +338,12 @@ def test_plan_readiness_candidates(tmp_path, sweep_env):
     prev = make_marker(root, now - 3600, os.getpid())
     make_marker(root, now, os.getpid())  # current run
 
-    alpha = "docs/plans/2026-09-20-alpha.md"
-    beta = "docs/plans/2026-09-20-beta.md"
-    gamma = "docs/plans/2026-09-20-gamma.md"
-    delta_completed = "docs/plans/completed/2026-09-19-delta.md"
-    (root / "docs/plans").mkdir(parents=True)
-    (root / "docs/plans/completed").mkdir(parents=True)
+    alpha = "docs/history/plans/2026-09-20-alpha.md"
+    beta = "docs/history/plans/2026-09-20-beta.md"
+    gamma = "docs/history/plans/2026-09-20-gamma.md"
+    delta_completed = "docs/history/plans/completed/2026-09-19-delta.md"
+    (root / "docs/history/plans").mkdir(parents=True)
+    (root / "docs/history/plans/completed").mkdir(parents=True)
     (root / alpha).write_text("alpha\n", encoding="utf-8")
     git(root, "add", "-f", alpha)
     git(root, "commit", "-m", "alpha", "-q")  # tracked, unmodified: deliverables arm only
@@ -376,10 +376,10 @@ def test_plan_readiness_conservative_gating(tmp_path, sweep_env):
     write_facts(root)
     now = time.time()
     make_marker(root, now, os.getpid())  # current run only; no previous run
-    (root / "docs/plans").mkdir(parents=True)
+    (root / "docs/history/plans").mkdir(parents=True)
     ignored_plans = [
-        "docs/plans/2026-09-20-conv-a.md",
-        "docs/plans/2026-09-20-conv-b.md",
+        "docs/history/plans/2026-09-20-conv-a.md",
+        "docs/history/plans/2026-09-20-conv-b.md",
     ]
     for rel in ignored_plans:
         (root / rel).write_text(rel + "\n", encoding="utf-8")
@@ -405,8 +405,8 @@ def test_plan_readiness_stale_manifest_no_exemption(tmp_path, sweep_env):
     now = time.time()
     make_marker(root, now - 3600, os.getpid())
     make_marker(root, now, os.getpid())
-    plan = "docs/plans/2026-09-20-stale-exempt-attempt.md"
-    (root / "docs/plans").mkdir(parents=True)
+    plan = "docs/history/plans/2026-09-20-stale-exempt-attempt.md"
+    (root / "docs/history/plans").mkdir(parents=True)
     (root / plan).write_text("stale\n", encoding="utf-8")
     write_deliverables(root, [plan])
     write_manifest(root, "2026-09-20-stale-exempt-attempt", fresh_iso(hours_ago=30))
@@ -429,14 +429,14 @@ def test_deliverables_removal_rule(tmp_path, sweep_env):
     make_marker(root, now - 3600, os.getpid())
     make_marker(root, now, os.getpid())
 
-    plans_dir = root / "docs/plans"
-    completed_dir = root / "docs/plans/completed"
+    plans_dir = root / "docs/history/plans"
+    completed_dir = root / "docs/history/plans/completed"
     plans_dir.mkdir(parents=True)
     completed_dir.mkdir(parents=True)
-    good = "docs/plans/2026-09-20-good-one.md"
-    exempt = "docs/plans/2026-09-20-exempt-one.md"
-    gone = "docs/plans/2026-09-20-gone-one.md"
-    bad = "docs/plans/2026-09-20-bad-one.md"
+    good = "docs/history/plans/2026-09-20-good-one.md"
+    exempt = "docs/history/plans/2026-09-20-exempt-one.md"
+    gone = "docs/history/plans/2026-09-20-gone-one.md"
+    bad = "docs/history/plans/2026-09-20-bad-one.md"
     (plans_dir / "2026-09-20-good-one.md").write_text("g\n", encoding="utf-8")
     (plans_dir / "2026-09-20-exempt-one.md").write_text("e\n", encoding="utf-8")
     (completed_dir / "2026-09-20-gone-one.md").write_text("gone\n", encoding="utf-8")
@@ -465,8 +465,8 @@ def test_report_shape_and_order(tmp_path, sweep_env, monkeypatch, capsys):
     now = time.time()
     make_marker(root, now - 3600, os.getpid())
     make_marker(root, now, os.getpid())
-    plan = "docs/plans/2026-09-20-bad-report-plan.md"
-    (root / "docs/plans").mkdir(parents=True)
+    plan = "docs/history/plans/2026-09-20-bad-report-plan.md"
+    (root / "docs/history/plans").mkdir(parents=True)
     (root / plan).write_text("bad\n", encoding="utf-8")
     write_deliverables(root, [plan])
     monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
@@ -583,8 +583,8 @@ def test_plan_readiness_reports_stderr_on_validator_crash(tmp_path, sweep_env):
     now = time.time()
     make_marker(root, now - 3600, os.getpid())
     make_marker(root, now, os.getpid())
-    plan = "docs/plans/2026-09-20-crashing-plan.md"
-    (root / "docs" / "plans").mkdir(parents=True)
+    plan = "docs/history/plans/2026-09-20-crashing-plan.md"
+    (root / "docs" / "history" / "plans").mkdir(parents=True)
     (root / plan).write_text("p\n", encoding="utf-8")
     write_deliverables(root, [plan])
 
@@ -724,7 +724,7 @@ def test_doc_registry_ignores_unchanged_ignored_history(tmp_path, sweep_env, mon
     make_marker(root, now - 3600, os.getpid())
     make_marker(root, now, os.getpid())
 
-    completed = root / "docs" / "plans" / "completed"
+    completed = root / "docs" / "history" / "plans" / "completed"
     completed.mkdir(parents=True)
     frozen = completed / "unchanged.md"
     frozen.write_text("completed history\n", encoding="utf-8")
@@ -740,7 +740,7 @@ def test_doc_registry_ignores_unchanged_ignored_history(tmp_path, sweep_env, mon
 
     assert result.rc == 0
     rows = stdin_log.read_text(encoding="utf-8").splitlines()
-    assert "docs/plans/completed/unchanged.md" not in rows
+    assert "docs/history/plans/completed/unchanged.md" not in rows
 
 
 # --------------------------------------------------------------------------- #
@@ -929,8 +929,8 @@ def test_docs_tmp_sweep_classification_and_marker_immunity(tmp_path, sweep_env):
     m_anchor = make_marker(root, now - 3600, os.getpid())
     m_current = make_marker(root, now, os.getpid())
 
-    plans_dir = root / "docs/plans"
-    completed_dir = root / "docs/plans/completed"
+    plans_dir = root / "docs/history/plans"
+    completed_dir = root / "docs/history/plans/completed"
     plans_dir.mkdir(parents=True)
     completed_dir.mkdir(parents=True)
 
@@ -981,7 +981,7 @@ def test_docs_tmp_sweep_classification_and_marker_immunity(tmp_path, sweep_env):
 # --------------------------------------------------------------------------- #
 def test_docs_tmp_sweep_live_session_nested_plan_preserved(tmp_path, sweep_env):
     """[class: REPOSITORY_TEST] An execute-plan session whose plan lives in a
-    subdirectory of plans_dir (docs/plans/deferred/<slug>.md) is a LIVE
+    subdirectory of plans_dir (docs/history/plans/deferred/<slug>.md) is a LIVE
     session: the sweep preserves it instead of treating the plan as archived
     and rmtree-ing the session."""
     root = make_repo(tmp_path, "nested-session", gitignore_docs=True)
@@ -989,7 +989,7 @@ def test_docs_tmp_sweep_live_session_nested_plan_preserved(tmp_path, sweep_env):
     now = time.time()
     make_marker(root, now - 3600, os.getpid())
     make_marker(root, now, os.getpid())
-    deferred_dir = root / "docs" / "plans" / "deferred"
+    deferred_dir = root / "docs" / "history" / "plans" / "deferred"
     deferred_dir.mkdir(parents=True)
     plan_slug = "2026-09-20-nested-plan"
     (deferred_dir / (plan_slug + ".md")).write_text(
@@ -1182,7 +1182,7 @@ def test_session_window_and_staging_candidate_derivations(tmp_path, sweep_env):
 
 
 # --------------------------------------------------------------------------- #
-# Plan: docs/plans/2026-09-22-done-session-isolation-shared-checkout-ownership.md
+# Plan: docs/history/plans/2026-09-22-done-session-isolation-shared-checkout-ownership.md
 # Task 1: run manifest model, loader, and writer CLI.
 # --------------------------------------------------------------------------- #
 def _seed_run_manifest(
@@ -1247,9 +1247,9 @@ def test_write_manifest_creates_atomic_v1_record(
     # Pre-seeded dirt: one modified tracked file, one untracked file.
     (root / "README.md").write_text("modified tracked file\n", encoding="utf-8")
     (root / "note.txt").write_text("untracked scratch\n", encoding="utf-8")
-    plan = "docs/plans/2026-09-22-owned-plan.md"
+    plan = "docs/history/plans/2026-09-22-owned-plan.md"
     review_rel = "docs/reviews/2026-09-22-atomic-review-r1.md"
-    (root / "docs/plans").mkdir(parents=True)
+    (root / "docs/history/plans").mkdir(parents=True)
     (root / plan).write_text("plan body\n", encoding="utf-8")
     (root / "docs/reviews").mkdir(parents=True)
     (root / review_rel).write_text("staging review body\n", encoding="utf-8")
@@ -1329,7 +1329,7 @@ def test_write_manifest_enforces_claim_or_foreign(
     done_session = root / "docs" / "tmp" / "done-session"
 
     rc = lib.main(
-        ["write-manifest", "--owned-plan", "docs/plans/2026-09-22-x.md"]
+        ["write-manifest", "--owned-plan", "docs/history/plans/2026-09-22-x.md"]
     )
     assert rc != 0
     err = capsys.readouterr().err
@@ -1426,7 +1426,7 @@ def test_load_run_manifest_returns_none_when_absent(
 
 
 # --------------------------------------------------------------------------- #
-# Plan: docs/plans/2026-09-22-done-session-isolation-shared-checkout-ownership.md
+# Plan: docs/history/plans/2026-09-22-done-session-isolation-shared-checkout-ownership.md
 # Task 3: doc-registry gate consumes the manifest; shared baseline retired.
 # --------------------------------------------------------------------------- #
 def test_doc_registry_baseline_is_manifest_start_commit(
@@ -1811,7 +1811,7 @@ def test_doc_registry_no_manifest_keeps_legacy_behavior(
     now = time.time()
     make_marker(root, now - 3600, os.getpid())
     make_marker(root, now, os.getpid())
-    completed = root / "docs" / "plans" / "completed"
+    completed = root / "docs" / "history" / "plans" / "completed"
     completed.mkdir(parents=True)
     frozen = completed / "pre-window.md"
     frozen.write_text("old ignored history\n", encoding="utf-8")
@@ -1835,7 +1835,7 @@ def test_doc_registry_no_manifest_keeps_legacy_behavior(
     # row would vanish).
     assert "A\tlegacy-committed.md" in rows
     # Window-anchored ignored arm: the pre-window ignored file stays out.
-    assert "docs/plans/completed/pre-window.md" not in rows
+    assert "docs/history/plans/completed/pre-window.md" not in rows
     # Retirement: the file is never rewritten (byte-identical after the run).
     assert retired.read_text(encoding="utf-8") == head + "\n"
 
@@ -1845,7 +1845,7 @@ def test_doc_registry_no_manifest_keeps_legacy_behavior(
     write_facts(root2)
     write_stub_doc_registry_validator(root2)
     make_marker(root2, time.time(), os.getpid())
-    completed2 = root2 / "docs" / "plans" / "completed"
+    completed2 = root2 / "docs" / "history" / "plans" / "completed"
     completed2.mkdir(parents=True)
     old2 = completed2 / "old-ignored.md"
     old2.write_text("old ignored\n", encoding="utf-8")
@@ -1857,11 +1857,11 @@ def test_doc_registry_no_manifest_keeps_legacy_behavior(
 
     assert result2.rc == 0
     rows2 = stdin_log2.read_text(encoding="utf-8").splitlines()
-    assert "docs/plans/completed/old-ignored.md" in rows2
+    assert "docs/history/plans/completed/old-ignored.md" in rows2
 
 
 # --------------------------------------------------------------------------- #
-# Plan: docs/plans/2026-09-22-done-session-isolation-shared-checkout-ownership.md
+# Plan: docs/history/plans/2026-09-22-done-session-isolation-shared-checkout-ownership.md
 # Task 4: review-staging and ignored-path ownership scoping.
 # --------------------------------------------------------------------------- #
 def write_stub_review_staging_validator(root: Path) -> Path:
@@ -2066,10 +2066,10 @@ def test_session_ignored_paths_stay_window_anchored_under_manifest(
     make_marker(root, now - 3600, os.getpid())
     current = make_marker(root, now, os.getpid())
     _seed_run_manifest(root, "run-ignored", current.name, str(root), now)
-    completed = root / "docs" / "plans" / "completed"
+    completed = root / "docs" / "history" / "plans" / "completed"
     completed.mkdir(parents=True)
-    inside_rel = "docs/plans/completed/in-window.md"
-    outside_rel = "docs/plans/completed/out-window.md"
+    inside_rel = "docs/history/plans/completed/in-window.md"
+    outside_rel = "docs/history/plans/completed/out-window.md"
     (root / inside_rel).write_text("touched this session\n", encoding="utf-8")
     (root / outside_rel).write_text("old ignored history\n", encoding="utf-8")
     old_t = now - 86400
@@ -2093,10 +2093,10 @@ def test_no_manifest_keeps_window_conservative_filter(
     now = time.time()
     make_marker(root, now - 3600, os.getpid())
     make_marker(root, now, os.getpid())
-    completed = root / "docs" / "plans" / "completed"
+    completed = root / "docs" / "history" / "plans" / "completed"
     completed.mkdir(parents=True)
-    inside_rel = "docs/plans/completed/in-window.md"
-    outside_rel = "docs/plans/completed/out-window.md"
+    inside_rel = "docs/history/plans/completed/in-window.md"
+    outside_rel = "docs/history/plans/completed/out-window.md"
     (root / inside_rel).write_text("touched this session\n", encoding="utf-8")
     (root / outside_rel).write_text("old ignored history\n", encoding="utf-8")
     old_t = now - 86400
@@ -2110,9 +2110,9 @@ def test_no_manifest_keeps_window_conservative_filter(
     # Arm 2: unanchorable window (one marker) keeps everything, conservatively.
     root2 = mktemp_repo("ignored-conservative")
     make_marker(root2, time.time(), os.getpid())
-    completed2 = root2 / "docs" / "plans" / "completed"
+    completed2 = root2 / "docs" / "history" / "plans" / "completed"
     completed2.mkdir(parents=True)
-    old_rel = "docs/plans/completed/old-ignored.md"
+    old_rel = "docs/history/plans/completed/old-ignored.md"
     (root2 / old_rel).write_text("old ignored\n", encoding="utf-8")
     os.utime(root2 / old_rel, (now - 86400, now - 86400))
 
@@ -2123,7 +2123,7 @@ def test_no_manifest_keeps_window_conservative_filter(
 
 
 # --------------------------------------------------------------------------- #
-# Plan: docs/plans/2026-09-22-done-session-isolation-shared-checkout-ownership.md
+# Plan: docs/history/plans/2026-09-22-done-session-isolation-shared-checkout-ownership.md
 # Task 5: interrupted-run recovery and explicit adoption.
 # --------------------------------------------------------------------------- #
 def _newest_manifest_payload(root: Path, exclude_run_id: str | None = None) -> dict:
@@ -2209,7 +2209,7 @@ def test_adopt_copies_prior_boundary(
     start = git(root, "rev-parse", "HEAD").stdout.strip()
     prev = make_marker(root, time.time() - 3600, os.getpid())
     orphan_id = "run-orphan-adopt"
-    plan_rel = "docs/plans/2026-09-22-adopted-plan.md"
+    plan_rel = "docs/history/plans/2026-09-22-adopted-plan.md"
     review_rel = "docs/reviews/2026-09-22-adopt-review-r1.md"
     (root / review_rel).parent.mkdir(parents=True)
     (root / review_rel).write_text("orphan's staging review\n", encoding="utf-8")
@@ -2410,7 +2410,7 @@ def test_finalize_manifest_sets_complete(
 
 
 # --------------------------------------------------------------------------- #
-# Plan: docs/plans/2026-09-25-done-sweep-residuals-and-stale-origin-dispositions.md
+# Plan: docs/history/plans/2026-09-25-done-sweep-residuals-and-stale-origin-dispositions.md
 # Task 1: RED discrimination and behavior tests for r1 findings F1-F13.
 # --------------------------------------------------------------------------- #
 def test_load_run_manifest_marker_binding_beats_epoch_decoy(

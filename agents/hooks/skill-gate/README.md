@@ -19,7 +19,7 @@ stderr + exit 2 on block; agy/Cursor/Codex: top-level JSON, exit 0 always).
 
 ## What the gate does
 
-The skill-gate gates writes to gated artifact classes (v2: `docs/plans/` and the
+The skill-gate gates writes to gated artifact classes (v2: `docs/history/plans/` and the
 project lessons corpus `docs/maintenance/development_lessons.md`). Before a
 gated Write/Edit/MultiEdit is allowed, the gate requires a fresh per-(project,
 session) marker at

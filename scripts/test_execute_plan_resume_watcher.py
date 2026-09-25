@@ -985,7 +985,7 @@ class RuntimeWatcherIntegrationTest(unittest.TestCase):
         # Archived / completed: workflow_state complete in machine state.
         self.install_watcher(self.fixture.adapter(), 3_600_000_000, "rw-archived")
         self.clock.advance(30)
-        archived = self.fixture.root / "docs/plans/completed/fixture.md"
+        archived = self.fixture.root / "docs/history/plans/completed/fixture.md"
         archived.parent.mkdir(parents=True, exist_ok=True)
         # The ### Task 1 heading exists because the runtime's terminal gate requires at least one recognizable task section.
         archived.write_text("# fixture\n\n### Task 1: done\n\n- [x] checklist item\n")
@@ -995,14 +995,14 @@ class RuntimeWatcherIntegrationTest(unittest.TestCase):
         # equal to the archived path, digest over the archived bytes, source
         # at the absent active path).
         self.fixture.write_state(lambda state: state.update({"archive_gate": {
-            "plan_path": "docs/plans/fixture.md",
-            "declared_destination": "docs/plans/completed/fixture.md",
+            "plan_path": "docs/history/plans/fixture.md",
+            "declared_destination": "docs/history/plans/completed/fixture.md",
             "plan_digest": hashlib.sha256(archived.read_bytes()).hexdigest(),
             "last_commit_sha": "abcdef1",
             "phase5_checklist": ["checklist item"],
             "recorded_at": 1234.0,
         }}))
-        terminal = self.fixture.driver.mark_terminal("docs/plans/completed/fixture.md", "abcdef1", ["checklist item"])
+        terminal = self.fixture.driver.mark_terminal("docs/history/plans/completed/fixture.md", "abcdef1", ["checklist item"])
         self.assertEqual(terminal["status"], "success", terminal)
         adapter = self.fixture.adapter()
         decision = watcher.evaluate_fire(adapter, self.fixture.peek_state()["resume_watcher"])
@@ -2619,7 +2619,7 @@ class PlansAuthoringFixture:
         self.root = Path(self._tmp.name).resolve()
         self.tmp_dir = self.root / "tmp"
         self.tmp_dir.mkdir()
-        self.plan_path = self.root / "docs" / "plans" / "fixture-authoring.md"
+        self.plan_path = self.root / "docs" / "history" / "plans" / "fixture-authoring.md"
         self.plan_path.parent.mkdir(parents=True)
         self.plan_path.write_text(self.PLAN_TEXT, encoding="utf-8")
         self.state_path = self.tmp_dir / "plan-requirements-fixture-authoring.json"
@@ -2869,7 +2869,7 @@ class PlansAuthoringWatcherAdapterTest(unittest.TestCase):
         # A receipt for a different canonical plan path is fenced too.
         self.fixture.plan_path.write_text(self.fixture.PLAN_TEXT, encoding="utf-8")
         moved = dict(receipt)
-        moved["plan_path"] = str(self.fixture.root / "docs" / "plans" / "elsewhere.md")
+        moved["plan_path"] = str(self.fixture.root / "docs" / "history" / "plans" / "elsewhere.md")
         decision = watcher.evaluate_fire(adapter, moved)
         self.assertEqual(decision["decision"], "refuse")
         self.assertIn("plan-path", decision["mismatches"])

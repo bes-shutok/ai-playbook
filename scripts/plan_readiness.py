@@ -1073,7 +1073,7 @@ def evaluate_readiness(
     # is a recorded decision against doing the work. It is excluded from
     # active-plan readiness (fail-closed for direct invocations; the done
     # sweep's candidate derivation excludes the archive before this gate
-    # runs). See docs/plans/rejected/README.md.
+    # runs). See docs/history/plans/rejected/README.md.
     if rel_to_plans.parts and rel_to_plans.parts[0] == "rejected":
         return False, (
             f"plan file sits under the rejected archive directory "

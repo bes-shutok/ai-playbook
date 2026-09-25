@@ -97,8 +97,8 @@ NO_SESSION_KEY = "no-session"
 
 #: The default plans_dir suffix when no repo facts file resolves it (FLAGGED
 #: hardcoded convention). Works in worktrees because they contain
-#: ``docs/plans/`` without resolving a worktree-absent facts file.
-DEFAULT_PLANS_DIR_SUFFIX = Path("docs") / "plans"
+#: ``docs/history/plans/`` without resolving a worktree-absent facts file.
+DEFAULT_PLANS_DIR_SUFFIX = Path("docs") / "history" / "plans"
 
 #: Marker filename prefix (the full name is
 #: ``plans.<project>.<session>.marker``).
@@ -183,7 +183,7 @@ def _plans_path_matcher(target: str | Path, plans_dir: str | Path | None) -> boo
 
     ``plans_dir`` is resolved from repo ``.ai-playbook/facts.md`` by the caller
     (``facts_paths.resolve_plans_dir``); pass ``None`` to use the default
-    ``docs/plans/`` suffix. Classification resolves BOTH the target and
+    ``docs/history/plans/`` suffix. Classification resolves BOTH the target and
     ``plans_dir`` through ``os.path.realpath`` and uses ``Path.relative_to``/
     ``os.path.commonpath`` - never ``str.startswith``, never the lexical
     ``plans_dir`` string (M4: ``..``/symlink/absolute-path evasion bypasses a
@@ -192,7 +192,7 @@ def _plans_path_matcher(target: str | Path, plans_dir: str | Path | None) -> boo
     Cross-tree absolute target (r10-L5): when the gate cwd is a worktree, an
     absolute Write target into the MAIN repo is NOT classified by the
     cwd-resolved ``plans_dir``. This function ALSO checks the target against
-    the default ``docs/plans/`` suffix on the target's OWN realpath, so a
+    the default ``docs/history/plans/`` suffix on the target's OWN realpath, so a
     cross-tree plan write is still gated.
     """
     target_real = Path(os.path.realpath(str(target)))
@@ -203,7 +203,7 @@ def _plans_path_matcher(target: str | Path, plans_dir: str | Path | None) -> boo
         if _is_subpath(target_real, plans_real):
             return True
 
-    # Arm 2 (r10-L5): the default ``docs/plans/`` suffix on the target's OWN
+    # Arm 2 (r10-L5): the default ``docs/history/plans/`` suffix on the target's OWN
     # realpath, independent of the cwd-resolved plans_dir.
     if _under_default_plans_suffix(target_real):
         return True
@@ -271,33 +271,36 @@ def _is_subpath(child: Path, parent: Path) -> bool:
 
 
 def _under_default_plans_suffix(target_real: Path) -> bool:
-    """True iff ``target_real`` is under a ``docs/plans`` directory.
+    """True iff ``target_real`` is under a ``docs/history/plans`` directory.
 
     Walks the realpath ancestors of ``target_real``; if any ancestor is named
     ``plans`` AND its own parent is named ``docs``, the target is a plan file
     under the default convention. This is independent of the cwd-resolved
     ``plans_dir`` (closes the cross-tree-worktree hole, r10-L5).
 
-    BREADTH (r1-L10): the classification is GLOBAL - ANY ``docs/plans`` path on
+    BREADTH (r1-L10): the classification is GLOBAL - ANY ``docs/history/plans`` path on
     the filesystem is gated, not just ones under the current repo's toplevel.
-    A user editing ``~/notes/docs/plans/random.md`` (unrelated to any plan
+    A user editing ``~/notes/docs/history/plans/random.md`` (unrelated to any plan
     skill invocation) is blocked unless they recently invoked the plans skill
     for that project hash. This breadth is the documented design (the
     cross-tree-worktree hole requires the global fallback); restricting Arm 2
     to the git toplevel would re-open the hole for worktree writes.
     """
-    # Build the realpath of the conventional docs/plans anchor by walking up.
-    # Compare each (parent.name == "docs", dir.name == "plans") pair along the
-    # target's own realpath ancestors.
+    # Derive the conventional anchor from DEFAULT_PLANS_DIR_SUFFIX (the single
+    # source of truth for the default layout) and compare its parts tuple
+    # against each suffix of the target's own realpath ancestors.
+    suffix_parts = DEFAULT_PLANS_DIR_SUFFIX.parts
+    if not suffix_parts:
+        return False
     cur = target_real
     # Iterate parent chain. cur.parent eventually == cur at the root.
     while True:
+        if cur.parts[-len(suffix_parts):] == suffix_parts:
+            return True
         parent = cur.parent
         if parent == cur:
             # Reached filesystem root.
             return False
-        if cur.name == "plans" and parent.name == "docs":
-            return True
         cur = parent
 
 
@@ -1196,11 +1199,11 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
-        target = str(td_path / "docs" / "plans" / "x.md")
+        target = str(td_path / "docs" / "history" / "plans" / "x.md")
         allow, reason = run_consult(
             target,
             start_dir=td_path,
@@ -1226,7 +1229,7 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
@@ -1237,7 +1240,7 @@ def selftest() -> int:
             runtime_dir=runtime_dir,
             mtime_offset=0,
         )
-        target = str(td_path / "docs" / "plans" / "y.md")
+        target = str(td_path / "docs" / "history" / "plans" / "y.md")
         allow, reason = run_consult(
             target,
             start_dir=td_path,
@@ -1257,7 +1260,7 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
@@ -1268,7 +1271,7 @@ def selftest() -> int:
             runtime_dir=runtime_dir,
             mtime_offset=-(SKILL_GATE_WINDOW + 60),
         )
-        target = str(td_path / "docs" / "plans" / "z.md")
+        target = str(td_path / "docs" / "history" / "plans" / "z.md")
         allow, reason = run_consult(
             target,
             start_dir=td_path,
@@ -1294,7 +1297,7 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
@@ -1313,7 +1316,7 @@ def selftest() -> int:
         marker = _marker_path(runtime_dir, project, session)
         edge_mtime = marker_now - SKILL_GATE_WINDOW
         os.utime(str(marker), (edge_mtime, edge_mtime))
-        target = str(td_path / "docs" / "plans" / "edge.md")
+        target = str(td_path / "docs" / "history" / "plans" / "edge.md")
         with isolated_home(home_dir):
             allow, reason = _consult(
                 target,
@@ -1337,7 +1340,7 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
@@ -1355,7 +1358,7 @@ def selftest() -> int:
             os.utime(str(victim), (time.time(), time.time()))
             os.symlink(str(victim), str(marker))
             assert os.path.islink(str(marker)), "fixture: symlink must exist"
-        target = str(td_path / "docs" / "plans" / "sym.md")
+        target = str(td_path / "docs" / "history" / "plans" / "sym.md")
         allow, reason = run_consult(
             target,
             start_dir=td_path,
@@ -1375,7 +1378,7 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
@@ -1389,7 +1392,7 @@ def selftest() -> int:
         )
         future_ts = time.time() + 86400
         os.utime(str(marker), (future_ts, future_ts))
-        target = str(td_path / "docs" / "plans" / "fut.md")
+        target = str(td_path / "docs" / "history" / "plans" / "fut.md")
         allow, reason = run_consult(
             target,
             start_dir=td_path,
@@ -1423,7 +1426,7 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
@@ -1435,7 +1438,7 @@ def selftest() -> int:
             runtime_dir=runtime_dir,
             mtime_offset=0,
         )
-        target = str(td_path / "docs" / "plans" / "cross.md")
+        target = str(td_path / "docs" / "history" / "plans" / "cross.md")
         # Gate fires for session-B: looks up its OWN marker (ABSENT) -> BLOCK.
         allow, reason = run_consult(
             target,
@@ -1456,7 +1459,7 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
@@ -1467,7 +1470,7 @@ def selftest() -> int:
             runtime_dir=runtime_dir,
             mtime_offset=0,
         )
-        target = str(td_path / "docs" / "plans" / "pair.md")
+        target = str(td_path / "docs" / "history" / "plans" / "pair.md")
         allow, _ = run_consult(
             target,
             start_dir=td_path,
@@ -1488,12 +1491,12 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         # NOTE: runtime_dir does NOT pre-exist; the gate must makedirs it.
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
-        target = str(td_path / "docs" / "plans" / "fresh.md")
+        target = str(td_path / "docs" / "history" / "plans" / "fresh.md")
         allow, reason = run_consult(
             target,
             start_dir=td_path,
@@ -1514,11 +1517,11 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
-        target = str(td_path / "docs" / "plans" / "ns.md")
+        target = str(td_path / "docs" / "history" / "plans" / "ns.md")
         # Arm (a): absent --session-id, NO marker -> BLOCK.
         allow_none, _ = run_consult(
             target,
@@ -1563,8 +1566,8 @@ def selftest() -> int:
         repo_b = td_path / "repo_b"
         make_git_repo(repo_a)
         make_git_repo(repo_b)
-        (repo_a / "docs" / "plans").mkdir(parents=True)
-        (repo_b / "docs" / "plans").mkdir(parents=True)
+        (repo_a / "docs" / "history" / "plans").mkdir(parents=True)
+        (repo_b / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
@@ -1577,7 +1580,7 @@ def selftest() -> int:
             mtime_offset=0,
         )
         # Gate fires from repo_b: project differs -> marker ABSENT -> BLOCK.
-        target = str(repo_b / "docs" / "plans" / "reroot.md")
+        target = str(repo_b / "docs" / "history" / "plans" / "reroot.md")
         allow, reason = run_consult(
             target,
             start_dir=repo_b,
@@ -1593,17 +1596,17 @@ def selftest() -> int:
 
     # ------------------------------------------------------------------ #
     # plans_dir_default_classification: NO facts.md (worktree) + target
-    # docs/plans/x.md -> STILL CLASSIFIED via the docs/plans/ default.
+    # docs/history/plans/x.md -> STILL CLASSIFIED via the docs/history/plans/ default.
     # ------------------------------------------------------------------ #
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         # NO .ai-playbook/facts.md (a worktree would not have it).
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
-        target = str(td_path / "docs" / "plans" / "default.md")
+        target = str(td_path / "docs" / "history" / "plans" / "default.md")
         allow, reason = run_consult(
             target,
             start_dir=td_path,
@@ -1612,7 +1615,7 @@ def selftest() -> int:
             runtime_dir=runtime_dir,
         )
         check(
-            "plans_dir_default_classification: BLOCK (classified via docs/plans default, no facts)",
+            "plans_dir_default_classification: BLOCK (classified via docs/history/plans default, no facts)",
             not allow,
             f"allow={allow} reason={reason!r}",
         )
@@ -1623,7 +1626,7 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
@@ -1653,7 +1656,7 @@ def selftest() -> int:
 
     # ------------------------------------------------------------------ #
     # cross_tree_absolute_target_classified: gate cwd is a worktree, absolute
-    # target into MAIN repo's docs/plans/ -> STILL classified as gated.
+    # target into MAIN repo's docs/history/plans/ -> STILL classified as gated.
     # ------------------------------------------------------------------ #
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
@@ -1661,11 +1664,11 @@ def selftest() -> int:
         worktree = td_path / "worktree"
         make_git_repo(main_repo)
         make_git_repo(worktree)
-        (main_repo / "docs" / "plans").mkdir(parents=True)
+        (main_repo / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
-        target = str(main_repo / "docs" / "plans" / "crosstree.md")
+        target = str(main_repo / "docs" / "history" / "plans" / "crosstree.md")
         # Gate fires from the worktree cwd; absolute target in main repo.
         allow, reason = run_consult(
             target,
@@ -1963,7 +1966,7 @@ def selftest() -> int:
         td_path = Path(td)
         wt = td_path / "wt_single"
         make_git_repo(wt)
-        (wt / "docs" / "plans").mkdir(parents=True)
+        (wt / "docs" / "history" / "plans").mkdir(parents=True)
         subdir = wt / "subdir"
         subdir.mkdir()
         home_dir = td_path / "home"
@@ -1978,7 +1981,7 @@ def selftest() -> int:
             mtime_offset=0,
         )
         # Gate fires from a SUBDIR of the same worktree.
-        target = str(wt / "docs" / "plans" / "stable.md")
+        target = str(wt / "docs" / "history" / "plans" / "stable.md")
         allow, reason = run_consult(
             target,
             start_dir=subdir,
@@ -2015,8 +2018,8 @@ def selftest() -> int:
         td_path = Path(td)
         primary = td_path / "primary"
         make_git_repo(primary)
-        (primary / "docs" / "plans").mkdir(parents=True)
-        (primary / "docs" / "plans" / "seed.md").write_text("seed", encoding="utf-8")
+        (primary / "docs" / "history" / "plans").mkdir(parents=True)
+        (primary / "docs" / "history" / "plans" / "seed.md").write_text("seed", encoding="utf-8")
         import subprocess as _sp
         env = dict(os.environ)
         env["GIT_AUTHOR_NAME"] = "selftest"
@@ -2033,7 +2036,7 @@ def selftest() -> int:
             ["git", "-C", str(primary), "worktree", "add", "-q", str(wt)],
             check=True, env=env,
         )
-        (wt / "docs" / "plans" / "new.md").write_text("new", encoding="utf-8")
+        (wt / "docs" / "history" / "plans" / "new.md").write_text("new", encoding="utf-8")
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
@@ -2045,7 +2048,7 @@ def selftest() -> int:
             runtime_dir=runtime_dir,
             mtime_offset=0,
         )
-        target = str(wt / "docs" / "plans" / "new.md")
+        target = str(wt / "docs" / "history" / "plans" / "new.md")
         allow_primary, reason_primary = run_consult(
             target,
             start_dir=wt,
@@ -2104,8 +2107,8 @@ def selftest() -> int:
         td_path = Path(td)
         primary = td_path / "primary_cli"
         make_git_repo(primary)
-        (primary / "docs" / "plans").mkdir(parents=True)
-        (primary / "docs" / "plans" / "seed.md").write_text("seed", encoding="utf-8")
+        (primary / "docs" / "history" / "plans").mkdir(parents=True)
+        (primary / "docs" / "history" / "plans" / "seed.md").write_text("seed", encoding="utf-8")
         import subprocess as _sp
         env = dict(os.environ)
         env["GIT_AUTHOR_NAME"] = "selftest"
@@ -2122,7 +2125,7 @@ def selftest() -> int:
             ["git", "-C", str(primary), "worktree", "add", "-q", str(wt)],
             check=True, env=env,
         )
-        (wt / "docs" / "plans" / "new.md").write_text("new", encoding="utf-8")
+        (wt / "docs" / "history" / "plans" / "new.md").write_text("new", encoding="utf-8")
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
@@ -2150,7 +2153,7 @@ def selftest() -> int:
             any(expected_proj in m.name for m in markers),
             f"expected_proj={expected_proj} markers={[m.name for m in markers]}",
         )
-        target = str(wt / "docs" / "plans" / "new.md")
+        target = str(wt / "docs" / "history" / "plans" / "new.md")
         allow_cli, reason_cli = run_consult(
             target,
             start_dir=wt,
@@ -2173,7 +2176,7 @@ def selftest() -> int:
         td_path = Path(td)
         nongit = td_path / "nongit"
         nongit.mkdir()
-        (nongit / "docs" / "plans").mkdir(parents=True)
+        (nongit / "docs" / "history" / "plans").mkdir(parents=True)
         # Primary arm: monkeypatch HOME to a tmp dir whose logs/ does NOT
         # pre-exist; run the core consultation from the non-git cwd.
         home_dir = td_path / "home"
@@ -2212,13 +2215,13 @@ def selftest() -> int:
         td_path = Path(td)
         git_repo = td_path / "gitrepo"
         make_git_repo(git_repo)
-        (git_repo / "docs" / "plans").mkdir(parents=True)
+        (git_repo / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
         with isolated_home(home_dir):
             assert not (home_dir / ".ai-playbook" / "logs").exists()
-            target = str(git_repo / "docs" / "plans" / "p.md")
+            target = str(git_repo / "docs" / "history" / "plans" / "p.md")
             # Core consultation from the git-repo cwd.
             _consult(
                 target,
@@ -2265,11 +2268,11 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
-        target = str(td_path / "docs" / "plans" / "absent.md")
+        target = str(td_path / "docs" / "history" / "plans" / "absent.md")
         allow, reason = run_consult(
             target,
             start_dir=td_path,
@@ -2308,20 +2311,20 @@ def selftest() -> int:
         )
 
     # ------------------------------------------------------------------ #
-    # traversal_bypass: src/../../docs/plans/x.md AND plans_dir-as-symlink ->
+    # traversal_bypass: src/../../docs/history/plans/x.md AND plans_dir-as-symlink ->
     # BOTH classified as gated.
     # ------------------------------------------------------------------ #
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         (td_path / "src").mkdir(parents=True)
         # Arm 1: traversal in the target string.
-        target1 = str(td_path / "src" / ".." / ".." / "docs" / "plans" / "trav.md")
-        plans_dir_real = td_path / "docs" / "plans"
+        target1 = str(td_path / "src" / ".." / ".." / "docs" / "history" / "plans" / "trav.md")
+        plans_dir_real = td_path / "docs" / "history" / "plans"
         gated1 = classify_path(target1, str(plans_dir_real))
         check(
-            "traversal_bypass: src/../../docs/plans/x.md classified gated",
+            "traversal_bypass: src/../../docs/history/plans/x.md classified gated",
             gated1,
             f"gated1={gated1}",
         )
@@ -2346,11 +2349,11 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
-        target = str(td_path / "docs" / "plans" / "p.md")
+        target = str(td_path / "docs" / "history" / "plans" / "p.md")
         # Make check_marker raise PermissionError by monkeypatching os.lstat
         # (r2-M7: check_marker now uses os.lstat, not os.stat).
         real_lstat = os.lstat
@@ -2425,11 +2428,11 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
-        target = str(td_path / "docs" / "plans" / "eloop.md")
+        target = str(td_path / "docs" / "history" / "plans" / "eloop.md")
         import errno as _errno2
 
         # r3-L1: capture-before-patch ordering to match the sibling ``fail_open``
@@ -2493,11 +2496,11 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
-        target = str(td_path / "docs" / "plans" / "resolve_eloop.md")
+        target = str(td_path / "docs" / "history" / "plans" / "resolve_eloop.md")
         import errno as _errno3
 
         real_realpath = os.path.realpath
@@ -2561,10 +2564,10 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
-        target = str(td_path / "docs" / "plans" / "exc.md")
+        target = str(td_path / "docs" / "history" / "plans" / "exc.md")
         orig_consult = this_mod._consult
 
         def _raise_valueerror(*a, **k):
@@ -2638,12 +2641,12 @@ def selftest() -> int:
     # deny_reason as ONE string.
     # ------------------------------------------------------------------ #
     adversarial_target = (
-        'docs/plans/x"}\n"allow_tool": false, "y.md'
+        'docs/history/plans/x"}\n"allow_tool": false, "y.md'
     )
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        # Build a target path containing adversarial chars under docs/plans/.
+        # Build a target path containing adversarial chars under docs/history/plans/.
         # classify_path works on the string; the path need not exist on disk.
         home_dir = td_path / "home"
         home_dir.mkdir()
@@ -2677,11 +2680,11 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
-        target = str(td_path / "docs" / "plans" / "em.md")
+        target = str(td_path / "docs" / "history" / "plans" / "em.md")
         with isolated_home(home_dir):
             allow, reason = _consult(
                 target,
@@ -2898,7 +2901,7 @@ def selftest() -> int:
     # arm pins: (a) resolve_plans_dir(repo_root) EQUALS the facts value
     # byte-for-byte; (b) a NON-default plans_dir at repo root IS returned
     # from the repo root; (c) the GATE fired from a SUBDIR (no facts file
-    # there -> plans_dir None) STILL classifies a docs/plans/foo.md target as
+    # there -> plans_dir None) STILL classifies a docs/history/plans/foo.md target as
     # gated via the default-suffix fallback - the actual cross-subdir
     # guarantee a default-returning stub would also gate here, so the
     # discriminator is arm (b): a stub ignoring the facts NON-default value
@@ -2949,11 +2952,11 @@ def selftest() -> int:
             resolved_sub is None,
             f"resolved_sub={resolved_sub} (resolve_plans_dir reads <start_dir>/.ai-playbook directly)",
         )
-        # (d) The GATE fired from the subdir STILL classifies a docs/plans
+        # (d) The GATE fired from the subdir STILL classifies a docs/history/plans
         # target as gated via classify_path's default-suffix fallback (Arm 2
         # on the target realpath) - the ACTUAL cross-subdir guarantee.
-        (td_path / "docs" / "plans").mkdir(parents=True)
-        target = str(td_path / "docs" / "plans" / "sub.md")
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
+        target = str(td_path / "docs" / "history" / "plans" / "sub.md")
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
@@ -2965,7 +2968,7 @@ def selftest() -> int:
             runtime_dir=runtime_dir,
         )
         check(
-            "plans_dir_resolved_from_subdir: subdir gate STILL classifies docs/plans target (Arm 2 fallback)",
+            "plans_dir_resolved_from_subdir: subdir gate STILL classifies docs/history/plans target (Arm 2 fallback)",
             not allow,
             f"allow={allow} reason={reason!r}",
         )
@@ -3053,11 +3056,11 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         make_git_repo(td_path)
-        (td_path / "docs" / "plans").mkdir(parents=True)
+        (td_path / "docs" / "history" / "plans").mkdir(parents=True)
         home_dir = td_path / "home"
         home_dir.mkdir()
         runtime_dir = home_dir / ".ai-playbook" / "runtime" / "skill-invoked"
-        plan_target = str(td_path / "docs" / "plans" / "unchanged.md")
+        plan_target = str(td_path / "docs" / "history" / "plans" / "unchanged.md")
         other_target = str(td_path / "README.md")
         (td_path / "README.md").write_text("ok", encoding="utf-8")
         allow_block, reason_block = run_consult(

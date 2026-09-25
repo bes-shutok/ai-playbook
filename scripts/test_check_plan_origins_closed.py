@@ -27,7 +27,7 @@ FACTS_BODY = (
     "```toml\n"
     'backlog_dir = "docs/history/backlog/"\n'
     'backlog_completed_dir = "docs/history/backlog/completed/"\n'
-    'plans_completed_dir = "docs/plans/completed/"\n'
+    'plans_completed_dir = "docs/history/plans/completed/"\n'
     "```\n"
 )
 
@@ -44,7 +44,7 @@ class PlanOriginsClosedTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root, True)
         self.backlog = self.root / "docs" / "history" / "backlog"
         self.completed = self.backlog / "completed"
-        self.plans_dir = self.root / "docs" / "plans" / "completed"
+        self.plans_dir = self.root / "docs" / "history" / "plans" / "completed"
         for directory in (
             self.completed,
             self.plans_dir,
@@ -92,7 +92,9 @@ class PlanOriginsClosedTest(unittest.TestCase):
             f"# Backlog: {name}\n\nStatus: rejected (2026-09-23; fixture reason)\n\nbody\n",
         )
 
-    def _plan(self, name: str, origins: list[str] | None) -> Path:
+    def _plan(
+        self, name: str, origins: list[str] | None, body: str = ""
+    ) -> Path:
         lines = ["# Plan: fixture", ""]
         if origins:
             if len(origins) == 1:
@@ -108,7 +110,9 @@ class PlanOriginsClosedTest(unittest.TestCase):
                 lines.append(f"`{origins[-1]}`.")
             lines.append("")
         lines.extend(["## Tasks", "", "- [ ] fixture task", ""])
-        return self._write(self.plans_dir / name, "\n".join(lines))
+        return self._write(
+            self.plans_dir / name, "\n".join(lines) + body
+        )
 
     def _run(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -220,7 +224,7 @@ class PlanOriginsClosedTest(unittest.TestCase):
         self.assertNotIn("straggler", proc.stdout)
         # A plan living under the plans rejected/ archive directory is
         # gated like any plan; its rejected origin stays closed there.
-        rejected_plan_dir = self.root / "docs" / "plans" / "rejected"
+        rejected_plan_dir = self.root / "docs" / "history" / "plans" / "rejected"
         plan_lines = [
             "# Plan: fixture in the rejected archive",
             "",
@@ -302,6 +306,204 @@ class PlanOriginsClosedTest(unittest.TestCase):
         proc = self._run("--plan", str(plan))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("no origins block; nothing to verify", proc.stdout)
+
+
+    # ------------------------------------------------------------------
+
+    # Fold-then-delete consult canaries (P65 Task 4)
+    # ------------------------------------------------------------------
+
+    def _migrated_plan(self, name: str, origins: list[str], body: str) -> Path:
+        """An archived plan with an origins block plus extra body text
+        (e.g. a disposition section or a registry citation)."""
+        plan = self._plan(name, origins)
+        plan.write_text(plan.read_text(encoding="utf-8") + body, encoding="utf-8")
+        return plan
+
+    def _registry(self, rows: list[str]) -> Path:
+        table = "\n".join(
+            ["| k | src | notes |", "|---|---|---|"] + rows
+        )
+        return self._write(
+            self.root / "docs" / "maintenance" / "document-registry.md",
+            table + "\n",
+        )
+
+    def test_corpus_scan_resolves_disposition_section_origin(self) -> None:
+        self._plan(
+            "2026-09-19-fixture-disposition-anchored.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "\n## Disposition of migrated backlog items\n\n"
+            f"- `docs/history/backlog/{ALPHA}`: folded into this plan; per-item file deleted\n",
+        )
+        corpus = self._run()
+        self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stdout)
+        self.assertNotIn(f"{ALPHA} unresolved", corpus.stdout)
+
+    def test_corpus_scan_resolves_registry_migration_audit_origin(self) -> None:
+        self._plan(
+            "2026-09-19-fixture-registry-anchored.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "",
+        )
+        self._registry(
+            [
+                f"| alpha | docs/history/backlog/{ALPHA} | "
+                "user-approved 2026-09-26: migration audit - folded; per-item file deleted |"
+            ]
+        )
+        corpus = self._run()
+        self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stdout)
+        self.assertNotIn(f"{ALPHA} unresolved", corpus.stdout)
+
+    def test_registry_consult_row_scoped(self) -> None:
+        self._plan(
+            "2026-09-19-fixture-row-scoped.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "",
+        )
+        self._registry(
+            [
+                "| anchor-row | docs/history/backlog/unrelated.md | "
+                "user-approved 2026-09-26: migration audit - folded |",
+                f"| src-row | docs/history/backlog/{ALPHA} | plain note |",
+            ]
+        )
+        corpus = self._run()
+        self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stdout)
+        self.assertIn(f"{ALPHA} unresolved", corpus.stdout)
+
+    def test_corpus_scan_still_warns_genuinely_unresolved_origin(self) -> None:
+        self._plan(
+            "2026-09-19-fixture-genuine-straggler.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "",
+        )
+        corpus = self._run()
+        self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stdout)
+        self.assertIn(f"{ALPHA} unresolved", corpus.stdout)
+
+    def test_plan_mode_disposition_section_origin_passes(self) -> None:
+        self._migrated_plan(
+            "2026-09-19-fixture-plan-mode-disposition.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "\n## Disposition of migrated backlog items\n\n"
+            f"- `docs/history/backlog/{ALPHA}`: folded; per-item file deleted\n",
+        )
+        proc = self._run(
+            "--plan",
+            str(self.plans_dir / "2026-09-19-fixture-plan-mode-disposition.md"),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("ok (1/1 origins closed)", proc.stdout)
+
+    def test_plan_mode_registry_only_origin_still_stragglers(self) -> None:
+        self._plan(
+            "2026-09-19-fixture-plan-mode-registry-only.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "",
+        )
+        self._registry(
+            [
+                f"| alpha | docs/history/backlog/{ALPHA} | "
+                "user-approved 2026-09-26: migration audit - folded |"
+            ]
+        )
+        proc = self._run(
+            "--plan",
+            str(self.plans_dir / "2026-09-19-fixture-plan-mode-registry-only.md"),
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("straggler", proc.stdout)
+
+    def test_plan_mode_open_origin_named_in_disposition_still_stragglers(self) -> None:
+        self._open_top(ALPHA)
+        self._migrated_plan(
+            "2026-09-19-fixture-plan-mode-open-disposition.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "\n## Disposition of migrated backlog items\n\n"
+            f"- `docs/history/backlog/{ALPHA}`: named\n",
+        )
+        proc = self._run(
+            "--plan",
+            str(self.plans_dir / "2026-09-19-fixture-plan-mode-open-disposition.md"),
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("straggler", proc.stdout)
+
+    def test_registry_consult_requires_token_and_basename(self) -> None:
+        self._plan(
+            "2026-09-19-fixture-registry-no-token.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "",
+        )
+        self._registry(
+            [
+                f"| alpha | docs/history/backlog/{ALPHA} | "
+                "plain note without the marker |"
+            ]
+        )
+        corpus = self._run()
+        self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stdout)
+        self.assertIn(f"{ALPHA} unresolved", corpus.stdout)
+
+    def test_corpus_scan_open_origin_in_audit_cell_still_warns(self) -> None:
+        self._open_top(ALPHA)
+        self._plan(
+            "2026-09-19-fixture-open-audit-cell.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "",
+        )
+        self._registry(
+            [
+                f"| alpha | docs/history/backlog/{ALPHA} | "
+                "user-approved 2026-09-26: migration audit - folded |"
+            ]
+        )
+        corpus = self._run()
+        self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stdout)
+        self.assertIn(f"{ALPHA} unresolved", corpus.stdout)
+
+    def test_corpus_scan_open_origin_in_disposition_section_still_warns(self) -> None:
+        self._open_top(ALPHA)
+        self._migrated_plan(
+            "2026-09-19-fixture-open-disposition.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "\n## Disposition of migrated backlog items\n\n"
+            f"- `docs/history/backlog/{ALPHA}`: named\n",
+        )
+        corpus = self._run()
+        self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stdout)
+        self.assertIn(f"{ALPHA} unresolved", corpus.stdout)
+
+    def test_prefix_basename_near_miss_does_not_resolve(self) -> None:
+        self._plan(
+            "2026-09-19-fixture-prefix-near-miss.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "\n## Disposition of migrated backlog items\n\n"
+            f"- `docs/history/backlog/prefix-{ALPHA}`: a different item\n",
+        )
+        self._registry(
+            [
+                f"| row | docs/history/backlog/prefix-{ALPHA} | "
+                "user-approved 2026-09-26: migration audit - folded |"
+            ]
+        )
+        corpus = self._run()
+        self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stdout)
+        self.assertIn(f"{ALPHA} unresolved", corpus.stdout)
+
+    def test_missing_registry_leaves_consult_inert(self) -> None:
+        self._plan(
+            "2026-09-19-fixture-missing-registry.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "",
+        )
+        corpus = self._run()
+        self.assertEqual(corpus.returncode, 0, corpus.stdout + corpus.stdout)
+        self.assertIn(f"{ALPHA} unresolved", corpus.stdout)
+
+
 
 
 class OriginsBlockGrammarTest(unittest.TestCase):

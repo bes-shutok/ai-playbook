@@ -251,7 +251,7 @@ class ReviewRetentionTest(RetentionCliFixture):
         facts_dir.mkdir()
         (facts_dir / "facts.md").write_text(
             "```toml\n"
-            'plans_dir = "docs/plans/"\n'
+            'plans_dir = "docs/history/plans/"\n'
             'review_retention_months = "1"\n'
             "```\n",
             encoding="utf-8",

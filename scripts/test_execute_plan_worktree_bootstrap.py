@@ -63,7 +63,7 @@ BOOTSTRAP_LEAD_IN = "Linked-worktree bootstrap"
 # block and must never appear in the extracted recipe.
 CLOSEOUT_BLOCK_MARKERS = ("CLOSEOUT_SCRIPT", "{tmp_dir}", "{reviews_dir}")
 
-PLAN_REL = "docs/plans/2026-01-01-fixture-plan.md"
+PLAN_REL = "docs/history/plans/2026-01-01-fixture-plan.md"
 PLAN_DATE = "2026-01-01"
 SLUG = "fixture-plan"
 REVIEW_MD_NAME = f"{PLAN_DATE}-plan-review-{SLUG}-r1.md"
@@ -74,8 +74,8 @@ GITIGNORE_BODY = "/.ai-playbook/\n/docs/reviews\n/docs/tmp/\n"
 # The TOML keys the readiness gate and the bootstrap recipe resolve, with
 # the shapes copied from the real repository's .ai-playbook/facts.md.
 FACTS_BODY = """```toml
-plans_dir = "docs/plans/"
-plans_completed_dir = "docs/plans/completed/"
+plans_dir = "docs/history/plans/"
+plans_completed_dir = "docs/history/plans/completed/"
 backlog_dir = "docs/history/backlog/"
 backlog_completed_dir = "docs/history/backlog/completed/"
 reviews_dir = "docs/reviews/"
@@ -119,7 +119,7 @@ pair validates clean through the readiness gate from a linked worktree.
 ## Validation Commands
 
 ```bash
-python3 scripts/plan_readiness.py docs/plans/2026-01-01-fixture-plan.md
+python3 scripts/plan_readiness.py docs/history/plans/2026-01-01-fixture-plan.md
 ```
 """
 

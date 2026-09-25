@@ -12,14 +12,14 @@ sweep gate (agents/skills/maintenance/SKILL.md) treats a claimed report
 as skip-and-annotate: the claimed item is never moved; ownership beats
 the triage verdict, and exit 1 is the gate's stop signal.
 
-Contract (plan docs/plans/2026-09-23-p51-plans-authoring-surface-hygiene.md,
+Contract (plan docs/history/plans/2026-09-23-p51-plans-authoring-surface-hygiene.md,
 Task 1; origin docs/history/backlog/2026-09-22-deferral-sweeps-must-cross-check-claimed-origins.md):
 
 - Repeatable ``--slug`` accepting kebab-case stems or ``.md`` paths
   (normalized to filename stems).
 - ``--plans-dir`` override; without it the directory resolves from the
   repo facts file (``.ai-playbook/facts.md``, TOML ``plans_dir`` key)
-  with conventional default ``docs/plans/``. Relative values anchor at
+  with conventional default ``docs/history/plans/``. Relative values anchor at
   the repo root, never the process CWD, and no machine-specific
   absolute path is hardcoded.
 - Hyphen-bounded matching: an occurrence counts when the characters
@@ -49,7 +49,7 @@ try:
 except ImportError:  # pragma: no cover
     facts_paths = None  # type: ignore
 
-DEFAULT_PLANS_DIR = "docs/plans/"
+DEFAULT_PLANS_DIR = "docs/history/plans/"
 FACTS_PLANS_DIR_KEY = "plans_dir"
 
 # A stem's second match form: the leading calendar-date prefix, stripped.

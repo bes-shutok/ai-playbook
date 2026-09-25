@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live-signal harness detection: which supported harness is running THIS process?
 
-Process-scoped by design (see docs/plans/2026-09-18-harness-detection-and-budgeting-skip.md):
+Process-scoped by design (see docs/history/plans/2026-09-18-harness-detection-and-budgeting-skip.md):
 a live signal is evidence inside the current session's own process context --
 environment variables the harness injected, or the session's process ancestry.
 Host-installed-software evidence (a config file another runtime left on disk) is

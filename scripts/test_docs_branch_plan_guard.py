@@ -19,7 +19,7 @@ SCRIPT_PATH = Path(__file__).resolve().parent / "docs_branch_plan_guard.py"
 
 FEATURE = "sync-guard-demo"
 PLAN_NAME = f"2026-09-19-{FEATURE}.md"
-PLANS_REL = Path("docs/plans")
+PLANS_REL = Path("docs/history/plans")
 
 CERTIFIED_TEXT = "# Plan: sync guard demo\n\nThe certified shape of the plan bytes.\n"
 OLDER_TEXT = "# Plan: sync guard demo\n\nThe stale earlier shape of the plan bytes.\n"

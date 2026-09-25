@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hermetic pytest suite for the rearm-on-touch mechanical check (plan Task 3).
 
-Plan: docs/plans/2026-09-20-harness-triage-paperkeeping-dismantling-wall-clock.md,
+Plan: docs/history/plans/2026-09-20-harness-triage-paperkeeping-dismantling-wall-clock.md,
 section "Task 3: Rearm-on-touch mechanical check". Every test below mirrors one
 plan checkbox one-for-one and carries the plan's class tag in its docstring
 (`[class: REPOSITORY_TEST]`).
@@ -63,7 +63,7 @@ def parse_iso(value: str) -> datetime:
 
 def child_entry(fire_at: str | None, outcome: str = "pending",
                 created_at: str | None = None, kind: str = "execute",
-                target: str = "docs/plans/some-plan.md") -> dict:
+                target: str = "docs/history/plans/some-plan.md") -> dict:
     return {
         "automation_id": "child-1",
         "kind": kind,

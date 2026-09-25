@@ -3,7 +3,7 @@
 the r1-F1 check-writes arm).
 
 Covers the three ``RejectedArchiveLifecycleTest`` checkboxes of plan
-``docs/plans/2026-09-23-ai-harness-friction-audit.md`` plus the
+``docs/history/plans/2026-09-23-ai-harness-friction-audit.md`` plus the
 ``check-writes`` test arm the r1 code review's F1 remediation adds:
 
 - ``test_done_sweep_prunes_rejected_plan_deliverables``: a plan archived
@@ -57,8 +57,8 @@ import plan_readiness as pr
 
 FACTS_BODY = (
     "```toml\n"
-    'plans_dir = "docs/plans/"\n'
-    'plans_completed_dir = "docs/plans/completed/"\n'
+    'plans_dir = "docs/history/plans/"\n'
+    'plans_completed_dir = "docs/history/plans/completed/"\n'
     'backlog_dir = "docs/history/backlog/"\n'
     'reviews_dir = "docs/reviews/"\n'
     'tmp_dir = "docs/tmp/"\n'
@@ -188,9 +188,9 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
         now = time.time()
         self._marker(now - 3600)  # previous run anchors the window
         self._marker(now)  # current run
-        rejected_rel = "docs/plans/rejected/2026-09-20-rejected-plan.md"
-        bad_rel = "docs/plans/2026-09-20-bad.md"
-        completed_rel = "docs/plans/completed/2026-09-19-done-plan.md"
+        rejected_rel = "docs/history/plans/rejected/2026-09-20-rejected-plan.md"
+        bad_rel = "docs/history/plans/2026-09-20-bad.md"
+        completed_rel = "docs/history/plans/completed/2026-09-19-done-plan.md"
         for rel in (rejected_rel, bad_rel, completed_rel):
             path = self.root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -227,7 +227,7 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
         """[class: REPOSITORY_TEST] A plan under the plans rejected/
         directory is excluded from active-plan readiness even with a
         current, ready review sidecar; the live top-level twin passes."""
-        plans_dir = self.root / "docs" / "plans"
+        plans_dir = self.root / "docs" / "history" / "plans"
         reviews_dir = self.root / "docs" / "reviews"
         plans_dir.mkdir(parents=True, exist_ok=True)
         reviews_dir.mkdir(parents=True, exist_ok=True)
@@ -271,7 +271,7 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
         valid_rows = (
             "| rejected-plan-a | no | rejected | 2026-09-23 | "
             "decided against: scope folded into the active audit plan | "
-            "docs/plans/rejected/2026-09-20-plan-a.md |  |  |  |\n"
+            "docs/history/plans/rejected/2026-09-20-plan-a.md |  |  |  |\n"
             "| rejected-backlog-b | no | rejected | 2026-09-22 | "
             "decided against: duplicates the completed work | "
             "docs/history/backlog/rejected/2026-09-19-b.md |  |  |  |\n"
@@ -285,7 +285,7 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
         code, out = validate(
             "| rejected-plan-a | no | rejected |  | "
             "decided against: scope folded into the active audit plan | "
-            "docs/plans/rejected/2026-09-20-plan-a.md |  |  |  |\n"
+            "docs/history/plans/rejected/2026-09-20-plan-a.md |  |  |  |\n"
         )
         self.assertEqual(code, 1, out)
         self.assertIn("HARD", out)
@@ -294,7 +294,7 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
         code, out = validate(
             "| rejected-plan-a | no | rejected | soon | "
             "decided against: scope folded into the active audit plan | "
-            "docs/plans/rejected/2026-09-20-plan-a.md |  |  |  |\n"
+            "docs/history/plans/rejected/2026-09-20-plan-a.md |  |  |  |\n"
         )
         self.assertEqual(code, 1, out)
         self.assertIn("HARD", out)
@@ -303,7 +303,7 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
         code, out = validate(
             "| rejected-plan-a | no | rejected | 2026-13-45 | "
             "decided against: scope folded into the active audit plan | "
-            "docs/plans/rejected/2026-09-20-plan-a.md |  |  |  |\n"
+            "docs/history/plans/rejected/2026-09-20-plan-a.md |  |  |  |\n"
         )
         self.assertEqual(code, 1, out)
         self.assertIn("HARD", out)
@@ -319,7 +319,7 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
         # Control: an unknown state value stays a HARD enum finding.
         code, out = validate(
             "| archived-c | no | archived | 2026-09-22 |  | "
-            "docs/plans/completed/2026-09-19-c.md |  |  |  |\n"
+            "docs/history/plans/completed/2026-09-19-c.md |  |  |  |\n"
         )
         self.assertEqual(code, 1, out)
         self.assertIn("invalid state value", out)
@@ -340,7 +340,7 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
         self._write_registry(
             "| rejected-plan-a | no | rejected | 2026-09-23 | "
             "decided against: scope folded into the active audit plan | "
-            "docs/plans/rejected/2026-09-20-plan-a.md |  |  |  |\n"
+            "docs/history/plans/rejected/2026-09-20-plan-a.md |  |  |  |\n"
             "| rejected-backlog-b | no | rejected | 2026-09-22 | "
             "decided against: duplicates the completed work | "
             "docs/history/backlog/rejected/2026-09-19-b.md |  |  |  |\n"
@@ -352,15 +352,15 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
             return code, out.getvalue()
 
         # HARD: a body edit of a rejected plan record under the plans
-        # archive (the exact accident class docs/plans/rejected/README.md
+        # archive (the exact accident class docs/history/plans/rejected/README.md
         # forbids: "Never delete the rejection record to make room").
         code, out = check(
-            [("docs/plans/rejected/2026-09-20-plan-a.md", "M ")]
+            [("docs/history/plans/rejected/2026-09-20-plan-a.md", "M ")]
         )
         self.assertEqual(code, 1, out)
         self.assertIn(
             "HARD immutable path written without override:"
-            " docs/plans/rejected/2026-09-20-plan-a.md",
+            " docs/history/plans/rejected/2026-09-20-plan-a.md",
             out,
         )
         self.assertIn("change type M;", out)
@@ -381,7 +381,7 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
         # registered rejected srcs (clean porcelain add, name-status
         # rename).
         code, out = check(
-            [("docs/plans/rejected/2026-09-20-plan-a.md", "A ")]
+            [("docs/history/plans/rejected/2026-09-20-plan-a.md", "A ")]
         )
         self.assertEqual(code, 0, out)
         self.assertIn("licensed lifecycle add", out)
@@ -394,7 +394,7 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
         # HARD: an unregistered path under an archive dir stays gated
         # even with a licensed letter (no registered row, no exemption).
         code, out = check(
-            [("docs/plans/rejected/2026-09-21-unregistered.md", "A ")]
+            [("docs/history/plans/rejected/2026-09-21-unregistered.md", "A ")]
         )
         self.assertEqual(code, 1, out)
         self.assertIn("HARD immutable path written without override", out)

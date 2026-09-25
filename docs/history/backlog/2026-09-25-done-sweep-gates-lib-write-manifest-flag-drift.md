@@ -39,3 +39,13 @@ Runtime-home deployment lag for the sweep-gates lib family. The done skill's sta
 1. Redeploy `scripts/done_sweep_gates_lib.py` from the repo to the runtime home (repo is the source, runtime home is the destination, never the reverse), preserving the `.bak-<date>` precedent.
 2. Consider a symlink deployment for the sweep-gates script/lib pair so repo commits propagate without a manual copy step, coexisting with whichever single deployment convention the deferred deployment-step decision settles on.
 3. Optionally widen the done stale-deployment signature: an argparse `unrecognized arguments` error naming a flag the done SKILL.md itself documents is a stale-runtime-home signature with a copy remedy, not a lib bug to investigate.
+
+## Re-affirmation
+
+2026-09-26: re-hit at the next per-task done boundary of the same execution run (Task 2 finalize, personal-repo worktree). The deployed copy still rejects `--foreign-review-from`; the repeated-`--foreign-review` workaround again wrote a correct manifest (248 candidates). Priority re-affirmed: high.
+
+2026-09-26: re-hit at the Task 4 finalize boundary of the same execution run (verification-only task, personal-repo worktree). First attempt used `--claim-none` and got `error: unrecognized arguments: --claim-none`; the repeated-`--foreign-review` workaround again wrote a correct manifest (252 candidates). Priority re-affirmed: high.
+
+2026-09-26: re-hit at the r1 code-review address done boundary of the same execution run (personal-repo worktree). The deployed copy still accepts only the four base flags; the repeated-`--foreign-review` workaround again wrote a correct manifest (253 candidates). Priority re-affirmed: high.
+
+2026-09-26: re-hit at the r3 residual-acceptance verification done boundary of the same execution run (personal-repo worktree). First attempt used `--foreign-review-from <file>` and got `error: unrecognized arguments: --foreign-review-from`; the repeated-`--foreign-review` workaround again wrote a correct manifest (255 candidates). Priority re-affirmed: high.

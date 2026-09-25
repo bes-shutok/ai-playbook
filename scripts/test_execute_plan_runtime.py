@@ -2103,7 +2103,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             self.assertEqual(checkpoint["state"], "done-pending")
             done = cli("done", {"status": "success", "action_scope": "done-handoff", "checkpoint_identity": "task-1:done", "generation": claim["generation"], "claim_token": claim["token"], "task_id": "task-1", "commit_identity": commit, "checkbox": True, "clean_state": True, "log_evidence": ["task-1.log"]})
             self.assertEqual(done["status"], "success")
-            archived = root / "docs/plans/completed/cli-plan.md"
+            archived = root / "docs/history/plans/completed/cli-plan.md"
             archived.parent.mkdir(parents=True, exist_ok=True)
             archived.write_text("# cli plan\n\n### Task 1: first\n\n- [x] task-1\n", encoding="utf-8")
             # The final stage requires the pre-archive gate receipt: seed a
@@ -2113,15 +2113,15 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             # this CLI-driven fixture root.
             state = runtime.load_manifest(state_path)
             state["archive_gate"] = {
-                "plan_path": "docs/plans/cli-plan.md",
-                "declared_destination": "docs/plans/completed/cli-plan.md",
+                "plan_path": "docs/history/plans/cli-plan.md",
+                "declared_destination": "docs/history/plans/completed/cli-plan.md",
                 "plan_digest": hashlib.sha256(archived.read_bytes()).hexdigest(),
                 "last_commit_sha": commit,
                 "phase5_checklist": ["tests"],
                 "recorded_at": 1234.0,
             }
             runtime._safe_write_json(state_path, state)
-            self.assertEqual(cli("terminal", {"archived_plan_path": "docs/plans/completed/cli-plan.md", "last_commit_sha": commit, "phase5_checklist": ["tests"]})["status"], "success")
+            self.assertEqual(cli("terminal", {"archived_plan_path": "docs/history/plans/completed/cli-plan.md", "last_commit_sha": commit, "phase5_checklist": ["tests"]})["status"], "success")
 
     def test_create_operation_seeds_manifest(self):
         created_path = self.root / "created_state.json"
@@ -2291,7 +2291,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         runtime._safe_write_json(self.state_path, state)
         self.write_archived_plan(self.CHECKED_ARCHIVED_PLAN)
         self.seed_archive_gate()
-        driver.mark_terminal("docs/plans/completed/fixture-plan.md", "abcdef1", ["tests"])
+        driver.mark_terminal("docs/history/plans/completed/fixture-plan.md", "abcdef1", ["tests"])
         terminal = driver.terminal_result()
         self.assertEqual(terminal["status"], "success")
         self.assertEqual(terminal["workflow_state"], "complete")
@@ -2299,7 +2299,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertIn("archived_plan_path", terminal)
 
     CHECKED_ARCHIVED_PLAN = "# fixture plan\n\n### Task 3: third\n### Task 4: fourth\n\n- [x] task-3\n- [x] task-4\n"
-    ARCHIVED_PLAN_REL = "docs/plans/completed/fixture-plan.md"
+    ARCHIVED_PLAN_REL = "docs/history/plans/completed/fixture-plan.md"
 
     def complete_all_tasks(self) -> None:
         state = runtime.load_manifest(self.state_path)
@@ -2313,7 +2313,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
         return rel
 
-    def seed_archive_gate(self, archived_rel: str = ARCHIVED_PLAN_REL, source_rel: str = "docs/plans/fixture-plan.md", commit: str = "abcdef1") -> str:
+    def seed_archive_gate(self, archived_rel: str = ARCHIVED_PLAN_REL, source_rel: str = "docs/history/plans/fixture-plan.md", commit: str = "abcdef1") -> str:
         """Seed a conforming ``archive_gate`` receipt for the final-stage fixtures.
 
         Conforming means: the declared destination equals the archived
@@ -2552,7 +2552,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 ))
                 text = header + "x" * (size - len(header))
                 self.assertEqual(len(text.encode("utf-8")), size)
-                rel = self.write_archived_plan(text, rel=f"docs/plans/completed/boundary-{size}.md")
+                rel = self.write_archived_plan(text, rel=f"docs/history/plans/completed/boundary-{size}.md")
                 self.seed_archive_gate(archived_rel=rel)
                 result = self.driver().mark_terminal(rel, "abcdef1", ["tests"])
                 if expect_success:
@@ -4769,7 +4769,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         # refusal).
         driver = self.driver()
         before = self.state_path.read_bytes()
-        missing = self.root / "docs/plans/never-written.md"
+        missing = self.root / "docs/history/plans/never-written.md"
         self.assertFalse(missing.exists())
         result = driver.readiness(missing)
         self.assertEqual(result["status"], "blocked")
@@ -4859,7 +4859,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         # Pythons. The current Path.open implementation never calls the
         # patched os.open/os.fstat/os.fdopen or stat.S_ISREG, so the
         # ordering assertion fails pre-rewrite with an empty event log.
-        plan_dir = self.root / "docs" / "plans"
+        plan_dir = self.root / "docs" / "history" / "plans"
         plan_dir.mkdir(parents=True, exist_ok=True)
         plan_path = plan_dir / "spy-plan.md"
         plan_path.write_text("# spy plan\n", encoding="utf-8")
@@ -9309,7 +9309,7 @@ class ArchiveGateFixtureBase(unittest.TestCase):
     # complete so plan-file evidence never fires unless a test overrides the
     # plan or the manifest rows.
     PLAN_TEXT = "# fixture plan\n\n### Task 3: third\n### Task 4: fourth\n\n- [x] task-3\n- [x] task-4\n"
-    ACTIVE_PLAN_REL = "docs/plans/fixture-plan.md"
+    ACTIVE_PLAN_REL = "docs/history/plans/fixture-plan.md"
     SIDECAR_REL = "docs/reviews/fixture-r3.stats.json"
     PLAN_SLUG = "fixture-plan"
     # Manifest task rows seeded by ``seed_manifest``; a class overrides this
@@ -9353,8 +9353,8 @@ class ArchiveGateFixtureBase(unittest.TestCase):
         facts.parent.mkdir(parents=True, exist_ok=True)
         facts.write_text(
             "```toml\n"
-            "plans_dir = \"docs/plans/\"\n"
-            "plans_completed_dir = \"docs/plans/completed/\"\n"
+            "plans_dir = \"docs/history/plans/\"\n"
+            "plans_completed_dir = \"docs/history/plans/completed/\"\n"
             "```\n",
             encoding="utf-8",
         )
@@ -9363,7 +9363,7 @@ class ArchiveGateFixtureBase(unittest.TestCase):
         # The resolved destination directory exists on disk, so the
         # lookalike-candidate refusal proves the candidate-mismatch arm and
         # the success arm passes the destination-existence check.
-        (self.root / "docs/plans/completed").mkdir(parents=True, exist_ok=True)
+        (self.root / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
 
     def seed_manifest(self) -> None:
         runtime.create_manifest(self.state_path, self.PLAN_SLUG, self.TASK_ROWS)
@@ -9524,10 +9524,10 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         # plan filename) satisfies the candidate equality exactly and the
         # gate records that same declared destination.
         self.complete_all_tasks()
-        result = self.pre_archive(self.driver(), destination="docs/plans/completed/fixture-plan.md")
+        result = self.pre_archive(self.driver(), destination="docs/history/plans/completed/fixture-plan.md")
         self.assertEqual(result["status"], "success")
         state = runtime.load_manifest(self.state_path)
-        self.assertEqual(state["archive_gate"]["declared_destination"], "docs/plans/completed/fixture-plan.md")
+        self.assertEqual(state["archive_gate"]["declared_destination"], "docs/history/plans/completed/fixture-plan.md")
         self.assertEqual(state["workflow_state"], "active")
 
     def test_refuses_resolved_directory_form_destination(self):
@@ -9539,11 +9539,11 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.complete_all_tasks()
         driver = self.driver()
         before = self.state_path.read_bytes()
-        result = self.pre_archive(driver, destination="docs/plans/completed/")
+        result = self.pre_archive(driver, destination="docs/history/plans/completed/")
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "done-pending")
         self.assertTrue(any("unsupported archive destination" in entry for entry in result["evidence"]), result["evidence"])
-        self.assertTrue(any("docs/plans/completed/" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertTrue(any("docs/history/plans/completed/" in entry for entry in result["evidence"]), result["evidence"])
         self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_non_equal_file_destination(self):
@@ -9554,11 +9554,11 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.complete_all_tasks()
         driver = self.driver()
         before = self.state_path.read_bytes()
-        result = self.pre_archive(driver, destination="docs/plans/completed/other-plan.md")
+        result = self.pre_archive(driver, destination="docs/history/plans/completed/other-plan.md")
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "done-pending")
         self.assertTrue(any("unsupported archive destination" in entry for entry in result["evidence"]), result["evidence"])
-        self.assertTrue(any("the facts-resolved destination is docs/plans/completed/fixture-plan.md" in entry for entry in result["evidence"]), result["evidence"])
+        self.assertTrue(any("the facts-resolved destination is docs/history/plans/completed/fixture-plan.md" in entry for entry in result["evidence"]), result["evidence"])
         self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_unchecked_plan_checkbox(self):
@@ -9643,7 +9643,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         # directory but named for another run is refused on the plan identity
         # mismatch with the manifest plan_slug.
         self.complete_all_tasks()
-        foreign = self.write_active_plan(self.PLAN_TEXT, rel="docs/plans/other-plan.md")
+        foreign = self.write_active_plan(self.PLAN_TEXT, rel="docs/history/plans/other-plan.md")
         driver = self.driver()
         before = self.state_path.read_bytes()
         result = self.pre_archive(driver, plan_path=foreign)
@@ -9662,7 +9662,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         # byte-identical.
         self.complete_all_tasks()
         state = runtime.load_manifest(self.state_path)
-        state["resume_watcher"] = {"plan_path": "docs/plans/other-plan.md"}
+        state["resume_watcher"] = {"plan_path": "docs/history/plans/other-plan.md"}
         runtime._safe_write_json(self.state_path, state)
         driver = self.driver()
         before = self.state_path.read_bytes()
@@ -9771,17 +9771,17 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
 
         def seed_missing_completed_key() -> None:
             reset_standard_environment()
-            write_plain_facts('plans_dir = "docs/plans/"\n')
+            write_plain_facts('plans_dir = "docs/history/plans/"\n')
 
         def seed_removed_completed_dir() -> None:
             reset_standard_environment()
-            shutil.rmtree(self.root / "docs/plans/completed")
+            shutil.rmtree(self.root / "docs/history/plans/completed")
 
         def seed_escaping_completed_dir() -> None:
             reset_standard_environment()
             completed_key = "plans_completed_dir"
             escape_value = f"../{self.root.name}-escape-completed"
-            write_plain_facts('plans_dir = "docs/plans/"\n' + completed_key + ' = "' + escape_value + '"\n')
+            write_plain_facts('plans_dir = "docs/history/plans/"\n' + completed_key + ' = "' + escape_value + '"\n')
 
         def seed_raw_text_sidecar() -> None:
             reset_standard_environment()
@@ -9918,7 +9918,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         state = runtime.load_manifest(self.state_path)
         gate = state["archive_gate"]
         self.assertEqual(gate["plan_path"], self.ACTIVE_PLAN_REL)
-        self.assertEqual(gate["declared_destination"], "docs/plans/completed/fixture-plan.md")
+        self.assertEqual(gate["declared_destination"], "docs/history/plans/completed/fixture-plan.md")
         self.assertEqual(gate["plan_digest"], hashlib.sha256((self.root / self.ACTIVE_PLAN_REL).read_bytes()).hexdigest())
         self.assertEqual(gate["last_commit_sha"], "abcdef1")
         self.assertEqual(gate["phase5_checklist"], ["tests"])
@@ -9968,7 +9968,7 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assertEqual(result["status"], "success")
         state = runtime.load_manifest(self.state_path)
         self.assertIn("archive_gate", state)
-        self.assertEqual(state["archive_gate"]["declared_destination"], "docs/plans/completed/fixture-plan.md")
+        self.assertEqual(state["archive_gate"]["declared_destination"], "docs/history/plans/completed/fixture-plan.md")
         self.assertEqual(state["workflow_state"], "active")
         self.assertNotIn("terminal_receipt", state)
 
@@ -10171,8 +10171,8 @@ class TerminalFinalStageTest(ArchiveGateFixtureBase):
     the machine state.
     """
 
-    ARCHIVED_REL = "docs/plans/completed/fixture-plan.md"
-    SOURCE_REL = "docs/plans/fixture-plan.md"
+    ARCHIVED_REL = "docs/history/plans/completed/fixture-plan.md"
+    SOURCE_REL = "docs/history/plans/fixture-plan.md"
     OWNER = "terminal-final-owner"
 
     def setUp(self) -> None:
@@ -10232,7 +10232,7 @@ class TerminalFinalStageTest(ArchiveGateFixtureBase):
         # The supplied archived path must equal the gate's declared
         # destination exactly: a plan parked at any other path is refused
         # naming the destination mismatch, never terminal.
-        self.seed_gate(declared_destination="docs/plans/completed/other-plan.md")
+        self.seed_gate(declared_destination="docs/history/plans/completed/other-plan.md")
         driver = self.driver()
         result = self.mark_terminal(driver)
         self.assertEqual(result["status"], "blocked")
@@ -10406,7 +10406,7 @@ class ArchiveLocationTest(ArchiveGateFixtureBase):
     relocated file in place for recovery.
     """
 
-    SIBLING_PLAN_REL = "docs/plans_completed/fixture-plan.md"
+    SIBLING_PLAN_REL = "docs/history/plans_completed/fixture-plan.md"
     OWNER = "archive-location-owner"
 
     def setUp(self) -> None:
@@ -10623,7 +10623,7 @@ class ClaimsContainerShapeTest(unittest.TestCase):
                 "--input", json.dumps(
                     {
                         "stage": "pre-archive",
-                        "plan_path": "docs/plans/claims-shape.md",
+                        "plan_path": "docs/history/plans/claims-shape.md",
                         "destination": "",
                         "review_sidecar": "",
                         "last_commit_sha": "abcdef1",
@@ -11302,7 +11302,7 @@ class DiagnoseOperationTest(unittest.TestCase):
         state["terminal_receipt"] = {
             "workflow_state": "complete",
             "phase5_checklist": ["phase 5 complete"],
-            "archived_plan_path": "docs/plans/completed/fixture-plan.md",
+            "archived_plan_path": "docs/history/plans/completed/fixture-plan.md",
             "last_commit_sha": "a" * 40,
             "plan_digest": "b" * 64,
         }
@@ -11362,7 +11362,7 @@ class DiagnoseOperationTest(unittest.TestCase):
     def test_diagnose_classifies_terminal_gate(self):
         driver = self.diagnose_driver()
         refusal = driver.mark_terminal(
-            archived_plan_path="docs/plans/completed/fixture-plan.md",
+            archived_plan_path="docs/history/plans/completed/fixture-plan.md",
             last_commit_sha="a" * 40,
             phase5_checklist=["phase 5 complete"],
         )

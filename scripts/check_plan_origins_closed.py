@@ -46,7 +46,7 @@ except ImportError:  # pragma: no cover
 
 DEFAULT_BACKLOG_DIR = "docs/history/backlog"
 DEFAULT_COMPLETED_DIR = "docs/history/backlog/completed"
-DEFAULT_PLANS_DIR = "docs/plans/completed"
+DEFAULT_PLANS_DIR = "docs/history/plans/completed"
 # Rejected archive: a top-level backlog item moved here after an explicit
 # decision against the work counts as closed (never a live straggler).
 REJECTED_DIR_NAME = "rejected"
@@ -87,6 +87,27 @@ _DISPOSITIONS_HEADING_RE = re.compile(
     r"^\s*#{0,6}\s*origins\s+dispositions\s*:?\s*$", re.IGNORECASE
 )
 
+# The plan-side "## Disposition of migrated backlog items" section
+# (case-insensitive heading) is the fold-then-delete consult anchor: a
+# deleted origin whose basename appears there as a boundary-anchored
+# `.md` path token was deliberately folded and its per-item file
+# deleted, so the migrated-origin warn does not fire for it.
+_MIGRATED_DISPOSITIONS_HEADING_RE = re.compile(
+    r"^\s*#{0,6}\s*disposition\s+of\s+migrated\s+backlog\s+items\s*:?\s*$",
+    re.IGNORECASE,
+)
+
+# A `.md` path token in prose or a backtick span; the boundary guards
+# below reject a `prefix-<basename>` near miss.
+_MD_TOKEN_RE = re.compile(r"[\w./-]*\.md")
+
+# The document registry's migration-audit anchor: a ROW whose notes cell
+# carries the `user-approved` token AND the `migration audit` marker, and
+# whose row text boundary-anchors the origin's basename.
+_REGISTRY_MIGRATION_TOKEN = "user-approved"
+_REGISTRY_MIGRATION_MARKER = "migration audit"
+DEFAULT_DOC_REGISTRY_REL = "docs/maintenance/document-registry.md"
+
 
 def _dispositions_basenames(
     plan_text: str, backlog_dir: Path, completed_dir: Path
@@ -117,6 +138,78 @@ def _dispositions_basenames(
 
 def _warn(message: str) -> None:
     print(f"warning: {message}", file=sys.stderr)
+
+
+def _boundary_anchored(haystack: str, basename: str) -> bool:
+    """True iff ``basename`` appears in ``haystack`` with a non-name
+    character (or an edge) on both sides: ``prefix-<basename>`` does not
+    resolve."""
+    pattern = re.compile(
+        r"(?<![\w.-])" + re.escape(basename) + r"(?![\w.-])"
+    )
+    return pattern.search(haystack) is not None
+
+
+def _migrated_disposition_basenames(plan_text: str) -> list[str]:
+    """.md path tokens named in the plan's disposition-of-migrated-items
+    section (basename view), regardless of backtick quoting."""
+    names: list[str] = []
+    seen: set[str] = set()
+    in_section = False
+    for line in plan_text.splitlines():
+        if _MIGRATED_DISPOSITIONS_HEADING_RE.match(line):
+            in_section = True
+            continue
+        if in_section:
+            stripped = line.strip()
+            if stripped.startswith("#") and not _MIGRATED_DISPOSITIONS_HEADING_RE.match(line):
+                break  # next heading ends the section
+            for token in _MD_TOKEN_RE.findall(line):
+                name = Path(token.replace(os.sep, "/")).name
+                if name.endswith(".md") and name not in seen:
+                    seen.add(name)
+                    names.append(name)
+    return names
+
+
+def _disposition_consult(plan_text: str, basename: str) -> bool:
+    """Fold-then-delete consult: the plan's own migrated-dispositions
+    section names the deleted origin."""
+    return _boundary_anchored("\n".join(
+        _migrated_disposition_basenames(plan_text)
+    ), basename)
+
+
+def _registry_migration_audit_row(
+    repo_root: Path, basename: str, registry: Path | None
+) -> bool:
+    """Registry consult: one ROW jointly carries the anchor. Row-scoped,
+    never registry-scoped; inert (warn retained, no exception) when the
+    registry is missing or unreadable. ``registry`` is the once-per-run
+    resolved path (or None when facts resolution already failed), so the
+    per-origin loop neither re-resolves facts nor re-warns."""
+    if registry is None:
+        return False
+    try:
+        text = registry.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        notes_hits = [
+            c
+            for c in cells
+            if _REGISTRY_MIGRATION_TOKEN in c
+            and _REGISTRY_MIGRATION_MARKER in c
+        ]
+        if not notes_hits:
+            continue
+        if _boundary_anchored(stripped, basename):
+            return True
+    return False
 
 
 def resolve_repo_root(explicit: str | None) -> Path:
@@ -330,6 +423,8 @@ def run_plan_mode(
         state, detail = classify_origin(name, backlog_dir, completed_dir)
         if state in PASS_STATES:
             continue
+        if state == "missing" and _disposition_consult(text, name):
+            continue  # fold-then-delete: the plan's own disposition section anchors it
         stragglers.append((name, detail))
     if not stragglers:
         print(
@@ -360,7 +455,10 @@ def run_plan_mode(
 
 
 def run_corpus_mode(
-    plans_dir: Path, backlog_dir: Path, completed_dir: Path
+    plans_dir: Path,
+    backlog_dir: Path,
+    completed_dir: Path,
+    repo_root: Path | None = None,
 ) -> int:
     """Corpus warn arm: scan every archived plan, warn per unresolved
     origin, always exit 0 (the maintenance survey owns this surface)."""
@@ -369,6 +467,11 @@ def run_corpus_mode(
         print("check_plan_origins_closed: corpus scan: no archived plans; exit 0")
         return 0
     plans = sorted(plans_dir.rglob("*.md"))
+    registry: Path | None = None
+    if repo_root is not None:
+        registry = resolve_dir(
+            None, repo_root, "doc_registry_rel", DEFAULT_DOC_REGISTRY_REL
+        )
     unresolved = 0
     for plan in plans:
         try:
@@ -380,6 +483,13 @@ def run_corpus_mode(
             state, detail = classify_origin(name, backlog_dir, completed_dir)
             if state in PASS_STATES:
                 continue
+            if state == "missing" and repo_root is not None:
+                if _disposition_consult(text, name):
+                    continue  # disposition-anchored migrated origin
+                if _registry_migration_audit_row(
+                    repo_root, name, registry
+                ):
+                    continue  # registry migration-audit-anchored migrated origin
             print(
                 f"warning: {plan.name}: origin {name} unresolved ({detail})"
             )
@@ -456,7 +566,7 @@ def main(argv: list[str] | None = None) -> int:
     plans_dir = resolve_dir(
         args.plans_dir, repo_root, "plans_completed_dir", DEFAULT_PLANS_DIR
     )
-    return run_corpus_mode(plans_dir, backlog_dir, completed_dir)
+    return run_corpus_mode(plans_dir, backlog_dir, completed_dir, repo_root)
 
 
 if __name__ == "__main__":

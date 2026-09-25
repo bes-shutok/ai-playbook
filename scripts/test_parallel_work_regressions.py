@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Parallel-work regression probes for shared-checkout reliability.
 
-Plan: docs/plans/2026-09-23-ai-harness-friction-audit.md, Task 4. Every test
+Plan: docs/history/plans/2026-09-23-ai-harness-friction-audit.md, Task 4. Every test
 is a probe of one unrelated-peer false-block family against the real gate
 code, with the intentional data-loss protections pinned in the same run:
 
@@ -80,8 +80,8 @@ class ParallelWorkRegressionTest(unittest.TestCase):
         facts_dir.mkdir()
         (facts_dir / "facts.md").write_text(
             "```toml\n"
-            'plans_dir = "docs/plans/"\n'
-            'plans_completed_dir = "docs/plans/completed/"\n'
+            'plans_dir = "docs/history/plans/"\n'
+            'plans_completed_dir = "docs/history/plans/completed/"\n'
             'backlog_dir = "docs/history/backlog/"\n'
             'reviews_dir = "docs/reviews/"\n'
             'tmp_dir = "docs/tmp/"\n'

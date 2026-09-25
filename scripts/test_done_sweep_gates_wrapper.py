@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Wrapper-dispatch suite for done_sweep_gates.sh (plan Task 1, finding F2).
 
-Plan: docs/plans/2026-09-25-done-sweep-residuals-and-stale-origin-dispositions.md.
+Plan: docs/history/plans/2026-09-25-done-sweep-residuals-and-stale-origin-dispositions.md.
 Every test exercises the real wrapper script (bash) against a hermetic fixture
 repo under pytest ``tmp_path``: the wrapper resolves its lib next to itself,
 so these tests run the repo's own scripts/done_sweep_gates.sh.
@@ -51,8 +51,8 @@ def wrapper_repo(tmp_path, monkeypatch):
     facts_dir.mkdir()
     (facts_dir / "facts.md").write_text(
         "```toml\n"
-        'plans_dir = "docs/plans/"\n'
-        'plans_completed_dir = "docs/plans/completed/"\n'
+        'plans_dir = "docs/history/plans/"\n'
+        'plans_completed_dir = "docs/history/plans/completed/"\n'
         'backlog_dir = "docs/history/backlog/"\n'
         'reviews_dir = "docs/reviews/"\n'
         'tmp_dir = "docs/tmp/"\n'

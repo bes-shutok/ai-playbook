@@ -2,7 +2,7 @@
 """Rearm-on-touch mechanical check: the scripted form of the maintenance
 skill's Step 0 rearm-on-touch duty.
 
-Plan: docs/plans/2026-09-20-harness-triage-paperkeeping-dismantling-wall-clock.md,
+Plan: docs/history/plans/2026-09-20-harness-triage-paperkeeping-dismantling-wall-clock.md,
 section "Task 3: Rearm-on-touch mechanical check". This script mirrors (never
 replaces) the duty prose in agents/skills/maintenance/SKILL.md Step 0 and the
 re-arm hygiene shape in agents/skills/maintenance/zcode.md ("Recurring

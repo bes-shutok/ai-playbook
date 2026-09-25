@@ -49,7 +49,7 @@ DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
 # archived surface: the guard's shared-name intersection is top-level
 # only, so archived copies are never compared, and the check-restored
 # witness skips them (``rejected/`` is the explicit decision-against
-# archive; see docs/plans/rejected/README.md).
+# archive; see docs/history/plans/rejected/README.md).
 ARCHIVED_PLAN_DIR_NAMES = ("completed", "deferred", "rejected")
 
 

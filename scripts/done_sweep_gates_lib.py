@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Done sweep gate runner lib: the done skill's deterministic gates as code.
 
-Plan: ``docs/plans/2026-09-20-harness-triage-paperkeeping-dismantling-wall-clock.md``,
+Plan: ``docs/history/plans/2026-09-20-harness-triage-paperkeeping-dismantling-wall-clock.md``,
 Task 1. Invoked by ``scripts/done_sweep_gates.sh`` (one call per phase) and
 exercised hermetically by ``scripts/test_done_sweep_gates_lib.py``.
 
@@ -146,9 +146,9 @@ class GateContext:
         )
         return cls(
             repo_root=root,
-            plans_dir=_resolve_dir(root, "plans_dir", "docs/plans"),
+            plans_dir=_resolve_dir(root, "plans_dir", "docs/history/plans"),
             plans_completed_dir=_resolve_dir(
-                root, "plans_completed_dir", "docs/plans/completed"
+                root, "plans_completed_dir", "docs/history/plans/completed"
             ),
             backlog_dir=_resolve_dir(root, "backlog_dir", "docs/history/backlog"),
             reviews_dir=_resolve_dir(root, "reviews_dir", "docs/reviews"),
@@ -830,10 +830,10 @@ def derive_plan_readiness_candidates(ctx: GateContext) -> PlanReadinessDerivatio
         completed_prefix = str(
             ctx.plans_completed_dir.resolve().relative_to(ctx.repo_root.resolve())
         )
-    # Rejected archive: docs/plans/rejected/ holds plans rejected by
+    # Rejected archive: docs/history/plans/rejected/ holds plans rejected by
     # explicit decision. It is archive surface like the completed dir:
     # never a readiness candidate, and only its OWN deliverable lines are
-    # pruned (see docs/plans/rejected/README.md).
+    # pruned (see docs/history/plans/rejected/README.md).
     rejected_dir = ctx.plans_dir / "rejected"
     rejected_prefix = None
     if _is_relative_to(rejected_dir, ctx.repo_root):
@@ -1922,7 +1922,7 @@ def _sweep_execute_plan_sessions(
     """Remove execute-plan/<slug>/ sessions whose plan archived to
     plans_completed_dir; never remove an active session (manifest present and
     plan still under plans_dir). A live plan may sit anywhere under
-    plans_dir (e.g. ``docs/plans/deferred/<slug>.md``), so the pending
+    plans_dir (e.g. ``docs/history/plans/deferred/<slug>.md``), so the pending
     check is recursive over plans_dir, mirroring how the readiness
     candidate derivation accepts nested plan paths."""
     if not execute_dir.is_dir():

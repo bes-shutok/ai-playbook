@@ -136,7 +136,7 @@ class ApplyTest(unittest.TestCase):
         self.fx.item("2026-01-02-aa-bb.md")
         self.fx.registry("")
         overrides = os.path.join(self.fx.root, "overrides.txt")
-        write(overrides, "aa-bb docs/plans/completed/2026-01-09-nope.md\n")
+        write(overrides, "aa-bb docs/history/plans/completed/2026-01-09-nope.md\n")
         before = sorted(os.listdir(self.fx.inbox))
         rc = self.fx.run("--overrides", overrides, apply=True).returncode
         self.assertNotEqual(rc, 0)
@@ -157,7 +157,7 @@ class ApplyTest(unittest.TestCase):
     def test_destination_row_noted(self):
         self.fx.plan("2026-01-01-aa-bb.md")
         self.fx.item("2026-01-02-aa-bb.md")
-        self.fx.registry("| aa-bb | no | completed | 2026-01-01 | executed | docs/plans/completed/2026-01-01-aa-bb.md |  |  |  |\n")
+        self.fx.registry("| aa-bb | no | completed | 2026-01-01 | executed | docs/history/plans/completed/2026-01-01-aa-bb.md |  |  |  |\n")
         self.fx.run(apply=True)
         reg = read(self.fx.registry_path)
         self.assertIn("received backlog-completed/2026-01-02-aa-bb.md disposition (per-item file deleted)", reg)

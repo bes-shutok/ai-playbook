@@ -353,7 +353,7 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         (td_path / ".ai-playbook").mkdir()
-        plans_value = "docs/plans/"
+        plans_value = "docs/history/plans/"
         tmp_value = "docs/tmp/"
         shared_value = "/tmp/zz-shared-docs-X/"
         facts_body = (

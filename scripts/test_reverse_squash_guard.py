@@ -94,7 +94,7 @@ class ReverseSquashGuardTest(unittest.TestCase):
         repo.commit_all("base")
         repo.write("a.py", "a1\na2\na3\n")
         repo.write("c.py", "c1\nc2\nc3\n")
-        repo.write("docs/plans/completed/p.md", "plan body\n")
+        repo.write("docs/history/plans/completed/p.md", "plan body\n")
         repo.write("docs/history/backlog/completed/b1.md", "b1\n")
         repo.write("docs/history/backlog/completed/b2.md", "b2\n")
         squash = repo.commit_all("landed squash")
@@ -103,7 +103,7 @@ class ReverseSquashGuardTest(unittest.TestCase):
     def test_staged_inverse_of_landed_squash_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, squash = self._landed_squash_fixture(tmp)
-            git(repo.root, "mv", "docs/plans/completed/p.md", "docs/plans/p.md")
+            git(repo.root, "mv", "docs/history/plans/completed/p.md", "docs/history/plans/p.md")
             git(repo.root, "rm", "-q", "docs/history/backlog/completed/b1.md",
                 "docs/history/backlog/completed/b2.md")
             repo.write("a.py", "a1\n")
@@ -112,7 +112,7 @@ class ReverseSquashGuardTest(unittest.TestCase):
             proc = run_guard("check-staged", "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 1, proc.stdout.decode())
             out = proc.stdout.decode()
-            self.assertIn("docs/plans/completed/p.md", out)
+            self.assertIn("docs/history/plans/completed/p.md", out)
             self.assertIn("docs/history/backlog/completed/b1.md", out)
             self.assertIn("docs/history/backlog/completed/b2.md", out)
             self.assertIn(squash, out)
@@ -159,29 +159,29 @@ class ReverseSquashGuardTest(unittest.TestCase):
     def test_rename_within_archive_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
-            repo.write("docs/plans/completed/x.md", "x\n")
+            repo.write("docs/history/plans/completed/x.md", "x\n")
             repo.commit_all("base")
-            git(repo.root, "mv", "docs/plans/completed/x.md",
-                "docs/plans/completed/y.md")
+            git(repo.root, "mv", "docs/history/plans/completed/x.md",
+                "docs/history/plans/completed/y.md")
             proc = run_guard("check-staged", "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 0, proc.stdout.decode() + proc.stderr.decode())
 
     def test_rename_only_archive_egress_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
-            repo.write("docs/plans/completed/x.md", "x\n")
+            repo.write("docs/history/plans/completed/x.md", "x\n")
             repo.commit_all("base")
-            git(repo.root, "mv", "docs/plans/completed/x.md", "docs/plans/x.md")
+            git(repo.root, "mv", "docs/history/plans/completed/x.md", "docs/history/plans/x.md")
             proc = run_guard("check-staged", "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 1, proc.stdout.decode())
-            self.assertIn("docs/plans/completed/x.md", proc.stdout.decode())
+            self.assertIn("docs/history/plans/completed/x.md", proc.stdout.decode())
 
     def test_staged_in_place_removal_in_archive_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
-            repo.write("docs/plans/completed/p.md", "l1\nl2\nl3\nl4\n")
+            repo.write("docs/history/plans/completed/p.md", "l1\nl2\nl3\nl4\n")
             repo.commit_all("base")
-            repo.write("docs/plans/completed/p.md", "l1\nl4\n")
+            repo.write("docs/history/plans/completed/p.md", "l1\nl4\n")
             repo.stage_all()
             proc = run_guard("check-staged", "--repo", str(repo.root))
             self.assertEqual(proc.returncode, 0, proc.stdout.decode() + proc.stderr.decode())
@@ -204,23 +204,23 @@ class ReverseSquashGuardTest(unittest.TestCase):
     def test_check_diff_mode_recovers_extended_header_egress(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
-            repo.write("docs/plans/completed/x.md", "x\n")
+            repo.write("docs/history/plans/completed/x.md", "x\n")
             repo.commit_all("base")
-            git(repo.root, "mv", "docs/plans/completed/x.md", "docs/plans/x.md")
+            git(repo.root, "mv", "docs/history/plans/completed/x.md", "docs/history/plans/x.md")
             git(repo.root, "add", "-A")
             diff = git(repo.root, "diff", "-M", "--cached")
             proc = run_guard("check-diff", "--against", "HEAD",
                              "--repo", str(repo.root), stdin=diff.encode())
             self.assertEqual(proc.returncode, 1, proc.stdout.decode())
-            self.assertIn("docs/plans/completed/x.md", proc.stdout.decode())
+            self.assertIn("docs/history/plans/completed/x.md", proc.stdout.decode())
 
     def test_quoted_extended_header_paths_recovered(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
-            archived = "docs/plans/completed/pl\xc3\xa4ne.md"
+            archived = "docs/history/plans/completed/pl\xc3\xa4ne.md"
             repo._write(archived, "x\n")
             repo.commit_all("base")
-            git(repo.root, "mv", archived, "docs/plans/pl\xc3\xa4ne.md")
+            git(repo.root, "mv", archived, "docs/history/plans/pl\xc3\xa4ne.md")
             git(repo.root, "add", "-A")
             diff = git(repo.root, "diff", "-M", "--cached")
             self.assertIn('"', diff)  # header paths arrive C-quoted
@@ -232,7 +232,7 @@ class ReverseSquashGuardTest(unittest.TestCase):
     def test_check_staged_quoted_deleted_archive_path_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = ScratchRepo(tmp)
-            archived = "docs/plans/completed/archiv \xc3\xa4.md"
+            archived = "docs/history/plans/completed/archiv \xc3\xa4.md"
             repo._write(archived, "x\n")
             repo.commit_all("base")
             git(repo.root, "rm", "-q", archived)
@@ -364,9 +364,9 @@ class ReverseSquashGuardTest(unittest.TestCase):
         repo.commit_all("base")
         repo.write("f1.py", "one\ne1\ne2\n")
         repo.write("f2.py", "two\ne3\ne4\n")
-        repo.write("docs/plans/completed/p.md", "plan\n")
+        repo.write("docs/history/plans/completed/p.md", "plan\n")
         squash = repo.commit_all("landed squash")
-        git(repo.root, "mv", "docs/plans/completed/p.md", "docs/plans/p.md")
+        git(repo.root, "mv", "docs/history/plans/completed/p.md", "docs/history/plans/p.md")
         repo.write("f1.py", "one\n")
         repo.write("f2.py", "two\n")
         repo.stage_all()

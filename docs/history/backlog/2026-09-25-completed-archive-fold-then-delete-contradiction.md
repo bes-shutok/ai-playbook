@@ -3,6 +3,7 @@
 - **Created:** 2026-09-25
 - **Priority:** high
 - **Status:** open
+- **Coverage (substantive):** the resolution's option 1 is already owned by the open plan `docs/plans/2026-09-25-docs-branch-shadow-candidate-inclusion-and-completed-corpus-deletion.md` Task 6 (fold-then-delete of exactly these six items with the registry audit note); do not author a duplicate plan; this item resolves when that plan executes
 - **Driving force:** code-quality (queue integrity / corpus self-consistency)
 
 ## Finding

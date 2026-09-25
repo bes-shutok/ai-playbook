@@ -55,7 +55,7 @@ Declaration findings: a missing driving-force line, a missing Gist TLDR, a force
    ops keeps production/UAT checks plus a one-line pointer (`doc-hierarchy` company-decisions;
    ai-playbook backlog `2026-09-25-layer2-laptop-vs-ops-recipe-home.md`).
 7. **Unresolved decision-point audit**: flag for the correctness-completeness worker: (a) plan tasks that implement one of multiple plausible designs where the plan records neither a decision-point receipt nor a `none remain` grill result; (b) a cleanup plan lacking a scope ledger or a grill result while material ownership, preservation, or history-strategy choices remain open; (c) a material candidate appearing in the branch diff or task scope with no keep/remove/defer disposition and no evidence or explicit-confirmation basis; a generic `user confirmed` or `behavior unchanged` phrase is not a basis. Each hit is a correctness-completeness finding.
-8. **Declaration audit**: check the plan's header region for the `Driving force:` line per the plans skill template and the first line of `## Gist & Examples`; classify per the Declaration findings paragraph and flag for the correctness-completeness worker.
+8. **Declaration audit**: check the plan's header region for the `Driving force:` line per the plans skill template and the first line of `## Gist & Examples`; classify per the Declaration findings paragraph and flag for the correctness-completeness worker, and the required `## Outcome` section (first section after the header metadata block; one aim sentence plus two to four plain-globish result bullets; findings on its absence or jargon density block like any other required element).
 
 ## Step 2: Launch Workers in Parallel
 
@@ -272,7 +272,7 @@ After writing the review document:
 2. Fold non-blocking `Critical`, `High`, and material `Medium` findings when they expose a concrete implementation risk.
 3. Treat non-blocking `Low` as optional; do not extend the cycle for document inconsistency without demonstrated behavior impact.
 4. Add a reference line to the plan header: `Plan review: {reviews_dir}/<latest-rN>.md (latest, ready) · …`
-5. Add verification commands for each folded behavioral finding, and when the fold adds or moves a count obligation on a file, its verification includes the joint re-simulation of that file's complete count-gate set over a temp copy carrying all prescribed insertions (plans Validation Commands rule 36).
+5. Add verification commands for each folded behavioral finding, and when the fold adds, moves, or removes a count obligation on a file, its verification includes the joint re-simulation of that file's complete remaining count-gate set (the gates that survive the fold, plus any new one) over a temp copy carrying all prescribed insertions and removals (plans Validation Commands rule 36).
 6. Update finding triage and Review Statistics. Historical artifacts with older vocabularies remain valid legacy input.
 7. Classify findings located in Completed history artifacts (vocabulary per `doc-hierarchy` "Document states") as immutable context pointing at the current Living SOT: the recommended fix is a pointer, successor, or a successor (`superseded_by`) ownership-registry row recorded from the Living SOT, never an edit to the historical artifact body.
 

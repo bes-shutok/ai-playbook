@@ -7682,7 +7682,7 @@ def selftest() -> None:
         assert result["state"] == "done-pending"
         done = driver.record_done({"status": "success", "checkpoint_identity": "task-1:done", "task_id": "task-1", "generation": claim["generation"], "claim_token": claim["token"], "action_scope": "done-handoff", "evidence": ["selftest"], "commit_identity": "selftest-commit", "checkbox": True, "clean_state": True, "log_evidence": ["selftest-log"]})
         assert done["status"] == "success"
-        archived_plan = Path(directory) / "docs/plans/completed/selftest.md"
+        archived_plan = Path(directory) / "docs/history/plans/completed/selftest.md"
         archived_plan.parent.mkdir(parents=True, exist_ok=True)
         archived_plan.write_text("# selftest plan\n\n- [x] task-1\n", encoding="utf-8")
         # Staged terminal protocol: the final stage refuses without a
@@ -7692,15 +7692,15 @@ def selftest() -> None:
         # bytes, source at the absent active path).
         state = load_manifest(path)
         state["archive_gate"] = {
-            "plan_path": "docs/plans/selftest.md",
-            "declared_destination": "docs/plans/completed/selftest.md",
+            "plan_path": "docs/history/plans/selftest.md",
+            "declared_destination": "docs/history/plans/completed/selftest.md",
             "plan_digest": hashlib.sha256(archived_plan.read_bytes()).hexdigest(),
             "last_commit_sha": "abcdef1",
             "phase5_checklist": ["selftest"],
             "recorded_at": 1234.0,
         }
         _safe_write_json(path, state)
-        terminal = driver.mark_terminal("docs/plans/completed/selftest.md", "abcdef1", ["selftest"])
+        terminal = driver.mark_terminal("docs/history/plans/completed/selftest.md", "abcdef1", ["selftest"])
         assert terminal["status"] == "success"
         assert driver.terminal_result()["status"] == "success"
     print("execute-plan runtime selftest: durable claim, checkpoint, and done boundary passed")

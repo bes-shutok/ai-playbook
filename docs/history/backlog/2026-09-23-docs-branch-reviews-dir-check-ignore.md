@@ -1,7 +1,8 @@
 # docs-branch: reviews_dir not added when check-ignore rejects the directory path
 
-Status: open
+Status: closed
 Priority: high
+Disposition: 2026-09-25 (routed via docs/plans/2026-09-25-docs-branch-shadow-candidate-inclusion-and-completed-corpus-deletion.md, Task 7): closed by that plan's Tasks 1-3 — the coverage-scoped descendant-ignored fallback landed as the shared helper `docs_branch_candidate_ignored` in `agents/skills/docs-branch/SKILL.md` (bare check-ignore arm, tracked-content gate, descendant-ignored fallback with literal containment), called by BOTH the Step 1 snapshot loop and the Step 2 shadow-build loop; live needle re-verified on the execution base: the discriminating fixture battery passes (rule `docs/history/reviews/**` with an untracked candidate and a live ignored file inside: bare probe exit 1, tracked-content gate passes, helper returns 0; the plain-rule, zero-coverage, and tracked-root fixtures behave as pinned).
 
 ## Skill / step
 

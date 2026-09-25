@@ -18,7 +18,7 @@ Three subcommands plus a hermetic ``--selftest``:
   ``git -c core.quotePath=false diff --name-status --no-renames``
   output). Each
   stdin line MAY carry a change-type prefix: either ``XY PATH``
-  porcelain form (e.g. ``AM docs/plans/completed/x.md``; the
+  porcelain form (e.g. ``AM docs/history/plans/completed/x.md``; the
   leading-space worktree form `` M path`` parses the same way) or
   name-status form (``A<TAB>path``). Renames parse on the porcelain
   form ONLY (``R  old -> new``) and only when the porcelain status
@@ -100,7 +100,7 @@ Registry file format (Markdown table, one row per document identity):
 - ``state``: ``living`` | ``completed`` | ``superseded`` | ``rejected``
   (REQUIRED). ``rejected`` marks an archive row for a plan or backlog
   item moved under a ``rejected/`` directory after an explicit decision
-  against doing the work (docs/plans/rejected/,
+  against doing the work (docs/history/plans/rejected/,
   docs/history/backlog/rejected/).
 - ``archived``: freeze date (``YYYY-MM-DD`` or empty for living rows).
   For a ``rejected`` row this is the REJECTION DATE and is REQUIRED: a
@@ -128,14 +128,14 @@ Facts keys (read via ``scripts/facts_paths.py`` helpers from
 ``<root>/.ai-playbook/facts.md``, TOML-fence block; missing file or key
 falls back to the default, so pre-registry repos fail open):
 
-- ``plans_completed_dir`` (default ``docs/plans/completed/``)
+- ``plans_completed_dir`` (default ``docs/history/plans/completed/``)
 - ``backlog_completed_dir`` (default ``docs/history/backlog/completed/``)
 - ``doc_registry_rel`` (default ``docs/maintenance/document-registry.md``)
 
 Immutable completed-history directories (write-gated):
 
 - the resolved ``plans_completed_dir`` and ``backlog_completed_dir``
-- ``docs/plans/rejected/`` and ``docs/history/backlog/rejected/``
+- ``docs/history/plans/rejected/`` and ``docs/history/backlog/rejected/``
   (rejected archives; the permanence contract both archive READMEs
   state is enforced here: a body edit or deletion under either dir is
   a HARD unprotected write, and only the registered rejected row's
@@ -162,7 +162,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-DEFAULT_PLANS_COMPLETED_DIR = "docs/plans/completed/"
+DEFAULT_PLANS_COMPLETED_DIR = "docs/history/plans/completed/"
 DEFAULT_BACKLOG_COMPLETED_DIR = "docs/history/backlog/completed/"
 DEFAULT_DOC_REGISTRY_REL = "docs/maintenance/document-registry.md"
 
@@ -173,7 +173,7 @@ FEATURE_NOTES_DIR = "docs/history/feature-notes/"
 # whose body is frozen exactly like completed history. Hard-coded
 # conventional locations, like CONTEXT_DIR and FEATURE_NOTES_DIR (the
 # sibling-of-completed convention every consumer spells identically).
-PLANS_REJECTED_DIR = "docs/plans/rejected/"
+PLANS_REJECTED_DIR = "docs/history/plans/rejected/"
 BACKLOG_REJECTED_DIR = "docs/history/backlog/rejected/"
 EPHEMERA_DIRS = ("docs/history/reviews/", "docs/tmp/")
 
@@ -738,7 +738,7 @@ def cmd_validate(root: Path, cfg: dict, out: io.StringIO) -> int:
         if state == "rejected":
             # Rejected archive rows carry the decision metadata: a real
             # rejection date in the archived column and a non-empty
-            # rejection reason (docs/plans/rejected/README.md).
+            # rejection reason (docs/history/plans/rejected/README.md).
             date_value = row.get("archived", "").strip()
             if not rejection_date_valid(date_value):
                 print("HARD rejected registry row requires a real"
@@ -1244,7 +1244,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 FIXTURE_FACTS = """# fixture facts
 
 ```toml
-plans_completed_dir = "docs/plans/completed/"
+plans_completed_dir = "docs/history/plans/completed/"
 backlog_completed_dir = "docs/history/backlog/completed/"
 doc_registry_rel = "docs/maintenance/document-registry.md"
 ```
@@ -1351,11 +1351,11 @@ def _run_selftest_checks(st: Selftest) -> None:
     for missing in ("identity", "state"):
         header = registry_header()
         cols = ["doc-x", "no", "completed", "2026-01-01", "r",
-                "docs/plans/completed/x.md", "", "", ""]
+                "docs/history/plans/completed/x.md", "", "", ""]
         cols[REGISTRY_COLUMNS.index(missing)] = ""
         root = make_fixture("missing-" + missing, header +
                             "| " + " | ".join(cols) + " |\n",
-                            extra_files=["docs/plans/completed/x.md"])
+                            extra_files=["docs/history/plans/completed/x.md"])
         code, output = run(["--root", str(root), "validate"])
         st.expect("test_missing_required_field_fails_" + missing,
                   code, output, 1, want_substr="required")
@@ -1363,9 +1363,9 @@ def _run_selftest_checks(st: Selftest) -> None:
     # Hard finding: successor cycle A <-> B.
     root = make_fixture("cycle", registry_header() +
                         "| doc-a | no | superseded | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md | doc-b |  |  |\n"
+                        " docs/history/plans/completed/a.md | doc-b |  |  |\n"
                         "| doc-b | no | superseded | 2026-01-01 | r |"
-                        " docs/plans/completed/b.md | doc-a |  |  |\n")
+                        " docs/history/plans/completed/b.md | doc-a |  |  |\n")
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_successor_cycle_fails", code, output, 1,
               want_substr="cycle")
@@ -1377,9 +1377,9 @@ def _run_selftest_checks(st: Selftest) -> None:
                         " docs/other.md |  |  |  |\n",
                         extra_files=["docs/other.md"])
     code, output = run(["--root", str(root), "check-writes",
-                        "docs/plans/completed/a.md"])
+                        "docs/history/plans/completed/a.md"])
     st.expect("test_immutable_write_fails", code, output, 1,
-              want_substr="docs/plans/completed/a.md")
+              want_substr="docs/history/plans/completed/a.md")
 
     # check-writes: the src of a completed/superseded registry row with
     # NO change-type letter (argv/bare-stdin legacy channel) passes at
@@ -1387,28 +1387,28 @@ def _run_selftest_checks(st: Selftest) -> None:
     # same dir still fails.
     root = make_fixture("lifecycle", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     code, output = run(["--root", str(root), "check-writes",
-                        "docs/plans/completed/a.md"])
+                        "docs/history/plans/completed/a.md"])
     st.expect("test_registered_lifecycle_src_passes_warn_tier", code,
               output, 0, want_substr="verify this is the archive transition")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="docs/plans/completed/a.md\n")
+                       stdin_text="docs/history/plans/completed/a.md\n")
     st.expect("test_bare_stdin_registered_src_warns", code, output, 0,
               want_substr="no change-type letter")
     code, output = run(["--root", str(root), "check-writes",
-                        "docs/plans/completed/b.md"])
+                        "docs/history/plans/completed/b.md"])
     st.expect("test_unregistered_sibling_under_same_dir_fails", code,
-              output, 1, want_substr="docs/plans/completed/b.md")
+              output, 1, want_substr="docs/history/plans/completed/b.md")
 
     # check-writes: audit-noted override on a completed row passes
     # (warn names the cleanup duty: clear the note after the write).
     root = make_fixture("override", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |"
+                        " docs/history/plans/completed/a.md |  |  |"
                         " user-approved 2026-09-10: correction |\n")
     code, output = run(["--root", str(root), "check-writes",
-                        "docs/plans/completed/a.md"])
+                        "docs/history/plans/completed/a.md"])
     st.expect("test_immutable_write_override_passes", code, output, 0,
               want_substr="override")
     st.check("test_standing_override_warn_names_cleanup",
@@ -1419,14 +1419,14 @@ def _run_selftest_checks(st: Selftest) -> None:
     # and aliases are never overridden.
     root = make_fixture("override-living", registry_header() +
                         "| doc-a | yes | living |  |  | docs/a.md |  |"
-                        " docs/plans/completed/old.md | 2026-09-10 note |\n",
+                        " docs/history/plans/completed/old.md | 2026-09-10 note |\n",
                         extra_files=["docs/a.md",
-                                     "docs/plans/completed/old.md"])
+                                     "docs/history/plans/completed/old.md"])
     code, output = run(["--root", str(root), "check-writes",
-                        "docs/plans/completed/a.md",
-                        "docs/plans/completed/old.md"])
-    ok = (code == 1 and "docs/plans/completed/a.md" in output
-          and "docs/plans/completed/old.md" in output
+                        "docs/history/plans/completed/a.md",
+                        "docs/history/plans/completed/old.md"])
+    ok = (code == 1 and "docs/history/plans/completed/a.md" in output
+          and "docs/history/plans/completed/old.md" in output
           and "HARD immutable path written" in output)
     st.check("test_immutable_write_override_living_row_fails", ok,
              "exit=%d output=%r" % (code, output))
@@ -1435,10 +1435,10 @@ def _run_selftest_checks(st: Selftest) -> None:
     # named by a superseded row's successor field is licensed at warn tier.
     root = make_fixture("freeze-move", registry_header() +
                         "| doc-s | no | superseded | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md | doc-new |  |  |\n")
+                        " docs/history/plans/completed/a.md | doc-new |  |  |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text=
-                       "R  docs/live/a.md -> docs/plans/completed/a.md\n")
+                       "R  docs/live/a.md -> docs/history/plans/completed/a.md\n")
     st.expect("test_check_writes_successor_row_licenses_move", code, output,
               0, want_substr="licensed lifecycle add")
 
@@ -1446,25 +1446,25 @@ def _run_selftest_checks(st: Selftest) -> None:
     # successor) stays hard-gated as an immutable-path write.
     root = make_fixture("freeze-move-living", registry_header() +
                         "| doc-s | no | living |  |  |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text=
-                       "R  docs/live/a.md -> docs/plans/completed/a.md\n")
+                       "R  docs/live/a.md -> docs/history/plans/completed/a.md\n")
     st.expect("test_check_writes_move_without_successor_row_fails", code,
               output, 1, want_substr="immutable path written without override")
 
     # Hard finding: enum typos (sot/state) rejected.
     root = make_fixture("enum-sot", registry_header() +
                         "| doc-a | yeas | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n",
-                        extra_files=["docs/plans/completed/a.md"])
+                        " docs/history/plans/completed/a.md |  |  |  |\n",
+                        extra_files=["docs/history/plans/completed/a.md"])
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_invalid_sot_fails", code, output, 1,
               want_substr="invalid sot")
     root = make_fixture("enum-state", registry_header() +
                         "| doc-a | no | finishd | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n",
-                        extra_files=["docs/plans/completed/a.md"])
+                        " docs/history/plans/completed/a.md |  |  |  |\n",
+                        extra_files=["docs/history/plans/completed/a.md"])
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_invalid_state_fails", code, output, 1,
               want_substr="invalid state")
@@ -1474,7 +1474,7 @@ def _run_selftest_checks(st: Selftest) -> None:
                " | aliases | audit |\n"
                "|---|---|---|---|---|---|---|---|---|\n"
                "| doc-a | no | completed | 2026-01-01 | r |"
-               " docs/plans/completed/a.md |  |  |  |\n")
+               " docs/history/plans/completed/a.md |  |  |  |\n")
     root = make_fixture("header-renamed", renamed)
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_header_mismatch_fails", code, output, 1,
@@ -1487,7 +1487,7 @@ def _run_selftest_checks(st: Selftest) -> None:
                  " | successor | aliases | audit |\n"
                  "|---|---|---|---|---|---|---|---|---|\n"
                  "| no | doc-a | completed | 2026-01-01 | r |"
-                 " docs/plans/completed/a.md |  |  |  |\n")
+                 " docs/history/plans/completed/a.md |  |  |  |\n")
     root = make_fixture("header-reordered", reordered)
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_header_reordered_fails_closed", code, output, 1,
@@ -1496,7 +1496,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     # Hard finding: row cell count must equal the column count.
     shifted = (registry_header() +
                "| doc-a | no | completed | 2026-01-01 | r |"
-               " docs/plans/completed/a.md |  |\n")
+               " docs/history/plans/completed/a.md |  |\n")
     root = make_fixture("row-shifted", shifted)
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_row_cell_count_mismatch_fails", code, output, 1,
@@ -1521,14 +1521,14 @@ def _run_selftest_checks(st: Selftest) -> None:
     root = make_fixture("legacy", registry_header() +
                         "| doc-a | yes | living |  |  | docs/a.md |  |  |  |\n",
                         extra_files=["docs/a.md",
-                                     "docs/plans/completed/legacy.md"])
+                                     "docs/history/plans/completed/legacy.md"])
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_missing_legacy_entry_warns", code, output, 0,
               want_substr="unregistered")
 
     # Inventory names exactly the unregistered file.
     code, output = run(["--root", str(root), "inventory"])
-    ok = (code == 0 and "docs/plans/completed/legacy.md" in output
+    ok = (code == 0 and "docs/history/plans/completed/legacy.md" in output
           and "docs/a.md" not in output)
     st.check("test_inventory_lists_missing_entries", ok,
              "exit=%d output=%r" % (code, output))
@@ -1555,16 +1555,16 @@ def _run_selftest_checks(st: Selftest) -> None:
 
     # Absent registry: check-writes --stdin fails open (never exit 1).
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="docs/plans/completed/a.md\n")
+                       stdin_text="docs/history/plans/completed/a.md\n")
     st.expect("test_check_writes_absent_registry_fails_open", code, output,
               0, want_substr="warn")
 
     # stdin channel: only the immutable path is named.
     root = make_fixture("stdin", registry_header())
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="README.md\ndocs/plans/completed/a.md\n"
+                       stdin_text="README.md\ndocs/history/plans/completed/a.md\n"
                                   "scripts/x.py\n")
-    ok = (code == 1 and "docs/plans/completed/a.md" in output
+    ok = (code == 1 and "docs/history/plans/completed/a.md" in output
           and "README.md" not in output
           and output.count("immutable") >= 1)
     st.check("test_check_writes_stdin_channel", ok,
@@ -1572,9 +1572,9 @@ def _run_selftest_checks(st: Selftest) -> None:
 
     # argv channel: same discrimination.
     code, output = run(["--root", str(root), "check-writes",
-                        "README.md", "docs/plans/completed/a.md",
+                        "README.md", "docs/history/plans/completed/a.md",
                         "scripts/x.py"])
-    ok = (code == 1 and "docs/plans/completed/a.md" in output
+    ok = (code == 1 and "docs/history/plans/completed/a.md" in output
           and "README.md" not in output)
     st.check("test_check_writes_argv_channel", ok,
              "exit=%d output=%r" % (code, output))
@@ -1582,7 +1582,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     # Hard finding: successor self-loop (a row superseding itself).
     root = make_fixture("self-loop", registry_header() +
                         "| doc-a | no | superseded | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md | doc-a |  |  |\n")
+                        " docs/history/plans/completed/a.md | doc-a |  |  |\n")
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_successor_selfloop_fails", code, output, 1,
               want_substr="cycle")
@@ -1592,12 +1592,12 @@ def _run_selftest_checks(st: Selftest) -> None:
     # exemption, until the duplicate is deduplicated).
     root = make_fixture("dup-src", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |"
+                        " docs/history/plans/completed/a.md |  |  |"
                         " user-approved 2026-09-10: note |\n"
                         "| doc-b | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     code, output = run(["--root", str(root), "check-writes",
-                        "docs/plans/completed/a.md"])
+                        "docs/history/plans/completed/a.md"])
     st.expect("test_duplicate_src_stays_gated", code, output, 1,
               want_substr="multiple identities")
 
@@ -1605,7 +1605,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     # not a delimiter (Markdown table convention).
     root = make_fixture("escaped-pipe", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 |"
-                        " fix A \\| B | docs/plans/completed/a.md |"
+                        " fix A \\| B | docs/history/plans/completed/a.md |"
                         "  |  |  |\n")
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_escaped_pipe_cell_parses", code, output, 0,
@@ -1615,7 +1615,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     # own two-column table after the registry table is prose, not rows.
     root = make_fixture("second-table", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n"
+                        " docs/history/plans/completed/a.md |  |  |  |\n"
                         "\n## Notes\n\n"
                         "| note | detail |\n|---|---|\n"
                         "| a | b |\n")
@@ -1626,7 +1626,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     # Facts normalization: a ./-prefixed dir still gates (no silent
     # bypass), and an absolute spelling resolves cleanly (no traceback).
     dotted_facts = ("# fixture facts\n\n```toml\n"
-                    "plans_completed_dir = \"./docs/plans/completed/\"\n"
+                    "plans_completed_dir = \"./docs/history/plans/completed/\"\n"
                     "backlog_completed_dir ="
                     " \"./docs/history/backlog/completed/\"\n"
                     "doc_registry_rel ="
@@ -1634,17 +1634,17 @@ def _run_selftest_checks(st: Selftest) -> None:
     root = make_fixture("facts-dotted", registry_header(),
                         facts_body=dotted_facts)
     code, output = run(["--root", str(root), "check-writes",
-                        "docs/plans/completed/a.md"])
+                        "docs/history/plans/completed/a.md"])
     st.expect("test_dotted_facts_dir_still_gates", code, output, 1,
-              want_substr="docs/plans/completed/a.md")
+              want_substr="docs/history/plans/completed/a.md")
     absolute_facts = ("# fixture facts\n\n```toml\n"
-                      "plans_completed_dir = \"/docs/plans/completed/\"\n"
+                      "plans_completed_dir = \"/docs/history/plans/completed/\"\n"
                       "backlog_completed_dir ="
                       " \"/docs/history/backlog/completed/\"\n"
                       "doc_registry_rel ="
                       " \"/docs/maintenance/document-registry.md\"\n```\n")
     root = make_fixture("facts-absolute", registry_header(),
-                        extra_files=["docs/plans/completed/a.md"],
+                        extra_files=["docs/history/plans/completed/a.md"],
                         facts_body=absolute_facts)
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_absolute_facts_dir_resolves_cleanly", code, output, 0,
@@ -1811,91 +1811,91 @@ def _run_selftest_checks(st: Selftest) -> None:
     # regardless of letter; name-status lines carry letters too.
     root = make_fixture("f1-lifecycle", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="A  docs/plans/completed/a.md\n")
+                       stdin_text="A  docs/history/plans/completed/a.md\n")
     st.expect("test_registered_src_add_letter_passes", code, output, 0,
               want_substr="licensed lifecycle add")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="AM docs/plans/completed/a.md\n")
+                       stdin_text="AM docs/history/plans/completed/a.md\n")
     st.expect("test_registered_src_add_then_modify_not_licensed", code,
               output, 1,
               want_substr="immutable path written without override")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="R  docs/old.md -> docs/plans/completed/a.md\n")
+                       stdin_text="R  docs/old.md -> docs/history/plans/completed/a.md\n")
     st.expect("test_registered_src_rename_letter_passes", code, output, 0,
               want_substr="licensed lifecycle add")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="M  docs/plans/completed/a.md\n")
+                       stdin_text="M  docs/history/plans/completed/a.md\n")
     st.expect("test_registered_src_modify_letter_fails", code, output, 1,
               want_substr="immutable path written without override")
     # Leading-space worktree porcelain forms keep their status
     # column (unstaged M/D of a registered src is HARD; unregistered
     # immutable path with a leading-space letter still fails).
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text=" M docs/plans/completed/a.md\n")
+                       stdin_text=" M docs/history/plans/completed/a.md\n")
     st.expect("test_leading_space_modify_registered_src_fails", code,
               output, 1,
               want_substr="immutable path written without override")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text=" D docs/plans/completed/a.md\n")
+                       stdin_text=" D docs/history/plans/completed/a.md\n")
     st.expect("test_leading_space_delete_registered_src_fails", code,
               output, 1,
               want_substr="immutable path written without override")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text=" M docs/plans/completed/b.md\n")
+                       stdin_text=" M docs/history/plans/completed/b.md\n")
     st.expect("test_leading_space_modify_unregistered_fails", code,
-              output, 1, want_substr="docs/plans/completed/b.md")
+              output, 1, want_substr="docs/history/plans/completed/b.md")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text=" D docs/plans/completed/b.md\n")
+                       stdin_text=" D docs/history/plans/completed/b.md\n")
     st.expect("test_leading_space_delete_unregistered_fails", code,
-              output, 1, want_substr="docs/plans/completed/b.md")
+              output, 1, want_substr="docs/history/plans/completed/b.md")
     # A rename OUT of an immutable dir gates the old side (typed
     # as a deletion); a rename INTO a registered lifecycle src is the
     # licensed freeze move.
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="R  docs/plans/completed/a.md -> docs/live/a.md\n")
+                       stdin_text="R  docs/history/plans/completed/a.md -> docs/live/a.md\n")
     st.expect("test_rename_out_of_immutable_dir_fails", code, output, 1,
-              want_substr="docs/plans/completed/a.md")
+              want_substr="docs/history/plans/completed/a.md")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="R  docs/tmp/x.md -> docs/plans/completed/a.md\n")
+                       stdin_text="R  docs/tmp/x.md -> docs/history/plans/completed/a.md\n")
     st.expect("test_rename_into_registered_src_licensed", code, output,
               0, want_substr="licensed lifecycle add")
     # Conflict statuses are not licensed adds.
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="AA docs/plans/completed/a.md\n")
+                       stdin_text="AA docs/history/plans/completed/a.md\n")
     st.expect("test_conflict_status_not_licensed", code, output, 1,
               want_substr="immutable path written without override")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="AU docs/plans/completed/a.md\n")
+                       stdin_text="AU docs/history/plans/completed/a.md\n")
     st.expect("test_conflict_status_au_not_licensed", code, output, 1,
               want_substr="immutable path written without override")
     # Untracked at a registered lifecycle src is the freeze move
     # arriving; warn tier naming the cause, no override steer.
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="?? docs/plans/completed/a.md\n")
+                       stdin_text="?? docs/history/plans/completed/a.md\n")
     st.expect("test_untracked_registered_src_warns_stage_move", code,
               output, 0, want_substr="stage the move")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="A\tdocs/plans/completed/a.md\n")
+                       stdin_text="A\tdocs/history/plans/completed/a.md\n")
     st.expect("test_name_status_add_letter_passes", code, output, 0,
               want_substr="licensed lifecycle add")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="M\tdocs/plans/completed/a.md\n")
+                       stdin_text="M\tdocs/history/plans/completed/a.md\n")
     st.expect("test_name_status_modify_letter_fails", code, output, 1,
               want_substr="immutable path written without override")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="A  docs/plans/completed/b.md\n")
+                       stdin_text="A  docs/history/plans/completed/b.md\n")
     st.expect("test_unregistered_add_letter_still_fails", code, output, 1,
-              want_substr="docs/plans/completed/b.md")
+              want_substr="docs/history/plans/completed/b.md")
     # Recognized-but-uncommon letters (T) parse and gate; unknown
     # letters and tab-form renames are usage errors (exit 2).
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="T\tdocs/plans/completed/a.md\n")
+                       stdin_text="T\tdocs/history/plans/completed/a.md\n")
     st.expect("test_typechange_letter_gates_hard", code, output, 1,
-              want_substr="docs/plans/completed/a.md")
+              want_substr="docs/history/plans/completed/a.md")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="X\tdocs/plans/completed/a.md\n")
+                       stdin_text="X\tdocs/history/plans/completed/a.md\n")
     st.expect("test_unknown_name_status_letter_fails_closed", code,
               output, 2, want_substr="usage")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
@@ -1910,21 +1910,21 @@ def _run_selftest_checks(st: Selftest) -> None:
     # --stdin plus argv paths is a usage error even with empty
     # stdin (channel state, not parsed content, decides).
     code, output = run(["--root", str(root), "check-writes", "--stdin",
-                        "docs/plans/completed/a.md"], stdin_text="")
+                        "docs/history/plans/completed/a.md"], stdin_text="")
     st.expect("test_stdin_channel_with_argv_paths_fails_closed", code,
               output, 2, want_substr="usage")
 
     # Audit-note token format on completed rows (validate).
     root = make_fixture("f6-audit-valid", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |"
+                        " docs/history/plans/completed/a.md |  |  |"
                         " user-approved 2026-09-10: fixed broken link |\n")
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_audit_note_valid_token_passes", code, output, 0,
               forbid_substr="malformed audit note")
     root = make_fixture("f6-audit-malformed", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |"
+                        " docs/history/plans/completed/a.md |  |  |"
                         " self-approved fix |\n")
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_audit_note_malformed_token_fails", code, output, 1,
@@ -1936,7 +1936,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     # shared template so the two subcommands cannot drift.
     root = make_fixture("f6-audit-full-contract", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |"
+                        " docs/history/plans/completed/a.md |  |  |"
                         " self-approved quick fix |\n")
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_validate_audit_message_states_full_contract", code,
@@ -1950,14 +1950,14 @@ def _run_selftest_checks(st: Selftest) -> None:
                             ("future", "2099-01-01")):
         root = make_fixture("f7-audit-" + label, registry_header() +
                             "| doc-a | no | completed | 2026-01-01 | r |"
-                            " docs/plans/completed/a.md |  |  |"
+                            " docs/history/plans/completed/a.md |  |  |"
                             " user-approved %s: fix |\n" % bad_date)
         code, output = run(["--root", str(root), "validate"])
         st.expect("test_audit_note_impossible_date_" + label + "_fails",
                   code, output, 1, want_substr="malformed audit note")
         code, output = run(["--root", str(root), "check-writes",
                             "--stdin"],
-                           stdin_text="M  docs/plans/completed/a.md\n")
+                           stdin_text="M  docs/history/plans/completed/a.md\n")
         st.expect("test_audit_note_impossible_date_" + label
                   + "_no_override", code, output, 1,
                   want_substr="immutable path written without override")
@@ -1966,10 +1966,10 @@ def _run_selftest_checks(st: Selftest) -> None:
     # a self-minted note on the override row licenses nothing.
     root = make_fixture("f1-selfminted-override", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |"
+                        " docs/history/plans/completed/a.md |  |  |"
                         " self-approved quick fix |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="M  docs/plans/completed/a.md\n")
+                       stdin_text="M  docs/history/plans/completed/a.md\n")
     st.expect("test_check_writes_selfminted_note_hard_fails", code,
               output, 1, want_substr="malformed audit note")
     # The summary counts the row-scan audit-note defect
@@ -1997,12 +1997,12 @@ def _run_selftest_checks(st: Selftest) -> None:
     # continue must not hide it).
     root = make_fixture("f4-dup-src-bad-note", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |"
+                        " docs/history/plans/completed/a.md |  |  |"
                         " self-approved note |\n"
                         "| doc-b | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="A  docs/plans/completed/a.md\n")
+                       stdin_text="A  docs/history/plans/completed/a.md\n")
     st.expect("test_multi_claimed_row_bad_audit_note_reported", code,
               output, 1, want_substr="malformed audit note")
 
@@ -2035,14 +2035,14 @@ def _run_selftest_checks(st: Selftest) -> None:
                 + datetime.timedelta(days=3)).isoformat()
     root = make_fixture("f7-skew-ok", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |"
+                        " docs/history/plans/completed/a.md |  |  |"
                         " user-approved %s: fix |\n" % skew_ok)
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_audit_note_today_passes", code, output, 0,
               forbid_substr="malformed audit note")
     root = make_fixture("f7-skew-bad", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |"
+                        " docs/history/plans/completed/a.md |  |  |"
                         " user-approved %s: fix |\n" % skew_bad)
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_audit_note_three_days_ahead_fails", code, output, 1,
@@ -2053,15 +2053,15 @@ def _run_selftest_checks(st: Selftest) -> None:
     # misparse. A clean rename still parses both sides.
     root = make_fixture("f3-arrow-rename", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text="R  docs/live/a -> b ->"
-                       " docs/plans/completed/zz.md\n")
+                       " docs/history/plans/completed/zz.md\n")
     st.expect("test_arrow_bearing_rename_fails_closed", code, output, 2,
               want_substr="usage")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text="R  docs/live/x -> y.md ->"
-                       " docs/plans/completed/a.md\n")
+                       " docs/history/plans/completed/a.md\n")
     st.expect("test_arrow_bearing_rename_into_src_fails_closed", code,
               output, 2, want_substr="ambiguous")
 
@@ -2070,36 +2070,36 @@ def _run_selftest_checks(st: Selftest) -> None:
     # literal path and gates as itself (no phantom split entries).
     root = make_fixture("f1-arrow-norename", registry_header())
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="M  docs/plans/completed/report ->"
+                       stdin_text="M  docs/history/plans/completed/report ->"
                        " final.md\n")
     st.expect("test_single_arrow_modify_gates_full_literal_path", code,
               output, 1,
-              want_substr="docs/plans/completed/report -> final.md")
+              want_substr="docs/history/plans/completed/report -> final.md")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="?? docs/plans/completed/c -> d.md\n")
+                       stdin_text="?? docs/history/plans/completed/c -> d.md\n")
     st.expect("test_single_arrow_untracked_gates_full_literal_path", code,
-              output, 1, want_substr="docs/plans/completed/c -> d.md")
+              output, 1, want_substr="docs/history/plans/completed/c -> d.md")
     # Bypass direction: a non-rename arrow line whose truncated prefix
     # is a registered src must gate the full real path, never exit as a
     # phantom licensed add.
     root = make_fixture("f1-arrow-bypass", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="M  docs/plans/completed/a.md ->"
+                       stdin_text="M  docs/history/plans/completed/a.md ->"
                        " evil.md\n")
     st.expect("test_single_arrow_licensed_prefix_no_bypass", code, output,
-              1, want_substr="docs/plans/completed/a.md -> evil.md",
+              1, want_substr="docs/history/plans/completed/a.md -> evil.md",
               forbid_substr="licensed lifecycle add")
 
     # A registered src with an M letter plus an audit note passes
     # with the standing-override warn (the corruption override path).
     root = make_fixture("f1-override", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |"
+                        " docs/history/plans/completed/a.md |  |  |"
                         " user-approved 2026-09-10: correction |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="M  docs/plans/completed/a.md\n")
+                       stdin_text="M  docs/history/plans/completed/a.md\n")
     st.expect("test_registered_src_modify_with_audit_note_passes", code,
               output, 0, want_substr="override")
     st.check("test_modify_override_warns_cleanup",
@@ -2112,7 +2112,7 @@ def _run_selftest_checks(st: Selftest) -> None:
                 " | successor | aliases | audit |\n"
                 "|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|\n"
                 "| doc-a | no | completed | 2026-01-01 | r |"
-                " docs/plans/completed/a.md |  |  |  |\n")
+                " docs/history/plans/completed/a.md |  |  |  |\n")
     root = make_fixture("separator-centered", centered)
     code, output = run(["--root", str(root), "validate"])
     st.expect("test_centered_separator_row_parses_clean", code, output, 0,
@@ -2124,9 +2124,9 @@ def _run_selftest_checks(st: Selftest) -> None:
     # fail closed at the backslash guard before the strip runs.
     root = make_fixture("quoted-path", registry_header())
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text='"docs/plans/completed/a b.md"\n')
+                       stdin_text='"docs/history/plans/completed/a b.md"\n')
     st.expect("test_quoted_stdin_path_named_unquoted", code, output, 1,
-              want_substr="docs/plans/completed/a b.md")
+              want_substr="docs/history/plans/completed/a b.md")
 
     # Gates and exemption sets compare case-folded
     # spellings. The fold trait is anchored OUTSIDE the code under
@@ -2144,9 +2144,9 @@ def _run_selftest_checks(st: Selftest) -> None:
              "_fold('A')=%r folds=%r" % (_fold("A"), folds))
     root = make_fixture("case-variant", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     cfg = resolve_config(root)
-    variant = "docs/plans/COMPLETED/a.md"
+    variant = "docs/history/plans/COMPLETED/a.md"
     st.check("test_case_variant_immutable_tracks_fold",
              is_immutable(variant, cfg) == folds,
              "is_immutable=%r folds=%r"
@@ -2160,7 +2160,7 @@ def _run_selftest_checks(st: Selftest) -> None:
               output, 1 if folds else 0,
               want_substr="immutable path written without override"
               if folds else "")
-    unregistered_variant = "docs/plans/COMPLETED/zz.md"
+    unregistered_variant = "docs/history/plans/COMPLETED/zz.md"
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text=unregistered_variant + "\n")
     st.expect("test_case_variant_unregistered_gates_via_fold", code,
@@ -2187,9 +2187,9 @@ def _run_selftest_checks(st: Selftest) -> None:
             globals()["_fold"] = pinned_fold
             root = make_fixture("f5-fold-" + pin_label, registry_header() +
                                 "| doc-a | no | completed | 2026-01-01 | r |"
-                                " docs/plans/completed/a.md |  |  |  |\n")
+                                " docs/history/plans/completed/a.md |  |  |  |\n")
             cfg = resolve_config(root)
-            variant = "docs/plans/COMPLETED/a.md"
+            variant = "docs/history/plans/COMPLETED/a.md"
             st.check("test_fold_pin_" + pin_label + "_immutable_trait",
                      is_immutable(variant, cfg) is fold_active,
                      "is_immutable=%r fold_active=%r"
@@ -2207,7 +2207,7 @@ def _run_selftest_checks(st: Selftest) -> None:
                           + "_variant_write_passes", code, output, 0,
                           forbid_substr="immutable path written without"
                           " override")
-            unregistered_variant = "docs/plans/COMPLETED/zz.md"
+            unregistered_variant = "docs/history/plans/COMPLETED/zz.md"
             code, output = run(["--root", str(root), "check-writes",
                                 "--stdin"],
                                stdin_text=unregistered_variant + "\n")
@@ -2225,17 +2225,17 @@ def _run_selftest_checks(st: Selftest) -> None:
             # when not.
             code, output = run(["--root", str(root), "check-writes",
                                 "--stdin"],
-                               stdin_text="A  docs/plans/completed/A.md\n")
+                               stdin_text="A  docs/history/plans/completed/A.md\n")
             if fold_active:
                 st.expect("test_fold_pin_" + pin_label
                           + "_case_variant_add_near_match_warns", code,
                           output, 0,
-                          want_substr="docs/plans/completed/a.md",
+                          want_substr="docs/history/plans/completed/a.md",
                           forbid_substr="licensed lifecycle add")
             else:
                 st.expect("test_fold_pin_" + pin_label
                           + "_case_variant_add_still_gates", code, output,
-                          1, want_substr="docs/plans/completed/A.md")
+                          1, want_substr="docs/history/plans/completed/A.md")
     finally:
         globals()["_fold"] = real_fold
 
@@ -2248,9 +2248,9 @@ def _run_selftest_checks(st: Selftest) -> None:
     # transition check.
     root = make_fixture("hard-msg-padding", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="M  docs/plans/completed/a.md\n")
+                       stdin_text="M  docs/history/plans/completed/a.md\n")
     st.expect("test_hard_message_strips_status_padding", code, output, 1,
               want_substr="change type M;")
 
@@ -2263,9 +2263,9 @@ def _run_selftest_checks(st: Selftest) -> None:
     # fold-pinned block below anchors both traits on every host.)
     root = make_fixture("untracked-case-variant", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="?? docs/plans/completed/A.md\n")
+                       stdin_text="?? docs/history/plans/completed/A.md\n")
     if folds:
         st.expect("test_untracked_case_variant_warns_stage_move", code,
                   output, 0, want_substr="is not the registered spelling")
@@ -2291,10 +2291,10 @@ def _run_selftest_checks(st: Selftest) -> None:
                 "untracked-case-variant-pin-" + pin_label,
                 registry_header() +
                 "| doc-a | no | completed | 2026-01-01 | r |"
-                " docs/plans/completed/a.md |  |  |  |\n")
+                " docs/history/plans/completed/a.md |  |  |  |\n")
             code, output = run(["--root", str(root), "check-writes",
                                 "--stdin"],
-                               stdin_text="?? docs/plans/completed/A.md\n")
+                               stdin_text="?? docs/history/plans/completed/A.md\n")
             if fold_active:
                 st.expect("test_untracked_case_variant_fold_pin_"
                           + pin_label + "_warns_stage_move", code, output,
@@ -2315,9 +2315,9 @@ def _run_selftest_checks(st: Selftest) -> None:
     # unprotected immutable write (the dir is created explicitly so the
     # fixture is host-independent).
     root = make_fixture("untracked-dir-collapse", registry_header())
-    (root / "docs/plans/completed").mkdir(parents=True, exist_ok=True)
+    (root / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="?? docs/plans/completed/\n")
+                       stdin_text="?? docs/history/plans/completed/\n")
     st.expect("test_untracked_dir_collapse_hints_stage_move", code, output,
               0, want_substr="untracked directory")
     st.check("test_untracked_dir_collapse_names_stage_move",
@@ -2332,9 +2332,9 @@ def _run_selftest_checks(st: Selftest) -> None:
     # run pins both traits on every host.
     root = make_fixture("tracked-change-at-collapsed-dir",
                         registry_header())
-    (root / "docs/plans/completed").mkdir(parents=True, exist_ok=True)
+    (root / "docs/history/plans/completed").mkdir(parents=True, exist_ok=True)
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="M  docs/plans/completed/\n")
+                       stdin_text="M  docs/history/plans/completed/\n")
     st.expect("test_tracked_change_at_collapsed_dir_stays_hard", code,
               output, 1,
               want_substr="immutable path written without override",
@@ -2350,10 +2350,10 @@ def _run_selftest_checks(st: Selftest) -> None:
     # fold-pinned block below anchors both traits on every host.)
     root = make_fixture("case-only-rename", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="R  docs/plans/completed/a.md ->"
-                       " docs/plans/completed/A.md\n")
+                       stdin_text="R  docs/history/plans/completed/a.md ->"
+                       " docs/history/plans/completed/A.md\n")
     if folds:
         st.expect("test_case_only_rename_old_side_warns", code, output, 0,
                   want_substr="case-only rename")
@@ -2375,11 +2375,11 @@ def _run_selftest_checks(st: Selftest) -> None:
                 "case-only-rename-pin-" + pin_label,
                 registry_header() +
                 "| doc-a | no | completed | 2026-01-01 | r |"
-                " docs/plans/completed/a.md |  |  |  |\n")
+                " docs/history/plans/completed/a.md |  |  |  |\n")
             code, output = run(["--root", str(root), "check-writes",
                                 "--stdin"],
-                               stdin_text="R  docs/plans/completed/a.md ->"
-                               " docs/plans/completed/A.md\n")
+                               stdin_text="R  docs/history/plans/completed/a.md ->"
+                               " docs/history/plans/completed/A.md\n")
             if fold_active:
                 st.expect("test_case_only_rename_fold_pin_" + pin_label
                           + "_old_side_warns", code, output, 0,
@@ -2411,11 +2411,11 @@ def _run_selftest_checks(st: Selftest) -> None:
                 "same-spelling-delete-readd-pin-" + pin_label,
                 registry_header() +
                 "| doc-a | no | completed | 2026-01-01 | r |"
-                " docs/plans/completed/a.md |  |  |  |\n")
+                " docs/history/plans/completed/a.md |  |  |  |\n")
             code, output = run(["--root", str(root), "check-writes",
                                 "--stdin"],
-                               stdin_text="D\tdocs/plans/completed/a.md\n"
-                               "A  docs/plans/completed/a.md\n")
+                               stdin_text="D\tdocs/history/plans/completed/a.md\n"
+                               "A  docs/history/plans/completed/a.md\n")
             st.expect("test_same_spelling_delete_readd_fold_pin_"
                       + pin_label + "_stays_hard", code, output, 1,
                       want_substr="immutable path written without"
@@ -2431,10 +2431,10 @@ def _run_selftest_checks(st: Selftest) -> None:
     # block anchors both traits on every host.
     root = make_fixture("case-only-rename-name-status", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
-                       stdin_text="D\tdocs/plans/completed/a.md\n"
-                       "A  docs/plans/completed/A.md\n")
+                       stdin_text="D\tdocs/history/plans/completed/a.md\n"
+                       "A  docs/history/plans/completed/A.md\n")
     if folds:
         st.expect("test_case_only_rename_name_status_old_side_warns",
                   code, output, 0, want_substr="case-only rename")
@@ -2457,11 +2457,11 @@ def _run_selftest_checks(st: Selftest) -> None:
                 "case-only-rename-name-status-pin-" + pin_label,
                 registry_header() +
                 "| doc-a | no | completed | 2026-01-01 | r |"
-                " docs/plans/completed/a.md |  |  |  |\n")
+                " docs/history/plans/completed/a.md |  |  |  |\n")
             code, output = run(["--root", str(root), "check-writes",
                                 "--stdin"],
-                               stdin_text="D\tdocs/plans/completed/a.md\n"
-                               "A  docs/plans/completed/A.md\n")
+                               stdin_text="D\tdocs/history/plans/completed/a.md\n"
+                               "A  docs/history/plans/completed/A.md\n")
             if fold_active:
                 st.expect("test_case_only_rename_name_status_fold_pin_"
                           + pin_label + "_old_side_warns", code, output,
@@ -2480,11 +2480,11 @@ def _run_selftest_checks(st: Selftest) -> None:
     # raise and crash the run) rather than evaluate it.
     root = make_fixture("bare-line-plus-rename", registry_header() +
                         "| doc-a | no | completed | 2026-01-01 | r |"
-                        " docs/plans/completed/a.md |  |  |  |\n")
+                        " docs/history/plans/completed/a.md |  |  |  |\n")
     code, output = run(["--root", str(root), "check-writes", "--stdin"],
                        stdin_text="docs/notes.md\n"
-                       "R  docs/plans/completed/a.md ->"
-                       " docs/plans/completed/A.md\n")
+                       "R  docs/history/plans/completed/a.md ->"
+                       " docs/history/plans/completed/A.md\n")
     if folds:
         st.expect("test_bare_line_sibling_skipped_not_crashed", code,
                   output, 0, want_substr="case-only rename")
@@ -2508,10 +2508,10 @@ def _run_selftest_checks(st: Selftest) -> None:
                 "rename-dir-conjunct-pin-" + pin_label,
                 registry_header() +
                 "| doc-a | no | completed | 2026-01-01 | r |"
-                " docs/plans/completed/a.md |  |  |  |\n")
+                " docs/history/plans/completed/a.md |  |  |  |\n")
             code, output = run(["--root", str(root), "check-writes",
                                 "--stdin"],
-                               stdin_text="R  docs/plans/completed/a.md ->"
+                               stdin_text="R  docs/history/plans/completed/a.md ->"
                                " Docs/Plans/Completed/A.md\n")
             st.expect("test_rename_dirname_conjunct_fold_pin_"
                       + pin_label + "_stays_hard", code, output, 1,
@@ -2534,13 +2534,13 @@ def _run_selftest_checks(st: Selftest) -> None:
                 "rename-fold-conjunct-pin-" + pin_label,
                 registry_header() +
                 "| doc-a | no | completed | 2026-01-01 | r |"
-                " docs/plans/completed/a.md |  |  |  |\n"
+                " docs/history/plans/completed/a.md |  |  |  |\n"
                 "| doc-b | no | completed | 2026-01-01 | r |"
-                " docs/plans/completed/b.md |  |  |  |\n")
+                " docs/history/plans/completed/b.md |  |  |  |\n")
             code, output = run(["--root", str(root), "check-writes",
                                 "--stdin"],
-                               stdin_text="R  docs/plans/completed/a.md ->"
-                               " docs/plans/completed/b.md\n")
+                               stdin_text="R  docs/history/plans/completed/a.md ->"
+                               " docs/history/plans/completed/b.md\n")
             st.expect("test_rename_fold_conjunct_fold_pin_"
                       + pin_label + "_stays_hard", code, output, 1,
                       want_substr="immutable path written without"
@@ -2563,11 +2563,11 @@ def _run_selftest_checks(st: Selftest) -> None:
                 "rename-licensed-ct-conjunct-pin-" + pin_label,
                 registry_header() +
                 "| doc-a | no | completed | 2026-01-01 | r |"
-                " docs/plans/completed/a.md |  |  |  |\n")
+                " docs/history/plans/completed/a.md |  |  |  |\n")
             code, output = run(["--root", str(root), "check-writes",
                                 "--stdin"],
-                               stdin_text="D\tdocs/plans/completed/a.md\n"
-                               "?? docs/plans/completed/A.md\n")
+                               stdin_text="D\tdocs/history/plans/completed/a.md\n"
+                               "?? docs/history/plans/completed/A.md\n")
             st.expect("test_rename_licensed_ct_conjunct_fold_pin_"
                       + pin_label + "_stays_hard", code, output, 1,
                       want_substr="immutable path written without"
@@ -2589,11 +2589,11 @@ def _run_selftest_checks(st: Selftest) -> None:
                 "rename-outer-d-conjunct-pin-" + pin_label,
                 registry_header() +
                 "| doc-a | no | completed | 2026-01-01 | r |"
-                " docs/plans/completed/a.md |  |  |  |\n")
+                " docs/history/plans/completed/a.md |  |  |  |\n")
             code, output = run(["--root", str(root), "check-writes",
                                 "--stdin"],
-                               stdin_text="M  docs/plans/completed/a.md\n"
-                               "A  docs/plans/completed/A.md\n")
+                               stdin_text="M  docs/history/plans/completed/a.md\n"
+                               "A  docs/history/plans/completed/A.md\n")
             st.expect("test_rename_outer_d_conjunct_fold_pin_"
                       + pin_label + "_stays_hard", code, output, 1,
                       want_substr="immutable path written without"
@@ -2613,7 +2613,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     root = make_fixture("facts-escaping", registry_header(),
                         facts_body=escaping_facts)
     code, output = run(["--root", str(root), "check-writes",
-                        "docs/plans/completed/a.md"])
+                        "docs/history/plans/completed/a.md"])
     st.expect("test_root_escaping_facts_value_falls_back", code, output,
               1, want_substr="escapes the repo root")
 
@@ -2650,7 +2650,7 @@ def _run_selftest_checks(st: Selftest) -> None:
     # A backslash-run of two or more before a pipe is a parse
     # error (fail closed on ambiguous Markdown escaping).
     run_line = ("| doc-a | no | completed | 2026-01-01 |"
-                " fix A \\\\| B | docs/plans/completed/a.md |"
+                " fix A \\\\| B | docs/history/plans/completed/a.md |"
                 "  |  |  |\n")
     root = make_fixture("backslash-run", registry_header() + run_line)
     code, output = run(["--root", str(root), "validate"])
