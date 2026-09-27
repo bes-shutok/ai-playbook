@@ -30,6 +30,23 @@ When new config fields, parameters, or data schema fields are added:
 When the diff adds or renames DB tables/indexes, or documents a constrained config shape:
 - Is the operator/local verify inventory updated in the same change set (the repository's verify-script expected tables/indexes)?
 
+## Packaged schema parity
+
+When a diff ships or changes a packaged deployment or local-development
+manifest carrying schema or seed artifacts, compare packaged deployment and
+local-development manifests against the canonical migration and seed inventory,
+including ordering. An older packaged schema or a reordered seed set is a
+parity defect.
+
+Boundary: this door adds packaged-manifest parity only; verify-script
+expected inventories remain jointly owned by implementation.md's
+Same-change-set inventory section and documentation.md phase 1's Ops / local
+bootstrap inventory, and missing ops-doc or
+bootstrap-mount updates stay owned by documentation.md phase 1's Ops / local
+bootstrap inventory.
+
+Pattern: `implementation#packaged-schema-parity`
+
 ## Query order and index match
 
 When a new or changed mapper query adds `ORDER BY` / filter expressions used on
@@ -71,6 +88,22 @@ Weak or missing tests for wired code stay owned by the `testing` lens (`review-p
 **Ownership (tiered):** wiring, integration, completeness, return-value propagation, API schema alignment, config/env gaps. Do not report runtime algorithm bugs when wiring is correct, or structural layer violations (see `review-panel-selection.md`).
 
 Report problems only. No positive observations.
+
+## Conversion floor before zero-meaning sinks
+
+- Trigger: a validated config or API duration or numeric quantity rendered
+  through a truncating conversion into a sink documented or known to treat
+  zero as unlimited, disabled, or no-limit.
+- Required action: trace validation, conversion, sink; reject values whose
+  converted integer is below the sink's minimum meaningful unit even when the
+  source value is positive; cite the shared JVM guideline when present in the
+  Guideline Pack.
+- Boundary: quality.md's landed Representation precision rule owns the
+  emitted-representation witness for the duration-zero shape, while this door
+  owns the validation-to-conversion-to-sink trace, the sub-floor rejection,
+  and the guideline citation; merge per tiered ownership.
+
+Pattern: `implementation#truncating-conversion-floor`
 
 ## Framework and effective-configuration contract audit
 

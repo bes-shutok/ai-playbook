@@ -395,6 +395,7 @@ Each new or updated item still carries:
 - Why not fixed now: the scope boundary or decision, and who made it
 - Driving force: the primary force tag from the Backlog driving-force taxonomy, plus a secondary force when one exists
 - When the item fixes shared skills used by other repos: `Priority: critical` (or high) plus a `Consumer urgency:` line stating that consumer projects that run the skill need the fix, and that the skills-repo personal priority profile must not park or defer it as formal-hardening for the skills repo alone
+- Origin class: exactly one provenance value on every newly captured item, from the closed set: `Origin class: self-serving` (the failure or improvement was witnessed on the skills repo's own runtime; no consumer project is involved), `Origin class: consumer-feedback (company)` (witnessed in a company project that consumes these skills), or `Origin class: consumer-feedback (pet)` (witnessed in the owner's personal pet projects that consume these skills). Ordering semantics, next to the Consumer urgency rule above: at equal priority, consumer-feedback outranks self-serving, and the company/pet tag names which project family's priority profile (guidelines rule 68) applies when a shared-skill fix trades one consumer family against the other. A consumer-feedback item that also meets the Consumer urgency conditions carries both lines; the two lines compose (provenance plus never-profile-deferred), neither replaces the other.
 
 Capture sources: review-fix cycles and execute-plan Step 1.2b intermediate task reviews; both record the Driving force line on every captured item. learn Step 1.8 skill-usage captures in the skills repo follow the same Consumer urgency rule when the defect harms consumer runs.
 
@@ -500,7 +501,7 @@ Done is the gate consumer for the review-thread marker this skill writes: it gat
 Orchestration rule 4 applies **Fix-risk triage when fixes regenerate findings** in a regenerating loop; the triage classes and fix-vs-backlog decisions feed its exit report and **Backlog capture** tally. The loop's triage step applies **Triage class (real vs formal)** before the fix-vs-defer decision.
 
 ### With `maintenance` skill
-The maintenance survey resolves each open backlog item's profile and class per **Triage class (real vs formal)** (profile per guidelines rule 68), records the class in its survey output, and groups plan families profile-aware. This skill owns the per-finding classification and the cross-profile consultation procedure.
+The maintenance survey resolves each open backlog item's profile and class per **Triage class (real vs formal)** (profile per guidelines rule 68), records the class in its survey output, and groups plan families profile-aware. This skill owns the per-finding classification and the cross-profile consultation procedure. The Step 7 measurement-rider filing and the Step 1 audit consult's new-item duty follow **Backlog capture** required content, including the `Origin class:` line.
 
 ### With `review-reconciliation` skill
 Use reconciliation for recurring-root, contradictory-artifact, or evidence-ownership analysis. This skill retains fix-vs-backlog triage and does not treat reconciliation's artifact changes as independently reviewed; the original review orchestrator must run the next fresh round.

@@ -97,6 +97,9 @@ When a value crosses a framework, database, serializer, or mapper boundary:
    explicitly documents the wider set. The finding body names both enumeration
    APIs and cites one illegal key the wide API admits and the typed API
    excludes. Pattern: `quality#typed-catalog-enumeration-door`.
+7. **Nullable JDBC typing:** a nullable mapper parameter or bound value
+   requires an explicit JDBC type for the SQL NULL case, plus a test
+   exercising the null representation. Pattern: `quality#nullable-jdbc-type`.
 
 When a change persists multiple facts or updates dependency-driven state,
 enumerate every changed fact, published predicate, downstream job source, and

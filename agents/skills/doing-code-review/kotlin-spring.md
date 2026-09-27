@@ -22,6 +22,7 @@ Additional review context for Kotlin/Spring projects. Append to each sub-agent p
 
 - **Constructor injection**: Kotlin classes with single constructor do not need `@Autowired`. Multiple constructors need explicit annotation.
 - **`@Transactional` on suspend functions**: Spring's `@Transactional` does NOT work with coroutines by default. Use `TransactionalOperator` for reactive/coroutine transactions.
+- **Transaction-manager begin hooks**: same Spring mapping as `java-spring.md`: treat framework callback arguments as framework-specific handles and verify their runtime type before invoking rollback or cleanup on them; audit the superclass cleanup contract when extending begin hooks; on post-begin setup failure, roll back and unbind the already-bound resource before propagating.
 - **`open` classes**: Spring requires classes and methods to be `open` for proxying. The `kotlin-spring` plugin handles this for `@Component`, `@Service`, etc., but verify custom annotations are covered.
 - **Jackson + Kotlin**: use `jackson-module-kotlin`. Without it, deserialization of data classes fails at runtime (no default constructor). Default parameter values only work with this module.
 - **`lateinit var`**: acceptable for Spring-injected fields. Do not use for fields that might be accessed before injection completes (e.g. in `init {}` blocks).
@@ -71,3 +72,15 @@ resolve from the `kotlin_guidelines.md` numbered index:
   kotlin_guidelines.md #13, #17.
 - Batch read paths and terminal handlers (slim projections, hoisted invariant
   checks, throwing terminal handlers): kotlin_guidelines.md #19, #20, #21.
+
+File-qualified JVM guideline checks, separate from the table above (whose
+rule numbers resolve from the `kotlin_guidelines.md` index): the shared
+`jvm_guidelines.md` in the Guideline Pack carries two more rules, applied on
+every Kotlin review, not only after an incident:
+
+- `jvm_guidelines.md` #18: floor `Duration.toMillis()` and every other
+  truncating conversion before sinks that treat zero as unlimited or disabled;
+  the rule applies to any such sink, not only the guideline's named timeout
+  sink.
+- `jvm_guidelines.md` #20: drop perpetual "old migration path is null" asserts
+  after a rename.

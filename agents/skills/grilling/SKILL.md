@@ -3,9 +3,11 @@ name: grilling
 description: Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any grill trigger phrases.
 metadata:
   upstream: "https://github.com/mattpocock/skills/tree/main/skills/productivity/grilling"
+  local_fork: "deliberate; see the Local fork notice below and the Vendored Asset Sync Rules in the repository AGENTS.md"
 ---
 
 # Grilling
+> **Local fork notice:** this file carries a deliberate local fork of the upstream `productivity/grilling` skill (`metadata.upstream`). Deliberate divergences: the three-phase default cadence (unclear-first sequential, clear tail batched) replaces the upstream frontier/rounds format; batch-all mode; self-contained question rules; the mandatory ambiguity triggers (cleanup and restoration); the lifecycle-verb clarification trigger; the no-generic-acknowledgement rule; the answer-state rule (per-question `open`/`closed`); the opt-in phrase "accept the recommendation for this question"; per-question decision receipts; question economy with the consolidated assumptions list; the Integration Points section and its sync note with the plans skill Step 1.4 meta-rule. A future upstream sync of this directory must re-apply this fork (recovery source: git history of this path) or consciously drop it with the decision recorded; see the Vendored Asset Sync Rules in the repository AGENTS.md.
 
 Interview me relentlessly about every aspect of this until we reach a shared understanding. Walk down each branch of the decision tree. For each question, provide your recommended answer.
 

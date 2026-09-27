@@ -116,3 +116,8 @@ For compare-and-set updates, deduplication, reconciliation, or job queues:
    (empty claim, DB exception, rejection, checkpoint failure) must release in
    `finally` (or equivalent). Distributed-lock finally rules alone do not
    cover JVM permits. Pattern: `concurrency#permit-finally`.
+9. **NULL-tuple claim predicates:** SQL three-valued logic for first-write-wins
+   audit tuples: SQL equality never matches NULL, so claim predicates over a
+   NULL-initialized audit tuple use IS NULL per field in the fresh-claim
+   branch. Require fresh-claim, identical-retry, and conflicting-retry
+   witnesses. Pattern: `security#null-tuple-claim-predicates`.

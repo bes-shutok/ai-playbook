@@ -388,3 +388,7 @@ you no way to trigger compaction yourself, end the report with that stated in on
 {REPO_ROOT}: <repository root>
 <blocked_on>: <bare-ref-name>
 ```
+
+## Deferred-corpus re-triage child (pointer stub)
+
+This section is a pointer stub, not a blueprint, and it is not part of the backlog source text: it carries none of the counted dispatch-slice spans (no `<prompt` wrapper paragraph, no re-arm paragraph, no HOST CAVEAT, no primitive-precheck sentence). The retriage child's payload is assembled by the deciding turn per the dispatch ladder (`agents/skills/maintenance/zcode.md`, "Child dispatch ladder", including the re-arm-first action it requires of every child payload), with the SKILL.md re-triage consult block (`agents/skills/maintenance/SKILL.md` Step 1, "Deferred-corpus re-triage consult" and its sub-bullets) as the procedure of record. The assembled payload carries the `deferred re-triage lane` recognition literal plus the resolved repository root (the containment pair the zcode.md child-classification markers match), so the Step 2 widened arm classifies it as occupying only `G1a`.

@@ -159,5 +159,216 @@ class PlanReadinessFenceBalanceTest(unittest.TestCase):
         self.assertEqual(rc, 0, (out, err))
 
 
+# --------------------------------------------------------------------------- #
+# --check-review-name probe: one round pair re-verified against the gate's
+# own discovery shape (filename glob, sidecar presence, sidecar artifact_slug,
+# coverage self-references) before the loop folds findings or relaunches.
+# --------------------------------------------------------------------------- #
+
+CANONICAL_ROUND_NAME = "2026-09-01-plan-review-fixture-feature-r1.md"
+SHORT_SLUG_ROUND_NAME = "2026-09-01-plan-review-fixture-r1.md"
+REVIEW_NAME_ROUND_MD = (
+    "# Plan Review: fixture feature\n\n"
+    "## Summary\n\n"
+    "- ready=yes\n"
+)
+
+
+class ReviewNameCheckTest(unittest.TestCase):
+    """The ``--check-review-name`` probe binds one written round pair to
+    the plan's feature slug through the gate's own discovery shape."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="review-name-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        self.plans = self.root / "plans"
+        self.reviews = self.root / "reviews"
+        self.plans.mkdir()
+        self.reviews.mkdir()
+        self.plan = self.plans / "2026-09-01-fixture-feature.md"
+        self.plan.write_text("# Fixture plan\n\nBody.\n", encoding="utf-8")
+
+    def _run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.chdir(self.root)
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = plan_readiness.main(argv)
+        finally:
+            os.chdir(prev)
+        return rc, out.getvalue(), err.getvalue()
+
+    def _write_round(self, name, sidecar, directory=None):
+        """One round Markdown plus its ``.stats.json`` sidecar.
+
+        ``sidecar`` is JSON-serialized when it is an object, written
+        verbatim when it is a string, and skipped when ``None``.
+        """
+        round_path = (directory or self.reviews) / name
+        round_path.write_text(REVIEW_NAME_ROUND_MD, encoding="utf-8")
+        if sidecar is not None:
+            sidecar_text = (
+                sidecar if isinstance(sidecar, str) else json.dumps(sidecar)
+            )
+            round_path.with_suffix(".stats.json").write_text(
+                sidecar_text, encoding="utf-8"
+            )
+        return round_path
+
+    def _run_probe(self, round_path):
+        return self._run_main(
+            [str(self.plan), "--check-review-name", str(round_path)]
+        )
+
+    def _dangling_path(self):
+        return self.reviews / "2026-08-01-plan-review-older-feature-r1.md"
+
+    def test_accepts_canonical_pair(self):
+        round_path = self._write_round(
+            CANONICAL_ROUND_NAME, {"artifact_slug": "fixture-feature"}
+        )
+        rc, out, err = self._run_probe(round_path)
+        self.assertEqual(rc, 0, (out, err))
+        self.assertIn("review name check OK", out)
+
+    def test_rejects_short_slug(self):
+        round_path = self._write_round(
+            SHORT_SLUG_ROUND_NAME, {"artifact_slug": "fixture"}
+        )
+        rc, out, err = self._run_probe(round_path)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("fixture-feature", err)
+        self.assertIn("discovery shape", err)
+
+    def test_rejects_missing_sidecar(self):
+        round_path = self._write_round(CANONICAL_ROUND_NAME, None)
+        rc, out, err = self._run_probe(round_path)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("missing stats sidecar", err)
+
+    def test_rejects_sidecar_slug_mismatch(self):
+        round_path = self._write_round(
+            CANONICAL_ROUND_NAME, {"artifact_slug": "fixture"}
+        )
+        rc, out, err = self._run_probe(round_path)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("artifact_slug", err)
+        self.assertIn("expected 'fixture-feature'", err)
+
+    def test_rejects_dangling_inherited_coverage(self):
+        dangling = str(self._dangling_path())
+        round_path = self._write_round(
+            CANONICAL_ROUND_NAME,
+            {
+                "artifact_slug": "fixture-feature",
+                "coverage": {
+                    "inherited_coverage": [
+                        {"lens": "testing", "artifact": dangling}
+                    ]
+                },
+            },
+        )
+        rc, out, err = self._run_probe(round_path)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn(dangling, err)
+
+    def test_rejects_dangling_attempt_reference(self):
+        dangling = str(self._dangling_path())
+        round_path = self._write_round(
+            CANONICAL_ROUND_NAME,
+            {
+                "artifact_slug": "fixture-feature",
+                "coverage": {
+                    "attempts": [
+                        {"attempt_id": 1, "artifact": dangling}
+                    ]
+                },
+            },
+        )
+        rc, out, err = self._run_probe(round_path)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn(dangling, err)
+
+    def test_rejects_dangling_replacement_reference(self):
+        dangling = str(self._dangling_path())
+        round_path = self._write_round(
+            CANONICAL_ROUND_NAME,
+            {
+                "artifact_slug": "fixture-feature",
+                "coverage": {
+                    "replacement": [
+                        {"lens": "testing", "original_artifact": dangling}
+                    ]
+                },
+            },
+        )
+        rc, out, err = self._run_probe(round_path)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn(dangling, err)
+
+    def test_rejects_corrupt_sidecar(self):
+        round_path = self._write_round(CANONICAL_ROUND_NAME, "{not json")
+        rc, out, err = self._run_probe(round_path)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("malformed stats sidecar", err)
+        self.assertNotIn("Traceback", err)
+        self.assertNotIn("Traceback", out)
+
+    def test_rejects_round_outside_reviews_dir(self):
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        round_path = self._write_round(
+            CANONICAL_ROUND_NAME,
+            {"artifact_slug": "fixture-feature"},
+            directory=elsewhere,
+        )
+        rc, out, err = self._run_probe(round_path)
+        self.assertEqual(rc, 1, (out, err))
+        self.assertIn("reviews directory", err)
+
+    def test_rejects_symlinked_round_identity(self):
+        # F1 canary: identity (parent + filename) is judged on the path as
+        # claimed, never the symlink target, so a symlink named like a
+        # nonexistent round cannot borrow a clean pair's identity.
+        target = self._write_round(
+            CANONICAL_ROUND_NAME, {"artifact_slug": "fixture-feature"}
+        )
+        claimed = self.reviews / "2026-09-01-plan-review-fixture-feature-r9.md"
+        os.symlink(target, claimed)
+        rc, out, err = self._run_probe(claimed)
+        self.assertEqual(rc, 1, (out, err))
+        # The claimed pair is judged under the claimed names: the symlink
+        # borrows the target's identity checks but its own r9 sidecar is
+        # missing, which is the fail.
+        self.assertIn("missing stats sidecar", err)
+        self.assertIn("r9", err)
+
+    def test_missing_plan_path_is_usage_error(self):
+        round_path = self.reviews / CANONICAL_ROUND_NAME
+        with self.assertRaises(SystemExit) as caught:
+            self._run_main(["--check-review-name", str(round_path)])
+        self.assertEqual(caught.exception.code, 2)
+
+    def test_mode_combination_is_usage_error(self):
+        round_path = self.reviews / CANONICAL_ROUND_NAME
+        for flag in ("--selftest", "--sweep", "--pre-round"):
+            with self.subTest(flag=flag):
+                with self.assertRaises(SystemExit) as caught:
+                    self._run_main(
+                        [
+                            str(self.plan),
+                            flag,
+                            "--check-review-name",
+                            str(round_path),
+                        ]
+                    )
+                self.assertEqual(caught.exception.code, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

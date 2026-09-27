@@ -67,3 +67,7 @@ _Avoid_: ticket-id-keyed doc name, branch-scoped identity
 **Living SOT**:
 The one document or wire/schema source that owns the current normative rule for an idea. May change freely while its owning work is active; on completion or supersession the rule's home becomes a completed history artifact plus a successor entry in the ownership registry.
 _Avoid_: historical artifact (for a living doc), frozen context (a completed history artifact under `docs/history/context/`, not a separate state)
+
+**Release (run)**:
+One invocation of the `release` skill: squash the unpushed `main` commits into a few feature commits, write a dated `CHANGELOG.md` entry, and publish to the remote after the safety and privacy gates. A publishing action owned by the release workflow, not a plans-domain checkpoint; the plans-domain `Release gate` term keeps its own meaning.
+_Avoid_: release gate

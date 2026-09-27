@@ -14,7 +14,7 @@ Normal full code, plan, and RFC reviews launch exactly these workers:
 | `contract-docs` | `documentation` | `consistency` for plans and RFCs | Contracts, source-of-truth drift, prose, cross-section consistency |
 | `risk` | `security` | `concurrency`, `premortem` when signals below match | Security, ordering, rollout, and operational failure modes |
 
-Prepend `severity-calibration.md` to every worker prompt. Each worker records every loaded lens. Pattern IDs retain the originating lens prefix, with one exception: the conditional risk lenses `concurrency` and `premortem` are loaded lenses but NOT Pattern-ID owners: version-1 sidecars reject `concurrency#<slug>` and `premortem#<slug>`, so findings from those lenses are staged under the `risk` worker's base lens owner as `security#<slug>` (for example a race outcome becomes `security#race-condition`). Lens telemetry still counts `concurrency`/`premortem` via `panel[].lenses`.
+Prepend `severity-calibration.md` to every worker prompt. Each worker records every loaded lens. Pattern IDs retain the originating lens prefix, with one exception: the conditional risk lenses `concurrency` and `premortem` are loaded lenses but NOT Pattern-ID owners: version-1 sidecars reject `concurrency#<slug>` and `premortem#<slug>`, so findings from those lenses are staged under the `risk` worker's base lens owner as `security#<slug>` (for example a race outcome becomes `security#race-condition`). Lens telemetry still counts `concurrency`/`premortem` via `panel[].lenses`. A plan prescribing verbatim multi-line bash where a script file under scripts/ would carry the mechanical logic is a design-simplicity finding candidate (the runnable-carrier preference).
 
 ## Launch accounting
 
@@ -49,6 +49,7 @@ When `review-loop` or an `execute-plan` Phase 3 round runs a targeted round afte
 - Before loop **exit**, if the clear-candidate round would omit `design-simplicity`, include it in a hybrid pass (see `review-loop` exit criteria); this coverage is the same single exit hybrid the once-only allowance permits, never an additional pass. Do not exit on contract-docs/risk-only cleanliness alone after architecture-relevant code landed earlier on the branch.
 - When the plan has production paths and a prior round was blocking-clean on them under the risk and correctness lenses, schedule at most one exit hybrid (the missing quality-bar lenses, typically design-simplicity) for clear-round coverage; when the plan has no production paths, any blocking-clean round satisfies that precondition; in both branches the exit hybrid is still required before execute-plan Step 3.5's clean-review row may exit, unless the prior blocking-clean round was a full panel (it already carried every quality-bar lens, so exit coverage is satisfied). Do not resume docs/test-only focused rounds after it, and a blocking finding in the exit hybrid re-enters the normal address path. The exit-hybrid once-only allowance resets when any address pass after the hybrid mutates the digest, so the post-fix exit attempt again requires coverage.
 - When a soften watchlist has `open` rows, include the lead worker for each open pattern (tiered ownership table above).
+- Paired-surface renumber and dual-entry policy changes: after a migration renumber, force the `contract-docs` and `correctness-completeness` workers on the paired surfaces even in a focused round; after a dual-entry validation-policy change, additionally force the `design-simplicity` and `testing` workers so the architecture and testing lenses load the new doors (`architecture#dual-surface-policy-parity`, `testing#cross-surface-policy-witness`).
 
 ### Risk-signal floor
 
@@ -72,7 +73,7 @@ migration, dependency coordinate, or test runner/manifest, review metadata must
 include a boundary-contract checklist. It names the applicable witness layer
 for lifecycle ownership, effective configuration source and value, persistence
 state and representation, fail-closed logging render surfaces,
-framework/dependency availability, migration/runner parity, and an enabled
+framework/dependency availability, migration/runner parity, packaged deployment artifact parity, and an enabled
 assertion-bearing safety-boundary test.
 
 The worker may record `not applicable` only after scanning changed files and
@@ -153,7 +154,7 @@ Scan all changed files, not diff hunks only, for:
 
 **Default skip** when none match in changed files or their direct call paths visible in the diff.
 
-**SQL CTE deep-read:** when any changed file is a MyBatis mapper (annotation or XML) with multi-CTE claim/job transitions, the `risk`/`concurrency` worker must read the full statement bodies (not hunk-only) and apply `concurrency#cleanup-gated-on-update`, `concurrency#terminal-not-partial`, and `concurrency#claim-generation` before returning zero findings on that family.
+**SQL CTE deep-read:** when any changed file is a MyBatis mapper (annotation or XML) with multi-CTE claim/job transitions, the `risk`/`concurrency` worker must read the full statement bodies (not hunk-only) and apply `concurrency#cleanup-gated-on-update`, `concurrency#terminal-not-partial`, `concurrency#claim-generation`, and `security#null-tuple-claim-predicates` before returning zero findings on that family.
 
 **execute-plan override:** When Phase 3 scope includes concurrency, transactional mutators, `FOR UPDATE`, or race ITs, load `premortem` in `risk` even on quiet follow-up rounds unless the user said `skip premortem`.
 

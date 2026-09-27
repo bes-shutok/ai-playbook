@@ -7,7 +7,8 @@ description: >
   This skill owns all git commits except learn's own learn-authored skills-repo artifacts
   (learn Step 1.8 and the learn skill-placement commit workflow; artifacts in the
   failed-capture set (done Step 4) may be staged by Step 4 after asking) and the docs-branch skill's
-  orphan-branch commits; other skills (review, etc.) make file changes but never commit.
+  orphan-branch commits, and the release skill's own CHANGELOG notes commit (created inside a
+  release run); other skills (review, etc.) make file changes but never commit.
 ---
 
 # Done
@@ -108,7 +109,7 @@ Parallel agent sessions on the **same git repository** must not run `learn`, `do
 
 **After the lock is acquired, immediately continue to Step 1.** Do not run learn, docs-branch, or project commits before Step 0 succeeds.
 
-**Run-start marker:** immediately after the lock is acquired, write a content-bearing per-run marker file under `{tmp_dir}/done-session/` named `run-start-<UTCtimestamp>` (filename format `run-start-YYYYmmddTHHMMSSZ`, UTC; create the directory if missing). The pre-docs sweep gate run's plan-readiness gate anchors this run's session window on the newest marker written by a previous done run. Marker pruning is governed solely by the docs-tmp-sweep gate. The marker is content-bearing: its single line records the creation epoch, the trailing-slash-stripped resolved `$REPO_TOP`, and the writing shell PID, so gate-time identity can rely on content-match confirmation instead of chat recall alone. Field order in the marker line: the first field is the epoch, the last field is the PID, and everything between them is the repo root (repo roots containing spaces therefore parse unambiguously).
+**Run-start marker:** immediately after the lock is acquired, write a content-bearing per-run marker file under `{tmp_dir}/done-session/` named `run-start-<UTCtimestamp>` (filename format `run-start-YYYYmmddTHHMMSSZ`, UTC; create the directory if missing). The pre-docs sweep gate run's plan-readiness gate anchors this run's session window on the newest marker written by a previous done run. Marker pruning is governed solely by the docs-tmp-sweep gate. The marker is content-bearing: its single line records the creation epoch, the SHA-256 hex digest of the trailing-slash-stripped resolved `$REPO_TOP`, and the writing shell PID, so gate-time identity can rely on content-match confirmation instead of chat recall alone. The raw repo-root path is never recorded. Field order in the marker line: the first field is the epoch, the last field is the PID, and everything between them is the digest (a single 64-character token, so the middle field parses unambiguously).
 
 ```bash
 REPO_TOP="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -118,7 +119,9 @@ case "$TMP_DIR" in /*) ;; *) TMP_DIR="$REPO_TOP/$TMP_DIR";; esac
 mkdir -p "${TMP_DIR%/}/done-session"
 MARKER="${TMP_DIR%/}/done-session/run-start-$(date -u +%Y%m%dT%H%M%SZ)"
 MARKER="$(cd "$(dirname "$MARKER")" && pwd)/$(basename "$MARKER")"
-printf '%s\n' "$(date -u +%s) ${REPO_TOP%/} $$" > "$MARKER" && printf 'run-start marker: %s\n' "$MARKER"
+REPO_HASH="$(printf '%s' "${REPO_TOP%/}" | (shasum -a 256 2>/dev/null || sha256sum) | awk '{print $1}')"
+printf '%s' "$REPO_HASH" | grep -qE '^[0-9a-f]{64}$' || { echo "run-start marker: sha256 tool missing or malformed digest" >&2; exit 1; }
+printf '%s\n' "$(date -u +%s) $REPO_HASH $$" > "$MARKER" && printf 'run-start marker: %s\n' "$MARKER"
 ```
 
 **Run manifest:** immediately after the marker, write the run manifest record next to it under `{tmp_dir}/done-session/` (filename pattern `run-manifest-<run_id>.json`). The manifest is this run's ownership record: it carries a unique `run_id`, the marker filename it extends, the `start_commit` (HEAD at Step 0), the pre-existing dirt snapshot, the plan and review paths this run owns, the review candidates explicitly marked foreign, the `adopted_from` link (null unless an adoption was passed), and a `complete` flag written false. Resolve the sweep-gates lib repo-local first (a repo-local `scripts/done_sweep_gates_lib.py` wins; otherwise derive the deployed lib path from the sweep-gates script default), then invoke the writer:
@@ -154,7 +157,7 @@ Pass `--owned-plan` once per plan this run finalizes, `--owned-review` once per 
 
 **Adopted-run re-derivation (adoption boundary):** an adopted interrupted run re-derives its remaining work against the current default branch before any staging: a fresh diff of the run branch tip versus the current default-branch tip, recomputed at adoption time, which is the what-would-transplanting-change view that exposes a stale-base inversion. The prior session's working-tree diff, index state, or exported patch is never transplanted into this checkout, because a stale-base diff re-applied onto an advanced default branch materializes as a reverse-squash revert set (witness: the 2026-09-25 rule29 restaging, recorded in the backlog archive). The adoption continues only after the re-derived work plan is recorded in the session notes beside the run manifest reference and the Step 3 Reverse-squash arm passes on the first staged set.
 
-Keep the echoed marker path in chat context as this run's audit record. The sweep gates derive the session window mechanically from the `run-start-*` markers under `{tmp_dir}/done-session/` (the newest content-confirmed marker is the current run; the newest strictly older one is the previous-run anchor), which is the mechanical counterpart of the echo: when fewer than two markers are content-confirmable at gate time, the window is unanchorable (conservative gating) and the docs-tmp-sweep gate prunes no `run-start-*` markers this run; never guess by recency. This rule is the Step 0 echo-loss fallback that the plan-readiness gate back-references.
+Keep the echoed marker path in chat context as this run's audit record. The sweep gates derive the session window mechanically from the `run-start-*` markers under `{tmp_dir}/done-session/` (the newest content-confirmed marker is the current run; the newest strictly older one is the previous-run anchor; content confirmation compares the marker's recorded digest against the SHA-256 hex digest of this repo's resolved repo root recomputed via the Step 0 recipe, with a legacy raw-path marker confirmed by its resolved path instead, and recorded content that cannot be recomputed or does not match this repo is a cross-repo done run), which is the mechanical counterpart of the echo: when fewer than two markers are content-confirmable at gate time, the window is unanchorable (conservative gating) and the docs-tmp-sweep gate prunes no `run-start-*` markers this run; never guess by recency. This rule is the Step 0 echo-loss fallback that the plan-readiness gate back-references.
 
 ## Step 1: Run Learn
 
@@ -204,7 +207,7 @@ Gates run in this order: plan-readiness, confluence-hygiene, doc-registry, backl
 - **review-thread closure:** when a review-thread marker (a `docs/tmp/review-threads/<session-slug>.json` per `receiving-review`'s marker duty) whose recorded session identity matches the CURRENT session exists, run `python3 scripts/review_thread_gate.py --marker <path>` with an inventory source (canned file/pipe such as captured `gh` output, or `--live` (the gate accepts both marker shapes: canonical `owner/repo#N`, or numeric `pr` plus `repo`/`url`)): exit 0 only when every tracked thread carries a verified agent reply or an explicit disposition. On failure, report blocked, release the project done lock per Step 6, and do not report completion; report push authorization separately from review-response state. A session with no marker, or a marker whose recorded identity does not match the current session (stale or foreign), is unaffected: the gate reports it as stale/skipped and never gates this session's done run. Human-authored threads are never auto-resolved.
 - **review-staging:** complete each flagged staging doc per `review-staging` (Metadata, Review Statistics, Findings with Comment/Analysis) before continuing; do not sync stub staging docs to the orphan `docs` branch.
 - **vim-swap-sweep:** the runner removes only verified stale swaps (dead-owner PID) and preserves live-owner or unverifiable files; a `needs-manual` entry stays in place until manually confirmed.
-- **docs-tmp-sweep:** durable findings graduate into lessons, completed plans, or Layer 2 docs; the rest dies with its owner. The runner never removes an ACTIVE `execute-plan` session (its plan pending anywhere under `{plans_dir}`, nested subdirectories included), `review-loop*`/`code-review/`/`handoff/` scratch (their owning skills clean up), the previous-run anchor marker, or the current-run marker, and it skips rather than removes anything never synced to the `docs` branch or of unclear ownership; a one-off already synced to the `docs` branch is likewise skipped while it was modified inside the session window (removal waits for a session whose window no longer covers it, and an unanchorable window removes nothing). Resolve skips by hand only after confirming sync state, and report what was left and why.
+- **docs-tmp-sweep:** durable findings graduate into lessons, completed plans, or Layer 2 docs; the rest dies with its owner. The runner never removes an ACTIVE `execute-plan` session (its plan pending anywhere under `{plans_dir}`, nested subdirectories included), `review-loop*`/`code-review/`/`handoff/` scratch (their owning skills clean up), the previous-run anchor marker, or the current-run marker (a marker whose recorded digest matching the SHA-256 hex digest of this repo's resolved repo root, computed as in Step 0, is content-confirmable; a legacy raw-path marker confirms by its resolved path), and it skips rather than removes anything never synced to the `docs` branch or of unclear ownership; a one-off already synced to the `docs` branch is likewise skipped while it was modified inside the session window (removal waits for a session whose window no longer covers it, and an unanchorable window removes nothing). Resolve skips by hand only after confirming sync state, and report what was left and why.
 
 **After the pre-docs sweep gate run completes (or no-ops), immediately continue to Step 2.** Do not stop or wait for user input; the workflow is continuous and all steps should execute in sequence.
 
@@ -555,6 +558,9 @@ The pre-docs sweep gate run's review-staging gate validates this run's staging d
 
 ### With `plans` and `docs-branch` skills (docs/tmp sweep)
 The pre-docs sweep gate run's docs-tmp-sweep gate sweeps `{tmp_dir}` entries whose owning plan archived (plans Plan Lifecycle cleanup) or that are one-off ownerless scratch; `review-loop*`/`code-review/`/`handoff/` scratch is never swept here (no liveness witness; their owning skills clean up). The `docs-branch` sync then drops branch-tracked `{tmp_dir}` paths absent on disk (`{tmp_dir}` is its one sweep-eligible root), so branch copies propagate without hand-editing the docs branch.
+
+### With `release` skill
+The `release` skill borrows this skill's per-worktree done lock (label `release-<date>`, acquired by its authoring step and released by its final shell call, mirroring Steps 0 and 6): during a `release` skill run (the squash-and-publish workflow; unrelated to the done-lock release in Step 6), done neither commits nor pushes. The release run commits only its own CHANGELOG notes commit and publishes through its persisted push script; the reciprocal note lives in the `release` skill's Integration Points.
 
 ## Rules
 

@@ -59,6 +59,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
+import hmac
 import os
 import re
 import shutil
@@ -290,11 +292,28 @@ class PlanReadinessDerivation:
 # --------------------------------------------------------------------------- #
 # Session window (mechanical run-start-marker identity).
 # --------------------------------------------------------------------------- #
+def _marker_digest_matches(recorded: str, repo_root: Path) -> bool:
+    """True when ``recorded`` is a 64-hex digest of ``repo_root``'s root.
+
+    done Step 0 records sha256 of the trailing-slash-stripped resolved repo
+    root; legacy markers recorded the raw path instead (accepted for
+    compatibility with pre-digest writers and vendored copies).
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", recorded):
+        return False
+    expected = hashlib.sha256(
+        str(repo_root).rstrip("/").encode("utf-8")
+    ).hexdigest()
+    return hmac.compare_digest(recorded, expected)
+
+
 def _parse_marker(path: Path, repo_root: Path) -> Optional[RunMarker]:
     """Parse one run-start marker; content must record this repo's root.
 
     Field order (done Step 0): first field epoch, last field PID, everything
-    between is the repo root (spaces unambiguous).
+    between is the identity token. Current writers record a 64-hex SHA-256
+    digest of the trailing-slash-stripped resolved repo root; legacy markers
+    recorded the raw repo-root path (spaces unambiguous), still accepted.
     """
     try:
         content = path.read_text(encoding="utf-8").strip()
@@ -309,6 +328,8 @@ def _parse_marker(path: Path, repo_root: Path) -> Optional[RunMarker]:
     except ValueError:
         return None
     recorded_root = " ".join(fields[1:-1])
+    if len(fields) == 3 and _marker_digest_matches(recorded_root, repo_root):
+        return RunMarker(path=path, epoch=epoch, pid=pid, repo_root=recorded_root)
     if os.path.realpath(recorded_root) != os.path.realpath(str(repo_root)):
         return None  # cross-repo marker: cannot anchor this repo's window
     return RunMarker(path=path, epoch=epoch, pid=pid, repo_root=recorded_root)
@@ -360,6 +381,8 @@ def _marker_records_other_repo(path: Path, repo_root: Path) -> bool:
     if len(fields) < 3:
         return False
     recorded_root = " ".join(fields[1:-1])
+    if len(fields) == 3 and _marker_digest_matches(recorded_root, repo_root):
+        return False
     try:
         return os.path.realpath(recorded_root) != os.path.realpath(str(repo_root))
     except OSError:

@@ -94,7 +94,7 @@ For every changed normative example in the diff (request/response samples, confi
 
 Use pattern `documentation#missing-example-replay` when a changed example is neither validated nor inventoried, and `documentation#prose-example-conflict` when an example contradicts the rule it documents.
 
-A class-level comment whose only content is plan-slice identity (`P0.n`-style slice ids), a ticket key, or "this PR adds" narrative is a prose-delivery-slice-meta finding (Medium when it is the only class comment); require behavior-facing prose or deletion. This is distinct from the deferred relocatable identifier-inventory class and is not merged with it. Pattern: `documentation#prose-delivery-slice-meta`.
+A class-level comment whose only content is plan-slice identity (`P0.n`-style slice ids), a ticket key, or "this PR adds" narrative is a prose-delivery-slice-meta finding (Medium when it is the only class comment); require behavior-facing prose or deletion. See the Relocatable identifier inventory gate for the live gate. Pattern: `documentation#prose-delivery-slice-meta`.
 
 ### Plan / RFC prose (phase 1)
 
@@ -213,7 +213,7 @@ Apply to prose in living Layer 1/2 documentation (overviews, architecture and ma
 - **Ticket-as-gate:** Living Layer 1/2 prose must not use an issue key (for example `PROJ-1234`) as the primary gate label; prefer a durable capability name plus an optional RFC/ADR link, and keep issue keys in Layer 3 history, plans, backlog, and tracker workflow surfaces. <!-- portability: abstract --> issue-key shape is an abstract illustration owned by the orchestrator layer
 - **Second wire SOT:** When a caller catalog restates OpenAPI schemas, enums, or status maps, stage `catalog is second wire SOT; thin-index to OpenAPI` (replace restated tables with a pointer plus audience-specific delta), not `update the catalog table to match`.
 - **Authority roles:** OpenAPI wire shape, workflow/domain Layer 2 rules, API examples, glossary entries, ADRs, and historical documents are separate authorities; duplicated normative prose within one authority consolidates to its owning document, while cross-authority references are pointers, not second SOTs. Do not flag legitimate audience-specific content as duplication.
-- **Consolidation finding shape:** When the same normative workflow rule appears in several living documents, stage one consolidation finding that names the proposed canonical owner from the documentation hierarchy and replaces peer copies with audience-specific pointers or deltas.
+- **Consolidation finding shape:** When the same normative workflow rule appears in several living documents, classify each affected document's authority role and nominate no more than two current SOT owners before proposing any multi-document scope edit set; stage one consolidation finding naming the nominated owners instead of one finding per duplicated consumer, and record each affected consumer's disposition: pointer, audience-specific delta, historical context banner, or independent contract update; suggest a broad synchronized edit only when a consumer owns an independent contract that would otherwise go stale. Historical-path documents are not current SOT by default and can require an explicit context banner when stale content could mislead. Pattern: `documentation#prose-sot-consolidation`
 
 Use pattern `documentation#prose-<slug>` for these findings (for example `documentation#prose-ticket-as-gate`, `documentation#prose-second-wire-sot`).
 
@@ -225,10 +225,19 @@ Apply when a comment, doc section, or document contradicts what the current code
 2. **Remove as obsolete** when the text has no ongoing value: nothing depends on it, no reader will ask about the design it explains, and the code plus remaining docs already carry the truth.
 3. **Freeze as historical context** when the text records past decisions, constraints, or migration rationale readers may still need. Move it to the repo's frozen/history location (for example the Layer 3 history area per `doc-hierarchy` where that convention applies) instead of keeping it in active docs. Leave a one-line pointer at the old location when readers may come looking.
 4. When the contradiction is introduced by the current change itself (doc and code updated together), fixing the doc in place is the normal path; remove-or-freeze is for prose the code has already outgrown.
+5. When a null, omission, or empty-object contract changes, search canonical and peer documentation for statements of the old semantics and stage stale-semantics findings for every statement still asserting the old shape.
 
 Boundary: when the outdated text is a normative contract consumers rely on (OpenAPI, public API docs), the mismatch is a correctness/contract finding owned by `quality.md`; this agent still owns the prose disposition (fix in place, soften, remove, or freeze).
 
+Contradictions between two normative statements stay with consistency.md; the stale-semantics sweep above stages findings for single statements of the old semantics, not for inter-statement contradiction arbitration.
+
 Use pattern `documentation#prose-outdated-doc` for remove-or-freeze findings. In code review, scope is prose in the diff plus contradictions the diff introduces into existing docs; docs outside the diff follow the orchestrator's doc-scope rules (`doing-code-review` §4.9.2).
+
+### Relocatable identifier inventory gate
+
+Trigger: an added or changed comment or operator-doc line lists versioned filenames, migration ids, enum ordinals, or other identifiers that also appear as real paths, mounts, or resource names in the same diff. Required action: prefer delete plus pointer to the owning artifact; rewrite only when the comment is the sole operator contract and cannot point elsewhere. This gate wires the shared rule `coding_guidelines.md` #35. Boundary: for relocatable-inventory contradictions this gate's delete-plus-pointer disposition replaces the generic same-diff fix-in-place normal path of the Outdated documentation section's current-change disposition (item 4 above), and that section continues to own non-inventory stale prose.
+
+Pattern: `documentation#prose-relocatable-identifier-inventory`
 
 ### Do not flag (phase 2)
 
@@ -242,9 +251,9 @@ Use pattern `documentation#prose-outdated-doc` for remove-or-freeze findings. In
 
 ### Severity (phase 2)
 
-**Default Low** for all prose findings (per doing-code-review §4.9.0: documentation/inline-comment asks are Low).
+**Default Low** for all prose findings (per doing-code-review §4.9.0: documentation/inline-comment asks are Low, subject to the same-diff relocatable-inventory override below). Carve-out: a comment or operator-doc inventory that contradicts a path in the same diff is operability drift staged Medium per the new severity-calibration row (see the Relocatable identifier inventory gate).
 
-Do not assign Medium+ unless combined with a separate correctness or contract issue owned by another agent.
+Do not assign Medium+ to prose findings outside that class: prose findings stage Low except the same-diff relocatable-inventory contradiction class, which stages Medium operability drift per the new severity-calibration row.
 
 ### Output (code review)
 

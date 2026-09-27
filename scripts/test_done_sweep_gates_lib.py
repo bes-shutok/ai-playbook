@@ -21,6 +21,7 @@ Hermeticity contract:
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import struct
@@ -1138,6 +1139,42 @@ def test_confluence_run_when_gating(tmp_path, sweep_env):
 # Plan checkbox: test_session_window_and_staging_candidate_derivations
 # [class: REPOSITORY_TEST]
 # --------------------------------------------------------------------------- #
+def test_session_window_digest_markers(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] done Step 0's current marker format records a
+    64-hex sha256 digest of the trailing-slash-stripped resolved repo root in
+    the middle field; digest-format markers anchor the session window exactly
+    like legacy raw-path markers, and a foreign digest marker is classified
+    cross-repo rather than malformed."""
+    root = make_repo(tmp_path, "window-digest", gitignore_docs=True)
+    write_facts(root)
+    now = time.time()
+    done_session = root / "docs" / "tmp" / "done-session"
+    done_session.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(str(root).rstrip("/").encode("utf-8")).hexdigest()
+    prev = done_session / marker_name(now - 3600)
+    current = done_session / marker_name(now)
+    prev.write_text(f"{int(now - 3600)} {digest} {os.getpid()}\n", encoding="utf-8")
+    current.write_text(f"{int(now)} {digest} {os.getpid()}\n", encoding="utf-8")
+    foreign = done_session / marker_name(now - 7200)
+    foreign_digest = hashlib.sha256(b"/elsewhere/repo").hexdigest()
+    foreign.write_text(f"{int(now - 7200)} {foreign_digest} 1\n", encoding="utf-8")
+
+    ctx = ctx_for(root)
+    window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+    assert window.anchored
+    assert window.anchor.path == prev
+    assert window.current.path == current
+    assert window.start_epoch == pytest.approx(now - 3600, abs=2)
+
+    # Foreign digest marker plus one own marker: unanchorable, and the
+    # foreign marker is classified cross-repo (not malformed) via its digest.
+    os.remove(current)
+    window2 = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+    assert not window2.anchored
+    assert any("cross-repo" in note for note in window2.notes)
+    assert not any("unparseable" in note for note in window2.notes)
+
+
 def test_session_window_and_staging_candidate_derivations(tmp_path, sweep_env):
     """[class: REPOSITORY_TEST] The session window anchors on the previous-run
     marker (content-confirmed repo root), the current-run marker is immune; a

@@ -34,6 +34,7 @@ Caller must provide:
    - `Round`: `r1`, `r2`, … when part of a loop
    - `Review mode`: `fresh-adversarial` | `targeted` | `verification-only`; a clean verdict contradicts `verification-only`
    - `Changed-risk signals`: comma list of changed-risk signals (public API, cross-service call, generated or nullable model, serializer or message converter, security or rollout boundary) or `none`; this Metadata line uses the prose names of the five signal classes, while the sidecar `risk_signals` list uses their kebab-case forms (`public-api`, `cross-service-call`, `generated-or-nullable-model`, `serializer`, `security-or-rollout-boundary`)
+   - `Boundary-contract checklist`: `populated` | `not applicable (no boundary families)`; required when the Boundary-contract coverage floor triggers (changed scope touches one of its boundary families, per `review-agents/review-panel-selection.md`)
    - `Prior findings supplied as filter`: `no`; a clean verdict contradicts `yes`
    - `Last fix commit`: commit sha of the last accepted fix preceding this round, or `none`
    - `Witness ledger`: `<populated | N/A (no public mutators)>`; a non-null last fix commit on a post-fix round requires the populated-or-N/A witness shape (see the Metadata template and `### Witness ledger`)
@@ -65,7 +66,7 @@ Primary staging doc path:
 
 Where:
 - `<review-kind>` is a short stable token chosen by the caller, for example `confluence-review`, `rfc-review`, `plan-review`, `branch-review`
-- `<artifact-slug>` is the caller-provided slug
+- `<artifact-slug>` is the caller-provided slug; when the reviewed source is a plan, it MUST be the plan's readiness-gate feature slug (the plan filename stem minus its leading `YYYY-MM-DD-` prefix) so the round stays discoverable through the readiness validator's `*-plan-review-<feature-slug>-r*.md` glob, which the plans skill's per-round name binding check enforces after every round
 - `<mode_or_round>` must be stable and specific enough to avoid collisions in the same day, for example `light`, `full`, `review-local`, `r1`
 
 Create `{reviews_dir}` if it does not exist.
@@ -169,6 +170,7 @@ The staging doc must follow this structure exactly, including required headings:
 - Round: r1 *(omit on first non-loop review)*
 - Review mode: fresh-adversarial | targeted | verification-only
 - Changed-risk signals: <comma list or none>
+- Boundary-contract checklist: <populated | not applicable (no boundary families)>
 - Prior findings supplied as filter: no
 - Last fix commit: <sha or none>
 - Witness ledger: <populated | N/A (no public mutators)>

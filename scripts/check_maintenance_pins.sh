@@ -124,7 +124,9 @@ expect_absent_flat() { # expect_absent_flat <description> <pattern> <file>
 #       and stays legal, only unpinned; 'when due and lanes allow, dispatch
 #       at most one audit child' at exactly 1 whole-file; the
 #       friction_audit_cadence_days row at exactly 1 in the Configuration
-#       section and the execute|author|audit kind literal at exactly 2 in
+#       section and the execute|author|audit|retriage kind literal (the
+#       four-kind form since the 2026-09-26 origin-class provenance plan's
+#       additive retriage kind) at exactly 2 in
 #       the State file section, both region-scoped because the Task 2
 #       Revisions-ledger entry quotes both literals verbatim; the Step 5
 #       region's 'or the dispatch decision (for an idle-time dispatch)' at
@@ -174,8 +176,8 @@ pin "starvation releases only the starved lane" grep -qF 'releases only the star
 # together (the suite's later exit checkpoints would otherwise cut the run
 # short before they execute)
 pin "eight sanctioned writer classes" grep -qF 'eight sanctioned writer classes' "$S"
-expect_absent "superseded six sanctioned writer classes literal" 'six sanctioned writer classes' "$S"
-expect_absent "superseded seven sanctioned writer classes literal" 'seven sanctioned writer classes' "$S"
+for f in "$S" "$Z" "$P" "$D" "$E"; do expect_absent "superseded six sanctioned writer classes literal in $f" 'six sanctioned writer classes' "$f"; done
+for f in "$S" "$Z" "$P" "$D" "$E"; do expect_absent "superseded seven sanctioned writer classes literal in $f" 'seven sanctioned writer classes' "$f"; done
 # --- durable cycle gate pins (plan
 # 2026-09-26-p64-execution-lane-liveness-long-session-continuity.md, Task 2) ---
 # Presence pins are dedicated fixed-string greps that fail when their span is
@@ -1288,8 +1290,10 @@ pin "zcode.md Ladder precheck bullet anchored" grep -qF 'Ladder precheck' "$Z"
 # 1-5 of the same plan; Task 6 pins them, dated 2026-09-23). The lane
 # paragraph's operative span is count-gated at exactly 1 whole-file (the
 # Task 2 ledger entry paraphrases it and must never quote it). The
-# friction_audit_cadence_days row and the execute|author|audit kind literal
-# are quoted verbatim by the Task 2 Revisions-ledger entry, so bare presence
+# friction_audit_cadence_days row and the execute|author|audit|retriage
+# kind literal (the four-kind form; the retriage kind joined additively per
+# plan 2026-09-26-origin-class-provenance-and-deferred-retriage-lane.md,
+# Task 4) are quoted verbatim by the Task 2 Revisions-ledger entry, so bare presence
 # greps would be satisfied by the ledger copy after an operative deletion;
 # they are pinned region-scoped to their owning sections instead
 # (Configuration table row: exactly 1; State file section: exactly 2, the
@@ -1319,11 +1323,14 @@ if n != 1:
     print("PIN FAIL: friction_audit_cadence_days row count %d != 1 in the Configuration section" % n); sys.exit(1)
 # the kind enum literal (exactly 2 normative arms: the children-entry schema
 # line and the pending_dispatch field paragraph; the ledger copy sits
-# outside this region)
+# outside this region). The four-kind literal supersedes the original
+# three-kind count (plan
+# 2026-09-26-origin-class-provenance-and-deferred-retriage-lane.md, Task 4:
+# the retriage kind joined additively at both normative arms).
 state = region(s, "## State file", "\n## ", "State file")
-n = state.count("execute|author|audit")
+n = state.count("execute|author|audit|retriage")
 if n != 2:
-    print("PIN FAIL: execute|author|audit kind literal count %d != 2 in the State file section" % n); sys.exit(1)
+    print("PIN FAIL: execute|author|audit|retriage kind literal count %d != 2 in the State file section" % n); sys.exit(1)
 # the Step 5 region's dispatch-class-neutral rephrase span
 step5 = region(s, "### Step 5: scheduling", "### Step 6: state update", "Step 5")
 n = step5.count("or the dispatch decision (for an idle-time dispatch)")
@@ -1826,8 +1833,30 @@ pin "execution blueprint task-boundary compaction paragraph anchor" test "$(grep
 pin "densified execution-claim refresh record exactly-once" test "$(grep -oF 'at every task completion inside the implementation loop' "$P" | wc -l | tr -d ' ')" -eq 1
 pin "execute-plan task-boundary compaction duty policy anchor" grep -qF 'Task-boundary compaction duty' "$E"
 pin "queue-drain fold names the asserted-unchanged guard family" grep -qF 'lane guard and the P54 fleet cap' "$E"
-pin "pins header existence loop covers E" grep -qF 'for f in "$S" "$Z" "$P" "$D" "$E"' "${BASH_SOURCE[0]}"
+pin "pins header existence loop covers E" grep -qE '^for f in "\$S" "\$Z" "\$P" "\$D" "\$E"; do$' "${BASH_SOURCE[0]}"
 expect_absent "retired one-execution-child guard wording must be absent from the execute-plan skill" 'one-execution-child guard' "$E"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- deferred-corpus re-triage lane pins (plan
+# 2026-09-26-origin-class-provenance-and-deferred-retriage-lane.md, Task 4) ---
+# Companion pins for the lane's operative spans: the consult bullet's
+# distinctive fragment, the contention clause's sanctioned must-dispatch
+# reason literal, the zcode.md recognition literal, the fleet-cap
+# enumerations (zcode.md's fleet-cap sentence and the SKILL.md Step 2
+# fleet-cap guard), and the prompt-templates retriage pointer stub. The
+# consult bullet's fragment is count-gated at exactly 1 whole-file (the
+# Revisions ledger entry names the lane but never quotes the fragment), so
+# a ledger or stub copy can never satisfy the pin after an operative
+# deletion. The reason literal is likewise exactly-once (the contention
+# bullet is its only operative home).
+pin "deferred-corpus re-triage consult bullet present" grep -qF 'Deferred-corpus re-triage consult: read the re-triage record' "$S"
+pin "deferred-corpus re-triage consult bullet exactly-once" test "$(grep -oF 'Deferred-corpus re-triage consult' "$S" | wc -l | tr -d ' ')" -eq 1
+pin "retriage-lane-due reason literal present" grep -qF 'retriage-lane-due' "$S"
+pin "retriage-lane-due reason literal exactly-once" test "$(grep -oF 'retriage-lane-due' "$S" | wc -l | tr -d ' ')" -eq 1
+pin "zcode.md re-triage child recognition literal" grep -qF 'deferred re-triage lane' "$Z"
+pin "zcode.md fleet-cap enumeration widened to the re-triage kind" grep -qF 'authoring, audit, re-triage, and execution children are fleet members' "$Z"
+pin "SKILL.md Step 2 fleet-cap enumeration widened to the re-triage kind" grep -qF 'like the authoring, audit, and re-triage kinds' "$S"
+pin "prompt-templates retriage pointer stub present" grep -qF 'deferred re-triage lane' "$P"
 [ "$fail" -eq 1 ] && exit 1
 
 echo "maintenance pins: all hold"

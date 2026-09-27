@@ -40,6 +40,13 @@ Detect architectural and design problems. Code that works but violates SOLID pri
 - Multiple factory types for same creation: unclear ownership
 - Factory just calling constructor: unnecessary indirection
 
+## Dual-surface policy parity
+
+- Trigger: a deny or allow policy enforced at more than one public entry point, such as a parser, validator, filter, gateway, or batch importer.
+- Worker action: enumerate every entry point claiming the policy; compare predicate shapes (exact equality versus contains or prefix; normalization steps; shared versus duplicated constant sets); prefer one shared helper, otherwise stage a finding unless tests prove both surfaces reject the same representative inputs, citing the asymmetry examples: a compound token that passes exact match but fails contains, and the reverse.
+
+Pattern: `architecture#dual-surface-policy-parity`
+
 ## God Class / God Method Detection
 
 - Files over 500 lines: flag for extraction consideration

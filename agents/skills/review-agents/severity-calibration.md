@@ -78,6 +78,7 @@ Apply in order; the first match wins:
 | **Metrics / observability** | Low | Missing telemetry masks an active production problem on a hot path | (essentially never) |
 | **Missing test** | Low | Untested path is the **only** guard for a real failure mode (blast-radius bound) | Untested path allows data loss or security bypass |
 | **Documentation / inline comment** | Low | Two plausible implementations plus a realistic harmful outcome | Following it likely causes wrong normal-path behavior or an incompatible contract |
+| **Comment or operator-doc inventory contradicting a path in the same diff** (relocatable identifier inventory; wired by documentation.md's Relocatable identifier inventory gate) | **Medium** (operability drift; operators follow the named file). Specific override of the **Documentation / inline comment** Low default and of the **Document calibration** rule that document inconsistency alone is Low, for this same-diff contradiction class | (default is already Medium) | The stale inventory gates a release or recovery procedure → **High** |
 | **Prose clarity** | Low | (none) | (none) |
 | **Concurrency / race** | Medium | Race window achievable under stated TTL/load; verify I/O cost before claiming | Data loss or double-spend in achievable window → **High** |
 | **Security** | High | (none) | Trivial exploit → **Critical** |

@@ -3,9 +3,11 @@ name: grill-with-docs
 description: Relentless interview to sharpen a plan or design while updating glossary and architectural decisions inline. Use when the user wants to grill and document terminology or ADRs as you go.
 metadata:
   upstream: "https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs"
+  local_fork: "deliberate; see the Local fork notice below and the Vendored Asset Sync Rules in the repository AGENTS.md"
 ---
 
 # Grill with docs
+> **Local fork notice:** this file carries a deliberate local fork of the upstream `engineering/grill-with-docs` skill (`metadata.upstream`). Deliberate divergences: the expanded Workflow (inline `domain-modeling` application, doc-path resolution before the first question, a doc summary on confirmation); the answer-state restatement in Workflow step 2 (per-question `open`/`closed` state, the opt-in phrase "accept the recommendation for this question", per-question decision receipts, the consolidated assumptions list); the no-batching rule for glossary and ADR updates; the Integration Points section (grilling, premortem, execute-plan, rfc-design/plans); and the deliberate omission of the upstream `disable-model-invocation: true` frontmatter flag, which must NOT be restored by a sync. A future upstream sync of this directory must re-apply this fork (recovery source: git history of this path) or consciously drop it with the decision recorded; see the Vendored Asset Sync Rules in the repository AGENTS.md.
 
 Run a `grilling` session with `domain-modeling` active throughout the interview.
 

@@ -15,6 +15,7 @@ Additional review context for Java/Spring projects. Append to each sub-agent pro
 ## Spring-Specific Concerns
 
 - `@Transactional` propagation: verify scope covers the full logical unit. Watch for self-invocation bypassing the proxy.
+- Transaction-manager begin hooks: treat framework callback arguments as framework-specific handles and verify their runtime type before invoking rollback or cleanup on them; audit the superclass cleanup contract when extending begin hooks; on post-begin setup failure, roll back and unbind the already-bound resource before propagating.
 - `@Async` methods must return `void` or `Future`. Exceptions in async methods are lost unless a custom `AsyncUncaughtExceptionHandler` is configured.
 - `@Scheduled` methods: verify thread pool sizing. Default is single-threaded: one slow task blocks all others.
 - Bean lifecycle: `@PostConstruct` runs before the application is fully wired. Do not call other beans that depend on late initialization.
@@ -113,6 +114,15 @@ the complete branch diff, not only to the highlighted line:
 - `java_guidelines.md` #25: living-documentation status claims reconciled
   with implementation evidence (executable consumer, producer, or witness;
   apply when changed living docs claim an integration is active).
+- `jvm_guidelines.md` #18: floor `Duration.toMillis()` and every other
+  truncating conversion before sinks that treat zero as unlimited or disabled;
+  the rule applies to any such sink, not only the guideline's named timeout
+  sink.
+- `jvm_guidelines.md` #20: drop perpetual "old migration path is null" asserts
+  after a rename.
+
+These two `jvm_guidelines.md` rules are applied on every Java review,
+not only after an incident.
 
 Assign findings to the normal owners: unused surface to simplification,
 boundary behavior to quality or testing, error leakage and transport security

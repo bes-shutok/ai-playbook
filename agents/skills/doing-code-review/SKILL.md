@@ -385,7 +385,7 @@ Orchestrator-specific additions (not duplicated in severity-calibration):
 
 **Test asks are Low by default** (see severity-calibration); Medium only when the untested path prevents a real failure mode the team relies on.
 
-**Documentation/inline-comment asks are Low**, regardless of doc length or topic.
+**Documentation/inline-comment asks are Low**, regardless of doc length or topic, except the same-diff relocatable-inventory contradiction class (a comment or operator-doc inventory contradicting a path in the same diff), which defaults Medium per the severity-calibration Category defaults row.
 
 **Feature-flag gating does not reduce severity** (severity-calibration).
 

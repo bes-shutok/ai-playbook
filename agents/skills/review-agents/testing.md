@@ -72,6 +72,12 @@ A finding about test quality must state all four parts:
 
 Weak or missing tests stay owned by this lens even when the first observer was another worker (`review-panel-selection.md` tiered ownership).
 
+### Cross-surface policy witness
+
+When a shared helper enforcing one policy is mutated to the weaker shape, require at least one failing witness per surface: a test per entry point proving that surface still rejects the representative inputs the policy excludes. A green suite that exercises only the stronger surface proves nothing about the weakened one. Record the preference as shared helper preferred over duplicated predicates; when duplication remains anyway, the per-surface failing witnesses are the only accepted alternative.
+
+Pattern: `testing#cross-surface-policy-witness`
+
 ## Fake Test Detection
 
 Watch for tests that do not actually verify code:
@@ -152,6 +158,10 @@ configuration boundary, or test runner hook:
    the guarded module, not only the unit suite. Stage the pattern when helpers
    keep the rejected path while the unit suite is green.
    Pattern: `testing#helper-path-retarget-after-door`.
+6. **Container discovery fast path:** an auto-detected test extension decides
+   the non-container fast path before any container discovery; container
+   probes on classes needing no container are a runner defect, not an
+   accepted slow path. Pattern: `testing#container-discovery-fast-path`.
 
 ## Changed-code family inventory
 

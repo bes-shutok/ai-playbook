@@ -166,15 +166,43 @@ def feature_slug(plan_path: Path) -> str:
     return re.sub(r"^\d{4}-\d{2}-\d{2}-", "", stem, count=1)
 
 
+# ONE encoding of the review-round discovery shape
+# ``*-plan-review-<feature-slug>-r<N>.md`` (N >= 1): a glob skeleton
+# ``latest_review_round`` iterates under the reviews directory and a regex
+# skeleton the ``--check-review-name`` probe fullmatches a round filename
+# against. Both are instantiated by ``review_round_shape`` below, which also
+# owns the slug escaping per pattern language, so the two matchers cannot
+# drift into disagreeing about what a discoverable round is.
+_REVIEW_ROUND_GLOB_SKELETON = "*-plan-review-{slug}-r*.md"
+_REVIEW_ROUND_NAME_SKELETON = r".*-plan-review-{slug}-r([1-9]\d*)\.md"
+
+
+def review_round_shape(slug: str) -> tuple[str, re.Pattern[str]]:
+    """Both pattern-language forms of the discovery shape for ``slug``.
+
+    Returns ``(glob_pattern, name_re)``: the glob string for ``Path.glob``
+    in ``latest_review_round`` and the compiled regex the
+    ``--check-review-name`` probe fullmatches a round filename against.
+    The slug is escaped inside this helper (glob metacharacters for the
+    glob form, regex metacharacters for the fullmatch form); no caller
+    re-derives either the shape or the escaping.
+    """
+    return (
+        _REVIEW_ROUND_GLOB_SKELETON.format(slug=globmod.escape(slug)),
+        re.compile(_REVIEW_ROUND_NAME_SKELETON.format(slug=re.escape(slug))),
+    )
+
+
 def latest_review_round(reviews_dir: Path, slug: str) -> tuple[Path, int] | None:
     """Latest review artifact for ``slug``: highest ``r<N>``, ties by filename.
 
-    Never resolves latest by mtime.
+    Never resolves latest by mtime. The candidate glob is instantiated by
+    the shared ``review_round_shape``: one encoding of the discovery shape,
+    consumed here and by the ``--check-review-name`` probe's fullmatch.
     """
     candidates: list[tuple[int, str, Path]] = []
-    for path in reviews_dir.glob(
-        f"*-plan-review-{globmod.escape(slug)}-r*.md"
-    ):
+    glob_pattern, _name_re = review_round_shape(slug)
+    for path in reviews_dir.glob(glob_pattern):
         match = ROUND_RE.search(path.name)
         if match:
             candidates.append((int(match.group(1)), path.name, path))
@@ -1482,6 +1510,117 @@ def run_pre_round(plan_path: Path, plans_dir: Path) -> int:
     return 0
 
 
+def check_review_name(
+    plan_path: Path, round_md: Path, reviews_dir: Path
+) -> tuple[bool, str | None]:
+    """Name-shape probe: does one written round pair bind to the plan slug?
+
+    The per-round companion of ``latest_review_round``: re-verifies the
+    review artifact pair ``round_md`` against the SAME discovery shape the
+    done-boundary gate discovers rounds through, so a misnamed round is
+    caught in the round that wrote it instead of surfacing at the done
+    boundary as ``no review artifact for feature slug``. Returns
+    ``(ok, reason)``; ``reason`` names the FIRST failed condition only.
+
+    Checks, first problem wins: the round file's parent directory must BE
+    the configured ``reviews_dir``; the filename must fullmatch the shared
+    ``review_round_shape`` for the plan's ``feature_slug``; the sidecar
+    (``vrs.stats_sidecar_path``) must exist and parse as a JSON object;
+    ``artifact_slug`` must equal the slug; and when a ``coverage`` object
+    is present, every non-empty link value in ``attempts[]``
+    (``artifact``/``sidecar``), ``inherited_coverage[]``
+    (``artifact``/``sidecar``), and ``replacement[]``
+    (``original_artifact``/``original_sidecar``) must resolve through the
+    staging validator's own ``vrs._coverage_artifact_exists`` (a rename
+    orphans the old filename inside the sidecar's self-references). The
+    probe parses ONLY the fields it checks: staging schema validation
+    stays ``validate_review_staging.py --hard``'s duty and is never run
+    here.
+    """
+    reviews_dir = reviews_dir.expanduser().resolve()
+    # Identity checks (parent directory + filename) run on the LEXICAL
+    # path: a symlinked round path must be validated under the name and
+    # location it was CLAIMED at, never its symlink target's identity
+    # (a claimed r9 name whose target is a clean r1 pair would otherwise
+    # pass). The sidecar and every content check below run against the
+    # CLAIMED (lexical) path too, so the claimed PAIR must be complete
+    # under the claimed names; a symlink borrowing a clean target's
+    # sidecar fails its own missing-sidecar check.
+    _lex = Path(os.path.abspath(round_md.expanduser()))
+    lexical_round = Path(os.path.realpath(_lex.parent)) / _lex.name
+    slug = feature_slug(plan_path.expanduser().resolve())
+
+    # The round file must live DIRECTLY under the configured reviews
+    # directory: the gate's glob only ever looks there, so a pair staged
+    # anywhere else is invisible to the done-boundary discovery.
+    if lexical_round.parent != reviews_dir:
+        return False, (
+            f"round file must live directly under the configured reviews "
+            f"directory {reviews_dir}: {lexical_round.parent}"
+        )
+
+    _glob_pattern, name_re = review_round_shape(slug)
+    match = name_re.fullmatch(lexical_round.name)
+    if match is None:
+        return False, (
+            f"round filename does not match the discovery shape "
+            f"*-plan-review-{slug}-r<N>.md (N >= 1) for feature slug "
+            f"{slug!r}: {lexical_round.name}"
+        )
+    round_no = int(match.group(1))
+
+    sidecar = vrs.stats_sidecar_path(lexical_round)
+    if not sidecar.is_file():
+        return False, (
+            f"missing stats sidecar for round r{round_no}: {sidecar.name}"
+        )
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return False, (
+            f"malformed stats sidecar (unreadable or invalid JSON): {exc}"
+        )
+    if not isinstance(payload, dict):
+        return False, (
+            f"malformed stats sidecar (top-level JSON value is not an "
+            f"object): {type(payload).__name__} (round r{round_no})"
+        )
+
+    declared_slug = payload.get("artifact_slug")
+    if declared_slug != slug:
+        return False, (
+            f"sidecar artifact_slug is {declared_slug!r}, expected "
+            f"{slug!r} (round r{round_no})"
+        )
+
+    coverage = payload.get("coverage")
+    if isinstance(coverage, dict):
+        for list_key, keys in (
+            ("attempts", ("artifact", "sidecar")),
+            ("inherited_coverage", ("artifact", "sidecar")),
+            ("replacement", ("original_artifact", "original_sidecar")),
+        ):
+            entries = coverage.get(list_key)
+            for index, entry in enumerate(
+                entries if isinstance(entries, list) else []
+            ):
+                if not isinstance(entry, dict):
+                    continue
+                for key in keys:
+                    value = entry.get(key)
+                    if (
+                        isinstance(value, str)
+                        and value.strip()
+                        and not vrs._coverage_artifact_exists(value)
+                    ):
+                        return False, (
+                            f"coverage {list_key}[{index}] entry's {key} "
+                            f"references a missing file: {value} (round "
+                            f"r{round_no})"
+                        )
+    return True, None
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -1525,6 +1664,15 @@ def main(argv: list[str] | None = None) -> int:
         "the plan: the four review-record-independent probes with no "
         "sidecar-date gating and no review-record consultation",
     )
+    parser.add_argument(
+        "--check-review-name",
+        metavar="ROUND_MD",
+        help="Name-shape probe: verify that the ROUND_MD review artifact "
+        "pair under {reviews_dir} binds to the plan's feature slug (round "
+        "filename matches the gate's discovery shape, stats sidecar present "
+        "with artifact_slug equal to the slug, coverage self-references "
+        "resolve); prints review name check OK/FAILED and exits 0/1",
+    )
     args = parser.parse_args(argv)
 
     # Parse-time mutual exclusion (plans rule 29): --pre-round composes
@@ -1534,6 +1682,23 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--pre-round must not be combined with --selftest")
     if args.pre_round and args.sweep:
         parser.error("--pre-round must not be combined with --sweep")
+
+    # Parse-time mutual exclusion (--check-review-name probe): the probe
+    # composes with neither --selftest, --sweep, nor --pre-round, and its
+    # plan operand is required; every violation is a usage error (exit 2)
+    # decided before any mode runs.
+    if args.check_review_name and args.selftest:
+        parser.error(
+            "--check-review-name must not be combined with --selftest"
+        )
+    if args.check_review_name and args.sweep:
+        parser.error("--check-review-name must not be combined with --sweep")
+    if args.check_review_name and args.pre_round:
+        parser.error(
+            "--check-review-name must not be combined with --pre-round"
+        )
+    if args.check_review_name and not args.plan_path:
+        parser.error("plan_path is required when --check-review-name is set")
 
     compat_error = _check_sibling_compat()
     if compat_error is not None:
@@ -1597,6 +1762,37 @@ def main(argv: list[str] | None = None) -> int:
         # plan bytes only; the review record is never consulted. The full
         # gate below is untouched (additive branch only).
         return run_pre_round(anchor_at_root(args.plan_path), plans_dir)
+
+    if args.check_review_name:
+        # Name-shape probe: the written round pair must bind to the gate's
+        # own discovery shape before the loop folds the round's findings
+        # or relaunches. reviews_dir resolves exactly as every other mode
+        # resolves it (above); the probe parses only the fields it checks
+        # and never runs staging schema validation.
+        plan = anchor_at_root(args.plan_path)
+        # The round path enters LEXICALLY (anchored like facts values but
+        # never symlink-resolved): identity checks must judge the path as
+        # claimed, and check_review_name resolves internally for content.
+        _rx = Path(args.check_review_name).expanduser()
+        if _rx.is_absolute():
+            round_path = Path(os.path.abspath(_rx))
+        elif _rx.exists():
+            round_path = Path(os.path.abspath(_rx))
+        else:
+            round_path = Path(os.path.abspath(root / _rx))
+        ok, reason = check_review_name(plan, round_path, reviews_dir)
+        if not ok:
+            print(f"review name check FAILED: {reason}", file=sys.stderr)
+            return 1
+        slug = feature_slug(plan)
+        round_no = (
+            review_round_shape(slug)[1].fullmatch(round_path.name).group(1)
+        )
+        print(
+            f"review name check OK: {round_path.name} binds plan slug "
+            f"{slug} (r{round_no})"
+        )
+        return 0
 
     # The plan-path argument anchors like relative facts values: CWD
     # PREFERENCE first (a path that exists relative to the process cwd wins,
