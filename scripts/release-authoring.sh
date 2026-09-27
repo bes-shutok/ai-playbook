@@ -21,13 +21,36 @@
 set -euo pipefail
 
 lock_out=""
+run_tmp=""
+# Global EXIT trap handler: relays a still-non-empty lock_out exactly once (a
+# set -e exit on an unguarded command never reached die() or the success
+# path) and, on a non-zero exit, removes the step's own run dir so an abort
+# path leaves nothing behind. On the success path the final output block
+# already cleared lock_out, so the trap stays silent and the groups file
+# survives for the rewrite step. The body lives in a function (never an
+# inline single-quoted trap string: embedded quotes would corrupt the printf
+# format and with it the relayed exports).
+authoring_exit() {
+  authoring_rc=$?
+  if [ -n "$lock_out" ]; then
+    printf '%s\n' "$lock_out"
+    lock_out=""
+  fi
+  if [ "$authoring_rc" -ne 0 ] && [ -n "$run_tmp" ]; then
+    rm -rf "$run_tmp"
+  fi
+}
+trap authoring_exit EXIT
+
 die() {
   # Any post-acquisition abort relays the acquired lock exports on stdout, so
   # the calling shell's eval captures them and can release the lock on every
   # exit path (the plan's SCRIPT I/O CONTRACT). Nothing else ever reaches
-  # stdout, so the stream stays eval-able.
+  # stdout, so the stream stays eval-able. lock_out is cleared as it is
+  # relayed, so the EXIT trap never relays it a second time.
   if [ -n "$lock_out" ]; then
     printf '%s\n' "$lock_out"
+    lock_out=""
   fi
   printf 'release-authoring: FATAL: %s\n' "$*" >&2
   exit 1
@@ -41,8 +64,12 @@ die() {
 #                          <remote>/main range expression below resolves
 #                          through this key
 #   RELEASE_LOCK_MAX_WAIT  seconds the short agent wait may poll (default: 60)
+#   CHECK_NO_EM_DASH_SCRIPT repo-relative em-dash checker path (default:
+#                          scripts/check-no-em-dash.sh), resolved against the
+#                          primary checkout
 remote="${RELEASE_REMOTE:-origin}"
 upstream="refs/remotes/${remote}/main"
+checker="${CHECK_NO_EM_DASH_SCRIPT:-scripts/check-no-em-dash.sh}"
 
 [ "$#" -eq 1 ] || die "usage: release-authoring.sh <drafted-section-file>"
 draft_in="$1"
@@ -131,7 +158,11 @@ done < "$groups_md"
 # 5. Em-dash ban on the drafted section BEFORE it touches CHANGELOG.md.
 #    CHECK_NO_EM_DASH_ALL=1 scans the whole draft regardless of suffix, so a
 #    draft saved without the .md suffix cannot bypass the pre-apply gate.
-if ! CHECK_NO_EM_DASH_ALL=1 bash scripts/check-no-em-dash.sh file "$draft"; then
+#    The checker resolves late (here, with the run dir already in place) so a
+#    missing checker aborts as an environment failure through die()'s relay
+#    and the failure-exit run-dir cleanup, never as a policy hit.
+[ -f "$checker" ] || die "em-dash checker not found (set CHECK_NO_EM_DASH_SCRIPT): $checker"
+if ! CHECK_NO_EM_DASH_ALL=1 bash "$checker" file "$draft"; then
   die "the drafted section carries an em dash; fix the draft and re-run (CHANGELOG.md untouched)"
 fi
 
@@ -192,7 +223,7 @@ mv "$new_changelog" "$changelog"
 
 # 7. Whole-file em-dash scan, pass expected; restore the pre-run state and
 #    abort otherwise (the file was clean at step 3, so this is lossless).
-if ! bash scripts/check-no-em-dash.sh file "$changelog"; then
+if ! bash "$checker" file "$changelog"; then
   if git cat-file -e "HEAD:CHANGELOG.md" 2>/dev/null; then
     git checkout -- CHANGELOG.md
   else
@@ -221,6 +252,9 @@ groups_out="$run_tmp/release-groups.txt"
 } > "$groups_out"
 
 # 10. Hand the lock exports and the groups file to the invoking shell. These
-#     two stdout lines are the script's entire stdout contract.
+#     two stdout lines are the script's entire stdout contract. lock_out is
+#     cleared as it is relayed, so the EXIT trap never relays it a second
+#     time on the success path.
 printf '%s\n' "$lock_out"
+lock_out=""
 printf 'groups-file %s\n' "$groups_out"

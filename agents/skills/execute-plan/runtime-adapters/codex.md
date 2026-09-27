@@ -145,6 +145,26 @@ Refusal semantics (mirroring the neutral contract):
   `not_found` close result is the one proof of exit the host accepts for
   a missing entry: the release completes idempotently and the next
   launch proceeds.
+- **Terminal evidence for an absent worker**: when a registered worker's
+  session is absent from the snapshot, the driver consults this adapter's
+  terminal-evidence port (`observe_terminal_evidence`) before counting the
+  worker stale. The port derives completion only from the provider's own
+  conversation record under the canonical records root `~/.codex/sessions`
+  (read-only, in-process, bounded by the 2.0-second consult deadline),
+  derives the record's identity from the record's own content and refuses
+  a mismatch, and never infers completion from process absence; a fresh,
+  verified, identity-matched terminal observation releases the worker, and
+  every other outcome (record not found, record not terminal, stale read,
+  refused lookup, port error) quarantines the worker exactly as before.
+  The inventory parse also extracts the conversation id from an accepted
+  `codex exec resume <session-id> --json` argv, so a live resume process
+  joins its registered worker (first match wins; additional rows for the
+  same conversation stay foreign to the fence).
+- **Known debt (terminal-evidence plan, 2026-09-28)**: the adapter
+  capacity fence (`_with_capacity_fence`) still compares `process_identity`
+  ad hoc through serialized-dict set comparisons; migrate it to the shared
+  `runtime_capabilities.process_identity_fingerprint` predicate on next
+  touch, as the driver's registered-process fence already does.
 - **Stalled worker**: a worker with no heartbeat or log progress inside
   the profile's bounded liveness window is routed to the timeout hook
   and refused as launch capacity; it is never counted live or free.

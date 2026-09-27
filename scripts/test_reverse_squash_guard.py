@@ -373,5 +373,135 @@ class ReverseSquashGuardTest(unittest.TestCase):
         return repo, squash
 
 
+
+class ReverseSquashGuardCheckCommitTest(unittest.TestCase):
+    """check-commit: the parentless near-full-repo snapshot shape (P66 Task 2).
+
+    ScratchRepo writes base.txt without committing it, so every fixture first
+    seeds an initial commit; the committed tracked set then includes base.txt.
+    """
+
+    def _seed(self, repo):
+        repo.commit_all("seed init commit")
+
+    def _run_commit_tree(self, repo, tree, *parents):
+        args = ["commit-tree", tree]
+        for parent in parents:
+            args += ["-p", parent]
+        env = guard_env()
+        env.update({"GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.test",
+                    "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.test"})
+        proc = subprocess.run(["git", "-C", str(repo.root)] + args,
+                              input=b"orphan\n", stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout.decode().strip()
+
+    def _mktree(self, repo, input_bytes):
+        proc = subprocess.run(["git", "-C", str(repo.root), "mktree"],
+                              input=input_bytes, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, env=guard_env())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout.decode().strip()
+
+    def test_orphan_full_tree_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            self._seed(repo)
+            for i in range(20):
+                repo.write("f%02d.txt" % i, "x\n")
+            repo.commit_all("twenty files")
+            tracked = len(git(repo.root, "ls-files").strip().splitlines())
+            tree = git(repo.root, "rev-parse", "HEAD^{tree}").strip()
+            orphan = self._run_commit_tree(repo, tree)
+            proc = run_guard("check-commit", "--rev", orphan, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("refuse: parentless near-full-repo squash commit detected",
+                          proc.stdout.decode())
+            self.assertIn("/%d paths >= 0.5)" % tracked, proc.stdout.decode())
+
+    def test_parented_commit_ok(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            self._seed(repo)
+            repo.write("more.txt", "x\n")
+            repo.commit_all("child of the seed commit")
+            child = git(repo.root, "rev-parse", "HEAD").strip()
+            proc = run_guard("check-commit", "--rev", child, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("ok: parented commit", proc.stdout.decode())
+
+    def test_orphan_subtree_below_ratio_ok(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            self._seed(repo)
+            for i in range(18):
+                repo.write("f%02d.txt" % i, "x\n")
+            for i in range(2):
+                repo.write("subdir/s%02d.txt" % i, "x\n")
+            repo.commit_all("18 root plus 2 subdir")
+            tracked = len(git(repo.root, "ls-files").strip().splitlines())
+            tree = git(repo.root, "rev-parse", "HEAD:subdir").strip()
+            orphan = self._run_commit_tree(repo, tree)
+            proc = run_guard("check-commit", "--rev", orphan, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("ok: parentless commit below snapshot ratio (2/%d)" % tracked,
+                          proc.stdout.decode())
+
+    def test_missing_rev_is_tool_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            self._seed(repo)
+            proc = run_guard("check-commit", "--rev", "deadbeef" * 5,
+                             "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 2)
+
+    def test_orphan_on_empty_repo_denominator_zero_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            # No seed: base.txt stays untracked, so ls-files is empty.
+            self.assertEqual(git(repo.root, "ls-files").strip(), "")
+            blob = subprocess.run(
+                ["git", "-C", str(repo.root), "hash-object", "-w", "--stdin"],
+                input=b"one\n", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=guard_env())
+            self.assertEqual(blob.returncode, 0, blob.stderr)
+            blob_sha = blob.stdout.decode().strip()
+            one_tree = self._mktree(
+                repo, ("100644 blob %s\tone.txt\n" % blob_sha).encode())
+            orphan = self._run_commit_tree(repo, one_tree)
+            proc = run_guard("check-commit", "--rev", orphan, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("(1/0 paths >= 0.5)", proc.stdout.decode())
+
+    def test_orphan_empty_tree_zero_numerator_ok(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            self._seed(repo)
+            empty_tree = self._mktree(repo, b"")
+            orphan = self._run_commit_tree(repo, empty_tree)
+            proc = run_guard("check-commit", "--rev", orphan, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            tracked = len(git(repo.root, "ls-files").strip().splitlines())
+            self.assertIn("ok: parentless commit below snapshot ratio (0/%d)" % tracked,
+                          proc.stdout.decode())
+
+    def test_orphan_at_exact_ratio_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = ScratchRepo(tmp)
+            self._seed(repo)
+            for i in range(10):
+                repo.write("f%02d.txt" % i, "x\n")
+            for i in range(11):
+                repo.write("sub/s%02d.txt" % i, "x\n")
+            repo.commit_all("eleven sub of twenty-two tracked")
+            tree = git(repo.root, "rev-parse", "HEAD:sub").strip()
+            orphan = self._run_commit_tree(repo, tree)
+            proc = run_guard("check-commit", "--rev", orphan, "--repo", str(repo.root))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("(11/22 paths >= 0.5)", proc.stdout.decode())
+
+
+
 if __name__ == "__main__":
     unittest.main()

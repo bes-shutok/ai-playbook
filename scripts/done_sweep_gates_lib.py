@@ -15,7 +15,7 @@ them stay in the skill):
   sensitive-data-scan, em-dash-scan, instruction-size.
 
 Contract:
-- gate registry == the ten absorbed steps at gate and named sub-check
+- gate registry == the twelve absorbed steps at gate and named sub-check
   granularity (Design Invariant: gate preservation); report order is registry
   order, every gate reports even after an earlier failure, and the
   implementation runs every phase strictly sequentially in registry order (a
@@ -91,11 +91,14 @@ PRE_DOCS_GATES = [
     "review-staging",
     "vim-swap-sweep",
     "docs-tmp-sweep",
+    "plans-archive-twin",
 ]
 PRE_COMMIT_GATES = [
     "sensitive-data-scan",
     "em-dash-scan",
     "instruction-size",
+    "foreign-staging",
+    "plans-archive-twin",
 ]
 PHASES = {
     "pre-docs": PRE_DOCS_GATES,
@@ -301,10 +304,33 @@ def _marker_digest_matches(recorded: str, repo_root: Path) -> bool:
     """
     if not re.fullmatch(r"[0-9a-f]{64}", recorded):
         return False
-    expected = hashlib.sha256(
+    return hmac.compare_digest(recorded, _repo_root_digest(repo_root))
+
+
+def _repo_root_digest(repo_root: Path) -> str:
+    """The done Step 0 identity digest: sha256 of the trailing-slash-stripped
+    repo root string (the same derivation the run-start marker records)."""
+    return hashlib.sha256(
         str(repo_root).rstrip("/").encode("utf-8")
     ).hexdigest()
-    return hmac.compare_digest(recorded, expected)
+
+
+def _repo_relative(path: str, repo_root: Path) -> str:
+    """Repo-relative form of ``path`` when it sits under ``repo_root``.
+
+    The input resolves through realpath first, so a symlink-aliased spelling
+    of an in-repo staging doc still relativizes; when resolution or the
+    containment comparison fails (including out-of-root foreign inputs) the
+    input is returned verbatim, by prescription.
+    """
+    try:
+        resolved = os.path.realpath(path)
+        root = os.path.realpath(str(repo_root))
+        if resolved.startswith(root + os.sep):
+            return os.path.relpath(resolved, root)
+    except OSError:
+        pass
+    return path
 
 
 def _parse_marker(path: Path, repo_root: Path) -> Optional[RunMarker]:
@@ -328,8 +354,14 @@ def _parse_marker(path: Path, repo_root: Path) -> Optional[RunMarker]:
     except ValueError:
         return None
     recorded_root = " ".join(fields[1:-1])
-    if len(fields) == 3 and _marker_digest_matches(recorded_root, repo_root):
-        return RunMarker(path=path, epoch=epoch, pid=pid, repo_root=recorded_root)
+    if len(fields) == 3 and re.fullmatch(r"[0-9a-f]{64}", recorded_root):
+        # Hex identity tokens resolve by digest comparison only, never
+        # through the CWD-dependent legacy realpath arm.
+        if _marker_digest_matches(recorded_root, repo_root):
+            return RunMarker(
+                path=path, epoch=epoch, pid=pid, repo_root=recorded_root
+            )
+        return None  # foreign digest: cannot anchor this repo's window
     if os.path.realpath(recorded_root) != os.path.realpath(str(repo_root)):
         return None  # cross-repo marker: cannot anchor this repo's window
     return RunMarker(path=path, epoch=epoch, pid=pid, repo_root=recorded_root)
@@ -381,8 +413,10 @@ def _marker_records_other_repo(path: Path, repo_root: Path) -> bool:
     if len(fields) < 3:
         return False
     recorded_root = " ".join(fields[1:-1])
-    if len(fields) == 3 and _marker_digest_matches(recorded_root, repo_root):
-        return False
+    if len(fields) == 3 and re.fullmatch(r"[0-9a-f]{64}", recorded_root):
+        # Same short-circuit as _parse_marker: a hex token classifies by
+        # digest comparison only, never through the legacy realpath arm.
+        return not _marker_digest_matches(recorded_root, repo_root)
     try:
         return os.path.realpath(recorded_root) != os.path.realpath(str(repo_root))
     except OSError:
@@ -399,8 +433,11 @@ MANIFEST_SCHEMA_VERSION = 1
 class RunManifest:
     """The Step 0 record next to the run-start marker: run identity, the
     boundary (start commit plus pre-existing dirt), the run-owned plan and
-    review paths, explicitly foreign review artifacts, the explicit adoption
-    link, and the completion flag (false until the run finalizes)."""
+    review paths (repo-relative), explicitly foreign review artifacts, the
+    explicit adoption link, and the completion flag (false until the run
+    finalizes). ``repo_root`` carries the same 64-hex identity digest the
+    run-start marker records (legacy records keep the raw path and stay
+    loadable through the two-arm root match)."""
 
     schema: int
     run_id: str
@@ -410,6 +447,7 @@ class RunManifest:
     pid: int
     start_commit: str
     start_porcelain: list[str]
+    owned_paths: list[str]
     owned_plan_paths: list[str]
     owned_review_paths: list[str]
     foreign_review_paths: list[str]
@@ -426,6 +464,7 @@ class RunManifest:
             "pid": self.pid,
             "start_commit": self.start_commit,
             "start_porcelain": list(self.start_porcelain),
+            "owned_paths": list(self.owned_paths),
             "owned_plan_paths": list(self.owned_plan_paths),
             "owned_review_paths": list(self.owned_review_paths),
             "foreign_review_paths": list(self.foreign_review_paths),
@@ -485,6 +524,7 @@ class RunManifest:
             ),
             start_commit=start_commit,
             start_porcelain=str_list("start_porcelain"),
+            owned_paths=str_list("owned_paths"),
             owned_plan_paths=str_list("owned_plan_paths"),
             owned_review_paths=str_list("owned_review_paths"),
             foreign_review_paths=str_list("foreign_review_paths"),
@@ -525,9 +565,13 @@ def write_run_manifest(manifest: RunManifest, done_session_dir: Path) -> Path:
 
 
 def _manifest_root_matches(recorded_root: str, repo_root: Path) -> bool:
-    """Content-confirmed root matching: the same realpath rule the run-start
-    markers apply, so a manifest from another checkout of the same repo is
-    never this run's record."""
+    """Content-confirmed root matching, two arms like the run-start markers:
+    a 64-hex recorded root compares against this repo's identity digest;
+    anything else (a legacy raw-path record) keeps the realpath comparison,
+    so a manifest from another checkout of the same repo is never this run's
+    record and pre-digest manifests stay loadable."""
+    if re.fullmatch(r"[0-9a-f]{64}", recorded_root):
+        return hmac.compare_digest(recorded_root, _repo_root_digest(repo_root))
     try:
         return os.path.realpath(recorded_root) == os.path.realpath(str(repo_root))
     except OSError:
@@ -2183,6 +2227,176 @@ def gate_instruction_size(ctx: GateContext) -> GateResult:
 # --------------------------------------------------------------------------- #
 # Registry, phase runner, report, CLI.
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# foreign-staging + plans-archive-twin gates (done sweep landing-time nets).
+# --------------------------------------------------------------------------- #
+def normalized_start_dirt_paths(start_porcelain: list[str]) -> set[str]:
+    """Dedicated row normalizer for the start-dirt record, keyed on the
+    status letters: a row whose FIRST status letter (the index column) is
+    ``R`` or ``C``, or whose second (worktree) letter is ``R`` on runtimes
+    that emit worktree-column rename rows, registers BOTH sides of the
+    `` -> `` separator (each C-unquoted); any other row registers its body
+    verbatim, C-unquoted. A path containing the literal separator is parsed
+    by letters, never by substring. Deliberately NOT ``_porcelain_paths``,
+    which keeps only the new side of a rename and detects renames by
+    substring."""
+    paths: set[str] = set()
+    for row in start_porcelain:
+        if len(row) < 4:
+            continue
+        xy = row[:2]
+        rest = row[3:]
+        rename_like = xy[0] in ("R", "C") or xy[1] == "R"
+        if rename_like and " -> " in rest:
+            old, new = rest.split(" -> ", 1)
+            paths.add(_unquote_porcelain_path(old))
+            paths.add(_unquote_porcelain_path(new))
+        else:
+            paths.add(_unquote_porcelain_path(rest))
+    return paths
+
+
+def gate_foreign_staging(ctx: GateContext) -> GateResult:
+    """Pre-commit gate: the commit-boundary re-run over the final staged set.
+
+    Fails any staged path that is recorded as start-dirt at Step 0 and is
+    outside the run's owned paths (the union of ``owned_paths``,
+    ``owned_plan_paths``, and ``owned_review_paths``). With no resolvable
+    run manifest the gate reports a warning skip, never a silent pass and
+    never a crash. Content-level co-editing inside a session-owned path
+    stays a recorded residual (the judgment gate in the done skill owns it;
+    pathspec-only landing commits are the commit-time net)."""
+    gate = "foreign-staging"
+    window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+    manifest = load_run_manifest(ctx.done_session_dir, ctx.repo_root, window)
+    if manifest is None:
+        return GateResult(
+            gate,
+            0,
+            "foreign-staging: warning skip: no resolvable run manifest "
+            "(Step 0 record absent, foreign-rooted, or schema-invalid); "
+            "the staged set could not be ownership-checked",
+            warnings=[
+                "foreign-staging skipped: no resolvable run manifest for "
+                "the current session window"
+            ],
+        )
+    start_dirt = normalized_start_dirt_paths(manifest.start_porcelain)
+    owned = {
+        _manifest_review_rel(ctx, recorded)
+        for recorded in (
+            list(manifest.owned_paths)
+            + list(manifest.owned_plan_paths)
+            + list(manifest.owned_review_paths)
+        )
+    }
+    proc = ctx.git("diff", "--cached", "--name-only", "--no-renames")
+    staged = {
+        _unquote_porcelain_path(line)
+        for line in proc.stdout.splitlines()
+        if line.strip()
+    }
+    foreign = sorted(staged & start_dirt - owned)
+    if foreign:
+        return GateResult(
+            gate,
+            1,
+            "foreign-staging gate failed: landing must never stage foreign "
+            "start-dirt; staged path(s) recorded as start-dirt but not "
+            "owned: " + ", ".join(foreign),
+            warnings=[],
+        )
+    exempted = sorted(staged & start_dirt & owned)
+    message = "foreign-staging gate passed: no foreign start-dirt staged"
+    warnings: list[str] = []
+    if exempted:
+        message += (
+            "; owned start-dirt path(s) deliberately staged (claimed at "
+            "Step 0): " + ", ".join(exempted)
+        )
+        warnings.append(
+            "foreign-staging exempted owned path(s) named for audit: "
+            + ", ".join(exempted)
+        )
+    return GateResult(gate, 0, message, warnings=warnings)
+
+
+DATED_PLAN_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-.+\.md$")
+
+
+def gate_plans_archive_twin(ctx: GateContext) -> GateResult:
+    """Landing-time twin gate over the plans home (pre-docs AND pre-commit).
+
+    Fails any landing while a dated plan basename sits both at the plans
+    root and inside an archive state directory (completed, deferred,
+    rejected), byte-identical or not. Ownership split (recorded at the code
+    home per the plan): ``scripts/check_maintenance_pins.sh``
+    ``check_live_vs_archive_duplicates`` stays the corpus-wide scheduled
+    owner of the basename-collision class (plans AND backlog roots,
+    non-dated names included); this gate is the landing-time net over the
+    plans home only, facts-key-driven, dated plan shape. Deliberate scope
+    edge owned by neither scanner today: a basename in two state
+    directories with no root copy (completed plus rejected, say) is the
+    corpus-wide owner's designated absorber."""
+    gate = "plans-archive-twin"
+    warnings: list[str] = []
+    import facts_paths as _facts_paths
+
+    for key in ("plans_dir", "plans_completed_dir"):
+        if _facts_paths.resolve_toml_key_raw(ctx.repo_root, key) is None:
+            warnings.append(
+                f"plans-archive-twin: facts key {key!r} does not resolve; "
+                "the default home fell back"
+            )
+    state_dirs = {
+        "completed": ctx.plans_completed_dir,
+        "deferred": ctx.plans_dir / "deferred",
+        "rejected": ctx.plans_dir / "rejected",
+    }
+    for name, directory in state_dirs.items():
+        if not directory.is_dir():
+            warnings.append(
+                f"plans-archive-twin: resolved {name} state directory does "
+                f"not exist on disk: {directory}"
+            )
+    if not ctx.plans_dir.is_dir():
+        return GateResult(
+            gate,
+            0,
+            "plans-archive-twin: warning skip: plans home does not exist "
+            f"on disk: {ctx.plans_dir}",
+            warnings=warnings,
+        )
+    root_dated = {
+        entry.name
+        for entry in ctx.plans_dir.iterdir()
+        if entry.is_file() and DATED_PLAN_RE.match(entry.name)
+    }
+    findings: list[str] = []
+    for name in sorted(root_dated):
+        for state_name, directory in state_dirs.items():
+            twin = directory / name
+            if twin.is_file():
+                findings.append(
+                    f"{ctx.plans_dir / name} <-> {twin} ({state_name})"
+                )
+    if findings:
+        return GateResult(
+            gate,
+            1,
+            "plans-archive-twin gate failed: a dated plan basename sits "
+            "both at the plans root and in an archive state directory "
+            "(a move, never an add-plus-keep): " + "; ".join(findings),
+            warnings=warnings,
+        )
+    return GateResult(
+        gate,
+        0,
+        "plans-archive-twin gate passed: no root-plus-archive plan twin",
+        warnings=warnings,
+    )
+
+
 GATES: dict[str, Callable[[GateContext], GateResult]] = {
     "plan-readiness": gate_plan_readiness,
     "confluence-hygiene": gate_confluence_hygiene,
@@ -2194,6 +2408,8 @@ GATES: dict[str, Callable[[GateContext], GateResult]] = {
     "sensitive-data-scan": gate_sensitive_data_scan,
     "em-dash-scan": gate_em_dash_scan,
     "instruction-size": gate_instruction_size,
+    "foreign-staging": gate_foreign_staging,
+    "plans-archive-twin": gate_plans_archive_twin,
 }
 
 
@@ -2233,7 +2449,8 @@ def _usage() -> str:
         "<pre-docs|pre-commit|list-gates|write-manifest|finalize-manifest>\n"
         "phases: pre-docs (done Steps 1.5..2.62 gates), pre-commit (done "
         "Steps 2.7/2.76/2.8 mechanical gates)\n"
-        "list-gates prints the ten absorbed gate ids in phase order\n"
+        "list-gates prints the twelve absorbed gate ids in phase order, "
+        "deduped at first phase (the twin runs in both phases)\n"
         "write-manifest writes the done Step 0 run manifest record "
         "(run-manifest-<run_id>.json under the done-session directory), "
         "reporting interrupted runs (complete=false, never finalized; "
@@ -2279,6 +2496,11 @@ def _cmd_write_manifest(argv: list[str]) -> int:
     parser.add_argument(
         "--owned-review", action="append", default=[], metavar="PATH",
         help="review staging doc this run finalizes (repeatable)",
+    )
+    parser.add_argument(
+        "--owned-path", action="append", default=[], metavar="PATH",
+        help="start-dirt path this run may stage (repeatable; recorded in "
+        "owned_paths and audited by the foreign-staging gate)",
     )
     parser.add_argument(
         "--foreign-review", action="append", default=[], metavar="PATH",
@@ -2407,21 +2629,67 @@ def _cmd_write_manifest(argv: list[str]) -> int:
 
     if adopted is not None:
         start_commit = adopted.start_commit
+        owned_paths = _dedup_preserving_order(
+            [
+                _repo_relative(p, ctx.repo_root)
+                for p in list(args.owned_path) + list(adopted.owned_paths)
+            ]
+        )
         owned_plan_paths = _dedup_preserving_order(
-            list(args.owned_plan) + list(adopted.owned_plan_paths)
+            [
+                _repo_relative(p, ctx.repo_root)
+                for p in list(args.owned_plan) + list(adopted.owned_plan_paths)
+            ]
         )
         owned_review_paths = _dedup_preserving_order(
-            list(args.owned_review) + list(adopted.owned_review_paths)
+            [
+                _repo_relative(p, ctx.repo_root)
+                for p in list(args.owned_review) + list(adopted.owned_review_paths)
+            ]
         )
         foreign_review_paths = _dedup_preserving_order(
-            list(args.foreign_review) + list(adopted.foreign_review_paths)
+            [
+                _repo_relative(p, ctx.repo_root)
+                for p in list(args.foreign_review) + list(adopted.foreign_review_paths)
+            ]
         )
     else:
-        owned_plan_paths = _dedup_preserving_order(list(args.owned_plan))
-        owned_review_paths = _dedup_preserving_order(list(args.owned_review))
-        foreign_review_paths = _dedup_preserving_order(list(args.foreign_review))
+        owned_paths = _dedup_preserving_order(
+            [_repo_relative(p, ctx.repo_root) for p in args.owned_path]
+        )
+        owned_plan_paths = _dedup_preserving_order(
+            [_repo_relative(p, ctx.repo_root) for p in args.owned_plan]
+        )
+        owned_review_paths = _dedup_preserving_order(
+            [_repo_relative(p, ctx.repo_root) for p in args.owned_review]
+        )
+        foreign_review_paths = _dedup_preserving_order(
+            [_repo_relative(p, ctx.repo_root) for p in args.foreign_review]
+        )
 
     start_porcelain = _porcelain_lines(ctx, ".")
+
+    # Adoption composition: the predecessor's uncommitted output stays
+    # gate-visible, so the adopted start-dirt record is the adopted
+    # manifest's start_porcelain unioned with the fresh snapshot.
+    if adopted is not None:
+        start_porcelain = _dedup_preserving_order(
+            list(adopted.start_porcelain) + list(start_porcelain)
+        )
+
+    # Writer-side cross-check: an --owned-path claim matching no normalized
+    # start-dirt row warns by name (a wrong claim is auditable, never
+    # silent).
+    unclaimed = [
+        path
+        for path in owned_paths
+        if path not in normalized_start_dirt_paths(start_porcelain)
+    ]
+    if unclaimed:
+        print(
+            "write-manifest: warning: --owned-path claim(s) matching no "
+            "normalized start-dirt row: " + ", ".join(unclaimed)
+        )
 
     # Claim-or-foreign over the Step 0 enumeration universe: every staging
     # candidate on disk must be either claimed (the run's own --owned-review
@@ -2445,14 +2713,9 @@ def _cmd_write_manifest(argv: list[str]) -> int:
             # is marked foreign (each recorded in foreign_review_paths for
             # audit, repo-relative like the --foreign-review inputs) instead
             # of aborting one flag per path.
-            def repo_relative(candidate: str) -> str:
-                try:
-                    return str(Path(candidate).relative_to(ctx.repo_root))
-                except ValueError:
-                    return candidate
-
             foreign_review_paths = _dedup_preserving_order(
-                foreign_review_paths + [repo_relative(c) for c in uncovered]
+                foreign_review_paths
+                + [_repo_relative(c, ctx.repo_root) for c in uncovered]
             )
         else:
             return _cli_fail(
@@ -2469,10 +2732,11 @@ def _cmd_write_manifest(argv: list[str]) -> int:
         run_id=_new_run_id(),
         marker=window.current.path.name,
         created_epoch=time.time(),
-        repo_root=str(ctx.repo_root),
+        repo_root=_repo_root_digest(ctx.repo_root),
         pid=os.getpid(),
         start_commit=start_commit,
         start_porcelain=start_porcelain,
+        owned_paths=owned_paths,
         owned_plan_paths=owned_plan_paths,
         owned_review_paths=owned_review_paths,
         foreign_review_paths=foreign_review_paths,
@@ -2539,7 +2803,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0 if args else 2
     command = args[0]
     if command == "list-gates":
-        for gate_id in PRE_DOCS_GATES + PRE_COMMIT_GATES:
+        # Each gate id printed once, deduped at its first phase (the twin
+        # runs in both phases; printing it twice invites count drift).
+        for gate_id in dict.fromkeys(PRE_DOCS_GATES + PRE_COMMIT_GATES):
             print(gate_id)
         return 0
     if command == "write-manifest":

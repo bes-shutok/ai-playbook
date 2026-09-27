@@ -60,6 +60,7 @@ bash ~/.ai-playbook/scripts/scan-public-hygiene.sh   # from instructions repo ro
 - Prefer isolated environments for Python dependencies used by commands or skills (for example, `$HOME/.agents/venvs/codex-tools`) before system-level overrides.
 - Verify package availability in the selected package manager before proposing an install path.
 - If a command is interrupted or aborted, verify partial side effects first, report the current state, then continue.
+- A value quoted from conversation context is not evidence: before any precision-critical step (commit, landing, lock handling, digest verification), re-derive every digest, path, flag, or identifier from disk, and stop on a cross-check mismatch until it is resolved.
 
 ## Vendored Asset Sync Rules
 - When syncing vendored agent assets (`agents/skills/`), apply full bidirectional sync: add new items, update changed items, and remove items that no longer exist in the source. Use `rsync --delete` semantics.

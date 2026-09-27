@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from execute_plan_runtime_codex import CodexAdapter, _cancel_process_tree, _verify_process_terminated, _subprocess_runner
+from execute_plan_worker_registry import validate_provider_observation
 import runtime_capabilities as capabilities
 
 
@@ -815,6 +816,354 @@ class CodexAdapterTest(unittest.TestCase):
         result = adapter.wait("session-task-4", task_id="task-4", policy_token=self.policy())
         self.assertEqual(result["status"], "success", result)
         self.assertNotEqual(result["reason_code"], "timeout")
+
+
+class CodexAdapterTerminalEvidenceTest(unittest.TestCase):
+    """Task 1 rows: the conversation-keyed terminal-evidence port.
+
+    Retrieval-boundary seam: every consult-bearing row injects the records
+    root (an injected temp records root), never the ambient home-relative
+    default. The read time is pinned by a before/after monotonic bracket
+    around the consult plus a magnitude guard proving the record's
+    completion wall-clock timestamp is never used as ``observed_at``.
+    """
+
+    def setUp(self) -> None:
+        # Pin ambient execute-plan env inputs (hermeticity), exactly as the
+        # sibling adapter test class: adapter construction reads no ambient
+        # configuration.
+        self._saved_env = {key: os.environ.pop(key) for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST") if key in os.environ}
+
+    def tearDown(self) -> None:
+        os.environ.update(self._saved_env)
+        for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST"):
+            if key not in self._saved_env:
+                os.environ.pop(key, None)
+
+    @staticmethod
+    def record_text(*envelopes) -> str:
+        return "".join(json.dumps(item) + "\n" for item in envelopes)
+
+    @classmethod
+    def completed_record(cls, thread_id="session-task-4", completed_at="2026-09-28T12:00:00Z") -> str:
+        # The provider's own conversation record: the same JSONL envelope
+        # stream the live boundary emits. The completion wall-clock stamp
+        # rides on the completion envelope as metadata only.
+        return cls.record_text(
+            {"type": "thread.started", "thread_id": thread_id},
+            {"type": "turn.completed", "status": "success", "reason_code": "completed", "evidence": ["worker-checkpoint"], "action_scope": "repository-task", "checkpoint_identity": "task-4:worker", "generation": 1, "timestamp": completed_at},
+        )
+
+    @classmethod
+    def running_record(cls, thread_id="session-task-4") -> str:
+        # Record present, turn not proven completed: no decision-bearing
+        # final envelope exists yet.
+        return cls.record_text({"type": "thread.started", "thread_id": thread_id})
+
+    def test_terminal_observation_for_completed_conversation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "session-task-4.jsonl").write_text(self.completed_record(), encoding="utf-8")
+            adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True, terminal_records_root=root)
+            before = time.monotonic()
+            observation = adapter.observe_terminal_evidence("session-task-4")
+            after = time.monotonic()
+            # The port never caches: a second consult re-reads the record
+            # source and reports its current state with a fresh read.
+            (root / "session-task-4.jsonl").write_text(self.running_record(), encoding="utf-8")
+            second = adapter.observe_terminal_evidence("session-task-4")
+        self.assertEqual(observation["state"], "terminal")
+        self.assertEqual(observation["observation_kind"], "terminal-evidence")
+        self.assertEqual(observation["provider_identity"], {"session_id": "session-task-4"})
+        self.assertIs(observation["proof"]["verified"], True)
+        self.assertEqual(observation["proof"]["kind"], "provider-terminal")
+        self.assertEqual(observation["capacity_slot_effect"], "release")
+        # observed_at is the port's own read time in the monotonic domain...
+        self.assertGreaterEqual(observation["observed_at"], before)
+        self.assertLessEqual(observation["observed_at"], after)
+        # ...never the record's completion wall-clock timestamp: the
+        # magnitude guard keeps the 2026 wall epoch (about 1.79e9) out of
+        # the boot-relative monotonic domain, and the completion stamp
+        # rides as proof metadata only.
+        self.assertLess(observation["observed_at"], 1_000_000_000.0)
+        self.assertEqual(observation["proof"]["record_completed_at"], "2026-09-28T12:00:00Z")
+        self.assertNotEqual(second["state"], "terminal")
+        self.assertEqual(second["detail_signal"], "record-not-terminal")
+        self.assertGreaterEqual(second["observed_at"], observation["observed_at"])
+
+    def test_terminal_observation_reads_native_codex_record_envelopes(self):
+        # Codex session JSONL stores provider identity and event data inside
+        # each envelope's payload, rather than using the flat exec JSONL
+        # result shape handled by the live process adapter.
+        native_record = self.record_text(
+            {
+                "type": "session_meta",
+                "payload": {"session_id": "session-task-4", "id": "session-task-4"},
+            },
+            {
+                "type": "event_msg",
+                "timestamp": "2026-09-28T12:00:00Z",
+                "payload": {"type": "task_complete", "completed_at": "2026-09-28T12:00:00Z"},
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "session-task-4.jsonl").write_text(native_record, encoding="utf-8")
+            adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True, terminal_records_root=root)
+            observation = adapter.observe_terminal_evidence("session-task-4")
+        self.assertEqual(observation["state"], "terminal")
+        self.assertEqual(observation["provider_identity"], {"session_id": "session-task-4"})
+        self.assertTrue(observation["proof"]["verified"])
+        self.assertEqual(observation["proof"]["record_completed_at"], "2026-09-28T12:00:00Z")
+
+    def test_missing_process_is_not_terminal(self):
+        # No provider record under the canonical root and no OS process:
+        # the port refuses, it never infers completion from process absence.
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True, terminal_records_root=Path(directory))
+            observation = adapter.observe_terminal_evidence("session-task-4")
+        self.assertNotEqual(observation["state"], "terminal")
+        self.assertIn(observation["state"], {"unavailable", "stale", "malformed", "timed-out", "unsupported"})
+        self.assertEqual(observation["detail_signal"], "record-not-found")
+        self.assertFalse(observation["proof"]["verified"])
+        self.assertEqual(observation["process_identity"], {})
+        # A nonexistent records root is contained the same way (port
+        # totality): non-terminal, never a raise.
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True, terminal_records_root=Path(directory) / "absent")
+            observation = adapter.observe_terminal_evidence("session-task-4")
+        self.assertNotEqual(observation["state"], "terminal")
+        self.assertFalse(observation["proof"]["verified"])
+
+    def test_record_identity_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "session-task-4.jsonl").write_text(self.completed_record("other-conversation"), encoding="utf-8")
+            adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True, terminal_records_root=root)
+            observation = adapter.observe_terminal_evidence("session-task-4")
+        self.assertNotEqual(observation["state"], "terminal")
+        self.assertEqual(observation["detail_signal"], "identity-mismatch")
+        # The lookup argument is never echoed onto the observation: identity
+        # derives from the record's content and refuses on mismatch.
+        self.assertEqual(observation["provider_identity"], {})
+        # A record with no internal provider id at all cannot be bound.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "session-task-4.jsonl").write_text(self.record_text({"type": "turn.completed", "status": "success"}), encoding="utf-8")
+            adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True, terminal_records_root=root)
+            observation = adapter.observe_terminal_evidence("session-task-4")
+        self.assertNotEqual(observation["state"], "terminal")
+        self.assertEqual(observation["detail_signal"], "identity-mismatch")
+        self.assertEqual(observation["provider_identity"], {})
+
+    def test_port_is_read_only_against_provider_state(self):
+        runner = RecordedRunner()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "session-task-4.jsonl").write_text(self.completed_record(), encoding="utf-8")
+            adapter = CodexAdapter("/repo", runner=runner, approval_verified=True, terminal_records_root=root)
+            observation = adapter.observe_terminal_evidence("session-task-4")
+        self.assertEqual(observation["state"], "terminal")
+        argv_calls = [call[0] for call in runner.calls if isinstance(call[0], list)]
+        turn_starting = [argv for argv in argv_calls if len(argv) > 1 and argv[1] == "exec"]
+        self.assertEqual(turn_starting, [])
+        # File retrieval spawns no process at all over the consult.
+        self.assertEqual(argv_calls, [])
+        # The consult carries the explicit ps-snapshot-precedent timeout.
+        self.assertEqual(adapter.consult_timeout_seconds, 2.0)
+
+    def test_resume_argv_extraction(self):
+        extract = CodexAdapter._resume_conversation_id
+        accepted = [
+            (["codex", "exec", "resume", "session-id", "--json"], "session-id"),
+            (["codex", "exec", "resume", "--json", "session-id"], "session-id"),
+            (["codex", "exec", "resume", "session-id", "--json", "-C", "/repo"], "session-id"),
+            (["/opt/homebrew/bin/codex", "exec", "resume", "wrap-id", "--json"], "wrap-id"),
+            (["/usr/local/bin/codex.exe", "exec", "resume", "win-id", "--json"], "win-id"),
+        ]
+        for argv, expected in accepted:
+            with self.subTest(argv=argv):
+                self.assertEqual(extract(argv), expected)
+        negative = [
+            ["codex", "exec", "resume", "--json"],
+            ["codex", "exec", "resume"],
+            # A value-taking flag before the first positional token shadows
+            # the id position: extraction refuses rather than mis-attribute.
+            ["codex", "exec", "resume", "-C", "/repo", "--json", "session-id"],
+            ["codex", "exec", "--json", "-C", "/repo", "prompt"],
+        ]
+        for argv in negative:
+            with self.subTest(argv=argv):
+                self.assertIsNone(extract(argv))
+        # Parse integration: the extracted id is an additive row key only
+        # where it applies; the process-keyed row shape is untouched
+        # otherwise (the frozen inventory pin stays green).
+        snapshot = (
+            "  321 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec --json -C /repo implement\n"
+            "  322 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec resume session-id --json\n"
+        )
+        inventory = CodexAdapter._parse_process_snapshot(snapshot)
+        self.assertNotIn("conversation_id", inventory[0])
+        self.assertEqual(inventory[1]["conversation_id"], "session-id")
+
+    def test_conversation_id_shape_guard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "session-task-4.jsonl").write_text(self.completed_record(), encoding="utf-8")
+            adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True, terminal_records_root=root)
+
+            # Control: the interception below sees real record reads for a
+            # well-formed lookup key.
+            original_read_text = Path.read_text
+            reads: list[str] = []
+
+            def recording_read_text(path, *args, **kwargs):
+                reads.append(str(path))
+                return original_read_text(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "read_text", recording_read_text):
+                good = adapter.observe_terminal_evidence("session-task-4")
+            self.assertEqual(good["state"], "terminal")
+            self.assertTrue(reads)
+
+            original_is_file = Path.is_file
+            original_rglob = Path.rglob
+            touched: list[str] = []
+
+            def recording_is_file(path):
+                touched.append(f"is_file:{path}")
+                return original_is_file(path)
+
+            def recording_rglob(path, pattern):
+                touched.append(f"rglob:{path}:{pattern}")
+                return original_rglob(path, pattern)
+
+            for bad_id in ("../escape", "with/slash", "back\\slash", "..", ".", "", "   ", "id with space", "dots.in.id"):
+                with self.subTest(bad_id=bad_id):
+                    touched.clear()
+                    reads.clear()
+                    with mock.patch.object(Path, "read_text", recording_read_text), mock.patch.object(
+                        Path, "is_file", recording_is_file
+                    ), mock.patch.object(Path, "rglob", recording_rglob):
+                        refused = adapter.observe_terminal_evidence(bad_id)
+                    self.assertEqual(refused["detail_signal"], "invalid-conversation-id")
+                    self.assertNotEqual(refused["state"], "terminal")
+                    self.assertFalse(refused["proof"]["verified"])
+                    # The refusal fires before any record path is derived or
+                    # read.
+                    self.assertEqual(touched, [], touched)
+                    self.assertEqual(reads, [], reads)
+
+    def test_non_terminal_detail_signal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True, terminal_records_root=Path(directory))
+            not_found = adapter.observe_terminal_evidence("session-task-4")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "session-task-4.jsonl").write_text(self.running_record(), encoding="utf-8")
+            adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True, terminal_records_root=root)
+            not_terminal = adapter.observe_terminal_evidence("session-task-4")
+        # A present-but-unparseable record is record present, turn not
+        # proven completed.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "session-task-4.jsonl").write_text("{not jsonl}\n", encoding="utf-8")
+            adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True, terminal_records_root=root)
+            unparseable = adapter.observe_terminal_evidence("session-task-4")
+        self.assertEqual(not_found["detail_signal"], "record-not-found")
+        self.assertEqual(not_terminal["detail_signal"], "record-not-terminal")
+        self.assertEqual(unparseable["detail_signal"], "record-not-terminal")
+        self.assertNotEqual(not_found["detail_signal"], not_terminal["detail_signal"])
+        for observation in (not_found, not_terminal, unparseable):
+            self.assertNotEqual(observation["state"], "terminal")
+            self.assertFalse(observation["proof"]["verified"])
+
+    def test_retrieval_boundary(self):
+        # Direct canonical layout under the injected records root: the port
+        # obtains the record through the seam and translates it correctly.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            root.mkdir()
+            (root / "session-task-4.jsonl").write_text(self.completed_record(), encoding="utf-8")
+            adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True, terminal_records_root=root)
+            observation = adapter.observe_terminal_evidence("session-task-4")
+        self.assertEqual(observation["state"], "terminal")
+        self.assertEqual(observation["provider_identity"], {"session_id": "session-task-4"})
+        self.assertTrue(observation["proof"]["verified"])
+        # Date-partitioned rollout naming is found through the bounded scan.
+        with tempfile.TemporaryDirectory() as directory:
+            nested = Path(directory) / "sessions" / "2026" / "09" / "28"
+            nested.mkdir(parents=True)
+            (nested / "rollout-2026-09-28T12-00-00-session-task-9.jsonl").write_text(self.completed_record("session-task-9"), encoding="utf-8")
+            adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True, terminal_records_root=Path(directory))
+            observation = adapter.observe_terminal_evidence("session-task-9")
+        self.assertEqual(observation["state"], "terminal")
+        # An injected runner with no explicit root must default to a
+        # session-local temp root, never a home-relative read.
+        adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True)
+        self.assertNotEqual(adapter.terminal_records_root, Path.home() / ".codex" / "sessions")
+        observation = adapter.observe_terminal_evidence("session-task-4")
+        self.assertEqual(observation["detail_signal"], "record-not-found")
+
+    def test_live_process_inventory_unchanged(self):
+        # Regression pin, green before and after the parse extension: a live
+        # `codex exec resume` row is reported as process-keyed available
+        # inventory exactly as today, whatever additive row keys land.
+        snapshot = subprocess.CompletedProcess(
+            [],
+            0,
+            "  322 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec resume session-id --json\n",
+            "",
+        )
+        adapter = CodexAdapter("/repo", runner=RecordedRunner(), process_snapshot=lambda: snapshot)
+
+        observation = adapter.observe_inventory()
+
+        self.assertEqual(observation["observation_kind"], "inventory")
+        self.assertEqual(observation["state"], "available")
+        self.assertEqual(observation["capacity_slot_effect"], "retain")
+        self.assertEqual(len(observation["inventory"]), 1)
+        row = observation["inventory"][0]
+        self.assertEqual(row["process_identity"], {"pid": 322, "start_time": "Tue Sep 22 11:41:37 2026"})
+        self.assertTrue(row["provider_session_id"].startswith("codex-process-322-"))
+
+    def test_stale_consumer_normalization_unchanged(self):
+        # The chosen wiring keeps the freshness comparison consumer-owned:
+        # the driver wraps the port observation and re-enters the validating
+        # observation layer. An aged observation, injected as an aged cached
+        # read (its observed_at aged relative to the consumer's now, not an
+        # old completion timestamp), must still normalize to state stale
+        # with quarantine effect there. The port's own no-cache freshness is
+        # pinned by the record-mutation arm of the completed-observation
+        # row; this row stays green before the port exists.
+        now = time.monotonic()
+        item = {
+            "provider_session_id": "session-task-4",
+            "state": "terminal",
+            "proof": {"verified": True, "kind": "provider-terminal"},
+            "worker_id": "worker-task-4-session-task-4",
+        }
+        aged = {
+            "version": 1,
+            "observation_kind": "terminal-evidence",
+            "state": "terminal",
+            "observed_at": now - 3600.0,
+            "freshness_window": 5.0,
+            "provider_identity": {"session_id": "session-task-4"},
+            "process_identity": {},
+            "capacity_slot_effect": "release",
+            "proof": {"verified": True, "kind": "provider-terminal"},
+            "inventory": [item],
+        }
+        normalized = validate_provider_observation(aged, now=now, expected_kind="terminal-evidence")
+        self.assertEqual(normalized["state"], "stale")
+        self.assertEqual(normalized["capacity_slot_effect"], "quarantine")
+        # Control: the same envelope shape at a fresh read passes
+        # validation, so the stale outcome above is the freshness
+        # comparison, not the envelope shape.
+        fresh = dict(aged, observed_at=now)
+        normalized = validate_provider_observation(fresh, now=now, expected_kind="terminal-evidence")
+        self.assertEqual(normalized["state"], "terminal")
 
 
 if __name__ == "__main__":

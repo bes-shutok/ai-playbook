@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -1877,6 +1878,32 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             self.assertEqual(validated["plan_slug"], "fixture-plan")
             self.assertIn("task-4", validated["tasks"])
 
+    def test_validate_manifest_rejects_unknown_claim_state(self):
+        # Pins the closed-set rejections in validate_manifest (the guards
+        # pre-exist; this witness only proves they hold through the public
+        # entrypoint and name the rejected field).
+        driver = self.driver()
+        state = runtime.load_manifest(self.state_path)
+        state["claims"]["task-3"] = {
+            "task_id": "task-3",
+            "state": "junk-state",
+            "token": "junk-claim-token",
+            "owner": "test-owner",
+            "generation": 0,
+        }
+        runtime._safe_write_json(self.state_path, state)
+        with self.assertRaises(ValueError) as raised:
+            driver.validate_manifest()
+        self.assertIn("unknown claim state", str(raised.exception))
+
+        state = runtime.load_manifest(self.state_path)
+        state["claims"] = {}
+        state["tasks"]["task-4"]["status"] = "junk-state"
+        runtime._safe_write_json(self.state_path, state)
+        with self.assertRaises(ValueError) as raised:
+            driver.validate_manifest()
+        self.assertIn("unknown task status", str(raised.exception))
+
     def test_cli_checkpoint_operation_uses_file_backed_driver(self):
         payload = self.worker_checkpoint(task="task-4", generation=1)
         completed = subprocess.run(
@@ -2274,6 +2301,790 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                     runtime.create_manifest(created_path, "empty-plan", empty)
                 self.assertIn("create requires at least one task", str(raised.exception))
                 self.assertFalse(created_path.exists())
+
+    def test_preseed_gate_rejects_later_task_artifact_verifier(self):
+        # Pre-seed consistency gate, shape 1 (forward-dependent verifier):
+        # task-1's command argv names reports/report.txt, declared only in
+        # strictly later task-2's allowed_paths, so the verifier would demand
+        # an artifact that does not exist at the task-1 boundary (the
+        # witnessed consumer-run block). The seeder refuses naming both tasks
+        # and the gate, before any manifest file is written.
+        seed_path = self.root / "preseed_forward_dependency.json"
+        tasks = [
+            {
+                "id": "task-1",
+                "number": 1,
+                "status": "pending",
+                "allowed_paths": ["task-1.txt"],
+                "required_criteria": ["task-1:verification"],
+                "verification_commands": [
+                    {"id": "verify", "argv": ["cat", "reports/report.txt"], "criteria": ["task-1:verification"]}
+                ],
+            },
+            {
+                "id": "task-2",
+                "number": 2,
+                "status": "pending",
+                "allowed_paths": ["reports/report.txt"],
+                "required_criteria": ["task-2:verification"],
+                "verification_commands": [
+                    {"id": "verify", "argv": ["cat", "reports/report.txt"], "criteria": ["task-2:verification"]}
+                ],
+            },
+        ]
+        with self.assertRaises(ValueError) as raised:
+            runtime.create_manifest(seed_path, "forward-dependency-plan", tasks, repo_root=self.root)
+        message = str(raised.exception)
+        self.assertIn("task-1", message)
+        self.assertIn("task-2", message)
+        self.assertIn("pre-seed consistency gate", message)
+        self.assertIn("reports/report.txt", message)
+        self.assertFalse(seed_path.exists())
+
+    def test_preseed_gate_rejects_global_checklist_clone(self):
+        # Pre-seed consistency gate, shape 2 (global checklist clone): two
+        # tasks declaring identical non-empty whole verification_commands
+        # lists (deep equality) is the signature of a plan's global
+        # Validation Commands block copied into every task. The seeder
+        # refuses naming both tasks and the clone signature, before any
+        # manifest file is written.
+        seed_path = self.root / "preseed_clone.json"
+
+        def cloned_commands():
+            return [{"id": "verify-global", "argv": ["pytest", "tests/"], "criteria": ["whole-plan:verification"]}]
+
+        tasks = [
+            {
+                "id": "task-1",
+                "number": 1,
+                "status": "pending",
+                "allowed_paths": ["task-1.txt"],
+                "required_criteria": ["whole-plan:verification"],
+                "verification_commands": cloned_commands(),
+            },
+            {
+                "id": "task-2",
+                "number": 2,
+                "status": "pending",
+                "allowed_paths": ["task-2.txt"],
+                "required_criteria": ["whole-plan:verification"],
+                "verification_commands": cloned_commands(),
+            },
+        ]
+        with self.assertRaises(ValueError) as raised:
+            runtime.create_manifest(seed_path, "clone-plan", tasks, repo_root=self.root)
+        message = str(raised.exception)
+        self.assertIn("task-1", message)
+        self.assertIn("task-2", message)
+        self.assertIn("identical non-empty verification_commands", message)
+        self.assertIn("pre-seed consistency gate", message)
+        self.assertFalse(seed_path.exists())
+
+    def test_preseed_gate_accepts_targeted_two_task_contract(self):
+        # Positive control through the CLI create entry (where
+        # evidence_enforcement becomes true): task-1 carries a targeted
+        # verifier touching only task-1 outputs and covering only task-1
+        # criteria; task-2's verifier references task-2's own artifact. The
+        # seed succeeds with enforcement active and a non-empty digest, and
+        # task-1's criteria stay free of task-2's criterion. A payload whose
+        # tasks declare identical argv with per-task-distinct embedded
+        # criteria also seeds: the clone signature is whole-list deep
+        # equality, not argv equality.
+        created_path = self.root / "created_targeted.json"
+        payload = {
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "number": 1,
+                    "status": "pending",
+                    "allowed_paths": ["task-1.txt"],
+                    "required_criteria": ["task-1:verification"],
+                    "verification_commands": [
+                        {"id": "verify", "argv": ["cat", "task-1.txt"], "criteria": ["task-1:verification"]}
+                    ],
+                },
+                {
+                    "id": "task-2",
+                    "number": 2,
+                    "status": "pending",
+                    "allowed_paths": ["reports/report.txt"],
+                    "required_criteria": ["task-2:verification"],
+                    "verification_commands": [
+                        {"id": "verify", "argv": ["cat", "reports/report.txt"], "criteria": ["task-2:verification"]}
+                    ],
+                },
+            ]
+        }
+        command = [
+            sys.executable,
+            str(ROOT / "scripts/execute_plan_runtime.py"),
+            "--manifest", str(created_path),
+            "--repo-root", str(self.root),
+            "--owner", "create-owner",
+            "--plan-slug", "targeted-plan",
+            "--operation", "create",
+            "--input", json.dumps(payload),
+        ]
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout)["status"], "success")
+        manifest = runtime.load_manifest(created_path)
+        self.assertTrue(manifest["evidence_enforcement"])
+        self.assertTrue(manifest["evidence_contract_digest"])
+        self.assertEqual(manifest["tasks"]["task-1"]["required_criteria"], ["task-1:verification"])
+        self.assertNotIn("task-2:verification", manifest["tasks"]["task-1"]["required_criteria"])
+
+        argv_path = self.root / "created_identical_argv.json"
+        argv_payload = {
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "number": 1,
+                    "status": "pending",
+                    "allowed_paths": ["task-1.txt"],
+                    "required_criteria": ["task-1:verification"],
+                    "verification_commands": [
+                        {"id": "verify", "argv": ["echo", "verified"], "criteria": ["task-1:verification"]}
+                    ],
+                },
+                {
+                    "id": "task-2",
+                    "number": 2,
+                    "status": "pending",
+                    "allowed_paths": ["task-2.txt"],
+                    "required_criteria": ["task-2:verification"],
+                    "verification_commands": [
+                        {"id": "verify", "argv": ["echo", "verified"], "criteria": ["task-2:verification"]}
+                    ],
+                },
+            ]
+        }
+        argv_command = [
+            sys.executable,
+            str(ROOT / "scripts/execute_plan_runtime.py"),
+            "--manifest", str(argv_path),
+            "--repo-root", str(self.root),
+            "--owner", "create-owner",
+            "--plan-slug", "identical-argv-plan",
+            "--operation", "create",
+            "--input", json.dumps(argv_payload),
+        ]
+        argv_completed = subprocess.run(argv_command, cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(argv_completed.returncode, 0, argv_completed.stderr)
+        argv_manifest = runtime.load_manifest(argv_path)
+        self.assertTrue(argv_manifest["evidence_enforcement"])
+        self.assertTrue(argv_manifest["evidence_contract_digest"])
+
+    def test_preseed_gate_allows_earlier_and_shared_artifact_references(self):
+        # Accepted shapes: a later task's verifier referencing an earlier
+        # task's artifact (already produced by ordinal order); an artifact
+        # declared in several tasks' allowed_paths; and an argv token that is
+        # a strict substring of a later task's declared path -- exact
+        # equality is the only matching basis, never substring containment.
+        earlier_seed = self.root / "preseed_earlier_reference.json"
+        runtime.create_manifest(
+            earlier_seed,
+            "earlier-reference-plan",
+            [
+                {
+                    "id": "task-1",
+                    "number": 1,
+                    "status": "pending",
+                    "allowed_paths": ["task-1.txt"],
+                    "required_criteria": ["task-1:verification"],
+                    "verification_commands": [
+                        {"id": "verify", "argv": ["cat", "task-1.txt"], "criteria": ["task-1:verification"]}
+                    ],
+                },
+                {
+                    "id": "task-2",
+                    "number": 2,
+                    "status": "pending",
+                    "allowed_paths": ["reports/report.txt"],
+                    "required_criteria": ["task-2:verification"],
+                    "verification_commands": [
+                        {"id": "verify", "argv": ["cat", "reports/report.txt", "task-1.txt"], "criteria": ["task-2:verification"]}
+                    ],
+                },
+            ],
+            repo_root=self.root,
+        )
+        self.assertTrue(earlier_seed.exists())
+
+        shared_seed = self.root / "preseed_shared_declaration.json"
+        runtime.create_manifest(
+            shared_seed,
+            "shared-declaration-plan",
+            [
+                {
+                    "id": "task-1",
+                    "number": 1,
+                    "status": "pending",
+                    "allowed_paths": ["shared/inputs.txt", "task-1.txt"],
+                    "required_criteria": ["task-1:verification"],
+                    "verification_commands": [
+                        {"id": "verify", "argv": ["cat", "shared/inputs.txt"], "criteria": ["task-1:verification"]}
+                    ],
+                },
+                {
+                    "id": "task-2",
+                    "number": 2,
+                    "status": "pending",
+                    "allowed_paths": ["shared/inputs.txt", "reports/report.txt"],
+                    "required_criteria": ["task-2:verification"],
+                    "verification_commands": [
+                        {"id": "verify", "argv": ["cat", "reports/report.txt"], "criteria": ["task-2:verification"]}
+                    ],
+                },
+            ],
+            repo_root=self.root,
+        )
+        self.assertTrue(shared_seed.exists())
+
+        substring_seed = self.root / "preseed_substring_reference.json"
+        runtime.create_manifest(
+            substring_seed,
+            "substring-reference-plan",
+            [
+                {
+                    "id": "task-1",
+                    "number": 1,
+                    "status": "pending",
+                    "allowed_paths": ["task-1.txt"],
+                    "required_criteria": ["task-1:verification"],
+                    "verification_commands": [
+                        {"id": "verify", "argv": ["cat", "reports/report.txt.bak"], "criteria": ["task-1:verification"]}
+                    ],
+                },
+                {
+                    "id": "task-2",
+                    "number": 2,
+                    "status": "pending",
+                    "allowed_paths": ["reports/report.txt"],
+                    "required_criteria": ["task-2:verification"],
+                    "verification_commands": [
+                        {"id": "verify", "argv": ["cat", "reports/report.txt"], "criteria": ["task-2:verification"]}
+                    ],
+                },
+            ],
+            repo_root=self.root,
+        )
+        self.assertTrue(substring_seed.exists())
+
+    # ------------------------------------------------------------------
+    # Evidence-contract recovery (recover-evidence-contract)
+    # ------------------------------------------------------------------
+
+    MALFORMED_TASK_ONE_CONTRACT = {
+        "required_criteria": ["task-1:verification"],
+        "verification_commands": [
+            {"id": "verify", "argv": ["cat", "reports/report.txt"], "criteria": ["task-1:verification"]}
+        ],
+    }
+
+    def _seed_recovery_run(self, task_one_contract):
+        """Seed the backlog's two-task run shape the way a pre-gate driver left it.
+
+        The base map seeds clean through today's gate; ``task_one_contract``
+        is then patched in over the seeded task-1 fields and the digest is
+        recomputed, so the on-disk artifact equals what a driver predating
+        the pre-seed consistency gate would have written: a schema-valid
+        manifest whose task-1 verifier demands a strictly later task's
+        artifact.
+        """
+
+        tasks = [
+            {
+                "id": "task-1",
+                "number": 1,
+                "status": "pending",
+                "allowed_paths": ["task-1.txt"],
+                "required_criteria": ["task-1:verification"],
+                "verification_commands": [
+                    {"id": "verify", "argv": ["cat", "task-1.txt"], "criteria": ["task-1:verification"]}
+                ],
+            },
+            {
+                "id": "task-2",
+                "number": 2,
+                "status": "pending",
+                "allowed_paths": ["reports/report.txt"],
+                "required_criteria": ["task-2:verification"],
+                "verification_commands": [
+                    {"id": "verify", "argv": ["cat", "reports/report.txt"], "criteria": ["task-2:verification"]}
+                ],
+            },
+        ]
+        runtime.create_manifest(self.state_path, "fixture-plan", tasks, repo_root=self.root)
+        state = runtime.load_manifest(self.state_path)
+        state["evidence_enforcement"] = True
+        if task_one_contract:
+            state["tasks"]["task-1"].update(task_one_contract)
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        runtime._safe_write_json(self.state_path, state)
+
+    def _hold_task1(self, adapter=None, persist_construction=True):
+        """Claim task-1 and launch it for real (launch record + reservation)."""
+
+        driver = self.driver(adapter=adapter, persist_construction=persist_construction)
+        claimed = driver.claim_next_task()
+        self.assertEqual(claimed["status"], "success", claimed)
+        self.assertTrue(claimed["claimed"])
+        self.assertEqual(claimed["task_id"], "task-1")
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+        self.assertIsNone(driver._mark_claim_launched(claim, "task-1", {"allowed_paths": ["task-1.txt"]}))
+        return driver, runtime.load_manifest(self.state_path)["claims"]["task-1"]
+
+    def _drive_malformed_hold(self, register_worker=False, persist_construction=True):
+        """Produce the launched hold by driving the real read-only refusal.
+
+        Claims task-1, launches it (durable adapter launch reservation held),
+        optionally registers the launched worker and retires it terminal, then
+        submits a success receipt whose criteria cannot be covered (no
+        verification evidence exists for the task). The driver refuses the
+        result read-only as ``malformed-result``, leaving the claim and task
+        launched with the launch reservation held and no durable trace.
+        """
+
+        from execute_plan_worker_registry import WorkerRegistry
+
+        driver, claim = self._hold_task1(persist_construction=persist_construction)
+        if register_worker:
+            state = runtime.load_manifest(self.state_path)
+            registry = WorkerRegistry(state)
+            registered = registry.register_launch(
+                task_id="task-1",
+                claim_token=claim["token"],
+                generation=claim["generation"],
+                claim_owner_id=claim["owner"],
+                provider_session_id="session-hold",
+                worker_id="worker-hold",
+                command_identity="hold-command",
+                process_identity={"provider": "codex", "session_id": "session-hold"},
+                launch_id=claim["launch_id"],
+                capacity_entry_id="capacity-hold",
+                started_at=100.0,
+            )
+            self.assertEqual(registered["state"], "active")
+            terminal = registry.apply_terminal_receipt(
+                {
+                    "receipt_id": "terminal-hold",
+                    "task_id": "task-1",
+                    "claim_token": claim["token"],
+                    "claim_owner_id": claim["owner"],
+                    "generation": claim["generation"],
+                    "worker_id": "worker-hold",
+                    "provider_session_id": "session-hold",
+                    "event": "terminal",
+                    "reason": "completed",
+                    "observed_at": 101.0,
+                    "proof": {"kind": "provider-terminal", "verified": True},
+                }
+            )
+            self.assertEqual(terminal["outcome"], "released")
+            runtime._safe_write_json(self.state_path, registry.manifest)
+        before = self.state_path.read_bytes()
+        refused = driver.record_worker_checkpoint(
+            {
+                "status": "success",
+                "reason_code": "completed",
+                "evidence": ["worker finished its repository task"],
+                "action_scope": "repository-task",
+                "checkpoint_identity": "task-1:worker",
+                "generation": claim["generation"],
+                "claim_token": claim["token"],
+            }
+        )
+        self.assertEqual(refused["status"], "blocked", refused)
+        self.assertEqual(refused["reason_code"], "malformed-result", refused)
+        self.assertTrue(any("required verification criteria missing" in item for item in refused["evidence"]), refused)
+        # The refusal is read-only: the hold is the live launched shape.
+        self.assertEqual(self.state_path.read_bytes(), before)
+        held = runtime.load_manifest(self.state_path)
+        self.assertEqual(held["tasks"]["task-1"]["status"], "launched")
+        self.assertEqual(held["claims"]["task-1"]["state"], "launched")
+        self.assertTrue(
+            any(
+                reservation.get("task_id") == "task-1" and reservation.get("claim_token") == claim["token"]
+                for reservation in held["capacity"]["reservations"].values()
+            ),
+            held["capacity"]["reservations"],
+        )
+        return claim
+
+    def _corrected_task_one_contract(self):
+        return {
+            "required_criteria": ["task-1:targeted-verification"],
+            "verification_commands": [
+                {"id": "verify-targeted", "argv": ["cat", "task-1.txt"], "criteria": ["task-1:targeted-verification"]}
+            ],
+        }
+
+    def test_evidence_recovery_happy_path(self):
+        from execute_plan_worker_registry import validate_manifest_worker_schema
+
+        self._seed_recovery_run(self.MALFORMED_TASK_ONE_CONTRACT)
+        claim = self._drive_malformed_hold(register_worker=True)
+        old_generation = claim["generation"]
+        old_digest = runtime.load_manifest(self.state_path)["evidence_contract_digest"]
+
+        outcome = self.driver().recover_evidence_contract(
+            "task-1", claim["token"], old_generation, self._corrected_task_one_contract()
+        )
+
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["generation"], old_generation + 1)
+        self.assertFalse(
+            any(
+                reservation.get("task_id") == "task-1" and reservation.get("generation") == old_generation
+                for reservation in state["capacity"]["reservations"].values()
+            ),
+            state["capacity"]["reservations"],
+        )
+        self.assertFalse(any(worker.get("task_id") == "task-1" for worker in state["workers"].values()), state["workers"])
+        self.assertFalse(any(entry.get("worker_id") == "worker-hold" for entry in state["capacity"]["entries"].values()))
+        self.assertEqual(state["tasks"]["task-1"]["required_criteria"], ["task-1:targeted-verification"])
+        self.assertEqual(
+            state["tasks"]["task-1"]["verification_commands"],
+            [{"id": "verify-targeted", "argv": ["cat", "task-1.txt"], "criteria": ["task-1:targeted-verification"]}],
+        )
+        self.assertEqual(state["tasks"]["task-1"]["status"], "pending")
+        self.assertEqual(state["claims"]["task-1"]["state"], "closed")
+        self.assertNotEqual(state["evidence_contract_digest"], old_digest)
+        self.assertEqual(state["evidence_contract_digest"], capabilities.evidence_contract_digest(state["tasks"]))
+        receipts = [event for event in state["history"] if event.get("event") == "evidence-contract-recovery"]
+        self.assertEqual(len(receipts), 1, state["history"])
+        self.assertEqual(receipts[0]["task_id"], "task-1")
+        self.assertEqual(receipts[0]["token"], claim["token"])
+        self.assertEqual(receipts[0]["generation"], old_generation)
+        validate_manifest_worker_schema(state)
+        # The task is actually claimable again: the next claim succeeds with
+        # no residual reservation (a leftover reservation would refuse the
+        # relaunch fence with capacity-unavailable).
+        relaunch_driver = self.driver()
+        next_claim = relaunch_driver.claim_next_task()
+        self.assertEqual(next_claim["status"], "success", next_claim)
+        self.assertTrue(next_claim["claimed"])
+        self.assertEqual(next_claim["task_id"], "task-1")
+        self.assertGreater(next_claim["generation"], old_generation)
+        self.assertIsNone(
+            relaunch_driver._mark_claim_launched(
+                runtime.load_manifest(self.state_path)["claims"]["task-1"], "task-1", {"allowed_paths": ["task-1.txt"]}
+            )
+        )
+        final = runtime.load_manifest(self.state_path)
+        self.assertTrue(
+            any(
+                reservation.get("task_id") == "task-1" and reservation.get("generation") == next_claim["generation"]
+                for reservation in final["capacity"]["reservations"].values()
+            ),
+            final["capacity"]["reservations"],
+        )
+
+    def test_evidence_recovery_rejects_non_hold_or_identity_mismatch(self):
+        corrected = self._corrected_task_one_contract()
+        # (a) a claim blocked for a different reason (the suite's timeout hold)
+        self._seed_recovery_run({})
+        driver, claim = self._hold_task1()
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-1"].update(
+            {"status": "blocked", "resume_allowed": False, "blocked_receipt": {"status": "blocked", "reason_code": "timeout", "evidence": ["deadline exceeded"]}}
+        )
+        state["claims"]["task-1"]["state"] = "blocked"
+        runtime._safe_write_json(self.state_path, state)
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], corrected)
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("launched hold" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        # (b) a pending task with no live claim at all
+        self._seed_recovery_run({})
+        before = self.state_path.read_bytes()
+        outcome = self.driver(persist_construction=False).recover_evidence_contract("task-1", "no-such-token", 0, corrected)
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("launched hold" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        # (c) token mismatch on a genuine hold
+        self._seed_recovery_run(self.MALFORMED_TASK_ONE_CONTRACT)
+        claim = self._drive_malformed_hold()
+        before = self.state_path.read_bytes()
+        identity_driver = self.driver(persist_construction=False)
+        outcome = identity_driver.recover_evidence_contract("task-1", "wrong-token", claim["generation"], corrected)
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("token" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        # (d) generation mismatch on a genuine hold
+        outcome = identity_driver.recover_evidence_contract("task-1", claim["token"], claim["generation"] + 1, corrected)
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("generation" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_evidence_recovery_refuses_live_group_member(self):
+        self._seed_recovery_run(self.MALFORMED_TASK_ONE_CONTRACT)
+        driver, claim = self._hold_task1()
+        state = runtime.load_manifest(self.state_path)
+        state["claims"]["task-1"]["group_id"] = "grp-hold"
+        state.setdefault("claim_groups", {})["grp-hold"] = {
+            "group_id": "grp-hold",
+            "state": "active",
+            "kind": "batch",
+            "members": ["task-1", "task-2"],
+            "anchor": "task-1",
+            "active_member": "task-1",
+            "generation": claim["generation"],
+            "launch_record": {"baseline_revision": "group-anchor", "generation": claim["generation"], "launched_at": 100.0},
+        }
+        state["claims"]["task-2"] = {
+            "token": "sibling-token",
+            "generation": claim["generation"],
+            "owner": "test-owner",
+            "state": "staged",
+            "task_id": "task-2",
+            "group_id": "grp-hold",
+        }
+        state["tasks"]["task-2"]["status"] = "claimed"
+        runtime._safe_write_json(self.state_path, state)
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_evidence_contract(
+            "task-1", claim["token"], claim["generation"], self._corrected_task_one_contract()
+        )
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("grp-hold" in item for item in outcome["evidence"]), outcome)
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["claims"]["task-2"]["state"], "staged")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_evidence_recovery_rejects_corrected_payload_failing_preseed_gate(self):
+        self._seed_recovery_run(self.MALFORMED_TASK_ONE_CONTRACT)
+        claim = self._drive_malformed_hold()
+        before = self.state_path.read_bytes()
+        driver = self.driver(persist_construction=False)
+        # Shape 1: the corrected contract clones task-2's whole
+        # verification_commands list (deep equality) over the merged map.
+        clone = {
+            "required_criteria": ["task-2:verification"],
+            "verification_commands": [
+                {"id": "verify", "argv": ["cat", "reports/report.txt"], "criteria": ["task-2:verification"]}
+            ],
+        }
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], clone)
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(
+            any("pre-seed consistency gate" in item and "identical non-empty verification_commands" in item for item in outcome["evidence"]),
+            outcome,
+        )
+        self.assertEqual(self.state_path.read_bytes(), before)
+        # Shape 2: the corrected contract references task-2's later artifact.
+        forward = {
+            "required_criteria": ["task-1:verification"],
+            "verification_commands": [
+                {"id": "verify-forward", "argv": ["cat", "reports/report.txt"], "criteria": ["task-1:verification"]}
+            ],
+        }
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], forward)
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(
+            any("pre-seed consistency gate" in item and "strictly later task task-2" in item for item in outcome["evidence"]),
+            outcome,
+        )
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_evidence_recovery_rejects_incomplete_corrected_contract(self):
+        self._seed_recovery_run(self.MALFORMED_TASK_ONE_CONTRACT)
+        claim = self._drive_malformed_hold()
+        before = self.state_path.read_bytes()
+        driver = self.driver(persist_construction=False)
+        for incomplete in (
+            {"required_criteria": [], "verification_commands": [{"id": "verify", "argv": ["cat", "task-1.txt"], "criteria": ["task-1:verification"]}]},
+            {"required_criteria": ["task-1:verification"], "verification_commands": []},
+        ):
+            outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], incomplete)
+            self.assertEqual(outcome["status"], "blocked", outcome)
+            self.assertTrue(
+                any("requires non-empty required_criteria and verification_commands" in item for item in outcome["evidence"]),
+                outcome,
+            )
+            self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_evidence_recovery_requires_provider_inventory(self):
+        class MissingInventoryAdapter:
+            def observe_inventory(self):
+                return None
+
+        self._seed_recovery_run(self.MALFORMED_TASK_ONE_CONTRACT)
+        claim = self._drive_malformed_hold()
+        corrected = self._corrected_task_one_contract()
+        before = self.state_path.read_bytes()
+        # Missing witness: the adapter's inventory port reports nothing.
+        outcome = self.driver(adapter=MissingInventoryAdapter(), persist_construction=False).recover_evidence_contract(
+            "task-1", claim["token"], claim["generation"], corrected
+        )
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("provider inventory" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        # Non-accepting witness: a live foreign session the run does not own.
+        live = FakeAdapter()
+        live.inventory.append({"provider_session_id": "session-live", "process_identity": {"pid": 321, "start_time": "fixture-start"}})
+        outcome = self.driver(adapter=live, persist_construction=False).recover_evidence_contract(
+            "task-1", claim["token"], claim["generation"], corrected
+        )
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("provider inventory" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_evidence_recovery_replay_is_fenced(self):
+        self._seed_recovery_run(self.MALFORMED_TASK_ONE_CONTRACT)
+        claim = self._drive_malformed_hold()
+        corrected = self._corrected_task_one_contract()
+        first = self.driver().recover_evidence_contract("task-1", claim["token"], claim["generation"], corrected)
+        self.assertEqual(first["status"], "success", first)
+
+        replay = self.driver().recover_evidence_contract("task-1", claim["token"], claim["generation"], corrected)
+
+        self.assertEqual(replay["status"], "blocked", replay)
+        # The fence is evaluated FIRST: after the transition neither the hold
+        # nor the identity precondition can match, so only the recorded
+        # receipt can name this refusal.
+        self.assertTrue(any("evidence-contract-recovery" in item for item in replay["evidence"]), replay)
+        self.assertTrue(any("already recorded" in item for item in replay["evidence"]), replay)
+
+    def test_evidence_recovery_stale_receipt_fences(self):
+        self._seed_recovery_run(self.MALFORMED_TASK_ONE_CONTRACT)
+        claim = self._drive_malformed_hold()
+        outcome = self.driver().recover_evidence_contract(
+            "task-1", claim["token"], claim["generation"], self._corrected_task_one_contract()
+        )
+        self.assertEqual(outcome["status"], "success", outcome)
+        before = self.state_path.read_bytes()
+
+        late = self.driver(persist_construction=False).record_worker_checkpoint(
+            {
+                "status": "success",
+                "reason_code": "completed",
+                "evidence": ["late receipt from the replaced worker"],
+                "action_scope": "repository-task",
+                "checkpoint_identity": "task-1:worker",
+                "generation": claim["generation"],
+                "claim_token": claim["token"],
+            }
+        )
+
+        self.assertEqual(late["status"], "blocked", late)
+        self.assertEqual(late["reason_code"], "stale-claim", late)
+        self.assertTrue(any("already progressed past this receipt" in item for item in late["evidence"]), late)
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-1"]["status"], "pending")
+        self.assertNotIn("blocked_receipt", after["tasks"]["task-1"])
+        self.assertFalse(
+            any(event.get("event") == "worker-blocked" and event.get("task_id") == "task-1" for event in after["history"]),
+            after["history"],
+        )
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_evidence_recovery_accepts_multi_malformed_old_seeded_run(self):
+        from execute_plan_worker_registry import validate_manifest_worker_schema
+
+        clone = {
+            "required_criteria": ["whole-plan:verification"],
+            "verification_commands": [
+                {"id": "verify-global", "argv": ["pytest", "tests/"], "criteria": ["whole-plan:verification"]}
+            ],
+        }
+        tasks = [
+            {
+                "id": f"task-{index}",
+                "number": index,
+                "status": "pending",
+                "allowed_paths": [f"task-{index}.txt"],
+                "required_criteria": [f"task-{index}:verification"],
+                "verification_commands": [
+                    {"id": "verify", "argv": ["cat", f"task-{index}.txt"], "criteria": [f"task-{index}:verification"]}
+                ],
+            }
+            for index in (1, 2, 3)
+        ]
+        runtime.create_manifest(self.state_path, "fixture-plan", tasks, repo_root=self.root)
+        state = runtime.load_manifest(self.state_path)
+        # Pre-gate seed: only a driver predating the consistency gate can
+        # persist the global clone into every task.
+        for task in state["tasks"].values():
+            task.update(clone)
+        state["evidence_enforcement"] = True
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        runtime._safe_write_json(self.state_path, state)
+        claim = self._drive_malformed_hold()
+
+        outcome = self.driver().recover_evidence_contract(
+            "task-1", claim["token"], claim["generation"], self._corrected_task_one_contract()
+        )
+
+        self.assertEqual(outcome["status"], "success", outcome)
+        recovered = runtime.load_manifest(self.state_path)
+        self.assertEqual(recovered["tasks"]["task-1"]["status"], "pending")
+        self.assertEqual(recovered["claims"]["task-1"]["state"], "closed")
+        self.assertEqual(recovered["generation"], claim["generation"] + 1)
+        # The unchanged task-2/task-3 sibling-only clone shapes are reported
+        # in the outcome evidence without refusing: those siblings recover
+        # through this same operation as they hold.
+        self.assertTrue(
+            any(
+                "task-2" in item and "task-3" in item and "identical non-empty verification_commands" in item
+                for item in outcome["evidence"]
+            ),
+            outcome,
+        )
+        validate_manifest_worker_schema(recovered)
+        # The run continues.
+        next_claim = self.driver().claim_next_task()
+        self.assertEqual(next_claim["status"], "success", next_claim)
+        self.assertTrue(next_claim["claimed"])
+        self.assertEqual(next_claim["task_id"], "task-1")
+
+    def test_evidence_recovery_cli_operation_uses_adapter(self):
+        import argparse
+
+        self._seed_recovery_run(self.MALFORMED_TASK_ONE_CONTRACT)
+        claim = self._drive_malformed_hold(persist_construction=False)
+        args = argparse.Namespace(manifest=self.state_path, plan_slug="fixture-plan", owner="cli-operator", repo_root=self.root)
+        payload = {
+            "task_id": "task-1",
+            "token": claim["token"],
+            "generation": claim["generation"],
+            "corrected_contract": self._corrected_task_one_contract(),
+        }
+
+        result = runtime._operation_recover_evidence_contract(args, payload, adapter=FakeAdapter())
+
+        self.assertEqual(result["status"], "success", result)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["generation"], claim["generation"] + 1)
+        self.assertEqual(state["tasks"]["task-1"]["status"], "pending")
+        self.assertEqual(state["tasks"]["task-1"]["required_criteria"], ["task-1:targeted-verification"])
+        self.assertEqual(state["claims"]["task-1"]["state"], "closed")
+        receipts = [event for event in state["history"] if event.get("event") == "evidence-contract-recovery"]
+        self.assertEqual(len(receipts), 1, state["history"])
+        self.assertEqual(receipts[0]["task_id"], "task-1")
+        self.assertEqual(receipts[0]["token"], claim["token"])
+        self.assertEqual(receipts[0]["generation"], claim["generation"])
+        # persist_construction=False: the operation performs no owner backfill.
+        self.assertNotIn("owner", state)
+        # A non-accepting inventory refuses with the manifest byte-unchanged.
+        self._seed_recovery_run(self.MALFORMED_TASK_ONE_CONTRACT)
+        claim = self._drive_malformed_hold()
+        before = self.state_path.read_bytes()
+        non_accepting = FakeAdapter()
+        non_accepting.inventory.append({"provider_session_id": "session-live", "process_identity": {"pid": 321, "start_time": "fixture-start"}})
+        refused = runtime._operation_recover_evidence_contract(
+            args,
+            {"task_id": "task-1", "token": claim["token"], "generation": claim["generation"], "corrected_contract": self._corrected_task_one_contract()},
+            adapter=non_accepting,
+        )
+        self.assertEqual(refused["status"], "blocked", refused)
+        self.assertTrue(any("provider inventory" in item for item in refused["evidence"]), refused)
+        self.assertEqual(self.state_path.read_bytes(), before)
 
     def test_evidence_and_fixtures_are_hermetic(self):
         result = capabilities.bounded_evidence(["token=secret", {"password": "nested-secret"}, "x" * 2000])
@@ -11966,6 +12777,963 @@ class RuntimeContinuationBudgetTest(unittest.TestCase):
         self.driver._save(state)
         newer = self.request("turn-new-generation") | {"generation": self.claim["generation"] + 1, "claim_token": "replacement-token"}
         self.assertEqual(self.driver.reserve_continuation(newer)["ordinal"], 1)
+
+
+def _terminal_evidence_observation(session_id, *, observed_at=None, proof=None, detail="record-terminal"):
+    """A port-shaped terminal observation as the Codex adapter returns it.
+
+    ``observed_at`` defaults to the consult's own monotonic read, so a
+    fake port consulted late still reports a fresh read time.
+    """
+
+    return {
+        "version": 1,
+        "observation_kind": "terminal-evidence",
+        "state": "terminal",
+        "observed_at": time.monotonic() if observed_at is None else observed_at,
+        "freshness_window": 30.0,
+        "provider_identity": {"session_id": session_id},
+        "process_identity": {},
+        "capacity_slot_effect": "release",
+        "proof": {"verified": True, "kind": "provider-terminal"} if proof is None else proof,
+        "detail_signal": detail,
+    }
+
+
+def _terminal_evidence_refusal_observation(detail):
+    """A port-shaped non-terminal refusal observation."""
+
+    return {
+        "version": 1,
+        "observation_kind": "terminal-evidence",
+        "state": "unavailable",
+        "observed_at": time.monotonic(),
+        "freshness_window": 30.0,
+        "provider_identity": {},
+        "process_identity": {},
+        "capacity_slot_effect": "quarantine",
+        "proof": {"verified": False, "kind": "provider-terminal"},
+        "detail_signal": detail,
+    }
+
+
+class _ConsultAdapter:
+    """Inventory plus terminal-evidence port fake for the reconcile rows.
+
+    ``port`` is a callable (conversation id to observation), an Exception
+    (raised on every consult), or a fixed observation. ``expose_port=False``
+    builds the adapter-lacks-the-port-attribute shape. ``raw_stdout`` is the
+    raw ``ps`` command text the post-consult re-observation scans.
+    """
+
+    def __init__(self, inventory=None, port=None, raw_stdout=None, expose_port=True):
+        self._inventory_rows = inventory if inventory is not None else []
+        self._port = port
+        self._raw_stdout = raw_stdout
+        self.consults = []
+        # Clock pinning: the inventory read time derives from
+        # time.monotonic() at fixture setup, so a caller-supplied ``now``
+        # captured at or after setup always reads it as fresh.
+        self._observed_at = time.monotonic()
+        if expose_port:
+            self.observe_terminal_evidence = self._consult
+
+    def _consult(self, conversation_id):
+        self.consults.append(conversation_id)
+        if isinstance(self._port, Exception):
+            raise self._port
+        if callable(self._port):
+            return self._port(conversation_id)
+        return self._port
+
+    def observe_inventory(self):
+        rows = self._inventory_rows() if callable(self._inventory_rows) else list(self._inventory_rows)
+        return {"version": 1, "observation_kind": "inventory", "state": "available", "observed_at": self._observed_at, "freshness_window": 30.0, "capacity_slot_effect": "retain", "inventory": rows}
+
+    def process_snapshot(self):
+        return subprocess.CompletedProcess([], 0, stdout=self._raw_stdout or "", stderr="")
+
+
+class _ReconcileFixtureBase(unittest.TestCase):
+    """Shared fixture for the Task 2 reconcile wiring rows.
+
+    Clock pinning (the task-wide rule): fixtures derive worker
+    ``started_at`` from ``time.monotonic()`` at setup; tests that drive
+    ``reconcile_worker_capacity`` directly pass ``now=`` (monotonic, at or
+    after fixture setup); tests that drive ``WorkerRegistry.reconcile``
+    directly also pass ``now=``. The stalled fence is pinned only by its
+    own separately named canaries, never as an accident of another
+    fixture's clock.
+    """
+
+    def setUp(self) -> None:
+        self._saved_env = {key: os.environ.pop(key) for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST") if key in os.environ}
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.state_path = self.root / "runtime_state.json"
+        self._seed_manifest()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+        os.environ.update(self._saved_env)
+        for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST"):
+            if key not in self._saved_env:
+                os.environ.pop(key, None)
+
+    def _seed_manifest(self):
+        """(Re)create the fixture manifest; arms that need a clean slate
+        call this again instead of sharing mutated worker rows."""
+
+        runtime.create_manifest(self.state_path, "fixture-plan", [
+            {"id": "task-1", "number": 1, "status": "pending", "checkbox": False, "allowed_paths": ["task-1.txt"]},
+            {"id": "task-2", "number": 2, "status": "pending", "checkbox": False, "allowed_paths": ["task-2.txt"]},
+            {"id": "task-3", "number": 3, "status": "pending", "checkbox": False, "allowed_paths": ["task-3.txt"]},
+        ])
+        manifest = runtime.load_manifest(self.state_path)
+        for number in (1, 2, 3):
+            manifest["claims"][f"task-{number}"] = {"task_id": f"task-{number}", "token": f"tok-task-{number}", "generation": 1, "owner": "test-owner", "state": "claimed"}
+        runtime._safe_write_json(self.state_path, manifest)
+
+    def _driver(self, adapter, **kwargs):
+        return runtime.RuntimeDriver(
+            self.state_path,
+            plan_slug="fixture-plan",
+            owner="test-owner",
+            repo_root=self.root,
+            commit_lookup=lambda _commit: True,
+            adapter=adapter,
+            **kwargs,
+        )
+
+    def _register_worker(self, task_id, session, worker_id, entry_id, started_at=None):
+        manifest = runtime.load_manifest(self.state_path)
+        registry = runtime.WorkerRegistry(manifest)
+        claim = manifest["claims"][task_id]
+        registered = registry.register_launch(
+            task_id=task_id,
+            claim_token=claim["token"],
+            generation=claim["generation"],
+            claim_owner_id=claim["owner"],
+            provider_session_id=session,
+            worker_id=worker_id,
+            command_identity="codex-exec",
+            process_identity={"provider": "codex", "session_id": session},
+            launch_id=f"launch-{task_id}",
+            capacity_entry_id=entry_id,
+            started_at=time.monotonic() if started_at is None else started_at,
+        )
+        self.assertEqual(registered.get("state"), "active", registered)
+        manifest.update(workers=registry.manifest["workers"], capacity=registry.manifest["capacity"])
+        runtime._safe_write_json(self.state_path, manifest)
+        return registered
+
+    def _persist(self, manifest):
+        runtime._safe_write_json(self.state_path, manifest)
+        return runtime.load_manifest(self.state_path)
+
+    def _raw_resume_row(self, pid, conversation_id, start_time="Mon Sep 28 12:00:00 2026"):
+        return {
+            "provider_session_id": f"codex-process-{pid}-{start_time.replace(' ', '')[:12]}",
+            "process_identity": {"pid": pid, "start_time": start_time},
+            "conversation_id": conversation_id,
+        }
+
+    def _corrected_contract(self):
+        return {
+            "required_criteria": ["task-1:recovered-verification"],
+            "verification_commands": [
+                {"id": "verify-recovered", "argv": ["cat", "task-1.txt"], "criteria": ["task-1:recovered-verification"]}
+            ],
+        }
+
+    def _seed_launched_hold(self, adapter, session, worker_id="worker-hold", entry_id="capacity-hold", extra_workers=()):
+        """Hand-build the launched hold (task launched, claim launched with
+        its launch record, durable launch reservation held) plus the
+        registered worker row, so the recovery-path rows reach precondition
+        6 with a controlled adapter."""
+
+        manifest = runtime.load_manifest(self.state_path)
+        manifest["tasks"]["task-1"]["status"] = "launched"
+        manifest["claims"]["task-1"] = {
+            "task_id": "task-1",
+            "token": "tok-hold",
+            "generation": 3,
+            "owner": "test-owner",
+            "state": "launched",
+            "launch_id": "launch-hold",
+            "launch_record": {"baseline_revision": "base", "generation": 3, "launched_at": 100.0},
+        }
+        manifest["capacity"]["reservations"]["task-1:3:launch-hold"] = {"task_id": "task-1", "generation": 3, "claim_token": "tok-hold", "launch_id": "launch-hold"}
+        runtime._safe_write_json(self.state_path, manifest)
+        self._register_worker("task-1", session, worker_id, entry_id)
+        for task_id, extra_session, extra_worker, extra_entry in extra_workers:
+            manifest = runtime.load_manifest(self.state_path)
+            manifest["claims"][task_id] = {**manifest["claims"][task_id], "state": "launched"}
+            runtime._safe_write_json(self.state_path, manifest)
+            self._register_worker(task_id, extra_session, extra_worker, extra_entry)
+        return runtime.load_manifest(self.state_path)["claims"]["task-1"]
+
+
+class ProcessIdentityFingerprintTest(unittest.TestCase):
+    """The shared pid+start-time fence predicate and its cross-module pin.
+
+    The predicate homes in ``runtime_capabilities`` unconditionally (Task 0
+    Decision A); this plan's adopter is the driver's registered-process
+    fence. The registry's exact-dict comparison stays registry-local (its
+    zero-dependency contract forbids importing capabilities), so
+    equivalence is pinned here, test-side import only.
+    """
+
+    def test_pid_plane_equivalence_classes(self):
+        fingerprint = capabilities.process_identity_fingerprint
+        base = {"pid": 4242, "start_time": "Mon Sep 28 12:00:00 2026"}
+        self.assertEqual(fingerprint(base), (4242, "Mon Sep 28 12:00:00 2026"))
+        # Extra keys do not affect the pid plane (the foreign-start persisted
+        # shape carries a provider key the inventory row lacks).
+        self.assertEqual(fingerprint(base), fingerprint(dict(base, provider="codex")))
+        self.assertEqual(fingerprint(base), fingerprint(dict(base, note="ignored")))
+        # int-versus-string start_time normalize to one comparable form.
+        self.assertEqual(fingerprint({"pid": 7, "start_time": 1770000000}), fingerprint({"pid": 7, "start_time": "1770000000"}))
+        self.assertEqual(fingerprint({"pid": 7, "start_time": 1770000000.5}), fingerprint({"pid": 7, "start_time": "1770000000.5"}))
+        # Surrounding whitespace on the text form does not split a pair.
+        self.assertEqual(fingerprint(base), fingerprint({"pid": 4242, "start_time": "  Mon Sep 28 12:00:00 2026 "}))
+        # Differing pid or start_time stay distinct.
+        self.assertNotEqual(fingerprint(base), fingerprint(dict(base, pid=4243)))
+        self.assertNotEqual(fingerprint(base), fingerprint(dict(base, start_time="Tue Sep 29 12:00:00 2026")))
+        self.assertNotEqual(fingerprint({"pid": 7, "start_time": 1770000000}), fingerprint({"pid": 8, "start_time": 1770000000}))
+        # Provider-session-shaped identities carry no pid plane at all.
+        self.assertIsNone(fingerprint({"provider": "codex", "session_id": "conv-abc"}))
+        self.assertIsNone(fingerprint({}))
+        self.assertIsNone(fingerprint(None))
+        # Malformed pid planes are non-matching (fail closed), never equal.
+        self.assertIsNone(fingerprint({"pid": 0, "start_time": "x"}))
+        self.assertIsNone(fingerprint({"pid": -1, "start_time": "x"}))
+        self.assertIsNone(fingerprint({"pid": True, "start_time": "x"}))
+        self.assertIsNone(fingerprint({"pid": "4242", "start_time": "x"}))
+        self.assertIsNone(fingerprint({"pid": 4242}))
+        self.assertIsNone(fingerprint({"start_time": "x"}))
+        self.assertIsNone(fingerprint({"pid": 4242, "start_time": True}))
+        self.assertIsNone(fingerprint({"pid": 4242, "start_time": ""}))
+
+    def test_registry_exact_dict_join_pins_predicate_equivalence(self):
+        """Cross-module pin (test-side import only, no registry import of
+        capabilities): every pair the registry's exact-dict join treats as
+        equal the shared predicate also treats as equal; the predicate is
+        the more permissive normalization, and the pairs only it accepts
+        (extra keys, int-versus-string start_time) are exactly the pairs
+        the driver fence may now accept without the registry changing."""
+
+        persisted = {"pid": 99, "start_time": "Sat Sep 26 10:00:00 2026"}
+        session_shaped = {"provider": "codex", "session_id": "conv-pin"}
+        for worker_identity, observed_identity in (
+            (persisted, {"pid": 99, "start_time": "Sat Sep 26 10:00:00 2026"}),
+            (session_shaped, {"provider": "codex", "session_id": "conv-pin"}),
+        ):
+            if worker_identity == observed_identity:
+                self.assertEqual(
+                    capabilities.process_identity_fingerprint(worker_identity),
+                    capabilities.process_identity_fingerprint(observed_identity),
+                )
+        # The registry join stays exact-dict strict: the extra-key variant
+        # the predicate normalizes to equal still quarantines the worker
+        # (process-identity-mismatch), while the predicate calls the same
+        # pair equal for the fence.
+        extra_key_variant = {"pid": 99, "start_time": "Sat Sep 26 10:00:00 2026", "provider": "codex"}
+        self.assertNotEqual(persisted, extra_key_variant)
+        self.assertEqual(
+            capabilities.process_identity_fingerprint(persisted),
+            capabilities.process_identity_fingerprint(extra_key_variant),
+        )
+        # A session-shaped worker and a pid-shaped row disagree on both
+        # comparisons (no false equivalence across planes).
+        self.assertNotEqual(persisted, session_shaped)
+        self.assertNotEqual(
+            capabilities.process_identity_fingerprint(persisted),
+            capabilities.process_identity_fingerprint(session_shaped),
+        )
+        # Behavioral pin through the registry reducer itself.
+        manifest = {
+            "plan_slug": "pin",
+            "workers": {},
+            "capacity": {"version": 1, "entries": {}},
+            "claims": {"task-1": {"token": "tok-pin", "generation": 1, "owner": "owner-pin", "state": "claimed"}},
+        }
+        registry = runtime.WorkerRegistry(manifest)
+        registered = registry.register_launch(
+            task_id="task-1",
+            claim_token="tok-pin",
+            generation=1,
+            claim_owner_id="owner-pin",
+            provider_session_id="conv-pin",
+            worker_id="worker-pin",
+            command_identity="cmd",
+            process_identity=dict(persisted),
+            launch_id="launch-pin",
+            capacity_entry_id="capacity-pin",
+            started_at=1000.0,
+        )
+        self.assertEqual(registered["state"], "active")
+        now = 1100.0
+        exact = registry.reconcile([{"provider_session_id": "conv-pin", "process_identity": dict(persisted)}], now=now)
+        self.assertEqual(exact["status"], "available")
+        mismatched = registry.reconcile([{"provider_session_id": "conv-pin", "process_identity": dict(extra_key_variant)}], now=now)
+        self.assertEqual(registry.worker("worker-pin")["reconciliation"]["reason"], "process-identity-mismatch")
+        self.assertEqual(registry.worker("worker-pin")["state"], "quarantined")
+
+
+class ReconcileIdentityJoinTest(_ReconcileFixtureBase):
+    """Task 2 rows: the driver-side identity join and terminal-evidence wiring.
+
+    The parse extension was chosen (Task 0 Decision B), so the raw resume
+    rows join at the driver; the residual-branch replacement row does not
+    apply.
+    """
+
+    def test_live_worker_observed_available(self):
+        # Green-at-RED regression pin of today's session-id join semantics,
+        # asserted against WorkerRegistry.reconcile with a hand-built joined
+        # row (the driver wrapper cannot return available while any worker
+        # is active; that wrapper behavior is pinned by the raw-row rows).
+        registered = self._register_worker("task-1", "conv-live", "worker-live", "capacity-live")
+        registry = runtime.WorkerRegistry(runtime.load_manifest(self.state_path))
+        joined_row = {
+            "provider_session_id": "conv-live",
+            "process_identity": copy.deepcopy(registered["process_identity"]),
+        }
+        result = registry.reconcile([joined_row], now=time.monotonic())
+        self.assertEqual(result["status"], "available")
+        self.assertEqual(registry.worker("worker-live")["state"], "active")
+
+    def test_raw_resume_row_joined_at_driver(self):
+        # The discriminating row: a RAW codex exec resume pid row (carrying
+        # only the parse-extracted conversation id) joins its registered
+        # worker at the driver: the worker stays active in the persisted
+        # manifest instead of quarantining stale-inventory, while the
+        # capacity stays closed (unavailable, capacity-live from the live
+        # capacity entry witness).
+        self._register_worker("task-1", "conv-join", "worker-join", "capacity-join")
+        raw_row = self._raw_resume_row(501, "conv-join")
+        adapter = _ConsultAdapter(inventory=[raw_row])
+        manifest = runtime.load_manifest(self.state_path)
+        driver = self._driver(adapter)
+        result = driver.reconcile_worker_capacity(manifest, now=time.monotonic())
+        persisted = self._persist(manifest)
+        self.assertEqual(persisted["workers"]["worker-join"]["state"], "active")
+        self.assertNotEqual(persisted["workers"]["worker-join"]["reconciliation"].get("reason"), "stale-inventory")
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["reason"], "capacity-live")
+
+    def test_foreign_process_still_fences(self):
+        # Green-at-RED pin: an unregistered foreign codex exec process row
+        # that joins no registered worker keeps tripping the registered
+        # process fence after the join fix (the last guard against capacity
+        # double allocation).
+        self._register_worker("task-1", "conv-mine", "worker-mine", "capacity-mine")
+        present_row = {"provider_session_id": "conv-mine", "process_identity": {"provider": "codex", "session_id": "conv-mine"}}
+        foreign_row = self._raw_resume_row(777, "conv-foreign")
+        foreign_row.pop("conversation_id")  # an unjoinable fresh codex exec launch row
+        adapter = _ConsultAdapter(inventory=[present_row, foreign_row])
+        manifest = runtime.load_manifest(self.state_path)
+        driver = self._driver(adapter)
+        result = driver.reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["reason"], "capacity-live")
+        self.assertEqual(manifest["workers"]["worker-mine"]["state"], "active")
+
+    def test_absent_process_with_completed_conversation_releases_worker(self):
+        self._register_worker("task-1", "conv-done", "worker-done", "capacity-done")
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation))
+        manifest = runtime.load_manifest(self.state_path)
+        driver = self._driver(adapter)
+        result = driver.reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(adapter.consults, ["conv-done"])
+        self.assertEqual(result["status"], "available", result)
+        persisted = self._persist(manifest)
+        self.assertEqual(persisted["workers"]["worker-done"]["state"], "terminal")
+        self.assertFalse(persisted["capacity"]["entries"]["capacity-done"]["counts_toward_capacity"])
+        self.assertEqual(persisted["capacity"]["entries"]["capacity-done"]["state"], "released")
+
+    def test_identity_mismatch_refuses_release(self):
+        # Green-at-RED: terminal evidence keyed to a different conversation
+        # never releases the worker; the wrapper item carries the
+        # observation's own derived session id, so the registry identity
+        # fence refuses the release and the absence quarantine stands.
+        self._register_worker("task-1", "conv-mine", "worker-mine", "capacity-mine")
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation("conv-someone-else"))
+        manifest = runtime.load_manifest(self.state_path)
+        driver = self._driver(adapter)
+        result = driver.reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(result["status"], "quarantined")
+        self.assertEqual(result["reason"], "stale-inventory")
+        persisted = self._persist(manifest)
+        self.assertEqual(persisted["workers"]["worker-mine"]["state"], "quarantined")
+        self.assertTrue(persisted["capacity"]["entries"]["capacity-mine"]["counts_toward_capacity"])
+
+    def test_stale_terminal_evidence_refuses_release(self):
+        # Green-at-RED: an aged observation READ (injected aged cached read,
+        # never an old completion timestamp) normalizes to stale quarantine
+        # at the consuming validator; the freshness now is the driver's
+        # per-consult capture at or after the port read.
+        self._register_worker("task-1", "conv-aged", "worker-aged", "capacity-aged")
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation, observed_at=time.monotonic() - 120.0))
+        manifest = runtime.load_manifest(self.state_path)
+        driver = self._driver(adapter)
+        result = driver.reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(result["status"], "quarantined")
+        persisted = self._persist(manifest)
+        self.assertEqual(persisted["workers"]["worker-aged"]["state"], "quarantined")
+
+    def test_port_error_contained(self):
+        # Green-at-RED: every consult failure shape quarantines the worker
+        # exactly as absent evidence, never releases and never propagates;
+        # the recovery path that consumes the reconcile leaves the manifest
+        # byte-unchanged.
+        for name, adapter in {
+            "subprocess-timeout": _ConsultAdapter(inventory=[], port=subprocess.TimeoutExpired(cmd="ps", timeout=2.0)),
+            "builtin-key-error": _ConsultAdapter(inventory=[], port=KeyError("boom")),
+            "port-unavailable-observation": _ConsultAdapter(inventory=[], port=_terminal_evidence_refusal_observation("consult-error")),
+            "adapter-without-port": _ConsultAdapter(inventory=[], expose_port=False),
+        }.items():
+            with self.subTest(arm=name):
+                self._seed_manifest()
+                self._register_worker("task-1", f"conv-{name}", f"worker-{name}", f"capacity-{name}")
+                manifest = runtime.load_manifest(self.state_path)
+                driver = self._driver(adapter)
+                result = driver.reconcile_worker_capacity(manifest, now=time.monotonic())
+                self.assertEqual(result["status"], "quarantined")
+                self.assertEqual(result["reason"], "stale-inventory")
+                worker = manifest["workers"][f"worker-{name}"]
+                self.assertEqual(worker["state"], "quarantined")
+                self.assertNotEqual(worker["state"], "terminal")
+        # The recovery path consuming a raising port refuses fail-closed
+        # with the manifest byte-unchanged.
+        self._seed_manifest()
+        raising_port = subprocess.TimeoutExpired(cmd="consult", timeout=2.0)
+        self._seed_launched_hold(_ConsultAdapter(inventory=[], port=raising_port), session="conv-hold")
+        driver = self._driver(_ConsultAdapter(inventory=[], port=raising_port))
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_aggregate_consult_budget(self):
+        # More absent workers than the aggregate budget allows: the consult
+        # stops at the budget and the excess workers reconcile as absent
+        # evidence; a completable worker wedged behind budget-consuming
+        # stuck workers releases on a subsequent pass once the stuck rows
+        # are manually cleaned (the accepted stuck-consult-wedge residual).
+        # Worker ids are named so the persisted manifest's key-sorted
+        # consult order puts the stuck rows ahead of the completable one.
+        self._register_worker("task-1", "conv-stuck-1", "worker-a-stuck-1", "capacity-stuck-1")
+        self._register_worker("task-2", "conv-stuck-2", "worker-b-stuck-2", "capacity-stuck-2")
+        self._register_worker("task-3", "conv-ok", "worker-z-ok", "capacity-ok")
+
+        def port(conversation):
+            if conversation.startswith("conv-stuck"):
+                return _terminal_evidence_refusal_observation("record-not-found")
+            return _terminal_evidence_observation(conversation)
+
+        adapter = _ConsultAdapter(inventory=[], port=port)
+        manifest = runtime.load_manifest(self.state_path)
+        driver = self._driver(adapter)
+        with mock.patch.object(runtime.RuntimeDriver, "TERMINAL_EVIDENCE_CONSULT_BUDGET", 2):
+            result = driver.reconcile_worker_capacity(manifest, now=time.monotonic())
+            self.assertEqual(adapter.consults, ["conv-stuck-1", "conv-stuck-2"])
+            self.assertEqual(result["status"], "quarantined")
+            self.assertEqual(result.get("consult_outcomes"), {"worker-a-stuck-1": "record-not-found", "worker-b-stuck-2": "record-not-found"})
+            self.assertEqual(manifest["workers"]["worker-z-ok"]["state"], "quarantined")
+            persisted = self._persist(manifest)
+            # Manual cleanup of the stuck rows (the documented recovery for
+            # the wedge residual), then the subsequent pass consults and
+            # releases the completable worker.
+            persisted["workers"].pop("worker-a-stuck-1")
+            persisted["workers"].pop("worker-b-stuck-2")
+            persisted["capacity"]["entries"].pop("capacity-stuck-1")
+            persisted["capacity"]["entries"].pop("capacity-stuck-2")
+            persisted = self._persist(persisted)
+            second = driver.reconcile_worker_capacity(persisted, now=time.monotonic())
+        self.assertEqual(adapter.consults, ["conv-stuck-1", "conv-stuck-2", "conv-ok"])
+        self.assertEqual(second["status"], "available", second)
+        final = self._persist(persisted)
+        self.assertEqual(final["workers"]["worker-z-ok"]["state"], "terminal")
+        self.assertFalse(final["capacity"]["entries"]["capacity-ok"]["counts_toward_capacity"])
+
+    def test_recovery_consult_order_is_held_claim_first(self):
+        # The recovery call site threads the target task id, so the held
+        # claim's worker is consulted before any other candidate even when
+        # stuck rows precede it in manifest order; the pass still refuses
+        # while the other workers stay quarantined.
+        self._seed_launched_hold(
+            _ConsultAdapter(),
+            session="conv-hold",
+            extra_workers=(
+                ("task-2", "conv-stuck-a", "worker-stuck-a", "capacity-stuck-a"),
+                ("task-3", "conv-stuck-b", "worker-stuck-b", "capacity-stuck-b"),
+            ),
+        )
+
+        def port(conversation):
+            if conversation.startswith("conv-stuck"):
+                return _terminal_evidence_refusal_observation("record-not-found")
+            return _terminal_evidence_observation(conversation)
+
+        adapter = _ConsultAdapter(inventory=[], port=port)
+        driver = self._driver(adapter)
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+        before = self.state_path.read_bytes()
+        with mock.patch.object(runtime.RuntimeDriver, "TERMINAL_EVIDENCE_CONSULT_BUDGET", 2):
+            outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(adapter.consults[0], "conv-hold")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_wrapped_terminal_envelope_passes_conformance(self):
+        # The driver's wrapper envelope for a completed conversation passes
+        # validate_provider_observation as state terminal with its inventory
+        # list (never normalized to malformed), so the envelope contract and
+        # the wiring decision cannot drift apart.
+        registered = self._register_worker("task-1", "conv-wrap", "worker-wrap", "capacity-wrap")
+        driver = self._driver(_ConsultAdapter())
+        envelope = driver._terminal_observation_envelope(_terminal_evidence_observation("conv-wrap"), registered)
+        self.assertEqual(envelope["observation_kind"], "inventory")
+        self.assertEqual(envelope["state"], "terminal")
+        self.assertEqual(envelope["capacity_slot_effect"], "release")
+        self.assertEqual(len(envelope["inventory"]), 1)
+        normalized = runtime.validate_provider_observation(envelope, now=time.monotonic())
+        self.assertEqual(normalized["state"], "terminal", normalized)
+        self.assertIsInstance(normalized["inventory"], list)
+        item = normalized["inventory"][0]
+        self.assertEqual(item["provider_session_id"], "conv-wrap")
+        self.assertEqual(item["worker_id"], "worker-wrap")
+        self.assertIs(item["proof"]["verified"], True)
+        self.assertEqual(item["proof"]["kind"], "provider-terminal")
+
+    def test_non_conforming_proof_refuses_release(self):
+        # Green-at-RED: the port returning state terminal with a
+        # non-conforming proof (verified false, or a foreign proof kind)
+        # never releases; the driver copies the observation's own proof and
+        # never fabricates conformance, and the recovery path stays
+        # byte-unchanged.
+        non_verifying_port = lambda conversation: _terminal_evidence_observation(conversation, proof={"verified": False, "kind": "provider-terminal"})
+        foreign_kind_port = lambda conversation: _terminal_evidence_observation(conversation, proof={"verified": True, "kind": "provider-close"})
+        for name, adapter in {
+            "verified-false": _ConsultAdapter(inventory=[], port=non_verifying_port),
+            "foreign-kind": _ConsultAdapter(inventory=[], port=foreign_kind_port),
+        }.items():
+            with self.subTest(arm=name):
+                self._seed_manifest()
+                self._register_worker("task-1", f"conv-proof-{name}", f"worker-proof-{name}", f"capacity-proof-{name}")
+                manifest = runtime.load_manifest(self.state_path)
+                driver = self._driver(adapter)
+                result = driver.reconcile_worker_capacity(manifest, now=time.monotonic())
+                self.assertEqual(result["status"], "quarantined")
+                worker = manifest["workers"][f"worker-proof-{name}"]
+                self.assertEqual(worker["state"], "quarantined")
+                self.assertNotEqual(worker["state"], "terminal")
+        self._seed_manifest()
+        self._seed_launched_hold(_ConsultAdapter(inventory=[], port=non_verifying_port), session="conv-hold-proof")
+        driver = self._driver(_ConsultAdapter(inventory=[], port=non_verifying_port))
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_post_consult_reobserve_refuses_release(self):
+        # Green-at-RED: a resume row that appears only in the post-consult
+        # re-observation of the held worker's conversation (a manual resume
+        # without --json, visible only as a raw command token) downgrades
+        # the release to absence quarantine; the recovery path consuming it
+        # stays byte-unchanged.
+        raw_stdout = "/usr/local/bin/codex exec resume conv-quietly --model o4"
+        self._register_worker("task-1", "conv-quietly", "worker-quietly", "capacity-quietly")
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation), raw_stdout=raw_stdout)
+        manifest = runtime.load_manifest(self.state_path)
+        driver = self._driver(adapter)
+        result = driver.reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(result["status"], "quarantined")
+        self.assertEqual(result["reason"], "stale-inventory")
+        worker = manifest["workers"]["worker-quietly"]
+        self.assertEqual(worker["state"], "quarantined")
+        self.assertEqual(worker["reconciliation"], {"status": "stale", "reason": "stale-inventory"})
+        entry = manifest["capacity"]["entries"]["capacity-quietly"]
+        self.assertTrue(entry["counts_toward_capacity"])
+        self.assertEqual(entry["state"], "quarantined")
+        # The recovery path consuming the downgraded release refuses with
+        # the manifest byte-unchanged.
+        self._seed_manifest()
+        hold_raw = "codex exec resume conv-hold-reobserve"
+        self._seed_launched_hold(_ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation), raw_stdout=hold_raw), session="conv-hold-reobserve")
+        recovery_driver = self._driver(_ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation), raw_stdout=hold_raw))
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+        before = self.state_path.read_bytes()
+        outcome = recovery_driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_duplicate_join_deduplicates(self):
+        # Two concurrent resume rows of the same conversation: the driver
+        # reshapes at most one raw row per matched worker (first match
+        # wins) and leaves the rest raw and foreign, so the fence refuses
+        # capacity-live (a contained refusal) instead of the registry's
+        # whole-registry duplicate quarantine, and the worker stays active.
+        self._register_worker("task-1", "conv-dup", "worker-dup", "capacity-dup")
+        first = self._raw_resume_row(601, "conv-dup")
+        second = self._raw_resume_row(602, "conv-dup", start_time="Mon Sep 28 12:00:01 2026")
+        adapter = _ConsultAdapter(inventory=[first, second])
+        manifest = runtime.load_manifest(self.state_path)
+        driver = self._driver(adapter)
+        result = driver.reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["reason"], "capacity-live")
+        persisted = self._persist(manifest)
+        self.assertEqual(persisted["workers"]["worker-dup"]["state"], "active")
+
+    def test_joined_live_worker_stalls_past_liveness_window(self):
+        # Green-at-RED regression pin, built at the registry layer by hand:
+        # the stalled fence is newly reachable for joined Codex workers.
+        self._register_worker("task-1", "conv-stall", "worker-stall", "capacity-stall", started_at=time.monotonic() - 1000.0)
+        registered = runtime.load_manifest(self.state_path)["workers"]["worker-stall"]
+        registry = runtime.WorkerRegistry(runtime.load_manifest(self.state_path))
+        joined_row = {
+            "provider_session_id": "conv-stall",
+            "process_identity": copy.deepcopy(registered["process_identity"]),
+        }
+        result = registry.reconcile([joined_row], now=time.monotonic())
+        self.assertEqual(result["status"], "stalled")
+        self.assertEqual(result["reason"], "stalled")
+        self.assertEqual(registry.worker("worker-stall")["state"], "quarantined")
+
+    def test_raw_resume_row_stalls_past_liveness_window(self):
+        # A RAW resume row injected through the adapter inventory fixture
+        # for a worker whose started_at predates the liveness window yields
+        # stalled (not stale-inventory) once the join lands.
+        self._register_worker("task-1", "conv-stall-raw", "worker-stall-raw", "capacity-stall-raw", started_at=time.monotonic() - 1000.0)
+        raw_row = self._raw_resume_row(701, "conv-stall-raw")
+        adapter = _ConsultAdapter(inventory=[raw_row])
+        manifest = runtime.load_manifest(self.state_path)
+        driver = self._driver(adapter)
+        result = driver.reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(result["status"], "stalled", result)
+        self.assertEqual(result["reason"], "stalled")
+        worker = manifest["workers"]["worker-stall-raw"]
+        self.assertEqual(worker["state"], "quarantined")
+        self.assertEqual(worker["reconciliation"], {"status": "stalled", "reason": "stalled"})
+
+    def test_consult_outcome_recorded(self):
+        # A recovery-path consult whose outcome is record-not-found carries
+        # the per-worker consult outcome (bounded enum) in the precondition
+        # refusal evidence, so a deterministic mechanism failure is
+        # distinguishable from a transient refusal.
+        missing_port = lambda conversation: _terminal_evidence_refusal_observation("record-not-found")
+        self._seed_launched_hold(_ConsultAdapter(inventory=[], port=missing_port), session="conv-hold-outcome", worker_id="worker-hold-outcome", entry_id="capacity-hold-outcome")
+        driver = self._driver(_ConsultAdapter(inventory=[], port=missing_port))
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("worker-hold-outcome" in item and "record-not-found" in item for item in outcome["evidence"]), outcome["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+
+class ReconcileProducerCanaryTest(_ReconcileFixtureBase):
+    """Producer canaries for the behavior-shifting reconcile consumers.
+
+    One canary per behavior-shifting consumer (reclaim, reconcile
+    interruption): a terminal-evidence release through
+    reconcile_worker_capacity produces the intended producer outcome, and a
+    mis-keyed or non-completing record still refuses there.
+    """
+
+    def test_reclaim_releases_completed_worker_through_terminal_evidence(self):
+        self._register_worker("task-1", "conv-reclaim", "worker-reclaim", "capacity-reclaim")
+        fixed = time.time()
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation))
+        manifest = runtime.load_manifest(self.state_path)
+        manifest["tasks"]["task-1"]["status"] = "blocked"
+        manifest["claims"]["task-1"] = {**manifest["claims"]["task-1"], "state": "blocked", "timestamp": fixed - 14500.0}
+        self._persist(manifest)
+        driver = self._driver(adapter, clock=lambda: fixed)
+        outcome = driver.reclaim("task-1")
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-1"]["status"], "pending")
+        self.assertEqual(state["claims"]["task-1"]["state"], "replaced")
+        # The released terminal row is retired with its capacity entry per
+        # the reclaim rotation.
+        self.assertNotIn("worker-reclaim", state["workers"])
+        self.assertNotIn("capacity-reclaim", state["capacity"]["entries"])
+
+    def test_reclaim_refuses_when_record_not_completing(self):
+        self._register_worker("task-1", "conv-reclaim-stuck", "worker-reclaim-stuck", "capacity-reclaim-stuck")
+        fixed = time.time()
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_refusal_observation("record-not-found"))
+        manifest = runtime.load_manifest(self.state_path)
+        manifest["tasks"]["task-1"]["status"] = "blocked"
+        manifest["claims"]["task-1"] = {**manifest["claims"]["task-1"], "state": "blocked", "timestamp": fixed - 14500.0}
+        self._persist(manifest)
+        driver = self._driver(adapter, clock=lambda: fixed)
+        outcome = driver.reclaim("task-1")
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["claims"]["task-1"]["state"], "blocked")
+        self.assertNotEqual(state["workers"]["worker-reclaim-stuck"]["state"], "terminal")
+        self.assertEqual(state["workers"]["worker-reclaim-stuck"]["state"], "quarantined")
+
+    def test_reconcile_interruption_releases_completed_worker_through_terminal_evidence(self):
+        payload = self._seed_interrupted_claim()
+        self._register_worker("task-4", "conv-interrupted", "worker-interrupted", "capacity-interrupted")
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation))
+        driver = self._driver(adapter)
+        outcome = driver.reconcile_interruption(payload)
+        self.assertEqual(outcome["reason_code"], "interruption-reconciled", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-4"]["status"], "pending")
+        self.assertEqual(state["claims"]["task-4"]["state"], "replaced")
+        self.assertNotIn("task-4:9:launch-interrupted", state["capacity"]["reservations"])
+        self.assertEqual(state["workers"]["worker-interrupted"]["state"], "terminal")
+        self.assertFalse(state["capacity"]["entries"]["capacity-interrupted"]["counts_toward_capacity"])
+
+    def test_reconcile_interruption_refuses_when_record_not_completing(self):
+        payload = self._seed_interrupted_claim()
+        self._register_worker("task-4", "conv-interrupted-stuck", "worker-interrupted-stuck", "capacity-interrupted-stuck")
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_refusal_observation("record-not-found"))
+        driver = self._driver(adapter)
+        outcome = driver.reconcile_interruption(payload)
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(outcome["reason_code"], "cleanup-unverified")
+        state = runtime.load_manifest(self.state_path)
+        self.assertIn("task-4:9:launch-interrupted", state["capacity"]["reservations"])
+        self.assertNotEqual(state["workers"]["worker-interrupted-stuck"]["state"], "terminal")
+
+    def _seed_interrupted_claim(self):
+        """Mirror of the suite's interrupted-claim seed, scoped to the
+        canary fixture root: task-4 blocked with a timeout receipt and its
+        durable launch reservation held."""
+
+        manifest = runtime.load_manifest(self.state_path)
+        manifest["claims"]["task-4"] = {"task_id": "task-4", "token": "tok-interrupted", "generation": 9, "owner": "test-owner", "state": "blocked", "launch_id": "launch-interrupted"}
+        manifest["tasks"]["task-4"] = {
+            "id": "task-4",
+            "number": 4,
+            "status": "blocked",
+            "checkbox": False,
+            "allowed_paths": ["task-4.txt"],
+            "resume_allowed": False,
+            "blocked_receipt": {"status": "blocked", "reason_code": "timeout", "evidence": ["deadline exceeded"]},
+        }
+        manifest["capacity"]["reservations"]["task-4:9:launch-interrupted"] = {"task_id": "task-4", "generation": 9, "claim_token": "tok-interrupted", "launch_id": "launch-interrupted"}
+        runtime._safe_write_json(self.state_path, manifest)
+        return {"idempotency_key": "recover-timeout-9", "task_id": "task-4", "claim_token": "tok-interrupted", "generation": 9}
+
+
+class EvidenceContractRecoveryCodexTest(_ReconcileFixtureBase):
+    """Task 3 rows: recovery accepts completed workers, preserves fail-closed.
+
+    The Task 0 parse extension was chosen, so the guard-discriminating live
+    row is witnessable: a live resume process joins its registered worker
+    through the Task 2 mechanism (the registry-level reconcile returns
+    available, the driver wrapper downgrades to capacity-live), and the
+    recovery guard shapes that refusal's evidence by content.
+    """
+
+    HELD_SESSION = "conv-hold"
+
+    def _recovery_driver(self, adapter):
+        self._seed_launched_hold(adapter, session=self.HELD_SESSION)
+        return self._driver(adapter)
+
+    def test_recovery_succeeds_for_completed_worker(self):
+        # A launched hold whose worker completed (fresh identity-matched
+        # terminal evidence from an absent process, accepting inventory)
+        # recovers through the supported operation: the old claim closes,
+        # the durable launch reservation releases, the generation rotates,
+        # and the task returns to pending under one receipt.
+        self._recovery_driver(_ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation)))
+        driver = self._driver(_ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation)))
+        before_state = runtime.load_manifest(self.state_path)
+        claim = before_state["claims"]["task-1"]
+        old_generation = claim["generation"]
+        old_manifest_generation = before_state["generation"]
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], old_generation, self._corrected_contract())
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["claims"]["task-1"]["state"], "closed")
+        self.assertNotIn("task-1:3:launch-hold", state["capacity"]["reservations"], state["capacity"]["reservations"])
+        self.assertFalse(
+            any(reservation.get("task_id") == "task-1" and reservation.get("generation") == old_generation for reservation in state["capacity"]["reservations"].values()),
+            state["capacity"]["reservations"],
+        )
+        self.assertEqual(state["generation"], old_manifest_generation + 1)
+        self.assertEqual(state["tasks"]["task-1"]["status"], "pending")
+        receipts = [event for event in state["history"] if event.get("event") == "evidence-contract-recovery"]
+        self.assertEqual(len(receipts), 1, state["history"])
+        self.assertEqual(receipts[0]["task_id"], "task-1")
+        self.assertEqual(receipts[0]["token"], claim["token"])
+        self.assertEqual(receipts[0]["generation"], old_generation)
+        # The durable flip: the terminal worker row is popped and its
+        # capacity entry retired in the persisted manifest (the registry's
+        # worker-terminal history event stays registry-local under the Task
+        # 2 wiring constraint's save shape and is not asserted here).
+        self.assertNotIn("worker-hold", state["workers"])
+        self.assertNotIn("capacity-hold", state["capacity"]["entries"])
+        from execute_plan_worker_registry import validate_manifest_worker_schema
+
+        validate_manifest_worker_schema(state)
+
+    def test_recovery_succeeds_for_old_completed_hold(self):
+        # The normal recovery-after-the-fact case: the conversation record
+        # proves completion far outside any freshness window (carried as
+        # proof metadata only), and record age is irrelevant once identity
+        # matches and the read is fresh. The fixture port takes the real
+        # monotonic default read at consult time, so the production
+        # ordering (read after the reconcile-entry timestamp capture) is
+        # exercised.
+        far_past_completed_at = time.time() - 86400.0
+
+        def port(conversation):
+            return _terminal_evidence_observation(
+                conversation,
+                proof={"verified": True, "kind": "provider-terminal", "record_completed_at": far_past_completed_at},
+            )
+
+        self._recovery_driver(_ConsultAdapter(inventory=[], port=port))
+        driver = self._driver(_ConsultAdapter(inventory=[], port=port))
+        before_state = runtime.load_manifest(self.state_path)
+        claim = before_state["claims"]["task-1"]
+        old_manifest_generation = before_state["generation"]
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["generation"], old_manifest_generation + 1)
+        self.assertEqual(state["claims"]["task-1"]["state"], "closed")
+        self.assertEqual(state["tasks"]["task-1"]["status"], "pending")
+        self.assertNotIn("worker-hold", state["workers"])
+
+    def test_recovery_refuses_live_worker(self):
+        # Guard-discriminating row: a live registered worker of the held
+        # claim joined through the Task 0 parse plus the Task 2 driver
+        # reshape. The registry-level reconcile returns available for the
+        # joined row while the driver wrapper downgrades to capacity-live,
+        # and the recovery guard (evaluated on the reconciled worker state
+        # before the precondition-6 refusal return) shapes the refusal
+        # evidence on exactly that path: the row discriminates the guard by
+        # evidence content rather than by outcome reason.
+        self._recovery_driver(_ConsultAdapter())
+        live_row = self._raw_resume_row(808, self.HELD_SESSION)
+        driver = self._driver(_ConsultAdapter(inventory=[live_row]))
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(outcome["reason_code"], "precondition-unverified", outcome)
+        # The refusal evidence names the non-terminal worker row and takes
+        # precedence over (leads) the generic inventory reason.
+        worker_lines = [item for item in outcome["evidence"] if "worker-hold" in item]
+        self.assertTrue(worker_lines, outcome["evidence"])
+        generic_lines = [item for item in outcome["evidence"] if item.startswith("provider inventory did not accept")]
+        self.assertTrue(generic_lines, outcome["evidence"])
+        self.assertLess(outcome["evidence"].index(worker_lines[0]), outcome["evidence"].index(generic_lines[0]), outcome["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_recovery_refuses_unjoinable_live_worker(self):
+        # Labeled regression row (cannot witness the guard: today's
+        # reconcile refusal already produces this shape): a live process
+        # that joins no registered worker (no parse-extracted conversation
+        # id, so the join skips it and the registered-process fence keeps
+        # it foreign) refuses recovery with the manifest byte-unchanged.
+        self._recovery_driver(_ConsultAdapter())
+        unjoinable_row = self._raw_resume_row(909, "conv-unjoinable")
+        unjoinable_row.pop("conversation_id")
+        adapter = _ConsultAdapter(inventory=[unjoinable_row], port=_terminal_evidence_refusal_observation("record-not-found"))
+        driver = self._driver(adapter)
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_recovery_refuses_port_error(self):
+        # The containment mirror of the Task 2 canary: the terminal-evidence
+        # port raising or returning unavailable on the recovery path blocks
+        # with the manifest byte-unchanged, never an escaping exception.
+        for name, failing_port in {
+            "raising": subprocess.TimeoutExpired(cmd="consult", timeout=2.0),
+            "unavailable": _terminal_evidence_refusal_observation("consult-error"),
+        }.items():
+            with self.subTest(arm=name):
+                self._seed_manifest()
+                self._recovery_driver(_ConsultAdapter(inventory=[], port=failing_port))
+                driver = self._driver(_ConsultAdapter(inventory=[], port=failing_port))
+                claim = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+                before = self.state_path.read_bytes()
+                outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+                self.assertEqual(outcome["status"], "blocked", outcome)
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_recovery_refuses_mismatched_identity(self):
+        # Terminal evidence keyed to a different conversation than the
+        # registered worker's never releases the worker; recovery blocks
+        # with the manifest byte-unchanged.
+        self._recovery_driver(_ConsultAdapter())
+        driver = self._driver(_ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation("conv-someone-else")))
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["workers"]["worker-hold"]["state"], "active")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_recovery_refuses_stale_evidence(self):
+        # An aged observation READ (injected aged cached read, never an old
+        # completion timestamp) normalizes to the stale quarantine at the
+        # consuming validator; recovery blocks with the manifest
+        # byte-unchanged.
+        self._recovery_driver(_ConsultAdapter())
+        driver = self._driver(_ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation, observed_at=time.monotonic() - 120.0)))
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_old_worker_receipt_refused_after_recovery(self):
+        # Regression pin (green at RED: recovery retires the terminal worker
+        # row, so the existing registry refusal paths already enforce this):
+        # the replaced worker submitting a terminal receipt for the old
+        # claim identity after a successful recovery is refused (no valid
+        # receipt for the new generation) with no state change.
+        self._recovery_driver(_ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation)))
+        driver = self._driver(_ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation)))
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-1"]
+        outcome = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertNotIn("worker-hold", state["workers"])
+        late_receipt = {
+            "receipt_id": "late-terminal-hold",
+            "task_id": "task-1",
+            "claim_token": claim["token"],
+            "claim_owner_id": claim["owner"],
+            "generation": claim["generation"],
+            "worker_id": "worker-hold",
+            "provider_session_id": self.HELD_SESSION,
+            "event": "terminal",
+            "reason": "completed",
+            "observed_at": time.monotonic(),
+            "proof": {"kind": "provider-terminal", "verified": True},
+        }
+        before = self.state_path.read_bytes()
+        registry = runtime.WorkerRegistry(runtime.load_manifest(self.state_path))
+        refused = registry.apply_terminal_receipt(late_receipt)
+        self.assertEqual(refused["status"], "refused", refused)
+        self.assertEqual(refused["reason"], "identity-mismatch", refused)
+        # No state change: the refusal never touches the persisted manifest
+        # and no worker row appears for the replaced identity.
+        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assertNotIn("worker-hold", runtime.load_manifest(self.state_path)["workers"])
 
 
 if __name__ == "__main__":

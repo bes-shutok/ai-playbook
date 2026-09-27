@@ -82,6 +82,12 @@ available; no deferred runtime is silently treated as an eligible profile.
 - `doc-hierarchy-upkeep`: post-migration Layer 1/2 upkeep.
 - Vendored with the shared registry; not a separate runtime source.
 
+### Pre-authoring investigation (`agents/skills/investigate/`)
+- `investigate` (`agents/skills/investigate/SKILL.md`): pre-authoring investigation that turns a backlog item or group into a tracked rolling-log entry with a recommended plan-creation prompt and rejected-alternative dispositions; complements `plans` Phase 1 and the maintenance monitor step.
+
+### Maintenance scheduler (`agents/skills/maintenance/`)
+- `maintenance`: unattended scheduler turn (surveys backlog, plans, and quota); its monitor step prunes and authors the top ready entry of docs/history/backlog/PLAN-PROMPTS.md in-session when the authoring lane is free.
+
 ### Agent harness design (`agents/skills/agents-best-practices/`)
 - `agents-best-practices`: vendored from [DenisSergeevitch/agents-best-practices](https://github.com/DenisSergeevitch/agents-best-practices) (MIT; upstream `metadata.version` in `SKILL.md` frontmatter, currently `1.2.0`).
 - Scope: provider-neutral harness design (loops, permissions, MVP blueprints, evals, MCP/skills governance). Complements first-party workflow skills (`plans`, `execute-plan`, `learn`, `how-to-write-skills`).

@@ -49,8 +49,8 @@ from done_sweep_gates_lib import (
     run_gate,
 )
 
-# The ten absorbed gate ids, in done SKILL.md step order (plan Terms + G2).
-EXPECTED_TEN_GATES = [
+# The twelve absorbed gate ids, in done SKILL.md step order (plan Terms + G2).
+EXPECTED_TWELVE_GATES = [
     "plan-readiness",
     "confluence-hygiene",
     "doc-registry",
@@ -58,9 +58,11 @@ EXPECTED_TEN_GATES = [
     "review-staging",
     "vim-swap-sweep",
     "docs-tmp-sweep",
+    "plans-archive-twin",
     "sensitive-data-scan",
     "em-dash-scan",
     "instruction-size",
+    "foreign-staging",
 ]
 
 
@@ -312,18 +314,23 @@ def test_gate_registry_matches_absorbed_steps(capsys):
     plan-readiness, confluence-hygiene, doc-registry, backlog-inbox,
     review-staging, vim-swap-sweep, docs-tmp-sweep, sensitive-data-scan,
     em-dash-scan, instruction-size."""
-    assert PRE_DOCS_GATES == EXPECTED_TEN_GATES[:7]
-    assert PRE_COMMIT_GATES == EXPECTED_TEN_GATES[7:]
+    assert PRE_DOCS_GATES == EXPECTED_TWELVE_GATES[:8]
+    assert PRE_COMMIT_GATES[:3] == EXPECTED_TWELVE_GATES[8:11]
+    assert PRE_COMMIT_GATES[3] == "foreign-staging"
+    assert PRE_COMMIT_GATES[4] == "plans-archive-twin"
     assert lib.PHASES["pre-docs"] == PRE_DOCS_GATES
     assert lib.PHASES["pre-commit"] == PRE_COMMIT_GATES
     assert list(lib.PHASES.keys()) == ["pre-docs", "pre-commit"]
     # Every registry entry has an implementation and a phase slice.
-    assert set(lib.GATES.keys()) == set(EXPECTED_TEN_GATES)
+    assert set(lib.GATES.keys()) == set(EXPECTED_TWELVE_GATES)
     # The dead READ_ONLY_GATES set stays deleted (sequential execution).
     assert not hasattr(lib, "READ_ONLY_GATES")
-    # list-gates prints the ten ids in phase order, one per line.
+    # list-gates prints the twelve ids, deduped at first phase (the twin
+    # runs in both phases; printed once at pre-docs).
     assert lib.main(["list-gates"]) == 0
-    assert capsys.readouterr().out.splitlines() == EXPECTED_TEN_GATES
+    assert capsys.readouterr().out.splitlines() == EXPECTED_TWELVE_GATES
+    assert len(EXPECTED_TWELVE_GATES) == 12
+    assert len(set(EXPECTED_TWELVE_GATES)) == 12
 
 
 # --------------------------------------------------------------------------- #
@@ -476,7 +483,7 @@ def test_report_shape_and_order(tmp_path, sweep_env, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert rc != 0
     json_lines = [ln for ln in out.splitlines() if ln.startswith("{")]
-    assert len(json_lines) == 7  # one per pre-docs gate, in registry order
+    assert len(json_lines) == 8  # one per pre-docs gate, in registry order
     gates = []
     for ln in json_lines:
         payload = json.loads(ln)
@@ -1230,6 +1237,7 @@ def _seed_run_manifest(
     created_epoch: float,
     start_commit: str | None = None,
     start_porcelain: list[str] | None = None,
+    owned_paths: list[str] | None = None,
     owned_plan_paths: list[str] | None = None,
     owned_review_paths: list[str] | None = None,
     foreign_review_paths: list[str] | None = None,
@@ -1239,7 +1247,7 @@ def _seed_run_manifest(
     """Seed one run-manifest JSON through the lib's own model so loader tests
     exercise the real serialization shape. ``start_commit`` defaults to the
     current HEAD; ``start_porcelain`` defaults to an empty snapshot; the
-    owned/foreign lists default to empty; ``adopted_from`` defaults to null
+    owned/foreign lists (including ``owned_paths``) default to empty; ``adopted_from`` defaults to null
     and ``complete`` to false (an interrupted run)."""
     head = git(root, "rev-parse", "HEAD").stdout.strip()
     manifest = lib.RunManifest(
@@ -1251,6 +1259,7 @@ def _seed_run_manifest(
         pid=os.getpid(),
         start_commit=start_commit if start_commit is not None else head,
         start_porcelain=list(start_porcelain or []),
+        owned_paths=list(owned_paths or []),
         owned_plan_paths=list(owned_plan_paths or []),
         owned_review_paths=list(owned_review_paths or []),
         foreign_review_paths=list(foreign_review_paths or []),
@@ -1337,7 +1346,8 @@ def test_write_manifest_creates_atomic_v1_record(
     assert payload["adopted_from"] is None
     assert payload["complete"] is False
     assert payload["pid"] == os.getpid()
-    assert payload["repo_root"] == str(root.resolve())
+    assert payload["repo_root"] == root_digest(root)
+    assert str(root) not in manifests[0].read_text(encoding="utf-8")
     assert isinstance(payload["created_epoch"], (int, float))
 
 
@@ -2692,3 +2702,639 @@ def test_write_manifest_foreign_review_from_file_bulk_loads(
     assert len(manifests) == 1
     payload = json.loads(manifests[0].read_text(encoding="utf-8"))
     assert sorted(payload["foreign_review_paths"]) == sorted([peer_a, peer_b])
+
+
+# --------------------------------------------------------------------------- #
+# Done-gate manifest root truth: digest root + repo-relative paths.
+# --------------------------------------------------------------------------- #
+def root_digest(root: Path) -> str:
+    """The done Step 0 identity digest: sha256 of the trailing-slash-stripped
+    resolved repo root (the spelling GateContext.discover records)."""
+    return hashlib.sha256(str(root.resolve()).rstrip("/").encode()).hexdigest()
+
+
+def test_write_manifest_records_repo_root_digest(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a fixture repo with a content-bearing
+    run-start marker, expects write-manifest to record the 64-hex digest of
+    the resolved root as ``repo_root`` and to leave the raw root spelling out
+    of the manifest bytes entirely."""
+    root = mktemp_repo("digest-root")
+    make_marker(root, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    assert lib.main(["write-manifest"]) == 0
+    manifests = list(done_session.glob("run-manifest-*.json"))
+    assert len(manifests) == 1
+    text = manifests[0].read_text(encoding="utf-8")
+    payload = json.loads(text)
+    assert payload["repo_root"] == root_digest(root)
+    assert str(root) not in text
+
+
+def test_write_manifest_relativizes_absolute_foreign_input(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given ``--foreign-review`` answered with an
+    absolute path under the fixture root (the claim-or-foreign error prints
+    absolute candidate paths), expects the manifest to store the repo-relative
+    form and no raw root spelling in the bytes."""
+    root = mktemp_repo("abs-foreign")
+    make_marker(root, time.time(), os.getpid())
+    review_rel = "docs/reviews/2026-09-27-peer-review-r1.md"
+    (root / "docs/reviews").mkdir(parents=True)
+    (root / review_rel).write_text("peer staging review\n", encoding="utf-8")
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    assert lib.main(["write-manifest", "--foreign-review", str(root / review_rel)]) == 0
+    manifests = list(done_session.glob("run-manifest-*.json"))
+    assert len(manifests) == 1
+    text = manifests[0].read_text(encoding="utf-8")
+    payload = json.loads(text)
+    assert payload["foreign_review_paths"] == [review_rel]
+    assert str(root) not in text
+
+
+def test_write_manifest_relativizes_symlink_aliased_foreign_input(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a symlink alias directory pointing at
+    the fixture repo root and a ``--foreign-review`` input spelled through the
+    alias, expects the stored path to be the repo-relative form; this
+    discriminates the resolve-first helper from a lexical containment check."""
+    root = mktemp_repo("alias-foreign")
+    make_marker(root, time.time(), os.getpid())
+    review_rel = "docs/reviews/2026-09-27-aliased-review-r1.md"
+    (root / "docs/reviews").mkdir(parents=True)
+    (root / review_rel).write_text("peer staging review\n", encoding="utf-8")
+    alias = tmp_path / "alias-link"
+    alias.symlink_to(root, target_is_directory=True)
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    assert lib.main(
+        [
+            "write-manifest",
+            "--foreign-review",
+            str(alias / "docs" / "reviews" / "2026-09-27-aliased-review-r1.md"),
+        ]
+    ) == 0
+    manifests = list(done_session.glob("run-manifest-*.json"))
+    assert len(manifests) == 1
+    payload = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert payload["foreign_review_paths"] == [review_rel]
+
+
+def test_write_manifest_relativizes_inherited_paths_on_adopt(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a seeded legacy manifest recording the
+    absolute root plus an absolute owned review path and an absolute foreign
+    path, when the new run adopts it and also passes ``--foreign-review``
+    naming the relative form of that same foreign path, expects the new
+    manifest to record the digest root and repo-relative owned and foreign
+    paths with the shared path recorded exactly once and no raw root spelling."""
+    root = mktemp_repo("adopt-rel")
+    now = time.time()
+    make_marker(root, now - 60, os.getpid())
+    (root / "docs/reviews").mkdir(parents=True)
+    owned_rel = "docs/reviews/2026-09-27-owned-review-r1.md"
+    foreign_rel = "docs/reviews/2026-09-27-peer-review-r1.md"
+    for rel in (owned_rel, foreign_rel):
+        (root / rel).write_text("staging review body\n", encoding="utf-8")
+    old_run_id = "20260926T000000Z-adoptseed01"
+    _seed_run_manifest(
+        root,
+        old_run_id,
+        marker_name(now - 60),
+        str(root.resolve()),
+        now - 60,
+        owned_review_paths=[str(root / owned_rel)],
+        foreign_review_paths=[str(root / foreign_rel)],
+    )
+    make_marker(root, now, os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    assert lib.main(
+        ["write-manifest", "--adopt", old_run_id, "--foreign-review", foreign_rel]
+    ) == 0
+    manifests = sorted(done_session.glob("run-manifest-*.json"))
+    assert len(manifests) == 2
+    text = manifests[-1].read_text(encoding="utf-8")
+    payload = json.loads(text)
+    assert payload["adopted_from"] == old_run_id
+    assert payload["repo_root"] == root_digest(root)
+    assert payload["owned_review_paths"] == [owned_rel]
+    assert payload["foreign_review_paths"] == [foreign_rel]
+    assert str(root) not in text
+
+
+def test_manifest_root_matches_digest_and_legacy_arms(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given ``_manifest_root_matches`` called with
+    this repo's digest, a legacy absolute path spelling, a foreign repo's
+    digest, and a foreign absolute path, expects True, True, False, False."""
+    root = mktemp_repo("root-arms")
+    other = mktemp_repo("other-root")
+    # The production compare side is the resolved root (GateContext.discover
+    # resolves DONE_SWEEP_REPO_ROOT), so the direct calls pass root.resolve().
+    assert lib._manifest_root_matches(root_digest(root), root.resolve()) is True
+    assert lib._manifest_root_matches(str(root.resolve()), root.resolve()) is True
+    assert lib._manifest_root_matches(root_digest(other), root.resolve()) is False
+    assert lib._manifest_root_matches(str(other.resolve()), root.resolve()) is False
+
+
+def test_load_run_manifest_accepts_digest_root_and_rejects_foreign_digest(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a seeded manifest whose ``repo_root`` is
+    the digest of the resolved root, expects the loader to return it; given
+    one seeded with a foreign repo's digest, expects None."""
+    root = mktemp_repo("load-digest")
+    other = mktemp_repo("load-foreign")
+    now = time.time()
+    make_marker(root, now, os.getpid())
+    window = lib.derive_session_window(
+        root / "docs" / "tmp" / "done-session", root
+    )
+    assert window.current is not None
+
+    _seed_run_manifest(
+        root,
+        "20260926T000000Z-digestok01",
+        window.current.path.name,
+        root_digest(root),
+        now,
+    )
+    loaded = lib.load_run_manifest(
+        root / "docs" / "tmp" / "done-session", root.resolve(), window
+    )
+    assert loaded is not None
+    assert loaded.run_id == "20260926T000000Z-digestok01"
+
+    foreign_window_root = mktemp_repo("load-foreign-root")
+    make_marker(foreign_window_root, now, os.getpid())
+    foreign_window = lib.derive_session_window(
+        foreign_window_root / "docs" / "tmp" / "done-session", foreign_window_root
+    )
+    _seed_run_manifest(
+        foreign_window_root,
+        "20260926T000000Z-digestfg01",
+        foreign_window.current.path.name,
+        root_digest(other),
+        now,
+    )
+    assert (
+        lib.load_run_manifest(
+            foreign_window_root / "docs" / "tmp" / "done-session",
+            foreign_window_root.resolve(),
+            foreign_window,
+        )
+        is None
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Marker parser hex-token hardening and mixed-format window.
+# --------------------------------------------------------------------------- #
+def test_parse_marker_hex_mismatch_returns_none_without_realpath(
+    tmp_path, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a 3-field marker whose middle field is a
+    64-hex token that is not this repo's digest, with ``os.path.realpath``
+    monkeypatched to raise, expects ``_parse_marker`` to return None and
+    ``_marker_records_other_repo`` to return True with neither calling
+    realpath; and given a digest-match marker, expects ``_parse_marker`` to
+    succeed under the same raising monkeypatch."""
+    root = mktemp_repo("hex-mismatch").resolve()
+    foreign_digest = hashlib.sha256(b"some-other-repo-root").hexdigest()
+    marker_path = tmp_path / "run-start-foreign"
+    marker_path.write_text(
+        f"1000 {foreign_digest} 4242\n", encoding="utf-8"
+    )
+
+    def explode(path, *args, **kwargs):
+        raise AssertionError("realpath must not be called for hex tokens")
+
+    monkey = __import__("pytest").MonkeyPatch()
+    monkey.setattr(lib.os.path, "realpath", explode)
+    try:
+        assert lib._parse_marker(marker_path, root) is None
+        assert lib._marker_records_other_repo(marker_path, root) is True
+    finally:
+        monkey.undo()
+
+    digest_marker = tmp_path / "run-start-digest"
+    digest_marker.write_text(
+        f"2000 {lib._repo_root_digest(root)} 4242\n", encoding="utf-8"
+    )
+    monkey2 = __import__("pytest").MonkeyPatch()
+    monkey2.setattr(lib.os.path, "realpath", explode)
+    try:
+        parsed = lib._parse_marker(digest_marker, root)
+    finally:
+        monkey2.undo()
+    assert parsed is not None
+    assert parsed.repo_root == lib._repo_root_digest(root)
+
+
+def test_session_window_mixed_format_legacy_prev_digest_current(
+    tmp_path, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given a legacy raw-path previous marker and a
+    digest-format current marker for the same repo (the digest derived from
+    the resolved root spelling and the legacy marker recording that same
+    resolved spelling verbatim), expects ``derive_session_window`` invoked
+    with the ``ctx_for(root)`` context root to anchor with anchor equal to the
+    legacy marker, current equal to the digest marker, and ``start_epoch``
+    equal to the legacy marker's epoch."""
+    root = mktemp_repo("mixed-window")
+    old_epoch = time.time() - 3600
+    new_epoch = time.time()
+    done_session = root / "docs" / "tmp" / "done-session"
+    done_session.mkdir(parents=True, exist_ok=True)
+    legacy = done_session / marker_name(old_epoch)
+    legacy.write_text(
+        f"{int(old_epoch)} {root.resolve()} {os.getpid()}\n", encoding="utf-8"
+    )
+    current = done_session / marker_name(new_epoch)
+    current.write_text(
+        f"{int(new_epoch)} {lib._repo_root_digest(root.resolve())} {os.getpid()}\n",
+        encoding="utf-8",
+    )
+
+    window = lib.derive_session_window(done_session, ctx_for(root).repo_root)
+    assert window.anchored is True
+    assert window.anchor is not None
+    assert window.anchor.path.name == legacy.name
+    assert window.current is not None
+    assert window.current.path.name == current.name
+    assert window.start_epoch == int(old_epoch)
+
+
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-09-27-concurrent-landing-archive-routing-gates.md
+# Task 1: foreign-staging and plans-archive-twin gates.
+# --------------------------------------------------------------------------- #
+def _foreign_fixture(tmp_path, sweep_env, name: str):
+    """Hermetic repo with a run-start marker, a seeded run manifest whose
+    start_porcelain carries the plan's verbatim dirt rows, and the matching
+    foreign files staged bare (git add -f; the fixture gitignores /docs/)."""
+    root = make_repo(tmp_path, name, gitignore_docs=True)
+    write_facts(root)
+    now = time.time()
+    marker = make_marker(root, now, os.getpid())
+    (root / "docs/tmp").mkdir(parents=True, exist_ok=True)
+    (root / "docs/tmp/foreign-note.md").write_text("rename old side\n", encoding="utf-8")
+    (root / "docs/tmp/foreign note.md").write_text("quoted spaced\n", encoding="utf-8")
+    (root / "docs/tmp/tab\tname.md").write_text("control tab\n", encoding="utf-8")
+    (root / "docs/tmp/old-note.md").write_text("delete+add old side\n", encoding="utf-8")
+    (root / "docs/tmp/new-note.md").write_text("delete+add new side\n", encoding="utf-8")
+    (root / "docs/tmp/own-mid-session.md").write_text("own staging\n", encoding="utf-8")
+    start_porcelain = [
+        "R  docs/tmp/foreign-note.md -> docs/tmp/renamed-note.md",
+        '?? "docs/tmp/foreign note.md"',
+        '?? "docs/tmp/tab\\tname.md"',
+        "R  docs/tmp/old-note.md -> docs/tmp/new-note.md",
+    ]
+    _seed_run_manifest(
+        root,
+        "foreign-run-1",
+        marker.name,
+        str(root),
+        now,
+        start_porcelain=start_porcelain,
+    )
+    monkey_ok = root
+    git(root, "add", "-f",
+        "docs/tmp/foreign-note.md",
+        "docs/tmp/foreign note.md",
+        "docs/tmp/tab\tname.md",
+        "docs/tmp/old-note.md",
+        "docs/tmp/new-note.md",
+        "docs/tmp/own-mid-session.md")
+    return monkey_ok, start_porcelain
+
+
+def test_foreign_staging_fails_on_foreign_start_dirt(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given a hermetic repo whose run manifest is
+    seeded with verbatim porcelain rows (rename row, quoted spaced row,
+    control-character row, rename exposing a delete+add staged pair), where
+    the staged foreign path is the rename's OLD side, expects
+    gate_foreign_staging to fail naming the paths, unquoted."""
+    root, _ = _foreign_fixture(tmp_path, sweep_env, "foreign-fail")
+    result = run_gate("foreign-staging", ctx_for(root))
+    assert result.rc == 1, result.message
+    for path in (
+        "docs/tmp/foreign-note.md",
+        "docs/tmp/foreign note.md",
+        "docs/tmp/tab\tname.md",
+        "docs/tmp/old-note.md",
+    ):
+        assert path in result.message, (path, result.message)
+    # Own mid-session staging outside the start-dirt record is not foreign.
+    assert "own-mid-session" not in result.message
+
+
+def test_foreign_staging_owned_exemption_passes_and_names_path(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given the same start-dirt rows with the
+    foreign path present in the manifest's owned_paths, expects the gate to
+    pass and the pass result to name the exempted owned path."""
+    root, _ = _foreign_fixture(tmp_path, sweep_env, "foreign-owned")
+    now = time.time()
+    marker = make_marker(root, now + 1, os.getpid())
+    _seed_run_manifest(
+        root,
+        "foreign-owned-run",
+        marker.name,
+        str(root),
+        now + 1,
+        start_porcelain=[
+            "R  docs/tmp/foreign-note.md -> docs/tmp/renamed-note.md",
+        ],
+        owned_paths=["docs/tmp/foreign-note.md"],
+    )
+    result = run_gate("foreign-staging", ctx_for(root))
+    assert result.rc == 0, result.message
+    assert "docs/tmp/foreign-note.md" in result.message
+    assert result.warnings and "docs/tmp/foreign-note.md" in result.warnings[0]
+
+
+def test_foreign_staging_union_exemption_via_plan_paths(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given a start-dirt path exempted only via
+    owned_plan_paths, expects the gate to pass (the owned set is the union
+    of all three lists)."""
+    root, _ = _foreign_fixture(tmp_path, sweep_env, "foreign-union")
+    now = time.time()
+    marker = make_marker(root, now + 1, os.getpid())
+    _seed_run_manifest(
+        root,
+        "foreign-union-run",
+        marker.name,
+        str(root),
+        now + 1,
+        start_porcelain=[
+            "R  docs/tmp/foreign-note.md -> docs/tmp/renamed-note.md",
+        ],
+        owned_plan_paths=["docs/tmp/foreign-note.md"],
+    )
+    result = run_gate("foreign-staging", ctx_for(root))
+    assert result.rc == 0, result.message
+
+
+def test_foreign_staging_rerun_own_staging_passes(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given own mid-session staged paths that appear
+    in no start-dirt row, expects the gate to pass."""
+    root, _ = _foreign_fixture(tmp_path, sweep_env, "foreign-rerun")
+    now = time.time()
+    marker = make_marker(root, now + 1, os.getpid())
+    _seed_run_manifest(
+        root,
+        "foreign-rerun-run",
+        marker.name,
+        str(root),
+        now + 1,
+        start_porcelain=["?? docs/tmp/unrelated-dirt.md"],
+    )
+    result = run_gate("foreign-staging", ctx_for(root))
+    assert result.rc == 0, result.message
+
+
+def test_foreign_staging_adopted_run_claimed_and_unclaimed(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Adopted-run shapes: an adopted manifest whose
+    start_porcelain records the predecessor's created file (the unioned
+    start-dirt record) passes when the adopting Step 0 claimed it via
+    owned_paths and fails when the same shape is unclaimed."""
+    root, _ = _foreign_fixture(tmp_path, sweep_env, "foreign-adopt")
+    now = time.time()
+    # Claimed arm.
+    marker = make_marker(root, now + 1, os.getpid())
+    _seed_run_manifest(
+        root,
+        "adopt-claimed",
+        marker.name,
+        str(root),
+        now + 1,
+        start_porcelain=["?? docs/tmp/predecessor-output.md"],
+        adopted_from="foreign-run-1",
+        owned_paths=["docs/tmp/predecessor-output.md"],
+    )
+    (root / "docs/tmp/predecessor-output.md").write_text("x\n", encoding="utf-8")
+    git(root, "add", "-f", "docs/tmp/predecessor-output.md")
+    claimed = run_gate("foreign-staging", ctx_for(root))
+    assert claimed.rc == 0, claimed.message
+    # Unclaimed arm: identical shape, no owned_paths claim.
+    marker2 = make_marker(root, now + 2, os.getpid())
+    _seed_run_manifest(
+        root,
+        "adopt-unclaimed",
+        marker2.name,
+        str(root),
+        now + 2,
+        start_porcelain=["?? docs/tmp/predecessor-output.md"],
+        adopted_from="foreign-run-1",
+    )
+    unclaimed = run_gate("foreign-staging", ctx_for(root))
+    assert unclaimed.rc == 1, unclaimed.message
+    assert "docs/tmp/predecessor-output.md" in unclaimed.message
+
+
+def test_foreign_staging_writer_owned_path_flag(tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys):
+    """[class: REPOSITORY_TEST] Writer-side wiring: run the write-manifest
+    command with --owned-path and assert the written payload's owned_paths
+    equals that list."""
+    root = mktemp_repo("owned-flag")
+    marker = make_marker(root, time.time(), os.getpid())
+    (root / "docs/tmp").mkdir(parents=True, exist_ok=True)
+    (root / "docs/tmp/foreign-note.md").write_text("dirt\n", encoding="utf-8")
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    rc = lib.main(["write-manifest", "--claim-none", "--owned-path", "docs/tmp/foreign-note.md"])
+    assert rc == 0, capsys.readouterr().err
+    done_session = root / "docs/tmp/done-session"
+    manifest_path = sorted(done_session.glob("run-manifest-*.json"))[-1]
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["owned_paths"] == ["docs/tmp/foreign-note.md"]
+
+
+def test_foreign_staging_writer_warns_on_unmatched_claim(tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys):
+    """[class: REPOSITORY_TEST] Writer-side warning: given an --owned-path
+    claim matching no normalized start-dirt row, expects the writer to emit
+    its named warning."""
+    root = mktemp_repo("unmatched-claim")
+    make_marker(root, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    rc = lib.main(["write-manifest", "--claim-none", "--owned-path", "docs/tmp/never-dirty.md"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "--owned-path claim(s) matching no normalized start-dirt row" in out
+    assert "docs/tmp/never-dirty.md" in out
+
+
+def test_foreign_staging_writer_adopt_composes_owned_paths(tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys):
+    """[class: REPOSITORY_TEST] Writer-side adoption composition: a
+    write-manifest --adopt invocation with fresh claims over an adopted
+    manifest carrying owned_paths writes fresh claims plus adopted claims,
+    deduped."""
+    root = mktemp_repo("adopt-compose")
+    make_marker(root, time.time(), os.getpid())
+    (root / "dirt-a.md").write_text("a\n", encoding="utf-8")
+    (root / "dirt-b.md").write_text("b\n", encoding="utf-8")
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    assert lib.main(["write-manifest", "--claim-none", "--owned-path", "dirt-a.md"]) == 0
+    out = capsys.readouterr().out
+    first_id = sorted(
+        p.name[len("run-manifest-"):-len(".json")]
+        for p in (root / "docs/tmp/done-session").glob("run-manifest-*.json")
+    )[0]
+    assert first_id in out
+    marker2 = make_marker(root, time.time() + 1, os.getpid())
+    assert lib.main([
+        "write-manifest", "--adopt", first_id,
+        "--owned-path", "dirt-b.md",
+        "--owned-path", "dirt-a.md",
+    ]) == 0
+    capsys.readouterr()
+    done_session = root / "docs/tmp/done-session"
+    second = [
+        path
+        for path in done_session.glob("run-manifest-*.json")
+        if path.name != f"run-manifest-{first_id}.json"
+    ]
+    assert len(second) == 1
+    payload = json.loads(second[0].read_text(encoding="utf-8"))
+    assert payload["owned_paths"] == [
+        "dirt-b.md",
+        "dirt-a.md",
+    ]
+    # The adopted start-dirt record is unioned with the fresh snapshot.
+    assert "?? dirt-a.md" in payload["start_porcelain"]
+
+
+def test_foreign_staging_degrades_to_warning_skip_without_manifest(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Degradation: given no resolvable run
+    manifest, expects a warning-skip result, never a crash and never a
+    failure."""
+    root = make_repo(tmp_path, "no-manifest")
+    write_facts(root)
+    now = time.time()
+    make_marker(root, now - 1, os.getpid())
+    make_marker(root, now, os.getpid())
+    result = run_gate("foreign-staging", ctx_for(root))
+    assert result.rc == 0
+    assert "warning skip" in result.message
+    assert result.warnings
+
+
+# --- plans-archive-twin gate fixtures ------------------------------------- #
+def _twin_repo(tmp_path, sweep_env, name: str, facts_text: str | None = None):
+    root = make_repo(tmp_path, name, gitignore_docs=True)
+    if facts_text is None:
+        write_facts(root)
+    else:
+        facts_dir = root / ".ai-playbook"
+        facts_dir.mkdir(parents=True, exist_ok=True)
+        (facts_dir / "facts.md").write_text(facts_text, encoding="utf-8")
+    return root
+
+
+def test_plans_archive_twin_fails_on_root_archive_pairs(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given a dated plan basename at the plans root
+    paired into each state directory (byte-identical, byte-different,
+    deferred, rejected), expects gate_plans_archive_twin to fail naming both
+    paths; a basename in exactly one location and non-dated root files
+    never trigger the gate."""
+    root = _twin_repo(tmp_path, sweep_env, "twin-fail")
+    plans = root / "docs/history/plans"
+    for sub in ("completed", "deferred", "rejected"):
+        (plans / sub).mkdir(parents=True)
+    (plans / "2026-09-27-twin-a.md").write_text("same\n", encoding="utf-8")
+    (plans / "completed/2026-09-27-twin-a.md").write_text("same\n", encoding="utf-8")
+    result = run_gate("plans-archive-twin", ctx_for(root))
+    assert result.rc == 1, result.message
+    assert "docs/history/plans/2026-09-27-twin-a.md" in result.message
+    assert "completed" in result.message
+
+    (plans / "2026-09-27-twin-b.md").write_text("root newer bytes\n", encoding="utf-8")
+    (plans / "completed/2026-09-27-twin-b.md").write_text("archive older bytes\n", encoding="utf-8")
+    (plans / "2026-09-27-twin-c.md").write_text("c\n", encoding="utf-8")
+    (plans / "deferred/2026-09-27-twin-c.md").write_text("c\n", encoding="utf-8")
+    (plans / "2026-09-27-twin-d.md").write_text("d\n", encoding="utf-8")
+    (plans / "rejected/2026-09-27-twin-d.md").write_text("d\n", encoding="utf-8")
+    result = run_gate("plans-archive-twin", ctx_for(root))
+    assert result.rc == 1, result.message
+    for name in ("twin-b", "twin-c", "twin-d"):
+        assert f"2026-09-27-{name}.md" in result.message
+
+    # Single-location basenames and non-dated files pass.
+    for path in ("completed/2026-09-27-solo.md", "2026-09-27-root-only.md"):
+        (plans / path).write_text("solo\n", encoding="utf-8")
+    (plans / "README.md").write_text("not dated\n", encoding="utf-8")
+    result = run_gate("plans-archive-twin", ctx_for(root))
+    assert result.rc == 1  # twins a-d still present
+
+
+def test_plans_archive_twin_passes_on_clean_tree(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given the current-tree shape (no
+    root-plus-archive basename pair), expects a pass."""
+    root = _twin_repo(tmp_path, sweep_env, "twin-clean")
+    plans = root / "docs/history/plans"
+    for sub in ("completed", "deferred", "rejected"):
+        (plans / sub).mkdir(parents=True)
+    (plans / "2026-09-27-live.md").write_text("live\n", encoding="utf-8")
+    (plans / "completed/2026-09-26-archived.md").write_text("archived\n", encoding="utf-8")
+    (plans / "README.md").write_text("non-dated\n", encoding="utf-8")
+    result = run_gate("plans-archive-twin", ctx_for(root))
+    assert result.rc == 0, result.message
+    # Non-dated root file never triggers, even with the same basename in an
+    # archive state.
+    (plans / "completed/README.md").write_text("non-dated twin\n", encoding="utf-8")
+    assert run_gate("plans-archive-twin", ctx_for(root)).rc == 0
+
+
+def test_plans_archive_twin_reads_non_default_completed_dir(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given a non-default plans_completed_dir facts
+    key, expects the scan to read the configured home."""
+    root = _twin_repo(
+        tmp_path, sweep_env, "twin-nondefault",
+        "```toml\n"
+        'plans_dir = "docs/history/plans/"\n'
+        'plans_completed_dir = "docs/custom-archive/"\n'
+        'backlog_dir = "docs/history/backlog/"\n'
+        'reviews_dir = "docs/reviews/"\n'
+        'tmp_dir = "docs/tmp/"\n'
+        "```\n",
+    )
+    plans = root / "docs/history/plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    (root / "docs/custom-archive").mkdir(parents=True)
+    (plans / "2026-09-27-twin.md").write_text("root\n", encoding="utf-8")
+    (root / "docs/custom-archive/2026-09-27-twin.md").write_text("custom\n", encoding="utf-8")
+    result = run_gate("plans-archive-twin", ctx_for(root))
+    assert result.rc == 1, result.message
+    assert "docs/custom-archive/2026-09-27-twin.md" in result.message
+
+
+def test_plans_archive_twin_warns_on_fallback_and_absent_dirs(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given the completed-dir key unresolvable,
+    expects the named fallback warning and a scan of the default home (never
+    a failure); given a resolved state directory absent on disk, expects a
+    named warning line and a pass, never a silent green."""
+    root = _twin_repo(
+        tmp_path, sweep_env, "twin-warn",
+        "```toml\n"
+        'plans_dir = "docs/history/plans/"\n'
+        'backlog_dir = "docs/history/backlog/"\n'
+        'reviews_dir = "docs/reviews/"\n'
+        'tmp_dir = "docs/tmp/"\n'
+        "```\n",
+    )
+    (root / "docs/history/plans").mkdir(parents=True, exist_ok=True)
+    result = run_gate("plans-archive-twin", ctx_for(root))
+    assert result.rc == 0, result.message
+    assert any("plans_completed_dir" in w for w in result.warnings)
+    assert any("does not exist on disk" in w for w in result.warnings)

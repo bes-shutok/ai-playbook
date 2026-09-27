@@ -21,7 +21,7 @@ usage or git-environment errors (unresolvable ``--base``, missing HEAD, path
 outside the repository).
 
 With ``--stamp``, the gate cites an adjacent ``.source-commit`` stamp file
-(written beside the deployed copy by ``deploy_runtime_scripts.sh``) as
+(written beside the deployed copy at deployment time) as
 provenance: when the stamp is present its recorded commit is cited on stdout;
 when absent a report-only note goes to stderr and never changes the verdict.
 Stamping is manual-only for now; the helper is the sanctioned manual path.

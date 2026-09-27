@@ -146,6 +146,34 @@ def bounded_evidence(items: Any, limit: int = MAX_EVIDENCE_BYTES) -> list[str]:
     return result or ["evidence unavailable"]
 
 
+def process_identity_fingerprint(identity: Any) -> tuple[int, str] | None:
+    """Normalized pid + start-time comparison form shared by fence sites.
+
+    Reduces a process identity mapping to its comparable pid plane,
+    ignoring extra keys and normalizing int-versus-string ``start_time``
+    values, so registered-process fence comparisons cannot drift on
+    representation. Returns ``None`` for provider-session-shaped
+    identities (no pid plane to compare) and for malformed pid planes;
+    callers must treat ``None`` as non-matching (fail closed). This is a
+    fence-comparison normalization, not a worker-join mechanism: persisted
+    worker rows carry no pid in the normal provider-session case.
+    """
+
+    if not isinstance(identity, Mapping):
+        return None
+    pid = identity.get("pid")
+    start_time = identity.get("start_time")
+    if pid is None and start_time is None:
+        return None
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return None
+    if isinstance(start_time, bool) or not isinstance(start_time, (str, int, float)):
+        return None
+    if isinstance(start_time, str) and not start_time.strip():
+        return None
+    return (pid, str(start_time).strip())
+
+
 def normalize_evidence_envelope(value: Any) -> dict[str, Any]:
     """Validate and normalize independently captured verification evidence.
 

@@ -29,8 +29,9 @@ One release run:
 - Squashes that delta into a few feature commits, oldest group first, without reordering.
 - Writes one dated `CHANGELOG.md` section and commits only that file (the notes commit).
 - Creates a backup ref before any mutation, rewrites in an ad-hoc worktree outside the
-  repository, proves the final tree byte-identical, scans every published blob and message
-  for private data, and moves `main` with a compare-and-swap.
+  repository, proves the final tree byte-identical, scans the published result (every
+  blob and message of the rewritten tip tree plus the groups file) for private data, and
+  moves `main` with a compare-and-swap.
 - Publishes only at the end, from a separate shell call, by executing the persisted push
   script: a plain fast-forward of the verified rewritten tip. Forced pushes are never used.
 
@@ -69,6 +70,7 @@ aborts the run); local `main` is a descendant of `<remote>/main`.
 | `DONE_LOCK_HOLDER_PID` | Holder identity recorded in the lock metadata. `release-authoring.sh` exports it (pinned to its invoking shell) right before the wait-acquire, so the hold outlives the short-lived authoring process and dead-holder recovery cannot reclaim the lock mid-run. An explicit caller pin to a longer-lived process wins | set automatically by `release-authoring.sh` (the invoking shell's PID) |
 | `RELEASE_REMOTE` | Remote name; every `<remote>/main` range expression in either script resolves through it | `origin` |
 | `RELEASE_HYGIENE_SCANNER` | Repo-relative privacy-scanner path, resolved against the primary checkout | `scripts/scan-public-hygiene.sh` |
+| `CHECK_NO_EM_DASH_SCRIPT` | Repo-relative em-dash checker path, resolved against the primary checkout; `release-authoring.sh` uses it for the draft scan and the whole-file `CHANGELOG.md` scan. A missing checker aborts as an environment failure, never as a policy hit | `scripts/check-no-em-dash.sh` |
 | `PUBLIC_HYGIENE_PATTERNS_FILE` | Deny-pattern override handed to the privacy gate; when set, the effective value is printed to the run output and carried into the summary | unset (scanner default) |
 | `RELEASE_LOCK_MAX_WAIT` | Seconds the short agent wait may poll for the done lock | `60` |
 
@@ -154,9 +156,9 @@ message `changelog: release notes for <today>`), writes the groups file, and pri
 lock export lines plus a final `groups-file <path>` data line on stdout. The one-line
 `groups-file` helper turns that data line into an assignment, so the whole stdout evals
 as shell. The rewrite script re-asserts the lock and the branch, creates the backup ref,
-rewrites in the ad-hoc worktree, runs the privacy gate over every published blob and
-message, moves `main` with a compare-and-swap, and prints the persisted push script path
-on stdout.
+rewrites in the ad-hoc worktree, runs the privacy gate over the published result (every
+blob and message of the rewritten tip tree plus the groups file), moves `main` with a
+compare-and-swap, and prints the persisted push script path on stdout.
 
 ```bash
 unset DONE_LOCK_DIR DONE_LOCK_TOKEN RELEASE_GROUPS_FILE PUSH_SCRIPT
@@ -207,11 +209,14 @@ Notes on this call:
   a privacy hit (the `PRIVACY GATE FAILED` sentinel naming the offending paths) or any
   other abort.
 - The rewrite step also prints a report-only inventory of leftover scratch artifacts
-  (stale push scripts, authoring run dirs, materialization roots, temp branches,
-  rewrite worktrees). It never
-  cleans them. Offer cleanup to the user, gated on their confirmation that no other
-  release run is active, and never treat anything under `refs/release-backup/` as a
-  cleanup candidate.
+  (stale push scripts, materialization roots, temp branches, rewrite worktrees, and the
+  authoring run dir while the run is in flight). It never cleans them: the authoring
+  step removes its run dir on its own failure exits, and the rewrite step's exit trap
+  removes it at the rewrite's exit, so the only authoring run dir a later inventory can
+  still name is one left by a successful authoring step whose rewrite never ran. Offer
+  cleanup to the user, gated on their confirmation
+  that no other release run is active, and never treat anything under
+  `refs/release-backup/` as a cleanup candidate.
 - Keep the printed backup ref line and the privacy-gate output (the excluded-path skip
   notes, and the patterns-override line when `PUBLIC_HYGIENE_PATTERNS_FILE` is set) for
   the final summary.
@@ -283,21 +288,38 @@ Then report the summary to the user, in this order:
    `git log --oneline --reverse "<backup-ref>..main"` (the backup ref marks the
    pre-rewrite tip, so this range is exactly the squashed feature commits; the
    remote-tracking range is already empty after the push).
-2. The privacy-gate outcome: every published blob and message scanned and passed; carry
-   the gate's excluded-path skip notes, and the patterns-override line when one was
-   printed.
+2. The privacy-gate outcome: the published result scanned and passed (every blob and
+   message of the rewritten tip tree plus the groups file); carry the gate's
+   excluded-path skip notes, and the patterns-override line when one was printed.
 3. The backup ref name, stated as local-only and never published.
 4. The lock: released, and `status` shows free.
 5. The sibling-branch warning: publishing any branch the loop named would publish
    commits this run's gate never scanned; when none were named, say so.
 6. A statement that the materialized copies were destroyed: the rewrite worktree, the
-   temp branch, the materialization root, and the run temp dir were torn down on every
-   path, and the push script removed itself after running.
+   temp branch, the materialization root, and the rewrite run temp dir were torn down
+   on every path; the authoring run dir was removed on the authoring step's own failure
+   exits or by the rewrite step's trap at the rewrite's exit; and the push script
+   removed itself after running.
 
 ## Integration Points
 
 ### With `done` skill
 The per-worktree done lock serializes a release run exactly as it serializes a done run: the authoring step acquires it (label `release-<date>`) and the final shell call releases it on every exit path, as done Steps 0 and 6 do. Commit ownership is one sentence: done (with learn's, docs-branch's, and release's own notes commit excepted) owns all other commit flows. A release run commits only its own CHANGELOG notes commit and performs its own publish; it never runs the done workflow, and a done run stays out of the checkout for the duration of the release.
+
+## Privacy gate
+
+- The gate scans the published result only: the rewritten tip tree plus the groups
+  file (the authored commit subjects), materialized after the tree-identity gate. It
+  never scans the original commits: dirt added and cleaned inside the publish delta
+  never reaches the result, so per-commit scanning would only reject unpublishable
+  history the release never sends.
+- Intermediate squash trees: a blob present in a group-end tree but absent from the
+  final tree publishes inside that intermediate squash commit unscanned. The optional
+  per-group scan arm is deferred until a witness shows it matters.
+- The exclusion list grows only by deliberate one-line-reasoned decisions. A
+  directory-level convention is deferred until the list grows substantially beyond
+  its size at this plan's landing; the deliberate-decision rule is the operative
+  control, not a count threshold.
 
 ## Rules
 

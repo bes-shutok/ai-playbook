@@ -23,6 +23,7 @@ temp_branch=""
 hygiene_root=""
 run_tmp=""
 wt_parent=""
+authoring_run_dir=""
 
 die() {
   printf 'release-rewrite: FATAL: %s\n' "$*" >&2
@@ -45,6 +46,18 @@ cleanup() {
   if [ -n "$hygiene_root" ]; then rm -rf "$hygiene_root" || true; fi
   if [ -n "$run_tmp" ]; then rm -rf "$run_tmp" || true; fi
   if [ -n "$wt_parent" ]; then rm -rf "$wt_parent" || true; fi
+  # Tear down the authoring step's run dir (the groups file's producer
+  # directory) at the rewrite's exit. The guard never removes an arbitrary
+  # caller-supplied directory: only one sitting DIRECTLY under the
+  # canonicalized temp root with the mktemp pattern's name. The canonicalized
+  # root keeps a trailing-slash TMPDIR from desynchronizing the comparison
+  # (dirname output is already canonical).
+  if [ -n "$authoring_run_dir" ]; then
+    tmpdir_root="$(cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd)" || tmpdir_root=""
+    case "$authoring_run_dir" in
+      "$tmpdir_root"/release-authoring-*) rm -rf "$authoring_run_dir" || true ;;
+    esac
+  fi
   return 0
 }
 trap cleanup EXIT
@@ -63,6 +76,11 @@ groups_in="$1"
 groups_dir="$(dirname "$groups_in")"
 groups_file="$(cd "$groups_dir" 2>/dev/null && pwd)/$(basename "$groups_in")"
 [ -f "$groups_file" ] || die "groups file not found: $groups_in"
+# The authoring run dir is the groups file's own directory: the two steps are
+# sibling processes (an export in one never reaches the other), so the file
+# path is the only channel between them. The EXIT trap removes it under the
+# TMPDIR mktemp-shape guard above.
+authoring_run_dir="$(dirname "$groups_file")"
 
 top="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
 cd "$top"
@@ -371,7 +389,7 @@ fi
 #     push script: 0700, outside the trap-owned dirs, carrying the pre-push
 #     re-assertions followed by the verified-value fast-forward publish. The
 #     script removes itself on every exit via its own EXIT trap.
-snapshot="$(git status --porcelain | shasum -a 256 | cut -d' ' -f1)"
+snapshot="$(git status --porcelain --untracked-files=no | shasum -a 256 | cut -d' ' -f1)"
 push_script="$(mktemp "${TMPDIR:-/tmp}/release-push-${base_short}.XXXXXXXX")"
 chmod 700 "$push_script"
 {
@@ -398,7 +416,7 @@ push_abort() {
 
 current_tip="$(git rev-parse refs/heads/main)"
 [ "$current_tip" = "$EXPECTED_TIP" ] || push_abort "main (${current_tip}) no longer equals the rewritten tip (${EXPECTED_TIP})"
-current_snapshot="$(git status --porcelain | shasum -a 256 | cut -d' ' -f1)"
+current_snapshot="$(git status --porcelain --untracked-files=no | shasum -a 256 | cut -d' ' -f1)"
 [ "$current_snapshot" = "$SNAPSHOT_SHA" ] || push_abort "the working tree changed after the swap (post-swap status snapshot mismatch)"
 git fetch --quiet "$REMOTE" || push_abort "git fetch $REMOTE failed"
 git merge-base --is-ancestor "refs/remotes/$REMOTE/main" "$EXPECTED_TIP" \

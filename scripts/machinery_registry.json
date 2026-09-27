@@ -1,0 +1,1465 @@
+{
+  "entries": [
+    {
+      "disposition": "keep",
+      "id": "script:check-instruction-size.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
+      "paths": [
+        "scripts/check-instruction-size.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check-no-em-dash.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
+      "paths": [
+        "scripts/check-no-em-dash.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_backlog_claimed.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/check_backlog_claimed.py"
+      ],
+      "tests": [
+        "scripts/test_check_backlog_claimed.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_check_backlog_claimed.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_backlog_inbox_location.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/receiving-review/SKILL.md)",
+      "paths": [
+        "scripts/check_backlog_inbox_location.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/receiving-review/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_cleanup_scope_baseline.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/plans/SKILL.md)",
+      "paths": [
+        "scripts/check_cleanup_scope_baseline.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/plans/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_lesson_scope.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/check_lesson_scope.py"
+      ],
+      "tests": [
+        "scripts/test_check_lesson_scope.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_check_lesson_scope.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_maintenance_pins.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/maintenance/zcode.md)",
+      "paths": [
+        "scripts/check_maintenance_pins.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/zcode.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_plan_origins_closed.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/check_plan_origins_closed.py"
+      ],
+      "tests": [
+        "scripts/test_check_plan_origins_closed.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_check_plan_origins_closed.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:check_review_agent_portability.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/check_review_agent_portability.py"
+      ],
+      "tests": [
+        "scripts/test_check_review_agent_portability.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_check_review_agent_portability.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:codex_hook_config.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/codex_hook_config.py"
+      ],
+      "tests": [
+        "scripts/test_codex_hook_config.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_codex_hook_config.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:confluence-mirror-hygiene.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/docs-branch/SKILL.md)",
+      "paths": [
+        "scripts/confluence-mirror-hygiene.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/docs-branch/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:dirt_regression_gate.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/dirt_regression_gate.py"
+      ],
+      "tests": [
+        "scripts/test_dirt_regression_gate.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_dirt_regression_gate.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:doc_registry_validator.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/execute-plan/SKILL.md)",
+      "paths": [
+        "scripts/doc_registry_validator.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/execute-plan/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:docs_branch_backlog_dedupe.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/docs_branch_backlog_dedupe.py"
+      ],
+      "tests": [
+        "scripts/test_docs_branch_backlog_dedupe.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_docs_branch_backlog_dedupe.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:docs_branch_plan_guard.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/docs_branch_plan_guard.py"
+      ],
+      "tests": [
+        "scripts/test_docs_branch_plan_guard.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_docs_branch_plan_guard.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:done-lock.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/maintenance/zcode.md)",
+      "paths": [
+        "scripts/done-lock.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/zcode.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:done_sweep_gates.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/done/SKILL.md)",
+      "paths": [
+        "scripts/done_sweep_gates.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/done/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:done_sweep_gates_lib.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/done_sweep_gates_lib.py"
+      ],
+      "tests": [
+        "scripts/test_done_sweep_gates_lib.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_done_sweep_gates_lib.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:execute_plan_address_fanout.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/execute_plan_address_fanout.py"
+      ],
+      "tests": [
+        "scripts/test_execute_plan_address_fanout.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_execute_plan_address_fanout.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:execute_plan_resume_watcher.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/execute_plan_resume_watcher.py"
+      ],
+      "tests": [
+        "scripts/test_execute_plan_resume_watcher.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_execute_plan_resume_watcher.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:execute_plan_runtime.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/execute_plan_runtime.py"
+      ],
+      "tests": [
+        "scripts/test_execute_plan_runtime.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_execute_plan_runtime.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:execute_plan_runtime_codex.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/execute_plan_runtime_codex.py"
+      ],
+      "tests": [
+        "scripts/test_execute_plan_runtime_codex.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_execute_plan_runtime_codex.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:execute_plan_worker_registry.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/execute_plan_worker_registry.py"
+      ],
+      "tests": [
+        "scripts/test_execute_plan_worker_registry.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_execute_plan_worker_registry.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:facts_paths.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/execute-plan/SKILL.md)",
+      "paths": [
+        "scripts/facts_paths.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/execute-plan/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:friction_audit_quant.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/friction_audit_quant.py"
+      ],
+      "tests": [
+        "scripts/test_friction_audit_quant.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_friction_audit_quant.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:harness_detection.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/harness_detection.py"
+      ],
+      "tests": [
+        "scripts/test_harness_detection.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_harness_detection.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:hooks_log_summary.py",
+      "kind": "script",
+      "note": "standing written instruction: two hook READMEs (lessons-recall, skill-gate) reference this summary script",
+      "paths": [
+        "scripts/hooks_log_summary.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/hooks/lessons-recall/README.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:hooks_probe.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/hooks_probe.py"
+      ],
+      "tests": [
+        "scripts/test_hooks_probe.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_hooks_probe.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:landing_parentage_gate.py",
+      "kind": "script",
+      "note": "superseded by kept-set row landing-parentage-gate (same file, citation lives there)",
+      "paths": [],
+      "tests": [
+        "scripts/test_landing_parentage_gate.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_landing_parentage_gate.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (AGENTS.md)",
+      "paths": [
+        "scripts/lessons.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "AGENTS.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons_adopt.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
+      "paths": [
+        "scripts/lessons_adopt.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons_classify.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/lessons-migrate/SKILL.md)",
+      "paths": [
+        "scripts/lessons_classify.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/lessons-migrate/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons_corpus.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
+      "paths": [
+        "scripts/lessons_corpus.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons_index.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
+      "paths": [
+        "scripts/lessons_index.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons_migrate.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
+      "paths": [
+        "scripts/lessons_migrate.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:lessons_recall.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/done/SKILL.md)",
+      "paths": [
+        "scripts/lessons_recall.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/done/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:machinery_inventory.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/machinery_inventory.py"
+      ],
+      "tests": [
+        "scripts/test_machinery_inventory.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_machinery_inventory.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:plan_readiness.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/plan_readiness.py"
+      ],
+      "tests": [
+        "scripts/test_plan_readiness.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_readiness.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:quota_governor.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/quota_governor.py"
+      ],
+      "tests": [
+        "scripts/test_quota_governor.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_quota_governor.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:quota_pressure_stats.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/quota_pressure_stats.py"
+      ],
+      "tests": [
+        "scripts/test_quota_pressure_stats.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_quota_pressure_stats.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:quota_window_probe.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/quota_window_probe.py"
+      ],
+      "tests": [
+        "scripts/test_quota_window_probe.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_quota_window_probe.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:rearm_on_touch.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/rearm_on_touch.py"
+      ],
+      "tests": [
+        "scripts/test_rearm_on_touch.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_rearm_on_touch.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:release-authoring.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/release/SKILL.md)",
+      "paths": [
+        "scripts/release-authoring.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/release/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:release-rewrite.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/release/SKILL.md)",
+      "paths": [
+        "scripts/release-rewrite.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/release/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:reverse_squash_guard.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/reverse_squash_guard.py"
+      ],
+      "tests": [
+        "scripts/test_reverse_squash_guard.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_reverse_squash_guard.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:review_record_selection.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/review_record_selection.py"
+      ],
+      "tests": [
+        "scripts/test_review_record_selection.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_review_record_selection.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:review_retention.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/review_retention.py"
+      ],
+      "tests": [
+        "scripts/test_review_retention.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_review_retention.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:review_thread_gate.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/review_thread_gate.py"
+      ],
+      "tests": [
+        "scripts/test_review_thread_gate.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_review_thread_gate.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:review_usage_capture.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/review-staging/SKILL.md)",
+      "paths": [
+        "scripts/review_usage_capture.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/review-staging/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:runtime_capabilities.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/runtime_capabilities.py"
+      ],
+      "tests": [
+        "scripts/test_runtime_capabilities.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_runtime_capabilities.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:scan-public-hygiene.sh",
+      "kind": "script",
+      "note": "standing written instruction references this script (AGENTS.md)",
+      "paths": [
+        "scripts/scan-public-hygiene.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "AGENTS.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:session_channel.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
+      "paths": [
+        "scripts/session_channel.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:skill_distribution_check.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/skill_distribution_check.py"
+      ],
+      "tests": [
+        "scripts/test_skill_distribution_check.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_skill_distribution_check.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:skill_gate.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/learn/SKILL.md)",
+      "paths": [
+        "scripts/skill_gate.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/learn/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:summarize_review_stats.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/maintenance/SKILL.md)",
+      "paths": [
+        "scripts/summarize_review_stats.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:help_probe.py",
+      "kind": "script",
+      "note": "suite red test exercises it through runtime_capabilities",
+      "paths": [
+        "scripts/testdata/execute-plan/activation/help_probe.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_runtime_capabilities.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:tool_runtime_stats.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/tool_runtime_stats.py"
+      ],
+      "tests": [
+        "scripts/test_tool_runtime_stats.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_tool_runtime_stats.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:validate_review_staging.py",
+      "kind": "script",
+      "note": "standing written instruction references this script (agents/skills/rfc-design/SKILL.md)",
+      "paths": [
+        "scripts/validate_review_staging.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/rfc-design/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "script:worktree_closeout_migrate.py",
+      "kind": "script",
+      "note": "red test in the suite fails when this script breaks",
+      "paths": [
+        "scripts/worktree_closeout_migrate.py"
+      ],
+      "tests": [
+        "scripts/test_worktree_closeout_migrate.py"
+      ],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_worktree_closeout_migrate.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:budget-guard",
+      "kind": "hook",
+      "note": "standing written instruction references this hook (agents/skills/maintenance/zcode.md)",
+      "paths": [
+        "agents/hooks/budget-guard/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/zcode.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:codex-budget-reset-guard",
+      "kind": "hook",
+      "note": "user-decision: hook README standing registration instruction",
+      "paths": [
+        "agents/hooks/codex-budget-reset-guard/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/hooks/codex-budget-reset-guard/README.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:codex-execute-plan",
+      "kind": "hook",
+      "note": "standing written instruction references this hook (docs/maintenance/document-registry.md)",
+      "paths": [
+        "agents/hooks/codex-execute-plan/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/maintenance/document-registry.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:codex-model-guard",
+      "kind": "hook",
+      "note": "standing written instruction references this hook (docs/maintenance/codex-worker-model-guard.md)",
+      "paths": [
+        "agents/hooks/codex-model-guard/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/maintenance/codex-worker-model-guard.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:lessons-recall",
+      "kind": "hook",
+      "note": "standing written instruction references this hook (docs/maintenance/document-registry.md)",
+      "paths": [
+        "agents/hooks/lessons-recall/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "docs/maintenance/document-registry.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:plan-readiness",
+      "kind": "hook",
+      "note": "standing written instruction references this hook (agents/skills/review-loop/SKILL.md)",
+      "paths": [
+        "agents/hooks/plan-readiness/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/review-loop/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "hook:skill-gate",
+      "kind": "hook",
+      "note": "user-decision: hook README standing instruction",
+      "paths": [
+        "agents/hooks/skill-gate/"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/hooks/skill-gate/README.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:alert",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:authoring_cycle_gate",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:execution_priority",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:execution_queue",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:loop_mode",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:next_turn_at",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:parent_absent_since",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:parent_automation_form",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:parent_automation_id",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:park_proposals",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:pending_dispatch",
+      "kind": "state-field",
+      "note": "pipeline state-field family; open sibling owns its repair",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "sibling-boundary",
+        "ref": "docs/history/backlog/2026-09-28-maintenance-autonomous-pipeline.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:pending_landing",
+      "kind": "state-field",
+      "note": "pipeline state-field family; open sibling owns its repair",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "sibling-boundary",
+        "ref": "docs/history/backlog/2026-09-28-maintenance-autonomous-pipeline.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:pending_rearm",
+      "kind": "state-field",
+      "note": "pipeline state-field family; open sibling owns its repair",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "sibling-boundary",
+        "ref": "docs/history/backlog/2026-09-28-maintenance-autonomous-pipeline.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:pricing_cache",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:quota_at_decision",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:quota_signal",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:rate_limited_events",
+      "kind": "state-field",
+      "note": "pipeline state-field family; open sibling owns its repair",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "sibling-boundary",
+        "ref": "docs/history/backlog/2026-09-28-maintenance-autonomous-pipeline.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:rearm_note",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "state-field:turn_error",
+      "kind": "state-field",
+      "note": "field defined and consumed by the tracked State file schema section",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/skills/maintenance/SKILL.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:five-round-review-cap",
+      "kind": "protocol",
+      "note": "open sibling owns review-loop exit and cap machinery",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "sibling-boundary",
+        "ref": "docs/history/backlog/2026-09-28-review-loop-exit-condition-and-metrics.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:review-staging-governance",
+      "kind": "protocol",
+      "note": "resolved via plan_readiness suite: no dedicated validate_review_staging test file exists; plan_readiness invokes the validator hard gates and its suite covers them",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_readiness.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:plan-readiness-gate",
+      "kind": "protocol",
+      "note": "certification oracle suite",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_plan_readiness.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:digest-recert-fencing",
+      "kind": "protocol",
+      "note": "execute-plan runtime suite covers digest re-certification and generation fencing",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_execute_plan_runtime.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:merge-landing-lock",
+      "kind": "protocol",
+      "note": "resolved to red test: the named churn-prevention incident document does not exist; the done-lock lib suite is the covering red test (incident witness: the 2026-09-27 orphan-history rebuild recorded in memory and development_lessons.md)",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_done_sweep_gates_lib.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:budget-pause-protocol",
+      "kind": "protocol",
+      "note": "resume-watcher suite covers the budget pause protocol",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_execute_plan_resume_watcher.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:done-sweep-gates",
+      "kind": "protocol",
+      "note": "done-sweep gates lib suite",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "red-test",
+        "ref": "scripts/test_done_sweep_gates_lib.py"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:reverse-squash-dirt-gates",
+      "kind": "protocol",
+      "note": "staged-reverse-squash dirt incident recorded in development_lessons.md",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "incident",
+        "ref": "projects/.ai-playbook/development_lessons.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:skills-gate-markers",
+      "kind": "protocol",
+      "note": "user-decision: skill-gate hook README standing instruction",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "user-decision",
+        "ref": "agents/hooks/skill-gate/README.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:quota-probing-budget-guard",
+      "kind": "protocol",
+      "note": "ref substituted at execution: the named open sibling origin was fold-then-deleted at that plan's execution (squash main 1f404537); the landed completed plan is the boundary record",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "sibling-boundary",
+        "ref": "docs/history/plans/completed/2026-09-28-account-quota-governor.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:worktree-recipe",
+      "kind": "protocol",
+      "note": "open sibling owns worktree lifecycle recipes",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "sibling-boundary",
+        "ref": "docs/history/backlog/2026-09-28-worktree-first-standard-only-mode.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "protocol:residual-acceptance-exit",
+      "kind": "protocol",
+      "note": "open sibling owns residual-acceptance exit machinery",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "sibling-boundary",
+        "ref": "docs/history/backlog/2026-09-19-residual-exit-same-day-ordering-semantics.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "public-hygiene-scan",
+      "kind": "protocol",
+      "note": "origin Expected kept set; deployed scanner home is ~/.ai-playbook/scripts/scan-public-hygiene.sh, mandated by AGENTS.md commit rules; ref re-pointed at fold from the deleted origin to the archived plan",
+      "paths": [
+        "docs/scan-public-hygiene.patterns.example",
+        "AGENTS.md"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "origin-kept-set",
+        "ref": "docs/history/plans/completed/2026-09-28-machinery-elimination-pass.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "landing-parentage-gate",
+      "kind": "script",
+      "note": "origin Expected kept set; prevents the 2026-09-27 orphan-squash history severing (parentless root); ref re-pointed at fold from the deleted origin to the archived plan",
+      "paths": [
+        "scripts/landing_parentage_gate.py",
+        "scripts/test_landing_parentage_gate.py"
+      ],
+      "tests": [
+        "scripts/test_landing_parentage_gate.py"
+      ],
+      "witness": {
+        "class": "origin-kept-set",
+        "ref": "docs/history/plans/completed/2026-09-28-machinery-elimination-pass.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "disk-truth-verification",
+      "kind": "protocol",
+      "note": "origin Expected kept set; protocol defined in the plans skill degraded-generation section (digest re-derivation from disk, stop on cross-check mismatch); ref re-pointed at fold from the deleted origin to the archived plan",
+      "paths": [
+        "agents/skills/plans/SKILL.md"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "origin-kept-set",
+        "ref": "docs/history/plans/completed/2026-09-28-machinery-elimination-pass.md"
+      }
+    },
+    {
+      "disposition": "keep",
+      "id": "claim-if-concurrent",
+      "kind": "protocol",
+      "note": "origin Expected kept set; mandated by the tracked maintenance authoring blueprint (agents/skills/maintenance/prompt-templates.md); the gitignored claims directory docs/tmp/authoring-claims/ is named here only, never as a resolving path; ref re-pointed at fold from the deleted origin to the archived plan",
+      "paths": [],
+      "tests": [],
+      "witness": {
+        "class": "origin-kept-set",
+        "ref": "docs/history/plans/completed/2026-09-28-machinery-elimination-pass.md"
+      }
+    }
+  ],
+  "removals": [
+    {
+      "disposition": "delete",
+      "id": "script:deploy_runtime_scripts.sh",
+      "kind": "script",
+      "note": "unwitnessed: zero tracked references outside completed history; no red test; twin deployment is described as plain cp in the skills",
+      "paths": [
+        "scripts/deploy_runtime_scripts.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "none",
+        "ref": null
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "script:migrate_backlog_completed.py",
+      "kind": "script",
+      "note": "spent witness: one-shot backlog-completed archive migration executed 2026-09-25 (completed plan docs/history/plans/completed/2026-09-25-backlog-completed-archive-policy.md)",
+      "paths": [
+        "scripts/migrate_backlog_completed.py"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "none",
+        "ref": null
+      }
+    },
+    {
+      "disposition": "delete",
+      "id": "script:sweep-tmp.sh",
+      "kind": "script",
+      "note": "unwitnessed: manual /tmp cleaner with zero tracked references and no red test",
+      "paths": [
+        "scripts/sweep-tmp.sh"
+      ],
+      "tests": [],
+      "witness": {
+        "class": "none",
+        "ref": null
+      }
+    }
+  ],
+  "schema_version": 1
+}

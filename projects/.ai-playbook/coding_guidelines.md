@@ -633,3 +633,19 @@ When a binary layout is measured in whole bytes (envelope tag, nonce, fixed-widt
 **Rule:** When a grep-family pattern can begin with a dash, pass it after `-e` (or `--`): `grep -nF -e '--flag "value"' file`. Without the separator, grep parses the pattern as a command-line option and exits with a usage error (rc 2), which a fail-closed gate reads as "marker missing" and a fail-open pipeline can read as success. Verify the exact command form once against the shell's real grep at authoring time; BSD and GNU grep differ in message but both refuse.
 
 **Example:** A plan's ordering gate keyed a line number on `grep -nF '--incoming-root "$VAR"'`; BSD grep exited 2 on every tree, so the gate reported "marker missing" even on a correct tree, and the plan's exit-0 done-when was unreachable. Adding `-e` restored both runnability and discrimination (a faithful tree passed, inverted and absent-marker trees failed).
+
+## 37. An Exported Variable Reaches Only Children: Sibling Scripts Share No Environment
+
+**Shape trigger:** Two helper scripts invoked one after another by a wrapper (or by an agent shell), where the first must hand state (a directory path, a token, an id) to the second, and someone reaches for `export VAR=...` in the first script.
+
+**Rule:** An export propagates only downward, to the exporting process's descendants; a script that has already exited cannot hand its environment to the sibling that runs next. Pass cross-script state through a file artifact instead: the producer writes the value to its documented output path and the consumer reads and derives it from that path (normalize and validate before use). When the state is a directory, the consumer should verify it matches the expected location pattern before acting on it, so a caller-supplied arbitrary path is never trusted blindly.
+
+**Example:** A plan prescribed that an authoring script export its temp-run directory so the sibling rewrite script's cleanup trap could remove it. The reviewer probed the mechanism empirically: the variable was unset in the rewrite step, because the two scripts are sibling processes spawned by the calling shell, and the first had exited before the second started. The fold replaced the export with deriving the directory from the input file's own path (the producer writes its output inside that directory), which needs no environment at all.
+
+## 38. Never Inline a Single-Quoted Bash Trap String That Contains Single Quotes
+
+**Shape trigger:** Writing `trap '...multi-line body...' EXIT` where the body needs quoted arguments (a `printf` format, a message string).
+
+**Rule:** Bash cannot nest single quotes, so an embedded `'` in a single-quoted trap string terminates it and silently corrupts the body (a `printf '%s\n'` degrades to `printf %sn`, appending a literal `n` to the output). Put the trap body in a handler function and register the bare name: `cleanup() { ...; }` then `trap cleanup EXIT`. The function also keeps `$?` capture and late evaluation of variables readable.
+
+**Example:** An EXIT trap relaying lock-export lines was written inline single-quoted; the corrupted format appended a stray character to the relayed token, so the calling shell's eval captured a value that could not release the lock, on exactly the fault paths the trap existed to protect. A test that only counted `export ` lines passed vacuously; the catch came from asserting the relayed values equal the acquire-log values. See also #37 (sibling-script state passing) from the same incident.

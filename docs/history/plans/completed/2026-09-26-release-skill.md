@@ -3,20 +3,20 @@
 Backlog origin: none
 Driving force: new-capability (primary) + simplicity (secondary)
 Justification: direct user request in chat on 2026-09-26 (consumer-requested capability, not self-serving hardening), so park-triage would not defer it; the simplicity force was added by the 2026-09-26 reconciliation amendment (user-approved extraction of the mechanical logic from markdown-embedded blocks into real scripts).
-Plan review: docs/reviews/2026-09-26-plan-review-release-skill-r8.md (r1-r8 lineage) and docs/reviews/2026-09-26-plan-review-release-skill-reconciliation.md (loop closed by user direction; simplification amendment executed)
+Plan review: docs/reviews/2026-09-26-plan-review-release-skill-r8.md (r1-r9 lineage) and docs/reviews/2026-09-26-plan-review-release-skill-reconciliation.md (loop closed by user direction; simplification amendment executed)
 
 ## Outcome
 
 Turn releasing into one deliberate command that squashes the unpushed pile into a few feature commits and publishes it safely, so local main stops drifting hundreds of noisy commits ahead of origin.
 
 - A new release skill rewrites unpushed history by feature, writes a plain-language CHANGELOG entry, and publishes after safety and privacy gates.
-- The rewrite is guarded: a backup ref, a byte-identical final tree gate, a privacy scan, and a compare-and-swap push, so a release can neither lose work nor leak private files.
+- The rewrite is guarded: a backup ref, a byte-identical final tree gate, a privacy scan, and a compare-and-swap local ref update followed by the verified plain fast-forward push, so a release can neither lose work nor leak private files.
 - Releasing no longer requires a manual dig through hundreds of commits.
 
 
 ## Simplification amendment (2026-09-26, user-approved)
 
-Eight review rounds (r1-r8) converged the design but showed that markdown-embedded bash blocks generate unbounded pin churn: extraction seams, block-lifetime contracts, and cross-shell function bindings produced the majority of findings from r4 on. Per the reconciliation note, the mechanical logic now lives in REAL SCRIPT FILES that the skill prose invokes and the selftest executes directly. The block-extraction machinery, verbatim-block headings, and cross-shell binding pins from the r1-r8 lineage are SUPERSEDED by this shape; their behavioral invariants are carried forward as script-contract pins below.
+Nine review rounds (r1-r9) converged the design but showed that markdown-embedded bash blocks generate unbounded pin churn: extraction seams, block-lifetime contracts, and cross-shell function bindings produced the majority of findings from r4 on. Per the reconciliation note, the mechanical logic now lives in REAL SCRIPT FILES that the skill prose invokes and the selftest executes directly. The block-extraction machinery, verbatim-block headings, and cross-shell binding pins from the r1-r9 lineage are SUPERSEDED by this shape; their behavioral invariants are carried forward as script-contract pins below.
 
 ## Terms
 
@@ -38,7 +38,7 @@ Eight review rounds (r1-r8) converged the design but showed that markdown-embedd
 - assume feature grouping is judgment-based (subjects, bodies, touched paths) but CONTIGUOUS-RUNS-ONLY; basis: reordering interleaved features risks conflicts and breaks the confirmed byte-identical tree invariant.
 - assume no git tags; the dated CHANGELOG section is the release identity; basis: the repo has zero tags.
 - assume sibling branches pointing into the rewritten range are left untouched and reported; basis: surgical-scope rule.
-- assume a root `CHANGELOG.md` needs no document-registry row; basis: `scripts/doc_registry_validator.py` scope is `docs/plans` and `docs/history`.
+- assume a root `CHANGELOG.md` needs no document-registry row; basis: `scripts/doc_registry_validator.py` scope is the `docs/history` tree.
 Decision points requiring a grill: history rewrite of local main authorized with rails, executed in an ad-hoc worktree, tolerant of concurrent new commits (regroup from the new tip) and of uncommitted changes (preserved byte-identical): user decision, chat AskUserQuestion plus mid-turn message, 2026-09-26, Gist, Tasks; push to origin is the final step and fires only after main has successfully changed, publishing the changed (squashed) history: user decision, chat AskUserQuestion plus mid-turn clarification, 2026-09-26, Gist, Tasks; PII and sensitive-data check before the push covering everything published: user decision, chat mid-turn message, 2026-09-26, Tasks; CHANGELOG.md at repo root: user decision, chat AskUserQuestion, 2026-09-26, Tasks; plan branch 2026-09-26-release-skill: user decision, chat AskUserQuestion, 2026-09-26, session-scoped only; script-file extraction approved replacing the markdown-block form: user decision, chat, 2026-09-26, Tasks, Simplification amendment
 
 ## Gist & Examples
@@ -80,7 +80,7 @@ trust.
 - The full Validation Commands block exits 0.
 
 **Ship when:**
-- A live `release` run on this repo completes fetch through push cleanly (this publishes the current unpushed backlog, size measured at run time) and the user confirms the CHANGELOG entry reads right. Evidence owner: the user; closure: a live run finishes with `origin/main` equal to local `main` and the user's explicit confirmation of the notes; if the first attempt aborts at the privacy gate (expected until the user-directed cleanup of the known hits below), the gate closes on the first run after that cleanup. Expected on the first run: the privacy gate ABORTS naming known deny-pattern hits in historical delta files (measured 2026-09-26 in `docs/plans/completed/2026-09-03-reviewed-plan-readiness-gate.md`, `docs/plans/completed/2026-09-08-plans-grill-answer-state-machine.md`, `docs/plans/completed/2026-09-09-agent-agnostic-execute-plan.md`, `scripts/summarize_review_stats.py`, `scripts/test_execute_plan_runtime.py`); cleaning those files is a separate user-directed effort, out of this plan's scope. Operations follow-up owned by the user; no checklist item. [class: EXTERNAL_RELEASE_GATE]
+- A live `release` run on this repo completes fetch through push cleanly (this publishes the current unpushed backlog, size measured at run time) and the user confirms the CHANGELOG entry reads right. Evidence owner: the user; closure: a live run finishes with `origin/main` equal to local `main` and the user's explicit confirmation of the notes; if the first attempt aborts at the privacy gate (expected until the user-directed cleanup of the known hits below), the gate closes on the first run after that cleanup. Expected on the first run: the privacy gate ABORTS naming known deny-pattern hits in historical delta files (measured 2026-09-26 in `docs/history/plans/completed/2026-09-03-reviewed-plan-readiness-gate.md`, `docs/history/plans/completed/2026-09-08-plans-grill-answer-state-machine.md`, `docs/history/plans/completed/2026-09-09-agent-agnostic-execute-plan.md`, `scripts/summarize_review_stats.py`, `scripts/test_execute_plan_runtime.py`); cleaning those files is a separate user-directed effort, out of this plan's scope. Operations follow-up owned by the user; no checklist item. [class: EXTERNAL_RELEASE_GATE]
 
 ## Review Scope
 

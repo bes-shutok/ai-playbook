@@ -14,14 +14,18 @@ Commands:
   paths <path>...      Same as file (alias)
   staged               Scan git-staged paths (added/copied/modified)
   touched              Scan unstaged + staged + untracked paths in current repo
-  added-lines [--base REF] [paths...]
+  added-lines [--base REF] [--base=REF] [--] [paths...]
                        Scan git-diff added lines only (git diff -U0 against the
                        base; all extensions) and report file:new-file-line per
                        hit. The default base is HEAD, so the mode gates
                        working-tree insertions at authoring time; re-scanning
                        already-committed insertions is out of scope by design.
                        Git failures (exit status 2 or worse) abort non-zero
-                       instead of reading as clean.
+                       instead of reading as clean. The -- separator ends
+                       option parsing, so every argument after it is a
+                       pathspec. A paths argument matching no tracked file,
+                       including untracked files, aborts non-zero because the
+                       mode cannot scan it.
   stdin                Read file list from stdin (one path per line)
 
 Prose paths scanned by default: *.md, *.mdc, AGENTS.md, CLAUDE.md, GEMINI.md, COPILOT.md
@@ -110,6 +114,19 @@ scan_added_lines() {
         ;;
     esac
   done
+
+  # Fail closed: a pathspec that matches no tracked file (typo, or a real but
+  # untracked file) would otherwise diff to nothing and read as clean, so
+  # abort instead. Mirrors the git-abort exit class above.
+  if [[ ${#paths[@]} -gt 0 ]]; then
+    local entry
+    for entry in "${paths[@]}"; do
+      if [[ -z "$(git ls-files -- "$entry")" ]]; then
+        echo "check-no-em-dash: pathspec matches no tracked file: $entry" >&2
+        exit 2
+      fi
+    done
+  fi
 
   local git_status=0
   local diff_text=""

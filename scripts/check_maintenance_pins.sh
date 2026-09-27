@@ -369,12 +369,14 @@ for needle in ("record the structured-first-line `rearm_note` under the reader-s
                "the short-circuit `loop-mode-held` reason wins when both holds coincide"):
     if needle not in step1:
         print("PIN FAIL: Step 1 lacks the r3 Step 1 contract span %r" % needle); sys.exit(1)
-# review r5 F2: the loop-mode-held retention clause's operative sub-span,
-# region-scoped to the Step 1 region (the r2-era bare-token pin above stays
-# green on the clause's other occurrences; deleting the retention clause's tail
-# empties this span and fails here)
-if "is retained in `pending_dispatch` with reason `loop-mode-held`" not in step1:
-    print("PIN FAIL: Step 1 lacks the loop-mode-held retention clause span"); sys.exit(1)
+# review r2 F7: the loop-mode-held retention clause's operative sub-span;
+# moved from the Step 1 region to the Step 3 region by the
+# deferred-residual-dispositions plan Task 9 (T4 named the exclusion at the
+# Step 3 enforcement sentence and reduced the Step 1 clauses to references, so
+# the clause still carrying the retention wording verbatim lives in Step 3; the
+# Step 1 bare-token pin above stays green on the referencing clauses)
+if "is retained in `pending_dispatch` with reason `loop-mode-held`" not in step3:
+    print("PIN FAIL: Step 3 lacks the loop-mode-held retention clause span"); sys.exit(1)
 # review r3 F12: the writer-classes closedness membership clauses, pinned per
 # class line (each sanctioned class is one bullet line), so dropping a member
 # from its class line fails where the whole-file topic greps stay green
@@ -588,8 +590,12 @@ pin "overlay names the merge lock acquire command" grep -qF 'merge-acquire' "$Z"
 pin "recipe mode appendix clause" grep -qF 'mode appendix sourced from state' "$Z"
 # review r1 F8: the existence pin above guards presence only, so a content
 # needle for the clause's directive-wording span (unique in zcode.md) pins the
-# determinate appendix shape the Step 0 detection predicate reads
-pin "recipe mode appendix content (directive wording span)" grep -qF "carrying the user's directive wording and naming the lane the mode excludes" "$Z"
+# determinate appendix shape the Step 0 detection predicate reads; the needle
+# moved with the span in the deferred-residual-dispositions plan Task 9 (T2
+# reworded the span to defer to the pinned literal, which names the lane the
+# mode keeps, and pinned the trim-plus-single-line normalization)
+pin "recipe mode appendix content (directive wording span)" grep -qF "in the pinned canonical form below, which names the lane the mode keeps" "$Z"
+pin "recipe mode appendix pins the directive normalization" grep -qF "the field's directive wording, trimmed and collapsed to a single line" "$Z"
 # review r2 F6: the recipe pins the appendix's canonical template literal, so
 # every renderer class builds one form and SKILL.md's detection predicate diffs
 # against it (unique literal in zcode.md)
@@ -987,8 +993,10 @@ for needle in ("assert the session actually owns", "mode appendix sourced from s
         print("PIN FAIL: successor dispatch leg lacks the state-durability needle %s" % needle); sys.exit(1)
 # review r2 F7: the chain-nothing loop_mode condition, region-scoped to the
 # successor paragraph (the deviation-list entry paraphrases it, so a whole-file
-# grep would be satisfied by the registration prose)
-if "is a non-dual mode excluding the execution lane" not in succ:
+# grep would be satisfied by the registration prose); the needle re-anchored on
+# the named-exclusion reference in the deferred-residual-dispositions plan
+# Task 9 (T4 reduced the restated mode semantics to the named Step 3 exclusion)
+if "the Step 3 loop-mode exclusion" not in succ:
     print("PIN FAIL: successor leg lacks the chain-nothing loop_mode condition"); sys.exit(1)
 # review r3 F12: the watchdog recovery clear span (the SKILL.md watchdog writer
 # class names it), region-scoped to the Watchdog backstop bullet (one line; the
@@ -1145,7 +1153,7 @@ pin "plans budget gate mirrors the canonical resume checks" grep -qF 'The canoni
 pin "dfm r1 F8 successor external-cites-source needle" grep -qF 'where `external` must cite its source' "$PL"
 pin "dfm r1 F8 successor park-triage needle" grep -qF 'why park-triage would or would not take it' "$PL"
 pin "dfm r2 F1 successor backlog-origin-none producer line" grep -qF 'otherwise the line reads `Backlog origin: none`' "$PL"
-pin "dfm r2 F1 successor driving-principles enumeration" grep -qF 'four driving principles (`efficiency`, `token-usage`, `simplicity`, `code-quality`)' "$PL"
+pin "dfm r2 F1 successor driving-principles enumeration" grep -qF 'five driving principles (`efficiency`, `token-usage`, `simplicity`, `code-quality`, `automation`)' "$PL"
 
 # --- budget-gate resume fallback preservation pins (plan 2026-09-21-budget-gate-resume-fallbacks, Task 1) ---
 # Freeze-literal origin note: the preservation spans' origin is plan
@@ -1733,6 +1741,11 @@ expect_absent "retired strictly-sequential clocked-child stance parenthetical mu
 # its argument so the inline selftest below can call it directly on a fixture
 # (never a whole-suite re-invocation, which would die for the wrong reason on
 # a temp fixture or recurse on an in-repo one).
+# Landing-time net over the plans home: gate_plans_archive_twin in
+# scripts/done_sweep_gates_lib.py (dated plan basenames only, facts-key
+# driven). This section stays the corpus-wide scheduled owner (plans AND
+# backlog roots, non-dated names included) and is the designated absorber
+# of the two-state-directories-no-root-copy edge that gate does not cover.
 check_live_vs_archive_duplicates() { # $1 = root to scan
   local root="$1"
   local live_root archive_dir base rc=0
@@ -1857,6 +1870,58 @@ pin "zcode.md re-triage child recognition literal" grep -qF 'deferred re-triage 
 pin "zcode.md fleet-cap enumeration widened to the re-triage kind" grep -qF 'authoring, audit, re-triage, and execution children are fleet members' "$Z"
 pin "SKILL.md Step 2 fleet-cap enumeration widened to the re-triage kind" grep -qF 'like the authoring, audit, and re-triage kinds' "$S"
 pin "prompt-templates retriage pointer stub present" grep -qF 'deferred re-triage lane' "$P"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- authoring-lane target-distinctness pins (plan
+# 2026-09-28-maintenance-autonomous-pipeline.md, Task 1) ---
+# The 2026-09-28 09:32 stand-down (the authoring lane stood down beside a live
+# peer's claim without checking the candidate target's distinctness, while a
+# standing user directive to keep authoring was recorded) is the witness for
+# rewriting the authoring-vs-authoring clause into the target-distinctness
+# rule. The rule's home sentence is count-gated at exactly 1 whole-file: the
+# discovery arm, the D2 guard-resolution sentence, and the rolling-log
+# dispatch clause all reference the rule by name, so a restatement anywhere
+# would create a second home. The carve-out pin covers the arms inheritance
+# sentence (the release condition for the state-file, armed, fired, and
+# widened arms), and the two exclusivity pins hold the audit-child and
+# re-triage-child spans the rewrite had to preserve byte-for-byte in meaning.
+pin "G1a target-distinctness rule home sentence" grep -qF 'does not hold the lane when the targets are distinct' "$S"
+pin "G1a target-distinctness home sentence exactly-once" test "$(grep -oF 'does not hold the lane when the targets are distinct' "$S" | wc -l | tr -d ' ')" -eq 1
+pin "G1a arms target-distinctness carve-out" grep -qF "releases when the recorded or listed child's target is distinct from the candidate target and the standing-directive sanction exists" "$S"
+pin "G1a audit-child exclusivity span preserved" grep -qF 'an audit child never runs alongside an authoring child or another audit child' "$S"
+pin "G1a re-triage-child exclusivity span preserved" grep -qF 'never runs alongside an authoring child, another re-triage child, or an audit child' "$S"
+[ "$fail" -eq 1 ] && exit 1
+
+# --- stall-class recovery pins (plan
+# 2026-09-28-maintenance-autonomous-pipeline.md, Task 4) ---
+# Companion pins for the stall-class recovery spans: the Step 0 re-arm
+# discharge precedence (a timing amendment of the Step 1 park-discharge duty,
+# the turn discharging parked re-arm records before the survey; the
+# pending_dispatch half stays owned by the Step 1 duty, so the pins hold the
+# cross-reference instead of a duplicate), the Step 6 completion-stranding
+# detection (the turn_error literal plus the wide explanation predicate that
+# never trips a healthy loop: a within-one-cadence armed carrier and a
+# reset-window carrier armed by the recipe's cadence rule both count, and the
+# recorded quota-pause reason suppresses the trip while such a carrier is
+# armed), and the zcode.md Child dispatch ladder's named reduced-toolset
+# terminal rung (the listing-only park whose recovery path is the Step 0
+# discharge precedence). The two SKILL.md literals are count-gated at exactly
+# 1 whole-file so a restatement anywhere cannot create a second home; the
+# renumbered last-resort rung pin holds the ladder's numbering through the
+# rung insertion (the prompt-templates.md closeout duty references the
+# last-resort step by name, so the numbering must stay resolvable).
+pin "step 0 discharge precedence duty sentence" grep -qF 'the turn discharges parked re-arm records before it surveys' "$S"
+pin "step 0 discharge precedence literal exactly-once" test "$(grep -oF 'discharges parked' "$S" | wc -l | tr -d ' ')" -eq 1
+pin "step 0 discharge joins the duty's writer enumeration" grep -qF "discharge writes join the sanctioned-writer enumeration that duty's writes use" "$S"
+pin "step 0 dispatch half stays with the step 1 duty" grep -qF 'dispatch discharge stays owned by the existing Step 1 parked-intent discharge duty' "$S"
+pin "completion-stranding literal present" grep -qF 'turn_error: completion-stranded' "$S"
+pin "completion-stranding literal exactly-once" test "$(grep -oF 'completion-stranded' "$S" | wc -l | tr -d ' ')" -eq 1
+pin "stranding reset-window carrier explanation span" grep -qF "a reset-window carrier armed by the recipe's cadence rule for a later quota window counts as well" "$S"
+pin "stranding quota-pause suppression span" grep -qF 'suppresses the trip while such a reset-window carrier is armed' "$S"
+pin "reduced-toolset terminal rung present" grep -qF 'Reduced-toolset terminal' "$Z"
+pin "reduced-toolset rung listing-only predicate" grep -qF 'a session whose automation toolset is the listing primitive only parks the decided action with its payload copy' "$Z"
+pin "reduced-toolset rung names the step 0 recovery path" grep -qF 'the SKILL.md Step 0 discharge precedence' "$Z"
+pin "ladder last-resort rung renumbered intact" grep -qF '5. Last resort:' "$Z"
 [ "$fail" -eq 1 ] && exit 1
 
 echo "maintenance pins: all hold"

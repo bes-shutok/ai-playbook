@@ -232,7 +232,7 @@ class ReleaseSkillSelftest(unittest.TestCase):
             )
         return proc
 
-    def _run_env(self, lock_exports=None) -> dict:
+    def _run_env(self, lock_exports=None, env_extra=None) -> dict:
         """Environment for invoking the real scripts: pinned TMPDIR, lock stub,
         fixture patterns file, hermetic git config, and the per-case shim dir
         prepended to PATH. TZ is pinned to UTC and ambient git-context and
@@ -259,6 +259,8 @@ class ReleaseSkillSelftest(unittest.TestCase):
         env["PATH"] = str(self.shim_dir) + os.pathsep + os.environ.get("PATH", "")
         if lock_exports:
             env.update(lock_exports)
+        if env_extra:
+            env.update(env_extra)
         return env
 
     def _write_lock_stub(self) -> None:
@@ -318,6 +320,18 @@ class ReleaseSkillSelftest(unittest.TestCase):
                 "fi\n"
                 'exec "%s" "$@"\n' % real
             )
+        elif name == "commit-fail":
+            body = (
+                "#!/usr/bin/env bash\n"
+                "# selftest git shim: every git commit fails, so the authoring\n"
+                "# step's unguarded step-8 commit exits under set -e and only the\n"
+                "# global EXIT trap can relay the lock exports.\n"
+                'if [ "${1:-}" = "commit" ]; then\n'
+                '  echo "selftest shim: git commit forced to fail" >&2\n'
+                "  exit 7\n"
+                "fi\n"
+                'exec "%s" "$@"\n' % real
+            )
         else:
             self.fail("unknown shim name: %s" % name)
         path = self.shim_dir / "git"
@@ -354,6 +368,12 @@ class ReleaseSkillSelftest(unittest.TestCase):
         adds = ["README.md"]
         if variant == "published_changelog":
             (seed / "CHANGELOG.md").write_text(self._today_section("published section marker"), encoding="utf-8")
+            adds.append("CHANGELOG.md")
+        if variant == "changelog_em_dash":
+            (seed / "CHANGELOG.md").write_text(
+                "# Changelog\n\n## 2026-01-01\n\nOlder section carrying " + EM_DASH + " an em dash\n",
+                encoding="utf-8",
+            )
             adds.append("CHANGELOG.md")
         self._gitx("add", "--", *adds, cwd=seed)
         self._gitx("commit", "-q", "-m", "initial commit", cwd=seed)
@@ -1314,6 +1334,178 @@ class ReleaseSkillSelftest(unittest.TestCase):
                 "the abort must happen before staging; unexpected non-untracked entry: %s" % line,
             )
         self._assert_lock_was_acquired()
+
+    # ------------------------------------------------------------------
+    # Follow-up plan cases (run-dir teardown, snapshot scope, relay,
+    # checker resolution, step-7 restore)
+    # ------------------------------------------------------------------
+
+    def test_authoring_whole_file_em_dash_restores_and_cleans_run_dir(self):
+        self._build_fixture("changelog_em_dash")
+        self._install_scanner("noop")
+        changelog = self.clone / "CHANGELOG.md"
+        before = changelog.read_bytes()
+        head_before = self._rev_parse("HEAD")
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "whole-file em dash marker")
+        authoring = self._authoring_step()
+        self._release_last_acquisition()
+        self.assertNotEqual(
+            authoring.returncode, 0,
+            "a pre-existing em dash in CHANGELOG.md must abort the whole-file scan:\n%s\n%s"
+            % (authoring.stdout, authoring.stderr),
+        )
+        self.assertIn("pre-existing em dash", authoring.stderr, "the abort must name the whole-file scan failure")
+        self.assertEqual(authoring.stdout.count("export DONE_LOCK_DIR="), 1,
+                         "the die() relay must reach stdout exactly once:\n%s" % authoring.stdout)
+        self.assertEqual(authoring.stdout.count("export DONE_LOCK_TOKEN="), 1)
+        self.assertEqual(changelog.read_bytes(), before, "the pre-run CHANGELOG.md must be restored byte-identical")
+        self.assertEqual(self._rev_parse("HEAD"), head_before, "no notes commit may be created")
+        self._assert_lock_was_acquired()
+        self.assertEqual(
+            list(self.tmpdir.glob("release-authoring-*")), [],
+            "the authoring failure exit must remove the run dir",
+        )
+
+    def test_push_reassertion_ignores_untracked_stray_file(self):
+        rewrite, _, _, _ = self._run_release()
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "rewrite failed rc=%s\nstdout:\n%s\nstderr:\n%s" % (rewrite.returncode, rewrite.stdout, rewrite.stderr),
+        )
+        push_script = self._find_push_script()
+        rewritten_tip = self._rev_parse("main")
+        base_tip = self._rev_parse("origin/main")
+        (self.clone / "stray-untracked.txt").write_text("stray file between swap and push\n", encoding="utf-8")
+        pushed = self._execute_push_script(push_script)
+        self.assertEqual(
+            pushed.returncode, 0,
+            "a stray untracked file must not abort the push re-assertion:\n%s" % (pushed.stdout + pushed.stderr),
+        )
+        self.assertEqual(self._rev_parse("origin/main"), rewritten_tip, "the push publishes the verified tip")
+        self.assertNotEqual(self._rev_parse("origin/main"), base_tip)
+        # The tracked-modification polarity stays covered by
+        # test_post_swap_snapshot_mismatch_aborts (an uncommitted tracked edit
+        # still fails the snapshot re-assertion).
+
+    def test_rewrite_trap_removes_authoring_run_dir(self):
+        self._build_fixture()
+        self._install_scanner("noop")
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "run dir teardown marker")
+        authoring = self._authoring_step()
+        exports, groups_path = self._require_authoring_contract(authoring)
+        run_dir = Path(groups_path).parent
+        self.assertIn("release-authoring-", run_dir.name, "the groups file lives in the authoring run dir")
+        self.assertTrue(run_dir.exists(), "the run dir must exist while the run is in flight")
+        rewrite = self._rewrite_step(groups_path, exports)
+        self._release_lock(exports)
+        self._assert_release_logged(exports["DONE_LOCK_TOKEN"])
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "rewrite failed rc=%s\nstdout:\n%s\nstderr:\n%s" % (rewrite.returncode, rewrite.stdout, rewrite.stderr),
+        )
+        self.assertFalse(run_dir.exists(), "the rewrite EXIT trap removes the authoring run dir")
+        self.assertEqual(
+            list(self.tmpdir.glob("release-authoring-*")), [],
+            "no authoring run dir may survive the rewrite",
+        )
+
+    def test_rewrite_trap_leaves_non_authoring_dirs_alone(self):
+        self._build_fixture()
+        self._install_scanner("noop")
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "guard marker")
+        authoring = self._authoring_step()
+        exports, groups_path = self._require_authoring_contract(authoring)
+        relocated_parent = self.tmpdir / "relocated-groups-parent"
+        relocated_parent.mkdir()
+        relocated = relocated_parent / "groups.txt"
+        shutil.copyfile(groups_path, relocated)
+        rewrite = self._rewrite_step(str(relocated), exports)
+        self._release_lock(exports)
+        self._assert_release_logged(exports["DONE_LOCK_TOKEN"])
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "rewrite failed rc=%s\nstdout:\n%s\nstderr:\n%s" % (rewrite.returncode, rewrite.stdout, rewrite.stderr),
+        )
+        self.assertTrue(relocated.exists(), "a directory outside the release-authoring-* mktemp shape must survive the trap")
+        self.assertEqual((relocated_parent / "groups.txt").read_bytes(), Path(groups_path).read_bytes())
+
+    def test_lock_relay_set_e_fault_exactly_once(self):
+        self._build_fixture()
+        self._install_scanner("noop")
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "relay fault marker")
+        self._write_shim("commit-fail")
+        authoring = self._authoring_step()
+        self._release_last_acquisition()
+        self.assertNotEqual(
+            authoring.returncode, 0,
+            "a set -e exit on the step-8 commit must abort:\n%s\n%s" % (authoring.stdout, authoring.stderr),
+        )
+        self._assert_lock_was_acquired()
+        self.assertEqual(authoring.stdout.count("export DONE_LOCK_DIR="), 1,
+                         "the EXIT-trap relay must reach stdout exactly once (no double relay):\n%s" % authoring.stdout)
+        self.assertEqual(authoring.stdout.count("export DONE_LOCK_TOKEN="), 1)
+        # The relayed values must be well-formed, not merely present once: a
+        # corrupted relay (a broken trap quoting would leave a stray suffix on
+        # the token) would make the calling shell's release mismatch.
+        relay, _ = self._parse_authoring(authoring)
+        acquired = self._last_acquire_exports()
+        self.assertTrue(acquired, "the faulted run must have acquired the lock first")
+        self.assertEqual(relay.get("DONE_LOCK_DIR"), acquired["DONE_LOCK_DIR"],
+                         "the relayed DONE_LOCK_DIR must equal the acquired value:\n%s" % authoring.stdout)
+        self.assertEqual(relay.get("DONE_LOCK_TOKEN"), acquired["DONE_LOCK_TOKEN"],
+                         "the relayed DONE_LOCK_TOKEN must equal the acquired value:\n%s" % authoring.stdout)
+        self.assertNotIn("groups-file ", authoring.stdout, "a faulted run never reaches the success-path data line")
+        self.assertEqual(
+            list(self.tmpdir.glob("release-authoring-*")), [],
+            "the non-zero EXIT-trap path removes the run dir",
+        )
+
+    def test_lock_relay_success_exactly_once(self):
+        self._build_fixture()
+        self._install_scanner("noop")
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "relay success marker")
+        authoring = self._authoring_step()
+        exports, groups_path = self._require_authoring_contract(authoring)
+        self._release_lock(exports)
+        self._assert_release_logged(exports["DONE_LOCK_TOKEN"])
+        self.assertEqual(authoring.stdout.count("export DONE_LOCK_DIR="), 1,
+                         "the success path relays the exports exactly once:\n%s" % authoring.stdout)
+        self.assertEqual(authoring.stdout.count("export DONE_LOCK_TOKEN="), 1)
+        self.assertEqual(authoring.stdout.count("groups-file "), 1)
+
+    def test_missing_em_dash_checker_dies_and_cleans_run_dir(self):
+        self._build_fixture()
+        self._install_scanner("noop")
+        missing = self.tmpdir / "no-such-checker.sh"
+        self._draft_section(DEFAULT_COUNTS, DEFAULT_MSGS, "missing checker marker")
+        head_before = self._rev_parse("HEAD")
+        authoring = subprocess.run(
+            ["bash", str(AUTHORING_SCRIPT), str(self.section_path)],
+            cwd=str(self.clone), env=self._run_env(env_extra={"CHECK_NO_EM_DASH_SCRIPT": str(missing)}),
+            capture_output=True, text=True,
+        )
+        self._release_last_acquisition()
+        self.assertNotEqual(
+            authoring.returncode, 0,
+            "a missing checker must abort:\n%s\n%s" % (authoring.stdout, authoring.stderr),
+        )
+        self.assertIn("em-dash checker not found", authoring.stderr, "the abort names the environment failure")
+        self.assertIn(str(missing), authoring.stderr, "the abort names the missing path")
+        self.assertNotIn("carries an em dash", authoring.stderr, "a missing checker must never be reported as a policy hit")
+        self.assertEqual(authoring.stdout.count("export DONE_LOCK_DIR="), 1,
+                         "the die() relay must reach stdout exactly once:\n%s" % authoring.stdout)
+        self.assertEqual(authoring.stdout.count("export DONE_LOCK_TOKEN="), 1)
+        relay, _ = self._parse_authoring(authoring)
+        acquired = self._last_acquire_exports()
+        self.assertTrue(acquired, "the aborting run must have acquired the lock first")
+        self.assertEqual(relay.get("DONE_LOCK_DIR"), acquired["DONE_LOCK_DIR"])
+        self.assertEqual(relay.get("DONE_LOCK_TOKEN"), acquired["DONE_LOCK_TOKEN"])
+        self._assert_lock_was_acquired()
+        self.assertEqual(self._rev_parse("HEAD"), head_before, "no notes commit may be created")
+        self.assertEqual(
+            list(self.tmpdir.glob("release-authoring-*")), [],
+            "the abort also witnesses the authoring failure-exit run-dir removal",
+        )
 
 
 if __name__ == "__main__":

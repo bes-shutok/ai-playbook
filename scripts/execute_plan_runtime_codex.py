@@ -7,6 +7,7 @@ import json
 import hashlib
 import fcntl
 import os
+import re
 import signal
 import shlex
 import subprocess
@@ -29,6 +30,11 @@ from runtime_capabilities import bounded_evidence
 # configuration surface.
 DEFAULT_LAUNCH_DEADLINE = 900.0
 DEFAULT_WAIT_DEADLINE = 1500.0
+# Per-consult bound for the terminal-evidence port. The ps snapshot
+# precedent (2.0 seconds) sizes it. In-process record retrieval honors it
+# cooperatively (deadline checks per scan candidate); a local file read
+# cannot be preempted, which is the recorded in-process residual.
+TERMINAL_EVIDENCE_TIMEOUT_SECONDS = 2.0
 DANGEROUS_FLAGS = {"--approve-for-me", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"}
 SAFE_ENV_KEYS = {"PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR"}
 
@@ -156,6 +162,20 @@ class CodexAdapter:
 
     adapter_version = "1.0"
 
+    # Flags that consume a separate value token in `codex exec` argvs. When
+    # one appears before the first positional token after `resume`, the
+    # conversation id is not attributable without a full flag table, so
+    # extraction refuses: a mis-attributed join is worse than an unjoinable
+    # row, which quarantines exactly as today.
+    RESUME_VALUE_FLAGS = frozenset({"-C", "--cd", "-c", "--config", "-m", "--model", "--profile", "--image"})
+
+    # Provider conversation-id shape for terminal-evidence lookup keys. The
+    # persisted session id originates from the launch envelope with no shape
+    # validation, so the port validates before any record path is derived:
+    # one pattern rejects path separators, traversal segments, whitespace,
+    # dots, and glob metacharacters in a single stroke.
+    CONVERSATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}$")
+
     def __init__(
         self,
         repo_root: Path | str,
@@ -167,6 +187,8 @@ class CodexAdapter:
         approval_receipt: Path | str | None = None,
         process_snapshot: Any | None = None,
         capacity_lock_path: Path | str | None = None,
+        terminal_records_root: Path | str | None = None,
+        consult_timeout_seconds: float | None = None,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
         self.runner = runner
@@ -200,6 +222,21 @@ class CodexAdapter:
         else:
             self._test_capacity_lock_dir = tempfile.TemporaryDirectory(prefix="execute-plan-codex-capacity-")
             self.capacity_lock_path = Path(self._test_capacity_lock_dir.name) / "capacity.lock"
+        self.consult_timeout_seconds = self._finite(consult_timeout_seconds, TERMINAL_EVIDENCE_TIMEOUT_SECONDS)
+        self._test_terminal_records_dir = None
+        if terminal_records_root is not None:
+            self.terminal_records_root = Path(terminal_records_root).expanduser().resolve()
+        elif runner is _subprocess_runner:
+            # Production source for the provider's own conversation records:
+            # the canonical Codex records root under HOME. Consults only ever
+            # read under it.
+            self.terminal_records_root = Path.home() / ".codex" / "sessions"
+        else:
+            # An injected runner is a hermetic test boundary: its records
+            # root is a session-local temp directory, never an ambient
+            # home-relative read.
+            self._test_terminal_records_dir = tempfile.TemporaryDirectory(prefix="execute-plan-codex-records-")
+            self.terminal_records_root = Path(self._test_terminal_records_dir.name)
         manifest_values: dict[str, Any] = {}
         manifest_path = os.environ.get("EXECUTE_PLAN_PACKAGE_MANIFEST")
         if manifest_path:
@@ -229,6 +266,9 @@ class CodexAdapter:
         test_lock_dir = getattr(self, "_test_capacity_lock_dir", None)
         if test_lock_dir is not None:
             test_lock_dir.cleanup()
+        test_records_dir = getattr(self, "_test_terminal_records_dir", None)
+        if test_records_dir is not None:
+            test_records_dir.cleanup()
 
     def _run(self, argv: list[str], deadline: float, operation: str, policy_token: Mapping[str, Any] | None = None) -> dict[str, Any]:
         if any(flag in argv for flag in DANGEROUS_FLAGS):
@@ -361,11 +401,163 @@ class CodexAdapter:
                 continue
             identity = {"pid": pid, "start_time": start_time}
             session_suffix = hashlib.sha256(start_time.encode("utf-8")).hexdigest()[:12]
-            inventory.append({
+            row = {
                 "provider_session_id": f"codex-process-{pid}-{session_suffix}",
                 "process_identity": identity,
-            })
+            }
+            conversation_id = CodexAdapter._resume_conversation_id(argv)
+            if conversation_id is not None:
+                # Additive join key: the conversation id a live `codex exec
+                # resume` process carries in its argv. The row stays
+                # process-keyed; rows with no parseable id are unchanged.
+                row["conversation_id"] = conversation_id
+            inventory.append(row)
         return inventory
+
+    @staticmethod
+    def _resume_conversation_id(argv: list[str]) -> str | None:
+        """Extract the conversation id from an accepted ``exec resume`` argv.
+
+        Accepted shapes are the production resume argv (the id directly
+        after ``resume``) and variants where valueless flags precede or
+        follow it, located through the same wrapper-path codex binary
+        lookup the inventory parse uses. Returns None for everything else:
+        fresh exec launches, resumes with no parseable id, and resumes
+        whose id position is shadowed by a value-taking flag.
+        """
+        codex_index = next(
+            (index for index, value in enumerate(argv[:-1]) if Path(value).name in {"codex", "codex.exe"}),
+            None,
+        )
+        if codex_index is None or argv[codex_index + 1] != "exec":
+            return None
+        invocation = argv[codex_index + 2:]
+        if not invocation or invocation[0] != "resume":
+            return None
+        for token in invocation[1:]:
+            if token in CodexAdapter.RESUME_VALUE_FLAGS:
+                return None
+            if not CodexAdapter._option_like(token):
+                return token
+        return None
+
+    @classmethod
+    def _valid_conversation_id(cls, conversation_id: Any) -> bool:
+        return isinstance(conversation_id, str) and cls.CONVERSATION_ID_PATTERN.match(conversation_id) is not None
+
+    def observe_terminal_evidence(self, conversation_id: str) -> dict[str, Any]:
+        """Consult the provider's own conversation record for terminal evidence.
+
+        Read-only against provider state: completion is derived only from
+        the record content for the exact conversation launched under the
+        claim, never from process absence, and no turn-starting command
+        (``codex exec resume``) is ever invoked. The lookup key is
+        shape-guarded before any record path is derived under the
+        canonicalized records root. The port is total: every failure mode
+        returns a non-terminal observation, never a raise, and the
+        ``detail_signal`` field separates ``record-not-found`` (no record
+        for the conversation) from ``record-not-terminal`` (record present,
+        turn not proven completed) and refuses on identity mismatch, so the
+        consuming wrapper can classify the bounded consult-outcome enum.
+        ``observed_at`` is the consultation read time in the monotonic
+        domain (``normalize_observation``'s default); the record's
+        completion wall-clock timestamp, when present, rides as proof
+        metadata only. The consult carries an explicit per-consult timeout
+        (``consult_timeout_seconds``) that the in-process record scan
+        honors cooperatively by checking the deadline per scan candidate;
+        a local file read cannot be preempted, which is the recorded
+        in-process residual.
+        """
+        try:
+            return self._terminal_evidence(conversation_id)
+        except Exception:  # the port is total: containment beats diagnosis
+            return self._terminal_evidence_refusal("consult-error", ["terminal-evidence consult failed and was contained"])
+
+    def _terminal_evidence(self, conversation_id: str) -> dict[str, Any]:
+        if not self._valid_conversation_id(conversation_id):
+            return self._terminal_evidence_refusal("invalid-conversation-id", [f"conversation id rejected as lookup key: {str(conversation_id)[:64]!r}"])
+        record_text, retrieval_error = self._read_conversation_record(conversation_id)
+        if retrieval_error is not None:
+            return self._terminal_evidence_refusal(retrieval_error, [f"conversation record retrieval failed: {retrieval_error}"])
+        if record_text is None:
+            return self._terminal_evidence_refusal("record-not-found", ["no conversation record under the canonical records root"])
+        envelopes, malformed = self._jsonl(record_text)
+        if malformed or not envelopes:
+            return self._terminal_evidence_refusal("record-not-terminal", ["conversation record is not a parseable JSONL envelope stream"])
+        record_id = next(
+            (
+                identity
+                for item in envelopes
+                for source in (item, item.get("payload", {}))
+                if isinstance(source, Mapping)
+                for identity in (source.get("thread_id") or source.get("session_id") or source.get("id"),)
+                if identity
+            ),
+            None,
+        )
+        if not isinstance(record_id, str) or record_id != conversation_id:
+            # Identity binding derives from the record's content only: the
+            # lookup argument is never echoed onto the observation.
+            return self._terminal_evidence_refusal("identity-mismatch", ["conversation record identity does not verify against the lookup key"])
+        final_envelope = next(
+            (
+                item
+                for item in reversed(envelopes)
+                if "status" in item
+                or item.get("type") in {"turn.completed", "result"}
+                or isinstance(item.get("payload"), Mapping)
+                and (
+                    "status" in item["payload"]
+                    or item["payload"].get("type") in {"turn.completed", "task_complete", "result"}
+                )
+            ),
+            envelopes[-1],
+        )
+        final_payload = final_envelope.get("payload")
+        final = dict(final_payload) if isinstance(final_payload, Mapping) else dict(final_envelope)
+        if final.get("type") == "task_complete":
+            final["type"] = "turn.completed"
+        final.setdefault("timestamp", final_envelope.get("timestamp"))
+        translated = self.translate_host_result(final, 0, f"terminal-evidence:{conversation_id}")
+        if translated.get("status") != "success" or translated.get("reason_code") != "completed":
+            return self._terminal_evidence_refusal("record-not-terminal", [f"conversation record does not prove the turn completed: {translated.get('status')}/{translated.get('reason_code')}"])
+        proof = {
+            "verified": True,
+            "kind": "provider-terminal",
+            "record_completed_at": final.get("completed_at") or final.get("timestamp"),
+        }
+        return self.normalize_observation("terminal-evidence", "terminal", provider_session_id=record_id) | {"proof": proof, "detail_signal": "record-terminal"}
+
+    def _terminal_evidence_refusal(self, detail: str, evidence: list[str]) -> dict[str, Any]:
+        return self.normalize_observation("terminal-evidence", "unavailable") | {
+            "proof": {"verified": False, "kind": "provider-terminal"},
+            "detail_signal": detail,
+            "evidence": bounded_evidence(evidence),
+        }
+
+    def _read_conversation_record(self, conversation_id: str) -> tuple[str | None, str | None]:
+        """Read the conversation record under the canonicalized records root.
+
+        Returns ``(text, error)``: ``(None, None)`` when no record exists
+        (the caller classifies record-not-found), ``(None, reason)`` when
+        retrieval failed, and ``(text, None)`` on success. The canonical
+        direct layout is tried first; a bounded scan over the root covers
+        date-partitioned rollout naming. The scan checks the consult
+        deadline per candidate entry.
+        """
+        try:
+            direct = self.terminal_records_root / f"{conversation_id}.jsonl"
+            if direct.is_file():
+                return direct.read_text(encoding="utf-8"), None
+            started = time.monotonic()
+            for candidate in self.terminal_records_root.rglob(f"*{conversation_id}.jsonl"):
+                if time.monotonic() - started > self.consult_timeout_seconds:
+                    return None, "consult-timeout"
+                if candidate.is_file():
+                    return candidate.read_text(encoding="utf-8"), None
+            return None, None
+        except (OSError, UnicodeDecodeError, ValueError):
+            return None, "retrieval-error"
 
     def _with_capacity_fence(self, operation: str, generation: int, task_id: str, invoke: Any, policy_token: Mapping[str, Any] | None = None) -> dict[str, Any]:
         """Serialize process discovery and launch/resume across local runs."""

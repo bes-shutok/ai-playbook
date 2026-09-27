@@ -2,9 +2,12 @@
 """Fail-closed readiness validator for reviewed plans.
 
 Given a plan path, answers: does the latest review of these exact plan bytes
-report ready=yes with zero unresolved blocking findings and a valid sidecar?
-A plan under the plans dir's ``rejected/`` archive is never active-ready:
-it is excluded with its own named reason before any review checks run.
+report ready=yes with zero unresolved blocking findings and a valid sidecar --
+or, when that final round declares a cap closure (``extensions.cap_closure``),
+does the plan carry the conforming terminal ``## Residual findings (cap
+closure)`` section that stands in for the yes verdict? A plan under the plans
+dir's ``rejected/`` archive is never active-ready: it is excluded with its own
+named reason before any review checks run.
 
 Exit 0 only when every readiness condition passes; otherwise prints the FIRST
 failed condition and exits 1. Digest, schema, sidecar-path, and review-parsing
@@ -42,8 +45,13 @@ import validate_review_staging as vrs
 # Sibling compat handshake: the COMPAT_VERSION value of the sibling shared-rule
 # module (vrs) that THIS validator shipped against. Checked at every launch
 # (gate, sweep, selftest) before any other work; a missing or mismatched
-# sibling value means a partially updated deployment.
-EXPECTED_SIBLING_COMPAT_VERSION = 2
+# sibling value means a partially updated deployment. Bumped 2 to 3 with
+# the cap-closure terminal shape (certification machinery
+# contract-collisions plan, Task 1): this verdict arm consumes the vrs
+# CAP_CLOSURE_SECTION_HEADING constant and the malformed-declaration
+# rejection lives in the new vrs wiring, so the shared-rule semantics are
+# pair-coupled.
+EXPECTED_SIBLING_COMPAT_VERSION = 3
 
 # Round suffix of a review artifact filename: ``-r<N>.md`` (N >= 1).
 # Case-sensitive on purpose: the discovery glob below is lowercase-only, so
@@ -363,6 +371,131 @@ def fence_balance_problem(plan_text: str) -> str | None:
         f"unclosed fence opener at line {opener_line} (no matching "
         f"closer); refusing to evaluate probes over truncated text"
     )
+
+
+# Residual-section disposition vocabulary (certification machinery
+# contract-collisions plan, Task 1): the pinned enum the cap-closure
+# matcher parses. A ``disposition: <word>`` label outside the vocabulary,
+# or a list entry with no disposition token at all, rejects the entry so
+# the matcher is total (never a silent skip).
+_CAP_CLOSURE_DISPOSITION_VOCABULARY = frozenset({"folded", "accepted"})
+_CAP_CLOSURE_DISPOSITION_LABEL_RE = re.compile(
+    r"\bdispositions?\b\s*[:=]?\s*([A-Za-z][A-Za-z_-]*)", re.IGNORECASE
+)
+
+
+def _cap_closure_entry_disposition(entry: str) -> str | None:
+    """Parse one residual-section list entry's disposition token.
+
+    Returns ``"accepted"``, ``"folded"``, or ``None`` when the entry
+    carries no disposition token or one outside the vocabulary. An
+    explicit ``disposition: <word>`` label is authoritative: a word
+    outside the vocabulary rejects the entry instead of falling back to a
+    bare vocabulary mention elsewhere on the line.
+    """
+    label = _CAP_CLOSURE_DISPOSITION_LABEL_RE.search(entry)
+    if label is not None:
+        word = label.group(1).lower()
+        return word if word in _CAP_CLOSURE_DISPOSITION_VOCABULARY else None
+    for word in ("accepted", "folded"):
+        if re.search(rf"\b{word}\b", entry):
+            return word
+    return None
+
+
+def cap_closure_terminal_state_problem(
+    plan_text: str,
+    cap_closure_declaration: object,
+    staged_patterns: list[str],
+) -> str | None:
+    """Reason when the plan's cap-closure terminal state is unsatisfied.
+
+    Consumed by the readiness verdict arm whenever the final sidecar
+    declares ``extensions.cap_closure``; ``staged_patterns`` are the
+    patterns from that sidecar's ``findings`` array (keeping the
+    accounting inside the probe is what lets the verdict arm stay
+    ordering-only). Returns ``None`` on a satisfied conjunct, else the
+    dedicated named reason.
+
+    Conjuncts, first problem wins:
+
+    (a) the fence-stripped plan text carries the staging validator's
+        single-owner section literal (``vrs.CAP_CLOSURE_SECTION_HEADING``,
+        the BARE heading; the declaration check compares the
+        ``'## ' + `` prefixed form against the same owner) as a
+        line-anchored level-2 heading, the Assumptions-trailer precedent
+        (``md_section`` composes its matcher from the bare heading): a
+        quoted mention, a fenced copy, or a ``###`` heading never
+        satisfies it;
+    (b) when the declaration's ``residuals`` count is greater than zero,
+        the section body (md_section semantics: it stops at the next
+        level-2 heading or end of file, and the FIRST conforming heading
+        governs, so a non-empty body under any later conforming heading
+        never rescues an empty first section) contains at least one
+        non-blank line;
+    (c) every staged pattern appears in the section body WITH a
+        ``folded``/``accepted`` disposition on the same list entry as its
+        pattern (never scanned section-wide); under-reporting the round's
+        staged findings returns the dedicated named reason;
+    (d) the declared ``residuals`` count equals the number of distinct
+        section-body entries carrying the ``accepted`` disposition.
+    """
+    heading = vrs.CAP_CLOSURE_SECTION_HEADING
+    stripped = _strip_fences(plan_text)
+    heading_present = re.search(
+        rf"^## {re.escape(heading)}\s*$", stripped, re.MULTILINE
+    )
+    if not heading_present:
+        return (
+            "cap closure terminal state missing: the plan carries no "
+            f"line-anchored '## {heading}' section (a quoted mention, a "
+            "fenced copy, or a '###' heading never satisfies it)"
+        )
+    section = md_section(stripped, heading)
+    raw_residuals = (
+        cap_closure_declaration.get("residuals")
+        if isinstance(cap_closure_declaration, dict)
+        else 0
+    )
+    residuals = (
+        raw_residuals
+        if isinstance(raw_residuals, int) and not isinstance(raw_residuals, bool)
+        else 0
+    )
+    entries = [line.strip() for line in section.splitlines() if line.strip()]
+    if residuals > 0 and not entries:
+        return (
+            "cap closure terminal state missing or empty: the "
+            f"'## {heading}' section body is missing or empty while the "
+            f"declaration claims {residuals} residual(s)"
+        )
+    under_reported = [
+        pattern
+        for pattern in staged_patterns
+        if not any(
+            pattern in entry
+            and _cap_closure_entry_disposition(entry) is not None
+            for entry in entries
+        )
+    ]
+    if under_reported:
+        return (
+            "cap closure terminal state under-reports the round's staged "
+            f"findings: no '## {heading}' body entry carries a folded or "
+            f"accepted disposition for {under_reported!r}"
+        )
+    accepted_tally = sum(
+        1
+        for entry in entries
+        if _cap_closure_entry_disposition(entry) == "accepted"
+    )
+    if accepted_tally != residuals:
+        return (
+            "cap closure residuals count mismatch: the declaration claims "
+            f"{residuals} accepted residual(s) but the '## {heading}' "
+            f"section body carries {accepted_tally}"
+        )
+    return None
 
 
 def decision_marker_problem(plan_text: str) -> str | None:
@@ -1203,6 +1336,34 @@ def evaluate_readiness(
         _fence_problem = None
     if _fence_problem is not None:
         return False, _fence_problem
+    # Cap-closure declaration presence and the plan-text date guards: the
+    # trigger set for the single shared defensive decode below (the only
+    # gated consumers of the plan text).
+    extensions = payload.get("extensions")
+    cap_closure_declared = isinstance(extensions, dict) and (
+        vrs.CAP_CLOSURE_KEY in extensions
+    )
+    round_date = str(payload.get("date") or "").strip()
+    trailer_gated = _gate_fires(round_date, DECISION_MARKER_MIN_DATE)
+    scope_gated = _gate_fires(round_date, REVIEW_SCOPE_MIN_DATE)
+    ownership_gated = _gate_fires(round_date, PLAN_STRUCTURE_MIN_DATE)
+    # Shared defensive decode for the gated plan-text consumers (the
+    # declaration-routed cap-closure probe and the date-gated trailer,
+    # Review Scope, and plan-ownership probes): the bytes are decoded at
+    # most ONCE per call and ONLY when at least one consumer needs the
+    # text, so an undecodable plan whose round is date-exempt and which
+    # carries no declaration keeps today's pass and its own later reason
+    # family (r2 F2). The existing cannot-read reason family is kept for
+    # the shared failure case; step 6 reuses the decoded text.
+    plan_text: str | None = None
+    if cap_closure_declared or trailer_gated or scope_gated or ownership_gated:
+        try:
+            plan_text = plan_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            return False, (
+                f"cannot read plan bytes for gated checks (trailer, "
+                f"Review Scope, and/or plan ownership): {exc}"
+            )
     expected_digest = vrs.compute_source_digest("plan", plan_bytes)
 
     # 3. Shared sidecar gate: the SAME validation the staging validator runs
@@ -1253,19 +1414,42 @@ def evaluate_readiness(
     # legacy records keep today's tolerance (r2 F1 fold: the live corpus
     # carries legacy ``verdict`` keys, so a rejecting consumer would newly
     # fail artifacts that pass today).
+    # Cap-closure exception (certification machinery contract-collisions
+    # plan, Task 1): when the final sidecar DECLARES
+    # ``extensions.cap_closure``, this step keeps only the ordering
+    # decision, mirroring the ``fence_balance_problem`` consumption above.
+    # The declaration routes the probe at the plan bytes; a satisfied
+    # conjunct passes (whatever the verdict value), and a probe reason
+    # returns the dedicated terminal-state reason. Without the
+    # declaration, today's verdict behavior is unchanged.
     verdict_field = sidecar_verdict(payload)
-    if verdict_field == "no":
-        return False, (
-            f"latest review r{round_no} sidecar verdict field reports 'no'"
+    if cap_closure_declared:
+        findings = payload.get("findings")
+        staged_patterns = [
+            row.get("pattern")
+            for row in (findings if isinstance(findings, list) else [])
+            if isinstance(row, dict) and isinstance(row.get("pattern"), str)
+        ]
+        problem = cap_closure_terminal_state_problem(
+            plan_text,
+            extensions.get(vrs.CAP_CLOSURE_KEY),
+            staged_patterns,
         )
-    if verdict_field != "yes":
-        summary = summary_section(content)
-        verdicts = verdict_tokens(summary)
-        if not verdicts or verdicts[-1].lower() != "yes":
+        if problem is not None:
+            return False, problem
+    else:
+        if verdict_field == "no":
             return False, (
-                f"latest review r{round_no} does not report a ready=yes verdict "
-                f"line in its ## Summary"
+                f"latest review r{round_no} sidecar verdict field reports 'no'"
             )
+        if verdict_field != "yes":
+            summary = summary_section(content)
+            verdicts = verdict_tokens(summary)
+            if not verdicts or verdicts[-1].lower() != "yes":
+                return False, (
+                    f"latest review r{round_no} does not report a ready=yes verdict "
+                    f"line in its ## Summary"
+                )
 
     # 5. is_review_ready() over the same Markdown is True.
     if not vrs.is_review_ready(content):
@@ -1283,27 +1467,10 @@ def evaluate_readiness(
     # current-shape sidecars, and a malformed value must not reach the
     # lexicographic gate comparison (r4 F4); failing those would retrofit
     # legacy artifacts; the authoring-side prose gate covers newly
-    # authored plans regardless (r1 F3). The plan bytes read once above
-    # for the digest are decoded here; only a decode failure can still
-    # reach this reason family.
-    round_date = str(payload.get("date") or "").strip()
-    trailer_gated = _gate_fires(round_date, DECISION_MARKER_MIN_DATE)
-    scope_gated = _gate_fires(round_date, REVIEW_SCOPE_MIN_DATE)
-    ownership_gated = _gate_fires(round_date, PLAN_STRUCTURE_MIN_DATE)
-    # Decode sharing without widening the decode failure (r2 F2): the
-    # plan bytes are decoded ONCE, and ONLY when at least one of the two
-    # date guards fires — an undecodable plan whose round is date-exempt
-    # must not newly fail. The trailer block's existing decode-failure
-    # reason text is kept for that shared case; the decoded text is
-    # passed to whichever probe runs below.
-    if trailer_gated or scope_gated or ownership_gated:
-        try:
-            plan_text = plan_bytes.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            return False, (
-                f"cannot read plan bytes for gated checks (trailer, "
-                f"Review Scope, and/or plan ownership): {exc}"
-            )
+    # authored plans regardless (r1 F3). The date guards and the shared
+    # decode live beside the fence-balance consumption above (one decode
+    # per call, one named failure reason); this block reuses the decoded
+    # plan text.
     if trailer_gated:
         problem = decision_marker_problem(plan_text)
         if problem:

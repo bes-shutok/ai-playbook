@@ -59,6 +59,8 @@ If `git diff ${BASE_BRANCH}...HEAD | wc -c` exceeds `review_large_diff_bytes` (d
 
 **Context budget checkpoint (round boundary):** the orchestrator applies the execute-plan `Context budget checkpoints` policy at each round boundary (after the round's step 4, before the next round's step 1): measure context size, log one telemetry record with `skill: review-loop` to the run's telemetry file `docs/tmp/review-loop/<branch-slug>/context.jsonl`, and act per that policy's threshold ladder; review-loop does not restate the ladder. Under execute-plan Phase 3 the parent's after-review-round checkpoint is authoritative for ladder actions: review-loop only logs its per-skill record and takes no ladder action of its own, and the first record review-loop appends for a run is the baseline for its own compactions_to_date comparison.
 
+Each round boundary updates the loop's disk-truth record per the plans skill's degraded-generation disk-truth protocol: the round's staging doc and its `.stats.json` sidecar are the per-round disk artifacts, findings are read from those files (never from the loop's own prose), and a detected garble or cross-check mismatch stops the loop before the next round's fixes.
+
 ## Staging doc (required every round)
 
 Path pattern:
@@ -129,6 +131,8 @@ Stop only when **all** of the following hold on a fresh review of committed `HEA
 4. **Design-simplicity coverage before exit:** if the clear-candidate round used `panel_mode: focused` and omitted `design-simplicity`, run one more pass that includes `design-simplicity` (hybrid is enough: correctness + design-simplicity + any other owners still needed). Skip this extra pass only when the immediately preceding round in this run was a **full** panel that already completed `design-simplicity` on the same tip digest.
 5. No unresolved reconciliation trigger remains. If recurring history, contradictory artifacts, or an untrusted closure witness remains, run `review-reconciliation` before reporting exit.
 6. **Residual-acceptance exit mirror:** standalone loops share the same `residual-acceptance exit` shape as execute-plan Phase 3: a named fix set (from a reconciliation pass or the fix-risk triage), one address pass plus ONE focused targeted round composed per `review-panel-selection` Targeted follow-ups, out-of-set new blocking findings become durable backlog items with an owner and a trigger, and the policy is recorded before the verification round runs.
+
+Advisory (no new mechanical gate, every strictness class; class resolution per `review-plan`, Project strictness classes): stop when the latest round produced no new blocking findings, recording ordinary findings instead of chasing them with new rounds; when blocking findings survive a verification round, escalate to simplifying or rewriting the change instead of another patch round. In a `personal`-class project the default is two review rounds with a hard cap of three, and at the cap without a clean round the loop stops for simplify-or-rewrite; `max_full_panel_rounds` keeps its default for standard-class projects.
 
 | Signal | Valid exit? |
 |--------|-------------|

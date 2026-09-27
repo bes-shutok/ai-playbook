@@ -141,6 +141,20 @@ class SelectionHelperTest(unittest.TestCase):
         self.assertFalse(md.exists())
         self.assertFalse(sidecar.exists())
 
+    def test_select_preserves_uppercase_feature_slug(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            code, payload, err = self.select_slug(
+                Path(directory), "CRM-607-fact-reconcile-worker", DIGEST_A,
+                "--kind", "plan-review"
+            )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(payload["decision"], "new-record")
+        self.assertTrue(
+            payload["markdown"].endswith(
+                "-plan-review-CRM-607-fact-reconcile-worker-r1.md"
+            )
+        )
+
     def test_select_reuses_same_pass(self) -> None:
         base = f"{self.today}-demo-r1"
         md, sidecar = self.write_pair(self.reviews, base, DIGEST_A)
@@ -1026,6 +1040,60 @@ class SelectionHelperTest(unittest.TestCase):
         self.assertEqual(payload["decision"], "new-record")
         self.assertIsNone(payload["prior"])
         self.assertIsNone(payload["supersedes"])
+
+    def test_select_usage_error_precedes_orphan_refusal(self) -> None:
+        # Deterministic usage-error precedence: the --source-digest usage
+        # errors (empty, grammar) and the slug usage errors (traversal,
+        # backup infix) are decided before any record-corpus state is
+        # consulted, so an orphan half in the corpus never masks them with
+        # the exit-1 orphan refusal: the same invalid input exits 2 with
+        # the same message everywhere.
+        orphan = self.reviews / f"{self.today}-demo-r1.stats.json"
+        orphan.write_text(
+            json.dumps({"source_digest": DIGEST_A}), encoding="utf-8"
+        )
+        # Empty digest over the orphan corpus: exit 2 with the
+        # --source-digest usage message, never exit 1 with the orphan
+        # message.
+        code, payload, err = self.select("")
+        self.assertEqual(code, 2, err)
+        self.assertEqual(payload, {})
+        self.assertIn("--source-digest", err)
+        self.assertNotIn("orphaned record half", err)
+        # Malformed digest over the same corpus: exit 2 with the
+        # digest-grammar message.
+        code, payload, err = self.select("xyz")
+        self.assertEqual(code, 2, err)
+        self.assertEqual(payload, {})
+        self.assertIn("^[0-9a-f]{64}$", err)
+        self.assertNotIn("orphaned record half", err)
+        # Traversal slug with a valid digest: exit 2 naming the slug, never
+        # exit 1 naming the orphan.
+        code, out, err = self.run_cli(
+            "select",
+            "--dir",
+            str(self.reviews),
+            "--slug",
+            "../../x",
+            "--source-digest",
+            DIGEST_A,
+        )
+        self.assertEqual(code, 2, err)
+        self.assertIn("../../x", err)
+        self.assertNotIn("orphaned record half", err)
+        # Backup-infix slug with a valid digest: exit 2 naming the slug.
+        code, out, err = self.run_cli(
+            "select",
+            "--dir",
+            str(self.reviews),
+            "--slug",
+            "demo.backup-x",
+            "--source-digest",
+            DIGEST_A,
+        )
+        self.assertEqual(code, 2, err)
+        self.assertIn("demo.backup-x", err)
+        self.assertNotIn("orphaned record half", err)
 
 
 if __name__ == "__main__":

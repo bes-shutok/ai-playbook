@@ -23,6 +23,11 @@ Privacy invariant: path-level baseline and conservation data live ONLY under
 ``~/.ai-playbook/review-telemetry/`` (local, untracked). No path-level data
 enters any tracked file. Aggregate public output is built in later tasks.
 
+The ``--metrics`` mode is the review-corpus metrics pass: a read-only
+aggregation of the discovered sidecars into per-loop, per-complexity-band
+metrics (findings-per-round decay, ready-rate, cap-exhaustion share) with
+aggregate-only JSON and Markdown outputs.
+
 Concurrency invariant: a process-wide ``fcntl.flock`` on the telemetry lock is
 held across discover->digest->parse->aggregate->publish; each input is read
 once into an immutable byte buffer used for both digest and parse; before
@@ -2686,6 +2691,434 @@ def _roots_from_facts(user_facts: Path) -> list[Path]:
 
 
 # --------------------------------------------------------------------------- #
+# Review-corpus metrics pass (review-loop exit-condition metrics, Task 3).
+# Read-only aggregation over the discovered sidecar corpus: loops grouped by
+# artifact_slug, per-round decay, ready-rate, cap exhaustion, segmented by the
+# plan-complexity band derived from the plan file's task-checkbox count.
+# Aggregate-only output in both forms: no per-file path rows, no slugs, no
+# repository identifiers (privacy invariant).
+# --------------------------------------------------------------------------- #
+
+
+# Report schema marker for the metrics documents.
+METRICS_SCHEMA = "review-metrics-v1"
+
+# Complexity bands (plan Terms): small (5 or fewer task checkboxes), medium
+# (6 to 15), large (16 or more), unknown (plan file absent or the slug match
+# is ambiguous). Fixed key order keeps the report shape stable.
+COMPLEXITY_BANDS = ("small", "medium", "large", "unknown")
+
+
+def _repo_plans_dirs(repo: Path) -> list[Path]:
+    """Resolve a repo's plans directories for band derivation.
+
+    ``plans_dir`` plus its completed subdirectory (the ``plans_completed_dir``
+    facts key, falling back to ``plans_dir`` / ``completed``). Resolution
+    mirrors ``_repo_reviews_dir``: the RAW facts value is read through
+    ``facts_paths`` (single parser; Design Invariant 11) and a relative value
+    is anchored at the repo root. Defaults keep repos without the facts keys
+    working.
+    """
+    raw = facts_paths.resolve_toml_key_raw(repo, "plans_dir")
+    plans = Path(raw).expanduser() if raw else repo / "docs" / "history" / "plans"
+    if not plans.is_absolute():
+        plans = repo / plans
+    raw_completed = facts_paths.resolve_toml_key_raw(repo, "plans_completed_dir")
+    completed = (
+        Path(raw_completed).expanduser() if raw_completed else plans / "completed"
+    )
+    if not completed.is_absolute():
+        completed = repo / completed
+    return [plans, completed]
+
+
+def _plan_task_checkboxes(path: Path) -> int | None:
+    """Count the plan file's task checkboxes (checked or unchecked).
+
+    Both checkbox states count: the band measures plan size, and an archived
+    plan is as large as it was when active. Returns None when the file cannot
+    be read (the band then stays unknown instead of failing the pass).
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    return text.count("- [ ]") + text.count("- [x]")
+
+
+def _band_of_count(count: int) -> str:
+    """Map a task-checkbox count to its complexity band (plan Terms)."""
+    if count <= 5:
+        return "small"
+    if count <= 15:
+        return "medium"
+    return "large"
+
+
+def _resolve_band(slug: str, plans_dirs: list[Path]) -> str:
+    """Derive a loop's complexity band from its plan file.
+
+    The artifact slug globs both plans directories; exactly one match derives
+    the band from the file's task-checkbox count. Zero matches (plan absent)
+    or more than one (ambiguous: the slug matches plan files under both the
+    plans directory and its completed subdirectory) resolve ``unknown``.
+    """
+    matches: set[Path] = set()
+    for directory in plans_dirs:
+        if not directory.is_dir():
+            continue
+        try:
+            for candidate in directory.glob(f"*{slug}*.md"):
+                if candidate.is_file() and not candidate.is_symlink():
+                    matches.add(candidate.resolve())
+        except (OSError, ValueError):
+            continue
+    if len(matches) != 1:
+        return "unknown"
+    count = _plan_task_checkboxes(next(iter(matches)))
+    if count is None:
+        return "unknown"
+    return _band_of_count(count)
+
+
+def _round_index_of(value) -> int | None:
+    """Coerce a sidecar ``round`` value to an integer index, or None.
+
+    Accepts the contracted shapes (integer, or a string like ``"r3"`` or
+    ``"3"``); anything else, including bool, is unusable.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text.startswith("r"):
+            text = text[1:]
+        if text.isdigit():
+            return int(text)
+    return None
+
+
+def _metrics_round_record(payload: dict) -> dict | None:
+    """One loop round's metrics record from a sidecar payload, or None.
+
+    Records the round number, verdict, staged findings total, blocking count,
+    and whether ``extensions.cap_closure`` is present. Mistyped containers
+    yield zeros (partial-failure design: one bad sidecar never aborts the
+    pass); a record without a usable round index is not a record.
+    """
+    rnd = _round_index_of(payload.get("round"))
+    if rnd is None:
+        return None
+    findings = payload.get("findings")
+    if isinstance(findings, list):
+        staged = len(findings)
+        blocking = sum(
+            1
+            for finding in findings
+            if isinstance(finding, dict) and finding.get("blocking") is True
+        )
+    else:
+        counts = payload.get("counts")
+        staged = (
+            _coerce_int(counts.get("staged_findings"))
+            if isinstance(counts, dict)
+            else 0
+        )
+        blocking = 0
+    verdict = payload.get("verdict")
+    if verdict not in ("yes", "no"):
+        verdict = None
+    extensions = payload.get("extensions")
+    cap = isinstance(extensions, dict) and "cap_closure" in extensions
+    return {
+        "round": rnd,
+        "verdict": verdict,
+        "staged": staged,
+        "blocking": blocking,
+        "cap_closure": cap,
+    }
+
+
+def _sidecar_fails_validation(payload: dict) -> bool:
+    """Delegated validation gate for the metrics pass.
+
+    Unparsable buffers are caught by the caller (payload None). A version-1
+    record must pass the validator's exported version-1 contract (the single
+    validation authority, ``validate_review_staging.validate_version1_payload``);
+    versionless records keep their legacy compatibility treatment and are
+    never re-judged against today's contract. The Markdown content argument
+    is empty: the pass is sidecar-only, and with no verdict heading the
+    clean-verdict cross-checks inside the validator stay quiet.
+    """
+    label = vrs.classify_sidecar_schema(payload)
+    if label == "unsupported":
+        return True
+    if label != "current-v1":
+        return False
+    result = vrs.ValidationResult(path=Path("metrics-sidecar"))
+    vrs.validate_version1_payload(payload, "", result)
+    return bool(result.errors)
+
+
+def _loops_from_sidecars(
+    sidecars: list[Path], buffers: dict[Path, bytes]
+) -> tuple[dict[str, list[dict]], int]:
+    """Group discovered sidecars into per-slug loop round records.
+
+    Returns ``(loops, legacy_count)``: ``loops`` maps each artifact slug to
+    its round records sorted by round index; ``legacy_count`` counts sidecars
+    that failed validation or carry no usable loop identity (the unknown-band
+    legacy bucket; the pass never fails on them). A duplicate slug+round pair
+    keeps the first record in sorted-path order (deterministic; no
+    double-counting).
+    """
+    slots: dict[str, dict[int, dict]] = {}
+    legacy = 0
+    for sidecar in sidecars:  # caller passes sorted paths
+        payload, _ = parse_payload(buffers.get(sidecar, b""))
+        if payload is None or _sidecar_fails_validation(payload):
+            legacy += 1
+            continue
+        record = _metrics_round_record(payload)
+        slug = payload.get("artifact_slug")
+        if record is None or not isinstance(slug, str) or not slug:
+            legacy += 1
+            continue
+        slot = slots.setdefault(slug, {})
+        if record["round"] in slot:
+            continue
+        slot[record["round"]] = record
+    loops = {
+        slug: [slot[rnd] for rnd in sorted(slot)] for slug, slot in slots.items()
+    }
+    return loops, legacy
+
+
+def _empty_band_stats() -> dict:
+    """Empty stats shape for one cohort of loops (stable key set)."""
+    return {
+        "loops": 0,
+        "cap_closures": 0,
+        "cap_exhaustion_share": 0.0,
+        "findings_by_round": {},
+        "blocking_by_round": {},
+        "ready_by_round": {},
+        "ready_rate_by_round": {},
+        "latest_round_distribution": {},
+    }
+
+
+def _band_stats(loops: list[list[dict]]) -> dict:
+    """Aggregate one cohort of loops (a band, or all bands) into stats.
+
+    ``loops`` is a list of per-loop round-record lists, each sorted by round
+    index. Findings totals per round index form the decay series; ready-rate
+    divides by ALL the cohort's loops (a loop without a round at an index is
+    not ready there), so the final-index rate reads as the share of loops
+    whose round at that depth was clean. Cap exhaustion counts each loop once
+    (any round carrying ``extensions.cap_closure`` closes the loop through
+    the cap). Round-index keys are ints in memory; JSON stringifies them.
+    """
+    stats = _empty_band_stats()
+    stats["loops"] = len(loops)
+    cap_loops = 0
+    by_round_findings: dict[int, int] = {}
+    by_round_blocking: dict[int, int] = {}
+    by_round_ready: dict[int, int] = {}
+    latest: dict[int, int] = {}
+    for records in loops:
+        if not records:
+            continue
+        if any(rec.get("cap_closure") for rec in records):
+            cap_loops += 1
+        last = records[-1]["round"]
+        latest[last] = latest.get(last, 0) + 1
+        for rec in records:
+            idx = rec["round"]
+            by_round_findings[idx] = by_round_findings.get(idx, 0) + rec["staged"]
+            by_round_blocking[idx] = (
+                by_round_blocking.get(idx, 0) + rec["blocking"]
+            )
+            if rec.get("verdict") == "yes":
+                by_round_ready[idx] = by_round_ready.get(idx, 0) + 1
+    total = len(loops)
+    stats["cap_closures"] = cap_loops
+    stats["cap_exhaustion_share"] = (cap_loops / total) if total else 0.0
+    stats["findings_by_round"] = dict(sorted(by_round_findings.items()))
+    stats["blocking_by_round"] = dict(sorted(by_round_blocking.items()))
+    stats["ready_by_round"] = dict(sorted(by_round_ready.items()))
+    stats["ready_rate_by_round"] = {
+        idx: ((ready / total) if total else 0.0)
+        for idx, ready in sorted(by_round_ready.items())
+    }
+    stats["latest_round_distribution"] = dict(sorted(latest.items()))
+    return stats
+
+
+def build_metrics_report(
+    band_loops: dict[str, list[list[dict]]], legacy_count: int
+) -> dict:
+    """Build the aggregate-only metrics report.
+
+    Every band key is always present (stable shape for consumers); the
+    unknown band carries the legacy-bucket sidecar count next to its loops.
+    Output holds aggregates only: no sidecar paths, no slugs, no repository
+    identifiers.
+    """
+    bands = {}
+    for band in COMPLEXITY_BANDS:
+        bands[band] = _band_stats(band_loops.get(band, []))
+    bands["unknown"]["legacy_bucket_sidecars"] = legacy_count
+    overall = _band_stats(
+        [
+            loops
+            for band in COMPLEXITY_BANDS
+            for loops in band_loops.get(band, [])
+        ]
+    )
+    return {
+        "schema": METRICS_SCHEMA,
+        "loops": overall["loops"],
+        "sidecars_legacy_bucket": legacy_count,
+        "bands": bands,
+        "overall": overall,
+    }
+
+
+def serialize_metrics_json(report: dict) -> bytes:
+    """Canonical JSON bytes for the metrics report (deterministic)."""
+    return (json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _fmt_rate(value: float) -> str:
+    """Format a share/rate with two decimals for the Markdown tables."""
+    return f"{value:.2f}"
+
+
+def _rounds_suffix(stats: dict, key: str) -> str:
+    """Format a per-round stats map as a compact ``rN=value`` list."""
+    return ", ".join(
+        f"r{idx}={stats[key][idx]}" for idx in sorted(stats[key])
+    )
+
+
+def serialize_metrics_markdown(report: dict) -> bytes:
+    """Aggregate-only Markdown for the metrics report.
+
+    Tables carry per-round and per-band aggregates only; no per-file rows,
+    paths, slugs, or repository identifiers (privacy invariant).
+    """
+    overall = report["overall"]
+    lines: list[str] = []
+    lines.append("# Review corpus metrics")
+    lines.append("")
+    lines.append(
+        f"Loops: {report['loops']}; sidecars in legacy bucket: "
+        f"{report['sidecars_legacy_bucket']}"
+    )
+    lines.append("")
+    lines.append("## Overall")
+    lines.append("")
+    lines.append("| round | findings | blocking | ready | ready rate |")
+    lines.append("|---|---|---|---|---|")
+    for idx in sorted(overall["findings_by_round"]):
+        lines.append(
+            f"| r{idx} | {overall['findings_by_round'][idx]} "
+            f"| {overall['blocking_by_round'].get(idx, 0)} "
+            f"| {overall['ready_by_round'].get(idx, 0)} "
+            f"| {_fmt_rate(overall['ready_rate_by_round'].get(idx, 0.0))} |"
+        )
+    lines.append("")
+    lines.append(
+        f"Cap closures: {overall['cap_closures']} of {overall['loops']} loops "
+        f"(share {_fmt_rate(overall['cap_exhaustion_share'])})"
+    )
+    lines.append(
+        "Latest-round distribution: "
+        + _rounds_suffix(overall, "latest_round_distribution")
+    )
+    lines.append("")
+    lines.append("## Complexity bands")
+    lines.append("")
+    lines.append(
+        "| band | loops | cap closures | cap share | findings by round "
+        "| ready rate by round | latest rounds |"
+    )
+    lines.append("|---|---|---|---|---|---|---|")
+    for band in COMPLEXITY_BANDS:
+        stats = report["bands"][band]
+        lines.append(
+            f"| {band} | {stats['loops']} | {stats['cap_closures']} "
+            f"| {_fmt_rate(stats['cap_exhaustion_share'])} "
+            f"| {_rounds_suffix(stats, 'findings_by_round')} "
+            f"| {_rounds_suffix(stats, 'ready_rate_by_round')} "
+            f"| {_rounds_suffix(stats, 'latest_round_distribution')} |"
+        )
+    lines.append("")
+    lines.append(
+        "Legacy bucket (sidecars that failed validation or carry no usable "
+        "loop identity, counted in the unknown band): "
+        f"{report['sidecars_legacy_bucket']}"
+    )
+    lines.append("")
+    return "\n".join(lines).encode("utf-8")
+
+
+def run_metrics_pass(repo_roots: list[Path]) -> dict:
+    """Run the read-only metrics pass over the discovered corpus.
+
+    Reuses the facts-driven discovery primitives (repo walk, reviews-dir
+    resolution, sidecar ingestion, pinned single reads, delegated
+    validation) and never fails on a legacy or unparseable sidecar (legacy
+    bucket). Returns the aggregate-only report (see
+    ``build_metrics_report``).
+    """
+    band_loops: dict[str, list[list[dict]]] = {
+        band: [] for band in COMPLEXITY_BANDS
+    }
+    legacy = 0
+    for root in repo_roots:
+        for repo in iter_repos_under_root(root):
+            found: set[Path] = set()
+            _ingest_sidecars(_repo_reviews_dir(repo), found)
+            _ingest_sidecars(repo / "docs" / "history" / "reviews", found)
+            sidecars = sorted(found)
+            buffers = {s: read_byte_buffer(s) for s in sidecars}
+            loops, legacy_count = _loops_from_sidecars(sidecars, buffers)
+            legacy += legacy_count
+            plans_dirs = _repo_plans_dirs(repo)
+            for slug in sorted(loops):
+                band_loops[_resolve_band(slug, plans_dirs)].append(loops[slug])
+    return build_metrics_report(band_loops, legacy)
+
+
+def cmd_metrics(
+    user_facts: Path,
+    json_path: Path | None,
+    markdown_path: Path | None,
+) -> int:
+    """``--metrics``: read-only corpus aggregation into per-band loop metrics.
+
+    Aggregate-only outputs (no per-file path rows) are written atomically to
+    the caller-supplied paths. Never fails on a legacy or unparseable
+    sidecar: failing sidecars land in the unknown-band legacy bucket.
+    """
+    repo_roots = _roots_from_facts(user_facts)
+    report = run_metrics_pass(repo_roots)
+    if json_path is not None:
+        _atomic_write_private(json_path, serialize_metrics_json(report))
+    if markdown_path is not None:
+        _atomic_write_private(markdown_path, serialize_metrics_markdown(report))
+    sys.stdout.write(
+        f"metrics: {report['loops']} loop(s); legacy bucket "
+        f"{report['sidecars_legacy_bucket']}\n"
+    )
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # Selftest registry. The dotted names match the plan's checkbox IDs.
 # --------------------------------------------------------------------------- #
 
@@ -2731,6 +3164,37 @@ def _make_legacy_payload() -> dict:
         "agents_launched": 3,
         "counts": {"raw_findings": 2},
     }
+
+
+def _metrics_v1_payload(
+    slug: str,
+    round_no: int,
+    verdict: str,
+    blocking_flags: list[bool],
+    *,
+    cap_closure: bool = False,
+) -> dict:
+    """Build a valid version-1 sidecar payload for the metrics selftests.
+
+    Reuses the validator's ``_version1_payload`` builder (ONE canonical
+    five-worker shape; its pre-fence date keeps the extended-field, coverage,
+    and record-kind fences exempt) and overrides the loop-identity fields the
+    metrics pass reads: artifact_slug, round, verdict, findings (with
+    blocking flags), and the cap-closure extension.
+    """
+    payload = vrs._version1_payload()
+    payload["artifact_slug"] = slug
+    payload["round"] = round_no
+    payload["verdict"] = verdict
+    payload["findings"] = [
+        vrs._current_finding(id=i + 1, blocking=flag)
+        for i, flag in enumerate(blocking_flags)
+    ]
+    payload["counts"]["staged_findings"] = len(blocking_flags)
+    payload["extensions"] = (
+        {"cap_closure": {"round": round_no}} if cap_closure else {}
+    )
+    return payload
 
 
 # ---- facts_roots ----
@@ -6293,6 +6757,241 @@ def _t_historical_immutability(check) -> None:
         )
 
 
+# ---- metrics ----
+@_test("summarize_review_stats#metrics_bands")
+def _t_metrics_bands(check) -> None:
+    """Metrics pass over a synthetic five-loop corpus (review-loop
+    exit-condition metrics plan, Task 3 Case A).
+
+    Loop A: three rounds, findings totals 6, 4, 2, verdicts no, no, yes.
+    Loop B: two rounds, totals 3, 3, cap closure on the last round.
+    Loop C: one round, two findings, verdict no. Plans sized into different
+    bands (small, medium, large). A fourth loop whose plan file is absent
+    (one round, two findings, verdict no) and a fifth loop whose slug matches
+    plan files under BOTH the plans dir and its completed subdir (one round,
+    one finding, verdict no). Expected: per-round findings series 14, 7, 2;
+    ready-rate one of five at the final index; cap-exhaustion share one of
+    five; three loops in their derived bands with the plan-less fourth and
+    the ambiguous-slug fifth both unknown; zero per-file path rows in the
+    JSON. Ends with explicit temp-directory teardown.
+    """
+    import shutil
+    import tempfile
+
+    td = Path(tempfile.mkdtemp(prefix="review-metrics-selftest-"))
+    try:
+        root = td / "myrepos"
+        repo = root / "metrics-repo"  # synthetic; never asserted in outputs
+        plans = repo / "docs" / "history" / "plans"
+        completed = plans / "completed"
+        reviews = repo / "docs" / "reviews"
+        for directory in (plans, completed, reviews, repo / ".ai-playbook"):
+            directory.mkdir(parents=True)
+        (repo / ".ai-playbook" / "facts.md").write_text(
+            "```toml\n"
+            'plans_dir = "docs/history/plans/"\n'
+            'plans_completed_dir = "docs/history/plans/completed/"\n'
+            'reviews_dir = "docs/reviews/"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+
+        def plan_file(directory: Path, slug: str, checkboxes: int) -> None:
+            body = "\n".join("- [ ] task item" for _ in range(checkboxes))
+            (directory / f"2026-09-01-{slug}.md").write_text(
+                f"# {slug} plan\n\n{body}\n", encoding="utf-8"
+            )
+
+        def sidecar(
+            slug: str,
+            round_no: int,
+            verdict: str,
+            blocking_flags: list[bool],
+            *,
+            cap_closure: bool = False,
+        ) -> None:
+            payload = _metrics_v1_payload(
+                slug, round_no, verdict, blocking_flags, cap_closure=cap_closure
+            )
+            _write_private_sidecar(
+                reviews / f"2026-09-02-branch-review-{slug}-r{round_no}.stats.json",
+                payload,
+            )
+
+        plan_file(plans, "alpha-feature", 3)  # small (5 or fewer)
+        plan_file(plans, "beta-feature", 10)  # medium (6 to 15)
+        plan_file(plans, "gamma-feature", 20)  # large (16 or more)
+        # delta-feature: deliberately absent from both plans directories.
+        plan_file(plans, "epsilon-feature", 7)
+        plan_file(completed, "epsilon-feature", 7)  # ambiguous slug match
+
+        sidecar("alpha-feature", 1, "no", [False] * 6)
+        sidecar("alpha-feature", 2, "no", [True, True, False, False])
+        sidecar("alpha-feature", 3, "yes", [True, False])
+        sidecar("beta-feature", 1, "no", [False] * 3)
+        sidecar("beta-feature", 2, "no", [False] * 3, cap_closure=True)
+        sidecar("gamma-feature", 1, "no", [False, False])
+        sidecar("delta-feature", 1, "no", [True, False])
+        sidecar("epsilon-feature", 1, "no", [False])
+
+        report = run_metrics_pass([root])
+        overall = report["overall"]
+        check(
+            "metrics_bands: per-round findings series 14, 7, 2",
+            [overall["findings_by_round"].get(i, 0) for i in (1, 2, 3)]
+            == [14, 7, 2],
+            str(overall["findings_by_round"]),
+        )
+        check(
+            "metrics_bands: ready-rate one of five at the final index",
+            abs(overall["ready_rate_by_round"].get(3, -1.0) - 0.2) < 1e-9,
+            str(overall["ready_rate_by_round"]),
+        )
+        check(
+            "metrics_bands: cap-exhaustion share one of five",
+            report["loops"] == 5
+            and overall["cap_closures"] == 1
+            and abs(overall["cap_exhaustion_share"] - 0.2) < 1e-9,
+            f"loops={report['loops']} cap={overall['cap_closures']}",
+        )
+        bands = report["bands"]
+        check(
+            "metrics_bands: three loops in their derived bands",
+            bands["small"]["loops"] == 1
+            and bands["medium"]["loops"] == 1
+            and bands["large"]["loops"] == 1,
+            str({b: bands[b]["loops"] for b in ("small", "medium", "large")}),
+        )
+        check(
+            "metrics_bands: plan-less and ambiguous loops both unknown",
+            bands["unknown"]["loops"] == 2
+            and bands["unknown"].get("legacy_bucket_sidecars", 0) == 0,
+            str(bands["unknown"]),
+        )
+        check(
+            "metrics_bands: cap closure lands in the medium band",
+            bands["medium"]["cap_closures"] == 1
+            and bands["small"]["cap_closures"] == 0,
+            str(bands["medium"]),
+        )
+        check(
+            "metrics_bands: no legacy sidecars in the clean corpus",
+            report["sidecars_legacy_bucket"] == 0,
+            str(report["sidecars_legacy_bucket"]),
+        )
+        json_text = serialize_metrics_json(report).decode("utf-8")
+        md_text = serialize_metrics_markdown(report).decode("utf-8")
+        check(
+            "metrics_bands: JSON has zero per-file path rows",
+            ".stats.json" not in json_text and str(td) not in json_text,
+            "per-file path data leaked into metrics JSON",
+        )
+        check(
+            "metrics_bands: Markdown aggregate-only",
+            ".stats.json" not in md_text
+            and str(td) not in md_text
+            and "alpha-feature" not in md_text,
+            "slug or path data leaked into metrics Markdown",
+        )
+    finally:
+        shutil.rmtree(td)
+
+    check(
+        "metrics_bands: explicit temp-directory teardown",
+        not td.exists(),
+        f"{td} still exists",
+    )
+
+
+# ---- metrics ----
+@_test("summarize_review_stats#metrics_legacy_tolerance")
+def _t_metrics_legacy_tolerance(check) -> None:
+    """Metrics pass beside a sidecar that fails version-1 validation
+    (review-loop exit-condition metrics plan, Task 3 Case B).
+
+    One valid two-round loop sits next to a version-1 sidecar missing a
+    required top-level field: the failing sidecar is counted into the
+    unknown-band legacy bucket, the loop's series stays intact, and the pass
+    (command layer included) still exits 0.
+    """
+    import shutil
+    import tempfile
+
+    td = Path(tempfile.mkdtemp(prefix="review-metrics-legacy-selftest-"))
+    try:
+        root = td / "myrepos"
+        repo = root / "legacy-tolerance-repo"
+        # No repo facts file: discovery exercises its legacy default reviews
+        # directory (docs/history/reviews/) in this case.
+        reviews = repo / "docs" / "history" / "reviews"
+        reviews.mkdir(parents=True)
+        _write_private_sidecar(
+            reviews / "2026-09-02-branch-review-valid-feature-r1.stats.json",
+            _metrics_v1_payload("valid-feature", 1, "no", [False] * 3),
+        )
+        _write_private_sidecar(
+            reviews / "2026-09-02-branch-review-valid-feature-r2.stats.json",
+            _metrics_v1_payload("valid-feature", 2, "yes", [False]),
+        )
+        failing = _metrics_v1_payload("broken-feature", 1, "no", [True])
+        del failing["panel"]  # version-1 required top-level field
+        _write_private_sidecar(
+            reviews / "2026-09-02-branch-review-broken-feature-r1.stats.json",
+            failing,
+        )
+
+        report = run_metrics_pass([root])
+        check(
+            "metrics_legacy_tolerance: failing sidecar in the legacy bucket",
+            report["sidecars_legacy_bucket"] == 1
+            and report["bands"]["unknown"].get("legacy_bucket_sidecars", 0) == 1,
+            str(report["sidecars_legacy_bucket"]),
+        )
+        check(
+            "metrics_legacy_tolerance: valid loop still aggregates",
+            report["loops"] == 1
+            and report["overall"]["findings_by_round"] == {1: 3, 2: 1},
+            str(report["overall"]["findings_by_round"]),
+        )
+
+        # Command layer: exit 0 with both outputs written and aggregate-only.
+        user_facts = td / "facts.md"
+        user_facts.write_text(
+            f"| `personal_projects_root` | `{td / 'myrepos'}` | x |\n",
+            encoding="utf-8",
+        )
+        json_out = td / "metrics.json"
+        md_out = td / "metrics.md"
+        exit_code = cmd_metrics(user_facts, json_out, md_out)
+        check(
+            "metrics_legacy_tolerance: pass exits 0",
+            exit_code == 0,
+            str(exit_code),
+        )
+        check(
+            "metrics_legacy_tolerance: both outputs written non-empty",
+            json_out.is_file()
+            and json_out.read_text(encoding="utf-8").strip() != ""
+            and md_out.is_file()
+            and md_out.read_text(encoding="utf-8").strip() != "",
+            "metrics output missing or empty",
+        )
+        json_text = json_out.read_text(encoding="utf-8")
+        check(
+            "metrics_legacy_tolerance: JSON aggregate-only",
+            ".stats.json" not in json_text and str(td) not in json_text,
+            "per-file path data leaked into metrics JSON",
+        )
+    finally:
+        shutil.rmtree(td)
+
+    check(
+        "metrics_legacy_tolerance: explicit temp-directory teardown",
+        not td.exists(),
+        f"{td} still exists",
+    )
+
+
 # ---- helpers used by selftests ----
 def _file_mode(path: Path) -> int | None:
     try:
@@ -6339,6 +7038,8 @@ _SUBSET_OF: dict[str, str] = {
     "summarize_review_stats#public_output": "report",
     "summarize_review_stats#real_deny_inventory": "release",
     "summarize_review_stats#historical_immutability": "release",
+    "summarize_review_stats#metrics_bands": "metrics",
+    "summarize_review_stats#metrics_legacy_tolerance": "metrics",
 }
 
 
@@ -6383,7 +7084,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--subset",
         default="",
-        help="comma-separated selftest subset tags (discovery,conservation,permissions,lifecycle,aggregation,report,release)",
+        help="comma-separated selftest subset tags (discovery,conservation,permissions,lifecycle,aggregation,report,release,metrics)",
     )
     parser.add_argument("--user-facts", type=Path, default=Path.home() / ".ai-playbook" / "facts.md")
     parser.add_argument(
@@ -6417,6 +7118,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json-report", type=Path, default=None)
     parser.add_argument("--markdown-report", type=Path, default=None)
     parser.add_argument(
+        "--metrics",
+        action="store_true",
+        help="read-only review-corpus metrics pass: loops grouped by "
+        "artifact_slug, findings decay, ready-rate, and cap-exhaustion "
+        "share per complexity band; aggregate-only outputs",
+    )
+    parser.add_argument(
+        "--metrics-json",
+        metavar="PATH",
+        type=Path,
+        default=None,
+        help="metrics output as canonical JSON (with --metrics; at least "
+        "one of --metrics-json / --metrics-markdown is required)",
+    )
+    parser.add_argument(
+        "--metrics-markdown",
+        metavar="PATH",
+        type=Path,
+        default=None,
+        help="metrics output as aggregate-only Markdown (with --metrics; "
+        "at least one of --metrics-json / --metrics-markdown is required)",
+    )
+    parser.add_argument(
         "--emit-deny-inventory",
         metavar="PATH",
         type=Path,
@@ -6429,6 +7153,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.selftest:
         subsets = [s for s in args.subset.split(",") if s.strip()] if args.subset else None
         return run_selftest(subsets)
+
+    if args.metrics:
+        if args.metrics_json is None and args.metrics_markdown is None:
+            sys.stderr.write(
+                "--metrics requires --metrics-json and/or --metrics-markdown\n"
+            )
+            return 2
+        return cmd_metrics(args.user_facts, args.metrics_json, args.metrics_markdown)
 
     home_ai = Path.home() / ".ai-playbook"
     tel = home_ai / TELEMETRY_DIR_NAME

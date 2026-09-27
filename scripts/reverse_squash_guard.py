@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Reverse-squash guard: refuse staged or diffed change sets that invert landed content.
 
-Two thin modes over one detection core:
+Two thin modes over one detection core, plus one commit-inspection mode:
 
   check-staged [--repo ROOT] [--ack SHA]
       Judge the index of ROOT (default: process cwd) against ROOT HEAD.
   check-diff --against REV --repo ROOT [--ack SHA] [FILE]
       Judge a git-format unified diff (FILE or stdin) against REV.
+  check-commit --rev SHA --repo ROOT
+      Inspect one commit: a parentless commit whose tree carries at least
+      SNAPSHOT_RATIO of the repository's tracked files is the witnessed
+      orphan-squash defect (2026-09-27: commit 351f704f) and is refused.
 
 Exit codes: 0 clean, 1 refusal with named evidence, 2 tool failure.
 """
@@ -16,6 +20,7 @@ import subprocess
 import sys
 
 ARCHIVE_DIRS = ("docs/history/plans/completed/", "docs/history/backlog/completed/")
+SNAPSHOT_RATIO = 0.5
 MIRROR_SCAN_SINCE = "30.days"
 MIRROR_SCAN_MAX_COMMITS = 2000
 MIRROR_FLOOR = 2
@@ -331,6 +336,39 @@ def cmd_check_diff(args):
     return report(findings, acked)
 
 
+def cmd_check_commit(args):
+    root = args.repo
+    try:
+        run_git(["git", "-C", root, "rev-parse", "--git-dir"], "repository probe")
+    except ToolError as exc:
+        return fail2(str(exc))
+    # An unresolvable rev raises ToolError inside run_git; main() maps that
+    # to the guard-family exit 2 (tool failure).
+    rev = run_git(["git", "-C", root, "rev-parse", "--verify",
+                   args.rev + "^{commit}"], "commit resolve").decode().strip()
+    fields = run_git(["git", "-C", root, "rev-list", "--parents", "-n", "1", rev],
+                     "parent scan").decode().split()
+    if len(fields) > 1:
+        print("ok: parented commit")
+        return 0
+    numerator = run_git(["git", "-C", root, "ls-tree", "-r", "--name-only", rev],
+                        "tree listing").decode().splitlines()
+    n = len([ln for ln in numerator if ln.strip()])
+    denominator = run_git(["git", "-C", root, "ls-files"],
+                          "tracked listing").decode().splitlines()
+    d = len([ln for ln in denominator if ln.strip()])
+    if d == 0:
+        ratio = 1.0 if n > 0 else 0.0
+    else:
+        ratio = float(n) / float(d)
+    if ratio >= SNAPSHOT_RATIO:
+        print("refuse: parentless near-full-repo squash commit detected "
+              "(%d/%d paths >= %s)" % (n, d, SNAPSHOT_RATIO))
+        return 1
+    print("ok: parentless commit below snapshot ratio (%d/%d)" % (n, d))
+    return 0
+
+
 def main(argv):
     import argparse
     parser = argparse.ArgumentParser(prog="reverse_squash_guard.py")
@@ -346,10 +384,16 @@ def main(argv):
     diff.add_argument("--ack", default=None)
     diff.add_argument("diff_file", nargs="?", default=None)
 
+    commit = sub.add_parser("check-commit")
+    commit.add_argument("--rev", required=True)
+    commit.add_argument("--repo", required=True)
+
     args = parser.parse_args(argv)
     try:
         if args.mode == "check-staged":
             return cmd_check_staged(args)
+        if args.mode == "check-commit":
+            return cmd_check_commit(args)
         return cmd_check_diff(args)
     except ToolError as exc:
         return fail2(str(exc))

@@ -263,6 +263,53 @@ a task without configured criteria cannot pass through the adapter result
 path. The `verify` CLI operation accepts a task ID and declared command ID and
 asks the driver to capture and persist the receipt for the active claim.
 
+Pre-seed consistency gate. The pre-seed consistency gate refuses a
+verifier that depends on a later task's artifact and refuses two or more
+tasks declaring identical non-empty verification_commands lists. A command
+argv token is canonicalized through the same fail-closed path policy used
+at launch and matched against strictly later tasks' `allowed_paths` entries
+by exact equality only, never substring containment; the clone signature is
+deep equality of the whole `verification_commands` list, so identical argv
+carrying per-task-distinct embedded criteria is accepted, as are references
+to same-or-earlier tasks' artifacts. Refusals raise before the manifest is
+written, naming the task id and the offending entry. The plan's global
+validation block is never seeded into tasks and remains the whole-plan gate
+checked at the done boundary.
+
+Evidence-contract recovery. The `malformed-result` refusal is read-only, so
+the hold it leaves behind is the live launched shape itself: the claim and
+task stay launched with the claim's durable launch reservation and no
+durable receipt of the refusal. The sanctioned exit is the driver's
+`recover-evidence-contract` operation, which validates its preconditions in
+order and refuses with evidence, leaving the manifest byte-unchanged,
+unless every one holds: the replay fence first (the manifest history must
+not already carry an `evidence-contract-recovery` receipt naming the
+request's task id, token, and generation), the launched hold shape, the
+exact claim token and generation, no live claim-group ownership, a corrected
+contract satisfying the per-task non-empty envelope rule and passing the
+pre-seed gate over the merged task map (refusing only on problem shapes
+that involve the corrected task, since multi-malformed old-seeded runs
+recover task by task as they hold), and a fresh provider inventory obtained
+through the adapter on a reservation-stripped detached view whose reconcile
+leaves no registered worker of the held claim non-terminal: the reconcile
+joins a live `resume` process to its registered worker through the
+conversation id in the process argv, consults the adapter's
+terminal-evidence port for each registered worker whose session is absent
+from the inventory, and releases a worker only on a fresh, verified,
+identity-matched terminal observation. Independently of the inventory
+verdict, the operation refuses while any registered worker of the held
+claim is not terminal or released, and that refusal's evidence naming the
+worker row precedes the generic inventory reason. On acceptance
+the transition applies in one locked save: the manifest generation is
+bumped, the held claim's launch reservation is released inline with the
+worker and capacity state reconciled, the task's evidence fields are
+replaced with the corrected contract, the `evidence_contract_digest` is
+recomputed, the old claim is closed as `closed`, and the task returns to
+`pending`, with one fenced `evidence-contract-recovery` history receipt
+appended. A late receipt from the replaced worker fences read-only as
+`stale-claim` with no durable mutation, for success and non-success
+receipts alike. Manual manifest edits stay prohibited. An invalid-choice argparse error for recover-evidence-contract means the vendored driver predates the operation: re-sync the driver; the manifest is untouched and manual edits remain prohibited.
+
 The standard reason codes are `completed`, `worker-hesitation`,
 `contract-violation`, `approval-required`, `timeout`, `dirty-worktree`,
 `cleanup-required`, `cleanup-unverified`, `malformed-result`, `owner-mismatch`,
@@ -337,11 +384,13 @@ budget exhausted transitions the claim to `blocked`, the reclaimable lease
 state whose standard recovery machinery then applies. While the budget
 remains, recovery is the in-place resume: a continue relaunches the same
 claim under the same token and generation (no second claim row, no reclaim
-rotation), and reclaim refuses a parked claim with evidence naming
-`waiting-capacity` while the retry budget is live; in the exhausted window
-(attempts_remaining 0, before the next capacity receipt lands the claim in
-`blocked`) the refusal names the exhausted budget and the pending `blocked`
-transition instead. A `waiting-capacity` claim
+rotation; the parked claim's recovery action is the literal
+`resume-same-claim`, the exact value carried in the receipt's
+`recovery_action` field), and reclaim refuses a parked claim with evidence
+naming `waiting-capacity` while the retry budget is live; in the exhausted
+window (attempts_remaining 0, before the next capacity receipt lands the
+claim in `blocked`) the refusal names the exhausted budget and the pending
+`blocked` transition instead. A `waiting-capacity` claim
 at the queue head routes the readiness decision to `recovery` with
 `preserve-and-reconcile` through the unprovable-next-task condition (the
 parked task is not claimable; the condition text is unchanged). A capacity
@@ -371,9 +420,13 @@ same key returns the recorded outcome without another transition. Missing,
 malformed, unavailable, or live-worker evidence preserves the claim and
 reservation and refuses automatic continuation. `continue`, `resume`, and a
 resume-watcher fire run reconciliation before launching or clearing watcher
-guards. If the claim has a registered worker, reconciliation requires a
-matching verified terminal lifecycle receipt to release its worker capacity;
-an empty inventory cannot retire a registered worker and instead leaves it
+guards. If the claim has a registered worker, reconciliation requires
+verified terminal evidence to release its worker capacity: a matching
+verified terminal lifecycle receipt, or the driver's terminal-evidence
+consult of the adapter for a registered worker whose session is absent from
+the inventory, which releases the worker only on a fresh, verified,
+identity-matched terminal observation; an empty inventory without such
+evidence cannot retire a registered worker and instead leaves it
 quarantined. If the launch never registered a worker, a fresh valid empty
 inventory is the provider witness that no owned process remains. The normal
 `reconcile_startup` path continues to own commit recovery and follows this
@@ -1103,15 +1156,15 @@ decision whose predicate holds is returned:
   order: an empty manifest, then machine state, then unresolved handoff or
   fenced claim, then plan shape or plan-manifest disagreement, then
   unprovable next task.
-One envelope-level outcome sits outside that failed-condition enumeration:
-when the manifest lock is held by another owner at decision time, the
-operation returns the `recovery` decision with recovery action
-`resumable-conflict`, a transient contention envelope whose reading is to
-retry the readiness call after the lock is released; nothing is blocked
-durably and the manifest is unchanged. Transient contention is scoped
-exactly like the driver's other contention outcomes: the envelope carries
-reason code `stale-claim` with recovery action `resumable-conflict`, and
-the decision itself is carried in the outcome's `decision` field.
+  One envelope-level outcome sits outside that failed-condition enumeration:
+  when the manifest lock is held by another owner at decision time, the
+  operation returns the `recovery` decision with recovery action
+  `resumable-conflict`, a transient contention envelope whose reading is to
+  retry the readiness call after the lock is released; nothing is blocked
+  durably and the manifest is unchanged. Transient contention is scoped
+  exactly like the driver's other contention outcomes: the envelope carries
+  reason code `stale-claim` with recovery action `resumable-conflict`, and
+  the decision itself is carried in the outcome's `decision` field.
 - `direct-continuation` fires when all five conditions pass.
 
 The five machine-owned conditions:

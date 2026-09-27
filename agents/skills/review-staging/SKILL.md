@@ -77,7 +77,7 @@ There is one canonical Markdown record and one matching sidecar for each review 
 
 If more than one matching record already exists, select one canonical record, add `Supersedes` and `Superseded by` metadata links, and mark every non-canonical record `SUPERSEDED`. A superseded record is historical only and is never eligible for posting. The canonical path must be selected before review workers launch and must remain the only path used for synthesis, triage, and posting.
 
-Selection is mechanical: before workers launch, every orchestrator runs the record selection helper (`scripts/review_record_selection.py`, subcommand `select`) with the resolved reviews directory, the artifact slug, and the digest of the bytes about to be reviewed, and writes only the paths the helper emits (decisions `new-record`, `reuse`, or `new-round`). The helper refuses (exit 1) when the existing record's sidecar `source_digest` differs from the supplied digest and no decision is supplied; resolve the refusal only with `--explicit-new-round` or the explicit archival operation, never by rewriting the prior record. Before any permitted same-pass replacement (`new-round`), invoke the helper's `backup` subcommand so a timestamped byte-identical copy pair of the prior record exists under the reviews directory, and record the printed backup path in the new record's Metadata as `Backup of prior record: <path>`. After the successor record is staged, mark the prior record with the helper's `mark-superseded` subcommand; the validator rejects a `Supersedes` link that is dangling, missing its `Superseded by` back-reference, or mismatched.
+Selection is mechanical: before workers launch, every orchestrator runs the record selection helper (`scripts/review_record_selection.py`, subcommand `select`) with the resolved reviews directory, the artifact slug, and the digest of the bytes about to be reviewed, and writes only the paths the helper emits (decisions `new-record`, `reuse`, or `new-round`). Pass `--kind plan-review` for plan reviews so the emitted path matches the plan-review discovery shape; omit `--kind` for record families whose slug already carries its kind. Slugs preserve their case. The helper refuses (exit 1) when the existing record's sidecar `source_digest` differs from the supplied digest and no decision is supplied; resolve the refusal only with `--explicit-new-round` or the explicit archival operation, never by rewriting the prior record. Before any permitted same-pass replacement (`new-round`), invoke the helper's `backup` subcommand so a timestamped byte-identical copy pair of the prior record exists under the reviews directory, and record the printed backup path in the new record's Metadata as `Backup of prior record: <path>`. After the successor record is staged, mark the prior record with the helper's `mark-superseded` subcommand; the validator rejects a `Supersedes` link that is dangling, missing its `Superseded by` back-reference, or mismatched.
 
 Create a new suffixed record only for an explicitly requested new review round, or when the prior record is final or posted and the current review is genuinely a new round. A worker lens does not by itself justify a new primary record.
 
@@ -121,6 +121,19 @@ The listed `reason_code` values are the closed address-fan-out enum (`completed`
 Synthesis-table immutability is deliberately NOT in that list (r1 F23): the validator gates one record's shape and conservation and never compares across rounds, so keeping synthesis tables (Panel, Discarded, Severity calibration) stable through a triage update is parent merge discipline per `receiving-review` (Staging doc triage outcomes; Triage presentation freeze), not a validator check.
 
 Versionless legacy sidecars reject `address_fanout` and remain on the single-worker path.
+
+### Cap-closure sidecar extension
+
+`personal`-class projects never close a loop through this shape (the strict package escalates to simplify-or-rewrite at their cap of three); a sidecar declaring `extensions.cap_closure` for a plan whose project resolves `personal` is a certification defect (class resolution: `review-plan`, Project strictness classes).
+
+When a plan loop closes at its configured round cap without a clean round, the final round's sidecar records the operator-authorized cap-closure terminal shape in `extensions.cap_closure`, with required keys:
+
+- `plan_section` (exactly `## Residual findings (cap closure)`)
+- `round` (int or string, equal to the sidecar `round` after string normalization and normalizing to at least `CAP_CLOSURE_MIN_ROUND` = 3)
+- `residuals` (non-negative int, booleans excluded; counts the section-body entries carrying the `accepted` disposition, and the readiness probe enforces the tie)
+- `pre_fold_digest` (lowercase hex64, written before folding, differing from the re-bound `source_digest`)
+
+The plan section's contract is the cap-round disposition ledger: every staged finding of the cap round is listed with its disposition (`folded` or `accepted`). This is a `version-1-only` extension, fail-closed at the version boundary: versionless legacy sidecars carrying `cap_closure` are rejected. The validator's section-literal constant is the shape's single owner and holds the bare heading (the declaration value carries the `## ` prefix).
 
 ### Discard reason codes (use exactly one per discarded row)
 

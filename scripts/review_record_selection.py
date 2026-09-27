@@ -57,7 +57,7 @@ BACKUP_METADATA_LABEL = "Backup of prior record:"
 # traversal segments (r1 F13). The gate uses fullmatch (r2 F10): a bare $ end
 # anchor matches before a trailing newline, so a newline-terminated slug
 # would slip through and emit a filename with an embedded newline.
-SLUG_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]*")
+SLUG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 # Length bound on the slug (r3 overflow risk F3): the emitted pair embeds
 # the slug between the date prefix and the -r<N> suffix, so an over-long
@@ -269,16 +269,29 @@ def _enumerate(
 
 
 def select_record(
-    reviews_dir: Path, slug: str, source_digest: str, explicit_new_round: bool = False
+    reviews_dir: Path,
+    slug: str,
+    source_digest: str,
+    explicit_new_round: bool = False,
+    review_kind: str | None = None,
 ) -> Selection:
     """Decide reuse vs the next round, or refuse (the overwrite guard)."""
     reviews_dir = Path(reviews_dir)
     if not SLUG_PATTERN.fullmatch(slug):
         raise SelectionUsageError(
             f"invalid --slug {slug!r}: a slug must match "
-            "^[a-z0-9][a-z0-9._-]*$ (no path separators, no trailing "
+            "^[A-Za-z0-9][A-Za-z0-9._-]*$ (no path separators, no trailing "
             "newline) because it is embedded in the emitted "
             "record filenames"
+        )
+    if review_kind is not None and review_kind not in {
+        "plan-review",
+        "branch-review",
+        "code-review",
+        "exec-review",
+    }:
+        raise SelectionUsageError(
+            f"invalid --kind {review_kind!r}: use plan-review, branch-review, code-review, or exec-review"
         )
     if len(slug) > MAX_SLUG_LENGTH:
         raise SelectionUsageError(
@@ -295,6 +308,26 @@ def select_record(
             "as a backup and counted informationally only, silently "
             "blinding the overwrite guard on a later select"
         )
+    if not source_digest.strip():
+        # A caller-supplied invocation error, not a record-corpus state:
+        # an empty digest would silently disable the overwrite guard, so
+        # this usage error (exit 2) is decided before any record-corpus
+        # state is consulted.
+        raise SelectionUsageError(
+            "--source-digest is empty; an empty digest would silently "
+            "disable the overwrite guard"
+        )
+    if SOURCE_DIGEST_PATTERN.fullmatch(source_digest) is None:
+        # The digest-grammar usage error (exit 2) is likewise decided
+        # before any record-corpus state is consulted: an orphan half in
+        # the corpus must never mask this invocation-level refusal with
+        # the exit-1 taxonomy.
+        raise SelectionUsageError(
+            f"invalid --source-digest {source_digest!r}: a source digest "
+            "must match ^[0-9a-f]{64}$ (a lowercase 64-character hex "
+            "SHA-256, the sidecar source_digest grammar); refusing the "
+            "comparison input before any record is read"
+        )
     pairs, orphans, backups_ignored = _enumerate(reviews_dir, slug)
     if orphans:
         named = ", ".join(sorted(path.name for path in orphans))
@@ -304,25 +337,10 @@ def select_record(
             "refusing both reuse and allocation until the orphan half is "
             "repaired (restore the missing twin or remove the orphan)"
         )
-    if not source_digest.strip():
-        # A caller-supplied invocation error, not a record-corpus state:
-        # an empty digest would silently disable the overwrite guard, so
-        # it is refused in the usage-error taxonomy (exit 2) before any
-        # comparison.
-        raise SelectionUsageError(
-            "--source-digest is empty; an empty digest would silently "
-            "disable the overwrite guard"
-        )
-    if SOURCE_DIGEST_PATTERN.fullmatch(source_digest) is None:
-        raise SelectionUsageError(
-            f"invalid --source-digest {source_digest!r}: a source digest "
-            "must match ^[0-9a-f]{64}$ (a lowercase 64-character hex "
-            "SHA-256, the sidecar source_digest grammar); refusing the "
-            "comparison input before any record is read"
-        )
 
     def emit(round_number: int) -> tuple[Path, Path]:
-        base = f"{DATE_SOURCE().isoformat()}-{slug}-r{round_number}"
+        kind_prefix = f"{review_kind}-" if review_kind else ""
+        base = f"{DATE_SOURCE().isoformat()}-{kind_prefix}{slug}-r{round_number}"
         return reviews_dir / f"{base}.md", reviews_dir / f"{base}.stats.json"
 
     if not pairs:
@@ -647,6 +665,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--slug", required=True, help="artifact slug embedded in the record names"
     )
     select_parser.add_argument(
+        "--kind",
+        choices=("plan-review", "branch-review", "code-review", "exec-review"),
+        help="optional review kind prefix in the emitted record name",
+    )
+    select_parser.add_argument(
         "--source-digest",
         required=True,
         help="digest of the bytes about to be reviewed (compared against the "
@@ -688,6 +711,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.slug,
                 args.source_digest,
                 explicit_new_round=args.explicit_new_round,
+                review_kind=args.kind,
             )
             print(
                 json.dumps(

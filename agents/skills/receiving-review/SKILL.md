@@ -181,6 +181,8 @@ SKIP only when one of these conditions holds:
   - Finding was already confirmed as `done` by prior code inspection
 ```
 
+Ordinary (non-blocking) findings are recorded in the staging record or captured as backlog; a review loop never launches additional rounds to chase them to zero (advisory guidance; class resolution per `review-plan`, Project strictness classes).
+
 Do **not** drop a finding that asks to strengthen `## Validation Commands` solely because the skill or implementation prose already states the obligation. Skill correctness and validation-gate coverage are separate surfaces (see `development_lessons.md` #186).
 
 "Optional" or "Low" severity signals lower priority for the reviewer, not permission to defer action. If the fix is large or opens a new subsystem, say so briefly in the report but proceed unless a push-back condition above triggers. The Triage Decision Rule below still gates design-decision findings (architectural moves, refactors) - those remain ask-first regardless of severity.
@@ -394,6 +396,7 @@ Each new or updated item still carries:
 - Severity and source reference: staging doc path, round, finding id, capture hygiene check verdict
 - Why not fixed now: the scope boundary or decision, and who made it
 - Driving force: the primary force tag from the Backlog driving-force taxonomy, plus a secondary force when one exists
+- `Dedup probe:` the keyword search run over the open backlog corpus (item filenames plus Problem bodies), the nearest item(s) found, and either the distinction from each or an explicit merge recommendation
 - When the item fixes shared skills used by other repos: `Priority: critical` (or high) plus a `Consumer urgency:` line stating that consumer projects that run the skill need the fix, and that the skills-repo personal priority profile must not park or defer it as formal-hardening for the skills repo alone
 - Origin class: exactly one provenance value on every newly captured item, from the closed set: `Origin class: self-serving` (the failure or improvement was witnessed on the skills repo's own runtime; no consumer project is involved), `Origin class: consumer-feedback (company)` (witnessed in a company project that consumes these skills), or `Origin class: consumer-feedback (pet)` (witnessed in the owner's personal pet projects that consume these skills). Ordering semantics, next to the Consumer urgency rule above: at equal priority, consumer-feedback outranks self-serving, and the company/pet tag names which project family's priority profile (guidelines rule 68) applies when a shared-skill fix trades one consumer family against the other. A consumer-feedback item that also meets the Consumer urgency conditions carries both lines; the two lines compose (provenance plus never-profile-deferred), neither replaces the other.
 
@@ -417,7 +420,8 @@ Every captured item declares its Driving force from this closed set.
 - scalability: behavior under growth in data volume
 - reliability: failure handling, retries and idempotency
 - maintainability: structure that slows future change
-- simplicity: unnecessary abstraction or structure
+- simplicity: unnecessary abstraction or structure, plus the active-elimination sense: existing machinery whose existence no witnessed failure justifies is a finding the same as newly added complexity
+- automation: recurring manual direction or intervention that the skill machinery could run itself (routine loops left unautomated)
 - testability: coverage gaps, hermeticity, flake resistance
 - observability: logging, metrics, tracing, and debuggability gaps
 - docs: documentation debt or source-of-truth drift
@@ -425,7 +429,7 @@ Every captured item declares its Driving force from this closed set.
 - new-capability: improvement suggestion that adds functionality
 - external: mandated from outside current project priorities
 
-Plans declare a driving force from the plans skill's own closed set; the plans efficiency tag reads as performance or token-usage, its code-quality force maps to maintainability, its simplicity force maps here unchanged, and its new-capability and external tags carry over verbatim.
+Plans declare a driving force from the plans skill's own closed set; the plans efficiency tag reads as performance or token-usage, its code-quality force maps to maintainability, its simplicity and automation forces map here unchanged, and its new-capability and external tags carry over verbatim.
 
 Amendment rule: adding a force requires documenting it in this list (tag plus one-line scope) before first use; renaming or removing a force requires a plan. An item fitting no force uses `external` with the concern named in its Problem statement.
 

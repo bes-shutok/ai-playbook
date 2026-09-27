@@ -340,6 +340,25 @@ ADDRESS_FANOUT_WORKER_KEYS = frozenset(
 ADDRESS_FANOUT_ATTEMPT_KEYS = frozenset(
     {"id", "status", "reason_code", "log"}
 )
+# Cap-closure terminal shape (certification machinery contract-collisions
+# plan, Task 1). ``extensions.cap_closure`` is a version-1-only sidecar
+# extension declared by the final round of a capped review loop: it records
+# the plan section carrying the residual findings and their dispositions,
+# the capped round, the accepted residual count, and the pre-fold digest.
+# A versionless (legacy) record carrying the extension fails closed at the
+# version boundary in ``validate_cap_closure_contract``; current-v1
+# records get the full shape gate there. ``CAP_CLOSURE_SECTION_HEADING``
+# is the SINGLE OWNER of the section literal: it holds the BARE heading,
+# the ``plan_section`` equality check here compares against the
+# ``'## ' + `` prefixed form, and the readiness gate
+# (scripts/plan_readiness.py) composes its ``md_section`` matcher from the
+# bare form via its existing ``vrs`` import, so the two forms cannot drift.
+CAP_CLOSURE_KEY = "cap_closure"
+CAP_CLOSURE_SECTION_HEADING = "Residual findings (cap closure)"
+CAP_CLOSURE_MIN_ROUND = 3
+CAP_CLOSURE_KEYS = frozenset(
+    {"plan_section", "round", "residuals", "pre_fold_digest"}
+)
 # r4 F1: the no-fix marker vocabulary. Producers spell the absent token as
 # ``none`` (the Markdown template spelling), ``null`` (the JSON sidecar
 # spelling copied into the Markdown line), or ``n/a``; all three count as
@@ -445,8 +464,15 @@ CLEAN_VERDICT_RE = re.compile(
 )
 # Sibling compat handshake contract: consumers of this module pair against
 # the COMPAT_VERSION value they shipped with; bump it ONLY together with
-# every consumer's expected constant.
-COMPAT_VERSION = 2
+# every consumer's expected constant. Bumped 2 to 3 with the cap-closure
+# terminal shape (certification machinery contract-collisions plan, Task
+# 1): the readiness verdict arm now consumes this module's
+# CAP_CLOSURE_SECTION_HEADING constant and the malformed-declaration
+# rejection lives in the new validate_cap_closure_contract wiring, so the
+# shared-rule semantics are pair-coupled and a partial deployment must
+# fail with the handshake's named message (precedent: the address-fanout
+# change bumped the pair 1 to 2 in 7baa8ce1).
+COMPAT_VERSION = 3
 SUPPORTED_SIDECAR_SCHEMA_VERSIONS = (1,)
 # Single declaration of the conforming verdict vocabulary (version-1 sidecar
 # ``verdict`` field). Consumers (e.g. scripts/plan_readiness.py
@@ -3342,6 +3368,213 @@ def validate_address_fanout_contract(
         )
 
 
+# The step-3 routed substrings: scripts/plan_readiness.py classifies the
+# shared sidecar gate's first error by matching these literals (coverage
+# presence, then the source-kind family, then the digest family), so any
+# error text carrying one of them is routed into that family.
+# ``validate_cap_closure_contract`` rejections must therefore never carry
+# them, not even echoed from a producer-supplied key or value;
+# ``_route_safe`` strips the literals from an echoed producer value (the
+# ``while`` re-checks after each replacement because removing one occurrence
+# can juxtapose the surviving fragments into a fresh literal).
+ROUTED_ERROR_SUBSTRINGS = (
+    "source_digest",
+    "source_kind",
+    "missing the required 'coverage' object",
+)
+
+
+def _route_safe(text: str) -> str:
+    """Strip the step-3 routed literals from an echoed producer value."""
+    for literal in ROUTED_ERROR_SUBSTRINGS:
+        while literal in text:
+            text = text.replace(literal, "[filtered]")
+    return text
+
+
+def validate_cap_closure_contract(
+    payload: dict,
+    result: ValidationResult,
+    *,
+    schema_class: str,
+) -> None:
+    """The ``extensions.cap_closure`` shape gate (certification machinery
+    contract-collisions plan, Task 1).
+
+    ``cap_closure`` is legal ONLY on current-v1 records: a versionless
+    (legacy) record carrying the extension fails closed with a
+    version-boundary message and never reaches the shape gate. On a
+    current-v1 record the declaration must be an object with exactly the
+    four pinned keys: ``plan_section`` (exactly the single-owner
+    ``'## ' + CAP_CLOSURE_SECTION_HEADING`` literal), ``round`` (int or
+    string, booleans excluded, equal to the sidecar round after BOTH-sides
+    ``str()`` normalization, then floor-checked after stripping one
+    optional leading ``r``: the normalized value must parse as an integer
+    and cannot precede ``CAP_CLOSURE_MIN_ROUND``), ``residuals``
+    (non-negative int, booleans excluded; the readiness probe enforces the
+    tie to the section's ``accepted`` entries), and ``pre_fold_digest``
+    (lowercase hex64, written before folding, must differ from the digest
+    bound to the reviewed bytes). Every error names ``cap_closure`` and
+    avoids the step-3 routed substrings (``source_digest``,
+    ``source_kind``, ``missing the required 'coverage' object``) by
+    construction, including the differ-from-record rejection: the message
+    templates are static text and every echoed producer-derived value is
+    stripped of those literals via ``_route_safe`` first (only repo-owned
+    constants, such as ``schema_class`` and the allowed-key list, are
+    interpolated unfiltered). The readiness error mapping classifies by
+    matching those literals, so it can never route a declaration rejection
+    into the stale-digest or source-kind family, even when the
+    declaration's own keys or values are spelled with a routed literal.
+
+    ``schema_class`` is the per-run classification threaded in from
+    ``_validate_stats_sidecar_gates`` (r6 F13:
+    ``classify_sidecar_schema`` runs exactly once per validation run).
+    """
+    if not isinstance(payload, dict):
+        return
+    extensions = payload.get("extensions")
+    if not isinstance(extensions, dict) or CAP_CLOSURE_KEY not in extensions:
+        return
+    declaration = extensions[CAP_CLOSURE_KEY]
+    if schema_class != "current-v1":
+        result.add_error(
+            "extensions.cap_closure is a version-1-only extension: a "
+            f"{schema_class} record carrying it fails closed at the version "
+            "boundary; versionless legacy sidecars reject cap_closure"
+        )
+        return
+    if not isinstance(declaration, dict):
+        result.add_error(
+            "extensions.cap_closure must be an object with 'plan_section', "
+            "'round', 'residuals', and 'pre_fold_digest'; got "
+            f"{_route_safe(type(declaration).__name__)}"
+        )
+        return
+    for key in declaration:
+        if key not in CAP_CLOSURE_KEYS:
+            # Static text naming the allowed set: echoing the offending key
+            # would let a producer-spelled key (for example one named with a
+            # routed literal) steer the readiness error mapping into the
+            # wrong family.
+            result.add_error(
+                "extensions.cap_closure accepts only the keys "
+                "plan_section, round, residuals, pre_fold_digest"
+            )
+
+    # plan_section: exactly the prefixed single-owner section literal.
+    if "plan_section" not in declaration:
+        result.add_error(
+            "extensions.cap_closure is missing required key 'plan_section'"
+        )
+    else:
+        expected_section = "## " + CAP_CLOSURE_SECTION_HEADING
+        if declaration["plan_section"] != expected_section:
+            result.add_error(
+                "extensions.cap_closure 'plan_section' must be exactly "
+                f"{expected_section!r}; got "
+                f"{_route_safe(repr(declaration['plan_section']))}"
+            )
+
+    # round: int or string (booleans excluded), equal to the sidecar round
+    # after BOTH-sides string normalization; the normalized value must
+    # parse as an integer after stripping one optional leading 'r' (the
+    # sidecar round is dual-typed, e.g. "r1" or 1) and cannot precede the
+    # floor. The floor is a lower bound on honest cap closures (the plans
+    # loop reconciles at three non-monotonic rounds); it never claims the
+    # configured cap itself was verified.
+    if "round" not in declaration:
+        result.add_error(
+            "extensions.cap_closure is missing required key 'round'"
+        )
+    else:
+        declaration_round = declaration["round"]
+        if isinstance(declaration_round, bool) or not isinstance(
+            declaration_round, (str, int)
+        ):
+            result.add_error(
+                "extensions.cap_closure 'round' must be an integer or a "
+                "string (boolean excluded); got "
+                f"{_route_safe(repr(declaration_round))}"
+            )
+        else:
+            sidecar_round = payload.get("round")
+            normalized_round = str(declaration_round)
+            if normalized_round != str(sidecar_round):
+                result.add_error(
+                    "extensions.cap_closure 'round' must equal the sidecar "
+                    "round after string normalization (sidecar round "
+                    f"{_route_safe(repr(sidecar_round))} vs declaration "
+                    f"round {_route_safe(repr(declaration_round))})"
+                )
+            else:
+                digits = (
+                    normalized_round[1:]
+                    if normalized_round.startswith("r")
+                    else normalized_round
+                )
+                try:
+                    round_number = int(digits)
+                except ValueError:
+                    result.add_error(
+                        "extensions.cap_closure 'round' "
+                        f"{_route_safe(repr(normalized_round))} does not "
+                        "parse as an integer after stripping one optional "
+                        "leading 'r'"
+                    )
+                else:
+                    if round_number < CAP_CLOSURE_MIN_ROUND:
+                        result.add_error(
+                            "extensions.cap_closure 'round' "
+                            f"{_route_safe(repr(normalized_round))} is below "
+                            f"CAP_CLOSURE_MIN_ROUND {CAP_CLOSURE_MIN_ROUND}; "
+                            "an honest cap closure cannot precede round "
+                            f"{CAP_CLOSURE_MIN_ROUND}"
+                        )
+
+    # residuals: non-negative int, booleans excluded.
+    if "residuals" not in declaration:
+        result.add_error(
+            "extensions.cap_closure is missing required key 'residuals'"
+        )
+    else:
+        residuals = declaration["residuals"]
+        if (
+            isinstance(residuals, bool)
+            or not isinstance(residuals, int)
+            or residuals < 0
+        ):
+            result.add_error(
+                "extensions.cap_closure 'residuals' must be a non-negative "
+                "integer (boolean excluded); got "
+                f"{_route_safe(repr(residuals))}"
+            )
+
+    # pre_fold_digest: required lowercase hex64, differing from the digest
+    # bound to the reviewed bytes (the differ message deliberately phrases
+    # itself without the routed literals; see the docstring).
+    if "pre_fold_digest" not in declaration:
+        result.add_error(
+            "extensions.cap_closure is missing required key "
+            "'pre_fold_digest'"
+        )
+    else:
+        pre_fold_digest = declaration["pre_fold_digest"]
+        if not isinstance(pre_fold_digest, str) or not HEX64_RE.match(
+            pre_fold_digest
+        ):
+            result.add_error(
+                "extensions.cap_closure 'pre_fold_digest' must be a "
+                "lowercase 64-character hex digest; got "
+                f"{_route_safe(repr(pre_fold_digest))}"
+            )
+        elif pre_fold_digest == payload.get("source_digest"):
+            result.add_error(
+                "extensions.cap_closure 'pre_fold_digest' must differ from "
+                "the digest bound to the reviewed bytes: it records the "
+                "pre-fold state, not the folded state"
+            )
+
+
 def validate_coverage_markdown_agreement(
     content: str,
     payload: dict,
@@ -3960,6 +4193,16 @@ def _validate_stats_sidecar_gates(
     # shape and conservation gate. The per-run classification is threaded
     # in (r6 F13: classify_sidecar_schema runs exactly once per run).
     validate_address_fanout_contract(
+        payload, result, schema_class=schema_class
+    )
+    # Cap-closure terminal shape (certification machinery contract-collisions
+    # plan, Task 1): extensions.cap_closure is legal only on current-v1
+    # records; a versionless record carrying the extension fails closed at
+    # the version boundary, and current-v1 records get the full shape gate.
+    # The per-run classification is threaded in (r6 F13: one
+    # classify_sidecar_schema call per run), mirroring the address-fanout
+    # wiring above.
+    validate_cap_closure_contract(
         payload, result, schema_class=schema_class
     )
 
