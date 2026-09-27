@@ -58,7 +58,7 @@ On `pause_decision: pause` the orchestrator completes only the finished boundary
 **Flexible predecessor lineage (origin 3).** Before (today): a plan that names one exact commit identity as its prerequisite proof blocks valid executions whenever history was rebased, cherry-picked, or squashed, because the required work is present under a different identity. After (this plan): a plan declares predecessors as neutral work-item references with outcome predicates, and the driver verifies them repository-locally:
 
 ```json
-{"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "history-ref", "value": "CRM-1234"}, {"kind": "ancestry", "value": "v1.2-tag"}, {"kind": "artifact", "path": "scripts/quota_window_probe.py", "contains": "pause_decision"}]}]}
+{"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": "history-ref", "value": "PROJ-1234"}, {"kind": "ancestry", "value": "v1.2-tag"}, {"kind": "artifact", "path": "scripts/quota_window_probe.py", "contains": "pause_decision"}]}]}
 ```
 
 `history-ref` matches a commit message containing the reference on the current history (identity-independent, so rebased, cherry-picked, and squashed variants all verify); `ancestry` uses the existing descendant check; `artifact` checks a repository path exists and contains a pinned span. A `validator` outcome is run by the orchestrator and recorded as exit evidence. When no outcome verifies, the driver returns `blocked` with reason `precondition-unverified` and a diagnostic naming the reference and every outcome it tried; a malformed declaration fails closed the same way. A declared commit identity is never as the sole proof of a prerequisite.
@@ -273,7 +273,7 @@ Files:
 - `scripts/test_execute_plan_runtime.py`
 - `agents/skills/execute-plan/runtime-contract.md`
 
-- [x] `ExecutePlanRuntimeTest#test_precondition_history_ref_verifies_rebased_history`; given a tmp fixture repo where a commit message contains `CRM-1234` and HEAD was rebased onto a newer base (the commit identity changed), expects the `history-ref` outcome to verify and the operation to return `status: success` with per-predecessor evidence
+- [x] `ExecutePlanRuntimeTest#test_precondition_history_ref_verifies_rebased_history`; given a tmp fixture repo where a commit message contains `PROJ-1234` and HEAD was rebased onto a newer base (the commit identity changed), expects the `history-ref` outcome to verify and the operation to return `status: success` with per-predecessor evidence
 - [x] `ExecutePlanRuntimeTest#test_precondition_history_ref_verifies_cherry_picked_history`; given the referenced work cherry-picked onto a new branch under a different identity, expects `history-ref` to verify
 - [x] `ExecutePlanRuntimeTest#test_precondition_history_ref_verifies_squashed_history`; given two referenced work commits squashed into one whose message carries both references, expects `history-ref` to verify for each reference
 - [x] `ExecutePlanRuntimeTest#test_precondition_ancestry_outcome`; given an `ancestry` outcome naming a base commit that is an ancestor of HEAD, expects it to verify; given an unrelated commit, expects it not to

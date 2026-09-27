@@ -190,7 +190,7 @@ def _abbreviate_home_str(s: str, home: Path) -> str:
 
     Rationale (B2 hygiene, N2 r4): paths under the runtime home
     (``~/.zcode/...``, ``~/.codex/...``) and home paths embedded mid-text
-    in exception messages (``[Errno 2] ...: '/Users/...'``) are emitted in
+    in exception messages (``[Errno 2] ...: '<home>/...'``) are emitted in
     tilde form so no expanded absolute home path reaches a sidecar, stderr
     diagnostics, or the pushed docs branch; strings outside ``home`` pass
     through unchanged. Plain textual replacement on the ``home`` string

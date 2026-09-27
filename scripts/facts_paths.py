@@ -706,7 +706,7 @@ def selftest() -> int:
             "| Key | Path (this machine) | Purpose |\n"
             "|-----|----------------------|---------|\n"
             "| `personal_projects_root` | `~/Projects/myrepos/` | Personal |\n"
-            "| `company_projects_root` | `~/Projects/sporty/` | Company |\n",
+            "| `company_projects_root` | `~/Projects/example-company/` | Company |\n",
             encoding="utf-8",
         )
         personal, company = resolve_projects_roots(facts_path)
@@ -717,7 +717,7 @@ def selftest() -> int:
         )
         check(
             "resolve_projects_roots: company root resolved",
-            company is not None and company.name == "sporty",
+            company is not None and company.name == "example-company",
             str(company),
         )
         # Absent keys return None, do not raise.

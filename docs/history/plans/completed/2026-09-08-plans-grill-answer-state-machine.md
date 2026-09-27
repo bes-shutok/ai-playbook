@@ -27,7 +27,7 @@ Decision points requiring a grill: Step 1.4 duplication cross-reference vs self-
 
 What changes: an unanswered material grill question becomes a hard blocker on plan readiness, and the interview gains explicit answer-state semantics so generic acknowledgements can never silently accept a recommendation. The plans Step 1.4 confirmation meta-rule duplication versus the grilling skill is settled as deliberate self-containment with sync notes.
 
-Why: during CRM-691 plan authoring on 2026-09-08 the user answered a material grill question with "go on"; the session read that as permission to continue authoring with the recommendation, while the user meant "continue asking". The plan then looked execution-ready while a user-owned decision stood unanswered. There was no mechanical gate that could catch this: the readiness validator only checks the decision-points trailer for placeholder stems `pending`, `tbd`, and `todo`, so an open question that never entered the trailer as one of those stems is invisible.
+Why: during PROJ-691 plan authoring on 2026-09-08 the user answered a material grill question with "go on"; the session read that as permission to continue authoring with the recommendation, while the user meant "continue asking". The plan then looked execution-ready while a user-owned decision stood unanswered. There was no mechanical gate that could catch this: the readiness validator only checks the decision-points trailer for placeholder stems `pending`, `tbd`, and `todo`, so an open question that never entered the trailer as one of those stems is invisible.
 
 **Before (today):** the user says "go on" after a question carrying a recommendation. The authoring agent proceeds with the recommendation, never records a receipt, the plan carries no trace of the open decision, and the readiness gate passes `ready=yes` on a fresh review. A plan whose trailer reads `Decision points requiring a grill: open: phased-rollout decision` passes `decision_marker_problem` today (verified by probe at authoring time: returns `None`).
 
@@ -70,7 +70,7 @@ Joined item decision: the plans Step 1.4 meta-rule keeps restating the generic-a
 
 **Ship when:**
 
-- The next real plan-authoring session exercises the state machine against a live user and the CRM-691 "go on" scenario behaves as specified; prose only, human-owned observation.
+- The next real plan-authoring session exercises the state machine against a live user and the PROJ-691 "go on" scenario behaves as specified; prose only, human-owned observation.
 
 ## Review Scope
 

@@ -19,6 +19,12 @@ ROOT="${PUBLIC_HYGIENE_REPO_ROOT:-.}"
 PATTERNS_FILE="${PUBLIC_HYGIENE_PATTERNS_FILE:-${HOME}/.ai-playbook/public-hygiene.patterns}"
 
 SCAN_STRICT=(agents/skills projects)
+# Pattern-quoting sources (2026-09-27): detector implementations whose bytes
+# carry the deny patterns themselves, their detection fixtures, and archived
+# plans or backlog records that quote sweep commands or placeholder home
+# paths. These files cannot be reworded without destroying what they record,
+# so they are out of scan scope; real identifiers elsewhere are masked, not
+# excluded. Keep _path_is_excluded below in sync.
 GLOB_EXCLUDES=(
   --glob '!**/LICENSE.txt'
   --glob '!docs/facts.md.example'
@@ -29,6 +35,19 @@ GLOB_EXCLUDES=(
   --glob '!docs/AGENTS.md'
   --glob '!AGENTS.md'
   --glob '!CLAUDE.md'
+  --glob '!scripts/scan-public-hygiene.sh'
+  --glob '!scripts/done_sweep_gates_lib.py'
+  --glob '!scripts/test_done_sweep_gates_lib.py'
+  --glob '!scripts/check_review_agent_portability.py'
+  --glob '!scripts/test_check_review_agent_portability.py'
+  --glob '!docs/history/plans/completed/2026-08-19-confluence-split-and-create-documentation-removal.md'
+  --glob '!docs/history/plans/completed/2026-09-03-docs-branch-temp-file-hygiene.md'
+  --glob '!docs/history/plans/completed/2026-09-04-sot-unification-living-docs-and-grill-escalation.md'
+  --glob '!docs/history/plans/completed/2026-09-05-docs-branch-trap-before-restore-region.md'
+  --glob '!docs/history/plans/completed/2026-09-08-run-start-marker-content-hash.md'
+  --glob '!docs/history/plans/rejected/2026-09-07-straggler-wording-pins.md'
+  --glob '!docs/history/backlog/rejected/2026-09-07-token-telemetry-r5-residuals.md'
+  --glob '!docs/history/backlog/completed/2026-09-07-run-start-marker-content-docs-branch-leak.md'
 )
 
 # Usage message.
@@ -218,6 +237,10 @@ _path_is_excluded() {
       return 0
       ;;
     docs/reviews/*|docs/tmp/*|agents/skills/how-to-write-skills/*)
+      return 0
+      ;;
+    scripts/scan-public-hygiene.sh|scripts/done_sweep_gates_lib.py|scripts/test_done_sweep_gates_lib.py|scripts/check_review_agent_portability.py|scripts/test_check_review_agent_portability.py|docs/history/plans/completed/2026-08-19-confluence-split-and-create-documentation-removal.md|docs/history/plans/completed/2026-09-03-docs-branch-temp-file-hygiene.md|docs/history/plans/completed/2026-09-04-sot-unification-living-docs-and-grill-escalation.md|docs/history/plans/completed/2026-09-05-docs-branch-trap-before-restore-region.md|docs/history/plans/completed/2026-09-08-run-start-marker-content-hash.md|docs/history/plans/rejected/2026-09-07-straggler-wording-pins.md|docs/history/backlog/rejected/2026-09-07-token-telemetry-r5-residuals.md|docs/history/backlog/completed/2026-09-07-run-start-marker-content-docs-branch-leak.md)
+      # Pattern-quoting sources; see the GLOB_EXCLUDES comment above.
       return 0
       ;;
     *)

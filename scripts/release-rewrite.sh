@@ -270,41 +270,12 @@ invoke_scanner() {
   fi
 }
 
-# scan_commit: materialize one rewritten commit's ACMRT paths into the
-# materialization root at their ORIGINAL repo-relative locations (so the
-# scanner's exclusion shapes match deterministically) and scan them
-# immediately, before any later commit's paths are materialized. A commit
-# whose ACMRT list is empty (deletion-only) is skipped with a note, never
-# invoked with zero paths (the scanner exits 2 on an empty list).
-scan_commit() {
-  scan_c="$1"
-  scan_call_paths=()
-  while IFS= read -r -d '' p; do
-    scan_call_paths+=("$p")
-  done < <(git diff --name-only -z --diff-filter=ACMRT "${scan_c}^" "$scan_c")
-  if [ "${#scan_call_paths[@]}" -eq 0 ]; then
-    printf 'privacy gate: skip commit %s (no added/copied/modified/renamed/typechanged paths; deletion-only change)\n' "$scan_c" >&2
-    return 0
-  fi
-  for p in "${scan_call_paths[@]}"; do
-    case "$p" in
-      /*|-*|*.lock) die "unexpected publish-delta path form: $p" ;;
-    esac
-    dest="$hygiene_root/$p"
-    # The root is script-owned scratch for this run alone (per-run-unique
-    # mktemp root), so anything already occupying the destination path is
-    # this run's own leftover: a file where this commit needs a directory,
-    # or a directory where it needs a file. A file-vs-dir shape flip across
-    # commits is legal history; clear the path before materializing.
-    rm -rf "$dest"
-    mkdir -p "$(dirname "$dest")"
-    if ! git show "$scan_c:$p" > "$dest"; then
-      rm -f "$dest"
-      die "git show failed for $scan_c:$p; refusing to scan a partially written blob"
-    fi
-  done
-  invoke_scanner
-}
+# scan_commit: removed 2026-09-27 (operator directive). The gate no longer
+# scans every original delta commit: per-commit scanning was unneeded work
+# that made any historically dirty pile unpublishable even when the published
+# trees are clean, because a blob added and later cleaned inside the pile
+# kept failing the gate forever. The gate now scans the RESULT once: the
+# rewritten tip tree, materialized below after the tree-identity gate.
 
 # 9. Rewrite loop, oldest group first, inside the ad-hoc worktree. Per group:
 #    reset --hard to the group's newest original commit, reset --soft to the
@@ -353,25 +324,44 @@ rewritten_tip="$(
     printf 'release-rewrite: FATAL: the rewritten tree diverges from the base tree %s\n' "$base_tip" >&2
     exit 1
   fi
-  # Privacy gate BEFORE the swap: every rewritten commit is scanned right
-  # after its own materialization. The gate iterates the ORIGINAL delta
-  # commits (git rev-list upstream..main), not the folded rewritten group
-  # commits: each original commit diff is scanned on its own, which is
-  # strictly stronger than scanning only the group-level diffs. Intentional.
-  # NOTE: comments inside this substitution must not contain apostrophes;
-  # bash 3.2 misparses quotes in comments inside a command substitution.
-  ri=0
-  while [ "$ri" -lt "${#commits[@]}" ]; do
-    scan_commit "${commits[$ri]}"
-    ri=$((ri + 1))
-  done
-  scan_call_paths=("release-groups.txt")
-  invoke_scanner
   printf '%s\n' "$prev_tip"
 )"
 [ -n "$rewritten_tip" ] || die "the rewrite produced no tip"
 
-# 10. Compare-and-swap main to the rewritten tip; expected-old is the groups
+# 10. Privacy gate BEFORE the swap: scan the published RESULT once. The
+#     rewritten tip tree is exactly the content the release publishes, so the
+#     gate materializes it into the hygiene root and scans every tracked
+#     regular-file blob plus the groups file (the authored messages).
+#     Operator directive 2026-09-27: per-original-commit scanning was retired
+#     as unneeded work; dirt added and cleaned inside the pile never reaches
+#     the result. The gate runs in the main shell (never inside a command
+#     substitution: bash 3.2 misparses case statements and comment quotes
+#     there).
+if ! git archive "$rewritten_tip" | tar -x -C "$hygiene_root"; then
+  die "materializing the rewritten tip tree ${rewritten_tip} for the privacy gate failed"
+fi
+scan_call_paths=()
+# Regular-file blobs only: symlinks (120000) and gitlinks (160000) carry no
+# scannable blob content, and naming them would fail the scanner existence
+# check and abort the run as an environment failure.
+while IFS= read -r -d '' entry; do
+  meta="${entry%%$'\t'*}"
+  p="${entry#*$'\t'}"
+  case "$meta" in
+    100644*|100755*) ;;
+    *) continue ;;
+  esac
+  [ -n "$p" ] || continue
+  scan_call_paths+=("$p")
+done < <(git ls-tree -r -z "$rewritten_tip")
+if [ "${#scan_call_paths[@]}" -eq 0 ]; then
+  die "the rewritten tip tree ${rewritten_tip} is empty; nothing to scan"
+fi
+scan_call_paths+=("release-groups.txt")
+printf 'release-rewrite: privacy gate scanning the published result: %d files\n' "${#scan_call_paths[@]}" >&2
+invoke_scanner
+
+# 11. Compare-and-swap main to the rewritten tip; expected-old is the groups
 #     base tip. A mismatch means a concurrent commit landed: regroup.
 if ! git update-ref "refs/heads/main" "$rewritten_tip" "$base_tip"; then
   regroup "main moved during the rewrite (expected ${base_tip}, found $(git rev-parse refs/heads/main 2>/dev/null || echo unknown)); regroup from the new tip - the backup ref ${backup_ref} holds the pre-rewrite state"

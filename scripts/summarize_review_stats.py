@@ -2743,7 +2743,7 @@ def _t_facts_roots(check) -> None:
         facts = td_path / "facts.md"
         facts.write_text(
             "| `personal_projects_root` | `~/Projects/myrepos/` | x |\n"
-            "| `company_projects_root` | `~/Projects/sporty/` | y |\n",
+            "| `company_projects_root` | `~/Projects/example-company/` | y |\n",
             encoding="utf-8",
         )
         roots = facts_paths.resolve_projects_roots(facts)

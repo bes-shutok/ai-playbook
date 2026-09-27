@@ -1764,7 +1764,7 @@ def selftest() -> int:
     # pass the buggy matcher-based predicate and hide the bug (Family H).
     # ------------------------------------------------------------------ #
     AGY_MATCHER = "write_to_file|replace_file_content|multi_replace_file_content"
-    AGY_COMMAND = "/home/self/.gemini/antigravity-cli/hooks/skill-gate.sh"
+    AGY_COMMAND = "/home/<self>/.gemini/antigravity-cli/hooks/skill-gate.sh"
 
     def write_hooks_json(p: Path, timeout) -> None:
         entry: dict = {
@@ -1821,7 +1821,7 @@ def selftest() -> int:
             "matcher": AGY_MATCHER,
             "timeout": 10 * R,
             "hooks": [
-                {"type": "command", "command": "/home/self/.gemini/antigravity-cli/hooks/other.sh"}
+                {"type": "command", "command": "/home/<self>/.gemini/antigravity-cli/hooks/other.sh"}
             ],
         }
         hj.write_text(json.dumps({"hooks": {"PreToolUse": [other]}}), encoding="utf-8")

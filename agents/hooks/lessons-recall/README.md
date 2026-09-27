@@ -463,7 +463,7 @@ ABSOLUTE path (relative paths resolve against the launch cwd and fail with exit
 ```json
 {
   "PreInvocation": [
-    {"type": "command", "command": "/home/you/.gemini/antigravity-cli/hooks/lessons-recall.sh", "timeout": 10}
+    {"type": "command", "command": "/home/<you>/.gemini/antigravity-cli/hooks/lessons-recall.sh", "timeout": 10}
   ]
 }
 ```

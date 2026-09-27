@@ -47,8 +47,8 @@ Edge cases covered by the design include duplicate checkpoint delivery, a worker
 - Resumability: replaying a manifest after interruption preserves prior logs, does not duplicate a completed commit, and starts at the first incomplete step.
 - Safety: repository autonomy is separate from push, deploy, merge, external communication, and access changes; genuine tool approvals remain blocking and auditable.
 - Maintainability: the shared contract has one source of truth, adapters only translate host protocols, and probe failures identify the missing capability or registration.
-- Verification: existing self-tests and hygiene checks remain green, and every incident from the CRM-691 run has a deterministic regression case.
-- Witnesses: the Codex adapter is exercised through recorded host envelopes, the driver is exercised across a file-backed reload boundary, and malformed results, authorization violations, duplicate delivery, timeout, lock takeover, and all named CRM-691 traces have explicit assertions.
+- Verification: existing self-tests and hygiene checks remain green, and every incident from the PROJ-691 run has a deterministic regression case.
+- Witnesses: the Codex adapter is exercised through recorded host envelopes, the driver is exercised across a file-backed reload boundary, and malformed results, authorization violations, duplicate delivery, timeout, lock takeover, and all named PROJ-691 traces have explicit assertions.
 
 **Done when:**
 
@@ -98,7 +98,7 @@ Edge cases covered by the design include duplicate checkpoint delivery, a worker
 - `scripts/test_runtime_capabilities.py` *(new)*
 - `scripts/test_execute_plan_runtime.py` *(new)*
 - `scripts/test_execute_plan_runtime_codex.py` *(new)*
-- `scripts/testdata/execute-plan/` *(new, recorded host envelopes and CRM-691 traces)*
+- `scripts/testdata/execute-plan/` *(new, recorded host envelopes and PROJ-691 traces)*
 
 **Plan-related extension**; implementation and review may change files not listed above. Treat a finding as in scope when it implements or completes a plan task, fixes a regression introduced by plan work, closes wiring or documentation implied by an explicit must-fix change, or contradicts the contract this plan changes. If the causal link is weak, drop it as out of scope with a one-line reason.
 

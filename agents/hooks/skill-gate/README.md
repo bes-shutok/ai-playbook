@@ -302,7 +302,7 @@ names. `timeout` MUST be `>= 2 * RESOLVER_GIT_TIMEOUT_S` (= 10):
         "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
         "timeout": 10,
         "hooks": [
-          {"type": "command", "command": "/home/you/.gemini/antigravity-cli/hooks/skill-gate.sh"}
+          {"type": "command", "command": "/home/<you>/.gemini/antigravity-cli/hooks/skill-gate.sh"}
         ]
       }
     ]

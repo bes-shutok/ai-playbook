@@ -4290,37 +4290,37 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def test_precondition_history_ref_verifies_rebased_history(self):
         base = self._git_stdout("rev-parse", "HEAD")
         self._git("checkout", "-q", "-b", "work")
-        original = self.commit_message("CRM-1234 predecessor feature work")
+        original = self.commit_message("PROJ-1234 predecessor feature work")
         self._git("checkout", "-q", "--detach", base)
         newer = self.commit_message("newer base unrelated to the feature")
         self._git("checkout", "-q", "work")
         self._git("rebase", "-q", newer)
         rebased = self._git_stdout("rev-parse", "HEAD")
         self.assertNotEqual(rebased, original)
-        result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "history-ref", "value": "CRM-1234"}]}]})
+        result = self.verify({"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": "history-ref", "value": "PROJ-1234"}]}]})
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["reason_code"], "completed")
-        self.assertEqual(result["predecessors"][0]["ref"], "CRM-1234")
+        self.assertEqual(result["predecessors"][0]["ref"], "PROJ-1234")
         self.assertTrue(result["predecessors"][0]["verified"])
 
     def test_precondition_history_ref_verifies_cherry_picked_history(self):
         self._git("checkout", "-q", "-b", "work")
-        source = self.commit_message("CRM-1234 cherry-pick source work")
+        source = self.commit_message("PROJ-1234 cherry-pick source work")
         self._git("checkout", "-q", "-")
         self.commit_message("divergent base commit")
         self._git("cherry-pick", source)
         picked = self._git_stdout("rev-parse", "HEAD")
         self.assertNotEqual(picked, source)
-        result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "history-ref", "value": "CRM-1234"}]}]})
+        result = self.verify({"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": "history-ref", "value": "PROJ-1234"}]}]})
         self.assertEqual(result["status"], "success")
 
     def test_precondition_history_ref_verifies_squashed_history(self):
         base = self._git_stdout("rev-parse", "HEAD")
-        self.commit_message("CRM-1234 first piece")
-        self.commit_message("CRM-5678 second piece")
+        self.commit_message("PROJ-1234 first piece")
+        self.commit_message("PROJ-5678 second piece")
         self._git("reset", "-q", "--soft", base)
-        self.commit_message("CRM-1234 CRM-5678 squashed predecessor work")
-        for ref in ("CRM-1234", "CRM-5678"):
+        self.commit_message("PROJ-1234 PROJ-5678 squashed predecessor work")
+        for ref in ("PROJ-1234", "PROJ-5678"):
             result = self.verify({"predecessors": [{"ref": ref, "outcomes": [{"kind": "history-ref", "value": ref}]}]})
             self.assertEqual(result["status"], "success", ref)
             self.assertTrue(result["predecessors"][0]["verified"])
@@ -4328,11 +4328,11 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def test_precondition_ancestry_outcome(self):
         ancestor = self.commit_message("ancestor base commit")
         self.commit_message("descendant commit")
-        document = {"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "ancestry", "value": ancestor}]}]}
+        document = {"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": "ancestry", "value": ancestor}]}]}
         verified = self.verify(document)
         self.assertEqual(verified["status"], "success")
         orphan = self.orphan_commit()
-        unverified = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "ancestry", "value": orphan}]}]})
+        unverified = self.verify({"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": "ancestry", "value": orphan}]}]})
         self.assertEqual(unverified["status"], "blocked")
         self.assertEqual(unverified["reason_code"], "precondition-unverified")
 
@@ -4340,10 +4340,10 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         probe = self.root / "scripts" / "quota_window_probe.py"
         probe.parent.mkdir(parents=True, exist_ok=True)
         probe.write_text("# probe\npause_decision = True\n", encoding="utf-8")
-        document = {"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "artifact", "path": "scripts/quota_window_probe.py", "contains": "pause_decision"}]}]}
+        document = {"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": "artifact", "path": "scripts/quota_window_probe.py", "contains": "pause_decision"}]}]}
         verified = self.verify(document)
         self.assertEqual(verified["status"], "success")
-        absent = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "artifact", "path": "scripts/quota_window_probe.py", "contains": "absent_span"}]}]})
+        absent = self.verify({"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": "artifact", "path": "scripts/quota_window_probe.py", "contains": "absent_span"}]}]})
         self.assertEqual(absent["status"], "blocked")
         self.assertEqual(absent["reason_code"], "precondition-unverified")
 
@@ -4354,7 +4354,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         probe = self.root / "scripts" / "quota_window_probe.py"
         probe.parent.mkdir(parents=True, exist_ok=True)
         probe.write_text("# probe\npause_decision = True\n", encoding="utf-8")
-        result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "artifact", "path": "scripts/../scripts/quota_window_probe.py", "contains": "pause_decision"}]}]})
+        result = self.verify({"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": "artifact", "path": "scripts/../scripts/quota_window_probe.py", "contains": "pause_decision"}]}]})
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "precondition-unverified")
 
@@ -4364,7 +4364,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         probe_path = self.root / "scripts" / "quota_window_probe.py"
         probe_path.parent.mkdir(parents=True, exist_ok=True)
         probe_path.write_text("# probe\npause_decision = True\n", encoding="utf-8")
-        result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "artifact", "path": "scripts/quota_window_probe.py", "contains": ""}]}]})
+        result = self.verify({"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": "artifact", "path": "scripts/quota_window_probe.py", "contains": ""}]}]})
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "precondition-unverified")
         joined = " ".join(str(item) for item in result["evidence"])
@@ -4381,28 +4381,28 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertTrue(result["resume_allowed"])
 
     def test_precondition_fails_closed_names_reference(self):
-        self.commit_message("CRM-1234 present work")
+        self.commit_message("PROJ-1234 present work")
         orphan = self.orphan_commit()
         outcomes = [
             {"kind": "history-ref", "value": "NOPE-9999"},
             {"kind": "ancestry", "value": orphan},
             {"kind": "artifact", "path": "scripts/missing_probe.py", "contains": "pause_decision"},
         ]
-        result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": outcomes}]})
+        result = self.verify({"predecessors": [{"ref": "PROJ-1234", "outcomes": outcomes}]})
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "precondition-unverified")
         self.assertTrue(result["resume_allowed"])
         joined = " ".join(str(item) for item in result["evidence"])
-        self.assertIn("CRM-1234", joined)
+        self.assertIn("PROJ-1234", joined)
         self.assertIn("NOPE-9999", joined)
         self.assertIn(orphan, joined)
         self.assertIn("scripts/missing_probe.py", joined)
 
     def test_precondition_malformed_declaration_fails_closed(self):
         cases = (
-            {"ref": "CRM-1234", "outcomes": [{"kind": "time-travel", "value": "CRM-1234"}]},
-            {"ref": "CRM-1234", "outcomes": []},
-            {"outcomes": [{"kind": "history-ref", "value": "CRM-1234"}]},
+            {"ref": "PROJ-1234", "outcomes": [{"kind": "time-travel", "value": "PROJ-1234"}]},
+            {"ref": "PROJ-1234", "outcomes": []},
+            {"outcomes": [{"kind": "history-ref", "value": "PROJ-1234"}]},
         )
         for declaration in cases:
             with self.subTest(declaration=declaration):
@@ -4414,10 +4414,10 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 self.assertIn("malformed", joined)
 
     def test_precondition_any_outcome_verifies(self):
-        self.commit_message("CRM-1234 present work")
-        document = {"predecessors": [{"ref": "CRM-1234", "outcomes": [
+        self.commit_message("PROJ-1234 present work")
+        document = {"predecessors": [{"ref": "PROJ-1234", "outcomes": [
             {"kind": "artifact", "path": "scripts/missing_probe.py", "contains": "pause_decision"},
-            {"kind": "history-ref", "value": "CRM-1234"},
+            {"kind": "history-ref", "value": "PROJ-1234"},
         ]}]}
         result = self.verify(document)
         self.assertEqual(result["status"], "success")
@@ -4430,8 +4430,8 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(result["reason_code"], "precondition-unverified")
 
     def test_precondition_cli_without_manifest(self):
-        self.commit_message("CRM-1234 cli fixture work")
-        predecessors = self.predecessors_file({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "history-ref", "value": "CRM-1234"}]}]})
+        self.commit_message("PROJ-1234 cli fixture work")
+        predecessors = self.predecessors_file({"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": "history-ref", "value": "PROJ-1234"}]}]})
         completed = subprocess.run(
             [
                 sys.executable,
@@ -4451,7 +4451,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
 
     def test_precondition_malformed_document_fails_closed(self):
         cases = (
-            {"predecessors": "CRM-1234"},
+            {"predecessors": "PROJ-1234"},
             {"predecessors": None},
             ["not", "a", "mapping"],
         )
@@ -4500,13 +4500,13 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         decoy = self.root.parent / f"outside-decoy-{uuid.uuid4().hex[:8]}.txt"
         decoy.write_text(span, encoding="utf-8")
         self.addCleanup(decoy.unlink, missing_ok=True)
-        document = {"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "artifact", "path": "../outside.txt", "contains": span}]}]}
+        document = {"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": "artifact", "path": "../outside.txt", "contains": span}]}]}
         result = self.verify(document)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "precondition-unverified")
 
     def test_precondition_validator_only_outcome_blocks_without_malformed_label(self):
-        document = {"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": "validator", "value": "scripts/check.py"}]}]}
+        document = {"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": "validator", "value": "scripts/check.py"}]}]}
         result = self.verify(document)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "precondition-unverified")
@@ -4517,7 +4517,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def test_precondition_leading_dash_value_is_malformed_declaration(self):
         for kind in ("history-ref", "ancestry"):
             with self.subTest(kind=kind):
-                result = self.verify({"predecessors": [{"ref": "CRM-1234", "outcomes": [{"kind": kind, "value": "--injected-option"}]}]})
+                result = self.verify({"predecessors": [{"ref": "PROJ-1234", "outcomes": [{"kind": kind, "value": "--injected-option"}]}]})
                 self.assertEqual(result["status"], "blocked")
                 self.assertEqual(result["reason_code"], "precondition-unverified")
                 joined = " ".join(str(item) for item in result["evidence"]).lower()

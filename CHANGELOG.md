@@ -16,10 +16,11 @@ This release publishes nine days of agent-workflow hardening: the maintenance lo
 
 ### Safety gates and scripts
 - Every execution runs in its own worktree, history landings are guarded against orphan and reverse squashes, and merge landings serialize through a lock.
-- Releasing unpushed work is now a supported flow: feature-clustered commits, a backup ref, a privacy scan of everything published, and a verified fast-forward push.
+- Releasing unpushed work is now a supported flow: feature-clustered commits, a backup ref, a privacy scan of the published result, and a verified fast-forward push.
+- The release privacy gate scans the published result once instead of every commit, so a clean final tree publishes without per-commit archaeology.
 - Review agents gained eight new door patterns that catch truncation, conversion, and identifier-inventory misses.
 
 ### Docs and hygiene
 - CHANGELOG.md now records what each release improves for the reader.
-- Registry rows record the licensing behind every gated write, and host sync drop zones stay out of the repository.
+- Registry rows record the licensing behind every gated write, host sync drop zones stay out of the repository, and generic placeholders replaced company-specific fixture text in scripts and archived plans.
 

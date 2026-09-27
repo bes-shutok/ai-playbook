@@ -60,7 +60,7 @@ Backlog origin: `docs/history/backlog/2026-08-31-reviewed-plan-readiness-gate.md
 Today, nothing mechanically prevents `execute-plan` from starting or `done`
 from finalizing a plan-creation session whose plan never passed `review-plan`:
 the skill-gate only gates writes to plan files, and a plan that never touched
-disk (conversational Plan Mode) bypasses it entirely. The CRM-688 session
+disk (conversational Plan Mode) bypasses it entirely. The PROJ-688 session
 produced and presented an unreviewed plan that was only honestly labeled a
 draft after the user asked.
 
@@ -163,7 +163,7 @@ speculative, drop as out of scope with a one-line reason.
   the validator-pass plan unless the readiness wiring itself breaks it.
 - `agents/skills/execute-plan/` session-log or manifest behavior unrelated to
   the readiness gate.
-- Any CRM-688 product code or plan; explicitly out of scope per the backlog.
+- Any PROJ-688 product code or plan; explicitly out of scope per the backlog.
 
 ## Validation Commands
 

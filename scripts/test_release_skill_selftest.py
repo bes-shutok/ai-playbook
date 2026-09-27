@@ -31,7 +31,8 @@ Harness-pinned seams (Task 2 implements against these):
   BOTH directions before use: exit 0 plus the PASS marker on clean content,
   exit 1 plus FAIL naming the path on a hit), ``noop`` (exit 0), ``exit2``
   (exit 2), ``lognoop`` (exit 0 plus an argv witness log, used by the
-  git-show-failure case to prove no materialized file reaches the scanner).
+  tree-materialization-failure case to prove no materialized file reaches the
+  scanner).
 - Fixture layout per case: temp dir holding a bare ``origin``, a clone whose
   ``main`` carries 6 commits in 3 contiguous feature groups (distinct author
   names and dates per source commit, one group deleting a file, one
@@ -278,12 +279,12 @@ class ReleaseSkillSelftest(unittest.TestCase):
                 "# selftest pass-through git shim\n"
                 'exec "%s" "$@"\n' % real
             )
-        elif name == "show-fail":
+        elif name == "archive-fail":
             body = (
                 "#!/usr/bin/env bash\n"
-                "# selftest git shim: every git show fails (materialization must abort)\n"
-                'if [ "${1:-}" = "show" ]; then\n'
-                '  echo "selftest shim: git show forced to fail" >&2\n'
+                "# selftest git shim: git archive fails (result materialization must abort)\n"
+                'if [ "${1:-}" = "archive" ]; then\n'
+                '  echo "selftest shim: git archive forced to fail" >&2\n'
                 "  exit 42\n"
                 "fi\n"
                 'exec "%s" "$@"\n' % real
@@ -902,27 +903,62 @@ class ReleaseSkillSelftest(unittest.TestCase):
         rewrite, _, _, pre_tip = self._run_release(variant="outside_scope", scanner="real")
         self._assert_abort_shape(rewrite, pre_tip, token_absent=DENY_TOKEN, path_expected="scripts/tool.sh")
 
-    def test_added_then_deleted_secret_aborts(self):
+    def test_added_then_deleted_secret_proceeds(self):
+        # Result-only scanning (operator directive 2026-09-27): a secret added
+        # and later deleted inside the pile never reaches the published result,
+        # so the release proceeds and the final tree carries no deny token.
         rewrite, _, _, pre_tip = self._run_release(variant="added_deleted", scanner="real")
-        self._assert_abort_shape(
-            rewrite, pre_tip, token_absent=DENY_TOKEN, path_expected="shared/placeholder.txt",
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "release must proceed when the dirt never reaches the result "
+            "(rc=%s)\nstdout:\n%s\nstderr:\n%s" % (rewrite.returncode, rewrite.stdout, rewrite.stderr),
         )
+        self.assertEqual(
+            self._gitx("grep", "-F", DENY_TOKEN, "main", check=False).stdout, "",
+            "the published result must carry no deny token",
+        )
+        self._assert_tree_identical_to(pre_tip)
 
-    def test_rename_with_scrub_old_blob_aborts(self):
+    def test_rename_with_scrub_old_blob_proceeds(self):
+        # The dirty pre-rename blob stays inside pile history but never
+        # reaches the published result; only the scrubbed renamed file does.
         rewrite, _, _, pre_tip = self._run_release(variant="rename_scrub", scanner="real")
-        self._assert_abort_shape(rewrite, pre_tip, token_absent=DENY_TOKEN, path_expected="docs/guide.md")
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "release must proceed when the scrubbed rename keeps the token out "
+            "of the result (rc=%s)\nstdout:\n%s\nstderr:\n%s"
+            % (rewrite.returncode, rewrite.stdout, rewrite.stderr),
+        )
+        self.assertEqual(
+            self._gitx("grep", "-F", DENY_TOKEN, "main", check=False).stdout, "",
+            "the published result must carry no deny token",
+        )
+        self._assert_tree_identical_to(pre_tip)
 
     def test_typechange_blob_aborts(self):
         rewrite, _, _, pre_tip = self._run_release(variant="typechange", scanner="real")
         self._assert_abort_shape(rewrite, pre_tip, token_absent=DENY_TOKEN, path_expected="link/alias")
 
-    def test_dirty_then_cleaned_same_path_aborts(self):
+    def test_dirty_then_cleaned_same_path_proceeds(self):
+        # Cleaned within the pile before the result is cut: the published
+        # tree carries only the cleaned content, so the gate passes it.
         rewrite, _, _, pre_tip = self._run_release(variant="dirty_cleaned", scanner="real")
-        self._assert_abort_shape(
-            rewrite, pre_tip, token_absent=DENY_TOKEN, path_expected="feature-alpha/one.txt",
+        self.assertEqual(
+            rewrite.returncode, 0,
+            "release must proceed when the in-pile clean keeps the token out "
+            "of the result (rc=%s)\nstdout:\n%s\nstderr:\n%s"
+            % (rewrite.returncode, rewrite.stdout, rewrite.stderr),
         )
+        self.assertEqual(
+            self._gitx("grep", "-F", DENY_TOKEN, "main", check=False).stdout, "",
+            "the published result must carry no deny token",
+        )
+        self._assert_tree_identical_to(pre_tip)
 
     def test_deletion_only_group_proceeds(self):
+        # A group whose net change deletes files still proceeds: the gate
+        # scans the published result once, so per-group path sets no longer
+        # exist and no per-group skip note is printed.
         rewrite, _, _, _ = self._run_release(
             counts=[2, 2, 1, 1, 1],
             msgs=[MSG_G1, MSG_G2, "docs rework", "cleanup", "release notes"],
@@ -933,13 +969,6 @@ class ReleaseSkillSelftest(unittest.TestCase):
             rewrite.returncode, 0,
             "a deletion-only group must proceed (rc=%s)\nstdout:\n%s\nstderr:\n%s"
             % (rewrite.returncode, rewrite.stdout, rewrite.stderr),
-        )
-        combined = rewrite.stdout + rewrite.stderr
-        self.assertIn(
-            "no added/copied/modified/renamed/typechanged paths",
-            combined,
-            "the empty-path-set skip note must be surfaced in the rewrite "
-            "script's exact wording (never a bare 'skip' or silence):\n%s" % combined,
         )
         self.assertEqual(self._rev_list_count("origin/main..main"), 5)
 
@@ -965,8 +994,8 @@ class ReleaseSkillSelftest(unittest.TestCase):
         )
         self._assert_torn_down()
 
-    def test_git_show_failure_is_fatal(self):
-        rewrite, _, _, pre_tip = self._run_release(scanner="lognoop", rewrite_shim="show-fail")
+    def test_tree_materialization_failure_is_fatal(self):
+        rewrite, _, _, pre_tip = self._run_release(scanner="lognoop", rewrite_shim="archive-fail")
         self._assert_abort_shape(rewrite, pre_tip)
         scanned = self.scanner_log.exists() and self.scanner_log.read_text().strip()
         self.assertFalse(scanned, "no materialized file may reach the scanner:\n%s" % (scanned or ""))
