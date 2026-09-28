@@ -71,12 +71,143 @@ def _build_store(path: Path, tool_rows, turn_rows=(), part_rows=(), message_rows
     conn.close()
 
 
-class ToolRuntimeStatsTests(unittest.TestCase):
+class StatsFixtureMixin:
+    """Shared per-test fixture: script module, one tmp dir, scratch repo.
+
+    Every test class declares this mixin first; an empty scratch repo dir
+    harms classes that never touch it and deletes the config knob entirely.
+    """
+
+    leak = None
+
     def setUp(self):
         self.module = _load_script_module()
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.tmpdir = Path(self.tmp.name)
+        self.repo = self.tmpdir / "repo"
+        self.repo.mkdir()
+        self.base = _ms(2026, 9, 21)
+
+    def _touch_repo_file(self, rel: str):
+        target = self.repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("# fixture script\n", encoding="utf-8")
+
+
+class DaysWindowTests(StatsFixtureMixin, unittest.TestCase):
+    def _argv(self, store, out_root, extra=()):
+        return [
+            "--store", str(store), "--out-root", str(out_root),
+            "--facts", str(self.tmpdir / "absent-facts.md"),
+            "--repo-root", str(self.repo), *extra,
+        ]
+
+    def _digest_heading(self, out_root):
+        digest = next((out_root / "tool-runtime-stats").glob("*.md")).read_text(encoding="utf-8")
+        return digest
+
+    def test_days_window_filters_older_rows(self):
+        day1_noon = _ms(2026, 9, 21)
+        at_bound = _ms(2026, 9, 21, 18)
+        below_bound = at_bound - 1
+        day2_noon = _ms(2026, 9, 22)
+        day3_noon = _ms(2026, 9, 23)
+        rows = [
+            # below the bound; completes at day2 noon (the completed-at
+            # straddler the absent-pairs assertion kills column mutants with)
+            ("tu1", "s1", "t1", "c1", "Read", "completed", day1_noon, day2_noon, None, None),
+            # exactly at the bound: included, pinning the inclusive >=
+            ("tu2", "s1", "t2", "c2", "Edit", "completed", at_bound, at_bound + 1000, None, None),
+            # one millisecond below the bound: excluded
+            ("tu3", "s1", "t3", "c3", "Grep", "completed", below_bound, below_bound + 1000, None, None),
+            ("tu4", "s1", "t4", "c4", "Edit", "completed", day2_noon, day2_noon + 1000, None, None),
+            ("tu5", "s1", "t5", "c5", "Edit", "completed", day3_noon, day3_noon + 1000, None, None),
+        ]
+        store = self.tmpdir / "store.sqlite"
+        _build_store(store, rows)
+        out_root = self.tmpdir / "out"
+        argv = self._argv(store, out_root, ("--days", "2"))
+        with mock.patch.object(self.module, "_now_ms", lambda: _ms(2026, 9, 23, 18)):
+            rc, stdout, _ = run_main(self.module, argv)
+        self.assertEqual(rc, 0)
+        report = json.loads(stdout)
+        ld = self.module.local_date_from_ms
+        d1, d2, d3 = ld(day1_noon), ld(day2_noon), ld(day3_noon)
+        present = {(r["date"], r["tool"]) for r in report["days"]}
+        # the boundary row is included; the below-bound rows (and any
+        # straddler-derived pair) are absent
+        self.assertEqual(present, {(d1, "Edit"), (d2, "Edit"), (d3, "Edit")})
+        self.assertNotIn((d1, "Read"), present)
+        self.assertNotIn((d1, "Grep"), present)
+        self.assertIn("3 day(s) in window", self._digest_heading(out_root))
+
+    def test_days_window_covering_is_behavior_identical(self):
+        day1_noon = _ms(2026, 9, 21)
+        day2_noon = _ms(2026, 9, 22)
+        day3_noon = _ms(2026, 9, 23)
+        rows = [
+            ("tu1", "s1", "t1", "c1", "Edit", "completed", day1_noon, day1_noon + 1000, None, None),
+            ("tu2", "s1", "t2", "c2", "Edit", "completed", day2_noon, day2_noon + 1000, None, None),
+            ("tu3", "s1", "t3", "c3", "Edit", "completed", day3_noon, day3_noon + 1000, None, None),
+        ]
+        store = self.tmpdir / "store.sqlite"
+        _build_store(store, rows)
+        with mock.patch.object(self.module, "_now_ms", lambda: _ms(2026, 9, 23, 18)):
+            rc1, out1, _ = run_main(
+                self.module, self._argv(store, self.tmpdir / "out-unflagged"))
+            rc2, out2, _ = run_main(
+                self.module,
+                self._argv(store, self.tmpdir / "out-window", ("--days", "3")))
+        self.assertEqual(rc1, 0)
+        self.assertEqual(rc2, 0)
+        self.assertEqual(out1, out2)
+
+    def test_days_rejects_invalid_values(self):
+        import contextlib
+        import io
+        for bad in ("0", "1000001"):
+            err = io.StringIO()
+            with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(err):
+                self.module.main(["run", "--days", bad])
+            self.assertEqual(cm.exception.code, 2)
+            self.assertIn("day window", err.getvalue())
+
+    def test_days_window_summary_and_share_cohort(self):
+        day1_noon = _ms(2026, 9, 21)
+        day3_noon = _ms(2026, 9, 23)
+        turn_rows = [
+            # out-of-window turn carrying tokens (below the bound)
+            ("sA", "tA", day1_noon, "completed", 1, 400, 0, 400),
+            # straddling turn: two joined tool rows, one below the bound,
+            # one on day3; started inside the window
+            ("sB", "tB", day3_noon, "completed", 2, 100, 100, 200),
+        ]
+        rows = [
+            ("tu1", "sA", "tA", "cA1", "Edit", "completed", day1_noon, day1_noon + 1000, None, None),
+            ("tu2", "sB", "tB", "cB1", "Edit", "completed", day1_noon, day1_noon + 1000, None, None),
+            ("tu3", "sB", "tB", "cB2", "Edit", "completed", day3_noon, day3_noon + 1000, None, None),
+        ]
+        store = self.tmpdir / "store.sqlite"
+        _build_store(store, rows, turn_rows=turn_rows)
+        out_root = self.tmpdir / "out"
+        with mock.patch.object(self.module, "_now_ms", lambda: _ms(2026, 9, 23, 18)):
+            rc, stdout, _ = run_main(
+                self.module, self._argv(store, out_root, ("--days", "2")))
+        self.assertEqual(rc, 0)
+        report = json.loads(stdout)
+        self.assertEqual({r["date"] for r in report["day_summaries"]}, {report["days"][0]["date"]})
+        day3_rows = [r for r in report["days"] if r["date"] == report["days"][0]["date"]]
+        # the in-window row's token share is half the straddling turn's
+        # tokens (the whole-store joined count), reconciliation-exact
+        self.assertEqual(day3_rows[0]["tokens"], 200 / 2)
+        day3_summary = report["day_summaries"][0]
+        # the day summary's sums exclude the out-of-window turn's tokens
+        self.assertEqual(day3_summary["tokens_in"], 100)
+        self.assertEqual(day3_summary["tokens_out"], 100)
+
+
+class ToolRuntimeStatsTests(StatsFixtureMixin, unittest.TestCase):
 
     def _run(self, argv):
         return self.module.main(["run", *argv])
@@ -310,15 +441,8 @@ SANCTIONED_TOOL_PART = json.dumps(
 )
 
 
-class TokenJoinTests(unittest.TestCase):
+class TokenJoinTests(StatsFixtureMixin, unittest.TestCase):
     """Task 3: per-turn tokens joined to tool rows; no-judgment share."""
-
-    def setUp(self):
-        self.module = _load_script_module()
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.tmpdir = Path(self.tmp.name)
-        self.base = _ms(2026, 9, 21)
 
     def _run_and_read(self, tool_rows, turn_rows):
         store = self.tmpdir / "store.sqlite"
@@ -409,26 +533,12 @@ class TokenJoinTests(unittest.TestCase):
 
 
 
-class RankingReportTests(unittest.TestCase):
+class RankingReportTests(StatsFixtureMixin, unittest.TestCase):
     """Task 5: rankings, error floor, filing thresholds, predicates, trend."""
-
-    def setUp(self):
-        self.module = _load_script_module()
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.tmpdir = Path(self.tmp.name)
-        self.repo = self.tmpdir / "repo"
-        self.repo.mkdir()
-        self.base = _ms(2026, 9, 21)
 
     # -- fixture builders --
 
     _store_counter = 0
-
-    def _touch_repo_file(self, rel: str):
-        target = self.repo / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("# fixture script\n", encoding="utf-8")
 
     def _store(self, tool_rows, turn_rows, part_rows=()):
         RankingReportTests._store_counter += 1
@@ -704,16 +814,10 @@ class RankingReportTests(unittest.TestCase):
         self.assertIn("no prior report", digest)
 
 
-class OutputContractTests(unittest.TestCase):
+class OutputContractTests(StatsFixtureMixin, unittest.TestCase):
     """Task 4: stamped artifacts, retention line, keep-newest-eight, privacy."""
 
-    def setUp(self):
-        self.module = _load_script_module()
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.tmpdir = Path(self.tmp.name)
-        self.base = _ms(2026, 9, 21)
-        self.leak = "PW-SYNTHETIC-LEAK-CANARY"
+    leak = "PW-SYNTHETIC-LEAK-CANARY"
 
     def _store_with_leak(self, path):
         """Fixture whose message content and mid-command token carry the leak."""
@@ -844,31 +948,15 @@ class OutputContractTests(unittest.TestCase):
         self.assertEqual(len(list(home.glob("*.md"))), 1)
 
 
-class BashAttributionTests(unittest.TestCase):
+class BashAttributionTests(StatsFixtureMixin, unittest.TestCase):
     """Task 2: repo-anchored script attribution for Bash rows."""
 
-
-
-
-    def setUp(self):
-        self.module = _load_script_module()
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.repo = Path(self.tmp.name) / "repo"
-        self.repo.mkdir()
-        self.base = _ms(2026, 9, 21)
-
     _fixture_counter = 0
-
-    def _touch_repo_file(self, rel: str):
-        target = self.repo / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("# fixture script\n", encoding="utf-8")
 
     def _fixture(self, commands, tool="Bash"):
         """One Bash row + part row per command; CALLID tokens join the part."""
         BashAttributionTests._fixture_counter += 1
-        store = Path(self.tmp.name) / f"store-{BashAttributionTests._fixture_counter}.sqlite"
+        store = self.tmpdir / f"store-{BashAttributionTests._fixture_counter}.sqlite"
         tool_rows, part_rows = [], []
         for i, command in enumerate(commands):
             call_id = f"c{i}"
@@ -887,7 +975,7 @@ class BashAttributionTests(unittest.TestCase):
 
     def _slugs(self, store):
         report = self._capture_json(
-            ["--store", str(store), "--out-root", str(Path(self.tmp.name) / "out"),
+            ["--store", str(store), "--out-root", str(self.tmpdir / "out"),
              "--repo-root", str(self.repo)]
         )
         return [(r["tool"], r["script_slug"]) for r in report["days"]]
@@ -908,10 +996,10 @@ class BashAttributionTests(unittest.TestCase):
         self.assertEqual(rows, [("Bash", "quota_window_probe.py")])
 
     def test_command_outside_sanctioned_prefixes_aggregates_as_other(self):
-        foreign = Path(self.tmp.name) / "foreign-project"
+        foreign = self.tmpdir / "foreign-project"
         foreign.mkdir()
         store = self._fixture([f"{foreign}/tool.sh run fast"])
-        out_root = Path(self.tmp.name) / "out-privacy"
+        out_root = self.tmpdir / "out-privacy"
         stdout, stderr = self._run_capture_streams(
             ["--store", str(store), "--out-root", str(out_root),
              "--repo-root", str(self.repo)]
@@ -935,7 +1023,7 @@ class BashAttributionTests(unittest.TestCase):
         store = self._fixture(["ignored-command-a", "ignored-command-b"], tool="Edit")
         # Edit rows carry no Bash attribution even when parts exist
         report = self._capture_json(
-            ["--store", str(store), "--out-root", str(Path(self.tmp.name) / "out"),
+            ["--store", str(store), "--out-root", str(self.tmpdir / "out"),
              "--repo-root", str(self.repo)]
         )
         self.assertEqual({(r["tool"], r["script_slug"]) for r in report["days"]}, {("Edit", None)})
@@ -943,7 +1031,7 @@ class BashAttributionTests(unittest.TestCase):
     def test_missing_part_rows_degrade_to_other(self):
         store = self._fixture([None, None])  # Bash rows with no matching part rows
         stdout, stderr = self._run_capture_streams(
-            ["--store", str(store), "--out-root", str(Path(self.tmp.name) / "out"),
+            ["--store", str(store), "--out-root", str(self.tmpdir / "out"),
              "--repo-root", str(self.repo)]
         )
         report = json.loads(stdout)
@@ -986,7 +1074,7 @@ class BashAttributionTests(unittest.TestCase):
         # absent-data arm: the miner raises and the rider's fail-open wrapping
         # reports it without failing the maintenance turn
         BashAttributionTests._fixture_counter += 1
-        store = Path(self.tmp.name) / f"store-{BashAttributionTests._fixture_counter}.sqlite"
+        store = self.tmpdir / f"store-{BashAttributionTests._fixture_counter}.sqlite"
         tool_rows = [
             ("tu0", "s1", "t0", "c0", "Bash", "completed", self.base, self.base + 100, 100, None),
         ]
@@ -994,7 +1082,7 @@ class BashAttributionTests(unittest.TestCase):
         _build_store(store, tool_rows, part_rows=part_rows)
         with self.assertRaises(sqlite3.OperationalError):
             self._run_capture_streams(
-                ["--store", str(store), "--out-root", str(Path(self.tmp.name) / "out"),
+                ["--store", str(store), "--out-root", str(self.tmpdir / "out"),
                  "--repo-root", str(self.repo)]
             )
 

@@ -86,6 +86,30 @@ class LongWaitRunner(RecordedRunner):
 
 
 class CodexAdapterTest(unittest.TestCase):
+    def worker_launch(self, adapter, task_id, generation, *, policy_token="default", prompt=None, deadline_seconds=None):
+        scope = self.policy() if policy_token == "default" or policy_token is None else policy_token
+        role = {
+            "role": "single-task-worker",
+            "task_id": task_id,
+            "claim_token": "fixture-claim",
+            "generation": generation,
+            "task_body": "Implement the fixture task.",
+            "allowed_paths": list(scope["allowed_paths"]),
+            "validation_commands": [{"id": "verify", "argv": ["python3", "-m", "unittest"], "criteria": ["fixture criterion"]}],
+            "required_criteria": ["fixture criterion"],
+            "evidence_owner": "worker",
+            "worker_log_destination": "task-worker.log.md",
+            "parent_obligations": [],
+            "parent_obligations": [],
+        }
+        return adapter.launch(
+            {"id": task_id, "worker_role": role},
+            json.dumps(role) if prompt is None else prompt,
+            generation,
+            deadline_seconds=deadline_seconds,
+            policy_token=None if policy_token is None else scope,
+        )
+
     def test_translates_terminal_exec_json_events(self):
         adapter = CodexAdapter(Path.cwd(), runner=lambda *_args, **_kwargs: {"returncode": 0, "stdout": ""})
         completed = adapter.translate_host_result({"type": "turn.completed", "usage": {}}, 3, "task-4")
@@ -118,7 +142,7 @@ class CodexAdapterTest(unittest.TestCase):
         runner = RecordedRunner()
         adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
         self.assertEqual(adapter.activation_check()["status"], "success")
-        launch = adapter.launch({"id": "task-4"}, "implement task", 1, policy_token=self.policy())
+        launch = self.worker_launch(adapter, "task-4", 1)
         self.assertEqual(launch["status"], "success")
         self.assertEqual(launch["session_id"], "session-task-4")
         wait = adapter.wait(launch["session_id"], policy_token=self.policy())
@@ -136,10 +160,27 @@ class CodexAdapterTest(unittest.TestCase):
         adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True)
         self.assertEqual(adapter.activation_check()["status"], "success")
         p = self.policy()
-        receipt = adapter.launch({"id": "task-4"}, "implement task", 1, policy_token=p)
+        receipt = self.worker_launch(adapter, "task-4", 1, policy_token=p)
         self.assertEqual(receipt["status"], "success")
         for field in ("provider_session_id", "worker_id", "launch_id", "capacity_entry_id", "command_identity", "process_identity", "observed_at"):
             self.assertTrue(receipt.get(field), field)
+
+    def test_launch_preserves_validated_task_role(self):
+        runner = RecordedRunner()
+        adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
+        adapter.activation_check()
+        policy = self.policy()
+        result = self.worker_launch(adapter, "task-4", 1, policy_token=policy)
+        self.assertEqual(result["status"], "success")
+        launch_call = next(call for call in runner.calls if call[2] == "launch")
+        self.assertEqual(json.loads(launch_call[0][-1])["role"], "single-task-worker")
+        self.assertEqual(json.loads(launch_call[0][-1])["task_id"], "task-4")
+
+        before = len([call for call in runner.calls if call[2] == "launch"])
+        missing = adapter.launch({"id": "task-4"}, "{}", 1, policy_token=policy)
+        after = len([call for call in runner.calls if call[2] == "launch"])
+        self.assertEqual(missing["reason_code"], "contract-violation")
+        self.assertEqual(after, before)
 
     def test_observe_inventory_accepts_an_empty_successful_process_snapshot(self):
         completed = subprocess.CompletedProcess([], 0, "  101 Tue Sep 22 11:41:37 2026 /sbin/launchd\n", "")
@@ -213,7 +254,7 @@ class CodexAdapterTest(unittest.TestCase):
             import fcntl
             with lock_path.open("r+") as lock_file:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                result = adapter.launch({"id": "task-4"}, "implement task", 1, policy_token=self.policy())
+                result = self.worker_launch(adapter, "task-4", 1)
 
         self.assertEqual(result["reason_code"], "capacity-unavailable")
         self.assertFalse(any(isinstance(call[0], list) and call[2] == "launch" for call in runner.calls))
@@ -229,7 +270,130 @@ class CodexAdapterTest(unittest.TestCase):
         adapter = CodexAdapter("/repo", runner=runner, approval_verified=True, process_snapshot=lambda: snapshot)
         self.assertEqual(adapter.activation_check()["status"], "success")
 
-        result = adapter.launch({"id": "task-4"}, "implement task", 1, policy_token=self.policy())
+        result = self.worker_launch(adapter, "task-4", 1)
+
+        self.assertEqual(result["reason_code"], "capacity-unavailable")
+        self.assertFalse(any(isinstance(call[0], list) and call[2] == "launch" for call in runner.calls))
+
+    def test_inventory_survives_unmatched_quote_in_codex_prompt_arguments(self):
+        # One live worker's unmatched shell quote in its prompt arguments
+        # must not quarantine the host's capacity: the inventory reads quote
+        # characters as literal characters and never parses prompt text as
+        # shell, so the row stays present with its identity intact.
+        snapshots = [
+            subprocess.CompletedProcess(
+                [], 0,
+                "  321 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec --json -C /repo implement 'task\n",
+                "",
+            ),
+            subprocess.CompletedProcess(
+                [], 0,
+                "  321 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec --json -C /repo implement \"task\n",
+                "",
+            ),
+            subprocess.CompletedProcess(
+                [], 0,
+                "  321 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec --json -C /repo implement it's \"done\n",
+                "",
+            ),
+        ]
+        for snapshot in snapshots:
+            with self.subTest(stdout=snapshot.stdout):
+                adapter = CodexAdapter("/repo", runner=RecordedRunner(), process_snapshot=lambda value=snapshot: value)
+
+                observation = adapter.observe_inventory()
+
+                self.assertEqual(observation["state"], "available")
+                self.assertEqual(len(observation["inventory"]), 1)
+                row = observation["inventory"][0]
+                self.assertEqual(row["process_identity"], {"pid": 321, "start_time": "Tue Sep 22 11:41:37 2026"})
+
+    def test_inventory_still_fails_closed_on_malformed_identity_fields(self):
+        # Regression pin, expected green at RED: malformed identity fields
+        # keep failing closed around the tolerant token scan.
+        non_integer_pid = subprocess.CompletedProcess(
+            [], 0,
+            "  notapid Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec --json -C /repo implement\n",
+            "",
+        )
+        short_start_time = subprocess.CompletedProcess(
+            [], 0,
+            "  321 Sep 22 2026 /opt/homebrew/bin/codex exec\n",
+            "",
+        )
+        for snapshot in (non_integer_pid, short_start_time):
+            with self.subTest(stdout=snapshot.stdout):
+                adapter = CodexAdapter("/repo", runner=RecordedRunner(), process_snapshot=lambda value=snapshot: value)
+
+                observation = adapter.observe_inventory()
+
+                self.assertEqual(observation["state"], "unavailable")
+                self.assertIsNone(observation["inventory"])
+
+    def test_inventory_keeps_row_shape_and_empty_snapshot_guards(self):
+        # Regression pin, expected green at RED: the row-shape guard and the
+        # empty-snapshot guard keep failing closed around the tolerant token
+        # scan.
+        wrong_field_count = subprocess.CompletedProcess([], 0, "  321 Tue Sep 22 11:41:37 2026\n", "")
+        empty_snapshot = subprocess.CompletedProcess([], 0, "\n", "")
+        for snapshot in (wrong_field_count, empty_snapshot):
+            with self.subTest(stdout=snapshot.stdout):
+                adapter = CodexAdapter("/repo", runner=RecordedRunner(), process_snapshot=lambda value=snapshot: value)
+
+                observation = adapter.observe_inventory()
+
+                self.assertEqual(observation["state"], "unavailable")
+                self.assertIsNone(observation["inventory"])
+
+    def test_inventory_resume_conversation_id_from_tolerant_tokens(self):
+        # The conversation-id extraction consumes the tolerant token list
+        # with its value-flag shadowing rule and option-like test unchanged.
+        intact_id = subprocess.CompletedProcess(
+            [], 0,
+            "  330 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec resume session-id --json repair the 'quote\n",
+            "",
+        )
+        adapter = CodexAdapter("/repo", runner=RecordedRunner(), process_snapshot=lambda: intact_id)
+        observation = adapter.observe_inventory()
+        self.assertEqual(observation["state"], "available")
+        self.assertEqual(observation["inventory"][0]["conversation_id"], "session-id")
+
+        shadowed_id = subprocess.CompletedProcess(
+            [], 0,
+            "  331 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec resume -C /repo --json session-id\n",
+            "",
+        )
+        adapter = CodexAdapter("/repo", runner=RecordedRunner(), process_snapshot=lambda: shadowed_id)
+        observation = adapter.observe_inventory()
+        self.assertEqual(observation["state"], "available")
+        self.assertNotIn("conversation_id", observation["inventory"][0])
+
+        literal_json_after_id = subprocess.CompletedProcess(
+            [], 0,
+            "  332 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec resume session-id --json emit --json records\n",
+            "",
+        )
+        adapter = CodexAdapter("/repo", runner=RecordedRunner(), process_snapshot=lambda: literal_json_after_id)
+        observation = adapter.observe_inventory()
+        self.assertEqual(observation["state"], "available")
+        self.assertEqual(observation["inventory"][0]["conversation_id"], "session-id")
+
+    def test_inventory_unrelated_live_exec_still_blocks_capacity(self):
+        # Regression pin, expected green at RED: a clean-argv recognized exec
+        # row still occupies the single capacity slot. Its discrimination
+        # value is at GREEN, catching a narrowing rewrite that drops clean
+        # rows from the inventory.
+        snapshot = subprocess.CompletedProcess(
+            [],
+            0,
+            "  333 Tue Sep 22 11:41:37 2026 /opt/homebrew/bin/codex exec --json -C /repo implement\n",
+            "",
+        )
+        runner = RecordedRunner()
+        adapter = CodexAdapter("/repo", runner=runner, approval_verified=True, process_snapshot=lambda: snapshot)
+        self.assertEqual(adapter.activation_check()["status"], "success")
+
+        result = self.worker_launch(adapter, "task-4", 1)
 
         self.assertEqual(result["reason_code"], "capacity-unavailable")
         self.assertFalse(any(isinstance(call[0], list) and call[2] == "launch" for call in runner.calls))
@@ -242,14 +406,15 @@ class CodexAdapterTest(unittest.TestCase):
         self.assertEqual(adapter.activation_check()["status"], "success")
         policy = self.policy() | {"generation": 2, "parallel_member_processes": [process]}
 
-        allowed = adapter.launch({"id": "task-5"}, "implement task", 2, policy_token=policy)
+        allowed = self.worker_launch(adapter, "task-5", 2, policy_token=policy)
 
         self.assertEqual(allowed["status"], "success", allowed)
         self.assertTrue(any(isinstance(call[0], list) and call[2] == "launch" for call in runner.calls))
         other_runner = RecordedRunner()
         other = CodexAdapter("/repo", runner=other_runner, approval_verified=True, process_snapshot=lambda: snapshot)
         self.assertEqual(other.activation_check()["status"], "success")
-        refused = other.launch({"id": "task-5"}, "implement task", 2, policy_token=self.policy() | {"generation": 2})
+        fresh = self.policy() | {"generation": 2}
+        refused = self.worker_launch(other, "task-5", 2, policy_token=fresh)
         self.assertEqual(refused["reason_code"], "capacity-unavailable")
         self.assertFalse(any(isinstance(call[0], list) and call[2] == "launch" for call in other_runner.calls))
 
@@ -295,7 +460,7 @@ class CodexAdapterTest(unittest.TestCase):
         runner = RecordedRunner(timeout=True, cleanup_verified=False)
         adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
         self.assertEqual(adapter.activation_check()["status"], "success")
-        result = adapter.launch({"id": "task-4"}, "implement task", 1, deadline_seconds=0.01, policy_token=self.policy())
+        result = self.worker_launch(adapter, "task-4", 1, deadline_seconds=0.01)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "cleanup-unverified")
         self.assertEqual(result["retry_policy"]["mode"], "none")
@@ -314,7 +479,7 @@ class CodexAdapterTest(unittest.TestCase):
         adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
         self.assertEqual(adapter.activation_check()["status"], "success")
         process_calls_after_activation = len(runner.calls)
-        result = adapter.launch({"id": "task-4"}, "implement task", 1, deadline_seconds=0.01, policy_token=self.policy())
+        result = self.worker_launch(adapter, "task-4", 1, deadline_seconds=0.01)
         # expects: the cleanup-unverified classification, never a plain
         # timeout and never a success
         self.assertEqual(result["status"], "blocked")
@@ -345,7 +510,7 @@ class CodexAdapterTest(unittest.TestCase):
         runner = RecordedRunner(timeout=True, cleanup_verified=True)
         adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
         self.assertEqual(adapter.activation_check()["status"], "success")
-        verified = adapter.launch({"id": "task-4"}, "implement task", 1, deadline_seconds=0.01, policy_token=self.policy())
+        verified = self.worker_launch(adapter, "task-4", 1, deadline_seconds=0.01)
         self.assertEqual(verified["status"], "blocked")
         self.assertEqual(verified["reason_code"], "timeout")
         self.assertIn("launch deadline exceeded", verified["evidence"])
@@ -355,7 +520,7 @@ class CodexAdapterTest(unittest.TestCase):
         unverified_runner = RecordedRunner(timeout=True, cleanup_verified=False)
         unverified_adapter = CodexAdapter("/repo", runner=unverified_runner, approval_verified=True)
         self.assertEqual(unverified_adapter.activation_check()["status"], "success")
-        unverified = unverified_adapter.launch({"id": "task-4"}, "implement task", 1, deadline_seconds=0.01, policy_token=self.policy())
+        unverified = self.worker_launch(unverified_adapter, "task-4", 1, deadline_seconds=0.01)
         self.assertEqual(unverified["status"], "blocked")
         self.assertEqual(unverified["reason_code"], "cleanup-unverified")
         self.assertEqual(unverified["retry_policy"]["mode"], "none")
@@ -370,7 +535,7 @@ class CodexAdapterTest(unittest.TestCase):
         timeout_runner = RecordedRunner(timeout=True, cleanup_verified=True)
         timeout_adapter = CodexAdapter("/repo", runner=timeout_runner, approval_verified=True)
         self.assertEqual(timeout_adapter.activation_check()["status"], "success")
-        timed_out = timeout_adapter.launch({"id": "task-4"}, "implement task", 1, deadline_seconds=0.01, policy_token=self.policy())
+        timed_out = self.worker_launch(timeout_adapter, "task-4", 1, deadline_seconds=0.01)
         self.assertEqual(timed_out["reason_code"], "timeout")
 
         class MalformedLaunchRunner(RecordedRunner):
@@ -381,14 +546,14 @@ class CodexAdapterTest(unittest.TestCase):
 
         malformed_adapter = CodexAdapter("/repo", runner=MalformedLaunchRunner(), approval_verified=True)
         self.assertEqual(malformed_adapter.activation_check()["status"], "success")
-        malformed = malformed_adapter.launch({"id": "task-4"}, "implement task", 1, policy_token=self.policy())
+        malformed = self.worker_launch(malformed_adapter, "task-4", 1)
         self.assertEqual(malformed["reason_code"], "malformed-result")
         self.assertNotEqual(timed_out["reason_code"], malformed["reason_code"])
 
     def test_approval_policy_never_uses_dangerous_bypass(self):
         runner = RecordedRunner()
         adapter = CodexAdapter("/repo", runner=runner, approval_verified=False)
-        result = adapter.launch({"id": "task-4"}, "implement task", 1)
+        result = self.worker_launch(adapter, "task-4", 1, policy_token=None)
         self.assertEqual(result["reason_code"], "runtime-policy-unavailable")
         flattened = " ".join(" ".join(call[0]) for call in runner.calls if isinstance(call[0], list))
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", flattened)
@@ -420,13 +585,13 @@ class CodexAdapterTest(unittest.TestCase):
         adapter = CodexAdapter("/repo", runner=runner, approval_verified=True)
         self.assertEqual(adapter.activation_check()["status"], "success")
         before = len(runner.calls)
-        adapter.launch({"id": "task-4"}, "implement", 1, policy_token=self.policy())
+        self.worker_launch(adapter, "task-4", 1)
         self.assertEqual(len(runner.calls), before + 1)
 
     def test_option_like_prompt_and_session_id_are_rejected(self):
         adapter = CodexAdapter("/repo", runner=RecordedRunner(), approval_verified=True)
         self.assertEqual(adapter.activation_check()["status"], "success")
-        self.assertEqual(adapter.launch({"id": "task-4"}, "-c approval_policy=never", 1, policy_token=self.policy())["reason_code"], "contract-violation")
+        self.assertEqual(self.worker_launch(adapter, "task-4", 1, prompt="-c approval_policy=never")["reason_code"], "contract-violation")
         self.assertEqual(adapter.resume("-config", "continue", 1, policy_token=self.policy())["reason_code"], "contract-violation")
         self.assertEqual(adapter.resume("session-task-4", "-c sandbox=disabled", 1, policy_token=self.policy())["reason_code"], "contract-violation")
         self.assertEqual(adapter.wait("--help", 1, task_id="task-4", policy_token=self.policy())["reason_code"], "contract-violation")
@@ -589,7 +754,7 @@ class CodexAdapterTest(unittest.TestCase):
 
             adapter = CodexAdapter("/repo", runner=ProcessRunner(), approval_verified=True)
             self.assertEqual(adapter.activation_check()["status"], "success")
-            result = adapter.launch({"id": "task-4"}, "implement", 1, policy_token=self.policy())
+            result = self.worker_launch(adapter, "task-4", 1)
             self.assertEqual(result["status"], "blocked")
             self.assertEqual(result["reason_code"], "timeout")
             self.assertTrue(any(call[0] == "cancel" for call in adapter.runner.calls))
@@ -724,7 +889,7 @@ class CodexAdapterTest(unittest.TestCase):
                     self.assertEqual(adapter.launch_deadline, 17.5)
                     self.assertEqual(adapter.activation_check()["status"], "success")
                     policy = {"token": "policy", "repo_root": str((root / "repo").resolve()), "allowed_paths": ["task.txt"], "operation_kind": "repository-task", "network": False, "generation": 1}
-                    launch = adapter.launch({"id": "task-4"}, "implement task", 1, policy_token=policy)
+                    launch = self.worker_launch(adapter, "task-4", 1, policy_token=policy)
                     self.assertEqual(launch["status"], "success")
             finally:
                 os.environ.clear()

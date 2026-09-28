@@ -1338,12 +1338,12 @@
       "disposition": "keep",
       "id": "protocol:worktree-recipe",
       "kind": "protocol",
-      "note": "open sibling owns worktree lifecycle recipes",
+      "note": "archived worktree-first plan owns the canonical worktree lifecycle recipe",
       "paths": [],
       "tests": [],
       "witness": {
         "class": "sibling-boundary",
-        "ref": "docs/history/backlog/2026-09-28-worktree-first-standard-only-mode.md"
+        "ref": "docs/history/plans/completed/2026-09-28-worktree-first-standard-only-mode.md"
       }
     },
     {

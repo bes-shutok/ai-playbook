@@ -152,6 +152,39 @@ def find_forbidden_shared_terms(
 
 
 class RuntimeCapabilitiesTest(unittest.TestCase):
+    def test_single_declaration_parser_home(self):
+        # The single-parser invariant census. Census domain: every non-test
+        # runtime script under scripts/, with exactly two exclusions stated
+        # here: scripts/plan_readiness.py (the sanctioned second grammar
+        # consumer, exempt from the census by the declaration-contract
+        # design) and this census test's own file (a test module, named so
+        # the exclusion is explicit). The census keys on the runtime
+        # declaration parser's identifying markers: the `_TASK_FILE_ENTRY`
+        # entry-pattern source and the `_plan_declared_files` entry point.
+        # Both must appear in exactly one script: the runtime's sole
+        # declaration-parsing source.
+        scripts_dir = ROOT / "scripts"
+        excluded = {"plan_readiness.py", "test_runtime_capabilities.py"}
+        candidates = sorted(
+            path for path in scripts_dir.glob("*.py")
+            if not path.name.startswith("test_") and path.name not in excluded
+        )
+        markers = ("_TASK_FILE_ENTRY", "_plan_declared_files")
+        homes = {marker: [path.name for path in candidates if marker in path.read_text(encoding="utf-8")] for marker in markers}
+        for marker, owners in homes.items():
+            self.assertEqual(owners, ["execute_plan_runtime.py"], (marker, owners))
+
+    def test_evidence_contract_enforces_utf8_item_and_envelope_limits(self):
+        self.assertEqual(len(capabilities.evidence_criterion_ids(["é" * 256])), 1)
+        with self.assertRaisesRegex(ValueError, "item byte limit"):
+            capabilities.evidence_criterion_ids(["é" * 257])
+        with self.assertRaisesRegex(ValueError, "aggregate byte limit"):
+            capabilities.evidence_criterion_ids([chr(97 + index) + "a" * 511 for index in range(9)])
+        with self.assertRaisesRegex(ValueError, r"receipt item-count limit \(100\)"):
+            capabilities.evidence_criterion_ids([f"c{index:03d}" for index in range(101)])
+        contract = {"task-1": {"required_criteria": ["é" * 256], "verification_commands": [{"id": "v", "argv": ["true"], "criteria": ["é" * 256]}], "allowed_paths": []}}
+        self.assertTrue(capabilities.evidence_contract_digest(contract))
+
     def test_evidence_envelope_requires_driver_captured_machine_fields(self):
         evidence = {
             "version": 1,
@@ -310,10 +343,14 @@ class RuntimeCapabilitiesTest(unittest.TestCase):
             subprocess.run(["git", "add", ".gitignore"], cwd=root, env=git_env, check=True)
             subprocess.run(["git", "commit", "-qm", "base"], cwd=root, env=git_env, check=True)
             manifest_path = root / "runtime_state.json"
+            # The seed records the runtime id like every create boundary since
+            # the claim-boundary runtime-identity gate: a manifest with no
+            # recorded runtime id refuses the group claim before the capacity
+            # race this witness exercises can start.
             runtime.create_manifest(manifest_path, "capacity-race", [
                 {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["task-1.txt"]},
                 {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["task-2.txt"]},
-            ], repo_root=root)
+            ], repo_root=root, runtime_id="codex")
             first_driver = runtime.RuntimeDriver(manifest_path, owner="race-test", repo_root=root, adapter=InventoryAdapter())
             claimed = first_driver.claim_parallel_group(["task-1", "task-2"])
             self.assertEqual(claimed["status"], "success")

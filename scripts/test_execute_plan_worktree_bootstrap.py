@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""Smoke check for the execute-plan linked-worktree bootstrap recipe.
+"""Smoke check for the execute-plan Transfer-in implementation recipe.
 
 Origin completion evidence for the worktree-gitignored-bootstrap gap: a
 linked worktree (its ``.git`` is a file) lacks the gitignored inputs the
 Step 0.5 readiness gate resolves - the facts file, the certified reviews
-directory, and the tmp directory - and the execute-plan skill carries a
-bootstrap recipe for exactly that. This suite proves the recipe is
-load-bearing end to end:
+directory, and the tmp directory - and the execute-plan skill's
+Worktree-first standard carries the Transfer-in implementation for exactly
+that. This suite proves the recipe is load-bearing end to end:
 
-1. The FIRST fenced bash block after the "Linked-worktree bootstrap"
-   lead-in in ``agents/skills/execute-plan/SKILL.md`` is extracted at test
-   runtime (so skill-text drift fails the test) and executed VERBATIM in a
-   linked worktree of a synthetic primary repo fixture. A second fenced
-   block (the closeout-baseline capture) follows in the same region and
-   must not be picked, so the extractor's pick is asserted against the
-   closeout block's distinctive literals.
-2. After the recipe: the facts file, the review sidecar pair, and
-   ``docs/tmp`` are present in the worktree, and the plan readiness
-   validator (``scripts/plan_readiness.py`` of the repo carrying this
-   test, resolved relative to ``__file__``) run from the worktree on the
-   fixture plan exits 0.
+1. The FIRST fenced bash block after the "Transfer-in implementation (how
+   step 2 runs)" lead-in in ``agents/skills/execute-plan/SKILL.md`` is
+   extracted at test runtime (so skill-text drift fails the test) and
+   executed VERBATIM in a linked worktree of a synthetic primary repo
+   fixture. A second fenced block (the transfer-out-and-deletion migration
+   recipe) follows in the same region and must not be picked, so the
+   extractor's pick is asserted against that block's distinctive literals.
+2. After the recipe: the facts file and the review sidecar pair are
+   present in the worktree, the run's tmp directory is created empty (the
+   canonical recipe mkdirs it; per-run scratch does not transfer in), and
+   the plan readiness validator (``scripts/plan_readiness.py`` of the repo
+   carrying this test, resolved relative to ``__file__``) run from the
+   worktree on the fixture plan exits 0.
 3. Negative control: the same fixture's worktree WITHOUT the recipe makes
    the validator exit non-zero with an environment failure (facts or
    reviews missing), proving the recipe is load-bearing (guard, not RED).
@@ -57,11 +58,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL_PATH = REPO_ROOT / "agents" / "skills" / "execute-plan" / "SKILL.md"
 READINESS_VALIDATOR = REPO_ROOT / "scripts" / "plan_readiness.py"
 
-BOOTSTRAP_LEAD_IN = "Linked-worktree bootstrap"
-# r1 F8: a second fenced bash block (the closeout-baseline capture) follows
-# the bootstrap recipe in the same region; these literals belong to that
-# block and must never appear in the extracted recipe.
-CLOSEOUT_BLOCK_MARKERS = ("CLOSEOUT_SCRIPT", "{tmp_dir}", "{reviews_dir}")
+BOOTSTRAP_LEAD_IN = "Transfer-in implementation (how step 2 runs)"
+# r1 F8: a second fenced bash block (the transfer-out-and-deletion migration
+# recipe) follows the transfer-in recipe in the same region; these literals
+# belong to that block and must never appear in the extracted recipe. (r3: the
+# former "{reviews_dir}" marker was dropped; the migration fence never carries
+# it, so it could not discriminate the two blocks.)
+CLOSEOUT_BLOCK_MARKERS = ("CLOSEOUT_SCRIPT", "{tmp_dir}")
 
 PLAN_REL = "docs/history/plans/2026-01-01-fixture-plan.md"
 PLAN_DATE = "2026-01-01"
@@ -261,9 +264,10 @@ def extract_bootstrap_recipe(skill_text: str) -> str:
     """Extract the FIRST fenced bash block after the bootstrap lead-in.
 
     The lead-in is a bold paragraph, not a heading, and two fenced bash
-    blocks follow it in the same region (the bootstrap recipe, then the
-    closeout-baseline capture); this picker takes the first and the test
-    asserts the pick against the closeout block's distinctive literals.
+    blocks follow it in the same region (the transfer-in recipe, then the
+    transfer-out-and-deletion migration recipe); this picker takes the
+    first and the test asserts the pick against the second block's
+    distinctive literals.
     """
     lead_at = skill_text.find(BOOTSTRAP_LEAD_IN)
     if lead_at < 0:
@@ -363,7 +367,7 @@ def run_readiness_validator(worktree: Path) -> subprocess.CompletedProcess:
 
 
 class WorktreeBootstrapTest(unittest.TestCase):
-    """The linked-worktree bootstrap recipe executes verbatim and the
+    """The Transfer-in implementation recipe executes verbatim and the
     readiness gate needs it."""
 
     def _fresh_fixture(self, name: str) -> tuple[Path, Path]:
@@ -382,21 +386,22 @@ class WorktreeBootstrapTest(unittest.TestCase):
             self.assertNotIn(
                 marker,
                 recipe,
-                "the extractor picked the closeout-baseline block instead of "
-                "the bootstrap recipe (r1 F8)",
+                "the extractor picked the transfer-out-and-deletion block "
+                "instead of the transfer-in recipe (r1 F8)",
             )
         # The pick guard has teeth only while the second fenced block in the
-        # same region is the closeout-baseline capture; pin that block's
-        # position and content so a skill-text change cannot silently
-        # invalidate the discriminator above (r1 F8).
+        # same region is the transfer-out-and-deletion migration recipe; pin
+        # that block's position and content so a skill-text change cannot
+        # silently invalidate the discriminator above (r1 F8).
         recipe_opener = skill_text.index("```bash", skill_text.index(BOOTSTRAP_LEAD_IN))
         recipe_end = skill_text.index("\n```", recipe_opener)
         closeout_opener = skill_text.find("```bash", recipe_end)
         self.assertGreater(
             closeout_opener,
             recipe_end,
-            "expected a second fenced bash block (the closeout-baseline "
-            "capture) after the bootstrap recipe in the same region",
+            "expected a second fenced bash block (the transfer-out-and-"
+            "deletion migration recipe) after the transfer-in recipe in "
+            "the same region",
         )
         closeout_start = skill_text.index("\n", closeout_opener) + 1
         closeout_block = skill_text[

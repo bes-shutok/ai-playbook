@@ -1851,6 +1851,8 @@ When using incremental check/lint scripts (such as `check-no-em-dash.sh` or loca
 
 **General form (both directions):** A gate that selects its file population from git must match the population the gate is supposed to inspect at the moment it runs. Post-commit / branch-final gates need the merge-base diff (`<base>...HEAD`, three-dot); pre-commit / pre-push gates need working-tree diff (`<ref>`, two-dot) plus untracked files. Selecting the wrong range yields a silent false green: zero files scanned, exit 0. Encode the selection in a selftest that proves the expected population is non-empty, because the "zero files" failure mode is otherwise invisible. Two-dot and three-dot are not interchangeable commit-range forms: they diverge exactly when the branch sits behind its base. `<base>..HEAD` is the endpoint diff (`git diff <base> HEAD`) and drags in every base-side change that landed after divergence; `<base>...HEAD` isolates the branch's own changes. Review subjects inherit this rule, not just gate populations: a branch-execution review briefed with `main..HEAD` on a branch four commits behind main dragged four unrelated main-side commits into scope; the reviewer re-scoped to `main...HEAD` before judging findings (2026-09-22 review-staging-infra-quality execution review r1).
 
+**Third direction (2026-09-29 skills-repo hygiene gate):** a default "whole-tree" scan mode can also be scope-limited by a hard-coded tuple (source trees only), so docs and scripts paths accumulate violations that every default-mode green exit never observes; the failures surfaced only when the explicit files mode ran on named paths, and eleven committed files needed retroactive masking. Same silent false-green family: a clean exit is evidence only about the mode's population. Confirm a path sits inside the mode's scope before reading green as clean, and route out-of-scope trees through the explicit mode until the scope decision is recorded.
+
 **See also:** grep ALL test files when data flow changes, compare against committed blob, not stashed tree, scope assertions to new work, TDD RED cycle catches invisible false-green gates (a selftest that asserts the expected hit surfaces a zero-population selection bug). CLAUDE.md §4 Agent Workflow Rules / No em dash scan.
 
 
@@ -7580,3 +7582,59 @@ An absence claim produced by tracking tooling ("origin missing", "artifact dropp
 **Why:** a session-bootstrap skill's worktree-recognition arm matched any linked worktree, so an unrelated worktree on the same repository qualified for adoption of its inputs; the prescribed mechanical fix was the git-dir comparison plus a convention check, verified by a probe worktree the arm must reject.
 
 **See also:** #404 (lock keying across linked worktrees).
+
+## 457. Derive Shared-File Edit Guards From Fresh Bytes, Scope to Sections
+
+**Principle:** Family H (Verify the real thing, not the abstraction)
+
+When preparing a batch of structural edits to a shared coordination file that peer sessions also commit to (a rolling prompt log, a shared queue, a registry), re-derive every guard and identifier from the file's bytes at write time, and scope each structural assertion to the span of the section it targets.
+
+**Trigger:** an edit batch (insertions, amendments, section removals) prepared from an earlier read of a file other sessions write concurrently.
+
+**Rule:**
+1. Scope every structural assertion - uniqueness checks, not-yet-amended checks, boundary checks - to the target section's span, never to the whole file: a peer's edit to a sibling section can trip a whole-file pattern (an amended preamble line shared with a sibling entry) or bypass it.
+2. Derive free identifiers (slug numbers, positions) from the fresh read at write time, never from the survey-time read: a peer append can spend the identifier the batch claimed.
+3. Keep the fail-loud assertions even though they can abort on a peer race: the abort costs one re-derive; a silent write would corrupt two entries.
+
+**What happened (2026-09-29, grouping pass over a shared rolling prompt log):** while a six-entry batch was prepared from a survey-time read, a peer session committed to the file twice - appending an entry that spent the batch's next slug number and amending a sibling entry's preamble that the batch's whole-file "not already amended" guard matched. The whole-file guard aborted the batch (correct, fail-loud); re-deriving from fresh bytes showed the collision, and the batch renumbered and section-scoped its guards before writing.
+
+**Why:** the drift-retry discipline (re-read before write) governs the write, but a prepared batch encapsulates its assumptions in guard code compiled from the old read; the guards are assumptions too and must be re-derived with the rest.
+
+**See also:** #454 (count-gated literals are exactly-once), #455 (a rule needs the source that holds its value).
+
+## 458. Seed the Execute-Plan Driver With the Host's Real Adapter Runtime
+
+**Principle:** Family H (Verify the real thing, not the abstraction: the driver's policy gate answers through the adapter inventory, not through the recorded runtime string).
+
+**Trigger:** seeding a fresh `runtime_state.json` via `execute_plan_runtime.py create` on a host whose installed adapter set differs from the session host's own runtime id.
+
+**Rule:** Seed `create` with the runtime id of an adapter the host actually ships (`ls agents/skills/execute-plan/runtime-adapters/`; here only `codex`), never the session host's own name. A seed with an unknown runtime id passes create and preflight (readiness never reads the adapter) and then blocks the first claim with `runtime-policy-unavailable` (no verified adapter), and after the sanctioned one reclaim with an approval receipt, with `capacity-live` from the malformed inventory path. Distinguish the two blocks from a genuine capacity hold by reading `capacity.last_reconciliation.reason`: `malformed`/`observed_at: null` means no adapter, while `capacity-live` with a real observation means a live peer's workers hold the inventory - the latter stands down or proceeds manifest-only with the deviation recorded, it does not reclaim.
+
+**Why:** a scheduled execution run seeded `--runtime zcode` on a host with only the codex adapter; create and preflight passed, the claim blocked, one budgeted reclaim was spent discovering the adapter gap, and the peer's live codex workers then masked the real cause as `capacity-live`.
+
+**See also:** #456 (detect the primary checkout by git-dir equality), #450 (prelaunch reclaim budget).
+
+## 459. Seed the Evidence Contract as Executable Argv and Close Handoff Claims Through Their Binding
+
+**Principle:** Family H (Verify the real thing, not the abstraction: the driver executes contracts mechanically, so a contract that reads correctly in prose still fails at spawn time).
+
+**Trigger:** seeding `verification_commands` for a machine manifest, or closing a task whose claim was created by a done handoff (any task after the first).
+
+**Rule:** Seed every verification command as real argv the driver can spawn without a shell: `subprocess.run(argv)` resolves argv[0] on PATH, so an env-prefixed spelling such as `CHECK_NO_EM_DASH_ALL=1 bash ...` fails with `FileNotFoundError` (`worktree-witness-unavailable`) and, because the contract is immutable, the only exit is `recover-evidence-contract`; write `["env", "VAR=1", "bash", ...]` instead. For handoff-successor claims, the prelaunch binding must be consumed via the `worker-start` operation (receipt fields must equal the binding's identity; worker identity comes from the durable launch receipt) before any checkpoint binds, and the done receipt must name the commit whose OWN first-parent paths all sit inside the task's allowed paths, so checkbox-mark commits stay separate parent bookkeeping and the receipt names the work commit.
+
+**Why:** the 2026-09-29 task-local-verifier execution run lost a task boundary to an unrunnable seeded command and had to re-drive task-4 through evidence-contract recovery, which itself was wedged until the recovery reachability fixes (checkpoint records carrying claim_token, closed-claim exam exclusion) landed in 5fd0417b.
+
+**See also:** #458 (seed with the host's real adapter runtime), #456 (detect the primary checkout by git-dir equality).
+## 460. Probe a Fold's Newly Prescribed Machine Invocation Against the Post-Fold State It Governs
+
+**Principle:** Family H (Verify the real thing, not the abstraction: a validation or save step added by a review fold is a behavioral claim about the NEW state, not a safe reuse of a green-on-old-state machine).
+
+**Trigger:** a review fold adds or widens a prescription that runs an existing validator, digest builder, or post-check over state the fold itself changes (partially corrected rows, sibling defects, multi-entity fixtures).
+
+**Rule:** before certifying the fold, execute the prescribed invocation once against a simulated post-fold state carrying every shape the new prescription can govern (a partially healed fixture, a sibling strand, an uncorrected sibling), and record which failure modes the invoked machine itself raises. If the machine iterates beyond the fold's own slice, scope the prescription to the slice or name the caught-and-downgraded shapes explicitly.
+
+**Why:** two consecutive rounds staged blocking findings of exactly this shape: a "post-validate through the full manifest validation" fold clause deadlocked multi-defect fixtures because the validator recomputed over all rows, and a save-side recompute re-raised the bare error the fold existed to eliminate. The same machine was green on the pre-fold tree; greenness there proved nothing about the state the fold creates.
+
+**Example:** a plan fold mandated full-manifest post-validation after a task-scoped contract repair; the validator's own all-rows recompute raised on an uncorrected sibling, wedging the exact partially repaired runs the fold targeted. The fold had only ever been checked against single-defect fixtures.
+
+**See also:** #246 (an inherited claim is not verification), #253 (execute the defang against the real fixture), #457 (derive guards from fresh bytes).

@@ -337,6 +337,7 @@ description: What + When      # Required: max 1024 chars
 - Use spaces for indentation, not tabs
 - File must be named `SKILL.md` (case-sensitive)
 - **Quote `description` in double quotes whenever its value contains a colon followed by a space** (for example `Trigger phrases: "do X", "do Y"`). An unquoted plain YAML scalar treats any `: ` inside the value as a new mapping key, so the frontmatter fails to parse and the skill silently fails to load (`copilot skill list` reports it under "failed to load"). Escape embedded double quotes as `\"`. Run `copilot skill list` after adding or editing a description to confirm it still loads.
+- **Keep the folded `description` under 1024 characters**; a registry that enforces the cap drops an over-limit skill from the skill list silently, with no error, so the only symptom is the skill vanishing. Descriptions grow incrementally across edits, so re-measure the folded length after every description edit. Keep long trigger-phrase enumerations in the body's invocation/trigger section (the authoritative copy read at load time) and summarize them in the description instead of enumerating them there. Verify with the runtime's skill list after editing.
 
 ### Description Best Practices
 

@@ -27,6 +27,10 @@ Per-project strictness split, therefore:
 
 One plan that (1) makes the blocking-only exit the mechanical rule everywhere the blocker-plus-medium shape persists (plans, review-plan, receiving-review, execute-plan re-cert arms), (2) adds a metrics aggregation pass over the review corpus (extend scripts/summarize_review_stats.py or its successor) reporting findings-per-round decay, ready-rate per round, and cap-exhaustion rate, segmented per project and complexity band, run by the maintenance loop's periodic report, (3) writes the advisory stop-and-escalate guidance into the review skills without a new mechanical gate, (4) applies the per-project strictness split: pet projects (personal repos root resolved from a facts key) get the strict package mechanically (default two rounds, hard cap three, simplify-or-rewrite on surviving blockers, cap-closure protocol retired in their surfaces), while other projects keep the advisory shape and record the explicit decision point that a later plan lowers or retires their round cap and cap-closure protocol only after that project's aggregated data confirms the direction. For non-pet projects deletion is deferred, not cancelled; the cap-closure polish family stays rejected either way as unwitnessed machinery polish.
 
+## Additional witness: consumer plan review
+
+Repeated review and reconciliation cycles on a consumer plan eventually converged: the latest full panel had zero blockers and was ready, with two Low findings explicitly deferred. A later full panel was triggered after removing a valid Jira hostname to satisfy a privacy scan, even though the plan contract and readiness evidence were unchanged. The extra round was caused by unnecessary sanitation, not by an unresolved plan issue. Fixing the false-positive policy addresses this witness without weakening the exact-digest review requirement.
+
 ## Environment
 
 User direction 2026-09-28: start with less radical limitations and more metrics to confirm the direction later, per project; convergence directive 2026-09-26; the corpus measurement recorded above is the witness for authoring this item, not yet for the caps.

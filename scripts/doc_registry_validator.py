@@ -53,6 +53,14 @@ Three subcommands plus a hermetic ``--selftest``:
   paths and multiply-claimed srcs stay gated regardless of letter. An
   audit note in the registry row for the path is the corruption
   override; the note must be removed after the licensed write lands.
+  For an UNREGISTERED path's deletion the license path is
+  register-and-note (p75 deferred-formal-residue-tail, Task 2): first
+  register the path as a completed-history row carrying the dated
+  ``user-approved YYYY-MM-DD:`` audit note, then perform the deletion,
+  so the covering-row license has a row to live on; the row is added
+  before the write, the note's standing-override warn names the
+  cleanup duty, and the note is removed after the licensed write
+  lands.
   The lifecycle exemption compares the UNFOLDED normalized path
   against the registry src's stored spelling (byte equality):
   a case-variant add of a registered src is not the licensed
@@ -1414,6 +1422,31 @@ def _run_selftest_checks(st: Selftest) -> None:
     st.check("test_standing_override_warn_names_cleanup",
              "clear the audit note after the licensed write lands"
              in output, repr(output))
+
+    # check-writes: register-and-note licenses an unregistered path's
+    # deletion (p75 deferred-formal-residue-tail Task 2). Arm 1: the
+    # deletion of an unregistered completed-history file is HARD. Arm 2:
+    # after the path is registered as a completed row carrying the dated
+    # audit note FIRST, the same deletion is licensed via the
+    # standing-override warn plus the override pass.
+    root = make_fixture("register-and-note", registry_header() +
+                        "| doc-a | no | living |  |  | docs/other.md |  |  |  |\n")
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text="D  docs/history/plans/completed/x.md\n")
+    st.expect("test_register_and_note_unregistered_deletion_is_hard",
+              code, output, 1, want_substr="HARD immutable path written"
+              " without override")
+    reg = root / DEFAULT_DOC_REGISTRY_REL
+    reg.write_text(registry_header() +
+                   "| doc-a | no | living |  |  | docs/other.md |  |  |  |\n"
+                   "| x | no | completed | 2026-09-28 | p75 flow witness |"
+                   " docs/history/plans/completed/x.md |  |  |"
+                   " user-approved 2026-09-28: register-and-note license |\n",
+                   encoding="utf-8")
+    code, output = run(["--root", str(root), "check-writes", "--stdin"],
+                       stdin_text="D  docs/history/plans/completed/x.md\n")
+    st.expect("test_register_and_note_licenses_unregistered_deletion",
+              code, output, 0, want_substr="override")
 
     # check-writes: an audit note on a LIVING row creates no override,
     # and aliases are never overridden.

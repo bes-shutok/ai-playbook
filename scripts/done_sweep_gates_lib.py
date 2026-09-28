@@ -564,18 +564,29 @@ def write_run_manifest(manifest: RunManifest, done_session_dir: Path) -> Path:
     return final
 
 
-def _manifest_root_matches(recorded_root: str, repo_root: Path) -> bool:
-    """Content-confirmed root matching, two arms like the run-start markers:
-    a 64-hex recorded root compares against this repo's identity digest;
-    anything else (a legacy raw-path record) keeps the realpath comparison,
-    so a manifest from another checkout of the same repo is never this run's
-    record and pre-digest manifests stay loadable."""
-    if re.fullmatch(r"[0-9a-f]{64}", recorded_root):
-        return hmac.compare_digest(recorded_root, _repo_root_digest(repo_root))
+def _repo_root_matches_value(root_raw: object, repo_root: Path) -> bool:
+    """Single source for the two-arm root identity shared by the manifest
+    matcher and the finalize pre-parse, raw-safe over any JSON value: a
+    64-hex string compares against this repo's identity digest; any other
+    string (a legacy raw-path record) keeps the realpath comparison, so a
+    manifest from another checkout of the same repo is never this run's
+    record and pre-digest manifests stay loadable; a non-string value can
+    satisfy neither arm and matches nothing."""
+    if not isinstance(root_raw, str):
+        return False
+    if re.fullmatch(r"[0-9a-f]{64}", root_raw):
+        return hmac.compare_digest(root_raw, _repo_root_digest(repo_root))
     try:
-        return os.path.realpath(recorded_root) == os.path.realpath(str(repo_root))
+        return os.path.realpath(root_raw) == os.path.realpath(str(repo_root))
     except OSError:
         return False
+
+
+def _manifest_root_matches(recorded_root: str, repo_root: Path) -> bool:
+    """Content-confirmed root matching, two arms like the run-start markers;
+    the arm semantics live in ``_repo_root_matches_value`` (one shared copy
+    for the matcher and the finalize pre-parse, so neither can drift)."""
+    return _repo_root_matches_value(recorded_root, repo_root)
 
 
 def load_run_manifest(
@@ -651,6 +662,61 @@ def _read_manifest_by_run_id(
     except (OSError, ValueError):
         return None
     return RunManifest.from_dict(payload)
+
+
+def _sanitize_manifest_error_value(raw: object) -> str:
+    """Render a raw manifest field for a finalize abort line: newlines and
+    other control characters stripped, truncated at 64 characters, so a
+    corrupt manifest cannot forge log lines into the finalize stderr."""
+    text = str(raw)
+    return "".join(ch for ch in text if ch.isprintable())[:64]
+
+
+def _finalize_identity_mismatch(
+    payload: object, repo_root: Path
+) -> Optional[tuple[str, str]]:
+    """The finalize-path identity contract over the raw payload, checked
+    BEFORE the tolerant from_dict parse: a manifest this finalizer accepts
+    must carry this repository's identity at the contract version, reusing
+    the record's existing keys (``schema`` == ``MANIFEST_SCHEMA_VERSION``
+    is the version, ``repo_root`` is the identity value).
+
+    Returns ``(schema_render, root_state)`` for the named abort when the
+    payload fails the contract (a missing, wrong-version, or non-int
+    ``schema``, or a ``repo_root`` that is missing or matches neither arm of
+    ``_repo_root_matches_value`` - the 64-hex fingerprint equal to this
+    repo's identity digest, or a resolvable path equal to this
+    repository); None when the payload may proceed to the tolerant read.
+    The rendered root state is exactly one of ``fingerprint`` (a 64-hex
+    root that is not this repository's), ``path`` (any non-hex root
+    value), or ``absent`` (the key is missing). The two-arm root matching
+    and the field itself stay shared with the frozen sweep-gate and adopt
+    consumers; only the finalize path turns a mismatch into a named
+    non-zero abort."""
+    if not isinstance(payload, dict):
+        return ("absent", "absent")
+    if "schema" in payload:
+        schema_render = _sanitize_manifest_error_value(payload["schema"])
+    else:
+        schema_render = "absent"
+    if "repo_root" not in payload:
+        return (schema_render, "absent")
+    root_raw = payload["repo_root"]
+    if isinstance(root_raw, str) and re.fullmatch(r"[0-9a-f]{64}", root_raw):
+        state = "fingerprint"
+    else:
+        # Non-hex string values and non-string values classify alike for
+        # the abort line: neither is a fingerprint.
+        state = "path"
+    schema = payload.get("schema")
+    schema_ok = (
+        isinstance(schema, int)
+        and not isinstance(schema, bool)
+        and schema == MANIFEST_SCHEMA_VERSION
+    )
+    if schema_ok and _repo_root_matches_value(root_raw, repo_root):
+        return None
+    return (schema_render, state)
 
 
 def _detect_interrupted_runs(
@@ -1945,6 +2011,8 @@ def gate_docs_tmp_sweep(ctx: GateContext) -> GateResult:
         message += "; removed: " + ", ".join(removed)
     if skipped:
         message += "; skipped: " + ", ".join(skipped)
+    if kept:
+        message += "; kept: " + ", ".join(kept)
     return GateResult(gate, 0, message, warnings=[])
 
 
@@ -1991,7 +2059,13 @@ def _sweep_execute_plan_sessions(
     plan still under plans_dir). A live plan may sit anywhere under
     plans_dir (e.g. ``docs/history/plans/deferred/<slug>.md``), so the pending
     check is recursive over plans_dir, mirroring how the readiness
-    candidate derivation accepts nested plan paths."""
+    candidate derivation accepts nested plan paths. An archived-plan session
+    that still holds its captured ``closeout-baseline.json`` as a regular
+    file is also never removed: the baseline is the mechanical witness that a
+    run owns the directory and its transfer-out (execute-plan lifecycle
+    step 5) may still be pending; a crashed run's directory lingers by the
+    same witness and is dispositioned through the interrupted-run report,
+    not destruction."""
     if not execute_dir.is_dir():
         return
     pending_stems = {
@@ -2004,6 +2078,9 @@ def _sweep_execute_plan_sessions(
             continue
         if session.name in pending_stems:
             kept.append(str(session) + " (active: plan still pending)")
+            continue
+        if (session / "closeout-baseline.json").is_file():
+            kept.append(str(session) + " (kept: closeout baseline present; transfer-out may be pending)")
             continue
         try:
             shutil.rmtree(session)
@@ -2184,6 +2261,76 @@ def gate_em_dash_scan(ctx: GateContext) -> GateResult:
         return GateResult(gate, 1, message, warnings=[])
     proc = ctx.run(["bash", str(script), "touched"], cwd=ctx.repo_root)
     if proc.returncode != 0:
+        # Fallback (plan 2026-09-28-em-dash-whole-file-gate-added-lines-
+        # selection Task 2): a non-zero touched probe may carry pre-existing
+        # committed violations on unchanged lines. Partition the probe's
+        # COMPLETE stdout (every reported row of this same invocation,
+        # captured before any failure rendering; never the failure message's
+        # last-10-rows tail, so a run with more than ten hitting files cannot
+        # silently pass a dirty added line) into untracked and tracked hit
+        # paths. Untracked hits still fail whole-file; each tracked hit is
+        # adjudicated by added-lines --base HEAD: clean means the hit is
+        # pre-existing committed bytes and passes with a baseline row; dirty
+        # means this run's insertion and still fails.
+        hit_rows = [
+            row for row in (proc.stdout or "").strip().splitlines() if row.strip()
+        ]
+        hit_paths = _dedup_preserving_order(
+            [row.split(":", 1)[0] for row in hit_rows if ":" in row]
+        )
+        first_hit_line: dict[str, str] = {}
+        for row in hit_rows:
+            parts = row.split(":", 2)
+            if len(parts) >= 2 and parts[0] not in first_hit_line:
+                # The touched probe reports the first violating line per file.
+                first_hit_line[parts[0]] = parts[1]
+        others = ctx.git("ls-files", "--others", "--exclude-standard")
+        untracked = (
+            set(others.stdout.splitlines()) if others.returncode == 0 else set()
+        )
+        untracked_hits = [p for p in hit_paths if p in untracked]
+        if untracked_hits:
+            return GateResult(
+                gate,
+                1,
+                "em dash scan failed: new prose must be whole-file clean: "
+                + ", ".join(untracked_hits),
+                warnings=[],
+            )
+        baseline_rows: list[str] = []
+        for path in [p for p in hit_paths if p not in untracked]:
+            check = ctx.run(
+                ["bash", str(script), "added-lines", "--base", "HEAD", "--", path],
+                cwd=ctx.repo_root,
+            )
+            if check.returncode != 0:
+                dirty_rows = [
+                    row
+                    for row in (check.stdout or "").strip().splitlines()
+                    if row.strip()
+                ][-10:]
+                return GateResult(
+                    gate,
+                    1,
+                    "em dash scan failed: added-lines --base HEAD flagged "
+                    f"working-tree insertions in {path}: "
+                    + " | ".join(dirty_rows),
+                    warnings=[],
+                )
+            baseline_rows.append(
+                "pre-existing (known-violation baseline): "
+                f"{path}:{first_hit_line.get(path, '?')}"
+            )
+        if baseline_rows:
+            return GateResult(
+                gate,
+                0,
+                "em dash scan clean (pre-existing known-violation baseline): "
+                + " | ".join(baseline_rows),
+                warnings=[],
+            )
+        # No parsable hit path (unexpected probe output shape): keep the
+        # legacy touched-tail failure rather than inventing a pass.
         tail_rows = [
             row for row in (proc.stdout or "").strip().splitlines() if row.strip()
         ][-10:]
@@ -2454,10 +2601,15 @@ def _usage() -> str:
         "write-manifest writes the done Step 0 run manifest record "
         "(run-manifest-<run_id>.json under the done-session directory), "
         "reporting interrupted runs (complete=false, never finalized; "
-        "continued only via an explicit --adopt boundary copy)\n"
+        "continued only via an explicit --adopt boundary copy); "
+        "--emit-foreign-candidates <file> writes the staging candidates "
+        "this run does not own one per line, sorted, for the first-finalize "
+        "bulk load and exits 0 without writing a manifest\n"
         "finalize-manifest sets a run manifest's complete flag to true in "
-        "place (done Step 6; --run-id required; a missing manifest is a "
-        "named not-found note, not a failure)"
+        "place (done Step 6; --run-id required; an absent manifest file is "
+        "a named not-found note with a zero exit, while a present manifest "
+        "carrying a wrong schema version or another repository's repo_root "
+        "is a named non-zero abort that leaves the record unchanged)"
     )
 
 
@@ -2484,6 +2636,18 @@ def _cmd_write_manifest(argv: list[str]) -> int:
     run's boundary (start_commit plus owned paths, foreign markings included)
     verbatim and records ``adopted_from``, and the adopted link suppresses the
     orphan report for later runs.
+
+    First-finalize bulk load: ``--emit-foreign-candidates <file>`` runs the
+    same staging-candidate enumeration as the claim-or-foreign gate,
+    subtracts the invocation's owned review claims (plus the adopted run's
+    inherited owned claims), writes the remaining candidate paths one per
+    line in sorted order to the file, and exits 0 without writing a
+    manifest, so the operator reviews the list and re-runs the real write
+    with ``--foreign-review-from``; a candidate path that cannot round-trip
+    through a one-per-line file (a newline, or leading/trailing whitespace,
+    including a trailing space before the ``.md`` extension the staging
+    predicate requires) aborts the emission with a named error before
+    anything is written.
     """
     parser = argparse.ArgumentParser(
         prog="done_sweep_gates.py write-manifest",
@@ -2510,6 +2674,13 @@ def _cmd_write_manifest(argv: list[str]) -> int:
         "--foreign-review-from", default=None, metavar="FILE",
         help="bulk-load foreign paths one per line from FILE (F13; merged "
         "into --foreign-review with the same dedup)",
+    )
+    parser.add_argument(
+        "--emit-foreign-candidates", default=None, metavar="FILE",
+        help="write the staging candidates this run does not own, one "
+        "repo-relative path per line in sorted order, to FILE and exit 0 "
+        "without writing a manifest (first-finalize bulk load: review the "
+        "list, then re-run the real write with --foreign-review-from FILE)",
     )
     parser.add_argument(
         "--claim-none", action="store_true",
@@ -2701,6 +2872,68 @@ def _cmd_write_manifest(argv: list[str]) -> int:
 
     owned_real = {real(p) for p in owned_review_paths}
     foreign_real = {real(p) for p in foreign_review_paths}
+
+    # First-finalize bulk load (the F13 companion affordance): emit the
+    # staging candidates this run does not own, one repo-relative path per
+    # line in sorted order, then exit 0 WITHOUT writing a manifest, so the
+    # operator reviews the list and re-runs the real write with
+    # --foreign-review-from. This runs before the claim-or-foreign gate on
+    # purpose: the emission is the answer to the very violation that gate
+    # raises on a first finalize, so the emit invocation must reach it.
+    if args.emit_foreign_candidates:
+        remaining = [
+            _repo_relative(str(candidate), ctx.repo_root)
+            for candidate in _all_staging_review_paths(ctx)
+            if os.path.realpath(str(candidate)) not in owned_real
+        ]
+        # The --foreign-review-from loader strips each line and splits on
+        # newlines, so a candidate path carrying a newline or CR, leading or
+        # trailing whitespace, or a vertical tab / form feed immediately
+        # before the final ".md" extension (the two whitespace kinds
+        # splitlines also breaks lines on and strip() cannot restore) cannot
+        # round-trip through the emitted file; space or tab immediately
+        # before the extension is internal whitespace and round-trips
+        # untouched. Abort named before anything is written.
+        unroundtrippable = [
+            path
+            for path in remaining
+            if "\n" in path
+            or "\r" in path
+            or path != path.strip()
+            or re.search(r"[\v\f]\.md$", path)
+        ]
+        if unroundtrippable:
+            return _cli_fail(
+                "write-manifest: foreign-candidate-roundtrip: staging review "
+                "candidate path(s) cannot be emitted one per line (a newline "
+                "or leading/trailing whitespace cannot round-trip through "
+                "--foreign-review-from): "
+                + ", ".join(
+                    # Control characters are stripped so a hostile filename
+                    # cannot forge extra stderr lines (same rendering class
+                    # as the finalize mismatch error).
+                    f"<{_sanitize_manifest_error_value(path)}>"
+                    for path in unroundtrippable
+                )
+            )
+        try:
+            Path(args.emit_foreign_candidates).write_text(
+                "".join(f"{path}\n" for path in sorted(remaining)),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            return _cli_fail(
+                "write-manifest: cannot write --emit-foreign-candidates file "
+                f"{args.emit_foreign_candidates}: {exc}"
+            )
+        print(
+            f"foreign-candidates: {args.emit_foreign_candidates} "
+            f"({len(remaining)} path(s), sorted); no manifest written; "
+            "review the list, then re-run the real write with "
+            "--foreign-review-from"
+        )
+        return 0
+
     uncovered = [
         str(candidate)
         for candidate in _all_staging_review_paths(ctx)
@@ -2755,10 +2988,16 @@ def _cmd_write_manifest(argv: list[str]) -> int:
 def _cmd_finalize_manifest(argv: list[str]) -> int:
     """Set the run manifest's ``complete`` flag to true in place (done Step 6,
     immediately before the done-lock release): the run reached the end, so it
-    is never an interrupted run for a later Step 0. A missing (or foreign-
-    rooted) manifest gets an explicit not-found note with a zero exit: the
-    Step 6 recipe's tolerance clause, a run without a manifest skips
-    finalization without failing."""
+    is never an interrupted run for a later Step 0. Two-way identity
+    contract: an absent manifest file keeps the explicit not-found note with
+    a zero exit (the Step 6 recipe's tolerance clause; a run without a
+    manifest skips finalization without failing), while a present manifest
+    that fails the pre-parse identity check - a wrong ``schema`` version, or
+    a ``repo_root`` matching neither arm of the root matcher - is a named
+    non-zero abort and the file is left byte-identical. The tolerant
+    from_dict read and its silent None degradation stay below this check for
+    the frozen non-finalize consumers (interrupted-run detection, adopt);
+    they never see this path's named abort."""
     parser = argparse.ArgumentParser(
         prog="done_sweep_gates.py finalize-manifest",
         description="Set the run manifest's complete flag to true in place.",
@@ -2771,16 +3010,45 @@ def _cmd_finalize_manifest(argv: list[str]) -> int:
 
     root = os.environ.get("DONE_SWEEP_REPO_ROOT")
     ctx = GateContext.discover(Path(root) if root else None)
-    manifest = _read_manifest_by_run_id(ctx.done_session_dir, args.run_id)
-    if manifest is None or not _manifest_root_matches(
-        manifest.repo_root, ctx.repo_root
-    ):
+
+    def not_found() -> int:
         print(
             "finalize-manifest: no run manifest found for run_id "
             f"{args.run_id} under {ctx.done_session_dir} (nothing to "
             "finalize; a run without a manifest skips finalization)"
         )
         return 0
+
+    if not args.run_id or Path(args.run_id).name != args.run_id or not _manifest_path(
+        ctx.done_session_dir, args.run_id
+    ).is_file():
+        return not_found()
+    # Identity contract pre-parse over the raw payload, BEFORE the tolerant
+    # read: a present manifest from another repository or at a wrong schema
+    # version aborts named and non-zero, writing nothing.
+    try:
+        payload = json.loads(
+            _manifest_path(ctx.done_session_dir, args.run_id).read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, ValueError):
+        payload = None
+    mismatch = _finalize_identity_mismatch(payload, ctx.repo_root)
+    if mismatch is not None:
+        schema_render, root_state = mismatch
+        return _cli_fail(
+            "run-manifest identity mismatch: manifest schema_version "
+            f"{schema_render} repo_root {root_state} is not supported by "
+            "this finalizer (expected schema_version 1 and a 64-hex "
+            "fingerprint root matching this repository); manifest left "
+            "unchanged"
+        )
+    manifest = _read_manifest_by_run_id(ctx.done_session_dir, args.run_id)
+    if manifest is None or not _manifest_root_matches(
+        manifest.repo_root, ctx.repo_root
+    ):
+        return not_found()
     if manifest.complete:
         print(
             f"finalize-manifest: run {manifest.run_id} is already complete; "

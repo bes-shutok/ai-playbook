@@ -34,6 +34,16 @@ and terminal-state transitions. The worker owns implementation and evidence;
 the done workflow owns the commit operation. Do not reproduce driver state
 transitions or host protocol details in a worker or done prompt.
 
+Each implement launch receives the driver's structured `single-task-worker`
+contract bound to the active task id, claim token and generation, complete task
+body, canonical allowed paths, declared validation commands and criteria,
+worker evidence owner, and worker-log destination. Treat those fields as
+authoritative even when caller notes contain conflicting prose. Do not select
+another task, resume execute-plan orchestration, or broaden scope. Parent-owned
+checklist actions are carried separately; in particular, the exact planned
+`Commit:` obligation stays with the parent's done receipt and is never worker
+evidence.
+
 **Orchestrator:** after implement → verify → Step 1.2b intermediate review → mark checkboxes → `done` for a task, **launch the next task immediately**. The next-task launch rides the driver's atomic handoff (see the adapter profile contract in `agents/skills/execute-plan/runtime-contract.md`): it requires a fresh owner identity, claim token, generation, and launch receipt for every next task; a replayed handoff receipt is idempotent and returns the recorded outcome, and a handoff carrying the previous task's owner or token is refused before any launch. Do not ask the user for permission between tasks, between review rounds, or before Phase 3. See SKILL.md "Continuous execution" and Step 1.5.
 
 Placeholders:

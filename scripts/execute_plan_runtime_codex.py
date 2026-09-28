@@ -9,7 +9,6 @@ import fcntl
 import os
 import re
 import signal
-import shlex
 import subprocess
 import tempfile
 import time
@@ -371,6 +370,37 @@ class CodexAdapter:
         )
 
     @staticmethod
+    def _tolerant_tokens(command: str) -> list[str]:
+        """Tokenize a process row's command text without shell parsing.
+
+        Quotes read as literal characters and prompt text is never parsed
+        as shell: the scan only needs to locate the wrapper binary token,
+        the ``exec`` subcommand, and the accepted ``resume``/``--json``
+        shape, all of which the adapter itself emits unquoted. One live
+        worker's unmatched quote in its prompt arguments therefore cannot
+        raise here and quarantine the host's capacity.
+        """
+        return command.split()
+
+    @staticmethod
+    def _locate_exec_invocation(argv: list[str]) -> list[str] | None:
+        """Locate the wrapper binary token, ``exec``, and the invocation head.
+
+        The one shape locator for both consumers, the inventory parse and
+        the conversation-id extraction: the wrapper binary token is found
+        by its path-independent name, ``exec`` must follow it directly, and
+        the returned head is the token list after ``exec``. None when the
+        row carries no recognized ``codex exec`` head.
+        """
+        codex_index = next(
+            (index for index, value in enumerate(argv[:-1]) if Path(value).name in {"codex", "codex.exe"}),
+            None,
+        )
+        if codex_index is None or argv[codex_index + 1] != "exec":
+            return None
+        return argv[codex_index + 2:]
+
+    @staticmethod
     def _parse_process_snapshot(output: str) -> list[dict[str, Any]]:
         if not output.strip():
             raise ValueError("empty process snapshot")
@@ -384,19 +414,13 @@ class CodexAdapter:
                 continue
             try:
                 pid = int(fields[0])
-                argv = shlex.split(command)
             except (ValueError, TypeError) as exc:
                 raise ValueError("malformed process row") from exc
+            argv = CodexAdapter._tolerant_tokens(command)
             if pid <= 0 or not argv:
                 raise ValueError("malformed process identity")
             start_time = " ".join(fields[1:6])
-            codex_index = next(
-                (index for index, value in enumerate(argv[:-1]) if Path(value).name in {"codex", "codex.exe"}),
-                None,
-            )
-            if codex_index is None or argv[codex_index + 1] != "exec":
-                continue
-            invocation = argv[codex_index + 2:]
+            invocation = CodexAdapter._locate_exec_invocation(argv)
             if not invocation or not (invocation[0] == "--json" or (invocation[0] == "resume" and "--json" in invocation[1:])):
                 continue
             identity = {"pid": pid, "start_time": start_time}
@@ -420,18 +444,13 @@ class CodexAdapter:
 
         Accepted shapes are the production resume argv (the id directly
         after ``resume``) and variants where valueless flags precede or
-        follow it, located through the same wrapper-path codex binary
-        lookup the inventory parse uses. Returns None for everything else:
-        fresh exec launches, resumes with no parseable id, and resumes
-        whose id position is shadowed by a value-taking flag.
+        follow it, located through the shared ``codex exec`` head locator
+        the inventory parse uses, over the tolerant token list. Returns
+        None for everything else: fresh exec launches, resumes with no
+        parseable id, and resumes whose id position is shadowed by a
+        value-taking flag.
         """
-        codex_index = next(
-            (index for index, value in enumerate(argv[:-1]) if Path(value).name in {"codex", "codex.exe"}),
-            None,
-        )
-        if codex_index is None or argv[codex_index + 1] != "exec":
-            return None
-        invocation = argv[codex_index + 2:]
+        invocation = CodexAdapter._locate_exec_invocation(argv)
         if not invocation or invocation[0] != "resume":
             return None
         for token in invocation[1:]:
@@ -760,10 +779,38 @@ class CodexAdapter:
 
     def launch(self, task: Mapping[str, Any], prompt: str, generation: int, deadline_seconds: float | None = None, policy_token: Mapping[str, Any] | None = None) -> dict[str, Any]:
         task_id = str(task["id"])
-        if self._option_like(prompt):
-            return self._blocked("contract-violation", ["option-like or empty prompt rejected"], generation=generation, checkpoint=f"{task_id}:policy")
         if not capabilities.validate_policy_token(policy_token, repo_root=str(self.repo_root), generation=generation):
             return self._blocked("runtime-policy-unavailable", ["missing or invalid driver policy token"], generation=generation, checkpoint=f"{task_id}:policy")
+        role = task.get("worker_role")
+        try:
+            prompt_contract = json.loads(prompt)
+        except (TypeError, json.JSONDecodeError):
+            prompt_contract = None
+        if (
+            not isinstance(role, Mapping)
+            or role.get("role") != "single-task-worker"
+            or role.get("task_id") != task_id
+            or not isinstance(role.get("claim_token"), str)
+            or not role["claim_token"].strip()
+            or role.get("generation") != generation
+            or not isinstance(role.get("task_body"), str)
+            or not role["task_body"].strip()
+            or not isinstance(role.get("allowed_paths"), list)
+            or not role["allowed_paths"]
+            or role["allowed_paths"] != list((policy_token or {}).get("allowed_paths", ()))
+            or not isinstance(role.get("required_criteria"), list)
+            or not role["required_criteria"]
+            or not isinstance(role.get("validation_commands"), list)
+            or not role["validation_commands"]
+            or role.get("evidence_owner") != "worker"
+            or not isinstance(role.get("parent_obligations"), list)
+            or not isinstance(role.get("worker_log_destination"), str)
+            or not role["worker_log_destination"].strip()
+            or prompt_contract != dict(role)
+        ):
+            return self._blocked("contract-violation", ["missing or mismatched validated task-worker role"], generation=generation, checkpoint=f"{task_id}:policy")
+        if self._option_like(prompt):
+            return self._blocked("contract-violation", ["option-like or empty prompt rejected"], generation=generation, checkpoint=f"{task_id}:policy")
         argv = [self.executable, "exec", "--json", "-C", str(self.repo_root), prompt]
         if self.activation_receipt is None:
             return self._blocked("runtime-policy-unavailable", ["adapter activation receipt is missing"], generation=generation, checkpoint=f"{task_id}:policy")

@@ -184,8 +184,10 @@ done <<< "$ID_FILES"
 
 # The door registry's new declaration tests must exist: the selftest enforces
 # their content, but only this count pin ensures they were written at all.
-test "$(grep -c 'def test_.*_declared' scripts/test_review_agent_doors.py)" -ge 11 \
-  || fail "door registry declaration tests missing (three landed plus eight new)"
+test "$(grep -c 'def test_.*_declared' scripts/test_review_agent_doors.py)" -eq 12 \
+  || fail "door registry declaration tests missing (four landed plus eight new)"
+grep -qF '### Relocatable identifier inventory gate' agents/skills/review-agents/documentation.md \
+  || fail "relocatable inventory gate heading pin missing"
 grep -qF 'dual-entry' scripts/test_review_agent_doors.py \
   || fail "panel-signal test extension missing the dual-entry branch"
 
@@ -208,7 +210,7 @@ test -n "$kotlin_table_line" && test -n "$kotlin_jvm_line" && [ "$kotlin_jvm_lin
   || fail "kotlin JVM guideline note not placed after the trigger table"
 grep -qF 'operability drift' agents/skills/review-agents/documentation.md \
   || fail "documentation lens lacks the severity carve-out"
-grep -qF 'stages Medium operability drift per the new severity-calibration row' agents/skills/review-agents/documentation.md \
+grep -qF 'stages Medium operability drift per the severity-calibration Category defaults row' agents/skills/review-agents/documentation.md \
   || fail "Do-not-assign-Medium+ reword not landed"
 grep -qF 'except the same-diff relocatable-inventory contradiction class' agents/skills/doing-code-review/SKILL.md \
   || fail "doing-code-review 4.9.0 lacks the severity deference"

@@ -105,6 +105,7 @@ For compare-and-set updates, deduplication, reconciliation, or job queues:
    delete that owns durable work must predicate on the coordinator's current
    `(job_id, claim_generation)` (or equivalent). A reclaim that bumps
    generation must make older generation writers fail closed.
+   Pattern: `concurrency#claim-generation`.
 7. **Terminal vs retryable failure:** permanently invalid payload, domain, or
    poison seats must take a terminal fail path (attempts exhausted or
    fail-closed terminal API), not infinite `PARTIAL` / requeue. Multi-step

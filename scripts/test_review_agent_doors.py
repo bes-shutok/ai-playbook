@@ -19,6 +19,27 @@ def lens_text(name: str) -> str:
     return (LENS / name).read_text(encoding="utf-8")
 
 
+def pattern_section(text: str, pattern_id: str) -> str:
+    """The door pattern's own section: from the nearest preceding line
+    matching `^#{2,6} ` before the `Pattern: `<id>`` declaration, through
+    the next such heading (headings of any level bound the extraction).
+    Whitespace-normalized, like pattern_window."""
+    occurrences = [m for m in re.finditer(re.escape(pattern_id), text)]
+    declaration = [m for m in occurrences if f"Pattern: `{pattern_id}`" in text[max(0, m.start() - 12):m.end() + 2]]
+    if len(occurrences) != 1 or len(declaration) != 1:
+        raise AssertionError(
+            f"{pattern_id}: expected exactly one `Pattern: \\`{pattern_id}\\`` "
+            f"declaration, found {len(declaration)} (total mentions {len(occurrences)})"
+        )
+    decl_start = declaration[0].start()
+    decl_line_start = text.rfind("\n", 0, decl_start) + 1
+    heads_before = list(re.finditer(r"^#{2,6} ", text[:decl_line_start], re.M))
+    sec_start = heads_before[-1].start() if heads_before else 0
+    nxt = re.search(r"^#{2,6} ", text[decl_line_start + 1:], re.M)
+    sec_end = decl_line_start + 1 + nxt.start() if nxt else len(text)
+    return re.sub(r"\s+", " ", text[sec_start:sec_end])
+
+
 def pattern_window(text: str, pattern_id: str, before: int = 700) -> str:
     """Text surrounding a `Pattern: `<id>`` declaration: the preceding
     `before` characters (the item the declaration closes) plus the
@@ -40,7 +61,7 @@ def pattern_window(text: str, pattern_id: str, before: int = 700) -> str:
 class ReviewAgentDoorsTest(unittest.TestCase):
     def test_typed_catalog_enumeration_door_declared(self):
         text = lens_text("quality.md")
-        window = pattern_window(text, "quality#typed-catalog-enumeration-door")
+        window = pattern_section(text, "quality#typed-catalog-enumeration-door")
         # (a) key source is the typed/published definition set, not a wider
         # all-keys helper, unless the plan documents the wider set
         self.assertIn("typed or published definition set", window)
@@ -53,7 +74,7 @@ class ReviewAgentDoorsTest(unittest.TestCase):
 
     def test_helper_path_retarget_after_door_declared(self):
         text = lens_text("testing.md")
-        window = pattern_window(text, "testing#helper-path-retarget-after-door")
+        window = pattern_section(text, "testing#helper-path-retarget-after-door")
         # (a) grep of test helpers for the newly banned path
         self.assertIn("grep of test helpers", window)
         # (b) same-change-set retarget or update
@@ -64,7 +85,7 @@ class ReviewAgentDoorsTest(unittest.TestCase):
 
     def test_delivery_slice_meta_declared(self):
         text = lens_text("documentation.md")
-        window = pattern_window(text, "documentation#prose-delivery-slice-meta")
+        window = pattern_section(text, "documentation#prose-delivery-slice-meta")
         # class-level comment carrying only plan-slice ids, ticket keys, or
         # add-narrative is a finding requiring behavior-facing prose
         self.assertIn("plan-slice identity", window)
@@ -73,7 +94,7 @@ class ReviewAgentDoorsTest(unittest.TestCase):
 
     def test_prose_sot_consolidation_door_declared(self):
         text = lens_text("documentation.md")
-        window = pattern_window(text, "documentation#prose-sot-consolidation")
+        window = pattern_section(text, "documentation#prose-sot-consolidation")
         # (a) authority-role classification and owner nomination
         self.assertIn("no more than two current SOT owners", window)
         # (b) one consolidation finding, not one finding per consumer
@@ -84,7 +105,7 @@ class ReviewAgentDoorsTest(unittest.TestCase):
 
     def test_prose_relocatable_identifier_inventory_declared(self):
         text = lens_text("documentation.md")
-        window = pattern_window(text, "documentation#prose-relocatable-identifier-inventory")
+        window = pattern_section(text, "documentation#prose-relocatable-identifier-inventory")
         # (a) trigger: the listed identifiers also appear as real paths,
         # mounts, or resource names in the same diff
         self.assertIn("real paths, mounts, or resource names in the same diff", window)
@@ -97,7 +118,7 @@ class ReviewAgentDoorsTest(unittest.TestCase):
 
     def test_dual_surface_policy_parity_declared(self):
         text = lens_text("architecture.md")
-        window = pattern_window(text, "architecture#dual-surface-policy-parity")
+        window = pattern_section(text, "architecture#dual-surface-policy-parity")
         # (a) trigger: one deny or allow policy enforced at more than one
         # public entry point (parser, validator, filter, gateway, batch
         # importer)
@@ -117,7 +138,7 @@ class ReviewAgentDoorsTest(unittest.TestCase):
 
     def test_cross_surface_policy_witness_declared(self):
         text = lens_text("testing.md")
-        window = pattern_window(text, "testing#cross-surface-policy-witness")
+        window = pattern_section(text, "testing#cross-surface-policy-witness")
         # weaker-shape mutation of a shared helper forces one failing
         # witness per surface
         self.assertIn("a shared helper enforcing one policy is mutated to the weaker shape", window)
@@ -127,12 +148,7 @@ class ReviewAgentDoorsTest(unittest.TestCase):
 
     def test_truncating_conversion_floor_declared(self):
         text = lens_text("implementation.md")
-        # before=900: the trigger bullet sits ~730 chars above the
-        # declaration, past the default 700-char lookback, so this door
-        # widens the window to keep the trigger class selector pinned.
-        window = pattern_window(
-            text, "implementation#truncating-conversion-floor", before=900
-        )
+        window = pattern_section(text, "implementation#truncating-conversion-floor")
         # (a) trigger: a validated config or API duration or numeric
         # quantity rendered through a truncating conversion
         self.assertIn("a validated config or API duration or numeric quantity", window)
@@ -154,7 +170,7 @@ class ReviewAgentDoorsTest(unittest.TestCase):
 
     def test_nullable_jdbc_type_declared(self):
         text = lens_text("quality.md")
-        window = pattern_window(text, "quality#nullable-jdbc-type")
+        window = pattern_section(text, "quality#nullable-jdbc-type")
         # (a) nullable mapper parameter or bound value requires an explicit
         # JDBC type for the SQL NULL case
         self.assertIn(
@@ -167,7 +183,7 @@ class ReviewAgentDoorsTest(unittest.TestCase):
 
     def test_null_tuple_claim_predicates_declared(self):
         text = lens_text("concurrency.md")
-        window = pattern_window(text, "security#null-tuple-claim-predicates")
+        window = pattern_section(text, "security#null-tuple-claim-predicates")
         # (a) SQL three-valued logic for first-write-wins audit tuples
         self.assertIn("SQL three-valued logic for first-write-wins audit tuples", window)
         # (b) equality never matches NULL, so the fresh-claim branch needs
@@ -179,7 +195,7 @@ class ReviewAgentDoorsTest(unittest.TestCase):
 
     def test_packaged_schema_parity_declared(self):
         text = lens_text("implementation.md")
-        window = pattern_window(text, "implementation#packaged-schema-parity")
+        window = pattern_section(text, "implementation#packaged-schema-parity")
         # (a) compare packaged deployment and local-development manifests
         # against the canonical migration and seed inventory
         self.assertIn("compare packaged deployment and local-development manifests", window)
@@ -192,7 +208,7 @@ class ReviewAgentDoorsTest(unittest.TestCase):
 
     def test_container_discovery_fast_path_declared(self):
         text = lens_text("testing.md")
-        window = pattern_window(text, "testing#container-discovery-fast-path")
+        window = pattern_section(text, "testing#container-discovery-fast-path")
         # (a) an auto-detected test extension decides the non-container fast
         # path before any container discovery
         self.assertIn(
@@ -208,14 +224,28 @@ class ReviewAgentDoorsTest(unittest.TestCase):
         text = lens_text("review-panel-selection.md")
         self.assertIn("quality#typed-catalog-enumeration-door", text)
         self.assertIn("testing#helper-path-retarget-after-door", text)
-        # targeted follow-up trigger: the migration-renumber branch forces
-        # contract-docs plus correctness-completeness on the paired surfaces
-        self.assertIn("migration renumber", text)
-        self.assertIn("contract-docs` and `correctness-completeness` workers on the paired surfaces", text)
-        # the dual-entry validation-policy branch additionally forces
-        # design-simplicity plus testing
-        self.assertIn("dual-entry validation-policy change", text)
-        self.assertIn("design-simplicity` and `testing` workers", text)
+        # compound spans over the paired-surface policy section: trigger
+        # plus pairing must occur, in order, inside the same section, so a
+        # pairing cannot survive being attached to the wrong trigger branch
+        heads = list(re.finditer(r"^#{2,6} ", text, re.M))
+        idx = text.find("migration renumber")
+        self.assertGreaterEqual(idx, 0)
+        sec_start = max((h.start() for h in heads if h.start() <= idx), default=0)
+        nxt = [h.start() for h in heads if h.start() > idx]
+        sec_end = nxt[0] if nxt else len(text)
+        section = re.sub(r"\s+", " ", text[sec_start:sec_end])
+        m1 = section.find("migration renumber")
+        m2 = section.find("contract-docs` and `correctness-completeness` workers on the paired surfaces")
+        self.assertGreaterEqual(m1, 0)
+        self.assertGreater(m2, m1)
+        m3 = section.find("dual-entry validation-policy change")
+        m4 = section.find("design-simplicity` and `testing` workers")
+        self.assertGreaterEqual(m3, 0)
+        self.assertGreater(m4, m3)
+
+    def test_relocatable_inventory_heading_pinned(self):
+        text = lens_text("documentation.md")
+        self.assertIn("### Relocatable identifier inventory gate\n", text)
 
     def test_fixture_annotations_cover_witnessed_shapes(self):
         fixtures = [

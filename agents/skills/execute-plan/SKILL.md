@@ -2,17 +2,15 @@
 name: execute-plan
 description: >
   Orchestrates iterative implementation of a plans-skill implementation plan using sub-agents:
-  implement tasks one launch at a time (a launch may batch up to four file-disjoint tasks under the Step 1.2 batch contract, or launch a parallel-group of up to four single-task implement workers for pairwise file-disjoint tasks under the Step 1.2 parallel-group contract; tests must pass), mark plan checkboxes, commit via done; then run
-  review/fix loops until one fresh review of the current digest has zero unresolved blocking
-  findings after receiving-review triage, with at most five full-panel rounds and a total-round
-  budget (default 5),
-  with done after each review iteration;
-  on successful completion, remove session tmp under resolved tmp_dir/execute-plan/<plan-slug>/.
-  Trigger phrases and invocations:
-  "execute the plan", "execute plan", "execute <plan-path>", "implement plan", "implement <plan-path>",
-  "run plan", "run <plan-path>", "execute-plan", "/execute-plan", or attaching/invoking this skill.
-  Plan path alone (no execute/implement/run verb before the path, no /execute-plan, no skill attachment)
-  is NOT execute-plan; use the plan-path gate only in that case.
+  implement tasks one launch at a time (batching and parallel groups per the Step 1.2 contracts;
+  tests must pass), mark plan checkboxes, commit via done; then run review/fix loops until one
+  fresh review of the current digest has zero unresolved blocking findings after receiving-review
+  triage, with at most five full-panel rounds (total-round budget, default 5) and done after each
+  iteration; on success, remove session tmp under tmp_dir/execute-plan/<plan-slug>/.
+  Trigger phrases: "execute the plan", "execute plan", "execute <plan-path>", "implement plan",
+  "implement <plan-path>", "run plan", "run <plan-path>", "execute-plan", "/execute-plan", or
+  attaching/invoking this skill. A bare plan path (no verb, no slash command, no attachment) is
+  NOT execute-plan; full invocation rules: the Invocation detection section (run first).
 ---
 
 # Execute Plan
@@ -23,7 +21,7 @@ description: >
 
 **Announce at start:** "I'm using the execute-plan skill to implement `<plan-path>`."
 
-Orchestrate plan execution from the main agent. Always run Phase 0 (branch setup) first; do not skip it. Delegate heavy work to sub-agents so context stays clean. Do not implement tasks inline unless a sub-agent fails and you must recover.
+Orchestrate plan execution from the main agent. Always run Phase 0 (the worktree-first run setup) first; do not skip it. Delegate heavy work to sub-agents so context stays clean. Do not implement tasks inline unless a sub-agent fails and you must recover.
 
 **Intermediate reviews (default on):** every executed task passes the Step 1.2b intermediate task review before its done commit. A plan header line `Intermediate reviews: off` skips Step 1.2b for that run, and the Recovery path does not run it; any other value or absence keeps it on.
 
@@ -36,6 +34,12 @@ authoritative state that the parent reloads and validates after every
 checkpoint or done handoff before selecting the next incomplete step.
 
 Read agents/skills/execute-plan/runtime-contract.md for the normative runtime contract, result schema, policy boundary, manifest ownership, and continuation transitions.
+
+**Preflight mandate (claim boundary):** On a seeded machine manifest, before any claim is created or continued, run the driver's read-only `preflight` operation (`python3 scripts/execute_plan_runtime.py --manifest {tmp_dir}/execute-plan/<PLAN_SLUG>/runtime_state.json --plan <plan-path> --operation preflight`) and invoke only the canonical continuation command it emitted on a passing result (the `preflight.continuation_command` field). Hand-assembled continuation commands are never invoked. For an admitted prepared-intent done-successor state, the same passing preflight emits that successor's advance command under the same shape, and it is the only sanctioned way to launch the admitted successor. The mandate scopes to the emitted command for the decision preflight made: the batch opt-in (`--batch`) and the parallel-group claim forms are separate driver contracts governed by their own steps (Step 1.2), and the driver's other operations (terminal, interrupt, progress, readiness, precondition, diagnose, the watcher family, and the recovery operations) stay governed by the steps that own them. Before invoking an emitted command, verify it pins `--repo-root` (the target repository root) and `--runtime` (the run's recorded runtime id); an emitted line without them means the deployed driver predates the mandate: stop and deploy the driver first, then re-run preflight. A failing preflight emits no command and mutates nothing: resolve the problems it names and re-run it before any claim or continuation.
+
+**Blocked direct claim recovery (one reclaim invocation):** when a direct initial claim (no prior claim, no prepared handoff intent, no registered worker) is blocked before launch with reason code exactly `runtime-policy-unavailable`, recovery is one reclaim invocation: run the driver's `reclaim` operation (`--operation reclaim --task-id <id>`) supplying `--approval-receipt` and `--runtime` - the same locked transition validates the supplied evidence, records it, and rotates the claim - then run preflight again and invoke the command it emits. The prelaunch-reclaim budget is two attempts (the initial recovery invocation plus exactly one transient retry); a third prelaunch reclaim of the same shape returns the named `prelaunch-reclaim-cap` outcome directing the operator at the adapter policy (resolve the policy blocker, then reclaim after the claim lease expires). The cap gates only this lease-bypass path: an expired claim lease rotates through the ordinary reclaim regardless of the count.
+
+**Shared driver resolution (scoped application):** runtime-contract.md ("Durable driver boundary") owns the normative resolution policy: the driver implementation is one shared deployed copy, every run artifact stays under the target project's facts-resolved tmp dir, and a project-local entry point is legitimate only as a deliberate, explicitly configured override. Applied to this skill: the target repository root is passed (`--repo-root`) or preserved (invocation from the target repository root) at every `scripts/execute_plan_runtime.py` invocation boundary this skill documents - the Step 0.6 precondition example, the Budget gate's watcher-schedule, watcher-supersede, and watcher-fire calls, the preflight invocation above, the Phase 4 terminal-gate example, and the interruption-reporting example. When an invocation runs from any other working directory (for example the shared tooling checkout that ships the driver), pass `--repo-root <target-root>` explicitly so the run cannot silently retarget.
 
 **Adapter profile and lifecycle receipts:** the host behavior behind that boundary is declared by the selected adapter profile, the profile contract in `agents/skills/execute-plan/runtime-contract.md` ("Adapter profile contract"); profiles live under `agents/skills/execute-plan/runtime-adapters/`. The parent never closes workers, infers capacity, or carries ownership forward from its own memory: every worker lifecycle event (completion, timeout, parent shutdown, and session restart) must flow through the selected adapter profile's lifecycle hooks and land a durable lifecycle receipt in machine state before the parent treats the event as settled, and every launch is preceded by a capacity and claim reconciliation against the receipt-fed capacity witness and the live claim records, never against a remembered worker count, a stale inventory entry, or the parent's own working memory of what is still running. A worker the witness cannot prove live is neither counted live nor counted as free capacity.
 
@@ -68,9 +72,10 @@ The transition loop is mandatory: after every worker return, review result, quot
 | Condition | The one next action |
 |---|---|
 | Plan digest unchanged since the recorded claim/recovery state | Resume claim/recovery state only through the driver (`readiness` then `continue`/recovery operation); never a repeated whole-plan review |
-| Plan-prose mismatch or scope drift reported | Stop before claim consumption; run the read-only `preflight` operation to name the drift side by side, then repair through the skill-gated plan-edit path - never relaunch or re-seed a claim to mask prose drift |
+| Plan-prose mismatch or scope drift reported | Stop before claim consumption; run the read-only `preflight` operation to name the drift side by side, then repair through the skill-gated plan-edit path plus a fresh `review-plan` round - never relaunch or re-seed a claim to mask prose drift. When the repaired plan strands the intent-backed claimed prelaunch claim (ordinary preflight refuses the stale seeded scope), the driver's `recover-task-scope` operation (`--operation recover-task-scope --input '{"task_id": "...", "token": "<prior claim token>", "generation": <prior generation>}'`) is the one sanctioned exit: the payload carries only the exact prior claim identity (the plan digest, review evidence, and replacement paths are derived from repository state - inventory and review evidence are never caller-suppliable), the replay fence on the recorded receipt is evaluated first, eligibility requires the intent-backed claimed prelaunch shape with no launch record, worker, or reservation, and refuses a live claim-group member (that member exits through the group path, `continue --batch`, or the blocked-member reclaim exit only when it is blocked with `resume_allowed` false) and a reviewed narrowing (the drift bound is widening-only); one locked write lands the claim rotation, the three handoff-intent carrier re-stamps, the scope replacement from the structured `Files:` declaration, the digest move, and one receipt - then the ordinary sequence proceeds: preflight over the post-recovery manifest, then launch through the emitted outcome action with only the rotated claim token. Runtime-contract.md ("Reviewed scope recovery") owns the full eligibility, receipt, replay-first, and refusal semantics. |
 | Retryable pre-launch refusal (capacity, activation evidence missing or stale, policy unavailable) | Retry the claim or launch after the named evidence is available; the claim and handoff stay retryable |
 | Ambiguous post-launch state (no receipt-backed terminal record) | Driver recovery path (`recover-done-pending` with bounded terminal evidence, handoff recovery, interruption reconciliation) - never a manual manifest edit |
+| Malformed worker result with an exact `launching` or `launched` successor handoff | Use the driver's evidence-contract recovery. It requires fresh matching provider-terminal proof with a receipt id, validates the predecessor against its durable claim and checkpoint, and atomically moves only the claim's exact intent through `ambiguous` to `failed`. Startup applies the generalized retirement rule: it ignores the retired launch for the latest matching recovery receipt across both recovery event identities (evidence-contract and prelaunch-contract recovery), requiring the strict identity-matched handoff-recovery shape only when the receipt carries the invalidated-handoff block and otherwise the prior and corrected contract identities, always with the strictly-newer-current-task-claim clause; retain its launch record. Any identity mismatch, stale or missing proof, or live worker refuses without mutation. A claimed prelaunch claim holding a stranded evidence contract (seeded criteria over the evidence limits) has its own recovery operation with the same receipt-fenced discipline: see runtime-contract.md, "The shared recovery-transition contract" and "Prelaunch contract recovery", for the payload, precondition order, and the named residuals. |
 | Unrelated validation or hygiene failure during recovery | Record as a separate follow-up; it does not invalidate the active task's correctness or commit scope |
 
 **Announcement is not execution.** Saying you are using this skill does not satisfy it. The parent agent must run the Phase 1 loop (implement sub-agent → verify → Step 1.2b intermediate review → refresh marker → mark checkboxes → **done sub-agent** → report) for **each** task. Passing tests or marking all checkboxes in one parent session is **not** a substitute for per-task `done` commits.
@@ -87,7 +92,7 @@ Before taking over or duplicating in-flight work on a plan (resuming an interrup
 
 ## Invocation detection (run first)
 
-**Before** the plan-path gate, branch setup, or any plan-scoped edit, classify the user message. This check is mandatory; do not skip it because a plan path is present.
+**Before** the plan-path gate, Phase 0 run setup, or any plan-scoped edit, classify the user message. This check is mandatory; do not skip it because a plan path is present.
 
 ### Algorithm
 
@@ -101,9 +106,11 @@ Normalize the user message: trim whitespace; compare case-insensitively.
 | B | **Verb + plan path (shorthand)** | Message contains `execute`, `implement`, or `run` followed by whitespace and a repository-relative `.md` path under a plans directory (path contains `/plans/`, or matches resolved `{plans_dir}` / `{plans_completed_dir}` / legacy `docs/plans/`). Examples: `execute docs/history/plans/foo.md`, `run {plans_dir}/PROJ-1-feature.md`. Extra whitespace between verb and path is OK. |
 | C | **Hyphen / slash** | Message contains `execute-plan` or `/execute-plan` |
 | D | **Skill attachment** | This `execute-plan` skill is attached to the message or selected via slash command |
-| E | **Prior gate** | User already chose execute-plan (option 1) in this session |
+| E | **Prior gate** | User already chose execute-plan (option 1) in this session **for the plan currently in play**; the choice carries that plan identity and never classifies a message about a different plan or a different objective. |
 
-**`invoked = false`** only when **none** of A–E match. Examples: bare path, `@plan.md`, "review this plan", "what's in this plan", `execute the tests` (verb + non-plan target).
+**`invoked = false`** when none of A–E match, **or when an objective switch supersedes a signal-E-only match per the reclassification precedence below**. Examples: bare path, `@plan.md`, "review this plan", "what's in this plan", `execute the tests` (verb + non-plan target), a clear request to author, review, finish authoring, clean up, or merge a plan branch when only the prior-gate signal matches.
+
+**Reclassification precedence:** signals A-D are evaluated on the current message first. When only E matches, the detector must check the current message for an objective switch: a clear request to author, review, finish authoring, clean up, merge, or otherwise manage a plan branch supersedes the prior execution choice (the message classifies as not-invoked and the plan-path gate or the switched-to workflow applies), unless the message also explicitly resumes execution (`continue executing`, `run the next task`, or equivalent). "Finish the plan" alone is ambiguous between finishing authoring and executing tasks and never defaults to execution. Within one explicitly selected plan run, step-continuation messages that neither switch objective nor name a different plan keep `invoked = true` without a repeated gate.
 
 **Plan path heuristic for signal B:** token after `execute`/`implement`/`run` ends with `.md` and looks like an implementation plan file (under `.../plans/...` or resolved `{plans_dir}`), not a script or command.
 
@@ -118,6 +125,9 @@ Normalize the user message: trim whitespace; compare case-insensitively.
 | `/execute-plan docs/history/plans/foo.md` | **true** | Proceed |
 | `docs/history/plans/foo.md` | false | Three-way gate |
 | `@PROJ-1234-plan.md` | false | Three-way gate |
+| (after a prior execute choice for plan P) `finish authoring the plan and merge the branch` | false | action: plan-path gate or authoring workflow; no implement worker, no claim |
+| (after a prior execute choice for plan P) `continue executing the same plan's next task` | **true** | Proceed without re-asking |
+| (after a prior execute choice for plan P) bare path to a different plan Q | false | action: three-way gate (different plan) |
 
 **Common misread to avoid:** `execute plan <path>` and `execute <path>` (when path is under `.../plans/...`) are **not** "path only". The verb is the invocation; the path is the argument.
 
@@ -133,11 +143,11 @@ Also treat as already chosen when any legacy signal below applies (same outcome 
 
 1. **Trigger phrase** in the user message (see table A–C).
 2. **Skill attachment or invocation** (see table D).
-3. **Prior gate choice** in the same session (see table E).
+3. **Prior gate choice for the plan in play** in the same session, subject to the reclassification precedence (see table E).
 
 When `invoked = true` **and** a plan path is available (in the message, from prior context, or from the slash command argument), announce the run contract and continue:
 
-> Using execute-plan on `<plan-path>`: Phase 0 branch setup → session tmp dir → one implement sub-agent + `done` commit per task (auto-continue through all tasks) → Phase 2 validation → Phase 3 parent-orchestrated review panel until one fresh blocking-clean digest → archive plan → Phase 5 terminal receipt then session tmp cleanup.
+> Using execute-plan on `<plan-path>`: Phase 0 worktree-first run setup → session tmp dir → one implement sub-agent + `done` commit per task (auto-continue through all tasks) → Phase 2 validation → Phase 3 parent-orchestrated review panel until one fresh blocking-clean digest → archive plan → Phase 5 terminal receipt then session tmp cleanup.
 
 **Commit authorization:** An execute-plan invocation **overrides** session-level "do not commit unless asked" **for this run only**. Step 1.4 and Step 3.4 `done` sub-agents must commit without a separate commit prompt. **Push** still requires explicit user instruction (see user `AGENTS.md` Git Push Policy).
 
@@ -165,11 +175,10 @@ Do not start Phase 1 until execute-plan is chosen (invocation signal or gate opt
 
 | Anti-pattern | Why it violates the skill |
 |--------------|---------------------------|
-| Skip Phase 0 and start Phase 1 immediately | Branch setup is mandatory; work must happen on a known, tracked branch; skipping Step 0.3 verification risks detached HEAD or wrong branch |
+| Skip Phase 0 and start Phase 1 immediately | The worktree-first run setup is mandatory; work happens in the run's ad-hoc worktree on its own branch per the Worktree-first standard; skipping it strands the run in the primary checkout |
 | Show three-way gate when message contains `execute` + plan path | `execute docs/.../plans/foo.md` is shorthand invocation, not path-only |
 | Show three-way gate when message contains `execute plan` + plan path | `execute plan docs/.../foo.md` is invocation + argument, not path-only |
 | Show three-way gate when execute-plan skill is attached or `/execute-plan` was used | Skill attachment and slash invocation already mean execute-plan; the gate is only for bare plan-path references |
-| Ask to continue when current branch already matches the plan | Definitive branch match auto-continues after Step 0.3; prompts are only for plausible non-exact matches or new branch creation |
 | Ask permission before the next task or review round | Phase 1 and Phase 3 auto-continue after each successful step; user already chose execute-plan |
 | Parent implements Task 1–N inline in one turn | Skips implement sub-agents and per-task `done`; only inline recovery after sub-agent failure is allowed |
 | Green tests → mark all `[x]` → archive plan | Checkboxes and archive belong **after** each task's `done`, not batched at the end |
@@ -215,15 +224,134 @@ See [agent-logs.md](agent-logs.md) for path convention, required sections, heart
 3. After a worker that received a defined log path returns, verify its log file exists, is non-empty, and **on relaunch still contains prior passes** (append-only; see [agent-logs.md](agent-logs.md) write semantics). Update `manifest.md`. For default Phase 3 lens workers, record their launch and result in the parent-owned review log. In recovery mode, the nested orchestrator writes that log; the parent only verifies it. Confirm exit criteria from the applicable log or worker return; do not re-run tests or re-review inline to duplicate the worker.
 4. Pass **only the preceding-step log path(s)** into each `done` sub-agent (Step 1.4 / Step 3.4); see [agent-logs.md](agent-logs.md). Do not paste log bodies into orchestrator context; paths and pass/fail summaries are enough for gating.
 
-**Prerequisite:** A plan file at `{plans_dir}/<name>.md` created per the `plans` skill, with `## Review Scope`, `## Validation Commands`, and `### Task N:` sections.
+**Prerequisite:** A plan file at `{plans_dir}/<name>.md` created per the `plans` skill, with `## Review Scope`, `## Validation Commands`, and `### Task N:` sections. The plan carries one `Evidence:` block per task immediately after the task's `Files:` list: one line per verification command carrying the exact command and the checklist criteria it covers; every declared command must be runnable at that task boundary, and criteria deferred to the final gate stay out of the task's required criteria. Criteria are measured in UTF-8 bytes: `MAX_EVIDENCE_ITEM_BYTES` is 512 UTF-8 bytes per criterion, with a 4096 UTF-8 byte aggregate and a 100-criteria count limit per task, so author criteria well under the byte unit rather than counting characters. When the create boundary refuses a task's evidence, it names the task, the offending criterion with its UTF-8 byte count where one exists, and the offending dimension (item bytes, aggregate bytes, or count): split the criterion that exceeds a limit into independently verifiable criteria preserving complete acceptance coverage (or consolidate the task's criteria when the aggregate or count dimension is the offender), then re-seed; limits are never raised silently without consumer proof.
 
 **Read first:** [subagent-prompts.md](subagent-prompts.md) for copy-paste prompt templates; [agent-logs.md](agent-logs.md) for log paths and handoff rules.
 
-## Phase 0: Branch Setup (Run Once at Start)
+## Worktree-first standard
 
-Before any implementation work, verify and set up a clean branch for this plan execution. Phase 0 always runs Step 0.3 verification; prompts are skipped only on **definitive branch match** (Step 0.1a).
+Every plan-authoring and plan-execution run works inside an ad-hoc worktree, never in the primary checkout; the standard governs fresh run work (the Recovery path's in-checkout exception over work already sitting in the primary checkout is the one sanctioned arm). This section owns the canonical lifecycle; consumer skills reference it, they do not restate it. The lifecycle, in imperative steps:
 
-**Branch naming convention** (compute before Step 0.1):
+1. **Create the worktree.** Create an ad-hoc worktree on its own branch off the per-project base branch (a sibling path, unique per run), before any run work. Report the worktree path and the branch name.
+2. **Transfer the inputs in.** Copy the run's gitignored input artifacts into the worktree before any work: the project facts file and any other gitignored inputs the run needs (for example, the reviews directory the readiness gate resolves). A worktree's gitignored directories start empty, so nothing resolves until it is copied in. The **Transfer-in implementation** below owns how.
+3. **Do the work there.** Perform all run work inside the worktree, on its own branch. No run work lands in the primary checkout while the worktree exists; the coordination witnesses and transfer steps the consuming duties name are the sanctioned exceptions.
+4. **Land under the lock.** Land the result as a squash merge to the base branch under the repository's merge-landing-lock discipline (acquire the lock before the landing critical section, release after it; on lock contention stand down keeping the worktree and branch and report). After releasing the lock, reconcile every live checkout of the base branch per the **Post-landing reconciliation implementation** below; the landing is not done until that reconciliation verifies completion, and an unverified refresh does not count as done.
+5. **Transfer the artifacts out and verify.** Before any cleanup, move all run artifacts (review staging documents, stats sidecars, telemetry) from the worktree back to the primary checkout and verify them present there. Gitignored run artifacts never ride the branch commits, so the primary checkout is their only durable home. The **Transfer-out-and-deletion implementation** below owns how.
+6. **Delete only after verification.** Delete the worktree and its branch only after step 5's verification passed; the same implementation owns the deletion gating.
+
+**Provisioned-worktree adoption (beside lifecycle step 1):** if the session already runs inside its dispatch-provisioned ad-hoc worktree, adopt it instead of creating a second: verify it is a linked worktree per the Linked-worktree detection sentence below; that it sits on a branch that is not detached and named per the run's Phase 0 convention (execution runs), or the branch the dispatching payload ordered the run to work on (authoring runs), verifiable by being inside that ordered worktree, or a branch otherwise recorded by the dispatching payload's witness; that it carries no tracked dirt (`git status --porcelain --untracked-files=no` empty); that no fresh foreign claim or recorded witness names the same worktree for another live run; and that the run's gitignored inputs are resolvable from the primary checkout for transfer-in (the transfer-in step runs after adoption, so resolvability, not presence, is the precondition). A failed adoption check stands the run down under the same fail-closed creation stand-down. Linked-worktree detection: the adoption check, the transfer-out fence, and the tracked-dirt fence use the predicate that a session runs inside a linked worktree exactly when `git rev-parse --git-dir` and `git rev-parse --git-common-dir` resolve to different paths; the transfer-in fence uses its .git-is-a-file equivalent.
+
+**Transfer-in implementation (how step 2 runs):** a run worktree's gitignored directories start empty (its `.git` is a file pointing at the primary repository), so stage the inputs the readiness gate resolves before that gate, from the worktree root: the facts file and the reviews directory with the certified artifacts transfer in, and the run's tmp directory is created empty (per-run scratch does not transfer in):
+
+```bash
+if [ -f .git ]; then
+  PRIMARY="$(git worktree list --porcelain | sed -n 's/^worktree //p' | head -1)"
+  mkdir -p .ai-playbook docs/reviews docs/tmp
+  test -f .ai-playbook/facts.md || cp "$PRIMARY/.ai-playbook/facts.md" .ai-playbook/facts.md
+  if [ -d "$PRIMARY/docs/reviews" ]; then
+    cp -R "$PRIMARY/docs/reviews/." docs/reviews/
+  fi
+fi
+```
+
+Resolve `reviews_dir`/`tmp_dir` from the facts TOML fence when it defines them instead of the defaults shown. When the readiness gate fails with the readiness validator's missing-plan error ("plan file does not exist: <resolved path>"), the plan bytes live on an unlanded authoring branch, not in this worktree: cherry-pick only the plan-authoring commit (the commit that adds the plan file under the resolved plans dir) onto the run's branch, drop any sibling plan files that rode along in that commit (git rm plus git commit --amend) so the final squash diff stays scoped to the executed plan, and re-run the gate.
+
+**Stale-checkout discriminator (before any dirt is classified):** a suspected-modified tracked file is a stale-checkout artifact, never an edit, exactly when its blob hash equals that path's blob at an ancestor commit while HEAD has advanced past that ancestor: compute the file's blob (`git hash-object <file>`) and compare it against the path's blob at ancestor commits (`git rev-parse <commit>:<path>` over `git log --format=%h -- <path>`, skipping commits where the path does not exist, a deletion or rename-source commit, rather than treating the failure as a match or a tool failure). An ancestor-blob match means restore-and-record: restore the file's worktree bytes from the base tip (the index is never written by this arm), record the restoration, and never commit the stale bytes; the file's mtime predating the commits it reverses is a supporting signal, not the gate. The index arm is wholesale: when a checkout's index sits byte-identical to a pre-landing tree (`git diff --cached <pre-landing-tip>` coming back empty while HEAD has advanced past the pre-landing tip), the staged state presents a reversal block of the whole landing. The remediation is gated per path, and this block is the rule's single home: restore a landing-changed path from the base tip (`git restore --source=<base-tip> --staged --worktree --` that one path) only when its index AND worktree bytes both equal the path's blob at an ancestor commit (the pre-landing tip's blob or any older ancestor), or when its worktree bytes equal the base tip while its index bytes equal an ancestor blob (a half-synced residue; the restore clears the index without changing the worktree bytes), or when its worktree bytes equal an ancestor blob while its index bytes equal the base tip (the wholesale residue a mixed reset leaves; the worktree-only restore clears it and the index is untouched), re-reading both byte states immediately before the restore in any arm; a path whose bytes match no ancestor blob in either state is a genuine modification and a named block, never restored; record the restoration or the block, and never commit, never blanket-reset. Where the classifying site carries session attribution (the done closeout's owned-path claims), a session-owned ancestor-blob match is reported for confirmation instead of auto-restored. The discriminator runs before any dirt is classified at every site that consumes this standard (the tracked-dirt inversion check below, the done skill's closeout classification, the post-landing reconciliation implementation in this section): a stale witness found at any of them takes the restore-and-record arm instead of being left as unexplained dirt. The class includes a landing-added path absent in the checkout and a landing-deleted path carrying only pre-landing bytes: the restore materializes and removes as the post-tip dictates.
+
+**Post-landing reconciliation implementation (how step 4 finishes):** the ref-level landing arms move the base branch's ref without writing any working tree, so the moment the landing lands, every live checkout of that branch carries stale bytes; the checkout-writing arms write the landing's paths themselves, which the per-path checks below handle correctly. After releasing the merge-landing lock, the landing session reconciles every live checkout of the base branch. Run from the primary checkout or pass its path via `--repo` (resolved from the worktree list, never from the session's cwd; the run worktree may already be scheduled for removal or gone):
+
+```bash
+RECON_REPO="<the primary checkout's path, the first worktree line>"
+BASE_BRANCH="<the base branch the landing moved>"
+PRE_TIP="<the base branch ref's value captured before the landing's ref move>"
+POST_TIP="<the base branch ref's value after the landing's ref move>"
+RECONCILE_SCRIPT="${RECONCILE_SCRIPT:-$(git -C "$RECON_REPO" rev-parse --show-toplevel)/scripts/reconcile_post_landing.py}"
+[ -f "$RECONCILE_SCRIPT" ] || RECONCILE_SCRIPT="${HOME}/.ai-playbook/scripts/reconcile_post_landing.py"
+python3 "$RECONCILE_SCRIPT" --repo "$RECON_REPO" \
+  --base "$BASE_BRANCH" --pre-tip "$PRE_TIP" --post-tip "$POST_TIP"
+```
+
+Completion is verified, not assumed: exit 0 means every live checkout of the base branch was verified current (each path the landing changed carries no diff against the new base tip and no status entry); exit 1 means the reconciliation completed with named blocks: record every block row in the run's session notes and, repo-keyed, as a pending-landing memory note (the record family the maintenance blueprints define in agents/skills/maintenance/prompt-templates.md), so the next session reads the paths plus witness instead of re-discovering the dirt; exit 2 = tool failure, stop and report without writing further. The 2026-09-29 17:04 witness rewrote sixteen of seventeen changed paths and presented as done exactly because no completion check existed. Every restore is per path and discriminator-gated: the reconciliation never force-resets a genuine modification and never steals a peer's file. Integration: lesson 6 (`docs/maintenance/development_lessons.md`) owns peer safety at the ref move; this implementation owns live-checkout freshness; the tracked-dirt inversion check below owns the run-worktree side at closeout.
+
+**Transfer-out-and-deletion implementation (how steps 5 and 6 run):** before any worktree removal, migrate the run's gitignored artifacts to the primary checkout and verify them there. Detect the worktree by resolving `git rev-parse --git-dir` and `git rev-parse --git-common-dir` to absolute paths (`cd ... && pwd`) and comparing them (raw rev-parse output is relative at the repo root and absolute from subdirectories, so normalization is load-bearing); when the two resolved paths are equal the step is a documented no-op, and when unequal, run the migration below and gate removal on it. The closeout baseline JSON is captured once per run before work begins (the session bootstrap owns that capture).
+
+```bash
+# Ad-hoc-worktree closeout: migrate gitignored run artifacts to the main
+# checkout BEFORE any worktree removal. Worktree removal is allowed only
+# after verified migration; if the main checkout is mid-merge, mid-rebase,
+# or done-locked, retry the migration and do not remove the worktree while
+# blocked. Normalized path comparison (r1 F5, r2 F4 cwd fix): raw rev-parse
+# output is relative at the repo root and absolute from subdirectories, so
+# both paths are resolved through cd+pwd before comparing; equal in the
+# main checkout, unequal in a linked worktree.
+GIT_DIR_P="$(cd "$(git rev-parse --git-dir)" && pwd)"
+GIT_COMMON_P="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
+if [ "$GIT_DIR_P" != "$GIT_COMMON_P" ]; then
+  MAIN_ROOT="$(cd "$(dirname "$GIT_COMMON_P")" && pwd)"
+  CLOSEOUT_SCRIPT="${WORKTREE_CLOSEOUT_SCRIPT:-$(git rev-parse --show-toplevel)/scripts/worktree_closeout_migrate.py}"
+  [ -f "$CLOSEOUT_SCRIPT" ] || CLOSEOUT_SCRIPT="${HOME}/.ai-playbook/scripts/worktree_closeout_migrate.py"
+  python3 "$CLOSEOUT_SCRIPT" migrate \
+    --baseline "{tmp_dir}/execute-plan/<PLAN_SLUG>/closeout-baseline.json" \
+    --source "$(git rev-parse --show-toplevel)" \
+    --target "$MAIN_ROOT" \
+    --manifest "{tmp_dir}/execute-plan/<PLAN_SLUG>/closeout-migration.json" \
+    --suffix "<PLAN_SLUG>" || { echo "closeout migration failed; do NOT remove the worktree" >&2; exit 1; }
+fi
+```
+
+**Tracked-dirt inversion check (between migration and removal):** the migrate operation copies only the configured gitignored review directories; a tracked diff in the source worktree (staged or unstaged entries for tracked paths in `git status --porcelain`) is outside its contract and must never be transplanted into the main checkout index. When a linked worktree carries tracked entries, diff the worktree against the main checkout HEAD and pass the diff through the reverse-squash guard before any manual move or removal decision; on a refusal, leave the worktree in place and surface the conflict for reconciliation:
+
+```bash
+GIT_DIR_P="$(cd "$(git rev-parse --git-dir)" && pwd)"
+GIT_COMMON_P="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
+if [ "$GIT_DIR_P" = "$GIT_COMMON_P" ]; then
+  echo "not a linked worktree; tracked-dirt inversion check not applicable"
+elif [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "no tracked dirt; tracked-dirt inversion check not applicable"
+else
+  MAIN_ROOT="$(cd "$(dirname "$GIT_COMMON_P")" && pwd)"
+  MAIN_HEAD="$(git -C "$MAIN_ROOT" rev-parse HEAD)"
+  GUARD=""
+  [ -f "$MAIN_ROOT/scripts/reverse_squash_guard.py" ] && GUARD="$MAIN_ROOT/scripts/reverse_squash_guard.py"
+  if [ -z "$GUARD" ] && [ -f "$HOME/.ai-playbook/scripts/reverse_squash_guard.py" ]; then GUARD="$HOME/.ai-playbook/scripts/reverse_squash_guard.py"; fi
+  if [ -z "$GUARD" ]; then
+    echo "reverse-squash guard absent; tracked-dirt check skipped"
+  else
+    DIFF_FILE="$(mktemp "${TMPDIR:-/tmp}/closeout-diff.XXXXXX")"
+    if git -c core.quotePath=false diff -M "$MAIN_HEAD" >"$DIFF_FILE"; then
+      GUARD_RC=0
+      python3 "$GUARD" check-diff --against "$MAIN_HEAD" --repo "$MAIN_ROOT" <"$DIFF_FILE" || GUARD_RC=$?
+      rm -f "$DIFF_FILE"
+      case "$GUARD_RC" in
+        0) echo "ok: no reverse-squash signature in tracked dirt" ;;
+        1) echo "reverse-squash refusal: do NOT transplant or remove; reconcile the tracked diff first" >&2; exit 1 ;;
+        *) echo "reverse-squash guard tool failure (rc $GUARD_RC); do NOT remove the worktree; stop and report" >&2; exit 1 ;;
+      esac
+    else
+      rm -f "$DIFF_FILE"
+      echo "diff production failed; do NOT transplant or remove the worktree; report instead" >&2
+      exit 1
+    fi
+  fi
+fi
+```
+
+**Stale-checkout adjudication (guard refusal and classification):** the reverse-squash guard refuses inversion content wholesale and cannot tell a stale witness from a genuine reversal; before any manual move, removal, or classification decision on tracked dirt at this check, run the stale-checkout discriminator above on each suspected-modified entry: an ancestor-blob match is landing debris, restored from the base tip with the restoration recorded, never transplanted and never committed, except that a path the run's own records claim is reported for the operator's confirmation rather than auto-restored; an index byte-identical to a pre-landing tree is the wholesale reversal signature, remediated under the discriminator's per-path gate (restore per the gate's arms, or a named block); anything else keeps the refusal's disposition unchanged.
+
+**Fail-closed stand-downs:**
+
+- A worktree creation failure stands the run down without writing anything: no claim files, no session logs, no plan or code edits. Report the failure and end the run; never fall back to in-checkout work.
+- A transfer-out verification failure keeps the worktree and its branch and reports the stranding (name the files that could not be moved or verified). The worktree and branch carry the only copy of the run's outputs, so never delete them over a failed verification.
+
+**Base-branch resolution rule:** the base branch is a per-project default resolved from the project facts document or the owning skill configuration, never a hardcoded repository name in shared prose. A default-branch integration project pins its default branch even when the run starts from another branch: landings must integrate onto the default branch regardless of the operator's checkout state. A checkout-flow project defaults to the operator's checked-out branch at run start. A base branch that cannot be resolved from the named sources stands the run down like a creation failure; the run never improvises a base. Configuration note: the base resolves from the facts key `base_branch` (TOML, in `.ai-playbook/facts.md`) or the owning skill's configuration; the project class resolves from the facts key `project_class` (values: `default-branch-integration`, `checkout-flow`), and when that key is absent the project defaults to default-branch-integration. When the `base_branch` key is absent, the fallback derivation is: a default-branch integration project resolves its default branch via the origin HEAD symbolic ref, and a checkout-flow project resolves the base from the branch checked out in the primary checkout at run start (class semantics and stand-downs as stated above). The maintenance payloads' landing tails and the Invariants isolation bullets pin the default branch; the per-project base governs worktree creation and the execute-plan and plans landings, and equals the repository default in a default-branch-integration project.
+
+**Reference contract:** the plans skill's authoring worktree setup (plan creation, update, and completion sessions) and the maintenance child payloads (the two child blueprints and the parked-dependency unblock child) run under this standard and must not restate the lifecycle steps above in their own bodies. Each carries only its payload-critical literals (the claim directory, the facts transfer-in, the review-artifact transfer-out, the merge-locked landing, and, execution payload only, the closeout-baseline capture). When this section changes, update the consumers by reference, not by copying steps into them.
+
+## Phase 0: Run Setup (Run Once at Start)
+
+Before any implementation work, the run sets up its ad-hoc worktree per the **Worktree-first standard** section above; that section owns the lifecycle, so this phase adds only the execution-run specifics below. The worktree's own branch is the Phase 0 dedicated branch.
+
+**Branch naming convention** (compute before Step 0.1; it names the worktree's branch):
 
 1. Extract Jira task ID from plan name if present (pattern: `[A-Z]+-\d+`, e.g. `PROJ-1234`)
 2. If found: branch name = `<JIRA-TASKID>-<short-description>`
@@ -231,105 +359,15 @@ Before any implementation work, verify and set up a clean branch for this plan e
 
 `<short-description>` is derived from the plan title, kebab-case, max ~40 chars. Also derive `<PLAN_SLUG>` = plan basename without `.md`.
 
-### Step 0.1a: Definitive branch match (auto-continue; no prompt)
+### Step 0.1: Worktree-first run setup
 
-If the current branch (not detached HEAD) equals **either**:
+Create the ad-hoc worktree on its own branch named per the convention above, off the base branch resolved by the canonical section's **Base-branch resolution rule** (lifecycle step 1), then transfer the run's gitignored inputs in per the Step 0.4 transfer-in paragraph. Report the worktree path and the branch name.
 
-- `<PLAN_SLUG>` (plan filename without `.md`, e.g. `PROJ-1234-predicate-catalog-fact-store`), or
-- the computed `<BRANCH_NAME>` from the naming convention above,
+Verify the worktree before proceeding: it must be on its named branch, not a detached HEAD. A worktree on a detached HEAD or missing its named branch is a creation failure.
 
-then **auto-continue**: report `Already on plan branch <current-branch>; verifying state and proceeding.` and skip to Step 0.3. Do **not** ask whether to continue.
+Already-provisioned recognition arm: if the session already runs inside its dispatch-provisioned ad-hoc worktree, adopt it instead of creating a second per the canonical section's provisioned-worktree adoption rule (lifecycle step 1), and treat the worktree setup step as complete once the adoption check and the session bootstrap pass, running the remaining run-setup steps inside it.
 
-This covers the common case where the `plans` skill already created the feature branch and the plan slug matches the branch name.
-
-### Step 0.1b: Plausible non-exact match (ask once)
-
-If on a non-default feature branch (not `main`, `master`, or `develop`) that **plausibly** relates to this plan (Jira ID or plan slug substring in the branch name) but is **not** a definitive match from Step 0.1a, ask:
-
-```
-You're already on: <current-branch>
-Expected plan branch: <PLAN_SLUG> or <BRANCH_NAME>
-Continue on this branch for plan execution? (yes/no)
-```
-
-- **yes** → skip to Step 0.3
-- **no** → proceed to Step 0.1c
-
-### Step 0.1c: Propose new branch creation
-
-When on a default branch or when the user declined Step 0.1b, announce: "Before executing the plan, I'll set up a dedicated branch. This ensures clean history and allows safe review/rollback."
-
-**Automatic path from clean trunk (fail-closed):** before asking, check the auto-branch conditions (same truth table as the `plans` skill Phase 0 Step 0.1). When the current branch is exactly `master` or `main`, both `git status --porcelain` and `git status --porcelain --ignored` are empty, and the remaining truth-table conditions hold, proceed directly to Step 0.2 branch creation without the ask and report what was created. Every other condition in the plans truth table keeps the explicit confirmation ask.
-
-Ask the user:
-
-```
-I'll create a new local branch for this plan execution:
-- Base: current branch (<current-branch>)
-- New branch name: <computed-branch-name>
-- Push stays off until you explicitly ask to push
-
-Proceed with branch creation? (yes/no)
-```
-
-Wait for explicit user confirmation before proceeding.
-
-### Step 0.2: Create the branch
-
-If the user confirms (yes):
-
-```bash
-# Read plan title (first heading after "#")
-PLAN_TITLE="$(grep -m1 '^# ' <plan-path> | sed 's/^# //' | sed 's/ .*//')"
-PLAN_BASE="$(basename -s .md <plan-path> | sed 's/docs\/plans\///')"
-
-# Extract Jira task ID if present (pattern: LETTERS-NUMBERS, e.g. PROJ-1234)
-JIRA_ID="$(echo "$PLAN_TITLE" | grep -oE '[A-Z]+-[0-9]+' | head -1)"
-
-# Derive branch name
-if [ -n "$JIRA_ID" ]; then
-    # Use Jira ID + kebab-case short description from plan title
-    SHORT_DESC="$(echo "$PLAN_TITLE" | sed 's/'"$JIRA_ID"'[:// ]*\([^A-Z].*\)/\1/' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g' | sed 's/-$//')"
-    BRANCH_NAME="${JIRA_ID}-${SHORT_DESC}"
-else
-    # Use date + kebab-case short description from plan slug/title
-    SHORT_DESC="$(echo "$PLAN_BASE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g' | cut -c1-40)"
-    BRANCH_NAME="$(date +%Y-%m-%d)-${SHORT_DESC}"
-fi
-
-# Create the new branch from the current HEAD
-git checkout -b "$BRANCH_NAME"
-
-# Report success
-echo "Created local branch: $BRANCH_NAME"
-```
-
-Do **not** run `git push` here. Branch-create confirmation is not push authorization. **Push** still requires explicit user instruction in the current message (see user `AGENTS.md` Git Push Policy).
-
-If the user declines (no):
-
-```
-Understood. I'll proceed on the current branch: <current-branch>
-Note: This means plan work will mix with any existing uncommitted changes.
-```
-
-### Step 0.3: Verify branch state
-
-Before proceeding to Phase 1:
-
-```bash
-# Verify we're on a branch (not detached HEAD)
-git rev-parse --abbrev-ref HEAD
-
-# If origin tracking exists, verify it matches the current branch
-git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "No tracking branch yet"
-```
-
-If detached HEAD: refuse to proceed and ask the user to create or switch to a branch first.
-
-Report the final branch state to the user before starting Phase 1.
-
-**Hard gate:** Do not proceed to Phase 1 until branch setup is complete or explicitly declined by the user.
+**Hard gate:** Do not proceed to Phase 1 until the worktree setup is complete (worktree created on its own branch, inputs transferred in). A creation failure stands the run down per the canonical section's fail-closed stand-downs.
 
 ### Step 0.4: Session bootstrap (before any plan-scoped code edit)
 
@@ -353,29 +391,18 @@ session_start_commit: <sha>
 
 | Step | Log path | Status |
 |------|----------|--------|
-| Phase 0 branch | (none) | pending |
+| Phase 0 worktree | (none) | pending |
 ```
 
 `session_start_commit` is the HEAD sha captured when Phase 0 completes; the Step 0.5 resume exemption uses it as its `git log` lower bound. The orchestrator refreshes the `updated:` timestamp on EVERY manifest update (including the Step 1.4 and Step 3.4 done-verification gate updates and the Step 3.5 counter refresh); it is the freshness witness the `done` Step 1.5 staleness rule reads. On resume of an existing run, the orchestrator's first action is a manifest update refreshing `updated:` (and confirming `workflow_state: active`) before relaunching any sub-agent; this re-establishes the fresh witness up front instead of via per-task review rounds.
 
 Update the manifest when Phase 0 completes. See [agent-logs.md](agent-logs.md) for log paths.
 
-**Machine manifest seeding (Phase 0):** When a structured machine manifest (`runtime_state.json`) is used for the run, the driver's `create` operation (`--operation create`) is the **only documented path that translates plan checkboxes into machine manifest state**: it seeds the authoritative manifest from the plan task list (pending statuses, fresh generation, mode `0600`) and validates every task's `allowed_paths` entries against the same fail-closed path policy enforced at launch. Directory-valued entries (including trailing-slash entries) are rejected with an actionable error naming the entry; directory prefix matching is out of scope because it would silently never match the file-level witnesses. No other path may write the initial machine manifest. Before invoking create, derive the task-to-evidence mapping from each task's own acceptance criteria and Files list. Each task's criteria and commands must be runnable at that task boundary; the plan's global Validation Commands block stays the final whole-plan gate checked at the done boundary, and the parent must never clone it into per-task verifiers. The create operation refuses both malformed shapes mechanically, naming the task and the offending entry: a verifier whose commands depend on an artifact only a later task produces, and two or more tasks declaring identical whole verification command lists cloned from the global block. If a worker result is refused as `malformed-result` over unsatisfiable criteria, the run holds at its launched claim, and the only sanctioned exit is the driver's `recover-evidence-contract` operation: reconcile the plan scope through the skill-gated plan edit first, then recover with the corrected contract. Reclaim refuses the hold over its live launch reservation, and a relaunch either is refused over the live claim or re-fails against the unchanged immutable contract, so neither is an exit from this hold; manual manifest edits stay prohibited.
+**Machine manifest seeding (Phase 0):** When a structured machine manifest (`runtime_state.json`) is used for the run, the driver's `create` operation (`--operation create`) is the **only documented path that translates plan checkboxes into machine manifest state**: it seeds the authoritative manifest from the plan task list (pending statuses, fresh generation, mode `0600`) and validates every task's `allowed_paths` entries against the same fail-closed path policy enforced at launch. Directory-valued entries (including trailing-slash entries) are rejected with an actionable error naming the entry; directory prefix matching is out of scope because it would silently never match the file-level witnesses. No other path may write the initial machine manifest. The create invocation mandates `--runtime` with the run's runtime id (every later preflight emission pins that recorded id; a manifest seeded without it fails the preflight emission fail-closed with the re-create remedy, the claim-boundary remedy supplied as `--runtime` together with `--approval-receipt`, or the driver's `recover-run-identity` migration operation) and supplies `--approval-receipt` when the host records one (the receipt persists resolved to an absolute path). After seeding, the Runtime-neutral execution contract's preflight mandate governs every claim and continuation boundary, including the first. Before invoking create, derive the task-to-evidence mapping only from each task's own `Evidence:` declaration; checklist prose, worker summaries, and the global validation block never seed a contract. A task without an `Evidence:` declaration stops seeding before create, and the named remedy is to add the declaration through the semantic plan-edit path (adding an Evidence block changes the evidence class, so the edit is semantic) and complete a fresh whole-plan review round before continuation. The machine manifest retains full criteria; verification receipts carry only compact criterion IDs resolved through the immutable mapping bound to `evidence_contract_digest`. Create refuses criteria that exceed UTF-8 byte or 100-item receipt limits before writing, and recovery refuses missing, altered, or ambiguous mappings before mutation. Manifest validation accepts the legacy evidence-contract digest shape for in-progress runs; newly created and corrected contracts use the current digest shape. Each task's criteria and commands must be runnable at that task boundary; the plan's global Validation Commands block stays the final whole-plan gate checked at the done boundary, and the parent must never clone it into per-task verifiers. The create operation refuses three malformed shapes mechanically, naming the task and the offending entry: a verifier whose commands depend on an artifact only a later task produces (an argv token whose canonical form equals a strictly later task's `allowed_paths` entry, the exact-canonical-equality shape), two or more tasks declaring identical whole verification command lists cloned from the global block (the clone-signature shape), and a non-path token embedding a strictly later task's allowed path under the tail-boundary rule. If a worker result is refused as `malformed-result` over unsatisfiable criteria, the run holds at its launched claim, and the only sanctioned exit is the driver's `recover-evidence-contract` operation: reconcile the plan scope through the skill-gated plan edit first, then recover with the corrected contract. Reclaim refuses the hold over its live launch reservation, and a relaunch either is refused over the live claim or re-fails against the unchanged immutable contract, so neither is an exit from this hold; manual manifest edits stay prohibited. The launch preflight additionally projects each task's worst-case evidence receipt envelope against the bounded schema limits before implementation work, and `recover-evidence-envelope` is the post-launch sanctioned exit when a launched verifier's contract projects over the limit (see the runtime contract).
 
-**Linked-worktree bootstrap (before the Step 0.5 gate):** when the checkout is a linked worktree (its `.git` is a file), the gitignored inputs the Step 0.5 gate resolves - the facts file, the reviews directory with the certified artifacts, and the tmp directory - are missing, so run this recipe before the gate:
+**Transfer-in (before the Step 0.5 gate):** the run worktree's gitignored directories start empty, so transfer the run's gitignored inputs in per the canonical section's **Transfer-in implementation** (Worktree-first standard, lifecycle step 2) before the Step 0.5 gate, and re-run the gate after the transfer; when the gate instead fails with the readiness validator's missing-plan error, apply that implementation's unlanded-plan remedy.
 
-```bash
-if [ -f .git ]; then
-  PRIMARY="$(git worktree list --porcelain | sed -n 's/^worktree //p' | head -1)"
-  mkdir -p .ai-playbook docs/reviews docs/tmp
-  test -f .ai-playbook/facts.md || cp "$PRIMARY/.ai-playbook/facts.md" .ai-playbook/facts.md
-  if [ -d "$PRIMARY/docs/reviews" ]; then
-    cp -R "$PRIMARY/docs/reviews/." docs/reviews/
-  fi
-fi
-```
-
-Run this before the Step 0.5 readiness gate whenever the checkout is a linked worktree, resolve `reviews_dir`/`tmp_dir` from the facts TOML fence when it defines them instead of the defaults shown, and re-run the Step 0.5 gate after the bootstrap. When the Step 0.5 gate instead fails with the readiness validator's missing-plan error ("plan file does not exist: <resolved path>"), the plan bytes live on an unlanded authoring branch, not in this worktree: create the execution branch off the default branch and cherry-pick only the plan-authoring commit (the commit that adds the plan file under the resolved plans dir), drop any sibling plan files that rode along in that commit (git rm plus git commit --amend) so the final squash diff stays scoped to the executed plan, and re-run the Step 0.5 gate.
+**Execution claim registration:** before any plan work, the run writes and thereafter honors the claim file per the EXECUTION CLAIM paragraph in `agents/skills/maintenance/prompt-templates.md`, the procedure of record (that paragraph owns the four frontmatter lines, the create-if-absent noclobber, the refresh cadence across phase boundaries, task completions, and review rounds, and the stale-claim takeover), at the primary checkout's literal `docs/tmp/execution-claims/<plan-slug>.md`, resolving the primary checkout as the first `worktree` entry of `git worktree list --porcelain` (the same resolution the Transfer-in implementation uses) and standing down writing nothing when the primary checkout cannot be resolved; a fresh foreign claim refuses the start (stand down writing nothing); the run deletes the claim at closeout and on an owned stand-down. The paragraph changes no review gate or landing gate; it makes the run's claim visible to the guards the payload template and the queue-drain chaining paragraph already honor.
 
 ```bash
 # Closeout baseline: record the pre-run file set of the gitignored artifact
@@ -450,7 +477,7 @@ After Step 0.5 has certified the run once, the orchestrator does not repeat that
 | Manifest lock contended at decision time (recovery action `resumable-conflict`) | Driver `readiness` operation, decision `recovery` with the transient contention envelope | Transient contention only: retry the readiness call after the lock is released; the manifest is unchanged and nothing is blocked durably. |
 | Every task complete or checkpointed (or carrying `checkbox: true`) on an `active`, `complete`, or `terminal` manifest | Driver `readiness` operation, decision `terminal-path` | Proceed to Phase 2 and the terminal-response gate. |
 
-Direct continuation (decision `direct-continuation`) requires all of: the machine manifest carries at least one task; machine `workflow_state` is `active`; no unresolved done handoff and no fenced claim; the plan carries at least one recognizable `### Task <N>:` section, and every progressed task (`done-pending`, `commit-pending`, `checkpointed`, `complete`) has a plan section with no unchecked checkbox line; and the next incomplete task is provable (`pending`). The digest, review-scope, and unresolved-finding conditions stay owned by the Step 0.5 validator and the review artifacts; the readiness operation never reads review sidecars; the terminal gate's clean-round sidecar read is the only documented extension. When several triggers coincide, the driver's fixed evaluation order decides: `terminal-path` first, then `observe-worker`, then `recovery`, then `direct-continuation`; the first matching decision is the outcome. The freeze is current state, not new machinery: the table's direct-continuation row already permits Task N to Task N+1 progression without a whole-plan re-certification while the digest and manifest stay valid.
+Direct continuation (decision `direct-continuation`) requires all of: the machine manifest carries at least one task; machine `workflow_state` is `active`; no unresolved done handoff and no fenced claim; the plan carries at least one recognizable `### Task <N>:` section, and every progressed task (`done-pending`, `commit-pending`, `checkpointed`, `complete`) has a plan section with no unchecked checkbox line; and the next incomplete task is provable (`pending`). The digest, review-scope, and unresolved-finding conditions stay owned by the Step 0.5 validator and the review artifacts; the readiness operation never reads review sidecars; the terminal gate's clean-round sidecar read and the reviewed scope-recovery operation's review-evidence composition (that one operation only) are the documented exceptions. When several triggers coincide, the driver's fixed evaluation order decides: `terminal-path` first, then `observe-worker`, then `recovery`, then `direct-continuation`; the first matching decision is the outcome. The freeze is current state, not new machinery: the table's direct-continuation row already permits Task N to Task N+1 progression without a whole-plan re-certification while the digest and manifest stay valid.
 
 ### Step 0.6: Predecessor verification (hard gate, before Phase 1)
 
@@ -478,6 +505,8 @@ The execution loop runs under the plans skill's degraded-generation disk-truth p
 | `budget_pause_max_used_percent` | Pause when the binding quota window used percent is at or above N | `90` |
 | `budget_probe_runtime` | Force a specific probe runtime id (accepted values per `scripts/quota_window_probe.py --help`) instead of auto-detect; the fallback value `auto` means omit `--runtime` entirely so the probe auto-detects (passing the literal string `auto` is rejected by the CLI) | `auto` |
 | `budget_pause_min_protocol_minutes` | Pause when the binding quota window's remaining minutes fall below this protocol-completion margin (the time the boundary's remaining work plus the pause protocol needs) | `10` |
+| `base_branch` | Base branch for worktree creation (Worktree-first standard lifecycle step 1; landings resolve per the Base-branch resolution rule) | The project-class derivation per the Base-branch resolution rule |
+| `project_class` | Project class: `default-branch-integration` or `checkout-flow` (drives the base-branch fallback derivation) | `default-branch-integration` |
 
 ### Budget gate (quota-window pause and resume)
 
@@ -536,7 +565,7 @@ The plans skill mirrors this protocol at plan-authoring boundaries (see the plan
 
 A context-size mechanism, distinct from the quota-window pause in the Budget gate above: the ladder below compacts this session's own working context and never pauses the run for a quota window. Run a context budget checkpoint only at safe boundaries: after each worker return, at each phase transition, and after each review round. The safe-boundary rule holds at every one of them: a checkpoint is never mid-task, because a compaction between a worker claim and its completion orphans driver state; the machine manifest mitigates but the boundary rule removes the exposure.
 
-**Task-boundary compaction duty.** Independent of the measurement ladder, the run performs a proactive compaction at every green task boundary: when Step 1.4's verification gate has passed (task commit landed, manifest updated) and at least one task remains unchecked, the run compacts at the boundary via the runtime compaction primitive when the runtime exposes one; on a runtime without one the boundary report carries the no-primitive note and the run continues (the measurement ladder above still governs measurement-driven compaction); the duty never runs mid-task, inside a review round, or while a merge lock or landing critical section is held; the manifest (workflow_state, task checkboxes, execution record) is the resume source of truth after any compaction, never the transcript summary.
+**Task-boundary checkpoint duty.** Independent of the measurement ladder, the run structures each green task boundary as durable checkpoint state: when Step 1.4's verification gate has passed (task commit landed, manifest updated) and at least one task remains unchecked, the boundary stands as a green commit plus the manifest update, so an automatic harness compaction can only land on resumable state; the session never invokes compaction itself (the measurement ladder above still governs measurement-driven compaction); the duty never runs mid-task, inside a review round, or while a merge lock or landing critical section is held; the manifest (workflow_state, task checkboxes, execution record) is the resume source of truth, never the transcript summary.
 
 **Threshold ladder.** At each checkpoint measure context size: runtime session/transcript stats where available; otherwise a char-count proxy over the transcript with a ~4 chars/token ratio, labeled an estimate (carried inline here because standalone execute-plan runs never load the maintenance overlay). Prefer the runtime's documented host-scoped locator where a runtime overlay defines one (for an agent runtime with an overlay defining one: the overlay's `Context measurement primitive` section); when no executable measurement surface exists (no locator, or the located store is missing, unreadable, or the session id not resolvable), the checkpoint appends the record with `action: no-primitive` and continues rather than skipping. The budget is `context_budget_tokens`, read from the opening TOML block of `.ai-playbook/facts.md`, falling back to 300000 when the key is absent. Apply the first matching rung:
 
@@ -556,7 +585,7 @@ Before any plan Markdown write, refresh the plans-class skill-gate marker per `a
 
 The main agent (you) only:
 
-1. Runs Phase 0 (branch setup) at the start before any implementation work (prompt only when branch is not a definitive match or new branch creation is needed).
+1. Runs Phase 0 (the worktree-first run setup) at the start before any implementation work, per the Worktree-first standard (a creation failure stands the run down).
 2. Loads and parses the plan file.
 3. Asks the runtime driver to identify the **topmost incomplete task** (first `### Task N:` that still has any `- [ ]` item).
 4. Asks the runtime driver to atomically claim the task, then launches the worker through the selected adapter (never parallel for implement or done, except a Step 1.2 parallel-group whose members implement concurrently under the parallel-group contract while done stays strictly sequential; the review-fix address pass may fan out only under the Step 3.3 fan-out contract, with parent-owned merge and the single per-round commit).
@@ -628,6 +657,16 @@ Use the **Implement Task** template from [subagent-prompts.md](subagent-prompts.
 
 Pass: plan file path, task number/title, full task section text, `## Validation Commands`, `Files:` list, and `<IMPLEMENT_LOG_PATH>` (see [agent-logs.md](agent-logs.md)).
 
+The driver builds the child prompt from the active claim and task contract:
+single-task worker role, exact task body and id, canonical allowed paths,
+task-local validation commands and criteria, evidence owner, and implement-log
+destination. Treat caller prose as non-authoritative; a mismatched structured
+role/scope or the orchestrator's `continue execute-plan` prompt blocks before
+launch reservation. Classify each checklist action as worker-owned or
+parent-owned before claim creation. Keep only worker-owned actions in worker
+criteria. Preserve a parent-owned `Commit:` action and its exact planned
+identity for the parent done receipt, which verifies it independently.
+
 **Batch option (disjoint tasks):** When the next K unchecked tasks, taken as a prefix of the unchecked queue in canonical document order with a cap of four, have pairwise-disjoint canonical `Files:` sets and the combined member file count is capped at 8, the orchestrator MAY batch them into ONE implement sub-agent launch (a **batch implement launch**) using the **Implement Task Batch** template from [subagent-prompts.md](subagent-prompts.md) instead of one launch per task, passing each member's task-local validation command, the group id, the active member ordinal, the member policy token, the anchor session id, and the per-task implement log paths. The orchestrator passes the driver's batch opt-in flag when claiming a batch and declines the option by claiming without the flag (a no-flag claim is today's single-task claim); the driver computes the batch membership as the maximal disjoint prefix (cap of four, canonical document order, no skipping past an overlapping task, and the combined member file count capped at 8). The batch worker uses one session and implements only the active member at a time, returns a member checkpoint at each task boundary, and resumes the same session for the next member with a fresh member policy token and moving baseline, writing each member's evidence into its own task-<N>-implement.log.md (create or append per [agent-logs.md](agent-logs.md)), so every member's Step 1.4 done reads its own preceding-step log exactly as today. Downstream stays exactly as today: per-task done commits in document order, per-task verification per the Step 1.2 exit criteria, per-task checkbox flips with a fresh marker refresh per write, per-task driver checkpoints, and K commits with no batch-level commit; sanctioned exception, a member held by a Step 1.2b blocking verdict (holding and done ordering per Step 1.2b Rounds). Guardrail: never batch tasks carrying host-wiring exception receipts, inclusion-gate ambiguity, or overlapping files. The batch decision and membership are recorded in the session manifest. When a failure in batch task j stops the batch, earlier batch tasks verify, checkpoint, and commit normally, and task j and later recover through the standard fix path. The inclusion hard gate runs on every batched task before the single launch.
 
 **Parallel-group option (concurrent disjoint tasks):** When the next K unchecked tasks (K >= 2, capped at 4 members and 8 combined member files) have pairwise-disjoint canonical `Files:` sets, no cross-task validation dependency, no host-wiring exception receipts, and no inclusion-gate ambiguity (mirroring the batch guardrail), the orchestrator MAY launch them as a **parallel implement group** instead of batching: it passes the driver's parallel-group claim operation the requested member ids in canonical document order (the driver re-derives the full membership from the machine manifest and refuses an overlapping, over-cap, non-prefix, or unauthorized request with stale-claim evidence; on a refusal the orchestrator falls back to the batch or single-task contract), launches the single-task **Implement Task** workers concurrently (one worker per member, each with its own session, claim, policy token, and `task-<N>-implement.log.md` per [agent-logs.md](agent-logs.md)), and records the group and its membership in the session manifest (`manifest.md`). After all members land, the per-member pipeline runs strictly sequentially in document order: Step 1.2 exit-criteria verification, Step 1.2b intermediate review, Step 1.3 checkbox flips (with a fresh marker refresh per write), and Step 1.4 done per member, so done stays strictly sequential with one commit per member and no group-level commit. A failed member recovers through the standard single-task path (focused fix, or the driver's terminal-receipt reclaim, which releases only that member) without failing siblings; the group closes on the last member commit. The inclusion hard gate runs on every member before the group launch.
@@ -685,7 +724,7 @@ Skip the upkeep run on personal projects or when migration-complete is false (su
 Launch a sub-agent using your agent's sub-agent execution capability.
 Use the **Done (per task)** template from [subagent-prompts.md](subagent-prompts.md).
 
-Pass the plan's commit line when present (e.g. `Commit: feat: ...`), and when the task section carries no `Commit:` line, expect the done workflow's justified `nothing to commit` and record the driver done receipt with `commit_identity` `none` per the runtime contract's Done handoff receipt subsection; never manufacture a checkbox-flip commit to satisfy the boundary (the none witness tolerates the Step 1.3 flip itself), `<IMPLEMENT_LOG_PATH>` for the task just completed, and `manifest.md` path. When Step 1.2b ran for the task, also pass `<TASK_REVIEW_LOG_PATH>` (`task-<N>-review.log.md`) and the captured backlog paths recorded on the task's `inter_review` line; omit the review log under the `Intermediate reviews: off` opt-out and on the Recovery path, where Step 1.2b does not run. The sub-agent **reads the implement log before `learn`**, then runs the full `done` skill (learn → docs-branch → commit) scoped to this task's changes.
+Pass the plan's commit line when present (e.g. `Commit: feat: ...`), and when the task section carries no `Commit:` line, expect the done workflow's justified `nothing to commit` and record the driver done receipt with `commit_identity` `none` per the runtime contract's Done handoff receipt subsection; never manufacture a checkbox-flip commit to satisfy the boundary (the none witness tolerates the Step 1.3 flip itself), `<IMPLEMENT_LOG_PATH>` for the task just completed, and `manifest.md` path. On the Recovery path, when a `Commit:`-line task's implementation is verified byte-identical to its claim baseline with clean task-local validation, the claim invocation carries `--recovery` and the done report records `commit_identity: baseline-unchanged` per the runtime contract's Done handoff receipt subsection; workers never manufacture a source edit to satisfy commit accounting. When Step 1.2b ran for the task, also pass `<TASK_REVIEW_LOG_PATH>` (`task-<N>-review.log.md`) and the captured backlog paths recorded on the task's `inter_review` line; omit the review log under the `Intermediate reviews: off` opt-out and on the Recovery path, where Step 1.2b does not run. The sub-agent **reads the implement log before `learn`**, then runs the full `done` skill (learn → docs-branch → commit) scoped to this task's changes.
 
 **Do not advance to the next task until `done` completes successfully, except a Step 1.2 parallel-group whose members launch concurrently under the parallel-group contract while their per-member `done` completions run sequentially in document order.**
 
@@ -703,7 +742,7 @@ After Step 1.4 passes, post a **brief** status (one short block is enough):
 - Task N completed; commit SHA and message
 - Starting Task N+1 (title) now
 
-Then run the **Task-boundary compaction duty** (see `Context budget checkpoints`) and immediately go to Step 1.1 for the next incomplete task. Do **not**:
+Then run the **Task-boundary checkpoint duty** (see `Context budget checkpoints`) and immediately go to Step 1.1 for the next incomplete task. Do **not**:
 
 - Ask "want me to proceed to Task N+1?"
 - Offer to start the next task as an optional follow-up
@@ -745,7 +784,7 @@ Run after all tasks are implemented and final validation passes.
 | **Full-panel budget** | At most five full-panel rounds; ask before a sixth |
 | **Total-round budget** | At most `max_review_rounds` review rounds in the whole Phase 3 loop (default 5), counting full-panel and focused rounds alike; ask at the cap |
 | **Escalation budget** | At most one escalation worker in the active review run |
-| **Residual-acceptance exit** | When a reconciliation pass or the fix-risk triage produces a named fix set, the orchestrator may propose the bounded exit; a standing instruction or explicit user grant records `residual_policy:` in the manifest BEFORE the verification round runs (the named finding set, the grant's source, and the date); the exit is one address pass for the named set plus ONE focused targeted round composed per `review-panel-selection` Targeted follow-ups; findings in the named set must reach fixed or dropped; any NEW blocking finding outside the set becomes a durable backlog item with an owner and a trigger instead of another round; the exit report lists the backlogged residuals with their item paths. **Do not** record a blanket `Medium→backlog` residual policy for the lost-work family: `concurrency#*` (which subsumes the currently enumerated `concurrency#cleanup-gated-on-update`, `concurrency#permit-finally`, and `concurrency#terminal-not-partial` entries), `quality#addressable-domain-door`, `quality#port-api-truth`, `quality#typed-catalog-enumeration-door`, and `implementation#typed-enqueue-door`; the family stays fix-or-block unless the user names each finding id in the residual set |
+| **Residual-acceptance exit** | When a reconciliation pass or the fix-risk triage produces a named fix set, the orchestrator may propose the bounded exit; a standing instruction or explicit user grant records `residual_policy:` in the manifest BEFORE the verification round runs (the named finding set, the grant's source, and the date), same-day recording sanctioned (the pre-archive ordering proof witnesses the ordering at day precision, so only a policy recorded later than the round's day refuses); the exit is one address pass for the named set plus ONE focused targeted round composed per `review-panel-selection` Targeted follow-ups; findings in the named set must reach fixed or dropped; any NEW blocking finding outside the set becomes a durable backlog item with an owner and a trigger instead of another round; the exit report lists the backlogged residuals with their item paths. **Do not** record a blanket `Medium→backlog` residual policy for the lost-work family: `concurrency#*` (which subsumes the currently enumerated `concurrency#cleanup-gated-on-update`, `concurrency#permit-finally`, and `concurrency#terminal-not-partial` entries), `quality#addressable-domain-door`, `quality#port-api-truth`, `quality#typed-catalog-enumeration-door`, and `implementation#typed-enqueue-door`; the family stays fix-or-block unless the user names each finding id in the residual set |
 
 In a `personal`-class project (class resolution and strict package per `review-plan`, Project strictness classes) these review budgets tighten mechanically: the default is two review rounds with a hard cap of three, and at the cap without a clean round the orchestrator stops and puts simplify-or-rewrite to the user; the cap-closure terminal shape is not available to personal-class plans.
 
@@ -1044,6 +1083,8 @@ When Phase 4 completes, proceed to Phase 5.
 
 Delete the execute-plan session directory **only after the full workflow succeeded**. This is the last orchestrator step. A run paused by the Budget gate never reaches Phase 5; tmp cleanup stays skipped until a resumed run completes the full workflow.
 
+**Post-landing continuation duty:** after the terminal receipt, an interactive turn follows the maintenance skill's execution-lane interactive continuation rule, defaulting to the closing report that names the next-highest open plan plus a ready-to-send continuation ask, and proceeding to the next digest-intact open plan only when a live continuation directive governs the session; the post-landing continuation duty references the rule and does not restate its conditions.
+
 **Success checklist (all must be true before removal):**
 
 1. Every plan task checkbox is `[x]`. Deferred-to-backlog items must also be `[x]` with an explicit Deferred/backlog note: a struck-through `- [ ]` line still fails the driver's line-anchored unchecked scan and blocks `mark_terminal`. Pass `--input` `phase5_checklist` as a non-empty **list of strings**, not an object.
@@ -1059,68 +1100,7 @@ Delete the execute-plan session directory **only after the full workflow succeed
 
 **Exit-path throwaway-script cleanup (every terminal exit, not just success):** The success-only gate above is correct for `.md` logs (which have resume/`learn` value), but it is the wrong gate for throwaway scripts and scratch data. On ANY terminal exit (user interrupt, max-rounds stop, handoff, crash) where Phase 5 success cleanup did not run, the orchestrator (or the operator before the next `docs-branch` sync) must audit `{tmp_dir}/execute-plan/<PLAN_SLUG>/` for throwaway `.py`/`.sh`/`.csv`/`.txt`/`__pycache__` files and scratch dirs such as `mutant-*` / `mutants/`, and either delete them or relocate them to repo-root `tmp/` per `agent_workflow_guidelines.md` §50.3.1. Reason: `docs-branch` is add-only and prunes only narrow ephemeral classes (stale cf-out snapshots, `__pycache__`, dirs orphaned by a completed doc-hierarchy migration), so throwaway scripts that ride along with the `.md` logs still land on the docs branch and persist in its history until a later sweep, which is why the terminal-exit audit remains required. Keep the `.md` logs and `manifest.md`; drop the scripts and mutant scratch trees.
 
-**Ad-hoc-worktree closeout (before any removal):** when the checkout is a linked worktree, detect it by resolving `git rev-parse --git-dir` and `git rev-parse --git-common-dir` to absolute paths (`cd ... && pwd`) and comparing them (raw rev-parse output is relative at the repo root and absolute from subdirectories, so normalization is load-bearing); when the two resolved paths are equal the step is a documented no-op, and when unequal, run the migration below and gate removal on it.
-
-```bash
-# Ad-hoc-worktree closeout: migrate gitignored run artifacts to the main
-# checkout BEFORE any worktree removal. Worktree removal is allowed only
-# after verified migration; if the main checkout is mid-merge, mid-rebase,
-# or done-locked, retry the migration and do not remove the worktree while
-# blocked. Normalized path comparison (r1 F5, r2 F4 cwd fix): raw rev-parse
-# output is relative at the repo root and absolute from subdirectories, so
-# both paths are resolved through cd+pwd before comparing; equal in the
-# main checkout, unequal in a linked worktree.
-GIT_DIR_P="$(cd "$(git rev-parse --git-dir)" && pwd)"
-GIT_COMMON_P="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
-if [ "$GIT_DIR_P" != "$GIT_COMMON_P" ]; then
-  MAIN_ROOT="$(cd "$(dirname "$GIT_COMMON_P")" && pwd)"
-  CLOSEOUT_SCRIPT="${WORKTREE_CLOSEOUT_SCRIPT:-$(git rev-parse --show-toplevel)/scripts/worktree_closeout_migrate.py}"
-  [ -f "$CLOSEOUT_SCRIPT" ] || CLOSEOUT_SCRIPT="${HOME}/.ai-playbook/scripts/worktree_closeout_migrate.py"
-  python3 "$CLOSEOUT_SCRIPT" migrate \
-    --baseline "{tmp_dir}/execute-plan/<PLAN_SLUG>/closeout-baseline.json" \
-    --source "$(git rev-parse --show-toplevel)" \
-    --target "$MAIN_ROOT" \
-    --manifest "{tmp_dir}/execute-plan/<PLAN_SLUG>/closeout-migration.json" \
-    --suffix "<PLAN_SLUG>" || { echo "closeout migration failed; do NOT remove the worktree" >&2; exit 1; }
-fi
-```
-
-**Tracked-dirt inversion check (between migration and removal):** the migrate operation copies only the configured gitignored review directories; a tracked diff in the source worktree (staged or unstaged entries for tracked paths in `git status --porcelain`) is outside its contract and must never be transplanted into the main checkout index. When a linked worktree carries tracked entries, diff the worktree against the main checkout HEAD and pass the diff through the reverse-squash guard before any manual move or removal decision; on a refusal, leave the worktree in place and surface the conflict for reconciliation:
-
-```bash
-GIT_DIR_P="$(cd "$(git rev-parse --git-dir)" && pwd)"
-GIT_COMMON_P="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
-if [ "$GIT_DIR_P" = "$GIT_COMMON_P" ]; then
-  echo "not a linked worktree; tracked-dirt inversion check not applicable"
-elif [ -z "$(git status --porcelain --untracked-files=no)" ]; then
-  echo "no tracked dirt; tracked-dirt inversion check not applicable"
-else
-  MAIN_ROOT="$(cd "$(dirname "$GIT_COMMON_P")" && pwd)"
-  MAIN_HEAD="$(git -C "$MAIN_ROOT" rev-parse HEAD)"
-  GUARD=""
-  [ -f "$MAIN_ROOT/scripts/reverse_squash_guard.py" ] && GUARD="$MAIN_ROOT/scripts/reverse_squash_guard.py"
-  if [ -z "$GUARD" ] && [ -f "$HOME/.ai-playbook/scripts/reverse_squash_guard.py" ]; then GUARD="$HOME/.ai-playbook/scripts/reverse_squash_guard.py"; fi
-  if [ -z "$GUARD" ]; then
-    echo "reverse-squash guard absent; tracked-dirt check skipped"
-  else
-    DIFF_FILE="$(mktemp "${TMPDIR:-/tmp}/closeout-diff.XXXXXX")"
-    if git -c core.quotePath=false diff -M "$MAIN_HEAD" >"$DIFF_FILE"; then
-      GUARD_RC=0
-      python3 "$GUARD" check-diff --against "$MAIN_HEAD" --repo "$MAIN_ROOT" <"$DIFF_FILE" || GUARD_RC=$?
-      rm -f "$DIFF_FILE"
-      case "$GUARD_RC" in
-        0) echo "ok: no reverse-squash signature in tracked dirt" ;;
-        1) echo "reverse-squash refusal: do NOT transplant or remove; reconcile the tracked diff first" >&2; exit 1 ;;
-        *) echo "reverse-squash guard tool failure (rc $GUARD_RC); do NOT remove the worktree; stop and report" >&2; exit 1 ;;
-      esac
-    else
-      rm -f "$DIFF_FILE"
-      echo "diff production failed; do NOT transplant or remove the worktree; report instead" >&2
-      exit 1
-    fi
-  fi
-fi
-```
+**Ad-hoc-worktree closeout (before any removal):** the run's worktree closeout is the canonical section's named **Transfer-out-and-deletion implementation** (Worktree-first standard, lifecycle steps 5 and 6): detect the worktree, migrate the gitignored run artifacts to the primary checkout with the closeout migration script against this run's captured closeout baseline, pass the tracked-dirt inversion check, and gate the worktree's deletion on both. A migration or inversion-check failure keeps the worktree and its branch and reports the stranding; never delete them over a failed verification.
 
 **Removal (orchestrator runs directly; not a sub-agent; only after terminal receipt):**
 
@@ -1138,7 +1118,7 @@ test ! -e "{tmp_dir}/execute-plan/<PLAN_SLUG>" && echo "tmp cleanup OK"
 
 Report successful plan completion to the user, including the verified terminal-receipt fields, the Phase 3 fixed-vs-backlogged findings tally (backlog item paths for valid findings not fixed on the branch), and that session tmp logs and any review diff snapshots under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` were removed. The exit report and any user-facing completion summary must carry every `release blocker owned elsewhere` row from the staging doc's `## Release-gate ledger` verbatim (the ledger is a handoff artifact, never authorization to expand the plan). Review staging docs under `{reviews_dir}/` are **not** deleted by this step (separate lifecycle). Only after the terminal receipt was written and re-read may the parent send its final response for the execute-plan request.
 
-**Queue-drain continuation (interactive execution under a standing execution directive):** when this run executes under a standing user directive to execute plans (a queue-drain directive, for example "execute plans one by one in order of urgency"), the verified landing and the completed closeout above are NOT a turn end: the orchestrator immediately re-surveys the plans directory for the next digest-intact open plan under the scheduler's D1 selection discipline, whose procedure of record is the maintenance skill's Step 3 D1 rule (the execution queue head and priority ordering from the scheduler state file, outstanding-landing resolution first, skipping memory-index dependency-blocked marks, live parked_dependencies entries, and externally-gated plans per the External-gate header classification) and continues executing it in the same turn, running the full execute-plan flow per plan. Before executing the next plan, the chaining start writes and honors the execution-claim protocol whose procedure of record is the maintenance prompt template's EXECUTION CLAIM paragraph: a noclobber claim file under the primary checkout's literal `docs/tmp/execution-claims/` root (the witness the scheduler's discovery arms read), refreshing its `updated:` per that paragraph's refresh duty (every phase boundary, every task completion inside the implementation loop, and every review-round iteration; a refresh recreates the claim file when a takeover unlinked it) and deleting it at closeout and owned stand-down; a fresh foreign claim on the same plan is a guard-fire stop, not a wait, and a chained session that cannot honor the refresh duty does not chain. The sanctioned inter-plan turn ends are a guard fire (a quota pause or near-reset with the Budget gate's constants on the interactive lane, a landing-gate hold reported by `scripts/done-lock.sh` merge-status, a lane hold from the scheduler guards, provider rate pressure with its structured rate-limited end) or an empty queue (no digest-intact open plan remains); a user interrupt or explicit abort is always sanctioned as well. A confirmation ask to the user is never a sanctioned inter-plan stop; the guard reason, stated in the final report, is. This rule governs only the boundary between plans: the next plan's own Phase 0 gates (branch setup among them) operate per their own rules and are not inter-plan stops. This paragraph changes no review gate, landing gate, or execution-lane dispatch guard (the `G1e` lane guard and the P54 fleet cap): every plan still passes the full chain, and the same turn simply chains into the next plan instead of stopping to ask.
+**Queue-drain continuation (interactive execution under a standing execution directive):** when this run executes under a standing user directive to execute plans (a queue-drain directive, for example "execute plans one by one in order of urgency"), the verified landing and the completed closeout above are NOT a turn end: the orchestrator immediately re-surveys the plans directory for the next digest-intact open plan under the scheduler's D1 selection discipline, whose procedure of record is the maintenance skill's Step 3 D1 rule (the execution queue head and priority ordering from the scheduler state file, outstanding-landing resolution first, skipping memory-index dependency-blocked marks, live parked_dependencies entries, and externally-gated plans per the External-gate header classification) and continues executing it in the same turn, running the full execute-plan flow per plan. Before executing the next plan, the chaining start writes and honors the execution-claim protocol whose procedure of record is the maintenance prompt template's EXECUTION CLAIM paragraph: a noclobber claim file under the primary checkout's literal `docs/tmp/execution-claims/` root (the witness the scheduler's discovery arms read), refreshing its `updated:` per that paragraph's refresh duty (every phase boundary, every task completion inside the implementation loop, and every review-round iteration; a refresh recreates the claim file when a takeover unlinked it) and deleting it at closeout and owned stand-down; a fresh foreign claim on the same plan is a guard-fire stop, not a wait, and a chained session that cannot honor the refresh duty does not chain. The sanctioned inter-plan turn ends are a guard fire (a quota pause or near-reset with the Budget gate's constants on the interactive lane, a landing-gate hold reported by `scripts/done-lock.sh` merge-status, a lane hold from the scheduler guards, provider rate pressure with its structured rate-limited end) or an empty queue (no digest-intact open plan remains); a user interrupt or explicit abort is always sanctioned as well. A confirmation ask to the user is never a sanctioned inter-plan stop; the guard reason, stated in the final report, is. This rule governs only the boundary between plans: the next plan's own Phase 0 gates (the worktree-first run setup among them) operate per their own rules and are not inter-plan stops. This paragraph changes no review gate, landing gate, or execution-lane dispatch guard (the `G1e` lane guard and the P54 fleet cap): every plan still passes the full chain, and the same turn simply chains into the next plan instead of stopping to ask.
 
 ## Sub-Agent Launch Rules
 
@@ -1167,7 +1147,7 @@ Report successful plan completion to the user, including the verified terminal-r
 
 ## Hard Gates
 
-1. **Branch setup before implementation**; Phase 0 must run and complete (definitive match auto-continue, branch created with tracking, or explicitly declined by user) before Phase 1 begins. Never skip Step 0.3 verification or start work on detached HEAD.
+1. **Run setup before implementation**; Phase 0 must run and complete (the ad-hoc worktree created on its own branch, inputs transferred in) before Phase 1 begins, per the Worktree-first standard; a creation failure stands the run down. Never work in the primary checkout or on a detached HEAD (exception: the Recovery path over inline work already in the primary checkout, per the Recovery path's disposition; Phase 0 does not re-home it).
 2. **No checkbox without green tests**; never mark `- [x]` before validation passes.
 3. **One implement launch per iteration, never parallel; a launch may batch up to four file-disjoint tasks as one batch implement launch under the Step 1.2 batch contract, or launch a parallel-group of up to four single-task implement workers concurrently for pairwise file-disjoint tasks under the Step 1.2 parallel-group contract; neither form creates a group-level commit and neither launches implement or done in parallel outside that contract.** The never-parallel clause is what makes a batch one launch rather than parallel launches, and it is what bounds the one sanctioned exception: a parallel-group implements concurrently only under the Step 1.2 parallel-group contract (driver-validated file-disjoint membership, capped at 4 members and 8 combined member files, each member its own single-task worker), while done stays strictly sequential in document order, and the address fan-out's parallelism stays governed by the Step 3.3 contract and the launch-rules table, so this gate's clause scopes to implement and done only.
 4. **Done after every task**; launch the `done` **sub-agent** (Step 1.4) and verify a commit at HEAD or a recorded none receipt per the runtime contract's Done handoff receipt subsection before starting the next task; overrides the plans skill handoff default of session-end-only `done`. Parent-agent implementation does not satisfy this gate. Sanctioned exception: a member of a Step 1.2 batch held by a Step 1.2b blocking verdict; subsequent batch members implement before the held member's done, and held members' done commits run in document order once the batch returns (Step 1.2b Rounds).
@@ -1206,7 +1186,7 @@ If the user stops mid-plan, classify the interruption state first, then apply th
 | Wait cancelled before launch, claim still `claimed` | Live claim in state `claimed` with no launch record | No worker exists yet: continue through the driver so the owned claim launches; do not wait on a worker handle that was never created, and never start a second claim for the task. |
 | Worker returned | A returned receipt (any status) not yet persisted | The receipt records only what returned and never advances a checkbox or pointer by itself; persist it through the driver checkpoint/done boundary before any progress marking. |
 | Failed, partial, timed-out, cancelled, or adapter-unavailable outcome | The outcome's blocked or error receipt | Each outcome names exactly one resumable next action; take that one action, then re-classify the state. |
-| Claim provably abandoned | Claim in `claimed`, `launched`, or `blocked` whose lease (`CLAIM_LEASE_SECONDS`, driver-owned, no override) has expired, on a task outside the progressed set, outside a live batch claim group | Reclaim goes only through the driver `reclaim` operation after lease expiry (`--operation reclaim --task-id <id>`); the driver rotates the token and generation, marks the old claim `replaced`, and puts the task back to `pending`. Never hand-edit a claim in the machine manifest. Batch group members are owned by the group protocol: see the next row. |
+| Claim provably abandoned | Claim in `claimed`, `launched`, or `blocked` whose lease (`CLAIM_LEASE_SECONDS`, driver-owned, no override) has expired, on a task outside the progressed set, outside a live batch claim group | Reclaim goes only through the driver `reclaim` operation (`--operation reclaim --task-id <id>`): after lease expiry, or immediately - no lease wait - through a prelaunch exit under identity fencing, either the blocked direct initial claim's fast path with `--approval-receipt` and `--runtime` supplied at the reclaim (the Runtime-neutral execution contract's one-reclaim-invocation recovery sequence; a two-attempt prelaunch-reclaim budget ends in the named `prelaunch-reclaim-cap` outcome) or the r4 F2 lease-waived live-group exit (next row). On any accepted reclaim the driver rotates the token and generation, marks the old claim `replaced`, and puts the task back to `pending`. Never hand-edit a claim in the machine manifest. Batch group members are owned by the group protocol: see the next row. |
 | Expired claim inside a live batch claim group | Expired claim carrying a `group_id` whose group is `active` | The driver `reclaim` operation refuses it (resumable `stale-claim` evidence naming the group): a batch member is owned by the group protocol, and reclaiming one would wedge the run. Recover through the group path instead - the driver `continue` operation with `--batch`, which resumes or recycles the active member through the anchor session. The one executable exit (r4 F2): when the member's durable receipt is non-resumable (the task blocked with `resume_allowed` false), both group recovery entries refuse it forever and nothing else closes the group, so `reclaim` on that member is allowed through - with no lease wait, since the terminal receipt is machine-provable - and atomically fails the group, releasing the still-staged member claims back to the pending queue as individuals. |
 | Retry needed | Same plan digest, same task identity | A retry preserves plan digest and task identity; never widen scope, edit the plan, or order a fresh review just to retry. |
 | Resume routing | Unchanged digest, manifest validity, review scope, and findings state | Route to direct continuation per the **Readiness decision table**; the whole-plan readiness review is not re-run while those conditions hold. |
@@ -1224,7 +1204,7 @@ Keep this standing guidance in every interruption state:
 
 Use when plan tasks were implemented inline (uncommitted or one large commit) and Step 1.4 / Phase 3 were skipped.
 
-1. Run Phase 0 and Step 0.4 (branch setup + session tmp dir + manifest).
+1. Run Phase 0 and Step 0.4 (worktree-first run setup + session tmp dir + manifest). Recovery over inline work that already sits in the primary checkout is the sanctioned in-checkout exception: skip the Phase 0 worktree step for this path (do not create a worktree), operate on the existing work in the primary checkout, and keep all subsequent task work and done commits in the primary checkout for the whole recovery. The worktree-first standard governs fresh run work; Phase 0 does not re-home existing uncommitted work.
 2. **Do not** re-implement from scratch or batch-mark all `[x]`.
 3. For each task in document order (same order as Phase 1):
    - Before verification or checkbox marking, apply the **Inclusion Hard Gate** to every checklist item in that task (including already `[x]` lines). External prerequisites are never exception-admissible. On failure, set the item back to `- [ ]`. While ownership, target, or evidence source is unclear, use only **Move to Ship when** or **Stop** (do **not** open interactive exception). To admit a release gate, use only Inclusion Hard Gate outcome 2: ask the user whether the item is exceptionally executable now and for a concrete **why executable now**, then write the bound receipt plus that why and `completion evidence`. Reject vacuous why-lines such as `why executable now: user said yes`. Self-written receipts without that ask are forbidden. Or stop with a recorded hard-gate reason.
@@ -1232,7 +1212,7 @@ Use when plan tasks were implemented inline (uncommitted or one large commit) an
    - Write or append `task-<N>-implement.log.md` (retroactive summary is OK if work already exists).
    - Apply **Plan-file edits (skill-gate)**.
    - Mark **only that task's** checkboxes `[x]` (same rule as Step 1.3).
-   - Launch **done** with that task's plan commit line.
+   - Launch **done** with that task's plan commit line. When the task's implementation is verified byte-identical to its claim baseline with clean task-local validation, the claim invocation carries `--recovery` and the done report records `commit_identity: baseline-unchanged` (the driver's recovery completion arm; workers never manufacture a source edit to satisfy commit accounting).
    - Gate: `git status` clean for that task's files before Task N+1.
 4. Run Phase 2 full validation, then Phase 3 until one fresh blocking-clean result, Phase 4 archive, and Phase 5 cleanup.
 

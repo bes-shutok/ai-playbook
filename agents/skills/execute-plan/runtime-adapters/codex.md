@@ -44,6 +44,14 @@ codex exec resume <session-id> --json [<prompt>]
 Launch always pins the repository root with `-C <repo-root>`; `wait`
 resumes a session without appending a prompt, while `resume` appends one.
 
+For launch, the driver passes a validated `single-task-worker` role contract
+in both the task envelope and JSON prompt. The adapter checks matching task
+id, claim generation, exact policy-token paths, non-empty worker criteria and
+validation commands, `evidence_owner: worker`, and a worker-log destination
+before invoking Codex. Missing or mismatched role fields return a
+`contract-violation` without a provider launch. Parent-owned commit and done
+obligations remain outside the child role and are verified by the parent.
+
 ## Worker identity
 
 One worker is the pair of the durable claim identity and the host session

@@ -627,29 +627,36 @@ def _review_scope_task_files(stripped: str) -> list[str]:
 
     Sections open at any ``###`` or ``####`` heading whose title starts
     with ``Task`` or ``Step``. Extraction reads ONLY the list items in
-    the ``Files:`` block of each task section. A ``files:`` line
-    (case-insensitive; an uppercase ``FILES:`` opener is the same block)
-    opens collection whenever it carries no inline payload (r1 F1: EVERY
-    empty-payload ``files:`` line (re-)opens collection, so a later real
-    ``Files:`` block in the same section is inventoried instead of being
-    silently dropped by a first-block latch); a payload-bearing line
-    such as ``Files: none new (...)`` is prose, not a list opener, and
-    closes collection. Collection ends at the first checkbox item
-    (``- [``) or any line that is neither a ``- `` item nor blank, so
-    checkbox bullets elsewhere in the task are never collected as paths
-    (F1: the repo template places ``Files:`` above the task checkboxes,
-    and the old blank-tolerant loop collected every checkbox as a path).
-    An INDENTED
-    list item (raw line starts with whitespace, stripped form starts
-    with ``- ``) is a nested annotation sub-bullet, not a path: it is
-    skipped while collection CONTINUES for the sibling top-level items
-    (r2 F3: collecting it yielded a garbage path token and a spurious
-    gate failure naming a phantom path; matches the top-level-only
-    semantics of the Review Scope category parser). Only path-shaped
-    tokens are collected (contains ``/`` or carries a doc/implementation
-    suffix; r4 F2: bare ``- none`` items must not fabricate paths). Each
-    item is normalized to its leading path token
-    (``_review_scope_path_token``).
+    the ``Files:`` block of each task section, aligned to the one
+    documented declaration grammar (runtime-contract.md, "Seeding
+    boundary and resume reconciliation"; the runtime parser
+    ``_plan_declared_files`` is the sole runtime parsing source and this
+    authoring-side record check is the sanctioned second grammar
+    consumer). Only the EXACT ``Files:`` heading opens a block: a
+    case-variant opener (``files:``/``FILES:``) is a named refusal
+    produced by ``_plan_declaration_shape_problem``, never silently
+    collected, and a path-shaped bullet ABOVE the heading is inert prose
+    (collection opens only at the heading). An empty-payload ``Files:``
+    line always (re-)opens collection (r1 F1: EVERY empty-payload
+    ``Files:`` line (re-)opens collection, so a later real ``Files:``
+    block in the same section is inventoried instead of being silently
+    dropped by a first-block latch; the duplicate-heading refusal for
+    that shape is produced by ``_plan_declaration_shape_problem``); a
+    payload-bearing line such as ``Files: none new (...)`` is prose, not
+    a list opener, and closes collection. Collection ends at the first
+    checkbox item (``- [``) or any line that is neither a ``- `` item nor
+    blank, so checkbox bullets elsewhere in the task are never collected
+    as paths (F1: the repo template places ``Files:`` above the task
+    checkboxes, and the old blank-tolerant loop collected every checkbox
+    as a path). An INDENTED list item (raw line starts with whitespace,
+    stripped form starts with ``- ``) is an entry like any other under a
+    valid heading: the documented grammar accepts indented entries, so
+    the former nested-annotation skip is stopped (r2 F3's garbage-path
+    concern is owned by token normalization below, not by skipping
+    entries). Only path-shaped tokens are collected (contains ``/`` or
+    carries a doc/implementation suffix; r4 F2: bare ``- none`` items
+    must not fabricate paths). Each item is normalized to its leading
+    path token (``_review_scope_path_token``).
     """
     paths: list[str] = []
     for match in re.finditer(
@@ -658,14 +665,16 @@ def _review_scope_task_files(stripped: str) -> list[str]:
         tail = re.split(r"\n#{2,4} ", stripped[match.end() :], maxsplit=1)[0]
         collecting = False
         for line in tail.splitlines():
-            opener = re.match(r"files:(.*)$", line, re.IGNORECASE)
+            opener = re.match(r"Files:(.*)$", line)
             if opener:
-                # An empty-payload files: line always (re-)opens
-                # collection (r1 F1: a later real Files: block in the
-                # same section must be inventoried); a line carrying an
-                # inline payload ("Files: none new (validation only;
-                # ...)" is a prose statement, not a list opener) closes
-                # collection.
+                # Only the exact case-sensitive heading decides (the
+                # documented exact-`Files:`-only rule; case variants are
+                # named refusals, never openers). An empty-payload
+                # Files: line always (re-)opens collection (r1 F1: a
+                # later real Files: block in the same section must be
+                # inventoried); a line carrying an inline payload
+                # ("Files: none new (validation only; ...)" is a prose
+                # statement, not a list opener) closes collection.
                 collecting = not opener.group(1).strip()
                 continue
             if not collecting:
@@ -677,10 +686,6 @@ def _review_scope_task_files(stripped: str) -> list[str]:
                 collecting = False
                 continue
             if stripped_line.startswith("- "):
-                if line[:1].isspace():
-                    # Indented nested annotation sub-bullet: skipped,
-                    # collection continues (r2 F3, see docstring).
-                    continue
                 token = _review_scope_path_token(stripped_line[2:])
                 if token and (
                     "/" in token
@@ -877,14 +882,17 @@ def _plan_task_label(title: str) -> str:
 def _plan_files_items(body: str) -> list[tuple[str, bool]]:
     """``(path token, carries the planned-new marker)`` for a task
     section's ``Files:`` block, mirroring the ``_review_scope_task_files``
-    collection rules: an empty-payload ``files:`` line (re)opens
-    collection, a payload-bearing line closes it, the first checkbox item
-    closes it, an indented item is a nested annotation sub-bullet and is
-    skipped, and only path-shaped tokens are collected."""
+    collection rules aligned to the one documented declaration grammar:
+    only the exact ``Files:`` heading opens collection (case variants are
+    named refusals via ``_plan_declaration_shape_problem``), an
+    empty-payload ``Files:`` line (re)opens collection, a payload-bearing
+    line closes it, the first checkbox item closes it, an indented item is
+    an entry like any other (the former nested-annotation skip is
+    stopped), and only path-shaped tokens are collected."""
     items: list[tuple[str, bool]] = []
     collecting = False
     for line in body.splitlines():
-        opener = re.match(r"files:(.*)$", line, re.IGNORECASE)
+        opener = re.match(r"Files:(.*)$", line)
         if opener:
             collecting = not opener.group(1).strip()
             continue
@@ -897,8 +905,6 @@ def _plan_files_items(body: str) -> list[tuple[str, bool]]:
             collecting = False
             continue
         if stripped_line.startswith("- "):
-            if line[:1].isspace():
-                continue
             token = _review_scope_path_token(stripped_line[2:])
             if token and _plan_path_shaped(token):
                 items.append(
@@ -912,6 +918,46 @@ def _plan_files_items(body: str) -> list[tuple[str, bool]]:
         else:
             collecting = False
     return items
+
+
+# The one declaration contract's named decisions, verbatim the runtime
+# parser's problem strings (execute_plan_runtime.py ``_plan_declared_files``
+# class constants) so both surfaces emit the same problem family for the
+# same shape. Change them together.
+_FILES_DUPLICATE_PROBLEM = (
+    "duplicate Files: heading in one task section: the documented grammar accepts exactly one exact 'Files:' declaration per task section"
+)
+_FILES_INDENTED_PROBLEM = (
+    "missing Files: declaration: an indented 'Files:' line is not a block opener under the documented grammar"
+)
+_FILES_CASE_VARIANT_PROBLEM = (
+    "declaration opener '{opener}' is a case variant: the documented grammar accepts the exact 'Files:' heading only"
+)
+
+
+def _plan_declaration_shape_problem(body: str) -> str | None:
+    """The named declaration-shape refusal for one task section body, the
+    authoring-side producer of the same problem family the runtime parser
+    emits: a second exact ``Files:`` heading in the section (the duplicate
+    declaration, refused instead of union-collected), a section whose only
+    opener is an indented ``Files:`` line (never a block opener), or a
+    case-variant opener (``files:``/``FILES:``; the documented grammar
+    accepts the exact ``Files:`` heading only). A path-shaped bullet above
+    the heading is inert prose on both surfaces. ``None`` when the section
+    carries no divergent shape."""
+    lines = body.splitlines()
+    exact_openers = [line for line in lines if line == "Files:"]
+    if len(exact_openers) > 1:
+        return _FILES_DUPLICATE_PROBLEM
+    if not exact_openers:
+        for line in lines:
+            stripped = line.strip()
+            if stripped.lower() != "files:":
+                continue
+            if line != stripped:
+                return _FILES_INDENTED_PROBLEM
+            return _FILES_CASE_VARIANT_PROBLEM.format(opener=stripped)
+    return None
 
 
 def _plan_checklist_items(body: str) -> list[str]:
@@ -956,6 +1002,15 @@ def plan_ownership_problem(plan_text: str, repo_root: Path) -> str | None:
     ``###``/``####`` headings starting with ``Task`` or ``Step``. Checks,
     first problem wins:
 
+    (0) a task section whose ``Files:`` declaration carries a divergent
+        shape under the one documented declaration grammar: a second
+        exact ``Files:`` heading (the duplicate declaration, refused
+        instead of union-collected), an indented ``Files:`` line as the
+        section's only opener (never a block opener), or a case-variant
+        opener (the documented exact-``Files:``-only rule). The reason is
+        the same named problem family the runtime parser emits, prefixed
+        by the task label; ``_plan_declaration_shape_problem`` owns the
+        decisions;
     (a) ``duplicate creating task`` - a ``Files:`` path annotated with
         the planned-new marker in more than one task section's
         ``Files:`` list; task identity is the section's document
@@ -986,6 +1041,15 @@ def plan_ownership_problem(plan_text: str, repo_root: Path) -> str | None:
     sections = [
         (_plan_task_label(title), body) for title, body in _plan_task_sections(stripped)
     ]
+
+    # (0) declaration-shape parity with the runtime parser: each divergent
+    # shape refuses through the same named problem family the runtime
+    # emits, in document order, before any ownership evaluation reads the
+    # collected items.
+    for label, body in sections:
+        shape_problem = _plan_declaration_shape_problem(body)
+        if shape_problem is not None:
+            return f"{label}: {shape_problem}"
 
     # (a) one creating task per new file: the first annotated listing
     # owns the path; a second annotated listing in a DIFFERENT section

@@ -32,6 +32,21 @@ DEFAULT_INVENTORY_PATH = ROOT / "projects/.ai-playbook/execute-plan-runtime-inve
 MAX_EVIDENCE_BYTES = 4096
 MAX_EVIDENCE_ITEM_BYTES = 512
 EVIDENCE_ENVELOPE_VERSION = 1
+
+
+def evidence_criterion_ids(criteria: Any) -> dict[str, str]:
+    """Build stable, compact receipt identifiers for full criterion text."""
+    if not isinstance(criteria, (list, tuple)) or any(not isinstance(item, str) or not item for item in criteria):
+        raise ValueError("required_criteria must be a list of non-empty strings")
+    if len(criteria) != len(set(criteria)):
+        raise ValueError("required_criteria contains duplicates")
+    if len(criteria) > 100:
+        raise ValueError("evidence criteria exceed receipt item-count limit (100)")
+    if any(len(item.encode("utf-8")) > MAX_EVIDENCE_ITEM_BYTES for item in criteria):
+        raise ValueError("evidence criterion exceeds UTF-8 item byte limit")
+    if sum(len(item.encode("utf-8")) for item in criteria) > MAX_EVIDENCE_BYTES:
+        raise ValueError("evidence criteria exceed UTF-8 aggregate byte limit")
+    return {f"c{index:03d}": criterion for index, criterion in enumerate(sorted(criteria), 1)}
 CAPABILITY_OWNER = "registry"
 CAPABILITY_NAMES = {
     "parent_continuation",
@@ -227,7 +242,72 @@ def normalize_evidence_envelope(value: Any) -> dict[str, Any]:
     return normalized
 
 
-def evidence_contract_digest(tasks: Mapping[str, Mapping[str, Any]]) -> str:
+def project_evidence_envelope(task: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a task's worst-case evidence receipt envelope.
+
+    Reads the task's registered criteria, verification command argv lists,
+    and allowed_paths and measures each against this module's own limit
+    constants (the same limits and UTF-8 byte counting the receipt validator
+    enforces). Returns ``{"ok": bool, "problems": [str], "fields": {...}}``;
+    the projection is conservative: worker-produced path lists are projected
+    at the full allowed_paths scope, so a passing projection can still be
+    narrowed at runtime but is never silently over the bounds at launch.
+    """
+    problems: list[str] = []
+    fields: dict[str, Any] = {}
+    criteria = [str(item) for item in (task.get("required_criteria") or ()) if isinstance(item, str)]
+    commands = [item for item in (task.get("verification_commands") or ()) if isinstance(item, Mapping)]
+    allowed = [str(item) for item in (task.get("allowed_paths") or ())]
+
+    def measure(name: str, items: list[str]) -> None:
+        sizes = [len(item.encode("utf-8")) for item in items]
+        worst = max(sizes, default=0)
+        aggregate = sum(sizes)
+        fields[name] = {"items": len(items), "max_item_bytes": worst, "aggregate_bytes": aggregate, "item_limit": MAX_EVIDENCE_ITEM_BYTES, "items_limit": 100, "aggregate_limit": MAX_EVIDENCE_BYTES}
+        for size, item in zip(sizes, items):
+            if size > MAX_EVIDENCE_ITEM_BYTES:
+                problems.append(f"{name}: item measures {size} UTF-8 bytes, limit {MAX_EVIDENCE_ITEM_BYTES}: {item[:64]!r}")
+        if len(items) > 100:
+            problems.append(f"{name}: {len(items)} items exceed the receipt item-count limit (100)")
+        if aggregate > MAX_EVIDENCE_BYTES:
+            problems.append(f"{name}: aggregate measures {aggregate} UTF-8 bytes, limit {MAX_EVIDENCE_BYTES}")
+
+    measure("required_criteria", criteria)
+    for index, command in enumerate(commands):
+        argv = command.get("argv") if isinstance(command, Mapping) else None
+        parts = [str(part) for part in argv] if isinstance(argv, (list, tuple)) else []
+        measure(f"verification_commands[{index}].argv", parts)
+    measure("allowed_paths", allowed)
+    digest = "sha256:" + "0" * 64
+    synthetic = {
+        "version": EVIDENCE_ENVELOPE_VERSION,
+        "command": [str(part) for part in (commands[0].get("argv") if commands and isinstance(commands[0].get("argv"), (list, tuple)) else ["projected"])],
+        "working_directory": ".",
+        "exit_status": 0,
+        "output_digest": digest,
+        "stdout_digest": digest,
+        "stderr_digest": digest,
+        "verified_by": "runtime-driver",
+        "task_id": str(task.get("id") or "task"),
+        "claim_token": "projected",
+        "generation": 0,
+        "launch_id": "projected",
+        "evidence_contract_digest": digest,
+        "source_digest": digest,
+        "selected_tests": ["projected"],
+        "baseline_paths": [],
+        "changed_paths": allowed,
+        "allowed_paths": allowed,
+        "criteria": [f"c{index:03d}" for index in range(1, len(criteria) + 1)],
+    }
+    total = len(json.dumps(synthetic, sort_keys=True).encode("utf-8"))
+    fields["envelope_total"] = {"bytes": total, "limit": MAX_EVIDENCE_BYTES}
+    if total > MAX_EVIDENCE_BYTES:
+        problems.append(f"aggregate: projected envelope JSON measures {total} UTF-8 bytes, limit {MAX_EVIDENCE_BYTES}")
+    return {"ok": not problems, "problems": problems, "fields": fields}
+
+
+def evidence_contract_digest(tasks: Mapping[str, Mapping[str, Any]], *, include_criterion_ids: bool = True) -> str:
     """Digest only immutable evidence requirements, excluding task progress."""
     contract = []
     for task_id, task in sorted(tasks.items()):
@@ -238,6 +318,7 @@ def evidence_contract_digest(tasks: Mapping[str, Mapping[str, Any]]) -> str:
             raise ValueError(f"task {task_id} required_criteria must be a list of non-empty strings")
         if len(criteria) != len(set(criteria)):
             raise ValueError(f"task {task_id} required_criteria contains duplicates")
+        criterion_id_map = evidence_criterion_ids(criteria)
         if not isinstance(commands, list) or any(not isinstance(item, Mapping) for item in commands):
             raise ValueError(f"task {task_id} verification_commands must be a list of mappings")
         canonical_commands = []
@@ -257,7 +338,10 @@ def evidence_contract_digest(tasks: Mapping[str, Mapping[str, Any]]) -> str:
         command_criteria = {criterion for command in canonical_commands for criterion in command["criteria"]}
         if not set(criteria).issubset(command_criteria) or command_criteria - set(criteria):
             raise ValueError(f"task {task_id} required criteria and command criteria must match")
-        contract.append({"task_id": task_id, "criteria": sorted(set(criteria)), "commands": sorted(canonical_commands, key=lambda command: command["id"]), "allowed_paths": sorted(set(str(path) for path in allowed))})
+        entry = {"task_id": task_id, "criteria": sorted(set(criteria)), "commands": sorted(canonical_commands, key=lambda command: command["id"]), "allowed_paths": sorted(set(str(path) for path in allowed))}
+        if include_criterion_ids:
+            entry["criterion_ids"] = criterion_id_map
+        contract.append(entry)
     data = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(data).hexdigest()
 

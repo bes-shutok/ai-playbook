@@ -18,6 +18,7 @@ import json
 import math
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -25,7 +26,7 @@ import tempfile
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
@@ -64,6 +65,35 @@ DONE_PENDING_RECOVERY_EVENT = "done-pending-recovery"
 # refused with the recorded receipt named even though neither the hold nor the
 # identity precondition can match after the transition.
 EVIDENCE_CONTRACT_RECOVERY_EVENT = "evidence-contract-recovery"
+# The append-only history event recording one evidence-envelope recovery (the
+# post-launch sanctioned exit for a contract that projects over the bounded
+# receipt envelope). Its task id, token, and generation fields are the
+# evidence envelope recovery replay fence, evaluated FIRST in the operation's
+# precondition order.
+EVIDENCE_ENVELOPE_RECOVERY_EVENT = "evidence-envelope-recovery"
+# The append-only history event recording one prelaunch contract recovery
+# (the sanctioned exit for a claimed prelaunch claim holding a stranded
+# evidence contract). Its identity (task id plus old claim token plus old
+# claim generation) is the replay fence, evaluated FIRST in the recovery
+# precondition order over the raw-tolerant manifest load; the distinct
+# event identity from the launched-hold operation above is the composition
+# fence between the two recovery operations.
+PRELAUNCH_CONTRACT_RECOVERY_EVENT = "prelaunch-contract-recovery"
+# The append-only history event recording one run-identity migration (the
+# sanctioned binding of a legacy manifest that records no runtime id). The
+# migration's replay fence is the manifest's own ``runtime`` field, evaluated
+# before any host-state precondition, so this receipt is the audit record of
+# the single accepted binding (runtime id, repository root, receipt identity,
+# payload task id, and any cleared poisoned intermediate claim or claim group).
+RUN_IDENTITY_MIGRATION_EVENT = "run-identity-migration"
+# The append-only history event recording one reviewed task-scope recovery
+# (the sanctioned prelaunch exit for a legitimate reviewed scope change). Its
+# identity (task id plus prior claim token plus prior claim generation) is the
+# replay fence: it is evaluated FIRST in the recovery precondition order, an
+# identical replay re-verifies the recorded rotated identity against the live
+# intent-backed prelaunch claim before returning the recorded outcome, and any
+# other state refuses as stale identity naming the matched receipt.
+SCOPE_RECOVERY_EVENT = "scope-recovery"
 # Claim lease for the reclaim operation: the claim `timestamp` is written once
 # at claim time and never renewed, so a claim is reclaimable only after this
 # many seconds. 14400 (four hours) is an order of magnitude above the
@@ -72,6 +102,13 @@ EVIDENCE_CONTRACT_RECOVERY_EVENT = "evidence-contract-recovery"
 # post-reclaim checkpoint fail fenced as owner-mismatch rather than corrupting
 # state. Driver-owned code: no environment variable or CLI flag overrides it.
 CLAIM_LEASE_SECONDS = 14400
+# Budget of the prelaunch-reclaim lease bypass: the initial recovery
+# invocation plus exactly one transient retry. A third prelaunch reclaim of a
+# `runtime-policy-unavailable` block is by definition a persistent policy
+# blocker and ends in the named `prelaunch-reclaim-cap` refusal instead of a
+# block-reclaim-preflight loop. Driver-owned code: no environment variable or
+# CLI flag overrides it.
+PRELAUNCH_RECLAIM_BUDGET = 2
 # Claim states the reclaim operation admits (the live set plus a claim fenced
 # by a blocked receipt whose worker is gone).
 RECLAIMABLE_CLAIM_STATES = {"claimed", "launched", "blocked"}
@@ -127,6 +164,18 @@ PARALLEL_GROUP_COMBINED_FILE_CAP = 8
 # (explicitly stopped). Close = the last member reaching one of these; a
 # released or stopped member never wedges an otherwise complete group.
 PARALLEL_MEMBER_TERMINAL_CLAIM_STATES = {"closed", "replaced", "aborted"}
+# The canonical claim-boundary remedy for a manifest recording no runtime id:
+# one shared text consumed by the preflight emission problem and the shared
+# claim-boundary refusal, so the two sites can never drift apart. A claim
+# boundary supplied the validated --runtime plus --approval-receipt pair
+# remains a valid remedy path; single-sided evidence (runtime-only or
+# receipt-only) is refused.
+_CLAIM_BOUNDARY_RUNTIME_REMEDY = (
+    "re-create the run with --runtime at the create boundary, or run the recover-run-identity migration "
+    "operation (which requires a driver whose --operation table registers it; update the deployed driver first), "
+    "or supply the validated --runtime plus --approval-receipt pair at the next claim boundary "
+    "(runtime-only or receipt-only evidence is refused)"
+)
 # The terminal gate bounds its archived-plan read at 1,000,000 bytes: a plan
 # at or under the bound is read whole (the unchecked-checkbox scan covers the
 # entire file), and a plan over the bound is refused outright instead of
@@ -503,29 +552,52 @@ def load_manifest(path: Path | str) -> dict[str, Any]:
 
 def _preseed_verifier_consistency_problems(
     task_map: Mapping[str, Mapping[str, Any]], canonical_root: Path | None
-) -> list[str]:
+) -> list[dict[str, Any]]:
     """Collect pre-seed verifier consistency problems over the task map.
 
-    Two shapes are collected, both witnessed blocking real consumer runs
+    Three shapes are collected, all witnessed blocking real consumer runs
     mid-flight:
 
-    1. A task's verification command ``argv`` token exactly naming, after
-       canonicalization through the same fail-closed path policy the launch
-       envelope enforces (compared canonical-to-canonical, or literally when
-       the token does not canonicalize cleanly), an ``allowed_paths`` entry
-       declared only by a strictly later task: the verifier would demand an
-       artifact that does not exist at that task boundary, the exact shape
-       that fail-closed a task whose worker and focused test had already
-       succeeded. Exact equality is the only matching basis -- never
-       substring containment, never a regex built from payload strings.
-    2. Two or more tasks declaring identical non-empty whole
+    1. Exact-equality later artifact: a task's verification command ``argv``
+       token exactly naming, after canonicalization through the same
+       fail-closed path policy the launch envelope enforces (compared
+       canonical-to-canonical, or literally when the token does not
+       canonicalize cleanly), an ``allowed_paths`` entry declared only by a
+       strictly later task: the verifier would demand an artifact that does
+       not exist at that task boundary, the exact shape that fail-closed a
+       task whose worker and focused test had already succeeded. Attributed
+       to the declaring task; basis ``exact-canonical-equality``.
+    2. Clone signature: two or more tasks declaring identical non-empty whole
        ``verification_commands`` lists (deep equality): the signature of a
        plan's global Validation Commands block copied into every task
-       instead of staying the whole-plan gate.
+       instead of staying the whole-plan gate. Attributed to the PAIR (both
+       cloned task ids); basis ``clone-signature``.
+    3. Embedded later path: a non-path argv token containing a strictly
+       later task's artifact path, including shell bodies, marker-bearing
+       text, flag assignments, quoted strings, aliases, and absolute paths
+       under the repository root. Attributed to the declaring task; basis
+       ``embedded-path-containment``.
 
-    Tasks without declared commands are skipped. Each returned string names
-    the task ids and the offending entry; an empty list means the map is
-    consistent.
+    Token classification: a pure-path token (no whitespace or quote
+    characters, canonicalizing through the fail-closed path policy;
+    identity when no repository root is supplied) keeps exact canonical
+    equality as its sole matching basis, and every other token is non-path
+    and is scanned for path occurrences only when the path ends the token
+    or the following character is outside ``[A-Za-z0-9._-]`` (the
+    tail-boundary rule), so suffix variants such as ``.bak`` and
+    nested-path namesakes do not match. Matching is literal substring
+    search over the payload; building a regex from payload strings stays
+    forbidden.
+
+    Each problem is a structured mapping: ``task_ids`` (the responsible
+    task ids -- the declaring task for shapes 1 and 3, both cloned tasks
+    for shape 2), ``basis`` (the matching basis named above), and
+    ``display`` (the evidence string naming the task id and path first and
+    eliding the offending token to a byte-count note, e.g.
+    ``(token elided: 214 bytes)``, because the token can carry secrets or
+    unrelated shell text). Callers that only render text join the
+    ``display`` strings. Tasks without declared commands are skipped; an
+    empty list means the map is consistent.
     """
 
     ordered = sorted(task_map.items(), key=lambda entry: entry[1].get("ordinal", 0))
@@ -547,7 +619,37 @@ def _preseed_verifier_consistency_problems(
             # literally against the declared entries.
             return token
 
-    problems: list[str] = []
+    def later_path_basis(token: str, path: str) -> str | None:
+        if canonical_token(token) == path:
+            return "exact-canonical-equality"
+        # Pure-path classification: a token with no whitespace or quote
+        # characters whose canonicalization through the fail-closed path
+        # policy succeeds keeps exact canonical equality as its sole
+        # matching basis, so a cleanly canonicalizing non-match is accepted
+        # without any containment scan.
+        if not any(character.isspace() or character in "\"'" for character in token):
+            try:
+                if canonical_root is not None:
+                    _safe_relative_path(canonical_root, token)
+                    return None
+            except ValueError:
+                pass
+        candidates = {path, "./" + path}
+        if "/" in path:
+            head, tail = path.rsplit("/", 1)
+            candidates.add(head.replace("/", "/./") + "/./" + tail)
+        if canonical_root is not None:
+            candidates.add(str(canonical_root / path))
+        for candidate in candidates:
+            start = 0
+            while (offset := token.find(candidate, start)) >= 0:
+                end = offset + len(candidate)
+                if end == len(token) or token[end] not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./-":
+                    return "embedded-path-containment"
+                start = offset + 1
+        return None
+
+    problems: list[dict[str, Any]] = []
     for index, (task_id, commands, _) in enumerate(declared):
         if not commands:
             # Tasks without declared commands carry nothing to verify.
@@ -564,23 +666,120 @@ def _preseed_verifier_consistency_problems(
                     if not isinstance(argv, list):
                         continue
                     for token in argv:
-                        if isinstance(token, str) and canonical_token(token) == later_path:
-                            problems.append(
-                                f"pre-seed consistency gate: task {task_id} verification command argv token {token!r} "
-                                f"matches allowed path {later_path!r} declared only by strictly later task {later_id}; "
-                                "the verifier would demand an artifact that does not exist at this task boundary"
-                            )
+                        if not isinstance(token, str):
+                            continue
+                        basis = later_path_basis(token, later_path)
+                        if basis is None:
+                            continue
+                        problems.append(
+                            {
+                                "task_ids": [task_id],
+                                "basis": basis,
+                                "display": (
+                                    f"pre-seed consistency gate: task {task_id} verification command argv token embeds "
+                                    f"allowed path {later_path!r} declared only by strictly later task {later_id} "
+                                    f"(token elided: {len(token.encode('utf-8'))} bytes); "
+                                    "the verifier would demand an artifact that does not exist at this task boundary"
+                                ),
+                            }
+                        )
     for index, (task_id, commands, _) in enumerate(declared):
         if not commands:
             continue
         for earlier_id, earlier_commands, _ in declared[:index]:
             if earlier_commands and commands == earlier_commands:
                 problems.append(
-                    f"pre-seed consistency gate: tasks {earlier_id} and {task_id} declare identical non-empty "
-                    "verification_commands lists (deep equality); this is the signature of a global checklist "
-                    "cloned into per-task verifiers instead of the whole-plan gate"
+                    {
+                        "task_ids": [earlier_id, task_id],
+                        "basis": "clone-signature",
+                        "display": (
+                            f"pre-seed consistency gate: tasks {earlier_id} and {task_id} declare identical non-empty "
+                            "verification_commands lists (deep equality); this is the signature of a global checklist "
+                            "cloned into per-task verifiers instead of the whole-plan gate"
+                        ),
+                    }
                 )
     return problems
+
+
+# The seed-time evidence limit dimensions: each entry pairs a needle from the
+# single-homed limit checks' messages (scripts/runtime_capabilities.py owns
+# the checks and the limits; consumers catch and attribute, never
+# re-implement) with the offending dimension name the create-boundary
+# refusal reports.
+_EVIDENCE_LIMIT_DIMENSIONS = (
+    ("evidence criterion exceeds UTF-8 item byte limit", "item bytes"),
+    ("evidence criteria exceed UTF-8 aggregate byte limit", "aggregate bytes"),
+    ("evidence criteria exceed receipt item-count limit", "count"),
+)
+_EVIDENCE_PROOF_LINE = "limits are never raised silently without consumer proof"
+
+
+def _evidence_limit_message(task_id: str, criteria: list[Any], dimension: str, bare_message: str) -> str:
+    """The named seed-time refusal for one task's evidence limit failure:
+    the task id, the offending criterion and its UTF-8 byte count where one
+    exists, the offending dimension, and the split or consolidation rule."""
+    byte_counts = [len(item.encode("utf-8")) for item in criteria if isinstance(item, str)]
+    total = sum(byte_counts)
+    if dimension == "item bytes":
+        offender = next(item for item in criteria if isinstance(item, str) and len(item.encode("utf-8")) > capabilities.MAX_EVIDENCE_ITEM_BYTES)
+        return (
+            f"task '{task_id}': {bare_message} ({len(offender.encode('utf-8'))} UTF-8 bytes, "
+            f"limit {capabilities.MAX_EVIDENCE_ITEM_BYTES}): {offender}; split the criterion into "
+            f"independently verifiable criteria preserving complete acceptance coverage; {_EVIDENCE_PROOF_LINE}"
+        )
+    if dimension == "aggregate bytes":
+        return (
+            f"task '{task_id}': {bare_message} ({total} UTF-8 bytes, limit {capabilities.MAX_EVIDENCE_BYTES}); "
+            f"consolidate the criteria (or split them further) so the aggregate fits; {_EVIDENCE_PROOF_LINE}"
+        )
+    return (
+        f"task '{task_id}': {bare_message}: {len(criteria)} criteria supplied; "
+        f"consolidate the criteria so the count fits; {_EVIDENCE_PROOF_LINE}"
+    )
+
+
+def _named_evidence_limit_error(task_map: Mapping[str, Mapping[str, Any]], error: ValueError) -> ValueError:
+    """Attribute a seed-time evidence limit ValueError to its owning task.
+
+    The limit checks stay single-homed in scripts/runtime_capabilities.py:
+    this helper only catches the raised ValueError, locates the task whose
+    criteria produced it by re-invoking the same single-homed helper per
+    task, and re-raises the named shape. A non-limit error (or an unmatched
+    task map) re-raises the original unchanged.
+    """
+    message = str(error)
+    dimension = next((name for needle, name in _EVIDENCE_LIMIT_DIMENSIONS if needle in message), None)
+    if dimension is None:
+        return error
+    for task_id in sorted(task_map):
+        criteria = task_map[task_id].get("required_criteria", [])
+        try:
+            capabilities.evidence_criterion_ids(criteria)
+        except ValueError as task_error:
+            if str(task_error) == message:
+                return ValueError(_evidence_limit_message(str(task_id), criteria if isinstance(criteria, list) else [], dimension, message))
+    return error
+
+
+def _contract_identity_digest(fields: Any) -> str:
+    """The raw contract-identity digest: sha256 over the canonical JSON of
+    one task's evidence fields, the identity a prelaunch recovery receipt
+    binds when the recorded digest cannot be helper-verified."""
+
+    return hashlib.sha256(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _task_criteria_stranded(criteria: Any) -> bool:
+    """Whether one task's stored criteria fail the single-homed evidence
+    limit checks (the stranded-contract shape); structural errors are not
+    stranding."""
+
+    try:
+        capabilities.evidence_criterion_ids(criteria)
+    except ValueError as exc:
+        return any(needle in str(exc) for needle, _ in _EVIDENCE_LIMIT_DIMENSIONS)
+    return False
 
 
 def create_manifest(
@@ -589,6 +788,8 @@ def create_manifest(
     tasks: list[Mapping[str, Any]] | Mapping[str, Mapping[str, Any]],
     profile: Mapping[str, Any] | None = None,
     repo_root: Path | str | None = None,
+    approval_receipt: Path | str | None = None,
+    runtime_id: str | None = None,
 ) -> dict[str, Any]:
     """Create the authoritative machine manifest with restrictive permissions.
 
@@ -604,7 +805,10 @@ def create_manifest(
     Before any bytes are written, the pre-seed consistency gate
     (``_preseed_verifier_consistency_problems``) refuses task maps whose
     verifiers are cloned across tasks or depend on strictly later tasks'
-    artifacts.
+    artifacts. When the CLI boundary validated a supplied ``--approval-receipt``
+    and ``--runtime``, the resolved absolute receipt path and the runtime id
+    seed the same single write, so create is the run's first evidence
+    boundary.
     """
 
     if isinstance(tasks, Mapping):
@@ -626,6 +830,55 @@ def create_manifest(
         item.setdefault("status", "pending")
         item.setdefault("checkbox", item["status"] == "complete")
         item.setdefault("ordinal", position)
+        actions = item.get("checklist_actions")
+        task_body = item.get("task_body")
+        if isinstance(task_body, str):
+            checklist_text = [
+                match.group(1).strip()
+                for line in task_body.splitlines()
+                if (match := re.match(r"^\s*[-*+]\s+\[ \]\s+(.*)$", line)) is not None
+            ]
+            if checklist_text and actions is None:
+                raise ValueError(f"task {task_id} has unclassified checklist actions")
+            if checklist_text and isinstance(actions, list):
+                action_text = [str(action.get("text", "")).strip() for action in actions if isinstance(action, Mapping)]
+                if sorted(checklist_text) != sorted(action_text):
+                    raise ValueError(f"task {task_id} checklist action classification is incomplete")
+        if actions is not None:
+            if not isinstance(actions, list) or any(
+                not isinstance(action, Mapping)
+                or action.get("owner") not in {"worker", "parent"}
+                or not isinstance(action.get("text"), str)
+                or not action.get("text", "").strip()
+                for action in actions
+            ):
+                raise ValueError(f"task {task_id} has an unclassified checklist action")
+            worker_criteria = set(item.get("required_criteria", ()))
+            parent_obligations = []
+            for action in actions:
+                is_commit = action.get("kind") == "commit" or action["text"].startswith("Commit:")
+                if action["owner"] != "parent" and not is_commit:
+                    continue
+                action = dict(action)
+                if is_commit:
+                    action["owner"] = "parent"
+                criteria = action.get("criteria", [action["text"]])
+                worker_criteria.difference_update(criteria if isinstance(criteria, list) else [])
+                if is_commit:
+                    text = action["text"]
+                    inferred_commit = text.split(":", 1)[1].strip() if text.startswith("Commit:") else None
+                    planned_commit = action.get("commit_identity", item.get("parent_commit", inferred_commit))
+                    if not isinstance(planned_commit, str) or not planned_commit.strip():
+                        raise ValueError(f"task {task_id} parent commit action requires its exact planned identity")
+                    item["parent_commit"] = planned_commit
+                parent_obligations.append(dict(action))
+            if not worker_criteria:
+                raise ValueError(f"task {task_id} has no worker-owned criteria")
+            item["required_criteria"] = [criterion for criterion in item.get("required_criteria", ()) if criterion in worker_criteria]
+            item["parent_obligations"] = parent_obligations
+            for command in item.get("verification_commands", ()):
+                if isinstance(command, dict):
+                    command["criteria"] = [criterion for criterion in command.get("criteria", ()) if criterion in worker_criteria]
         raw_paths = item.get("allowed_paths", item.get("files"))
         if canonical_root is not None and raw_paths is not None:
             canonical_paths: list[str] = []
@@ -646,7 +899,7 @@ def create_manifest(
         # Refuse before any manifest bytes are written: cloned or
         # forward-dependent verifiers are witnessed to fail-closed real runs
         # mid-flight, after a worker had already succeeded.
-        raise ValueError("; ".join(consistency_problems))
+        raise ValueError("; ".join(problem["display"] for problem in consistency_problems))
     profile = profile or {}
     capabilities_data = dict(profile.get("capabilities", {}))
     capability_receipts = {
@@ -656,6 +909,16 @@ def create_manifest(
         }
         for name in sorted(capabilities.CAPABILITY_NAMES)
     }
+    # The eager seed-time evidence build: the contract digest computation
+    # runs first, then the per-task criterion map. Every limit ValueError
+    # from the single-homed helpers is caught and re-raised naming the task
+    # id, the offending criterion where one exists, the offending dimension,
+    # and the split or consolidation rule, before any bytes are written.
+    try:
+        evidence_digest = capabilities.evidence_contract_digest(task_map)
+        evidence_map = {task_id: capabilities.evidence_criterion_ids(task.get("required_criteria", [])) for task_id, task in task_map.items()}
+    except ValueError as error:
+        raise _named_evidence_limit_error(task_map, error) from error
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "plan_slug": plan_slug,
@@ -671,7 +934,8 @@ def create_manifest(
         "resume_watcher": None,
         "user_interrupt": None,
         "tasks": task_map,
-        "evidence_contract_digest": capabilities.evidence_contract_digest(task_map),
+        "evidence_contract_digest": evidence_digest,
+        "evidence_criteria_map": evidence_map,
         "evidence_enforcement": False,
         "claims": {},
         "workers": {},
@@ -685,6 +949,10 @@ def create_manifest(
         "capabilities": capability_receipts,
         "history": [],
     }
+    if approval_receipt is not None:
+        manifest["approval_receipt"] = {"path": str(Path(approval_receipt).resolve())}
+    if runtime_id:
+        manifest["runtime"] = str(runtime_id)
     _safe_write_json(Path(path), manifest)
     return manifest
 
@@ -1153,11 +1421,21 @@ class RuntimeDriver:
         commit_ancestry: Callable[[str], bool] | None = None,
         clock: Callable[[], float] = _now,
         persist_construction: bool = True,
+        approval_receipt: Path | str | None = None,
+        runtime_id: str | None = None,
     ) -> None:
         self.manifest_path = Path(manifest_path)
         self.adapter = adapter
         self.profile = profile or {}
         self.repo_root = Path(repo_root or Path.cwd()).resolve()
+        # Approval evidence the CLI boundary already validated (the shared
+        # receipt loader) and resolved to an absolute path, threaded only for
+        # the approval-evidence operations; stamped into those operations' own
+        # locked transition saves by _stamp_approval_evidence, never persisted
+        # by construction, refusal paths, or read-only operations.
+        receipt_abs = str(Path(approval_receipt).resolve()) if approval_receipt is not None else None
+        evidence_runtime = str(runtime_id) if runtime_id else None
+        self._approval_evidence = (receipt_abs, evidence_runtime) if receipt_abs is not None or evidence_runtime is not None else None
         self.commit_lookup = commit_lookup or self._git_commit_exists
         # The staged terminal gate's freshness seam: True only when a commit
         # is proven ancestor-or-self of HEAD. Injectable beside commit_lookup
@@ -1250,6 +1528,70 @@ class RuntimeDriver:
     def _save(self, manifest: dict[str, Any]) -> None:
         manifest["updated_at"] = self.clock()
         _safe_write_json(self.manifest_path, manifest)
+
+    def _stamp_approval_evidence(self, manifest: dict[str, Any]) -> None:
+        """Record supplied approval evidence in a mutating transition's own save.
+
+        Called immediately before the success saves of the approval-evidence
+        operations (create seeds its own through ``create_manifest``), so the
+        receipt path (already resolved to an absolute by the CLI boundary) and
+        the runtime id land in the same locked write as the transition. Every
+        refusal path returns before reaching a stamp site, so a refused
+        operation persists nothing; preflight, readiness, and diagnose are
+        constructed without evidence and never stamp.
+        """
+
+        evidence = self._approval_evidence
+        if evidence is None:
+            return
+        receipt_path, runtime_id = evidence
+        if receipt_path is not None:
+            manifest["approval_receipt"] = {"path": receipt_path}
+        if runtime_id is not None:
+            manifest["runtime"] = runtime_id
+
+    def _claim_boundary_runtime_refusal(self, manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Shared claim-boundary admission gate for every claim-arm success exit.
+
+        Fires when the manifest records no non-empty ``runtime`` id and the
+        invocation evidence tuple does not carry BOTH a non-empty canonical
+        runtime id and a receipt path: receipt-only or runtime-only evidence
+        refuses, and the manifest's recorded receipt never substitutes for the
+        receipt flag. The caller invokes this immediately after its
+        aborted-workflow check and before any generation bump or claim write,
+        so the refusal also precedes the prepared-handoff adoption, the
+        pending enumeration, and the stale-claim and no-pending evaluations;
+        it is never called inside ``_stamp_approval_evidence`` (that helper
+        stays frozen and remains the stamp site of continue, reclaim,
+        worker-start, and reconcile). A manifest already recording a usable
+        runtime id never takes this gate, and a runtime id supplied without
+        the receipt flag refuses exactly like a receipt supplied without the
+        runtime id.
+        """
+
+        recorded_runtime = manifest.get("runtime")
+        if isinstance(recorded_runtime, str) and recorded_runtime.strip():
+            return None
+        receipt_path, runtime_id = self._approval_evidence if self._approval_evidence is not None else (None, None)
+        if not (isinstance(runtime_id, str) and runtime_id.strip() and isinstance(capabilities.load_profiles().get(runtime_id), Mapping)):
+            return self._claim_boundary_refusal(manifest)
+        if not (isinstance(receipt_path, str) and receipt_path.strip()):
+            return self._claim_boundary_refusal(manifest)
+        return None
+
+    def _claim_boundary_refusal(self, manifest: Mapping[str, Any]) -> dict[str, Any]:
+        """The canonical migration-remedy refusal shared by both boundary sites."""
+
+        return _outcome(
+            "blocked",
+            "precondition-unverified",
+            [f"claim refused: the manifest records no runtime id; remedies: {_CLAIM_BOUNDARY_RUNTIME_REMEDY}"],
+            "repository-task",
+            "claim:runtime-identity",
+            manifest.get("generation", 0),
+            "preserve-and-reconcile",
+            claimed=False,
+        )
 
     def _persist_recovery_transition(self, manifest: dict[str, Any], transition: str) -> str | None:
         """Validate the post-transition manifest through the same worker-schema
@@ -1437,6 +1779,9 @@ class RuntimeDriver:
             if not any(worker.get("state") == "quarantined" for worker in registry.manifest["workers"].values()):
                 result["status"] = "available"
                 result["reason"] = "reconciled"
+            else:
+                result["status"] = "quarantined"
+                result["reason"] = "stale-inventory"
         reservations = launch_reservations
         if result.get("status") == "available" and reservations:
             result = {"status": "unavailable", "reason": "launch-reservation"}
@@ -1540,27 +1885,44 @@ class RuntimeDriver:
         for worker in candidates:
             if len(outcomes) >= self.TERMINAL_EVIDENCE_CONSULT_BUDGET:
                 break
+            workers_before = copy.deepcopy(registry.manifest["workers"])
+            capacity_before = copy.deepcopy(registry.manifest["capacity"])
             outcome, terminal_observation = self._consult_terminal_evidence(worker)
             outcomes[str(worker.get("worker_id"))] = outcome
             if terminal_observation is None:
                 continue
-            workers_before = copy.deepcopy(registry.manifest["workers"])
-            capacity_before = copy.deepcopy(registry.manifest["capacity"])
             release = registry.apply_observation(
                 self._terminal_observation_envelope(terminal_observation, worker),
                 now=time.monotonic(),
             )
             if worker.get("worker_id") not in (release.get("released_workers") or []):
                 continue
-            if self._conversation_id_raw_visible(worker.get("provider_session_id")):
-                # Release-window guard: a resume of this conversation
-                # appeared only in the post-consult re-observation (the
-                # raw token match also sees manual resumes without
-                # --json, which the parse skips); downgrade the release to
-                # the absence quarantine. A turn started inside the
-                # snapshot window must not be released over.
-                registry.manifest["workers"] = workers_before
-                registry.manifest["capacity"] = capacity_before
+            raw_visibility = self._conversation_id_raw_visibility(worker.get("provider_session_id"))
+            if raw_visibility is not False:
+                # Raw command text can outlive the process row that first
+                # made the worker suspicious. Re-read terminal evidence once
+                # for the same persisted launch, then require a fresh raw
+                # snapshot with no matching resume before accepting release.
+                registry.manifest["workers"] = copy.deepcopy(workers_before)
+                registry.manifest["capacity"] = copy.deepcopy(capacity_before)
+                if raw_visibility is None:
+                    outcomes[str(worker.get("worker_id"))] = "process-snapshot-unavailable"
+                    continue
+                recheck_outcome, recheck = self._consult_terminal_evidence(worker)
+                if recheck is None or not self._terminal_observation_matches_worker(recheck, worker):
+                    outcomes[str(worker.get("worker_id"))] = recheck_outcome
+                    continue
+                recheck_release = registry.apply_observation(
+                    self._terminal_observation_envelope(recheck, worker),
+                    now=time.monotonic(),
+                )
+                if worker.get("worker_id") not in (recheck_release.get("released_workers") or []):
+                    outcomes[str(worker.get("worker_id"))] = "record-not-terminal"
+                    continue
+                if self._conversation_id_raw_visibility(worker.get("provider_session_id")) is not False:
+                    registry.manifest["workers"] = copy.deepcopy(workers_before)
+                    registry.manifest["capacity"] = copy.deepcopy(capacity_before)
+                    outcomes[str(worker.get("worker_id"))] = "live-or-unavailable-at-recheck"
         return outcomes
 
     def _consult_terminal_evidence(self, worker: Mapping[str, Any]) -> tuple[str, Mapping[str, Any] | None]:
@@ -1640,25 +2002,41 @@ class RuntimeDriver:
             "inventory": [item],
         }
 
-    def _conversation_id_raw_visible(self, conversation_id: Any) -> bool:
-        """Best-effort raw ``ps`` visibility check for the release window.
-
-        Matches the conversation id as a raw token in the full re-observed
-        command lines, so a manual resume without ``--json`` (skipped by
-        the inventory parse) is still seen. Contained: any snapshot
-        failure reads as not visible and leaves the release standing.
-        """
+    def _conversation_id_raw_visibility(self, conversation_id: Any) -> bool | None:
+        """Return visible, absent, or unknown for a bounded raw process read."""
 
         if not isinstance(conversation_id, str) or not conversation_id:
-            return False
+            return None
         snapshot = getattr(self.adapter, "process_snapshot", None)
         if not callable(snapshot):
-            return False
+            return None
         try:
-            raw = snapshot()
+            result = snapshot()
         except Exception:
-            return False
-        return conversation_id in str(getattr(raw, "stdout", "") or "")
+            return None
+        if (
+            not isinstance(result, subprocess.CompletedProcess)
+            or type(result.returncode) is not int
+            or result.returncode != 0
+            or not isinstance(result.stdout, str)
+        ):
+            return None
+        return conversation_id in result.stdout
+
+    @staticmethod
+    def _terminal_observation_matches_worker(observation: Mapping[str, Any], worker: Mapping[str, Any]) -> bool:
+        """Require exact provider session and verified terminal proof."""
+
+        provider_identity = observation.get("provider_identity")
+        proof = observation.get("proof")
+        return (
+            observation.get("state") == "terminal"
+            and isinstance(provider_identity, Mapping)
+            and provider_identity.get("session_id") == worker.get("provider_session_id")
+            and isinstance(proof, Mapping)
+            and proof.get("verified") is True
+            and proof.get("kind") == "provider-terminal"
+        )
 
     @staticmethod
     def _unregistered_process_live(registry: WorkerRegistry, inventory: list[Any]) -> bool:
@@ -1740,6 +2118,82 @@ class RuntimeDriver:
                 if isinstance(reservation, Mapping) and reservation.get("task_id") == claim.get("task_id") and reservation.get("claim_token") == claim.get("token") and reservation.get("generation") == claim.get("generation"):
                     reservations.pop(key, None)
             self._save(manifest)
+
+    @staticmethod
+    def _pop_launch_reservations_locked(manifest: dict[str, Any], task_id: str, claim_token: Any, generation: Any) -> None:
+        """Pop the launch reservations keyed to one claim identity triple.
+
+        Caller holds the manifest lock and persists the popped keys in its own
+        locked save; this helper never writes.
+        """
+
+        reservations = manifest.get("capacity", {}).get("reservations", {})
+        if isinstance(reservations, Mapping):
+            for key, reservation in list(reservations.items()):
+                if (
+                    isinstance(reservation, Mapping)
+                    and reservation.get("task_id") == task_id
+                    and reservation.get("claim_token") == claim_token
+                    and reservation.get("generation") == generation
+                ):
+                    reservations.pop(key, None)
+
+    @staticmethod
+    def _release_terminal_reservation_locked(manifest: dict[str, Any], claim: Mapping[str, Any], receipt: Mapping[str, Any]) -> None:
+        """Release only the reservation and worker entry named by a terminal receipt."""
+        identity = (claim.get("task_id"), claim.get("token"), claim.get("generation"), claim.get("launch_id"))
+        receipt_identity = (receipt.get("task_id"), receipt.get("claim_token"), receipt.get("generation"), receipt.get("launch_id"))
+        if any(value is None for value in identity) or receipt_identity != identity:
+            return
+        reservations = manifest.get("capacity", {}).get("reservations", {})
+        if isinstance(reservations, Mapping):
+            for key, reservation in list(reservations.items()):
+                if isinstance(reservation, Mapping) and (
+                    reservation.get("task_id"), reservation.get("claim_token"),
+                    reservation.get("generation"), reservation.get("launch_id"),
+                ) == identity:
+                    reservations.pop(key, None)
+        for worker in manifest.get("workers", {}).values():
+            if not isinstance(worker, dict) or (
+                worker.get("task_id"), worker.get("claim_token"), worker.get("generation"),
+                worker.get("launch_id"), worker.get("claim_owner_id"),
+            ) != (*identity, claim.get("owner")):
+                continue
+            worker_receipt = {**dict(receipt), "worker_id": worker.get("worker_id"), "provider_session_id": worker.get("provider_session_id")}
+            worker.update(state="terminal", terminal_reason=receipt.get("reason", "terminal"),
+                          last_receipt={"status": "success", "outcome": "released", "event": "terminal", "receipt_id": receipt.get("receipt_id")},
+                          receipt_metadata=worker_receipt, reconciliation={"status": "terminal", "observed_at": receipt.get("observed_at")})
+            entry = manifest.get("capacity", {}).get("entries", {}).get(worker.get("capacity_entry_id"))
+            if isinstance(entry, dict):
+                entry.update(counts_toward_capacity=False, state="released")
+
+    @staticmethod
+    def _sweep_stale_launch_reservations_locked(manifest: dict[str, Any]) -> None:
+        """Pop launch reservations matching no live claim identity triple.
+
+        A reservation is stale when no claim row in the manifest carries its
+        ``(task_id, claim_token, generation)`` triple; any claim state counts
+        as live, including the reclaim-target blocked claim, so only
+        reservations no claim can ever discharge are dropped. Caller holds the
+        manifest lock and persists the sweep in its own save (the reclaim's
+        rotation save, or the capacity-refusal save when capacity stays
+        unavailable).
+        """
+
+        reservations = manifest.get("capacity", {}).get("reservations", {})
+        if not isinstance(reservations, Mapping) or not reservations:
+            return
+        claims = manifest.get("claims", {})
+        for key, reservation in list(reservations.items()):
+            if not isinstance(reservation, Mapping):
+                continue
+            identity = (reservation.get("task_id"), reservation.get("claim_token"), reservation.get("generation"))
+            if not any(
+                isinstance(claim, Mapping)
+                and (claim.get("task_id"), claim.get("token"), claim.get("generation")) == identity
+                for claim in claims.values()
+            ):
+                reservations.pop(key, None)
 
     @_locked_mutation
     def apply_worker_lifecycle_receipt(self, event: str, receipt: Mapping[str, Any]) -> dict[str, Any]:
@@ -1838,8 +2292,16 @@ class RuntimeDriver:
             if "ordinal" in task and (isinstance(task["ordinal"], bool) or not isinstance(task["ordinal"], int) or task["ordinal"] < 0):
                 raise ValueError("task ordinal must be a non-negative integer")
         evidence_digest = value.get("evidence_contract_digest")
-        if evidence_digest is not None and evidence_digest != capabilities.evidence_contract_digest(value["tasks"]):
-            raise ValueError("manifest evidence contract digest does not match task criteria and allowlists")
+        if evidence_digest is not None:
+            current_digest = capabilities.evidence_contract_digest(value["tasks"])
+            legacy_digest = capabilities.evidence_contract_digest(value["tasks"], include_criterion_ids=False)
+            if evidence_digest not in {current_digest, legacy_digest}:
+                raise ValueError("manifest evidence contract digest does not match task criteria and allowlists")
+        expected_criteria_map = {task_id: capabilities.evidence_criterion_ids(task.get("required_criteria", [])) for task_id, task in value["tasks"].items()}
+        if value.get("evidence_enforcement") is True and value.get("evidence_criteria_map") is not None and value.get("evidence_criteria_map") != expected_criteria_map:
+            raise ValueError("manifest evidence criterion ID mapping does not match digest-bound task criteria")
+        if value.get("evidence_enforcement") is True and value.get("evidence_criteria_map") is None:
+            raise ValueError("manifest evidence criterion ID mapping is missing")
         if "evidence_enforcement" in value and not isinstance(value["evidence_enforcement"], bool):
             raise ValueError("manifest evidence_enforcement must be boolean")
         if value.get("evidence_enforcement") is True and any(not task.get("required_criteria") or not task.get("verification_commands") for task in value["tasks"].values()):
@@ -2021,7 +2483,7 @@ class RuntimeDriver:
             "stdout_digest": "sha256:" + hashlib.sha256(completed.stdout).hexdigest(),
             "stderr_digest": "sha256:" + hashlib.sha256(completed.stderr).hexdigest(),
             "baseline_paths": baseline_paths, "changed_paths": changed, "allowed_paths": allowed,
-            "criteria": declaration.get("criteria", []), "verified_by": "runtime-driver", "task_id": str(task_id),
+            "criteria": [key for key, text in (manifest.get("evidence_criteria_map", {}).get(str(task_id), {}) if manifest.get("evidence_enforcement") is True else capabilities.evidence_criterion_ids(task.get("required_criteria", []))).items() if text in declaration.get("criteria", [])], "verified_by": "runtime-driver", "task_id": str(task_id),
             "claim_token": str(claim["token"]), "generation": int(claim["generation"]), "launch_id": str(claim["launch_id"]),
             "evidence_contract_digest": str(manifest.get("evidence_contract_digest", "")), "source_digest": source_digest,
         })
@@ -2106,14 +2568,16 @@ class RuntimeDriver:
                     except ValueError as exc:
                         return self._result_error(str(exc), result["generation"], result["action_scope"], result["checkpoint_identity"])
                     declaration = commands.get(command_id)
-                    if not isinstance(declaration, Mapping) or normalized_evidence["command"] != declaration.get("argv") or normalized_evidence["criteria"] != sorted(declaration.get("criteria", ())):
+                    criterion_map = manifest.get("evidence_criteria_map", {}).get(task_id, capabilities.evidence_criterion_ids(task.get("required_criteria", [])))
+                    full_criteria = sorted(criterion_map[item] for item in normalized_evidence["criteria"] if item in criterion_map)
+                    if not isinstance(declaration, Mapping) or normalized_evidence["command"] != declaration.get("argv") or full_criteria != sorted(declaration.get("criteria", ())):
                         continue
                     if any(normalized_evidence.get(field) != claim.get(claim_field) for field, claim_field in (("task_id", "task_id"), ("claim_token", "token"), ("generation", "generation"), ("launch_id", "launch_id"))) or normalized_evidence.get("evidence_contract_digest") != manifest.get("evidence_contract_digest"):
                         continue
                     if normalized_evidence["source_digest"] != current_source_digest:
                         continue
                     if normalized_evidence["exit_status"] == 0 and normalized_evidence["working_directory"] == str(self.repo_root):
-                        covered.update(normalized_evidence["criteria"])
+                        covered.update(full_criteria)
                 if not required_criteria.issubset(covered):
                     missing = sorted(required_criteria - covered)
                     return _outcome("blocked", "malformed-result", [f"required verification criteria missing: {', '.join(missing)}", "run the driver-owned verification command and retry"], result["action_scope"], result["checkpoint_identity"], result["generation"], "preserve-and-reconcile")
@@ -2246,9 +2710,28 @@ class RuntimeDriver:
                 claim.get("generation", manifest.get("generation", 0)),
                 ["claim already progressed past this receipt"],
             )
-        self._apply_blocked(manifest, task_id, result, resume_allowed=result.get("resume_allowed", False), session_id=result.get("session_id"))
+        # The persist tail re-verified the claim token and generation under
+        # the lock above, so the persisted receipt is stamped with that
+        # verified identity: every later prelaunch proof compares the
+        # receipt-embedded identity against the live claim (the launch-path
+        # sites embed it at construction; this stamp covers the sites that
+        # return raw or driver-manufactured receipts without one).
+        receipt = dict(result)
+        receipt["claim_token"] = current_claim.get("token")
+        receipt["generation"] = current_claim.get("generation")
+        self._apply_blocked(manifest, task_id, receipt, resume_allowed=receipt.get("resume_allowed", False), session_id=receipt.get("session_id"))
+        if not receipt.get("resume_allowed", False):
+            # Non-resumable launch-path blocks (the runtime-policy-unavailable
+            # and runtime-error shapes) can never re-enter the adapter window,
+            # so the reservation and launch record this attempt just wrote are
+            # pure stale residue: release both here, in the same locked write,
+            # so the prelaunch proof reads a residue-free claim. Resumable
+            # outcomes (timeouts) stay untouched: their in-place resume still
+            # owns the reservation and the launch record.
+            self._pop_launch_reservations_locked(manifest, task_id, current_claim.get("token"), current_claim.get("generation"))
+            manifest["claims"][task_id].pop("launch_record", None)
         self._save(manifest)
-        return dict(result)
+        return receipt
 
     def _invoke_adapter_launch(
         self,
@@ -2447,6 +2930,7 @@ class RuntimeDriver:
         binding["worker_identity"] = worker_identity
         binding["worker_start_receipt"] = receipt_identity
         binding["consumed"] = True
+        self._stamp_approval_evidence(manifest)
         self._save(manifest)
         return _outcome("success", "completed", ["matching worker-start receipt consumed prelaunch binding"], "repository-task", f"{task_id}:worker-start", claim.get("generation", 0), "continue-parent")
 
@@ -2489,16 +2973,72 @@ class RuntimeDriver:
 
     @_locked_mutation
     def recover_ambiguous_handoff(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        """Close an ambiguous launch fence only with exact provider terminal evidence."""
+        """Close an ambiguous or evidence-recovered launch fence with terminal proof."""
         if not isinstance(request, Mapping):
             return _outcome("blocked", "malformed-result", ["handoff recovery request must be a mapping"], "repository-task", "runtime:handoff-recovery", 0, "preserve-and-reconcile")
         manifest = load_manifest(self.manifest_path)
         intent_key = request.get("intent_key")
         intent = manifest.get("handoff_intents", {}).get(intent_key) if isinstance(intent_key, str) else None
         evidence = request.get("provider_evidence")
-        if not isinstance(intent, dict) or intent.get("state") != "ambiguous" or not isinstance(evidence, Mapping):
+        if not isinstance(intent, dict) or intent.get("state") not in {"ambiguous", "launched"}:
             return _outcome("blocked", "ambiguous", ["handoff is not recoverable from the supplied provider evidence"], "repository-task", str(intent_key or "handoff"), manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
+        if intent.get("state") == "ambiguous" and not isinstance(evidence, Mapping):
+            return _outcome("blocked", "ambiguous", ["ambiguous handoff requires provider terminal evidence"], "repository-task", str(intent_key or "handoff"), manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
         successor = intent.get("successor")
+        if intent.get("state") == "launched":
+            # Evidence-contract recovery can already have closed and requeued
+            # this exact successor while leaving its parent handoff launched.
+            # Recover only that receipt-bound shape, and consult the adapter
+            # for fresh terminal proof instead of trusting request payload data.
+            task_id = str(successor.get("task_id", "")) if isinstance(successor, Mapping) else ""
+            claim = manifest.get("claims", {}).get(task_id)
+            task = manifest.get("tasks", {}).get(task_id)
+            receipts = [
+                event for event in manifest.get("history", [])
+                if isinstance(event, Mapping)
+                and event.get("event") == EVIDENCE_CONTRACT_RECOVERY_EVENT
+                and event.get("task_id") == task_id
+                and isinstance(claim, Mapping)
+                and event.get("token") == claim.get("token")
+                and event.get("generation") == claim.get("generation")
+            ]
+            launch = intent.get("launch_receipt")
+            if (
+                not isinstance(claim, Mapping)
+                or claim.get("state") != "closed"
+                or claim.get("token") != successor.get("claim_token")
+                or claim.get("generation") != successor.get("generation")
+                or claim.get("launch_id") != successor.get("launch_id")
+                or not isinstance(task, Mapping)
+                or task.get("status") != "pending"
+                or len(receipts) != 1
+                or not isinstance(launch, Mapping)
+                or not isinstance(launch.get("provider_session_id"), str)
+            ):
+                return _outcome("blocked", "ambiguous", ["launched handoff lacks one exact evidence-contract recovery receipt and closed pending successor"], "repository-task", str(intent_key), manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
+            port = getattr(self.adapter, "observe_terminal_evidence", None)
+            try:
+                observation = port(launch["provider_session_id"]) if callable(port) else None
+            except Exception:
+                observation = None
+            if (
+                not isinstance(observation, Mapping)
+                or observation.get("state") != "terminal"
+                or (observation.get("provider_identity") or {}).get("session_id") != launch["provider_session_id"]
+                or not isinstance(observation.get("proof"), Mapping)
+                or observation["proof"].get("verified") is not True
+                or observation["proof"].get("kind") != "provider-terminal"
+            ):
+                return _outcome("blocked", "ambiguous", ["fresh adapter terminal evidence does not verify the launched handoff session"], "repository-task", str(intent_key), manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
+            evidence = {
+                "source": "provider-lifecycle",
+                "state": "terminal",
+                "intent_id": intent.get("intent_id"),
+                "launch_id": successor.get("launch_id"),
+                "provider_session_id": launch["provider_session_id"],
+                "observed_at": observation.get("observed_at"),
+                "proof": dict(observation["proof"]),
+            }
         if not isinstance(successor, Mapping) or (
             evidence.get("source") != "provider-lifecycle"
             or evidence.get("state") != "terminal"
@@ -2512,6 +3052,10 @@ class RuntimeDriver:
         task = manifest.get("tasks", {}).get(task_id)
         if not isinstance(claim, dict) or not isinstance(task, dict) or claim.get("token") != successor.get("claim_token") or claim.get("generation") != successor.get("generation") or claim.get("launch_id") != successor.get("launch_id"):
             return _outcome("blocked", "stale-claim", ["handoff claim identity changed; recovery refused"], "repository-task", str(intent_key), manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
+        if intent.get("state") == "launched":
+            # The declared transition graph requires an explicit ambiguous
+            # state between an external launch and receipt-backed closure.
+            self._transition_handoff(intent, "ambiguous")
         self._transition_handoff(intent, "failed")
         intent["terminal_recovery_evidence"] = dict(evidence)
         claim.update({"state": "replaced", "replaced_at": self.clock(), "recovery_reason": "provider-terminal-handoff-proof"})
@@ -2956,7 +3500,7 @@ class RuntimeDriver:
             task_id,
             completion=completion,
             history=[{"event": "worker-checkpoint", "task_id": task_id, "generation": result["generation"]}],
-            checkpoint_record=(identity, {"result": result, "task_id": task_id, "recorded_at": self.clock()}),
+            checkpoint_record=(identity, {"result": {**result, "claim_token": claim_token}, "task_id": task_id, "recorded_at": self.clock()}),
             claim_state="launched",
         )
         refreshed = self.refresh_manifest()
@@ -3016,6 +3560,7 @@ class RuntimeDriver:
             and valid_log
             and len(str(raw["commit_identity"])) <= 128
             and self._task_id_from_checkpoint(checkpoint_identity) == task_id
+            and (not task.get("parent_commit") or raw.get("planned_commit") == task.get("parent_commit"))
         )
         if not valid:
             return _outcome("blocked", "done-pending", [f"missing or unfenced done evidence: {', '.join(required)}"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile"), False
@@ -3028,11 +3573,18 @@ class RuntimeDriver:
             return member_fence, False
         stripped_identity = str(raw["commit_identity"]).strip()
         none_receipt = stripped_identity == "none"
-        if not none_receipt and not self.commit_lookup(str(raw["commit_identity"])):
+        recovery_receipt = stripped_identity == "baseline-unchanged"
+        if not none_receipt and not recovery_receipt and not self.commit_lookup(str(raw["commit_identity"])):
             return _outcome("blocked", "commit-pending", [f"commit not found: {raw['commit_identity']}"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile"), False
         # The none receipt skips the commit lookup: the boundary witnesses
         # below prove the clean state themselves, and the recorded identity
-        # is the justification literal, never a manufactured commit.
+        # is the justification literal, never a manufactured commit. The
+        # recovery completion arm skips it the same way and proves its own
+        # conjuncts before the boundary witnesses run.
+        if recovery_receipt:
+            recovery_block = self._recovery_completion_block(manifest, claim, task, task_id, raw, checkpoint_identity)
+            if recovery_block is not None:
+                return recovery_block, False
         boundary = self._done_boundary_block(claim, str(raw["commit_identity"]), checkpoint_identity, manifest.get("generation", 0), manifest=manifest)
         if boundary is not None:
             return boundary, False
@@ -3043,6 +3595,14 @@ class RuntimeDriver:
                 actions = [dict(existing_intent["outcome_action"])]
             return _outcome("success", "completed", ["duplicate done handoff"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "continue-parent", actions=actions, duplicate=True), False
         stored_identity = stripped_identity if none_receipt else str(raw["commit_identity"])
+        self._release_terminal_reservation_locked(manifest, claim, {
+            "receipt_id": f"done-terminal:{task_id}:{claim.get('generation')}:{claim.get('launch_id')}",
+            "task_id": task_id, "claim_token": claim.get("token"),
+            "generation": claim.get("generation"), "launch_id": claim.get("launch_id"),
+            "claim_owner_id": claim.get("claim_owner_id", claim.get("owner")),
+            "event": "terminal", "reason": "done", "proof": {"kind": "driver-done-receipt", "verified": True},
+            "observed_at": self.clock(),
+        })
         resume_action, claim_next, advance_blocked = self._advance_group_locked(manifest, task_id, stored_identity, checkpoint_identity)
         if advance_blocked is not None:
             return advance_blocked, False
@@ -3069,6 +3629,8 @@ class RuntimeDriver:
         done_evidence = (
             "no-commit justification, checkbox, clean-state, and log evidence recorded"
             if none_receipt
+            else "recovery completion identity baseline-unchanged, checkbox, clean-state, and log evidence recorded"
+            if recovery_receipt
             else "done commit, checkbox, clean-state, and log evidence recorded"
         )
         if resume_action is not None:
@@ -3125,7 +3687,7 @@ class RuntimeDriver:
                 # unreadable HEAD under a none done refuses the done as
                 # commit-pending (fail closed) instead of seeding an empty
                 # baseline the done-boundary witnesses cannot consume.
-                advance_revision = self._git_head_revision() if str(commit_identity).strip() == "none" else str(commit_identity)
+                advance_revision = self._git_head_revision() if str(commit_identity).strip() in ("none", "baseline-unchanged") else str(commit_identity)
                 if not advance_revision:
                     return None, False, _outcome("blocked", "commit-pending", ["no-commit advance baseline unavailable: HEAD revision could not be read"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "preserve-and-reconcile", resume_allowed=False)
                 # Anchor-session resolution: the anchor capture is
@@ -3268,6 +3830,47 @@ class RuntimeDriver:
         })
         return True
 
+    def _recovery_completion_block(self, manifest, claim, task, task_id, raw, checkpoint_identity):
+        """Prove the recovery baseline-completion arm's conjuncts.
+
+        Caller holds the manifest lock. Returns None when every conjunct
+        holds (the receipt may proceed; the replay-fence record is applied
+        to the in-memory manifest and persists with the completion save),
+        or a blocked outcome naming the failed conjunct with the task left
+        ``done-pending``.
+        """
+        generation = int(manifest.get("generation", 0))
+
+        def refuse(evidence_items, reason_code="commit-pending", resume_allowed=False):
+            return _outcome("blocked", reason_code, [f"recovery completion arm: {item}" for item in evidence_items], "done-handoff", checkpoint_identity, generation, "preserve-and-reconcile", resume_allowed=resume_allowed)
+
+        if not isinstance(claim, Mapping) or claim.get("recovery_path") is not True:
+            return refuse(["claim does not carry recovery_path: true; only the execute-plan Recovery route may record baseline-unchanged"])
+        criteria = task.get("required_criteria", ()) if isinstance(task, Mapping) else ()
+        if not any("Commit:" in str(text) for text in criteria):
+            return refuse(["task carries no Commit: criterion; the recovery completion arm closes Commit-line tasks only"])
+        allowed = sorted(str(path) for path in ((claim.get("policy_token") or {}).get("allowed_paths", ())))
+        baseline_revision = str((claim or {}).get("baseline_revision") or "").strip()
+        if not allowed or not baseline_revision:
+            return refuse(["claim has no allowed-path scope or baseline revision to compare against"])
+        try:
+            baseline_digest = self._task_source_digest(allowed, revision=baseline_revision)
+            current_digest = self._task_source_digest(allowed)
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            return refuse([f"allowed-path source snapshot failed: {type(exc).__name__}"], reason_code="worktree-witness-unavailable", resume_allowed=False)
+        if baseline_digest != current_digest:
+            return refuse([f"allowed-path bytes differ from the claim baseline ({baseline_revision}); recovery completion requires byte-identical sources"])
+        receipts = manifest.get("verification_evidence", {}).get(task_id)
+        expected = {envelope.get("source_digest") for envelope in receipts.values() if isinstance(envelope, Mapping)} if isinstance(receipts, Mapping) else set()
+        if not expected or current_digest not in expected:
+            return refuse(["task-local validation evidence is absent or does not match the current allowed-path bytes"])
+        replay_book = manifest.setdefault("recovery_receipts", {})
+        prior = replay_book.get(task_id)
+        if isinstance(prior, Mapping) and (prior.get("claim_token") != raw.get("claim_token") or int(prior.get("generation", -1)) != int(raw.get("generation", -1))):
+            return refuse([f"completion identity already consumed by claim token {prior.get('claim_token')} generation {prior.get('generation')}; cross-claim replay refused"])
+        replay_book[task_id] = {"claim_token": raw.get("claim_token"), "generation": raw.get("generation"), "identity": "baseline-unchanged", "recorded_at": self.clock()}
+        return None
+
     def _done_boundary_block(self, claim: Mapping[str, Any] | None, commit_identity: str, checkpoint_identity: str, generation: int, manifest: Mapping[str, Any]) -> dict[str, Any] | None:
         """Verify the done boundary against the claim's launch baseline.
 
@@ -3292,7 +3895,7 @@ class RuntimeDriver:
         if drift is not None:
             return drift
         allowed = set((claim.get("policy_token") or {}).get("allowed_paths", ()))
-        if str(commit_identity).strip() == "none":
+        if str(commit_identity).strip() in ("none", "baseline-unchanged"):
             return None
         baseline_revision = str((claim or {}).get("baseline_revision") or "").strip()
         if not baseline_revision:
@@ -3365,6 +3968,7 @@ class RuntimeDriver:
             manifest["history"].append(event)
         if claim_state is not None and task_id in manifest["claims"]:
             manifest["claims"][task_id]["state"] = claim_state
+        self._stamp_approval_evidence(manifest)
         self._save(manifest)
 
     @staticmethod
@@ -3623,6 +4227,7 @@ class RuntimeDriver:
         # Activate through the one primitive: state, active member, and the
         # progress-revision mirror are lifecycle writes like any other.
         self._set_group_state(manifest, group_id, "active", member_ids[0])
+        self._stamp_approval_evidence(manifest)
         self._save(manifest)
         return {
             "status": "success",
@@ -3637,7 +4242,7 @@ class RuntimeDriver:
             "member_ordinals": member_ordinals,
         }
 
-    def claim_next_task(self, batch: bool = False) -> dict[str, Any]:
+    def claim_next_task(self, batch: bool = False, recovery: bool = False) -> dict[str, Any]:
         """Claim the next pending task; ``batch`` opts in to a claim group.
 
         This is the default-off `batch` opt-in on claim: a no-flag claim is
@@ -3661,6 +4266,16 @@ class RuntimeDriver:
                     ["workflow was explicitly aborted before claim"],
                     claimed=False,
                 )
+            # Shared claim-boundary admission gate: a runtime-less manifest
+            # refuses with the migration remedy unless the invocation evidence
+            # carries the validated runtime-plus-receipt pair. Sited before any
+            # generation bump, handoff adoption, pending enumeration, or
+            # stale-claim evaluation, and reached by both claim arms through
+            # this method (the batch arm's locked helper has no check of its
+            # own and is only ever entered here).
+            boundary_refusal = self._claim_boundary_runtime_refusal(manifest)
+            if boundary_refusal is not None:
+                return boundary_refusal
             pending_handoff = next((
                 (intent_key, intent) for intent_key, intent in manifest.get("handoff_intents", {}).items()
                 if isinstance(intent, Mapping) and intent.get("state") in {"prepared", "launching", "launched", "ambiguous"}
@@ -3709,8 +4324,11 @@ class RuntimeDriver:
             token = uuid.uuid4().hex
             launch_id = uuid.uuid4().hex
             claim = {"token": token, "generation": manifest["generation"], "owner": self.owner, "timestamp": self.clock(), "state": "claimed", "task_id": task["id"], "launch_id": launch_id}
+            if recovery:
+                claim["recovery_path"] = True
             manifest["claims"][task["id"]] = claim
             task["status"] = "claimed"
+            self._stamp_approval_evidence(manifest)
             self._save(manifest)
             return {"status": "success", "claimed": True, "task_id": task["id"], "generation": manifest["generation"], "token": token, "launch_id": launch_id, "actions": []}
 
@@ -3756,6 +4374,13 @@ class RuntimeDriver:
                     ["workflow was explicitly aborted before claim"],
                     claimed=False,
                 )
+            # Shared claim-boundary admission gate, the second of exactly two
+            # sites: the parallel-group arm refuses a runtime-less manifest
+            # with the same migration remedy before any membership evaluation,
+            # generation bump, or group write.
+            boundary_refusal = self._claim_boundary_runtime_refusal(manifest)
+            if boundary_refusal is not None:
+                return boundary_refusal
 
             def refuse(evidence: list[str]) -> dict[str, Any]:
                 return _outcome("blocked", "stale-claim", evidence, "repository-task", "claim:parallel-group", manifest.get("generation", 0), "resumable-conflict", claimed=False)
@@ -3863,6 +4488,7 @@ class RuntimeDriver:
             # member (concurrent members have no ordinal gate), and the
             # progress-revision mirror ride every lifecycle transition.
             self._set_group_state(manifest, group_id, "active", None)
+            self._stamp_approval_evidence(manifest)
             self._save(manifest)
             return {
                 "status": "success",
@@ -3923,6 +4549,7 @@ class RuntimeDriver:
         # from an earlier manifest snapshot would be silently dropped on save.
         manifest["tasks"][task_id]["status"] = "launched"
         manifest["history"].append({"event": "started", "task_id": task_id, "generation": claim["generation"]})
+        self._stamp_approval_evidence(manifest)
         self._save(manifest)
         return None
 
@@ -4028,7 +4655,7 @@ class RuntimeDriver:
             return _stale_claim_outcome(str(claim.get("token", task_id)), int(claim.get("generation", 0)), ["later batch members resume the anchor session; launch refused"])
         return None
 
-    def _launch_claimed_task(self, claim: Mapping[str, Any], prompt: str, deadline_seconds: float | None) -> dict[str, Any]:
+    def _launch_claimed_task(self, claim: Mapping[str, Any], prompt: str | None, deadline_seconds: float | None) -> dict[str, Any]:
         task_id = str(claim.get("task_id") or "")
         current_claim = self.refresh_manifest().get("claims", {}).get(task_id)
         if not isinstance(current_claim, Mapping):
@@ -4047,6 +4674,9 @@ class RuntimeDriver:
             if refusal is not None:
                 return refusal
         task = load_manifest(self.manifest_path)["tasks"][task_id]
+        worker_contract = self._worker_role_contract(task, claim)
+        if worker_contract is None:
+            return _outcome("blocked", "malformed-result", ["canonical single-task worker role is missing or mismatched"], "repository-task", f"{task_id}:launch", int(claim["generation"]), "preserve-and-reconcile")
         operation_kind = str(task.get("operation_kind", "repository-task"))
         # Member claims authorize their own canonical paths, never a
         # group-wide union.
@@ -4061,10 +4691,18 @@ class RuntimeDriver:
         authorization = self.authorize_envelope(envelope, int(claim["generation"]))
         if authorization["status"] != "success":
             return self._persist_blocked_claim(claim, authorization, task_id)
+        try:
+            requested_contract = json.loads(prompt) if isinstance(prompt, str) and prompt.strip() else None
+        except json.JSONDecodeError:
+            requested_contract = None
+        if isinstance(requested_contract, Mapping) and dict(requested_contract) != worker_contract:
+            return _outcome("blocked", "malformed-result", ["caller worker role or scope does not match authoritative task state"], "repository-task", f"{task_id}:launch", int(claim["generation"]), "preserve-and-reconcile")
+        if isinstance(prompt, str) and prompt.strip() == "continue execute-plan":
+            return _outcome("blocked", "malformed-result", ["orchestrator prompt cannot be used as worker content"], "repository-task", f"{task_id}:launch", int(claim["generation"]), "preserve-and-reconcile")
         if self.adapter is None:
             return self._persist_blocked_claim(
                 claim,
-                _outcome("blocked", "runtime-policy-unavailable", ["no adapter configured"], "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile"),
+                _outcome("blocked", "runtime-policy-unavailable", ["no adapter configured"], "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile", claim_token=claim["token"]),
             )
         activation_check = getattr(self.adapter, "activation_check", None)
         if callable(activation_check):
@@ -4073,7 +4711,7 @@ class RuntimeDriver:
                 activation_evidence = activation.get("evidence", ["adapter activation was not verified"]) if isinstance(activation, Mapping) else ["adapter activation returned a malformed receipt"]
                 return self._persist_blocked_claim(
                     claim,
-                    _outcome("blocked", "runtime-policy-unavailable", bounded_evidence(activation_evidence), "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile"),
+                    _outcome("blocked", "runtime-policy-unavailable", bounded_evidence(activation_evidence), "repository-task", str(claim["token"]), int(claim["generation"]), "preserve-and-reconcile", claim_token=claim["token"]),
                 )
             fencing = self._record_activation_receipt(claim, task_id, activation)
             if fencing is not None:
@@ -4101,7 +4739,10 @@ class RuntimeDriver:
                 and isinstance(worker.get("process_identity"), Mapping)
                 and worker.get("process_identity", {}).get("pid") is not None
             ]
-        raw = self._invoke_adapter_launch(claim, task, prompt, deadline_seconds, policy_token)
+        task_for_adapter = dict(task)
+        task_for_adapter["worker_role"] = worker_contract
+        serialized_prompt = json.dumps(worker_contract, ensure_ascii=False, sort_keys=True)
+        raw = self._invoke_adapter_launch(claim, task_for_adapter, serialized_prompt, deadline_seconds, policy_token)
         if raw.get("reason_code") == "malformed-result":
             # A malformed launch receipt refuses read-only: return before the
             # blocked-persist arm, so a self-inflicted malformed receipt never
@@ -4127,7 +4768,49 @@ class RuntimeDriver:
             self._release_launch_reservation(claim)
         return self.record_worker_checkpoint(raw)
 
-    def launch_next_task(self, prompt: str = "continue execute-plan", deadline_seconds: float | None = None, batch: bool = False) -> dict[str, Any]:
+    def _worker_role_contract(self, task: Mapping[str, Any], claim: Mapping[str, Any]) -> dict[str, Any] | None:
+        task_id = str(task.get("id", ""))
+        if not task_id or claim.get("task_id") != task_id or not self._claim_owned_by_driver(claim):
+            return None
+        allowed_paths = list(claim.get("allowed_paths") or task.get("allowed_paths", task.get("files", ())))
+        criteria = task.get("required_criteria")
+        commands = task.get("verification_commands")
+        enforcement = self.refresh_manifest().get("evidence_enforcement") is True
+        evidence_owner = task.get("evidence_owner") if enforcement else task.get("evidence_owner", "worker")
+        body = task.get("task_body") if enforcement else task.get("task_body", task.get("description", task.get("title", task_id)))
+        log_path = task.get("worker_log_path") if enforcement else task.get("worker_log_path", f"docs/tmp/execute-plan/{self.plan_slug}/{task_id}-implement.log.md")
+        if (
+            evidence_owner != "worker"
+            or not isinstance(claim.get("token"), str) or not claim.get("token")
+            or isinstance(claim.get("generation"), bool) or not isinstance(claim.get("generation"), int)
+            or (enforcement and (not allowed_paths or not isinstance(criteria, list) or not criteria or not isinstance(commands, list) or not commands))
+            or not isinstance(body, str) or not body.strip()
+            or not isinstance(log_path, str) or not log_path.strip()
+        ):
+            return None
+        if not isinstance(criteria, list):
+            criteria = []
+        if not isinstance(commands, list):
+            commands = []
+        contract = {
+            "role": "single-task-worker",
+            "task_id": task_id,
+            "claim_token": claim.get("token"),
+            "generation": claim.get("generation"),
+            "task_body": body,
+            "allowed_paths": allowed_paths,
+            "validation_commands": copy.deepcopy(commands),
+            "required_criteria": list(criteria),
+            "evidence_owner": evidence_owner,
+            "worker_log_destination": log_path,
+            "parent_obligations": copy.deepcopy(task.get("parent_obligations", [])),
+        }
+        return contract
+
+    def launch_next_task(self, prompt: str | None = None, deadline_seconds: float | None = None, batch: bool = False) -> dict[str, Any]:
+        if isinstance(prompt, str) and prompt.strip() == "continue execute-plan":
+            manifest = self.refresh_manifest()
+            return _outcome("blocked", "malformed-result", ["orchestrator prompt cannot be used as worker content"], "repository-task", "worker:role", int(manifest.get("generation", 0)), "preserve-and-reconcile")
         if batch and self._live_group(self.refresh_manifest()) is not None:
             # An already-claimed live group is launched or resumed through
             # the member continuation path, never through a second claim.
@@ -4140,7 +4823,7 @@ class RuntimeDriver:
             return _outcome("blocked", "owner-mismatch", ["claim changed before launch"], "repository-task", str(claim.get("token", "claim")), int(claim.get("generation", 0)), "preserve-and-reconcile")
         return self._launch_claimed_task(live_claim, prompt, deadline_seconds)
 
-    def launch_member_task(self, task_id: str, prompt: str = "continue execute-plan", deadline_seconds: float | None = None) -> dict[str, Any]:
+    def launch_member_task(self, task_id: str, prompt: str | None = None, deadline_seconds: float | None = None) -> dict[str, Any]:
         """Launch one claimed member of a live parallel implement group.
 
         The parallel-group launch entry: after ``claim_parallel_group``
@@ -4165,7 +4848,7 @@ class RuntimeDriver:
             return _stale_claim_outcome(str(claim.get("token", f"{task_id}:launch")), int(claim.get("generation", 0)), ["parallel member launch does not name the active group"])
         return self._launch_claimed_task(claim, prompt, deadline_seconds)
 
-    def continue_parent(self, prompt: str = "continue execute-plan", deadline_seconds: float | None = None, batch: bool = False) -> dict[str, Any]:
+    def continue_parent(self, prompt: str | None = None, deadline_seconds: float | None = None, batch: bool = False) -> dict[str, Any]:
         """Reload state, reconcile safely, and advance one defined step.
 
         ``batch`` opts the continuation into the claim-group protocol: a
@@ -4255,7 +4938,7 @@ class RuntimeDriver:
         self.refresh_manifest()
         return result
 
-    def _continue_group_member(self, manifest: Mapping[str, Any], group: Mapping[str, Any], prompt: str, deadline_seconds: float | None) -> dict[str, Any]:
+    def _continue_group_member(self, manifest: Mapping[str, Any], group: Mapping[str, Any], prompt: str | None, deadline_seconds: float | None) -> dict[str, Any]:
         """Advance a live group through its active member (reload-resolved).
 
         The active member and the anchor session are resolved from the
@@ -4440,7 +5123,7 @@ class RuntimeDriver:
         })
         return manifest["claims"][task_id]["attempt"]
 
-    def resume(self, prompt: str = "continue execute-plan", deadline_seconds: float | None = None) -> dict[str, Any]:
+    def resume(self, prompt: str | None = None, deadline_seconds: float | None = None) -> dict[str, Any]:
         """Resume only blocked tasks whose receipt permits continuation.
 
         Mirrors the launch pattern: the state selection and fence checks run
@@ -4694,10 +5377,11 @@ class RuntimeDriver:
                 claim.get("state") in {"claimed", "launched"}
                 or self._claim_launch_evidence(manifest, claim) is not None
             ) and not self._claim_requeued_by_done_recovery(manifest, task_id, claim)
+            and not self._claim_retired_by_evidence_recovery(manifest, task_id, claim)
         ]
         examined = [
             (task_id, claim) for task_id, claim in launch_evidence_claims
-            if claim.get("state") not in {"replaced", "waiting-capacity"}
+            if claim.get("state") not in {"replaced", "waiting-capacity", "closed"}
             and manifest["tasks"].get(task_id, {}).get("status")
             not in {"done-pending", "checkpointed", "complete"}
             and not self._claim_owned_by_live_group(manifest, claim)
@@ -4710,7 +5394,7 @@ class RuntimeDriver:
                 # A recorded none identity is a valid completion on its own:
                 # the done flow proved the clean state before recording it,
                 # so the recovery completes without any git lookup.
-                if str(commit_identity).strip() == "none" or (commit_lookup and commit_lookup(commit_identity)):
+                if str(commit_identity).strip() in ("none", "baseline-unchanged") or (commit_lookup and commit_lookup(commit_identity)):
                     return _ReconcileCommit(task_id, str(commit_identity), commit_lookup, claim.get("token"), claim.get("generation"))
             handoff_key = claim.get("handoff_intent_key")
             handoff = manifest.get("handoff_intents", {}).get(handoff_key) if handoff_key else None
@@ -4805,6 +5489,68 @@ class RuntimeDriver:
             and event.get("disposition") == "requeue"
             for event in manifest.get("history", [])
         )
+
+    @staticmethod
+    def _claim_retired_by_evidence_recovery(manifest: Mapping[str, Any], task_id: str, claim: Mapping[str, Any]) -> bool:
+        """Identify a claim retired by a recovery receipt, generalized across
+        both recovery event identities.
+
+        Admission keys on the LATEST matching receipt (last in history order
+        across ``evidence-contract-recovery`` and
+        ``prelaunch-contract-recovery`` receipts naming the task) rather than
+        an exactly-one count fence, so a post-recovery re-claim, a
+        twice-recovered chain, and a cross-identity chain are each decided by
+        the same stated rule. The strict ``handoff_recovery`` shape is
+        required only when the block is present: with a valid block the
+        landed unconditional exclusion applies (any non-closed newer claim is
+        retired); with a malformed block the claim stays examined. The
+        no-intent receipt shape (block omitted; the prior and corrected
+        contract identities still required) admits only a successor claim in
+        ``claimed`` state (stale launch evidence may be present); a claim in
+        ``launched`` state on a receipt-carrying task stays examined. The
+        requeued-or-reclaimed gate covers both flow-real post-recovery task
+        statuses (the requeue leaves the task ``pending``; an ordinary
+        re-claim leaves it ``claimed``); a launched task's claim stays
+        examined exactly as today.
+        """
+
+        if (manifest.get("tasks", {}).get(task_id) or {}).get("status") not in {"pending", "claimed"}:
+            return False
+        receipts = [event for event in manifest.get("history", []) if isinstance(event, Mapping)
+                    and event.get("event") in (EVIDENCE_CONTRACT_RECOVERY_EVENT, PRELAUNCH_CONTRACT_RECOVERY_EVENT)
+                    and event.get("task_id") == task_id]
+        if not receipts:
+            return False
+        receipt = receipts[-1]
+        retired_generation = receipt.get("generation")
+        current_generation = claim.get("generation")
+        newer = (
+            retired_generation is not None
+            and isinstance(current_generation, int) and not isinstance(current_generation, bool)
+            and current_generation > retired_generation
+        )
+        if not newer:
+            return False
+        handoff = receipt.get("handoff_recovery")
+        if "handoff_recovery" in receipt:
+            if not isinstance(handoff, Mapping):
+                return False
+            return (
+                receipt.get("token") is not None and retired_generation is not None
+                and handoff.get("successor", {}).get("task_id") == task_id
+                and handoff.get("successor", {}).get("claim_token") == receipt.get("token")
+                and handoff.get("successor", {}).get("generation") == retired_generation
+                and isinstance(handoff.get("intent_id"), str) and bool(handoff.get("intent_id"))
+                and claim.get("state") != "closed"
+            )
+        prior_identity = receipt.get("prior_contract_identity")
+        corrected_identity = receipt.get("corrected_contract_identity")
+        if not (
+            isinstance(prior_identity, Mapping) and bool(prior_identity)
+            and isinstance(corrected_identity, Mapping) and bool(corrected_identity)
+        ):
+            return False
+        return claim.get("state") == "claimed"
 
     @staticmethod
     def _claim_launch_evidence(manifest: Mapping[str, Any], claim: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -5496,7 +6242,7 @@ class RuntimeDriver:
             return _outcome("blocked", "commit-pending", ["matching done-log evidence and commit identity are required"], "done-handoff", f"{task_id}:commit", claim.get("generation", manifest.get("generation", 0)), "preserve-and-reconcile"), False
         # The none identity never consults the lookup: the boundary witnesses
         # below (the none arm of the done boundary) prove the state instead.
-        if str(commit_identity).strip() != "none" and not commit_lookup(commit_identity):
+        if str(commit_identity).strip() not in ("none", "baseline-unchanged") and not commit_lookup(commit_identity):
             return _outcome("blocked", "commit-pending", [f"commit not found: {commit_identity}"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "preserve-and-reconcile"), False
         # The committed artifact is verified exactly as the done handoff would
         # verify it: an out-of-scope or escaping commit is never reconciled
@@ -5827,9 +6573,8 @@ class RuntimeDriver:
         seam; when the input carries a well-formed ``residual_policy``, an
         OR-branch applies inside this clause: it additionally accepts the
         focused verification-round sidecar when the policy's recorded-at
-        predates the sidecar's round date (the proof is strict at day
-        precision against the sidecar ``date`` field, so a policy recorded
-        at or after the round day refuses), a blocking findings row whose
+        falls before the end of the sidecar's round date, refusing at or
+        after the following machine-local midnight, a blocking findings row whose
         id is not an integer refuses (membership against the policy's
         integer finding ids cannot prove such a row outside the named
         set), no findings row is both ``blocking: true`` and a member of
@@ -5994,12 +6739,14 @@ class RuntimeDriver:
             if not isinstance(round_date, str) or not round_date.strip():
                 return blocked(["clean-round review sidecar is missing the round date the residual policy ordering proof requires"])
             try:
-                round_day_epoch = datetime.strptime(round_date.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
+                round_day_end = (datetime.strptime(round_date.strip(), "%Y-%m-%d") + timedelta(days=1)).timestamp()
             except ValueError:
                 return blocked([f"clean-round review sidecar round date is not an ISO YYYY-MM-DD date: {round_date.strip()}"])
-            if float(residual_policy["recorded_at"]) >= round_day_epoch:
+            except OverflowError:
+                return blocked([f"clean-round review sidecar round date cannot order the residual policy proof: {round_date.strip()}"])
+            if float(residual_policy["recorded_at"]) >= round_day_end:
                 return blocked([
-                    f"residual policy recorded_at {residual_policy['recorded_at']} does not predate the sidecar round date {round_date.strip()}; the policy must be recorded in the manifest before the verification round runs",
+                    f"residual policy recorded_at {residual_policy['recorded_at']} falls after the sidecar round date {round_date.strip()}; the policy must be recorded in the manifest no later than the round's own day (same-day record-then-round recording is sanctioned; a policy recorded on a later day refuses)",
                 ])
             if "verdict" in payload and payload.get("verdict") not in ("yes", "no"):
                 return blocked([f"clean-round review sidecar verdict under the residual policy branch must be \"yes\" or \"no\" when present; supplied {payload.get('verdict')!r}"])
@@ -6229,6 +6976,24 @@ class RuntimeDriver:
         return workflow_terminal
 
     _PLAN_PATH_TOKEN = re.compile(r"`([^`\n]+?)`")
+    _TASK_FILE_ENTRY = re.compile(r"^\s*[-*]\s+`?([^`\s]+)`?\s*$")
+    # The planned-new annotation family, the same family the readiness record
+    # check recognizes (the `*(new` prefix with optional elaboration before
+    # the closer): a creation-intent record on a not-yet-created path. The
+    # entry grammar strips it so the runtime parse yields the bare path.
+    _TASK_FILE_ENTRY_PLANNED_NEW = re.compile(r"^\s*[-*]\s+`?([^`\s]+)`?\s+\*\(\s*new\b[^()]*\)\*\s*$")
+    # The one declaration contract's named decisions, shared verbatim with the
+    # readiness surface's problem channel (plan_readiness.py) so both surfaces
+    # emit the same problem family for the same shape.
+    _FILES_DUPLICATE_PROBLEM = (
+        "duplicate Files: heading in one task section: the documented grammar accepts exactly one exact 'Files:' declaration per task section"
+    )
+    _FILES_INDENTED_PROBLEM = (
+        "missing Files: declaration: an indented 'Files:' line is not a block opener under the documented grammar"
+    )
+    _FILES_CASE_VARIANT_PROBLEM = (
+        "declaration opener '{opener}' is a case variant: the documented grammar accepts the exact 'Files:' heading only"
+    )
 
     def preflight(self, plan_path: str | Path) -> dict[str, Any]:
         """Read-only pre-launch preflight (never mutates state).
@@ -6248,20 +7013,81 @@ class RuntimeDriver:
         uncovered path is reported side by side with the seeded scope;
         (5) the recorded approval receipt, where the manifest records one,
         re-loaded and re-fingerprinted through the shared receipt loader.
+        The readiness decision is reused unchanged; the exact fresh
+        done-successor state (one claimed claim backed by an exactly agreeing
+        prepared handoff intent) is admitted preflight-local as authorized
+        prelaunch state, exempt from the activation-evidence problem and from
+        the not-provable condition its claimed status otherwise trips, and a
+        ``runtime-policy-unavailable`` block gains the policy-evidence problem
+        naming reclaim-with-flags first. The canonical continuation command is
+        emitted only on a passing result (a failing preflight emits no
+        command) and, for an admitted successor, is the successor-advance
+        command; both share one self-sufficient shape built by
+        ``_preflight_continuation_command`` from the recorded runtime id, the
+        resolved repository root, and the recorded receipt.
+        The manifest path is resolved at preflight entry (a relative path
+        resolves against the driver's repository root; preflight-scoped, so
+        other operations keep their existing manifest resolution) and the same
+        resolved path is read and emitted, keeping the emitted absolute path
+        consistent with the round trip. A manifest recording no runtime id
+        fails the emission with a named problem (re-create or claim-boundary
+        remedies) and emits no command.
         The CLI constructs the driver with ``persist_construction=False`` and
         the method contains no write path: a failing preflight leaves the
         manifest byte-identical and every claim and handoff retryable. The
-        result carries one canonical continuation command built from the
-        verified local configuration, so a resume run never hand-assembles
-        runtime inputs.
+        check body factors into the lock-free ``_preflight_check_body``
+        helper (the already-loaded manifest in, the structured result out,
+        no locking and no manifest loads), which the reviewed scope-recovery
+        operation reuses for the fresh preflight recomputation its fence
+        requires. The result carries one canonical continuation command
+        built from the verified local configuration, so a resume run never
+        hand-assembles runtime inputs.
         """
 
-        with _manifest_lock(self.manifest_path, self.owner) as acquired:
+        manifest_path = self.manifest_path if self.manifest_path.is_absolute() else (self.repo_root / self.manifest_path).resolve()
+        with _manifest_lock(manifest_path, self.owner) as acquired:
             if not acquired:
                 outcome = _mutation_unavailable(self, "runtime:preflight", action_scope="parent-continuation")
                 outcome["preflight"] = {"status": "blocked", "checks": [], "drift": [], "continuation_command": None}
                 return outcome
-            manifest = load_manifest(self.manifest_path)
+            manifest = load_manifest(manifest_path)
+        plan_text, plan_error = _read_plan_bounded(None, plan_path, require_safe_path=False)
+        preflight = self._preflight_check_body(manifest, plan_text, plan_error, plan_path, manifest_path)
+        return _outcome(
+            "blocked" if preflight["problems"] else "success",
+            "preflight-passed" if not preflight["problems"] else "preflight-failed",
+            preflight["checks"] + preflight["problems"],
+            "parent-continuation",
+            "runtime:preflight",
+            manifest.get("generation", 0),
+            "preserve-and-reconcile" if preflight["problems"] else "continue-parent",
+            preflight=preflight,
+        )
+
+    def _preflight_check_body(
+        self,
+        manifest: Mapping[str, Any],
+        plan_text: str | None,
+        plan_error: str | None,
+        plan_path: str | Path,
+        manifest_path: Path,
+    ) -> dict[str, Any]:
+        """The lock-free preflight check body, shared with the scope recovery.
+
+        Takes the already-loaded manifest, the (possibly failed) bounded plan
+        read, and the resolved plan and manifest paths, and returns the
+        structured preflight result. It performs NO locking and NO manifest
+        loads: the preflight entry point keeps its existing
+        acquire/load/release scope and calls this helper with the loaded
+        snapshot, and the reviewed scope-recovery operation calls the same
+        helper under its own single locked mutation for the fresh preflight
+        recomputation its fence requires. The digest check keeps hashing the
+        raw plan file bytes (the bounded reader's stripped,
+        replacement-decoded text is not byte-faithful), so no second digest
+        recipe exists. The existing preflight tests are this refactored
+        entry point's regression gate.
+        """
+
         checks: list[str] = []
         problems: list[str] = []
         try:
@@ -6269,7 +7095,6 @@ class RuntimeDriver:
             checks.append("worker-registry schema: valid")
         except ValueError as error:
             problems.append(f"worker-registry schema: {error}")
-        plan_text, plan_error = _read_plan_bounded(None, plan_path, require_safe_path=False)
         if plan_error is not None:
             problems.append(f"plan file {plan_error}")
             plan_text = ""
@@ -6279,21 +7104,100 @@ class RuntimeDriver:
             self._readiness_decision(manifest, plan_text) if plan_text else ("recovery", ["plan unreadable"], None, "preserve-and-reconcile")
         )
         checks.append(f"readiness decision: {decision}")
+        admitted_successor = self._prepared_handoff_successor(manifest)
+        admitted_task_id = admitted_successor[0] if admitted_successor else None
         if failed_conditions:
-            problems.extend(f"readiness: {condition}" for condition in failed_conditions)
+            for condition in failed_conditions:
+                if admitted_task_id is not None and condition.startswith(f"next incomplete task '{admitted_task_id}' is not provable:"):
+                    # The exact fresh done-successor is authorized prelaunch
+                    # state: its claimed status is what the done handoff leaves
+                    # for the next continuation to launch, so this condition is
+                    # exempted preflight-local (the shared readiness decision's
+                    # returned tuple and the readiness operation's closed
+                    # decision set are unchanged).
+                    continue
+                problems.append(f"readiness: {condition}")
         drift: list[dict[str, Any]] = []
+        policy_blocks = sorted(
+            str(task_id)
+            for task_id, task in manifest.get("tasks", {}).items()
+            if isinstance(task, Mapping) and isinstance(task.get("blocked_receipt"), Mapping)
+            and task.get("blocked_receipt", {}).get("reason_code") == "runtime-policy-unavailable"
+        )
+        if policy_blocks:
+            # Policy-evidence arm: a runtime-policy-unavailable block names both
+            # candidate causes and the concrete remedies, reclaim-with-flags
+            # first (the recovery sequence records and validates in one locked
+            # transition); claim-with-flags only for a live pre-claim manifest
+            # with a claim boundary still ahead, re-create only for the genuine
+            # pre-claim case where nothing was consumed yet.
+            receipt_recorded = isinstance(manifest.get("approval_receipt"), Mapping) and bool(manifest["approval_receipt"].get("path"))
+            claim_boundary_ahead = any(
+                isinstance(task, Mapping) and task.get("status") == "pending"
+                for task in manifest.get("tasks", {}).values()
+            )
+            consumed = bool(manifest.get("checkpoints")) or any(
+                isinstance(claim, Mapping) and claim.get("state") in {"claimed", "launched", "waiting-capacity"}
+                for claim in manifest.get("claims", {}).values()
+            )
+            remedies = ["reclaim the blocked claim with --approval-receipt and --runtime (first; one locked transition validates and records the evidence)"]
+            if claim_boundary_ahead:
+                remedies.append("re-run the claim boundary with --approval-receipt and --runtime")
+            if not consumed:
+                remedies.append("re-create the run with the flags at the create boundary (genuine pre-claim case only)")
+            problems.append(
+                f"approval evidence: runtime-policy-unavailable block on task(s) {', '.join(policy_blocks)}"
+                + ("" if receipt_recorded else " while the manifest records no approval receipt")
+                + "; candidate causes: the claim or continuation boundary ran without --approval-receipt, or the supplied receipt failed validation; remedies: "
+                + "; ".join(remedies)
+            )
         if plan_text and next_task_id is not None:
             seeded = manifest.get("tasks", {}).get(next_task_id, {})
             allowed = list(seeded.get("allowed_paths", ())) if isinstance(seeded, Mapping) else []
             section = self._plan_task_section(plan_text, next_task_id)
             if section is not None:
-                claimed_paths = [token for token in self._PLAN_PATH_TOKEN.findall(section) if ("/" in token or token.endswith((".py", ".md", ".sh", ".json", ".toml"))) and not token.startswith(("http", "git "))]
-                uncovered = sorted({path for path in claimed_paths if not any(path == scope or path.startswith(scope) for scope in allowed)})
-                if uncovered:
+                claimed_paths, parse_problem = self._plan_declared_files(section)
+                if parse_problem:
+                    drift.append({"task_id": next_task_id, "plan_paths": [], "seeded_allowed_paths": allowed, "problem": parse_problem})
+                    problems.append(f"scope declaration parse problem on task '{next_task_id}': {parse_problem}")
+                elif claimed_paths is None or (not claimed_paths and allowed):
+                    if allowed:
+                        drift.append({"task_id": next_task_id, "plan_paths": [], "seeded_allowed_paths": allowed, "problem": "missing Files: declaration"})
+                        problems.append(f"scope drift on task '{next_task_id}': seeded scope is non-empty but the plan has no Files: declaration or entries")
+                    else:
+                        checks.append(f"plan-versus-claim scope on '{next_task_id}': no declaration and no seeded paths")
+                    claimed_paths = []
+                canonical_paths: list[str] = []
+                for path in claimed_paths:
+                    try:
+                        canonical_paths.append(_safe_relative_path(self.repo_root, path))
+                    except ValueError:
+                        canonical_paths.append(path)
+                uncovered = sorted({
+                    path for path in canonical_paths
+                    if not any(path == scope or scope.endswith("/") and path.startswith(scope) for scope in allowed)
+                })
+                if uncovered and not parse_problem:
                     drift.append({"task_id": next_task_id, "plan_paths": uncovered, "seeded_allowed_paths": allowed})
                     problems.append(f"scope drift on task '{next_task_id}': {len(uncovered)} plan path(s) outside the seeded scope")
-                else:
+                elif not uncovered and not parse_problem and claimed_paths is not None:
                     checks.append(f"plan-versus-claim scope on '{next_task_id}': paths covered by the seeded scope")
+        consult_task_id = next_task_id
+        if consult_task_id is None:
+            incomplete = [item for item in manifest.get("tasks", {}).values() if isinstance(item, Mapping) and not self._task_complete(item)]
+            consult_task_id = str(incomplete[0]["id"]) if incomplete else None
+        if consult_task_id is not None:
+            next_task = manifest.get("tasks", {}).get(str(consult_task_id))
+            if isinstance(next_task, Mapping):
+                projection = capabilities.project_evidence_envelope(next_task)
+                if not projection["ok"]:
+                    problems.append(
+                        f"task '{consult_task_id}': evidence envelope projection exceeds the bounded schema limit "
+                        f"({'; '.join(projection['problems'])}); narrow the task's allowed_paths or split the verifier, "
+                        "or recover the launched claim via recover-evidence-envelope"
+                    )
+                else:
+                    checks.append(f"evidence envelope projection on '{consult_task_id}': within the bounded schema limits")
         if plan_text and next_task_id is not None:
             recorded_digest = manifest.get("plan_digest")
             if isinstance(recorded_digest, str) and recorded_digest.strip():
@@ -6325,8 +7229,12 @@ class RuntimeDriver:
             for claim in live_claims
             if not isinstance(claim.get("launch_record"), Mapping) and self._claim_launch_evidence(manifest, claim) is None
         ]
+        if admitted_task_id is not None:
+            missing_activation = [task_id for task_id in missing_activation if task_id != admitted_task_id]
         if missing_activation:
             problems.append(f"activation evidence missing or stale for live claim(s): {', '.join(missing_activation)}; the claim and handoff stay retryable")
+        elif admitted_task_id is not None:
+            checks.append(f"activation evidence: prepared handoff successor '{admitted_task_id}' admitted as authorized prelaunch state")
         else:
             checks.append("activation evidence: every live claim carries its launch record")
         try:
@@ -6346,21 +7254,174 @@ class RuntimeDriver:
                 checks.append("approval receipt: valid")
             except (OSError, ValueError, KeyError) as error:
                 problems.append(f"approval receipt: {error}")
-        continuation = (
-            f"python3 scripts/execute_plan_runtime.py --manifest {self.manifest_path} --operation continue"
-            if decision == "direct-continuation"
-            else None
-        )
-        return _outcome(
-            "blocked" if problems else "success",
-            "preflight-passed" if not problems else "preflight-failed",
-            checks + problems,
-            "parent-continuation",
-            "runtime:preflight",
-            manifest.get("generation", 0),
-            "preserve-and-reconcile" if problems else "continue-parent",
-            preflight={"status": "passed" if not problems else "failed", "checks": checks, "problems": problems, "drift": drift, "next_task_id": next_task_id, "continuation_command": continuation},
-        )
+        continuation = None
+        if not problems and (decision == "direct-continuation" or admitted_task_id is not None):
+            # Fail-closed emission gate: a failing preflight emits no command.
+            # The direct-continuation decision and the admitted fresh
+            # done-successor share the canonical continuation shape; the
+            # successor-advance command is the only permitted way to launch an
+            # admitted prepared handoff (its adapter activation is performed by
+            # that continuation). A manifest recording no runtime id cannot
+            # pin the recorded runtime, so the emission fails with a named
+            # problem and no command instead of emitting a line that repeats
+            # the witnessed omission.
+            runtime_id = manifest.get("runtime")
+            if not isinstance(runtime_id, str) or not runtime_id.strip():
+                problems.append(
+                    "runtime id: the manifest records no runtime id, so the continuation command cannot pin the recorded runtime; "
+                    f"remedies: {_CLAIM_BOUNDARY_RUNTIME_REMEDY}"
+                )
+            elif runtime_id.startswith("-"):
+                # Fail closed on a hand-edited id: shlex.quote would emit the
+                # leading-dash value unquoted, so the pinned `--runtime` would
+                # parse the recorded id as an option instead of a value.
+                problems.append(
+                    f"runtime id: the recorded runtime id {runtime_id!r} starts with '-' and cannot be pinned as an option value; "
+                    "remedies: re-create the run with a valid --runtime at the create boundary, or supply --runtime at the next claim boundary"
+                )
+            else:
+                continuation = self._preflight_continuation_command(manifest, manifest_path)
+        return {
+            "status": "passed" if not problems else "failed",
+            "checks": checks,
+            "problems": problems,
+            "drift": drift,
+            "next_task_id": next_task_id,
+            "continuation_command": continuation,
+        }
+
+    def _preflight_continuation_command(self, manifest: Mapping[str, Any], manifest_path: Path) -> str:
+        """Build the canonical self-sufficient continuation command.
+
+        The driver's own resolved absolute script path, the preflight-resolved
+        manifest path, the recorded runtime id, the driver's resolved
+        repository root, and the recorded approval receipt exactly when the
+        manifest records one. Every interpolated path is asserted absolute and
+        every interpolated value passes through ``shlex.quote``, so the
+        emitted line parses back to the same argv from any working directory
+        and a space-bearing root stays one argument (an absolute path cannot
+        parse as an option).
+        """
+
+        script_path = Path(__file__).resolve()
+        receipt = manifest.get("approval_receipt")
+        receipt_path = receipt.get("path") if isinstance(receipt, Mapping) else None
+        has_receipt = isinstance(receipt_path, str) and bool(receipt_path.strip())
+        absolute_paths: list[Path] = [script_path, manifest_path, self.repo_root]
+        if has_receipt:
+            absolute_paths.append(Path(receipt_path))
+        for value in absolute_paths:
+            assert value.is_absolute(), f"preflight emission requires an absolute path: {value}"
+        argv = [
+            shlex.quote(str(script_path)),
+            "--manifest", shlex.quote(str(manifest_path)),
+            "--operation", "continue",
+            "--runtime", shlex.quote(str(manifest.get("runtime"))),
+            "--repo-root", shlex.quote(str(self.repo_root)),
+        ]
+        if has_receipt:
+            argv += ["--approval-receipt", shlex.quote(str(Path(receipt_path)))]
+        return " ".join(argv)
+
+    def _prepared_handoff_successor(self, manifest: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]] | None:
+        """The one live claimed successor backed by an exactly agreeing prepared intent.
+
+        Preflight-local admission probe for the fresh done-successor state a
+        successful done handoff leaves behind: exactly one claimed claim,
+        whose prepared handoff intent carries an unconsumed prelaunch binding
+        and a successor identity agreeing with the live claim on task, token,
+        generation, owner, and launch id. Identity-mismatched or
+        already-consumed intents never admit.
+        """
+
+        live = [
+            (str(task_id), claim)
+            for task_id, claim in manifest.get("claims", {}).items()
+            if isinstance(claim, Mapping) and claim.get("state") == "claimed"
+        ]
+        if len(live) != 1:
+            return None
+        task_id, claim = live[0]
+        intent_key = claim.get("handoff_intent_key")
+        intents = manifest.get("handoff_intents")
+        intent = intents.get(intent_key) if isinstance(intent_key, str) and isinstance(intents, Mapping) else None
+        if not isinstance(intent, Mapping) or intent.get("state") != "prepared" or intent.get("launch_receipt") is not None:
+            return None
+        binding = intent.get("prelaunch_binding")
+        if not isinstance(binding, Mapping) or binding.get("consumed") is True:
+            return None
+        successor = intent.get("successor")
+        if not isinstance(successor, Mapping) or any(
+            successor.get(field) != claim.get(claim_field)
+            for field, claim_field in (
+                ("task_id", "task_id"),
+                ("claim_token", "token"),
+                ("generation", "generation"),
+                ("claim_owner_id", "claim_owner_id"),
+                ("launch_id", "launch_id"),
+            )
+        ):
+            return None
+        return task_id, intent
+
+    @classmethod
+    def _plan_declared_files(cls, section: str) -> tuple[list[str] | None, str | None]:
+        """The sole runtime declaration parser, implementing the one
+        documented entry grammar (see runtime-contract.md, "Seeding boundary
+        and resume reconciliation").
+
+        Opener decisions: only the exact, unindented `Files:` line opens a
+        declaration block; a second exact heading in the same task section is
+        the named duplicate refusal, an indented `Files:` line is never an
+        opener (the named missing-declaration refusal), and a case-variant
+        opener (`files:`/`FILES:`) carries the named case-variant refusal. A
+        path-shaped bullet ABOVE the heading is inert prose: the scan starts
+        at the opener and never looks upward. Entries sit immediately under
+        the heading; indented entries are entries; the planned-new annotation
+        family on an entry strips to the bare path; every other malformed
+        shape keeps the existing malformed-entry refusal. The pre-round
+        readiness check mirrors these decisions through its own authoring-side
+        record check (the sanctioned second grammar consumer); no second
+        runtime parser exists.
+        """
+        lines = section.splitlines()
+        openers = [index for index, line in enumerate(lines) if line == "Files:"]
+        if len(openers) > 1:
+            # An empty path list accompanies every named refusal: consumers
+            # branch on the problem first and never iterate a None path list.
+            return [], cls._FILES_DUPLICATE_PROBLEM
+        if not openers:
+            for line in lines:
+                stripped = line.strip()
+                if stripped.lower() != "files:":
+                    continue
+                if line != stripped:
+                    return [], cls._FILES_INDENTED_PROBLEM
+                return [], cls._FILES_CASE_VARIANT_PROBLEM.format(opener=stripped)
+            return None, None
+        index = openers[0]
+        paths: list[str] = []
+        entries = lines[index + 1:]
+        blank_seen = False
+        for entry in entries:
+            if not entry.strip():
+                blank_seen = True
+                continue
+            if blank_seen:
+                if re.match(r"^\s*[-*]\s+(?!\[)", entry):
+                    return paths, "blank line before a later Files: entry"
+                break
+            match = cls._TASK_FILE_ENTRY.fullmatch(entry)
+            if match is None:
+                planned_new = cls._TASK_FILE_ENTRY_PLANNED_NEW.fullmatch(entry)
+                if planned_new is not None:
+                    paths.append(planned_new.group(1))
+                    continue
+                if re.match(r"^\s*[-*]\s+\[[ xX]\]", entry):
+                    break
+                return paths, f"malformed Files: entry: {entry.strip()}"
+            paths.append(match.group(1))
+        return paths, None
 
     def _plan_task_section(self, plan_text: str, task_id: str) -> str | None:
         """Extract the plan section of the task whose id encodes its ordinal.
@@ -6393,7 +7454,11 @@ class RuntimeDriver:
         decision. The digest, review-scope, and
         unresolved-finding conditions stay delegated to the Step 0.5
         validator and the review artifacts; the driver never reads review
-        sidecars.
+        sidecars, with exactly two documented exceptions: the terminal
+        gate's clean-round sidecar read, and the reviewed scope-recovery
+        operation's function-local review-evidence composition (that one
+        operation only, whose readiness evaluation is its single digest
+        authority).
 
         Returns the closed decision set {``direct-continuation``,
         ``observe-worker``, ``recovery``, ``terminal-path``} with named
@@ -6577,59 +7642,127 @@ class RuntimeDriver:
     # Interrupted-claim ownership recovery (lease-gated reclaim)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _proven_prelaunch_activation_failure(
-        manifest: Mapping[str, Any], task_id: str, task: Mapping[str, Any], claim: Mapping[str, Any]
-    ) -> bool:
-        """Prove a policy/activation refusal happened before any worker launch."""
+    def _prelaunch_recovery_arm(
+        self, manifest: Mapping[str, Any], task_id: str, task: Mapping[str, Any], claim: Mapping[str, Any]
+    ) -> str:
+        """Classify the prelaunch recovery shape: ``proven``, ``at-cap``, or ``none``.
+
+        The shared conjuncts (blocked task and claim, receipt reason exactly
+        ``runtime-policy-unavailable``, no launch record on the claim, no
+        registered worker on the task, no capacity reservation on the task)
+        fence both arms. The intent-backed arm keeps its exact fresh
+        prepared-successor identity match. The direct-claim arm evaluates the
+        real persisted shapes: the receipt's embedded claim token and
+        generation must equal the live claim's (the persist-tail stamp), the
+        approval evidence must be supplied at the invocation or already
+        recorded, and the task-record prelaunch-reclaim count must sit under
+        ``PRELAUNCH_RECLAIM_BUDGET`` - at the budget the arm returns
+        ``at-cap`` so the caller refuses by name instead of pretending the
+        shape is unproven. ``resume_allowed`` false is the persisted shape of
+        every non-resumable block and is tolerated inside the arms rather
+        than gated at the shared conjuncts.
+        """
 
         receipt = task.get("blocked_receipt")
         if (
             task.get("status") != "blocked"
-            or task.get("resume_allowed") is not False
             or claim.get("state") != "blocked"
             or not isinstance(receipt, Mapping)
             or receipt.get("reason_code") != "runtime-policy-unavailable"
             or claim.get("launch_record") is not None
         ):
-            return False
-        intent_key = claim.get("handoff_intent_key")
-        intents = manifest.get("handoff_intents")
-        intent = intents.get(intent_key) if isinstance(intent_key, str) and isinstance(intents, Mapping) else None
-        if not isinstance(intent, Mapping) or intent.get("state") != "prepared" or intent.get("launch_receipt") is not None:
-            return False
-        successor = intent.get("successor")
-        if not isinstance(successor, Mapping) or any(
-            successor.get(field) != claim.get(claim_field)
-            for field, claim_field in (
-                ("task_id", "task_id"),
-                ("claim_token", "token"),
-                ("generation", "generation"),
-                ("claim_owner_id", "claim_owner_id"),
-                ("launch_id", "launch_id"),
-            )
-        ):
-            return False
+            return "none"
         workers = manifest.get("workers")
         if not isinstance(workers, Mapping) or any(
             isinstance(worker, Mapping) and worker.get("task_id") == task_id
             for worker in workers.values()
         ):
-            return False
+            return "none"
         reservations = manifest.get("capacity", {}).get("reservations", {})
         if isinstance(reservations, Mapping) and any(
             isinstance(reservation, Mapping) and reservation.get("task_id") == task_id
             for reservation in reservations.values()
         ):
-            return False
-        return True
+            return "none"
+        intent_key = claim.get("handoff_intent_key")
+        intents = manifest.get("handoff_intents")
+        intent = intents.get(intent_key) if isinstance(intent_key, str) and isinstance(intents, Mapping) else None
+        if intent_key or isinstance(intent, Mapping):
+            # Intent-backed lineage: only the exact fresh prepared successor
+            # proves prelaunch; any other intent state is the ordinary
+            # recovery machinery's input, never the direct-claim arm's.
+            if not isinstance(intent, Mapping) or intent.get("state") != "prepared" or intent.get("launch_receipt") is not None:
+                return "none"
+            if task.get("resume_allowed") is not False:
+                return "none"
+            successor = intent.get("successor")
+            if not isinstance(successor, Mapping) or any(
+                successor.get(field) != claim.get(claim_field)
+                for field, claim_field in (
+                    ("task_id", "task_id"),
+                    ("claim_token", "token"),
+                    ("generation", "generation"),
+                    ("claim_owner_id", "claim_owner_id"),
+                    ("launch_id", "launch_id"),
+                )
+            ):
+                return "none"
+            return "proven"
+        # Direct-claim arm.
+        if receipt.get("claim_token") != claim.get("token") or receipt.get("generation") != claim.get("generation"):
+            return "none"
+        evidence = self._approval_evidence
+        supplied_receipt = evidence is not None and evidence[0] is not None
+        recorded = manifest.get("approval_receipt")
+        if not supplied_receipt and not (isinstance(recorded, Mapping) and bool(recorded.get("path"))):
+            return "none"
+        count = task.get("prelaunch_reclaim_count")
+        count = count if isinstance(count, int) and not isinstance(count, bool) else 0
+        if count >= PRELAUNCH_RECLAIM_BUDGET:
+            return "at-cap"
+        return "proven"
+
+    def _proven_prelaunch_activation_failure(
+        self, manifest: Mapping[str, Any], task_id: str, task: Mapping[str, Any], claim: Mapping[str, Any]
+    ) -> bool:
+        """Prove a policy/activation refusal happened before any worker launch."""
+
+        return self._prelaunch_recovery_arm(manifest, task_id, task, claim) == "proven"
+
+    def _prelaunch_reclaim_cap_evidence(
+        self, manifest: Mapping[str, Any], task_id: str, task: Mapping[str, Any], claim: Mapping[str, Any]
+    ) -> list[str] | None:
+        """Named at-cap evidence when every proof conjunct but the budget holds."""
+
+        if self._prelaunch_recovery_arm(manifest, task_id, task, claim) != "at-cap":
+            return None
+        count = task.get("prelaunch_reclaim_count")
+        count = count if isinstance(count, int) and not isinstance(count, bool) else 0
+        return [
+            f"prelaunch-reclaim budget exhausted on task '{task_id}': {count} of {PRELAUNCH_RECLAIM_BUDGET} prelaunch reclaims recorded",
+            "every other conjunct of the prelaunch proof holds; the runtime-policy-unavailable blocker is persistent",
+            "resolve the adapter policy blocker, then reclaim after the claim lease expires",
+        ]
 
     @_locked_mutation
     def reclaim(self, task_id: str) -> dict[str, Any]:
         """Release one expired claim so its interrupted task can be re-claimed.
 
-        The machine-provable precondition is lease expiry only: claim records
-        carry token, generation, owner, and timestamp but no process identity,
+        The machine-provable precondition is lease expiry, plus the two
+        prelaunch arms that bypass it under identity fencing: a prepared
+        handoff successor proven never launched (the intent-backed arm), and
+        a blocked direct claim whose persisted `runtime-policy-unavailable`
+        receipt carries the live claim identity, whose approval evidence is
+        supplied or already recorded, and whose task-record prelaunch-reclaim
+        count sits under ``PRELAUNCH_RECLAIM_BUDGET`` (the direct-claim arm).
+        At the budget the same shape is refused with the named
+        ``prelaunch-reclaim-cap`` outcome before lease accounting; the cap
+        gates only the lease-bypass path and an expired lease rotates
+        regardless of the count. A stale identity-keyed launch reservation is
+        swept after the refuse-only fences and before the capacity
+        reconciliation, so a reservation matching no live claim cannot wedge
+        the reclaim behind the capacity gate. The claim records carry
+        token, generation, owner, and timestamp but no process identity,
         so process liveness cannot be proven. Under the manifest lock the
         operation admits only a claim in ``RECLAIMABLE_CLAIM_STATES`` on a task
         outside ``PROGRESSED_TASK_STATUSES`` whose ``timestamp`` is at least
@@ -6799,11 +7932,35 @@ class RuntimeDriver:
         elapsed = self.clock() - float(timestamp)
         prelaunch_recovery = self._proven_prelaunch_activation_failure(manifest, task_id, task, claim)
         if elapsed < CLAIM_LEASE_SECONDS and not prelaunch_recovery:
+            # At-cap detection beside the predicate: every proof conjunct but
+            # the budget holding is the persistent-blocker signature, so it is
+            # refused by name before the lease refusal instead of masquerading
+            # as a fresh lease wait. The cap gates only this lease-bypass
+            # path: at or beyond CLAIM_LEASE_SECONDS the ordinary reclaim
+            # below proceeds through rotation regardless of the count.
+            cap_evidence = self._prelaunch_reclaim_cap_evidence(manifest, task_id, task, claim)
+            if cap_evidence is not None:
+                return _outcome(
+                    "blocked",
+                    "prelaunch-reclaim-cap",
+                    cap_evidence,
+                    "repository-task",
+                    f"{task_id}:reclaim",
+                    int(claim.get("generation", manifest.get("generation", 0))),
+                    "preserve-and-reconcile",
+                    resume_allowed=False,
+                    claim_token=claim.get("token"),
+                )
             return _stale_claim_outcome(
                 str(claim.get("token", f"{task_id}:reclaim")),
                 int(claim.get("generation", manifest.get("generation", 0))),
                 [f"claim lease has not expired: {int(elapsed)}s elapsed of {CLAIM_LEASE_SECONDS}s"],
             )
+        # Identity-keyed stale-reservation sweep: after the refuse-only fences
+        # and immediately before the capacity reconciliation, so the gate sees
+        # the post-sweep set and a reservation matching no live claim can
+        # never wedge the reclaim behind the launch-reservation refusal.
+        self._sweep_stale_launch_reservations_locked(manifest)
         capacity = self.reconcile_worker_capacity(manifest)
         if capacity.get("status") != "available":
             self._save(manifest)
@@ -6854,6 +8011,14 @@ class RuntimeDriver:
             "replaced_generation": int(claim.get("generation", 0)),
             "generation": replaced_generation,
         })
+        if prelaunch_recovery and elapsed < CLAIM_LEASE_SECONDS:
+            # The accepted early reclaim pays one unit of the task-record
+            # prelaunch-reclaim budget in the same locked rotation save; the
+            # count survives both the claim rotation and the task reset above
+            # (the reset strips only the dead session's fields).
+            count = task.get("prelaunch_reclaim_count")
+            task["prelaunch_reclaim_count"] = (count if isinstance(count, int) and not isinstance(count, bool) else 0) + 1
+        self._stamp_approval_evidence(manifest)
         self._save(manifest)
         return _outcome(
             "success",
@@ -6929,6 +8094,8 @@ class RuntimeDriver:
             "member": task_id,
             "released_members": released,
         })
+        self._pop_launch_reservations_locked(manifest, task_id, claim.get("token"), claim.get("generation"))
+        self._stamp_approval_evidence(manifest)
         self._save(manifest)
         return _outcome(
             "success",
@@ -7003,11 +8170,13 @@ class RuntimeDriver:
             "group_id": group_id,
             "member": task_id,
         })
+        self._pop_launch_reservations_locked(manifest, task_id, claim.get("token"), claim.get("generation"))
         # The release is a terminal member transition, so it runs the one
         # terminal-membership close predicate (shared with the advance close
         # and the session-less resume release): when this release leaves
         # every member claim terminal the group closes too.
         self._close_parallel_group_when_terminal_locked(manifest, group_id, task_id, group)
+        self._stamp_approval_evidence(manifest)
         self._save(manifest)
         return _outcome(
             "success",
@@ -7251,6 +8420,15 @@ class RuntimeDriver:
                 claim_generation,
                 "preserve-and-reconcile",
             )
+        self._release_terminal_reservation_locked(manifest, claim, {
+            "receipt_id": f"done-pending-recovery:{task_id}:{claim.get('generation')}:{claim.get('launch_id')}",
+            "task_id": task_id, "claim_token": claim.get("token"),
+            "generation": claim.get("generation"), "launch_id": claim.get("launch_id"),
+            "claim_owner_id": claim.get("owner"), "event": "terminal",
+            "reason": "done-pending-recovery",
+            "proof": {"kind": "operator-terminal-evidence", "verified": True, "evidence": terminal},
+            "observed_at": self.clock(),
+        })
         if disposition == "defer":
             # The defer arm's gates run before any mutation: a refused defer
             # leaves the manifest byte-identical. (7) Backlog evidence: an
@@ -7491,6 +8669,174 @@ class RuntimeDriver:
         return rows
 
     @_locked_mutation
+    def recover_evidence_envelope(
+        self,
+        task_id: str,
+        token: str,
+        generation: int,
+        corrected_contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Recover an over-bound-envelope launched hold under a corrected contract.
+
+        The post-launch sanctioned exit the preflight projection points at:
+        after launch, a contract whose projection exceeds the bounded receipt
+        envelope cannot pass the verify/checkpoint boundary, and the driver's
+        size refusals there are read-only. Mirroring
+        ``recover_evidence_contract`` (which owns the malformed-criterion
+        exit), this transition applies the corrected contract under the
+        manifest lock in fail-closed order, and every refusal leaves the
+        manifest byte-identical:
+
+        1. the evidence envelope recovery replay fence FIRST: the manifest
+           history must not already carry an ``evidence-envelope-recovery``
+           receipt naming the request's task id, token, and generation;
+        2. the launched hold (task ``launched``, claim ``launched`` with its
+           launch record);
+        3. the exact live claim token and generation;
+        4. the corrected contract is non-empty and its projection reads
+           within the bounded schema limits.
+
+        One locked save: the generation is bumped by one, the corrected
+        contract replaces the task's evidence fields, the digest and criteria
+        map are recomputed, the old claim closes (a late receipt from the
+        replaced worker fences read-only as stale-claim), the task returns to
+        ``pending``, and one fenced ``evidence-envelope-recovery`` receipt is
+        appended preserving the old token and generation.
+        """
+        identity = f"{task_id}:envelope-recovery"
+        manifest = self.refresh_manifest()
+        task = manifest["tasks"].get(task_id)
+        claim = manifest["claims"].get(task_id)
+        claim_generation = int(claim.get("generation", manifest.get("generation", 0))) if isinstance(claim, Mapping) else int(manifest.get("generation", 0))
+        # (1) Replay fence FIRST.
+        for event in manifest.get("history", []):
+            if (
+                isinstance(event, Mapping)
+                and event.get("event") == EVIDENCE_ENVELOPE_RECOVERY_EVENT
+                and event.get("task_id") == task_id
+                and event.get("token") == str(token)
+                and event.get("generation") == generation
+            ):
+                return _outcome(
+                    "blocked",
+                    "precondition-unverified",
+                    [
+                        "evidence envelope recovery replay fence: a receipt with the same task id, token, and generation is already recorded",
+                        "the recorded receipt fences the replayed request",
+                    ],
+                    "repository-task",
+                    identity,
+                    claim_generation,
+                    "preserve-and-reconcile",
+                )
+        # (2) Launched hold.
+        launch_evidence = self._claim_launch_evidence(manifest, claim) if isinstance(claim, Mapping) else None
+        if (
+            not isinstance(task, Mapping)
+            or task.get("status") != "launched"
+            or not isinstance(claim, Mapping)
+            or claim.get("state") != "launched"
+            or launch_evidence is None
+        ):
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [
+                    f"evidence envelope recovery requires the launched hold on task '{task_id}'",
+                    f"found task status '{task.get('status') if isinstance(task, Mapping) else 'unknown'}', claim state '{claim.get('state') if isinstance(claim, Mapping) else 'none'}'",
+                ],
+                "repository-task",
+                identity,
+                claim_generation,
+                "preserve-and-reconcile",
+            )
+        # (3) Exact live claim identity.
+        mismatched: list[str] = []
+        if claim.get("token") != token:
+            mismatched.append("token")
+        if claim.get("generation") != generation:
+            mismatched.append("generation")
+        if mismatched:
+            return _stale_claim_outcome(
+                identity,
+                claim_generation,
+                [
+                    f"evidence envelope recovery requires the exact live claim identity on task '{task_id}'",
+                    f"identity mismatch: {', '.join(mismatched)}",
+                ],
+            )
+        # (4) Corrected contract: non-empty and within the bounded envelope.
+        criteria = corrected_contract.get("required_criteria") if isinstance(corrected_contract, Mapping) else None
+        commands = corrected_contract.get("verification_commands") if isinstance(corrected_contract, Mapping) else None
+        if not isinstance(criteria, list) or not criteria or not isinstance(commands, list) or not commands:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [f"corrected contract for task '{task_id}' requires non-empty required_criteria and verification_commands"],
+                "repository-task",
+                identity,
+                claim_generation,
+                "preserve-and-reconcile",
+            )
+        merged_task = dict(task)
+        merged_task["required_criteria"] = criteria
+        merged_task["verification_commands"] = commands
+        projection = capabilities.project_evidence_envelope(merged_task)
+        if not projection["ok"]:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [
+                    f"corrected contract for task '{task_id}' still projects over the bounded schema limit "
+                    f"({'; '.join(projection['problems'])}); narrow the contract further before recovery"
+                ],
+                "repository-task",
+                identity,
+                claim_generation,
+                "preserve-and-reconcile",
+            )
+        # One locked save.
+        recovery_generation = int(manifest.get("generation", 0)) + 1
+        manifest["generation"] = recovery_generation
+        task["required_criteria"] = copy.deepcopy(criteria)
+        task["verification_commands"] = copy.deepcopy(commands)
+        manifest["evidence_contract_digest"] = capabilities.evidence_contract_digest(manifest["tasks"])
+        manifest["evidence_criteria_map"] = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in manifest["tasks"].items()}
+        claim["state"] = "closed"
+        self._reset_task_to_pending(task)
+        manifest.setdefault("history", []).append({
+            "event": EVIDENCE_ENVELOPE_RECOVERY_EVENT,
+            "task_id": task_id,
+            "token": str(token),
+            "generation": generation,
+            "recovered_generation": recovery_generation,
+        })
+        failure = self._persist_recovery_transition(manifest, "recover-evidence-envelope")
+        if failure is not None:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [failure],
+                "repository-task",
+                identity,
+                claim_generation,
+                "preserve-and-reconcile",
+            )
+        return _outcome(
+            "success",
+            "recovered",
+            [
+                f"task={task_id}",
+                f"generation={recovery_generation}",
+                "corrected contract applied within the bounded schema limits",
+                "claim closed and task requeued pending; a late receipt from the replaced worker fences read-only as stale-claim",
+            ],
+            "repository-task",
+            identity,
+            recovery_generation,
+            "continue-parent",
+        )
+
     def recover_evidence_contract(
         self,
         task_id: str,
@@ -7525,11 +8871,13 @@ class RuntimeDriver:
            criteria-and-commands envelope rule the create operation enforces
            and passes the pre-seed consistency helper over the merged task
            map (corrected fields merged in, argv canonicalized through the
-           same fail-closed path policy), refusing only on problem shapes
-           that involve the corrected task; problem shapes wholly among
-           unchanged sibling tasks are reported in the outcome evidence
-           without refusing, because multi-malformed old-seeded runs recover
-           task by task as they hold;
+           same fail-closed path policy): a problem refuses recovery only
+           when its responsible task names the corrected task id, and a
+           pair-attributed clone-signature problem refuses when either named
+           task is the corrected task, while problems attributable solely to
+           sibling tasks are reported in the outcome evidence without
+           refusing, because multi-malformed old-seeded runs recover task by
+           task as they hold;
         6. a fresh accepting provider inventory obtained through the driver's
            adapter (never from request payload fields), reconciled on the
            reconcile-interruption discipline: a detached manifest view that
@@ -7567,9 +8915,17 @@ class RuntimeDriver:
         persists.
         """
 
-        manifest = self.refresh_manifest()
         identity = f"{task_id}:evidence-recovery"
+        try:
+            manifest = self.refresh_manifest()
+        except ValueError as exc:
+            if "evidence criterion ID mapping" in str(exc):
+                return _outcome("blocked", "precondition-unverified", [f"{exc}; evidence-contract recovery refused before mutation"], "repository-task", identity, 0, "preserve-and-reconcile")
+            raise
         task = manifest["tasks"].get(task_id)
+        expected_map = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in manifest["tasks"].items()}
+        if manifest.get("evidence_criteria_map") != expected_map:
+            return _outcome("blocked", "precondition-unverified", ["evidence criterion ID mapping is missing, altered, or ambiguous; recovery refused before mutation"], "repository-task", identity, manifest.get("generation", 0), "preserve-and-reconcile")
         claim = manifest["claims"].get(task_id)
         claim_generation = int(claim.get("generation", manifest.get("generation", 0))) if isinstance(claim, Mapping) else int(manifest.get("generation", 0))
         # (1) Replay fence FIRST (see the precondition order in the docstring).
@@ -7670,24 +9026,27 @@ class RuntimeDriver:
             task_id: {**task, "required_criteria": criteria, "verification_commands": commands},
         }
         merged_problems = _preseed_verifier_consistency_problems(merged_tasks, self.repo_root)
-        sibling_problems = set(
-            _preseed_verifier_consistency_problems(
-                {name: item for name, item in manifest["tasks"].items() if name != task_id},
-                self.repo_root,
-            )
-        )
-        refusing_problems = [problem for problem in merged_problems if problem not in sibling_problems]
+        # A pre-existing problem is non-blocking only when its responsible
+        # task ids exclude the corrected task. Pair-attributed clone problems
+        # therefore block recovery when either member is corrected.
+        refusing_problems = [
+            problem for problem in merged_problems
+            if task_id in problem.get("task_ids", [])
+        ]
         if refusing_problems:
             return _outcome(
                 "blocked",
                 "precondition-unverified",
-                ["corrected contract refused by the pre-seed consistency gate", *refusing_problems],
+                ["corrected contract refused by the pre-seed consistency gate", *(problem["display"] for problem in refusing_problems)],
                 "repository-task",
                 identity,
                 claim_generation,
                 "preserve-and-reconcile",
             )
-        sibling_only_problems = [problem for problem in merged_problems if problem in sibling_problems]
+        sibling_only_problems = [
+            problem for problem in merged_problems
+            if task_id not in problem.get("task_ids", [])
+        ]
         try:
             recomputed_digest = capabilities.evidence_contract_digest(merged_tasks)
         except (TypeError, ValueError) as exc:
@@ -7759,6 +9118,66 @@ class RuntimeDriver:
                 claim_generation,
                 "preserve-and-reconcile",
             )
+        handoff_recovery = None
+        intent_key = claim.get("handoff_intent_key")
+        intent = manifest.get("handoff_intents", {}).get(intent_key) if isinstance(intent_key, str) else None
+        if isinstance(intent, dict) and intent.get("state") in {"launching", "launched"}:
+            successor = intent.get("successor")
+            prior = intent.get("prior")
+            exact_successor = isinstance(successor, Mapping) and all(
+                successor.get(field) == claim.get(claim_field)
+                for field, claim_field in (("task_id", "task_id"), ("claim_token", "token"), ("generation", "generation"), ("launch_id", "launch_id"), ("claim_owner_id", "claim_owner_id"))
+            )
+            intent_id = intent.get("intent_id")
+            intent_matches = isinstance(intent_id, str) and bool(intent_id.strip()) and sum(
+                1 for candidate in manifest.get("handoff_intents", {}).values()
+                if isinstance(candidate, Mapping) and candidate.get("intent_id") == intent_id
+            ) == 1
+            prior_task_id = prior.get("task_id") if isinstance(prior, Mapping) else None
+            prior_claim = manifest.get("claims", {}).get(prior_task_id) if isinstance(prior_task_id, str) else None
+            checkpoint_identity = prior.get("checkpoint_identity") if isinstance(prior, Mapping) else None
+            checkpoint = manifest.get("checkpoints", {}).get(checkpoint_identity) if isinstance(checkpoint_identity, str) else None
+            checkpoint_result = checkpoint.get("result") if isinstance(checkpoint, Mapping) else None
+            prior_exact = (
+                isinstance(prior_claim, Mapping) and prior_claim.get("state") == "closed"
+                and prior_claim.get("owner", prior_claim.get("claim_owner_id")) == prior.get("claim_owner_id")
+                and prior_claim.get("token") == prior.get("claim_token")
+                and prior_claim.get("generation") == prior.get("generation")
+                and isinstance(checkpoint, Mapping) and checkpoint.get("task_id") == prior_task_id
+                and isinstance(checkpoint_result, Mapping)
+                and checkpoint_result.get("checkpoint_identity") == checkpoint_identity
+                # The normalized result schema omits claim_token (the fence
+                # that needs it lives one lock later), so records written by
+                # the checkpoint path carry none; the token equality is only
+                # checkable when the record actually carries one, and the
+                # closed prior claim's token was already pinned above.
+                and (checkpoint_result.get("claim_token") is None or checkpoint_result.get("claim_token") == prior.get("claim_token"))
+                and checkpoint_result.get("generation") == prior.get("generation")
+            )
+            if not exact_successor or not intent_matches or not prior_exact:
+                return _outcome("blocked", "precondition-unverified", ["evidence-contract recovery found a mismatched handoff identity; no mutation performed"], "repository-task", identity, claim_generation, "preserve-and-reconcile")
+            terminal_workers = [worker for worker in observed_manifest.get("workers", {}).values()
+                                if isinstance(worker, Mapping) and worker.get("task_id") == task_id and worker.get("state") == "terminal"
+                                and worker.get("claim_token") == claim.get("token") and worker.get("generation") == claim.get("generation")
+                                and worker.get("launch_id") == claim.get("launch_id")]
+            if not terminal_workers:
+                return _outcome("blocked", "precondition-unverified", ["exact handoff recovery requires fresh terminal provider evidence for its successor worker"], "repository-task", identity, claim_generation, "preserve-and-reconcile")
+            worker = terminal_workers[0]
+            metadata = worker.get("receipt_metadata") if isinstance(worker.get("receipt_metadata"), Mapping) else {}
+            session_id = worker.get("provider_session_id")
+            provider_receipt_id = metadata.get("receipt_id")
+            if not session_id or metadata.get("provider_session_id") != session_id or not isinstance(provider_receipt_id, str) or not provider_receipt_id.strip():
+                return _outcome("blocked", "precondition-unverified", ["terminal provider evidence does not bind the handoff worker session"], "repository-task", identity, claim_generation, "preserve-and-reconcile")
+            recovery_receipt = {
+                "intent_id": intent.get("intent_id"), "intent_key": intent_key,
+                "prior": {key: prior.get(key) for key in ("task_id", "checkpoint_identity", "claim_owner_id", "claim_token", "generation")},
+                "successor": {key: successor.get(key) for key in ("task_id", "claim_owner_id", "claim_token", "generation", "launch_id")},
+                "provider_terminal_receipt_id": provider_receipt_id, "worker_session_id": session_id,
+            }
+            self._transition_handoff(intent, "ambiguous")
+            self._transition_handoff(intent, "failed")
+            intent["recovery_receipt"] = recovery_receipt
+            handoff_recovery = recovery_receipt
         # ONE locked save carries the whole transition.
         recovery_generation = int(manifest.get("generation", 0)) + 1
         manifest["generation"] = recovery_generation
@@ -7787,15 +9206,19 @@ class RuntimeDriver:
         task["required_criteria"] = copy.deepcopy(criteria)
         task["verification_commands"] = copy.deepcopy(commands)
         manifest["evidence_contract_digest"] = recomputed_digest
+        manifest["evidence_criteria_map"] = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in manifest["tasks"].items()}
         claim["state"] = "closed"
         self._reset_task_to_pending(task)
-        manifest.setdefault("history", []).append({
+        recovery_event = {
             "event": EVIDENCE_CONTRACT_RECOVERY_EVENT,
             "task_id": task_id,
             "token": str(token),
             "generation": claim.get("generation"),
             "recovered_generation": recovery_generation,
-        })
+        }
+        if handoff_recovery is not None:
+            recovery_event["handoff_recovery"] = copy.deepcopy(handoff_recovery)
+        manifest.setdefault("history", []).append(recovery_event)
         failure = self._persist_recovery_transition(manifest, "recover-evidence-contract")
         if failure is not None:
             return _outcome(
@@ -7815,7 +9238,7 @@ class RuntimeDriver:
             "old claim closed; task requeued to pending and claimable again",
             "evidence-contract-recovery receipt recorded naming the task id, old token, and old generation",
         ]
-        evidence.extend(f"sibling-only pre-seed gate finding reported without refusing: {problem}" for problem in sibling_only_problems)
+        evidence.extend(f"sibling-only pre-seed gate finding reported without refusing: {problem['display']}" for problem in sibling_only_problems)
         return _outcome(
             "success",
             "evidence-contract-recovered",
@@ -7827,6 +9250,1363 @@ class RuntimeDriver:
             actions=[],
             recovered_task=task_id,
             recovered_generation=recovery_generation,
+        )
+
+    def _prior_contract_identity(self, manifest: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
+        """The prior contract identity a prelaunch recovery receipt binds.
+
+        The Terms rule: the recorded ``evidence_contract_digest`` when the
+        landed helpers can verify it against the task's stored evidence
+        fields; when they cannot (the stranded oversized shape), a raw
+        identity instead: sha256 over the canonical JSON of the stranded
+        task's evidence fields. Never the criterion-ID map of the stranded
+        contract (``evidence_criterion_ids`` output), which the stranded
+        shape cannot produce.
+        """
+
+        prior_fields = {
+            "required_criteria": copy.deepcopy(task.get("required_criteria", [])),
+            "verification_commands": copy.deepcopy(task.get("verification_commands", [])),
+        }
+        recorded_digest = manifest.get("evidence_contract_digest")
+        try:
+            helper_verifiable = isinstance(recorded_digest, str) and bool(recorded_digest.strip()) and recorded_digest == capabilities.evidence_contract_digest(manifest.get("tasks", {}))
+        except (TypeError, ValueError):
+            helper_verifiable = False
+        if helper_verifiable:
+            return {"kind": "recorded", "evidence_contract_digest": recorded_digest}
+        return {"kind": "raw", "sha256": _contract_identity_digest(prior_fields)}
+
+    @_locked_mutation
+    def recover_prelaunch_contract(
+        self,
+        task_id: str,
+        token: str,
+        generation: int,
+        corrected_contract: Mapping[str, Any],
+        plan_path: str | Path,
+    ) -> dict[str, Any]:
+        """Recover a claimed prelaunch claim holding a stranded evidence contract.
+
+        The single sanctioned exit for the PROJ-607 stranded state: a claim
+        whose state is ``claimed`` with no launch record, no active capacity
+        reservation, no worker row, and no owning claim group in any state,
+        whose seeded evidence criteria the runtime's limit checks refuse. The
+        operator corrects the plan through the skill-gated plan edit first,
+        supplies the corrected contract (exactly ``required_criteria`` and
+        ``verification_commands``) with the corrected plan path, and this
+        transition closes the stale claim, returns the task to pending under
+        the corrected evidence contract, and records one fenced receipt.
+
+        The prior manifest loads RAW under the manifest lock: only the
+        structural worker and claim schema is validated (the launched-hold
+        operation's validating load is deliberately not reused, because the
+        stranded shape's recorded digest and criteria map cannot survive it);
+        the evidence digest and criteria-map consistency checks are deferred
+        to the post-transition state. Precondition order, fail closed:
+
+        1. replay fence FIRST over the append-only ``prelaunch-contract-recovery``
+           receipts (task id plus old token plus old generation); the recorded
+           receipt is named in the refusal;
+        2. the input contract: ``corrected_contract`` carries exactly
+           ``required_criteria`` and ``verification_commands``; any other
+           field, including ``allowed_paths``, refuses with the named
+           input-contract problem BEFORE any precondition beyond the replay
+           fence, because scope changes are never accepted from a recovery
+           payload (the corrected plan path is a payload field of this
+           operation only; the CLI plan-path argument gate does not extend
+           here);
+        3. the claimed prelaunch shape: task status ``claimed``, claim state
+           ``claimed``, no group-resolved launch record, no worker row;
+        4. no owning claim group in any state;
+        5. no active capacity reservation for the claim;
+        6. the exact live claim token and generation;
+        7. the prior contract actually stranded: its stored criteria fail the
+           same single-homed limit checks; a healthy prior refuses as named
+           (a declaration-refused prior with healthy criteria is a residual
+           whose exit is the plan edit plus preflight);
+        8. the corrected plan read through the shared bounded plan-read
+           policy with the safe-path requirement enabled (repository-relative,
+           non-escaping, the terminal gate's mode), so the receipt's plan
+           audit anchor can only bind in-repo bytes; the named unreadable-plan
+           refusal is ordered after the replay fence and the identity checks,
+           before the corrected-contract phase;
+        9. the corrected-contract phase in the sibling's order: the envelope
+           rule first over the pinned two-field set, then the corrected
+           task's digest and map contribution with the limit helpers caught
+           and attributed to the corrected task (the seed-time named shape),
+           then pre-seed consistency over the merged task map (refusing only
+           problem shapes that involve the corrected task, since
+           multi-strand legacy manifests recover task by task), then the
+           declaration parse over the task's plan section (the declaration
+           must parse under the one documented grammar; divergence between
+           the corrected contract and the plan text is accepted-with-audit,
+           never a refusal arm).
+
+        The transition is ONE locked save: the two evidence fields are
+        replaced; ``evidence_contract_digest`` and ``evidence_criteria_map``
+        are recomputed over the corrected task map with sibling-strand raises
+        caught and downgraded (when a sibling strand survives, the
+        pre-recovery digest and map values persist unchanged for the interim
+        manifest and the outcome evidence names the strand as remaining work
+        together with the statement that every validating driver entry fails
+        closed with the unnamed limit ValueError until the last strand
+        heals; a corrected contract is never misattributed a sibling strand);
+        the stale claim closes (the done-pending requeue precedent, so a late
+        receipt fences read-only as ``stale-claim``); the task returns to
+        ``pending``; handoff intents bound to the stale claim identity are
+        invalidated (no stale successor survives); and one fenced
+        ``prelaunch-contract-recovery`` receipt is appended binding the task
+        id, old token, old generation, the task's seeded allowed-paths digest
+        as the current-scope identity, the supplied plan bytes' digest, the
+        prior and corrected contract identities, the unconditional
+        accepted-divergence audit line comparing the corrected criteria set
+        with the prior criteria set, and, when a handoff intent was
+        invalidated, the invalidated-handoff block naming the intent id and
+        the stale successor claim identity. Post-transition, the worker-schema
+        validation runs before persistence and the digest and map consistency
+        is evaluated tolerantly over the corrected slice. Every refusal exits
+        before any byte changes.
+        """
+
+        identity = f"{task_id}:prelaunch-recovery"
+        manifest = load_manifest(self.manifest_path)
+        try:
+            validate_manifest_worker_schema(manifest)
+        except ValueError as exc:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [f"prelaunch contract recovery requires a structurally valid manifest (worker and claim schema); validation failed: {exc}"],
+                "repository-task",
+                identity,
+                manifest.get("generation", 0),
+                "preserve-and-reconcile",
+            )
+        claim = manifest.get("claims", {}).get(task_id)
+        claim_generation = int(claim.get("generation", manifest.get("generation", 0))) if isinstance(claim, Mapping) else int(manifest.get("generation", 0))
+
+        def refusal(evidence: list[str]) -> dict[str, Any]:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                evidence,
+                "repository-task",
+                identity,
+                claim_generation,
+                "preserve-and-reconcile",
+            )
+
+        # (1) Replay fence FIRST, on the raw-tolerant load.
+        for event in manifest.get("history", []):
+            if (
+                isinstance(event, Mapping)
+                and event.get("event") == PRELAUNCH_CONTRACT_RECOVERY_EVENT
+                and event.get("task_id") == task_id
+                and event.get("token") == str(token)
+                and event.get("generation") == generation
+            ):
+                return refusal([
+                    "duplicate prelaunch-contract-recovery receipt refused: a receipt with the same task id, token, and generation is already recorded",
+                    f"the recorded receipt fences the replayed request: task_id={task_id} token={event.get('token')} generation={event.get('generation')}",
+                ])
+
+        # (2) The input contract: exactly the pinned two-field set.
+        if not isinstance(corrected_contract, Mapping):
+            return refusal(["corrected_contract accepts exactly required_criteria and verification_commands; the recovery payload requires a corrected_contract object"])
+        unknown_fields = sorted(str(field) for field in corrected_contract if field not in {"required_criteria", "verification_commands"})
+        if unknown_fields:
+            return refusal([
+                "corrected_contract accepts exactly required_criteria and verification_commands; "
+                f"unexpected field(s): {', '.join(unknown_fields)}; "
+                "scope changes are never accepted from the recovery payload",
+            ])
+
+        # (3) The claimed prelaunch shape.
+        task = manifest.get("tasks", {}).get(task_id)
+        if not isinstance(task, Mapping):
+            return refusal([f"prelaunch contract recovery requires the task record for '{task_id}'; none exists"])
+        if task.get("status") != "claimed" or not isinstance(claim, Mapping) or claim.get("state") != "claimed":
+            task_status = str(task.get("status")) if isinstance(task, Mapping) else "unknown"
+            claim_state = str(claim.get("state")) if isinstance(claim, Mapping) else "none"
+            return refusal([
+                f"prelaunch contract recovery requires the claimed prelaunch claim on task '{task_id}': "
+                "task status 'claimed' and claim state 'claimed' with no launch record",
+                f"found task status '{task_status}', claim state '{claim_state}'",
+            ])
+        if self._claim_launch_evidence(manifest, claim) is not None:
+            return refusal([f"prelaunch contract recovery refused: the claim on task '{task_id}' already carries launch record evidence"])
+        live_worker = next(
+            (worker_id for worker_id, worker in manifest.get("workers", {}).items()
+             if isinstance(worker, Mapping) and worker.get("task_id") == task_id),
+            None,
+        )
+        if live_worker is not None:
+            return refusal([f"prelaunch contract recovery requires no worker row for task '{task_id}'; found worker row '{live_worker}'"])
+
+        # (4) No owning claim group in any state.
+        group_id = claim.get("group_id")
+        if group_id:
+            group = (manifest.get("claim_groups") or {}).get(group_id)
+            if isinstance(group, Mapping):
+                return refusal([
+                    f"claim is owned by claim group '{group_id}' (state '{group.get('state')}'); prelaunch contract recovery refused",
+                    "the group protocol owns the claim; the member exits through the group path",
+                ])
+
+        # (5) No active capacity reservation for the claim.
+        reservation_id = next(
+            (res_id for res_id, reservation in (manifest.get("capacity", {}) or {}).get("reservations", {}).items()
+             if isinstance(reservation, Mapping) and reservation.get("task_id") == task_id),
+            None,
+        )
+        if reservation_id is not None:
+            return refusal([f"prelaunch contract recovery requires no active capacity reservation for the claim on task '{task_id}'; found reservation '{reservation_id}'"])
+
+        # (6) Exact live claim token and generation.
+        mismatched: list[str] = []
+        if claim.get("token") != token:
+            mismatched.append("token")
+        if claim.get("generation") != generation:
+            mismatched.append("generation")
+        if mismatched:
+            return _stale_claim_outcome(
+                identity,
+                claim_generation,
+                [
+                    f"prelaunch contract recovery requires the exact live claim identity on task '{task_id}'",
+                    f"identity mismatch: {', '.join(mismatched)}",
+                ],
+            )
+
+        # (7) The prior contract actually stranded: its stored criteria fail
+        # the same single-homed limit checks.
+        if not _task_criteria_stranded(task.get("required_criteria", [])):
+            return refusal([
+                "prior contract is not stranded; recovery refused",
+                "prelaunch contract recovery admits only a task whose stored criteria fail the runtime evidence limit checks (the stranded-contract shape); "
+                "a declaration-refused prior with healthy criteria is a residual whose exit is the skill-gated plan edit plus preflight",
+            ])
+        prior_identity = self._prior_contract_identity(manifest, task)
+
+        # (8) The corrected plan read: after the replay fence and the identity
+        # checks, before the corrected-contract phase; safe-path required
+        # (repository-relative, non-escaping, the terminal gate's mode), so
+        # the receipt's plan audit anchor can only bind in-repo bytes.
+        try:
+            plan_relative = _safe_relative_path(self.repo_root, str(plan_path).strip())
+        except ValueError:
+            return refusal(["corrected plan read failed: is not a safe repository-relative path under the repository root"])
+        plan_text, plan_error = _read_plan_bounded(self.repo_root, plan_relative, require_safe_path=True)
+        if plan_error is not None or not plan_text:
+            return refusal([f"corrected plan read failed: {plan_error or 'plan file is empty'}"])
+        try:
+            plan_digest = hashlib.sha256((Path(self.repo_root) / plan_relative).read_bytes()).hexdigest()
+        except OSError as exc:
+            return refusal([f"corrected plan read failed: {exc}"])
+
+        # (9) The corrected-contract phase, in the sibling's order.
+        criteria = corrected_contract.get("required_criteria")
+        commands = corrected_contract.get("verification_commands")
+        if not isinstance(criteria, list) or not criteria or not isinstance(commands, list) or not commands:
+            return refusal([
+                f"corrected contract for task '{task_id}' requires non-empty required_criteria and verification_commands "
+                "(the per-task envelope rule the create operation enforces); an incomplete contract would re-strand at the next boundary"
+            ])
+        try:
+            corrected_task_map = capabilities.evidence_criterion_ids(criteria)
+        except ValueError as exc:
+            message = str(exc)
+            dimension = next((name for needle, name in _EVIDENCE_LIMIT_DIMENSIONS if needle in message), None)
+            if dimension is not None:
+                # Task 2's named shape, with the correction rule carried on
+                # its own bounded evidence line (the embedded criterion text
+                # can exceed the per-line evidence bound).
+                return refusal([
+                    f"corrected criterion refused before the save: split the criterion into independently verifiable criteria preserving complete acceptance coverage; {_EVIDENCE_PROOF_LINE}",
+                    _evidence_limit_message(str(task_id), criteria, dimension, message),
+                ])
+            return refusal([f"corrected contract for task '{task_id}' is not a valid evidence envelope: {exc}"])
+        corrected_slice = {task_id: {**task, "required_criteria": copy.deepcopy(criteria), "verification_commands": copy.deepcopy(commands)}}
+        corrected_contract_identity = {
+            "evidence_contract_digest": capabilities.evidence_contract_digest(corrected_slice),
+            "evidence_criteria_map": {task_id: corrected_task_map},
+        }
+        merged_tasks: dict[str, Mapping[str, Any]] = {
+            **manifest["tasks"],
+            task_id: {**task, "required_criteria": criteria, "verification_commands": commands},
+        }
+        merged_problems = _preseed_verifier_consistency_problems(merged_tasks, self.repo_root)
+        refusing_problems = [problem for problem in merged_problems if task_id in problem.get("task_ids", [])]
+        if refusing_problems:
+            return refusal([
+                "corrected contract refused by the pre-seed consistency gate",
+                *(problem["display"] for problem in refusing_problems),
+            ])
+        sibling_only_problems = [problem for problem in merged_problems if task_id not in problem.get("task_ids", [])]
+        section = self._plan_task_section(plan_text, task_id)
+        declared, parse_problem = self._plan_declared_files(section) if section is not None else (None, None)
+        if section is None or declared is None:
+            return refusal([f"corrected plan declares no Files: block in the plan section of task '{task_id}'; prelaunch contract recovery requires the corrected task's plan section to parse under the documented declaration grammar"])
+        if parse_problem:
+            return refusal([f"corrected plan declaration refused by the Files: entry grammar: {parse_problem}"])
+
+        # The ONE locked save carrying the whole closed mutation set. Allowed
+        # paths and the allowed-paths digest are captured before any mutation.
+        allowed_paths = [str(path) for path in (task.get("allowed_paths") or ())]
+        allowed_paths_digest = _contract_identity_digest(allowed_paths)
+        prior_criteria = copy.deepcopy(task.get("required_criteria", []))
+        invalidated: dict[str, Any] | None = None
+        for intent_key, candidate in manifest.get("handoff_intents", {}).items():
+            if not isinstance(candidate, Mapping) or candidate.get("state") in {"failed", "receipt-persisted"}:
+                continue
+            successor = candidate.get("successor") if isinstance(candidate.get("successor"), Mapping) else {}
+            binding = candidate.get("prelaunch_binding") if isinstance(candidate.get("prelaunch_binding"), Mapping) else {}
+            bound = (
+                (successor.get("task_id") == task_id and successor.get("claim_token") == str(token) and successor.get("generation") == generation)
+                or (binding.get("claim_token") == str(token) and binding.get("generation") == generation)
+            )
+            if not bound:
+                continue
+            current_state = candidate.get("state")
+            if current_state == "launched":
+                self._transition_handoff(candidate, "ambiguous")
+                self._transition_handoff(candidate, "failed")
+            else:
+                self._transition_handoff(candidate, "failed")
+            invalidated = {
+                "intent_id": candidate.get("intent_id"),
+                "intent_key": str(intent_key),
+                "successor": {"task_id": task_id, "claim_token": str(token), "generation": generation},
+            }
+            break
+        recovery_generation = int(manifest.get("generation", 0)) + 1
+        manifest["generation"] = recovery_generation
+        task["required_criteria"] = copy.deepcopy(criteria)
+        task["verification_commands"] = copy.deepcopy(commands)
+        # Recompute the digest and criteria map over the corrected task map
+        # with sibling-strand raises caught and downgraded: a surviving
+        # sibling strand persists the pre-recovery values unchanged for the
+        # interim manifest and is named in the outcome evidence.
+        strand: str | None = None
+        try:
+            recomputed_digest = capabilities.evidence_contract_digest(manifest["tasks"])
+            recomputed_map = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in manifest["tasks"].items()}
+        except ValueError as exc:
+            message = str(exc)
+            if any(needle in message for needle, _ in _EVIDENCE_LIMIT_DIMENSIONS):
+                strand = next(
+                    (
+                        name for name, item in sorted(manifest["tasks"].items())
+                        if name != task_id and _task_criteria_stranded(item.get("required_criteria", []))
+                    ),
+                    None,
+                )
+            else:
+                raise
+        if strand is None:
+            manifest["evidence_contract_digest"] = recomputed_digest
+            manifest["evidence_criteria_map"] = recomputed_map
+        claim["state"] = "closed"
+        self._reset_task_to_pending(task)
+        recovery_event = {
+            "event": PRELAUNCH_CONTRACT_RECOVERY_EVENT,
+            "task_id": task_id,
+            "token": str(token),
+            "generation": generation,
+            "recovered_generation": recovery_generation,
+            "allowed_paths_digest": allowed_paths_digest,
+            "plan_digest": plan_digest,
+            "prior_contract_identity": prior_identity,
+            "corrected_contract_identity": corrected_contract_identity,
+            "divergence_audit": {
+                "prior_criteria": prior_criteria,
+                "corrected_criteria": copy.deepcopy(criteria),
+                "outcome": "accepted-with-audit",
+            },
+        }
+        if invalidated is not None:
+            recovery_event["invalidated_handoff"] = invalidated
+        manifest.setdefault("history", []).append(recovery_event)
+
+        # Post-validation: the worker schema before persistence, plus the
+        # digest and map consistency evaluated tolerantly over the corrected
+        # slice (a surviving sibling strand keeps the pre-recovery values by
+        # design, so only the no-strand arm asserts full consistency).
+        if strand is None:
+            expected_map = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in manifest["tasks"].items()}
+            if manifest.get("evidence_criteria_map") != expected_map or manifest.get("evidence_contract_digest") != capabilities.evidence_contract_digest(manifest["tasks"]):
+                return refusal([
+                    "prelaunch recovery post-transition validation failed (digest and criteria map consistency); "
+                    "nothing was persisted: the recomputed contract identity does not match the corrected task map"
+                ])
+        failure = self._persist_recovery_transition(manifest, "recover-prelaunch-contract")
+        if failure is not None:
+            return refusal([failure])
+        evidence = [
+            f"task={task_id}",
+            f"generation={recovery_generation}",
+            "stale claim closed; task requeued to pending preflight-passable under the corrected evidence contract",
+            "evidence contract replaced; evidence_contract_digest and evidence_criteria_map recomputed",
+            "prelaunch-contract-recovery receipt recorded binding the task id, old token, old generation, the allowed-paths digest, the plan digest, and the prior and corrected contract identities",
+            "corrected-contract-versus-plan-text divergence accepted-with-audit; the receipt's audit line compares the corrected criteria set with the prior criteria set",
+        ]
+        if strand is not None:
+            evidence.append(f"remaining work: task '{strand}' still carries a stranded evidence contract; recover it through the same raw-tolerant operation, back-to-back in one session")
+            evidence.append("every validating driver entry fails closed with the unnamed limit ValueError until the last strand heals; the pre-recovery digest and criteria-map values persist unchanged for the interim manifest")
+        if sibling_only_problems:
+            evidence.extend(f"sibling-only pre-seed gate finding reported without refusing: {problem['display']}" for problem in sibling_only_problems)
+        if invalidated is not None:
+            evidence.append(f"handoff intent '{invalidated['intent_id']}' invalidated; no stale successor survives the stale claim identity")
+        return _outcome(
+            "success",
+            "prelaunch-contract-recovered",
+            evidence,
+            "repository-task",
+            identity,
+            recovery_generation,
+            "continue-parent",
+            actions=[],
+            recovered_task=task_id,
+            recovered_generation=recovery_generation,
+        )
+
+    @_locked_mutation
+    def recover_run_identity(
+        self,
+        task_id: str,
+        runtime_id: str,
+        repo_root: str,
+        generation: int,
+        token: str,
+        receipt_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Bind a legacy manifest's runtime identity in one audited transition.
+
+        The single sanctioned exit for a manifest seeded by an older driver
+        without a ``runtime`` id: the ordinary preflight correctly emits no
+        command for it (the canonical command must pin the recorded runtime),
+        a plain claim would stamp the runtime without activation evidence,
+        re-creating loses the run, and hand-editing the manifest bytes is
+        prohibited. Under the manifest lock every precondition is validated
+        in fail-closed order, and every refusal leaves the manifest
+        byte-identical (the validate-before-persist recovery transition
+        makes that guarantee mechanical for the accepted path too):
+
+        1. replay fence FIRST: the manifest must not already record a
+           non-empty ``runtime`` field; the recorded id is named in the
+           refusal. The fence is the manifest field itself, evaluated before
+           any host-state precondition, so a replayed request reaches it no
+           matter what else changed;
+        2. the payload task id equals the derived next incomplete task
+           (refused with both ids named when a differing incomplete task
+           exists, and refused as no-provable-next-task when none exists);
+        3. the payload runtime id is the canonical registered id (an alias
+           or unknown id is refused with the canonical form named);
+        4. the payload repo_root resolves to the driver's repository root;
+        5. the payload generation matches the manifest generation;
+        6. token semantics per shape: against a live claim the payload token
+           must match that claim's token exactly (a mismatch is the stale
+           refusal); on a claim-less manifest the token is operator
+           attestation validated for non-emptiness;
+        7. the optional receipt path is loaded and fingerprinted through the
+           shared receipt loader, with its recorded runtime canonicalize-equal
+           to the payload runtime id (the same pairing cross-check the CLI
+           flag path enforces).
+
+        Poisoned-shape leg: the failed remedy attempt's residue (the next
+        incomplete task claimed with no launch record and no prepared
+        handoff intent, or every member claim of a claim group in that same
+        never-launched shape) is the one obstruction this transition clears,
+        per the reclaim-release precedent: claim states closed, tasks reset
+        to pending, and the matching claim group closed together with its
+        still-staged member claims, all inside this same locked transition.
+        A live launch reservation on the task or any group member, and a
+        member claim in a launched shape, still refuse; a prepared handoff
+        intent that the readiness decision does not admit refuses with the
+        disagreement named. Closed-residue rule: after that clearing, the
+        same readiness decision the preflight runs is evaluated over the
+        post-clearing manifest (its plan text is read from the manifest
+        ``plan_slug`` through the resolved plans directory under the shared
+        bounded-read policy, failing closed naming the plan error when
+        unreadable), and the migration refuses, before any binding is
+        persisted, unless the decision admits the manifest (direct
+        continuation, or the admitted prepared handoff successor with no
+        failing condition left). The decision is the single class authority,
+        so this rule cannot drift when readiness gains a condition.
+
+        The accepted transition is ONE locked save: the runtime id, the
+        receipt record when supplied, the cleared claims and group, and one
+        fenced ``run-identity-migration`` history receipt (runtime id,
+        resolved repository root, receipt identity, payload task id, the
+        validated and post-transition generations, and for the clearing leg
+        the cleared claims' task ids and tokens plus any closed group's id
+        and released-member id list) persist together through the
+        validate-before-persist recovery transition helper, so a
+        post-transition schema failure persists nothing. The bound manifest
+        is admitted by the ordinary read-only preflight, which then emits the
+        canonical continuation command.
+        """
+
+        identity = f"{task_id}:run-identity"
+        manifest = self.refresh_manifest()
+        manifest_generation = int(manifest.get("generation", 0))
+        # (1) Replay fence FIRST (see the precondition order in the docstring).
+        recorded_runtime = manifest.get("runtime")
+        if isinstance(recorded_runtime, str) and recorded_runtime.strip():
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [
+                    "recover-run-identity refused: the manifest already records a runtime id "
+                    f"('{recorded_runtime.strip()}'); the migration is single-shot and the "
+                    "already-bound fence is evaluated before any host-state precondition",
+                ],
+                "repository-task",
+                identity,
+                manifest_generation,
+                "preserve-and-reconcile",
+            )
+        # (2) The payload task id vs the derived next incomplete task.
+        ordered_tasks = sorted(manifest["tasks"].values(), key=_pending_sort_key)
+        incomplete = [task for task in ordered_tasks if not self._task_complete(task)]
+        if not incomplete:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                ["recover-run-identity refused: the manifest carries no provable next incomplete task"],
+                "repository-task",
+                identity,
+                manifest_generation,
+                "preserve-and-reconcile",
+            )
+        derived_task_id = str(incomplete[0]["id"])
+        if task_id != derived_task_id:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [
+                    "recover-run-identity refused: the payload task id does not match the derived next incomplete task",
+                    f"payload task_id '{task_id}'; derived next incomplete task '{derived_task_id}'",
+                ],
+                "repository-task",
+                identity,
+                manifest_generation,
+                "preserve-and-reconcile",
+            )
+        # (3) Canonical registered runtime id.
+        profiles = capabilities.load_profiles()
+        if not isinstance(profiles.get(runtime_id), Mapping):
+            try:
+                canonical = capabilities.canonicalize_runtime_id(runtime_id)
+            except KeyError:
+                return _outcome(
+                    "blocked",
+                    "precondition-unverified",
+                    [
+                        "recover-run-identity refused: the payload runtime_id is not a registered runtime id or alias "
+                        f"in the runtime inventory: '{runtime_id}'",
+                    ],
+                    "repository-task",
+                    identity,
+                    manifest_generation,
+                    "preserve-and-reconcile",
+                )
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [
+                    "recover-run-identity refused: the payload runtime_id is not canonical; "
+                    f"'{runtime_id}' resolves to '{canonical}'; supply the canonical registered runtime id",
+                ],
+                "repository-task",
+                identity,
+                manifest_generation,
+                "preserve-and-reconcile",
+            )
+        # (4) The payload repository root resolves to the driver's root.
+        try:
+            payload_root = Path(repo_root).resolve()
+        except OSError as exc:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [f"recover-run-identity refused: the payload repo_root is not resolvable: {repo_root}: {exc}"],
+                "repository-task",
+                identity,
+                manifest_generation,
+                "preserve-and-reconcile",
+            )
+        if payload_root != self.repo_root:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [
+                    "recover-run-identity refused: the payload repo_root does not resolve to the driver's repository root",
+                    f"payload repo_root '{repo_root}'; driver repository root '{self.repo_root}'",
+                ],
+                "repository-task",
+                identity,
+                manifest_generation,
+                "preserve-and-reconcile",
+            )
+        # (5) Generation match.
+        if generation != manifest_generation:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [
+                    "recover-run-identity refused: the payload generation does not match the manifest generation",
+                    f"payload generation {generation}; manifest generation {manifest_generation}",
+                ],
+                "repository-task",
+                identity,
+                manifest_generation,
+                "preserve-and-reconcile",
+            )
+        # (6) Token semantics per shape: exact match against a live claim,
+        # operator attestation on a claim-less manifest (non-emptiness was
+        # validated at the payload-shape boundary).
+        claim = manifest["claims"].get(task_id)
+        if isinstance(claim, Mapping) and claim.get("state") in {"claimed", "launched", "waiting-capacity", "blocked"}:
+            if claim.get("token") != token:
+                return _stale_claim_outcome(
+                    identity,
+                    int(claim.get("generation", manifest_generation)),
+                    [
+                        "recover-run-identity refused: the supplied token does not match the live claim's token "
+                        f"on task '{task_id}' (the stale refusal)",
+                    ],
+                    "repository-task",
+                )
+        # (7) Optional receipt pairing through the shared receipt loader.
+        receipt_record: dict[str, Any] | None = None
+        if receipt_path is not None:
+            try:
+                receipt_data = capabilities.load_approval_receipt(receipt_path, config_root=self.repo_root)
+            except (OSError, ValueError, KeyError) as exc:
+                return _outcome(
+                    "blocked",
+                    "precondition-unverified",
+                    [
+                        "recover-run-identity refused: the supplied receipt_path could not be loaded or fingerprinted: "
+                        f"{receipt_path}: {exc}",
+                    ],
+                    "repository-task",
+                    identity,
+                    manifest_generation,
+                    "preserve-and-reconcile",
+                )
+            recorded_receipt_runtime = receipt_data.get("runtime")
+            try:
+                canonical_receipt_runtime = capabilities.canonicalize_runtime_id(str(recorded_receipt_runtime))
+            except KeyError:
+                canonical_receipt_runtime = None
+            if canonical_receipt_runtime != runtime_id:
+                return _outcome(
+                    "blocked",
+                    "precondition-unverified",
+                    [
+                        "recover-run-identity refused: the approval receipt's recorded runtime does not canonicalize "
+                        "to the payload runtime_id",
+                        f"receipt-recorded runtime '{recorded_receipt_runtime}'; payload runtime_id '{runtime_id}'",
+                    ],
+                    "repository-task",
+                    identity,
+                    manifest_generation,
+                    "preserve-and-reconcile",
+                )
+            receipt_record = {"path": str(Path(receipt_path).resolve())}
+        # Poisoned-shape leg: classify the next incomplete task's claim (and
+        # its claim group) before any mutation. The never-launched evidence
+        # standard is the poison definition: claimed state, no launch record
+        # (resolved through the group for members), and no prepared handoff
+        # intent.
+        def _never_launched_poison(candidate: Mapping[str, Any]) -> bool:
+            return (
+                candidate.get("state") == "claimed"
+                and self._claim_launch_evidence(manifest, candidate) is None
+                and not candidate.get("handoff_intent_key")
+            )
+
+        group_id = claim.get("group_id") if isinstance(claim, Mapping) else None
+        group = manifest.get("claim_groups", {}).get(str(group_id)) if isinstance(group_id, str) and group_id else None
+        claim_is_poison = isinstance(claim, Mapping) and _never_launched_poison(claim)
+        clearing_members: list[str] = []
+        residue_enrichment: list[str] = []
+        if claim_is_poison and isinstance(group, Mapping):
+            members = [str(member) for member in (group.get("members") or ()) if str(member) in manifest["claims"]]
+            live_reservations = self._identity_reservations_locked(manifest, members)
+            if live_reservations:
+                return _outcome(
+                    "blocked",
+                    "precondition-unverified",
+                    [
+                        "recover-run-identity refused: a live launch reservation is held on the poisoned shape's tasks; "
+                        "the migration clears only never-launched residue",
+                        *live_reservations,
+                    ],
+                    "repository-task",
+                    identity,
+                    manifest_generation,
+                    "preserve-and-reconcile",
+                )
+            live_members = [
+                (member, manifest["claims"][member])
+                for member in members
+                if member != task_id
+                and manifest["claims"][member].get("state") not in {"staged", "closed", "replaced", "aborted"}
+                and not _never_launched_poison(manifest["claims"][member])
+            ]
+            if live_members:
+                for member, member_claim in live_members:
+                    residue_enrichment.append(
+                        f"live member '{member}' of claim group '{group_id}' is in state "
+                        f"'{member_claim.get('state')}'"
+                        + (" with its launch record" if self._claim_launch_evidence(manifest, member_claim) is not None else "")
+                    )
+            else:
+                clearing_members = [
+                    member
+                    for member in members
+                    if manifest["claims"][member].get("state") == "staged" or _never_launched_poison(manifest["claims"][member])
+                ]
+        elif claim_is_poison:
+            live_reservations = self._identity_reservations_locked(manifest, [task_id])
+            if live_reservations:
+                return _outcome(
+                    "blocked",
+                    "precondition-unverified",
+                    [
+                        "recover-run-identity refused: a live launch reservation is held on the poisoned shape's task; "
+                        "the migration clears only never-launched residue",
+                        *live_reservations,
+                    ],
+                    "repository-task",
+                    identity,
+                    manifest_generation,
+                    "preserve-and-reconcile",
+                )
+            clearing_members = [task_id]
+        residue_enrichment.extend(self._prepared_intent_disagreement_lines(manifest, task_id))
+        # The clearing applies in memory FIRST, inside this same locked
+        # transition: the closed-residue rule below runs the readiness
+        # decision over the POST-CLEARING state (the transition's admitted
+        # post-state), and every refusal after this point returns before any
+        # save, so a refused migration still leaves the manifest
+        # byte-identical while an accepted one persists clearing and binding
+        # in the same locked write.
+        cleared_claims: list[dict[str, Any]] = []
+        released_members: list[str] = []
+        for member in clearing_members:
+            cleared_claims.append({"task_id": member, "token": manifest["claims"][member].get("token")})
+            manifest["claims"][member]["state"] = "closed"
+            member_task = manifest["tasks"].get(member)
+            if isinstance(member_task, Mapping):
+                self._reset_task_to_pending(manifest["tasks"][member])
+        if clearing_members and isinstance(group, Mapping):
+            released_members = [member for member in (str(item) for item in (group.get("members") or ())) if member in clearing_members]
+            self._set_group_state(manifest, str(group_id), "closed", None)
+        # Closed-residue rule: the same readiness decision the preflight runs,
+        # evaluated over the post-clearing manifest, is the single admission
+        # authority. Its plan text is read from the manifest plan_slug through
+        # the resolved plans directory under the shared bounded-read policy
+        # (the archive flow's existing resolution), failing closed with the
+        # plan error named.
+        plans_dir = _resolved_facts_dir(self.repo_root, "plans_dir")
+        plan_error: str | None = None
+        plan_text = ""
+        if plans_dir is None:
+            plan_error = "is not resolvable: the resolved plans directory is unavailable"
+        else:
+            try:
+                plan_relative = plans_dir.joinpath(f"{self.plan_slug}.md").relative_to(self.repo_root).as_posix()
+            except ValueError:
+                plan_error = f"is outside the resolved plans directory: {plans_dir}"
+            else:
+                plan_text, plan_error = _read_plan_bounded(self.repo_root, plan_relative, require_safe_path=True)
+        if plan_error is not None:
+            return self._residue_refusal_outcome(
+                identity,
+                manifest_generation,
+                [f"plan file {plan_error}"],
+                residue_enrichment,
+            )
+        decision, failed_conditions, _, _ = self._readiness_decision(manifest, plan_text)
+        admitted_successor = self._prepared_handoff_successor(manifest)
+        admitted_task_id = admitted_successor[0] if admitted_successor else None
+        conditions = [
+            condition for condition in failed_conditions
+            if not (admitted_task_id is not None and condition.startswith(f"next incomplete task '{admitted_task_id}' is not provable:"))
+        ]
+        if decision != "direct-continuation" and (admitted_task_id is None or conditions):
+            return self._residue_refusal_outcome(
+                identity,
+                manifest_generation,
+                [f"readiness decision: {decision}", *conditions],
+                residue_enrichment,
+            )
+        # ONE locked save carries the whole transition.
+        binding_generation = manifest_generation + 1
+        manifest["generation"] = binding_generation
+        manifest["runtime"] = runtime_id
+        if receipt_record is not None:
+            manifest["approval_receipt"] = dict(receipt_record)
+        migration_event: dict[str, Any] = {
+            "event": RUN_IDENTITY_MIGRATION_EVENT,
+            "runtime_id": runtime_id,
+            "repo_root": str(self.repo_root),
+            "task_id": task_id,
+            "generation": manifest_generation,
+            "binding_generation": binding_generation,
+        }
+        if receipt_record is not None:
+            migration_event["approval_receipt"] = dict(receipt_record)
+        if released_members:
+            migration_event["group_id"] = str(group_id)
+            migration_event["released_members"] = released_members
+        if cleared_claims:
+            migration_event["cleared_claims"] = cleared_claims
+        manifest.setdefault("history", []).append(migration_event)
+        failure = self._persist_recovery_transition(manifest, "recover-run-identity")
+        if failure is not None:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [failure],
+                "repository-task",
+                identity,
+                manifest_generation,
+                "preserve-and-reconcile",
+            )
+        evidence = [
+            f"runtime_id={runtime_id}",
+            f"repo_root={self.repo_root}",
+            f"task_id={task_id}",
+            f"generation={binding_generation}",
+            "runtime and approval receipt bound in one locked transition; "
+            "the run-identity-migration receipt records the binding",
+        ]
+        if cleared_claims:
+            evidence.append(
+                "poisoned intermediate claim(s) closed and task(s) reset to pending: "
+                + ", ".join(item["task_id"] for item in cleared_claims)
+            )
+        if released_members:
+            evidence.append(
+                f"claim group '{group_id}' closed; released members: {', '.join(released_members)}"
+            )
+        return _outcome(
+            "success",
+            "run-identity-bound",
+            evidence,
+            "repository-task",
+            identity,
+            binding_generation,
+            "continue-parent",
+            actions=[],
+            bound_runtime=runtime_id,
+            bound_generation=binding_generation,
+        )
+
+    def _scope_recovery_successor_live(self, manifest: Mapping[str, Any], claim: Mapping[str, Any]) -> bool:
+        """The replay-liveness predicate: the prepared-successor form, state-shaped.
+
+        True only when the live claim is still the intent-backed claimed
+        prelaunch claim its scope-recovery receipt rotated to: claimed state,
+        a prepared intent keyed to the claim with an unconsumed prelaunch
+        binding and no launch receipt, and the intent's successor identity in
+        exact five-field parity with the live claim. Any superseding state
+        (launched, replaced, closed, reclaimed) reads as not live.
+        """
+
+        intent_key = claim.get("handoff_intent_key")
+        intent = manifest.get("handoff_intents", {}).get(intent_key) if isinstance(intent_key, str) else None
+        if not isinstance(intent, Mapping) or intent.get("state") != "prepared" or intent.get("launch_receipt") is not None:
+            return False
+        binding = intent.get("prelaunch_binding")
+        if not isinstance(binding, Mapping) or binding.get("consumed") is True:
+            return False
+        successor = intent.get("successor")
+        return isinstance(successor, Mapping) and all(
+            successor.get(field) == claim.get(claim_field)
+            for field, claim_field in (
+                ("task_id", "task_id"),
+                ("claim_token", "token"),
+                ("generation", "generation"),
+                ("claim_owner_id", "claim_owner_id"),
+                ("launch_id", "launch_id"),
+            )
+        )
+
+    @_locked_mutation
+    def recover_task_scope(self, task_id: str, token: str, generation: int) -> dict[str, Any]:
+        """Recover one legitimate reviewed task-scope change before launch.
+
+        The single sanctioned exit for a prelaunch claim stranded by a
+        reviewed scope change: ordinary preflight correctly refuses the stale
+        seeded scope, and without this transition the claim wedges until
+        lease expiry. The operation accepts ONLY the exact prior task and
+        claim identity; the plan digest, the review evidence, the fresh
+        preflight recomputation, and the replacement paths are derived from
+        repository state, and no inventory or evidence surface is
+        caller-suppliable (the CLI adds no evidence flags; Task 2 pins the
+        dispatch). Every refusal leaves the manifest byte-identical and
+        appends no receipt; the accepted path lands the whole closed
+        mutation set in ONE locked manifest write, persisted through the
+        landed validate-before-persist helper (a post-transition validation
+        failure refuses byte-identically).
+
+        Precondition order, fail closed:
+
+        (1) Replay fence FIRST, against the recorded scope-recovery receipts'
+            prior identities (task id, prior token, prior generation): an
+            identical replay re-verifies that the receipt's recorded rotated
+            claim identity is still the live intent-backed claimed prelaunch
+            claim (claimed state, prepared intent, unconsumed binding) and
+            returns the recorded outcome with an explicit replay marker
+            naming the matched receipt; any superseding state refuses as
+            stale identity naming that receipt; a request whose identity
+            matches only an older receipt's prior identity falls to the
+            stale-identity refusal naming that older receipt; any other
+            mismatched replay naming the task is refused with the latest
+            recorded receipt named; a request carrying the current live
+            claim identity is not a replay and proceeds through ordinary
+            eligibility (a passing second correction appends a second
+            bounded receipt).
+        (2) The plan file is resolved directly as the facts-resolved plans
+            directory joined with the manifest's recorded plan slug and the
+            ``.md`` extension (repository-resolved, never caller-supplied;
+            the full-stem identity is the binding, and ``feature_slug`` is
+            used solely as the reviews-directory discovery key).
+        (3) Eligibility: the intent-backed claimed prelaunch claim - the
+            prepared handoff intent exists and keys to the claim (the
+            prepared-successor shape with its unconsumed binding; a direct
+            claimed claim is refused as not intent-backed) - with no launch
+            record, no worker row, no launch reservation, and no live
+            claim-group ownership.
+        (4) The fence: a fresh preflight recomputation through the lock-free
+            helper must fail with EXACTLY the widening scope-drift problem
+            for the target task whose drift entry carries a non-empty
+            plan-path set; the parse-problem and missing-declaration shapes,
+            a passing recomputation, and any other problem are refused as
+            fence-shape mismatch naming the recorded shape.
+        (5) Review evidence through the sanctioned composition, imported
+            function-locally (the runtime's lazy-import precedent; the
+            never-patched rule scopes to these imports): the reviews
+            directory via ``resolve_reviews_dir``, the discovery slug via
+            ``feature_slug``, the latest round via ``latest_review_round``,
+            and readiness via ``evaluate_readiness`` - the single digest
+            authority, refusing unless the latest ready round's recorded
+            digest equals the recomputed plan-bytes digest. Before the
+            receipt is written the round is re-resolved and the on-disk plan
+            bytes re-hashed, refusing by name on disagreement (the plan
+            bytes are read once per recovery for the digest the receipt
+            records).
+        (6) Replacement paths parsed ONLY from the structured ``Files:``
+            declaration through the landed ``_plan_declared_files`` parser
+            (never a second parser; backticked prose adds nothing), refusing
+            an absent declaration or an empty replacement path set by name,
+            and canonicalized through the create boundary's path policy
+            (``_safe_relative_path``), refusing an entry that fails
+            canonicalization or duplicates another after alias resolution.
+
+        The write inventory, in the one locked write: the claim row rotates
+        to a fresh token and a bumped generation (the reclaim/release
+        rotation precedent; owner and launch id never rotate, so the
+        five-field parity the launch boundary enforces stays intact) with
+        the global manifest generation bumped once alongside it;
+        ``intent.successor``, ``intent.outcome_action`` (its
+        ``idempotency_key`` re-stamped as part of the carrier), and
+        ``intent.prelaunch_binding`` identity fields re-stamped with the new
+        token and generation; the task record's canonical allowed paths
+        replaced; ``evidence_contract_digest`` recomputed over the
+        post-replacement task map (the landed evidence-contract replacement
+        operation's recipe); and one bounded history receipt keyed on the
+        prior claim identity recording the plan digest, the review evidence
+        identity (artifact path, round number, source digest), the prior
+        and replacement scopes, the outcome, and the rotated claim identity.
+        The operator then uses ordinary preflight and launch with the
+        rotated identity.
+        """
+
+        identity = f"{task_id}:scope-recovery"
+        try:
+            manifest = self.refresh_manifest()
+        except ValueError as exc:
+            return _outcome("blocked", "precondition-unverified", [f"{exc}; scope recovery refused before mutation"], "repository-task", identity, 0, "preserve-and-reconcile")
+        claim = manifest.get("claims", {}).get(task_id)
+        claim_generation = int(claim.get("generation", manifest.get("generation", 0))) if isinstance(claim, Mapping) else int(manifest.get("generation", 0))
+
+        def refusal(evidence: list[str]) -> dict[str, Any]:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                evidence,
+                "repository-task",
+                identity,
+                claim_generation,
+                "preserve-and-reconcile",
+            )
+
+        # (1) Replay fence FIRST (the recorded receipts' prior identities).
+        receipts = [
+            event
+            for event in manifest.get("history", [])
+            if isinstance(event, Mapping) and event.get("event") == SCOPE_RECOVERY_EVENT and event.get("task_id") == task_id
+        ]
+        if receipts:
+            latest = receipts[-1]
+            latest_prior = (latest.get("token"), latest.get("generation"))
+            if latest_prior == (str(token), generation):
+                rotated = latest.get("rotated") if isinstance(latest.get("rotated"), Mapping) else {}
+                replay_live = (
+                    isinstance(claim, Mapping)
+                    and claim.get("state") == "claimed"
+                    and claim.get("token") == rotated.get("claim_token")
+                    and claim.get("generation") == rotated.get("generation")
+                    and self._scope_recovery_successor_live(manifest, claim)
+                )
+                if replay_live:
+                    intent_key = claim.get("handoff_intent_key")
+                    intent = manifest.get("handoff_intents", {}).get(intent_key) if isinstance(intent_key, str) else None
+                    action = dict(intent["outcome_action"]) if isinstance(intent, Mapping) and isinstance(intent.get("outcome_action"), Mapping) else None
+                    return _outcome(
+                        "success",
+                        "scope-recovered",
+                        [
+                            "replay of the recorded scope-recovery receipt: the recorded rotated claim identity is still the live intent-backed prelaunch claim",
+                            f"matched receipt: task_id={task_id} token={latest.get('token')} generation={latest.get('generation')}",
+                        ],
+                        "repository-task",
+                        identity,
+                        claim_generation,
+                        "continue-parent",
+                        actions=[action] if action is not None else [],
+                        duplicate=True,
+                        replay_receipt={"task_id": task_id, "token": latest.get("token"), "generation": latest.get("generation"), "rotated": dict(rotated)},
+                    )
+                return refusal([
+                    "scope recovery refused: the replayed request's prior claim identity is stale",
+                    "the receipt's recorded rotated claim identity is no longer the live intent-backed prelaunch claim (launched, replaced, closed, or reclaimed)",
+                    f"matched receipt: task_id={task_id} token={latest.get('token')} generation={latest.get('generation')}",
+                ])
+            older = next((event for event in receipts[:-1] if (event.get("token"), event.get("generation")) == (str(token), generation)), None)
+            if older is not None:
+                return refusal([
+                    "scope recovery refused: the request's claim identity matches only an older recorded scope-recovery receipt after supersession",
+                    f"matched older receipt: task_id={task_id} token={older.get('token')} generation={older.get('generation')}",
+                ])
+            live_identity = (str(claim.get("token")), claim.get("generation")) if isinstance(claim, Mapping) else None
+            if live_identity != (str(token), generation):
+                return refusal([
+                    "scope recovery refused: the request's claim identity matches no recorded scope-recovery receipt and not the live claim",
+                    f"latest recorded receipt: task_id={task_id} token={latest.get('token')} generation={latest.get('generation')}",
+                ])
+        elif not isinstance(claim, Mapping) or claim.get("token") != token or claim.get("generation") != generation:
+            return refusal([
+                f"scope recovery requires the exact live claim identity on task '{task_id}'",
+                "identity mismatch: wrong task id, never-issued token, or stale generation",
+            ])
+
+        # (2) Plan file resolution: facts-resolved plans directory joined with
+        # the recorded plan slug; the full-stem identity is the binding.
+        plans_dir = _resolved_facts_dir(self.repo_root, "plans_dir")
+        if plans_dir is None:
+            return refusal(["scope recovery could not resolve the plans directory: the facts TOML-fence key plans_dir is missing or unresolvable"])
+        plan_slug = manifest.get("plan_slug")
+        plan_path = plans_dir / f"{plan_slug}.md"
+        if not isinstance(plan_slug, str) or not plan_slug.strip() or not plan_path.is_file():
+            return refusal([
+                "scope recovery resolves the plan file as the facts-resolved plans directory joined with the manifest's recorded plan slug and the .md extension",
+                f"plan file {plan_path} does not bind by full-stem identity to the manifest plan_slug '{plan_slug}'",
+            ])
+
+        # (3) Eligibility: the intent-backed claimed prelaunch claim.
+        task = manifest.get("tasks", {}).get(task_id)
+        if not isinstance(task, Mapping):
+            return refusal([f"scope recovery requires the task record for '{task_id}'; none exists"])
+        if claim.get("state") != "claimed":
+            return refusal([f"scope recovery requires the intent-backed claimed prelaunch claim on task '{task_id}'; found claim state '{claim.get('state')}'"])
+        intent_key = claim.get("handoff_intent_key")
+        intent = manifest.get("handoff_intents", {}).get(intent_key) if isinstance(intent_key, str) else None
+        successor = intent.get("successor") if isinstance(intent, Mapping) else None
+        if (
+            not isinstance(intent, Mapping)
+            or intent.get("state") != "prepared"
+            or not isinstance(successor, Mapping)
+            or any(
+                successor.get(field) != claim.get(claim_field)
+                for field, claim_field in (
+                    ("task_id", "task_id"),
+                    ("claim_token", "token"),
+                    ("generation", "generation"),
+                    ("claim_owner_id", "claim_owner_id"),
+                    ("launch_id", "launch_id"),
+                )
+            )
+        ):
+            return refusal([f"scope recovery requires the prepared handoff intent keyed to the claim on task '{task_id}'; a direct claimed claim with no prepared intent is not intent-backed"])
+        binding = intent.get("prelaunch_binding")
+        if not isinstance(binding, Mapping) or binding.get("consumed") is True:
+            return refusal([f"scope recovery requires the prepared intent's unconsumed prelaunch binding on task '{task_id}'; the handoff already launched or consumed its binding"])
+        if self._claim_launch_evidence(manifest, claim) is not None:
+            return refusal([f"scope recovery refused: the claim on task '{task_id}' already carries launch record evidence"])
+        if any(
+            isinstance(worker, Mapping) and worker.get("task_id") == task_id
+            for worker in manifest.get("workers", {}).values()
+        ):
+            return refusal([f"scope recovery refused: worker evidence exists for task '{task_id}'"])
+        if any(
+            isinstance(reservation, Mapping) and reservation.get("task_id") == task_id
+            for reservation in (manifest.get("capacity", {}) or {}).get("reservations", {}).values()
+        ):
+            return refusal([f"scope recovery refused: a launch reservation is held for task '{task_id}'"])
+        group_id = claim.get("group_id")
+        if group_id and self._claim_owned_by_live_group(manifest, claim):
+            return refusal([
+                f"claim is owned by live claim group '{group_id}'; scope recovery refused",
+                "the group protocol owns the claim; the member exits through the group path",
+            ])
+
+        # (4) One bounded plan read for the text and one for the bytes the
+        # receipt records; the fence recomputes through the lock-free helper.
+        plan_text, plan_error = _read_plan_bounded(None, plan_path, require_safe_path=False)
+        if plan_error is not None or not plan_text:
+            return refusal([f"plan file {plan_error or 'is empty'}"])
+        try:
+            plan_digest = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            return refusal([f"plan file is unreadable: {exc}"])
+        manifest_path = self.manifest_path if self.manifest_path.is_absolute() else (self.repo_root / self.manifest_path).resolve()
+        recomputation = self._preflight_check_body(manifest, plan_text, None, plan_path, manifest_path)
+        drift_entries = [entry for entry in recomputation.get("drift", []) if isinstance(entry, Mapping)]
+        drift_entry = next((entry for entry in drift_entries if entry.get("task_id") == task_id), None)
+        widening = (
+            recomputation.get("status") == "failed"
+            and recomputation.get("next_task_id") == task_id
+            and len(drift_entries) == 1
+            and drift_entry is not None
+            and bool(drift_entry.get("plan_paths"))
+            and "problem" not in drift_entry
+            and recomputation.get("problems") == [f"scope drift on task '{task_id}': {len(drift_entry['plan_paths'])} plan path(s) outside the seeded scope"]
+        )
+        if not widening:
+            recorded_problem = next((str(problem) for problem in recomputation.get("problems", []) if "scope" in str(problem)), None)
+            if recorded_problem is None and drift_entry is not None and drift_entry.get("problem"):
+                recorded_problem = str(drift_entry["problem"])
+            return refusal([
+                "scope recovery requires the fresh preflight recomputation to fail with exactly the widening scope-drift problem for the target task",
+                f"recomputation fence-shape mismatch: status={recomputation.get('status')}"
+                + (f", recorded: {recorded_problem}" if recorded_problem else ""),
+            ])
+
+        # (5) Review-evidence composition: the sanctioned imports, resolved
+        # against repository state; the readiness evaluation is the single
+        # digest authority.
+        from plan_readiness import evaluate_readiness, feature_slug, latest_review_round
+        from validate_review_staging import resolve_reviews_dir
+
+        reviews_dir = resolve_reviews_dir(self.repo_root)
+        slug = feature_slug(plan_path)
+        latest = latest_review_round(reviews_dir, slug)
+        if latest is None:
+            return refusal([
+                "scope recovery requires the latest ready review round covering the current plan digest",
+                f"no review round artifact for feature slug '{slug}' under {reviews_dir}",
+            ])
+        latest_path, round_no = latest
+        ready, readiness_reason = evaluate_readiness(plan_path, plans_dir, reviews_dir)
+        if not ready:
+            return refusal([
+                "scope recovery requires the latest ready review round covering the current plan digest",
+                f"review evidence changed or not ready: {readiness_reason}",
+            ])
+
+        # (6) Replacement paths: the structured Files: declaration only,
+        # canonicalized through the create boundary's path policy.
+        section = self._plan_task_section(plan_text, task_id)
+        declared, parse_problem = self._plan_declared_files(section) if section is not None else (None, None)
+        if section is None or declared is None:
+            return refusal([f"scope recovery found no Files: declaration in the plan section of task '{task_id}'"])
+        if parse_problem:
+            return refusal([f"scope recovery refused a declaration entry that fails the Files: entry grammar: {parse_problem}"])
+        if not declared:
+            return refusal([f"scope recovery refused an empty replacement path set: the Files: declaration of task '{task_id}' has no entries"])
+        replacement_paths: list[str] = []
+        seen_paths: set[str] = set()
+        for entry in declared:
+            try:
+                canonical = _safe_relative_path(self.repo_root, str(entry))
+            except ValueError as exc:
+                return refusal([f"scope recovery refused a declaration entry that fails canonicalization: {entry}: {exc}"])
+            if canonical in seen_paths:
+                return refusal([f"scope recovery refused a duplicate canonical allowed path after alias resolution: {entry} -> {canonical}"])
+            seen_paths.add(canonical)
+            replacement_paths.append(canonical)
+
+        # Evidence-coherence re-verification before the receipt is written:
+        # the round is re-resolved and the on-disk bytes re-hashed, refusing
+        # by name on disagreement with the evaluated round and digest.
+        reverified_round = latest_review_round(reviews_dir, slug)
+        try:
+            reverified_digest = hashlib.sha256(plan_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            return refusal([f"plan file became unreadable before the receipt was written: {exc}"])
+        if reverified_round != (latest_path, round_no) or reverified_digest != plan_digest:
+            return refusal([
+                "scope recovery refused: the review evidence identity changed during the recovery",
+                "the re-resolved latest round or the re-hashed plan bytes disagree with the evaluated round and digest",
+            ])
+
+        # The ONE locked write carrying the whole closed mutation set.
+        new_generation = int(manifest.get("generation", 0)) + 1
+        new_token = uuid.uuid4().hex
+        prior_scope = [str(path) for path in (task.get("allowed_paths") or ())]
+        manifest["generation"] = new_generation
+        manifest["claims"][task_id] = {**claim, "token": new_token, "generation": new_generation}
+        intent["successor"]["claim_token"] = new_token
+        intent["successor"]["generation"] = new_generation
+        intent["outcome_action"]["claim_token"] = new_token
+        intent["outcome_action"]["generation"] = new_generation
+        if isinstance(intent.get("idempotency_key"), str):
+            intent["outcome_action"]["idempotency_key"] = intent["idempotency_key"]
+        intent["prelaunch_binding"]["claim_token"] = new_token
+        intent["prelaunch_binding"]["generation"] = new_generation
+        task["allowed_paths"] = replacement_paths
+        manifest["evidence_contract_digest"] = capabilities.evidence_contract_digest(manifest["tasks"])
+        manifest.setdefault("history", []).append({
+            "event": SCOPE_RECOVERY_EVENT,
+            "task_id": task_id,
+            "token": str(token),
+            "generation": generation,
+            "plan_digest": plan_digest,
+            "review": {"artifact": str(latest_path), "round": round_no, "source_digest": plan_digest},
+            "prior_scope": prior_scope,
+            "replacement_scope": list(replacement_paths),
+            "outcome": "recovered",
+            "rotated": {"claim_token": new_token, "generation": new_generation},
+        })
+        failure = self._persist_recovery_transition(manifest, "recover-task-scope")
+        if failure is not None:
+            return _outcome(
+                "blocked",
+                "precondition-unverified",
+                [failure],
+                "repository-task",
+                identity,
+                claim_generation,
+                "preserve-and-reconcile",
+            )
+        return _outcome(
+            "success",
+            "scope-recovered",
+            [
+                f"task={task_id}",
+                f"generation={new_generation}",
+                "claim identity and every handoff-intent identity carrier rotated; owner and launch id preserved",
+                "allowed paths replaced from the structured Files: declaration and evidence_contract_digest recomputed",
+                "scope-recovery receipt recorded naming the prior claim identity, plan digest, review evidence, and both scopes",
+            ],
+            "repository-task",
+            identity,
+            new_generation,
+            "continue-parent",
+            actions=[dict(intent["outcome_action"])],
+            recovered_task=task_id,
+            recovered_generation=new_generation,
+        )
+
+    @staticmethod
+    def _identity_reservations_locked(manifest: Mapping[str, Any], task_ids: Sequence[str]) -> list[str]:
+        """Evidence lines for launch reservations held on the named tasks.
+
+        Caller holds the manifest lock; read-only. The poisoned-shape leg
+        clears only never-launched residue, so any surviving reservation
+        keyed to one of its tasks is a live obstruction named in the refusal.
+        """
+
+        wanted = set(task_ids)
+        lines: list[str] = []
+        reservations = manifest.get("capacity", {}).get("reservations", {})
+        if isinstance(reservations, Mapping):
+            for key, reservation in reservations.items():
+                if isinstance(reservation, Mapping) and reservation.get("task_id") in wanted:
+                    lines.append(f"launch reservation '{key}' on task '{reservation.get('task_id')}'")
+        return lines
+
+    @staticmethod
+    def _prepared_intent_disagreement_lines(manifest: Mapping[str, Any], task_id: str) -> list[str]:
+        """Name why the claimed task's prepared handoff intent does not admit.
+
+        The residue refusal's disagreement evidence, derived from the same
+        checks ``_prepared_handoff_successor`` applies: the intent's state,
+        a recorded launch receipt (consumed binding), a consumed prelaunch
+        binding, a missing intent record, or the exact disagreeing successor
+        identity fields. A task without a live claimed claim contributes no
+        line.
+        """
+
+        claim = manifest.get("claims", {}).get(task_id)
+        if not isinstance(claim, Mapping) or claim.get("state") != "claimed":
+            return []
+        intent_key = claim.get("handoff_intent_key")
+        intents = manifest.get("handoff_intents")
+        intent = intents.get(intent_key) if isinstance(intent_key, str) and isinstance(intents, Mapping) else None
+        if not isinstance(intent, Mapping):
+            if intent_key:
+                return [f"the live claimed task '{task_id}' carries handoff intent key '{intent_key}' whose intent record is missing"]
+            return []
+        if intent.get("state") != "prepared":
+            return [f"the live claimed task '{task_id}' carries handoff intent '{intent_key}' in state '{intent.get('state')}', not prepared"]
+        disagreement: list[str] = []
+        if intent.get("launch_receipt") is not None:
+            disagreement.append(f"the prepared handoff intent '{intent_key}' already carries a launch receipt (consumed binding)")
+        binding = intent.get("prelaunch_binding")
+        if isinstance(binding, Mapping) and binding.get("consumed") is True:
+            disagreement.append(f"the prepared handoff intent '{intent_key}' carries a consumed prelaunch binding")
+        successor = intent.get("successor")
+        if isinstance(successor, Mapping):
+            mismatched = [
+                field
+                for field, claim_field in (
+                    ("task_id", "task_id"),
+                    ("claim_token", "token"),
+                    ("generation", "generation"),
+                    ("claim_owner_id", "claim_owner_id"),
+                    ("launch_id", "launch_id"),
+                )
+                if successor.get(field) != claim.get(claim_field)
+            ]
+            if mismatched:
+                disagreement.append(
+                    f"the prepared handoff intent '{intent_key}' successor identity disagrees with the live claim "
+                    f"on {', '.join(mismatched)}"
+                )
+        return disagreement
+
+    def _residue_refusal_outcome(
+        self,
+        identity: str,
+        generation: int,
+        conditions: list[str],
+        enrichment: list[str],
+    ) -> dict[str, Any]:
+        """The closed-residue refusal: blocked before any binding persists."""
+
+        return _outcome(
+            "blocked",
+            "precondition-unverified",
+            [
+                "recover-run-identity refused before any binding was persisted: the manifest carries residue "
+                "the migration does not clear",
+                *conditions,
+                *enrichment,
+            ],
+            "repository-task",
+            identity,
+            generation,
+            "preserve-and-reconcile",
         )
 
     def _retire_recovered_workers(
@@ -8220,6 +11000,12 @@ class RuntimeDriver:
         outcome = _outcome("success", "interruption-reconciled", ["fresh provider inventory proved no owned worker remains", "matching launch reservation released", "worktree contents preserved for path-scoped task commit"], "repository-task", f"{task_id}:reconcile-interruption", generation, "continue-parent", task_id=task_id, idempotency_key=key)
         receipts[key] = {"task_id": task_id, "claim_token": claim_token, "generation": generation, "outcome": outcome}
         manifest.setdefault("history", []).append({"event": "interruption-reconciled", "task_id": task_id, "generation": generation, "idempotency_key": key})
+        # The resume and continue paths delegate here with evidence-carrying
+        # drivers, so a successful resume records the supplied evidence at this
+        # reconciliation save (the direct reconcile-interruption operation is
+        # constructed without evidence and stamps nothing; the refusal save
+        # above stays unstamped).
+        self._stamp_approval_evidence(manifest)
         failure = self._persist_recovery_transition(manifest, "reconcile-interruption")
         if failure is not None:
             return _outcome("blocked", "recovery-postvalidation-failed", [failure], "repository-task", f"{task_id}:reconcile-interruption", generation, "preserve-and-reconcile", resume_allowed=False)
@@ -8426,17 +11212,31 @@ class RuntimeDriver:
 def selftest() -> None:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "runtime_state.json"
-        create_manifest(path, "selftest", [{"id": "task-1", "number": 1, "status": "pending"}])
+        # The selftest's own run seeds its runtime id at the create boundary,
+        # so the later claim passes the shared claim-boundary admission gate.
+        create_manifest(path, "selftest", [{"id": "task-1", "number": 1, "status": "pending"}], runtime_id="codex")
         driver = RuntimeDriver(path, plan_slug="selftest", repo_root=directory, commit_lookup=lambda _commit: True)
         claim = driver.claim_next_task()
         assert claim["claimed"]
+        state = load_manifest(path)
+        launch_id = state["claims"][claim["task_id"]]["launch_id"]
+        reservation_id = f"{claim['task_id']}:{claim['generation']}:{launch_id}"
+        state["capacity"]["reservations"][reservation_id] = {
+            "task_id": claim["task_id"],
+            "claim_token": claim["token"],
+            "generation": claim["generation"],
+            "launch_id": launch_id,
+            "reserved_at": 1.0,
+        }
+        _safe_write_json(path, state)
         result = driver.record_worker_checkpoint({"status": "success", "reason_code": "completed", "evidence": ["selftest"], "action_scope": "repository-task", "checkpoint_identity": "task-1:worker", "generation": claim["generation"], "claim_token": claim["token"]})
         assert result["state"] == "done-pending"
         done = driver.record_done({"status": "success", "checkpoint_identity": "task-1:done", "task_id": "task-1", "generation": claim["generation"], "claim_token": claim["token"], "action_scope": "done-handoff", "evidence": ["selftest"], "commit_identity": "selftest-commit", "checkbox": True, "clean_state": True, "log_evidence": ["selftest-log"]})
         assert done["status"] == "success"
+        assert reservation_id not in load_manifest(path)["capacity"]["reservations"]
         archived_plan = Path(directory) / "docs/history/plans/completed/selftest.md"
         archived_plan.parent.mkdir(parents=True, exist_ok=True)
-        archived_plan.write_text("# selftest plan\n\n- [x] task-1\n", encoding="utf-8")
+        archived_plan.write_text("# selftest plan\n\n### Task 1: selftest\n\n- [x] task-1\n", encoding="utf-8")
         # Staged terminal protocol: the final stage refuses without a
         # conforming pre-archive gate receipt, so the selftest seeds one with
         # the same shape as the suite's seed_archive_gate helper (declared
@@ -8458,14 +11258,21 @@ def selftest() -> None:
     print("execute-plan runtime selftest: durable claim, checkpoint, and done boundary passed")
 
 
-def _operation_create(args: argparse.Namespace, payload: Mapping[str, Any]) -> dict[str, Any]:
+def _operation_create(
+    args: argparse.Namespace,
+    payload: Mapping[str, Any],
+    approval_receipt: Path | str | None = None,
+    runtime_id: str | None = None,
+) -> dict[str, Any]:
     """Seed the machine manifest from a plan task list.
 
     This is the only documented path that translates plan checkboxes into
     machine manifest state: it wraps ``create_manifest`` (the same seeding
     routine ``--selftest`` uses), validates every task's allowed-path entries
     against the same fail-closed path policy the launch envelope enforces,
-    and refuses to overwrite an existing manifest.
+    and refuses to overwrite an existing manifest. Evidence the CLI boundary
+    validated (the absolute receipt path and the runtime id) seeds the same
+    locked create write.
     """
 
     if args.manifest is None:
@@ -8492,8 +11299,16 @@ def _operation_create(args: argparse.Namespace, payload: Mapping[str, Any]) -> d
             not isinstance(tasks, Mapping) and not isinstance(task.get("id"), str)
         ):
             raise ValueError("create operation tasks must be mappings with a string id")
-        for entry in task.get("allowed_paths", task.get("files", ())):
+        declared_paths = task.get("allowed_paths", task.get("files", ()))
+        for entry in declared_paths:
             _safe_relative_path(repo_root, str(entry))
+        if not declared_paths:
+            raise ValueError(
+                f"create operation task {task.get('id', '<mapping-key>')} has an empty allowed-paths list; "
+                "the launch envelope's worker-role contract refuses such a task under evidence enforcement, "
+                "so the run would wedge at the first continue. Verification-only tasks must declare the file "
+                "their verification commands execute as their allowed path (the gates read it; no one edits it)."
+            )
         criteria = task.get("required_criteria")
         commands = task.get("verification_commands")
         if not isinstance(criteria, list) or not criteria or not isinstance(commands, list) or not commands:
@@ -8509,7 +11324,7 @@ def _operation_create(args: argparse.Namespace, payload: Mapping[str, Any]) -> d
         # Seeding canonicalizes: raw Files: entries persist as canonical
         # allowed_paths with persisted document ordinals; within-task
         # canonical duplicates are rejected here.
-        manifest = create_manifest(manifest_path, plan_slug, tasks, repo_root=repo_root)
+        manifest = create_manifest(manifest_path, plan_slug, tasks, repo_root=repo_root, approval_receipt=approval_receipt, runtime_id=runtime_id)
         manifest["evidence_enforcement"] = True
         if args.owner:
             manifest["owner"] = args.owner
@@ -8539,8 +11354,19 @@ def _operation_readiness(args: argparse.Namespace) -> dict[str, Any]:
     return driver.readiness(args.plan)
 
 
-def _operation_reclaim(args: argparse.Namespace, adapter: Any | None = None) -> dict[str, Any]:
-    """Lease-gated claim reclaim using the configured adapter inventory port."""
+def _operation_reclaim(
+    args: argparse.Namespace,
+    adapter: Any | None = None,
+    approval_receipt: Path | str | None = None,
+    runtime_id: str | None = None,
+) -> dict[str, Any]:
+    """Lease-gated claim reclaim using the configured adapter inventory port.
+
+    The CLI boundary validated the supplied evidence (the shared receipt
+    loader) and resolves it to an absolute path; the reclaim threads it into
+    the driver so the rotation save records it in the same locked transition,
+    and a refused reclaim persists nothing.
+    """
 
     driver = RuntimeDriver(
         args.manifest,
@@ -8549,6 +11375,8 @@ def _operation_reclaim(args: argparse.Namespace, adapter: Any | None = None) -> 
         owner=args.owner,
         repo_root=args.repo_root,
         persist_construction=False,
+        approval_receipt=approval_receipt,
+        runtime_id=runtime_id,
     )
     return driver.reclaim(args.task_id)
 
@@ -8622,6 +11450,102 @@ def _operation_recover_evidence_contract(args: argparse.Namespace, payload: Mapp
         persist_construction=False,
     )
     return driver.recover_evidence_contract(task_id, str(token), generation, corrected_contract)
+
+
+def _operation_recover_run_identity(args: argparse.Namespace, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Operator-invoked legacy-run identity migration (requires a JSON payload): runs with the ``_operation_recover_done_pending`` construction contract -- the driver is constructed with ``persist_construction=False`` and no adapter, because the migration performs no adapter I/O and the locked recovery transition is the operation's single manifest write. The payload carries the target repository root, the canonical registered runtime id, the task id bound to the derived next incomplete task, the manifest generation, the operator token (attested on a claim-less manifest, exact-match against a live claim), and the optional approval receipt path whose recorded runtime must pair with the runtime id."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("recover-run-identity operation requires a JSON object payload")
+    task_id = str(payload.get("task_id") or "")
+    runtime_id = payload.get("runtime_id")
+    repo_root = payload.get("repo_root")
+    generation = payload.get("generation")
+    token = payload.get("token")
+    receipt_path = payload.get("receipt_path")
+    if not task_id.strip():
+        raise ValueError("recover-run-identity payload requires a non-empty 'task_id'")
+    if not isinstance(runtime_id, str) or not runtime_id.strip():
+        raise ValueError("recover-run-identity payload requires a non-empty 'runtime_id'")
+    if not isinstance(repo_root, str) or not repo_root.strip():
+        raise ValueError("recover-run-identity payload requires a non-empty 'repo_root'")
+    if isinstance(generation, bool) or not isinstance(generation, int):
+        raise ValueError("recover-run-identity payload requires an integer 'generation'")
+    if token is None or not str(token).strip():
+        raise ValueError("recover-run-identity payload requires a non-empty 'token'")
+    if receipt_path is not None and (not isinstance(receipt_path, str) or not receipt_path.strip()):
+        raise ValueError("recover-run-identity payload requires a non-empty string 'receipt_path' when supplied")
+    driver = RuntimeDriver(
+        args.manifest,
+        plan_slug=args.plan_slug,
+        owner=args.owner,
+        repo_root=args.repo_root,
+        persist_construction=False,
+    )
+    return driver.recover_run_identity(
+        task_id.strip(),
+        runtime_id.strip(),
+        repo_root.strip(),
+        generation,
+        str(token),
+        receipt_path=receipt_path.strip() if isinstance(receipt_path, str) else None,
+    )
+
+
+def _operation_recover_task_scope(args: argparse.Namespace, payload: Mapping[str, Any], adapter: Any | None = None) -> dict[str, Any]:
+    """Operator-invoked reviewed scope recovery (requires a JSON payload): runs with the ``_operation_reclaim`` construction contract -- the driver is constructed with ``persist_construction=False`` and the resolved runtime adapter threaded in, so refusals are byte-identical across the whole CLI invocation and the locked recovery transition is the operation's single manifest write. The payload carries ONLY the exact prior claim identity (task id, prior claim token, prior claim generation): the plan digest, the review evidence identity, the fresh preflight recomputation, and the replacement paths are derived from repository state, and no inventory or review evidence surface is caller-suppliable."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("recover-task-scope operation requires a JSON object payload")
+    task_id = str(payload.get("task_id") or "")
+    token = payload.get("token")
+    generation = payload.get("generation")
+    if not task_id.strip():
+        raise ValueError("recover-task-scope payload requires a non-empty 'task_id'")
+    if token is None or not str(token).strip():
+        raise ValueError("recover-task-scope payload requires a non-empty 'token'")
+    if isinstance(generation, bool) or not isinstance(generation, int):
+        raise ValueError("recover-task-scope payload requires an integer 'generation'")
+    driver = RuntimeDriver(
+        args.manifest,
+        plan_slug=args.plan_slug,
+        adapter=adapter,
+        owner=args.owner,
+        repo_root=args.repo_root,
+        persist_construction=False,
+    )
+    return driver.recover_task_scope(task_id.strip(), str(token), generation)
+
+
+def _operation_recover_prelaunch_contract(args: argparse.Namespace, payload: Mapping[str, Any], adapter: Any | None = None) -> dict[str, Any]:
+    """Operator-invoked prelaunch contract recovery (requires a JSON payload): runs with the ``_operation_reclaim`` construction contract -- the driver is constructed with ``persist_construction=False`` and the resolved runtime adapter threaded in, so refusals are byte-identical across the whole CLI invocation and the locked recovery transition is the operation's single manifest write. The payload carries the task id, the old claim token, the old claim generation, the corrected contract object (exactly ``required_criteria`` and ``verification_commands``), and the corrected plan path (a payload field only; the CLI plan-path argument gate does not extend to this operation)."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("recover-prelaunch-contract operation requires a JSON object payload")
+    task_id = str(payload.get("task_id") or "")
+    token = payload.get("token")
+    generation = payload.get("generation")
+    corrected_contract = payload.get("corrected_contract")
+    plan_path = payload.get("plan_path")
+    if not task_id.strip():
+        raise ValueError("recover-prelaunch-contract payload requires a non-empty 'task_id'")
+    if token is None or not str(token).strip():
+        raise ValueError("recover-prelaunch-contract payload requires a non-empty 'token'")
+    if isinstance(generation, bool) or not isinstance(generation, int):
+        raise ValueError("recover-prelaunch-contract payload requires an integer 'generation'")
+    if not isinstance(corrected_contract, Mapping):
+        raise ValueError("recover-prelaunch-contract payload requires a 'corrected_contract' object")
+    if plan_path is None or not str(plan_path).strip():
+        raise ValueError("recover-prelaunch-contract payload requires a non-empty 'plan_path'")
+    driver = RuntimeDriver(
+        args.manifest,
+        plan_slug=args.plan_slug,
+        adapter=adapter,
+        owner=args.owner,
+        repo_root=args.repo_root,
+        persist_construction=False,
+    )
+    return driver.recover_prelaunch_contract(task_id.strip(), str(token), generation, corrected_contract, str(plan_path))
 
 
 def _git_commit_matching_reference(repo_root: Path, reference: str) -> bool:
@@ -8927,17 +11851,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--operation", choices=("create", "claim", "verify", "checkpoint", "done", "resume", "continue", "terminal", "precondition", "interrupt", "reconcile-interruption", "reserve-continuation", "worker-start", "recover-handoff", "progress", "readiness", "preflight", "reclaim", "diagnose", "recover-done-pending", "recover-evidence-contract", "watcher-schedule", "watcher-supersede", "watcher-fire") + _PLANS_WATCHER_OPERATIONS)
+    parser.add_argument("--operation", choices=("create", "claim", "verify", "checkpoint", "done", "resume", "continue", "terminal", "precondition", "interrupt", "reconcile-interruption", "reserve-continuation", "worker-start", "recover-handoff", "progress", "readiness", "preflight", "reclaim", "diagnose", "recover-done-pending", "recover-evidence-contract", "recover-evidence-envelope", "recover-prelaunch-contract", "recover-run-identity", "recover-task-scope", "watcher-schedule", "watcher-supersede", "watcher-fire") + _PLANS_WATCHER_OPERATIONS)
     parser.add_argument("--predecessors-file", type=Path, help="predecessors JSON document for the manifest-free precondition operation")
-    parser.add_argument("--input", help="JSON object payload (create, verify, checkpoint, done, interrupt, progress, terminal, recover-done-pending, recover-evidence-contract, and the watcher-* and plans-* operations; verify takes task_id and command_id; plans-watcher-schedule takes the FULL probe report as probe_report, or the payload itself, plus plan_path, plan_slug, and state_path; the classifier reads status, binding, pause_decision, and the binding limit's reset_at_epoch from limits[], so a subset payload classifies unknown and degrades to the report-only supersede)")
+    parser.add_argument("--input", help="JSON object payload (create, verify, checkpoint, done, interrupt, progress, terminal, recover-done-pending, recover-evidence-contract, recover-evidence-envelope, recover-prelaunch-contract, recover-run-identity, recover-task-scope, and the watcher-* and plans-* operations; verify takes task_id and command_id; plans-watcher-schedule takes the FULL probe report as probe_report, or the payload itself, plus plan_path, plan_slug, and state_path; the classifier reads status, binding, pause_decision, and the binding limit's reset_at_epoch from limits[], so a subset payload classifies unknown and degrades to the report-only supersede)")
     parser.add_argument("--plan", help="plan file path for the readiness operation")
     parser.add_argument("--task-id", help="task id for the reclaim operation")
     parser.add_argument("--plan-slug")
     parser.add_argument("--owner")
     parser.add_argument("--repo-root", type=Path)
     parser.add_argument("--runtime")
-    parser.add_argument("--prompt", default="continue execute-plan", help="worker prompt for continue/launch operations")
+    parser.add_argument("--prompt", help="optional worker-role contract JSON for continue/launch operations")
     parser.add_argument("--batch", action="store_true", help="opt the claim or continue operation into the batch implement launch protocol")
+    parser.add_argument("--recovery", action="store_true", help="claim-time only: record recovery_path: true on the claim record (the execute-plan Recovery route)")
     parser.add_argument("--approval-receipt", type=Path, help="auditable activation receipt proving a verified non-interactive host approval policy")
     args = parser.parse_args(argv)
     try:
@@ -8965,17 +11890,31 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--task-id is required for --operation reclaim")
         profile = capabilities.load_profiles().get(capabilities.canonicalize_runtime_id(args.runtime)) if args.runtime else None
         adapter_kwargs = {}
+        approval_receipt_abs = None
+        evidence_runtime_id = None
         if args.approval_receipt is not None:
             receipt = capabilities.load_approval_receipt(args.approval_receipt)
             if args.runtime and capabilities.canonicalize_runtime_id(args.runtime) != receipt["runtime"]:
                 raise ValueError("approval receipt runtime does not match --runtime")
+            approval_receipt_abs = Path(args.approval_receipt).resolve()
             adapter_kwargs["approval_receipt"] = args.approval_receipt
+        if args.runtime:
+            evidence_runtime_id = capabilities.canonicalize_runtime_id(args.runtime)
+        # The approval-evidence operations persist the validated evidence into
+        # their own locked transition saves; every other operation (including
+        # the read-only preflight, readiness, and diagnose) keeps the evidence
+        # validation-only, and the precondition and watcher operations never
+        # touch the manifest at all.
+        if args.operation in ("claim", "continue", "resume", "worker-start"):
+            evidence = {"approval_receipt": approval_receipt_abs, "runtime_id": evidence_runtime_id}
+        else:
+            evidence = {}
         adapter = capabilities.resolve_adapter(args.runtime, args.repo_root or Path.cwd(), **adapter_kwargs) if args.runtime else None
         payload = json.loads(args.input) if args.input else {}
         if args.operation == "create":
             # The manifest does not exist yet: create runs before any driver
             # construction and owns the seeding boundary itself.
-            result = _operation_create(args, payload)
+            result = _operation_create(args, payload, approval_receipt=approval_receipt_abs, runtime_id=evidence_runtime_id)
             print(json.dumps(result, sort_keys=True))
             return 0
         if args.operation == "readiness":
@@ -8987,8 +11926,18 @@ def main(argv: list[str] | None = None) -> int:
             # Read-only pre-launch preflight; the same write-free construction
             # contract as readiness: nothing is persisted, a failing preflight
             # leaves every claim and handoff retryable.
+            manifest_path = args.manifest
+            if manifest_path is not None and not manifest_path.is_absolute():
+                # The preflight read+emit resolution rule starts at the
+                # construction read: a relative --manifest from a foreign
+                # working directory resolves against the driver's repository
+                # root, mirroring the preflight method's own entry
+                # resolution, so the read and the emitted command target the
+                # same resolved file. Other operations keep their existing
+                # manifest resolution.
+                manifest_path = (Path(args.repo_root).resolve() if args.repo_root is not None else Path.cwd().resolve()) / manifest_path
             driver = RuntimeDriver(
-                args.manifest,
+                manifest_path,
                 plan_slug=args.plan_slug,
                 owner=args.owner,
                 repo_root=args.repo_root,
@@ -8999,7 +11948,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.operation == "reclaim":
             # Lease-gated reclaim; _operation_reclaim owns the construction contract.
-            result = _operation_reclaim(args, adapter=adapter)
+            result = _operation_reclaim(args, adapter=adapter, approval_receipt=approval_receipt_abs, runtime_id=evidence_runtime_id)
             print(json.dumps(result, sort_keys=True))
             return 0
         if args.operation == "diagnose":
@@ -9013,12 +11962,43 @@ def main(argv: list[str] | None = None) -> int:
             result = _operation_recover_done_pending(args, payload)
             print(json.dumps(result, sort_keys=True))
             return 0
-        if args.operation == "recover-evidence-contract":
+        if args.operation == "recover-evidence-envelope":
+            result = driver.recover_evidence_envelope(str(payload.get("task_id", "")), str(payload.get("token", "")), int(payload.get("generation", -1)), payload.get("corrected_contract") if isinstance(payload, Mapping) else None)
+        elif args.operation == "recover-evidence-contract":
             # Operator-invoked malformed-contract recovery; the construction
             # contract is _operation_reclaim's (persist_construction=False,
             # resolved adapter threaded in: the inventory witness is a fixture
             # property of the adapter, never a request payload field).
             result = _operation_recover_evidence_contract(args, payload, adapter=adapter)
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        if args.operation == "recover-prelaunch-contract":
+            # Operator-invoked prelaunch contract recovery; the construction
+            # contract is _operation_recover_evidence_contract's
+            # (persist_construction=False, resolved adapter threaded in), so
+            # refusals are byte-identical across the whole CLI invocation and
+            # the locked recovery transition is the operation's single
+            # manifest write.
+            result = _operation_recover_prelaunch_contract(args, payload, adapter=adapter)
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        if args.operation == "recover-run-identity":
+            # Operator-invoked legacy-run identity migration; the construction
+            # contract is _operation_recover_done_pending's
+            # (persist_construction=False, adapter-free: the migration
+            # performs no adapter I/O and the locked recovery transition is
+            # the operation's single manifest write).
+            result = _operation_recover_run_identity(args, payload)
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        if args.operation == "recover-task-scope":
+            # Operator-invoked reviewed scope recovery; the construction
+            # contract is _operation_recover_evidence_contract's
+            # (persist_construction=False, resolved adapter threaded in), so
+            # refusals are byte-identical across the whole CLI invocation and
+            # the locked recovery transition is the operation's single
+            # manifest write.
+            result = _operation_recover_task_scope(args, payload, adapter=adapter)
             print(json.dumps(result, sort_keys=True))
             return 0
         if args.operation == "precondition":
@@ -9061,6 +12041,7 @@ def main(argv: list[str] | None = None) -> int:
             owner=args.owner,
             repo_root=args.repo_root,
             persist_construction=True,
+            **evidence,
         )
         if args.operation == "claim":
             parallel_members = payload.get("parallel_group") if isinstance(payload, Mapping) else None
@@ -9071,7 +12052,7 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("parallel_group claim payload must be a non-empty list of task ids")
                 result = driver.claim_parallel_group(parallel_members)
             else:
-                result = driver.claim_next_task(batch=args.batch)
+                result = driver.claim_next_task(batch=args.batch, recovery=args.recovery)
         elif args.operation == "verify":
             result = driver.capture_verification_evidence(str(payload.get("task_id", "")), str(payload.get("command_id", "")))
         elif args.operation == "checkpoint":

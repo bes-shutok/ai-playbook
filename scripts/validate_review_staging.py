@@ -38,6 +38,7 @@ STAGING_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 ROUND_SUFFIX_RE = re.compile(r"-r(\d+)\.md$", re.IGNORECASE)
+BACKUP_NAME_RE = re.compile(r"\.backup-\d{8}T\d{6}(?:-\d+)?\.md$", re.IGNORECASE)
 MEDIUM_PLUS_VERDICT_RE = re.compile(
     r"(\d+)\s+Medium\+?\s+findings(?:\s+accepted\s+for\s+fix)?",
     re.IGNORECASE,
@@ -604,6 +605,8 @@ def compute_source_digest(source_kind: str, content_or_diff_bytes: bytes) -> str
 def is_staging_review_path(path: Path) -> bool:
     name = path.name
     if not name.endswith(".md"):
+        return False
+    if BACKUP_NAME_RE.search(name):
         return False
     if STAGING_NAME_RE.match(name):
         return True
@@ -5695,6 +5698,12 @@ def _selftest_path_names(_root: Path, check) -> None:
     check(
         "branch-review round name",
         is_staging_review_path(Path("2026-07-17-branch-review-main-r2.md")),
+    )
+    check(
+        "timestamped review backup is not an active staging record",
+        not is_staging_review_path(
+            Path("2026-07-17-plan-review-demo-r2.backup-20260929T102819.md")
+        ),
     )
 
 

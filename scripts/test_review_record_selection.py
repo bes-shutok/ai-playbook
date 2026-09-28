@@ -144,14 +144,14 @@ class SelectionHelperTest(unittest.TestCase):
     def test_select_preserves_uppercase_feature_slug(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             code, payload, err = self.select_slug(
-                Path(directory), "CRM-607-fact-reconcile-worker", DIGEST_A,
+                Path(directory), "PROJ-607-fact-reconcile-worker", DIGEST_A,
                 "--kind", "plan-review"
             )
         self.assertEqual(code, 0, err)
         self.assertEqual(payload["decision"], "new-record")
         self.assertTrue(
             payload["markdown"].endswith(
-                "-plan-review-CRM-607-fact-reconcile-worker-r1.md"
+                "-plan-review-PROJ-607-fact-reconcile-worker-r1.md"
             )
         )
 

@@ -158,6 +158,89 @@ class PlanReadinessFenceBalanceTest(unittest.TestCase):
         rc, out, err = self._run_main(["--pre-round", str(plan)])
         self.assertEqual(rc, 0, (out, err))
 
+    def test_pre_round_declaration_decisions_match_runtime_grammar(self):
+        # The pre-round surface decides every declaration shape exactly as the
+        # hardened runtime parser does (same accept, or the same named
+        # refusal), so a seeded declaration cannot pass one gate and fail the
+        # other. Entries sit immediately after the heading: the runtime block
+        # grammar refuses a blank line before a later entry, and the parity
+        # shapes here must stay inside the one documented grammar.
+        def declaration_plan(files_body: str, review_scope: str) -> str:
+            return (
+                "# P\n\n"
+                "## Assumptions\n\n"
+                "Decision points requiring a grill: none remain.\n\n"
+                "## Tasks\n\n"
+                "### Task 1: Do the thing\n\n"
+                f"{files_body}\n"
+                "- [ ] Write the module. [class: IMPLEMENTATION_REQUIRED]\n"
+                "\n"
+                "## Review Scope\n\n"
+                "**Production code:**\n\n"
+                f"{review_scope}"
+            )
+
+        acceptance = {
+            "plain annotated": (
+                "Files:\n- `src/new.py` *(new)*",
+                "- src/new.py *(new)*\n",
+            ),
+            "elaborated annotated": (
+                "Files:\n- `src/new.py` *(new; this plan)*",
+                "- src/new.py *(new)*\n",
+            ),
+            "indented entries": (
+                "Files:\n  - `src/new.py` *(new)*",
+                "- src/new.py *(new)*\n",
+            ),
+        }
+        for name, (files_body, review_scope) in acceptance.items():
+            plan = self._write_fixture(declaration_plan(files_body, review_scope))
+            rc, out, err = self._run_main(["--pre-round", str(plan)])
+            self.assertEqual(rc, 0, (name, out, err))
+
+        divergence = {
+            "duplicate heading": (
+                "Files:\n- `src/new.py` *(new)*\nFiles:\n- `src/second.py`",
+                "- src/new.py *(new)*\n- src/second.py\n",
+                "duplicate Files: heading",
+            ),
+            "indented opener": (
+                "    Files:\n- `src/new.py` *(new)*",
+                "- src/new.py *(new)*\n",
+                "an indented 'Files:' line is not a block opener",
+            ),
+            "case variant opener": (
+                "files:\n- `src/new.py` *(new)*",
+                "- src/new.py *(new)*\n",
+                "case variant",
+            ),
+            "uppercase case variant opener": (
+                "FILES:\n- `src/new.py` *(new)*",
+                "- src/new.py *(new)*\n",
+                "case variant",
+            ),
+        }
+        for name, (files_body, review_scope, expected_problem) in divergence.items():
+            plan = self._write_fixture(declaration_plan(files_body, review_scope))
+            rc, out, err = self._run_main(["--pre-round", str(plan)])
+            self.assertNotEqual(rc, 0, (name, out, err))
+            self.assertIn("readiness PRE-ROUND FAILED:", err, (name, out, err))
+            self.assertIn(expected_problem, err, (name, out, err))
+
+        # The indented-entry skip is stopped: an indented entry IS collected,
+        # so an indented entry omitted from the Review Scope inventory refuses
+        # with the inventory reason instead of being silently skipped.
+        unlisted_plan = declaration_plan(
+            "Files:\n  - `src/unlisted.py`",
+            "- src/second.py\n",
+        )
+        plan = self._write_fixture(unlisted_plan)
+        rc, out, err = self._run_main(["--pre-round", str(plan)])
+        self.assertNotEqual(rc, 0, (out, err))
+        self.assertIn("src/unlisted.py", err, (out, err))
+        self.assertIn("Review Scope", err, (out, err))
+
 
 # --------------------------------------------------------------------------- #
 # --check-review-name probe: one round pair re-verified against the gate's

@@ -21,6 +21,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -45,6 +46,7 @@ FILING_MIN_CALLS = 50
 ERROR_RANKING_MIN_CALLS = 50
 JUDGMENT_FREE_MIN_RATIO = 0.8
 DEFAULT_TOP_N = 5
+MAX_WINDOW_DAYS = 1_000_000
 RETENTION_KEEP = 8
 
 
@@ -210,7 +212,21 @@ def _token_script_slug(token: str, prefixes: tuple[Path, ...]) -> str | None:
     return None
 
 
-def bash_command_slugs(conn: sqlite3.Connection, prefixes: tuple[Path, ...]) -> tuple[dict[str, str], int]:
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _positive_days(value: str) -> int:
+    days = int(value)
+    if days < 1 or days > MAX_WINDOW_DAYS:
+        raise argparse.ArgumentTypeError(
+            "the day window must be a whole number of days between 1 and"
+            f" {MAX_WINDOW_DAYS:,} (got {value!r})"
+        )
+    return days
+
+
+def bash_command_slugs(conn: sqlite3.Connection, prefixes: tuple[Path, ...], started_after_ms: int | None = None) -> tuple[dict[str, str], int]:
     """Map tool_usage.id to a script slug for Bash rows; count degradations.
 
     The command string is read from the joined tool-call part solely to derive
@@ -220,13 +236,18 @@ def bash_command_slugs(conn: sqlite3.Connection, prefixes: tuple[Path, ...]) -> 
     pinned absent-data arms are swallowed, and the rider's fail-open wrapping
     reports the error without failing the maintenance turn.
     """
-    rows = conn.execute(
+    tool_query = (
         "SELECT tu.id, p.data FROM tool_usage tu LEFT JOIN part p"
         " ON p.session_id = tu.session_id"
         " AND json_extract(p.data, '$.type') = 'tool'"
         " AND json_extract(p.data, '$.callID') = tu.tool_call_id"
         " WHERE tu.tool_name = 'Bash'"
-    ).fetchall()
+    )
+    params: list = []
+    if started_after_ms is not None:
+        tool_query += " AND tu.started_at >= ?"
+        params.append(started_after_ms)
+    rows = conn.execute(tool_query, params).fetchall()
     slugs: dict[str, str] = {}
     degraded = 0
     for row_id, part_data in rows:
@@ -269,7 +290,7 @@ def _p95_nearest_rank(sorted_values: list[float]) -> float:
     return sorted_values[rank - 1]
 
 
-def collect_day_summaries(conn: sqlite3.Connection, report_dates: set[str] | None = None) -> list[dict]:
+def collect_day_summaries(conn: sqlite3.Connection, report_dates: set[str] | None = None, started_after_ms: int | None = None) -> list[dict]:
     """Per-day token summaries over turns that joined at least one tool row.
 
     A turn's tokens are allocated evenly across its joined tool rows for the
@@ -291,9 +312,15 @@ def collect_day_summaries(conn: sqlite3.Connection, report_dates: set[str] | Non
         date: {"tokens_in": 0, "tokens_out": 0, "total": 0, "single": 0}
         for date in (report_dates or ())
     }
-    turns = conn.execute(
-        "SELECT session_id, turn_id, started_at, input_tokens, output_tokens FROM turn_usage"
-    ).fetchall()
+    turn_query = (
+        "SELECT session_id, turn_id, started_at, input_tokens, output_tokens"
+        " FROM turn_usage"
+    )
+    turn_params: list = []
+    if started_after_ms is not None:
+        turn_query += " WHERE started_at IS NOT NULL AND started_at >= ?"
+        turn_params.append(started_after_ms)
+    turns = conn.execute(turn_query, turn_params).fetchall()
     for session_id, turn_id, started_at, input_tokens, output_tokens in turns:
         if started_at is None:
             continue
@@ -324,7 +351,7 @@ def collect_day_summaries(conn: sqlite3.Connection, report_dates: set[str] | Non
     return summaries
 
 
-def collect_day_rows(conn: sqlite3.Connection, repo_root: Path) -> tuple[list[dict], int]:
+def collect_day_rows(conn: sqlite3.Connection, repo_root: Path, started_after_ms: int | None = None) -> tuple[list[dict], int]:
     """Aggregate tool_usage into one row per (local date, tool, script slug).
 
     Durations come from the store column when positive; otherwise from the
@@ -336,7 +363,7 @@ def collect_day_rows(conn: sqlite3.Connection, repo_root: Path) -> tuple[list[di
     """
     require_tables(conn, ("part", "turn_usage"))
     prefixes = _sanctioned_prefixes(repo_root)
-    slugs, degraded = bash_command_slugs(conn, prefixes)
+    slugs, degraded = bash_command_slugs(conn, prefixes, started_after_ms)
     turn_tokens: dict[tuple[str, str], tuple[int, int]] = {}
     for session_id, turn_id, input_tokens, output_tokens in conn.execute(
         "SELECT session_id, turn_id, input_tokens, output_tokens FROM turn_usage"
@@ -352,10 +379,15 @@ def collect_day_rows(conn: sqlite3.Connection, repo_root: Path) -> tuple[list[di
             " GROUP BY session_id, turn_id"
         )
     }
-    rows = conn.execute(
+    row_query = (
         "SELECT id, session_id, turn_id, started_at, completed_at, duration_ms,"
         " tool_name, status FROM tool_usage"
-    ).fetchall()
+    )
+    row_params: list = []
+    if started_after_ms is not None:
+        row_query += " WHERE started_at IS NOT NULL AND started_at >= ?"
+        row_params.append(started_after_ms)
+    rows = conn.execute(row_query, row_params).fetchall()
     buckets: dict[tuple[str, str, str | None], dict] = {}
     for row_id, session_id, turn_id, started_at, completed_at, duration_ms, tool_name, status in rows:
         if started_at is None:
@@ -449,7 +481,7 @@ def window_rows(day_rows: list[dict]) -> tuple[dict, int]:
     return window, days_count
 
 
-def _predicates(tool: str, entry: dict, days_count: int) -> dict:
+def _predicates(tool: str, entry: dict) -> dict:
     """Mechanical scriptable predicates for one window row.
 
     deterministic: attributed script slug, or a non-Bash runtime tool whose
@@ -503,7 +535,7 @@ def build_rankings(day_rows: list[dict], top_n: int) -> dict:
         entry = dict(entry)
         entry["tool"] = tool
         entry["slug"] = slug
-        entry["predicates"] = _predicates(tool, entry, days_count)
+        entry["predicates"] = _predicates(tool, entry)
         entry["scriptable"] = all(
             entry["predicates"][name]
             for name in ("deterministic", "frequent", "judgment_free")
@@ -852,8 +884,13 @@ def run_collection(args: argparse.Namespace) -> int:
     conn = connect_read_only(store)
     try:
         require_tables(conn, ("tool_usage", "turn_usage", "part"), columns=PINNED_COLUMNS)
-        day_rows, degraded = collect_day_rows(conn, repo_root)
-        day_summaries = collect_day_summaries(conn, report_dates={row["date"] for row in day_rows})
+        started_after_ms = None if args.days is None else _now_ms() - args.days * 86_400_000
+        day_rows, degraded = collect_day_rows(conn, repo_root, started_after_ms)
+        day_summaries = collect_day_summaries(
+            conn,
+            report_dates={row["date"] for row in day_rows},
+            started_after_ms=started_after_ms,
+        )
     except StoreShapeError as exc:
         print(f"tool runtime stats: store at {store} is not a session store ({exc}); nothing collected")
         return 0
@@ -896,8 +933,14 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--top", type=int, default=DEFAULT_TOP_N, help="top-N ranking size")
     parser = argparse.ArgumentParser(prog="tool_runtime_stats", description=__doc__, parents=[common])
     sub = parser.add_subparsers(dest="command", required=False)
-    parser.set_defaults(command="run")
     run = sub.add_parser("run", parents=[common], help="collect and report in one pass (default)")
+    run.add_argument(
+        "--days",
+        type=_positive_days,
+        default=None,
+        help="optional day window: aggregate only rows started within the last N days (default: all time)",
+    )
+    parser.set_defaults(command="run", days=None)
     return parser
 
 

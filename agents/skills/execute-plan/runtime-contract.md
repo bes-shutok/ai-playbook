@@ -23,6 +23,27 @@ must not ask conversational permission or call a user-question facility for
 them. Push, deploy, merge, external communication, access changes, and any
 network action remain gated and must be returned as `blocked`.
 
+Before launch reservation, the driver constructs a validated structured role
+contract from the active claim and manifest task. It binds `role:
+single-task-worker`, task id, claim token and generation, the exact task body,
+canonical allowed paths, declared validation commands and criteria, worker
+evidence ownership, worker-log destination, and retained parent obligations.
+Only after validation does the driver serialize that contract as provider
+prompt text. Caller prose is not an identity source: omitted prose uses the
+driver-built contract, prose that attempts to replace contract values cannot
+change them, and an orchestrator prompt or structured role/scope mismatch
+refuses before adapter invocation. The adapter requires the same task role and
+scope in both the task envelope and serialized contract and launches nothing
+when fields are missing or disagree.
+
+Every task checklist action is classified as `worker` or `parent` before
+claim creation. Unknown or incomplete ownership refuses seeding. Worker
+criteria alone enter `required_criteria` and command coverage. A parent-owned
+`Commit:` action remains in `parent_obligations` with its exact planned commit
+identity; the parent done receipt must echo that identity in `planned_commit`
+and independently pass the normal done boundary. Excluding a parent action
+from worker evidence never removes the parent's completion duty.
+
 Plan authoring stays on the neutral side of this boundary: a plan task names
 only observable commands, paths, test identities, and acceptance criteria,
 with evidence and validation criteria the selected adapter can verify. The
@@ -146,6 +167,22 @@ locally:
 
 ### Incident obligations
 
+Evidence-contract recovery of a malformed worker result also settles the
+successor handoff named by that exact claim. Under the same manifest lock,
+fresh matching provider-terminal evidence moves only that intent through
+`launching` or `launched` to `ambiguous` and then `failed`, records a receipt
+binding the intent, predecessor checkpoint and claim, successor claim and
+launch, and provider terminal receipt/session, and requeues the task. Replays
+preserve the failed intent and receipt. Startup may ignore a closed historical
+claim only when exactly one recovery receipt binds the retired task, token,
+and generation to the exact handoff successor, and the task has a current
+claim at a strictly newer generation; the old launch record remains audit
+evidence. The predecessor token, owner, generation, and checkpoint must match
+the durable predecessor claim and checkpoint record, and the intent id must be
+non-empty and unique. Terminal proof must include a non-empty provider receipt
+id. Mismatched identities, stale or absent
+terminal proof, and live workers leave the manifest unchanged.
+
 Four incident obligations bind every adapter profile. Each names its
 refusal witnesses and its recovery path. A profile that cannot implement
 an obligation reports the affected capability as degraded or unsupported
@@ -167,7 +204,12 @@ through the registry with its fallback; it never silently skips one.
    bounded liveness window) is not counted live or free; it is routed to
    the timeout hook and refused as launch capacity. Recovery: reconcile
    the worker registry against the host's live session and process
-   state, then re-run the readiness decision.
+   state, then re-run the readiness decision. The inventory's process-row
+   scan is quote-tolerant (quote characters in a process row's command
+   text read as literal characters and prompt text is never parsed as
+   shell), and its one documented limitation stays fail-closed: a prompt
+   argument containing an embedded newline splits the rendered process
+   row and the snapshot reports unavailable instead of guessing.
 
 2. **Atomic handoff.** Advancing from one completed task to the next is
    an atomic handoff: one indivisible transition rotates the owner
@@ -244,15 +286,25 @@ status `contract-violation` before the closed-set check.
 Tasks may declare immutable `required_criteria` and `verification_commands`
 when the manifest is created. The manifest stores a canonical
 `evidence_contract_digest` over those fields and each task's path allowlist;
-checkboxes and task status are excluded. The driver runs a declared command
+checkboxes and task status are excluded. The manifest also stores a deterministic,
+immutable per-task mapping from compact criterion IDs (`c001`, `c002`, ...) to
+the full criteria, and the mapping is covered by that digest. Create checks the
+UTF-8 size of every receipt item and the complete envelope before writing; it
+refuses an unrepresentable contract without truncating criterion text, and
+enforces the receipt's 100-criterion count limit before creation. Manifest
+validation accepts both the current digest shape and the prior shape that
+predates compact criterion IDs, preserving in-progress runs across upgrades;
+new manifests and corrected recovery contracts use the current shape. The driver runs a declared command
 itself with argv execution in the repository root, records the exit status,
 output digest, selected test identity, baseline and changed committed paths,
-the declared allowlist, a digest of allowlisted source contents, covered criteria, and the active task, token,
+the declared allowlist, a digest of allowlisted source contents, compact criterion IDs, and the active task, token,
 generation, and launch identity. Receipts are persisted under the manifest
 lock. A successful worker result for a task with required criteria is
 accepted only when matching driver captured receipts cover every required
-criterion and match the active claim, evidence contract digest, and current
-allowlisted source snapshot. The done boundary also requires the task commit's
+criterion ID, resolve it through the digest-bound mapping, and match the active
+claim, evidence contract digest, and current allowlisted source snapshot. The
+full criteria remain in the task contract; receipts never duplicate their text.
+Recovery revalidates the mapping before any claim, handoff, or manifest mutation. The done boundary also requires the task commit's
 allowlisted source snapshot to match the captured evidence. Uncommitted
 worktree paths are diagnostic only; the done boundary checks the task's own
 commit path set against its allowlist.
@@ -264,14 +316,29 @@ path. The `verify` CLI operation accepts a task ID and declared command ID and
 asks the driver to capture and persist the receipt for the active claim.
 
 Pre-seed consistency gate. The pre-seed consistency gate refuses a
-verifier that depends on a later task's artifact and refuses two or more
-tasks declaring identical non-empty verification_commands lists. A command
-argv token is canonicalized through the same fail-closed path policy used
-at launch and matched against strictly later tasks' `allowed_paths` entries
-by exact equality only, never substring containment; the clone signature is
+verifier that depends on a later task's artifact, refuses two or more
+tasks declaring identical non-empty verification_commands lists, and
+refuses a non-path token embedding a strictly later task's allowed
+path. A command argv token is classified through the same fail-closed
+path policy used at launch: a pure-path token (no whitespace or quote
+characters, canonicalizing cleanly) keeps exact canonical equality
+against strictly later tasks' `allowed_paths` entries as its whole-token
+matching basis, while a non-path token embedding a strictly later
+task's allowed path under the tail-boundary rule is likewise refused,
+with the token elided in durable evidence; regex over payload strings
+stays forbidden. The clone signature is
 deep equality of the whole `verification_commands` list, so identical argv
 carrying per-task-distinct embedded criteria is accepted, as are references
-to same-or-earlier tasks' artifacts. Refusals raise before the manifest is
+to same-or-earlier tasks' artifacts. Shape 3 is the literal embedded shape
+only: a shell body constructing the path at runtime through variables,
+encoding, or glob and selection-tool forms, a case-spelled literal on a
+case-insensitive filesystem, and trailing-dot or backslash-separator
+spellings on Windows-family filesystems evade the pre-seed gate by
+design and still fail closed at the task boundary, with recovery as the
+exit. A false-positive refusal is remedied by rewording the command or
+moving the check to the task that owns the artifact; declaring the path
+on the earlier task to trip the carve-out grants write scope and
+creates cross-task overlap. Refusals raise before the manifest is
 written, naming the task id and the offending entry. The plan's global
 validation block is never seeded into tasks and remains the whole-plan gate
 checked at the done boundary.
@@ -310,6 +377,120 @@ appended. A late receipt from the replaced worker fences read-only as
 `stale-claim` with no durable mutation, for success and non-success
 receipts alike. Manual manifest edits stay prohibited. An invalid-choice argparse error for recover-evidence-contract means the vendored driver predates the operation: re-sync the driver; the manifest is untouched and manual edits remain prohibited.
 
+Evidence envelope projection and recovery. The launch preflight projects each task's worst-case evidence receipt envelope (per-item UTF-8 byte lengths, item counts, and the whole-envelope JSON size) against the same bounded limits the receipt validator enforces, and refuses the launch before any claim state changes with the task, field, measured size, limit, and both correction paths (narrow the task's allowed_paths or split the verifier, or recover the launched claim). The projection is conservative: worker-produced path lists are projected at the full allowed_paths scope. The post-launch sanctioned exit is the driver's `recover-evidence-envelope` operation, which mirrors the recovery-transition contract: the `evidence-envelope-recovery` replay fence FIRST (its task id, token, and generation receipt names the replayed request), the launched hold, the exact live claim token and generation, and a corrected contract that is non-empty and re-projects within the bounded schema limits. One locked save: the generation is bumped once, the corrected contract replaces the task's evidence fields with the digest and criteria map recomputed, the old claim closes (a late receipt from the replaced worker fences read-only as `stale-claim`), the task returns to `pending`, and one fenced `evidence-envelope-recovery` history receipt is appended preserving the old token and generation. An invalid-choice argparse error for recover-evidence-envelope means the vendored driver predates the operation: re-sync the driver; the manifest is untouched and manual edits remain prohibited.
+
+Run-identity migration. A manifest seeded by an older driver can record no `runtime` id: the read-only preflight correctly emits no command for it (the canonical command must pin the recorded runtime), a plain claim would stamp the runtime without activation evidence, re-creating loses the run, and hand-editing the manifest bytes stays prohibited. The sanctioned exit is the driver's `recover-run-identity` operation, which validates its preconditions in order and refuses with evidence, leaving the manifest byte-identical, unless every one holds: the replay fence first (the manifest must not already record a non-empty `runtime` field; the recorded id is named in the refusal, and the fence is evaluated before any host-state precondition), the payload `task_id` equal to the derived next incomplete task (both ids named on a mismatch; no-provable-next-task when none exists), a canonical registered payload `runtime_id` (an alias or unknown id is refused with the canonical form named), a payload `repo_root` resolving to the driver's repository root, a payload `generation` matching the manifest generation, the `token` per shape (exact match against a live claim's token, a mismatch returning the stale refusal; operator attestation validated for non-emptiness on a claim-less manifest), and the optional payload `receipt_path` loaded and fingerprinted through the shared receipt loader with its recorded runtime canonicalize-equal to the payload `runtime_id` (the same pairing cross-check the CLI flag path enforces). The one obstruction the same transition clears is the poisoned intermediate claim: the next incomplete task claimed with no launch record and no prepared handoff intent, or every member claim of a claim group in that same never-launched shape, closes per the reclaim-release precedent (claim states closed, tasks reset to pending, the matching claim group closed together with its still-staged member claims) and is recorded in the binding receipt; a live launch reservation on the task or any group member, a member claim in a launched shape, and a prepared handoff intent the readiness decision does not admit still refuse, naming the live member or the identity disagreement. After that clearing the transition evaluates the same readiness decision the preflight runs (its plan text is read from the manifest `plan_slug` through the resolved plans directory under the shared bounded-read policy, failing closed naming the plan error when unreadable) and refuses, before any binding is persisted, unless the decision admits the manifest (direct continuation, or the admitted prepared handoff successor with no failing condition left). On acceptance the transition applies in one locked save validated before persistence: the runtime id, the receipt record when supplied, any cleared claims and group, the generation bumped once, and one `run-identity-migration` history receipt (runtime id, resolved repository root, receipt identity, payload task id, the validated and post-transition generations, and for the clearing leg the cleared claims' task ids and tokens plus the closed group's id and its released-member id list). The bound manifest is then admitted by the ordinary read-only preflight, which emits the canonical continuation command. An invalid-choice argparse error for recover-run-identity means the deployed driver predates the operation: update the deployed driver first; the manifest is untouched and manual edits remain prohibited.
+
+Reviewed scope recovery. A legitimate reviewed scope change can strand the intent-backed claimed prelaunch claim: ordinary preflight correctly refuses the stale seeded scope, and without a sanctioned exit the claim wedges until lease expiry. The sanctioned exit is the driver's `recover-task-scope` operation, whose CLI payload carries ONLY the exact prior claim identity (task id, prior claim token, prior claim generation) - the plan digest, the review evidence identity, the fresh preflight recomputation, and the replacement paths are derived from repository state, and no inventory or review evidence surface is caller-suppliable. The operation validates its preconditions in order and refuses with evidence, leaving the manifest byte-identical and appending no receipt, unless every one holds: the replay fence first, against the recorded `scope-recovery` receipts' prior identities - an identical replay re-verifies that the receipt's recorded rotated claim identity is still the live intent-backed claimed prelaunch claim (claimed state, prepared intent keyed to the claim, unconsumed prelaunch binding) and returns the recorded outcome with an explicit replay marker naming the matched receipt, any superseding state (launched, replaced, closed, reclaimed) refuses as stale identity naming that receipt, a request whose identity matches only an older receipt's prior identity falls to the stale-identity refusal naming that older receipt, any other mismatched replay naming the task is refused with the latest recorded receipt named, and a request carrying the current live claim identity is not a replay and proceeds through ordinary eligibility (a passing second correction appends a second bounded receipt); the plan file resolved directly as the facts-resolved plans directory joined with the manifest's recorded plan slug and the `.md` extension (repository-resolved, never caller-supplied; the full-stem identity is the binding, and the feature slug is only the reviews-directory discovery key); the intent-backed claimed prelaunch shape - the prepared handoff intent exists and keys to the claim with its unconsumed prelaunch binding, so a direct claimed claim refuses as not intent-backed - with no launch record, no registered worker, no launch reservation, and no live claim-group ownership; a fresh preflight recomputation through the shared lock-free check-body helper failing with EXACTLY the widening scope-drift problem for the target task whose drift entry carries a non-empty plan-path set (a passing recomputation, the declaration-parse and missing-declaration shapes, and any other problem refuse as fence-shape mismatch naming the recorded shape); readiness through the review-evidence composition (`resolve_reviews_dir`, `feature_slug`, `latest_review_round`, `evaluate_readiness`), whose evaluation is the single digest authority refusing unless the latest ready round's recorded digest equals the recomputed plan-bytes digest (the round is re-resolved and the on-disk plan bytes re-hashed before the receipt is written, refusing by name on disagreement); and replacement paths parsed ONLY from the task's structured `Files:` declaration through the landed parser (backticked prose and other path-looking text add nothing), canonicalized through the create boundary's path policy and refusing an absent declaration, an empty replacement set, a grammar-failing entry, an entry that fails canonicalization, and duplicate entries after alias resolution. The drift check is widening-only: recovery admits reviewed widenings (the drift-failure shape); a reviewed narrowing passes ordinary preflight unchanged and leaves the wider seeded scope live, so it is out of scope for this operation. A claim-group member's scope changes are refused here with the group named: the member exits through the group path (the driver `continue` operation with `--batch`), or through the blocked-member reclaim exit only when the member is blocked with `resume_allowed` false. On acceptance the transition applies in one locked save validated before persistence, and it is the whole closed mutation set: the claim row rotates to a fresh token and a bumped generation with the manifest generation bumped once alongside it (the reclaim/release rotation precedent; the owner and launch id never rotate, so the five-field parity the launch boundary enforces stays intact), the three handoff-intent identity carriers (`successor`, `outcome_action` with its `idempotency_key` re-stamped as part of the carrier, `prelaunch_binding` preserving the claim owner and launch id) are re-stamped with the new token and generation, the task's canonical allowed paths are replaced, the `evidence_contract_digest` is recomputed over the post-replacement task map, and one bounded `scope-recovery` history receipt is appended keyed on the prior claim identity, recording the plan digest, the review evidence identity (review artifact path, round number, source digest), the prior and replacement scopes, the outcome, and the rotated claim identity. This one operation supersedes the runtime's never-reads-review-sidecars posture: its review-evidence composition is a documented exception alongside the terminal gate's clean-round sidecar read. The operator then uses the ordinary sequence with no extra step in between: ordinary preflight over the post-recovery manifest (it passes and emits the successor advance command), then launch through the emitted outcome action with only the rotated claim token. Manual manifest edits stay prohibited. An invalid-choice argparse error for recover-task-scope means the deployed driver predates the operation: update the deployed driver first; the manifest is untouched and manual edits remain prohibited.
+
+The shared recovery-transition contract. The three recovery operations
+(`recover-evidence-contract` for the launched hold, `recover-task-scope` for
+the reviewed scope change, and `recover-prelaunch-contract` for the stranded
+prelaunch contract) satisfy one set of invariants: each validates its
+preconditions in fail-closed order under the manifest lock with the replay
+fence FIRST (its recorded history receipt, keyed on task id, old token, and
+old generation, is named in the replay refusal); each lands its whole closed
+mutation set in ONE locked save - the manifest lock is deliberately
+non-reentrant, so no nested `@_locked_mutation` primitive is ever called
+inside the transition (a nested call would be a silent no-op and a post-lock
+call would split the transition into two saves); every refusal leaves the
+manifest byte-identical; each binds the request to the claim identity (task
+id, old token, old generation); and each appends its own append-only history
+receipt under a DISTINCT event identity - the distinct identities are the
+composition fence, so one operation's replay fence never matches another
+operation's receipt. Each operation below lists only its deltas beside the
+invariants above.
+
+Prelaunch contract recovery. A claimed prelaunch claim holding a stranded
+evidence contract (its seeded criteria fail the runtime evidence limit
+checks; the PROJ-607 shape) has exactly one sanctioned exit: the driver's
+`recover-prelaunch-contract` operation. The operator corrects the plan
+through the skill-gated plan edit first, then supplies a payload carrying
+the task id, the old claim token, the old claim generation, the corrected
+contract (exactly `required_criteria` and `verification_commands`; any other
+field, including `allowed_paths`, refuses with the named input-contract
+problem before any precondition beyond the replay fence, because scope
+changes are never accepted from a recovery payload), and the corrected plan
+path (a payload field only; the CLI plan-path argument gate does not extend
+to this operation), read through the shared bounded plan-read policy with
+the safe-path requirement enabled (repository-relative, non-escaping, the
+terminal gate's mode), so the receipt's plan audit anchor can only bind
+in-repo bytes; the named unreadable-plan refusal is ordered after the replay
+fence and the identity checks, before the corrected-contract phase.
+Prelaunch-only deltas beside the shared invariants: the prior manifest loads
+RAW under the manifest lock with only the structural worker and claim schema
+validated (the launched-hold operation keeps its validating load), because
+the stranded shape's recorded digest and criteria map cannot survive it; the
+evidence digest and criteria-map consistency checks are deferred to the
+post-transition state. The preconditions after the fence and input contract:
+the claimed prelaunch shape (task status `claimed`, claim state `claimed`,
+no group-resolved launch record, no worker row), no owning claim group in
+any state, no active capacity reservation for the claim, the exact live
+claim token and generation, and the prior contract actually stranded (its
+stored criteria fail the same single-homed limit checks; a healthy prior
+refuses as named). The corrected-contract phase runs in the scope
+recovery's order: the envelope rule first, then the corrected task's digest
+and map contribution with the limit helpers caught and attributed to the
+corrected task (the seed-time named shape naming task, criterion, byte
+count, and the split rule), then pre-seed consistency over the merged task
+map (refusing only problem shapes that involve the corrected task), then the
+declaration parse over the task's plan section under the one documented
+declaration grammar. On acceptance the transition applies in one locked save
+validated before persistence: the two evidence fields are replaced;
+`evidence_contract_digest` and `evidence_criteria_map` are recomputed over
+the corrected task map with sibling-strand raises caught and downgraded; the
+stale claim closes (the done-pending requeue precedent, so a late receipt
+fences read-only as `stale-claim`); the task returns to `pending`
+preflight-passable; handoff intents bound to the stale claim identity are
+invalidated (no stale successor survives); and one fenced
+`prelaunch-contract-recovery` receipt is appended binding the task id, old
+token, old generation, the task's seeded allowed-paths digest as the
+current-scope identity, the supplied plan bytes' digest, the prior and
+corrected contract identities, and the unconditional accepted-divergence
+audit line comparing the corrected criteria set with the prior criteria
+set - the launched-hold receipt binds claim identity only, so these
+contract-identity fields are a prelaunch-only delta - plus, when a handoff
+intent was invalidated, the invalidated-handoff block naming the intent id
+and the stale successor claim identity (task id, token, generation).
+
+Named decisions and residuals for the prelaunch recovery:
+
+- Corrected-contract-versus-plan-text divergence is accepted-with-audit,
+  never a refusal arm; the operator discipline is the skill-gated plan edit
+  first, and the receipt's audit line and plan digest carry the evidence.
+- A declaration-refused prior with healthy criteria is a residual, not an
+  admission trigger: its exit is the skill-gated plan edit plus preflight,
+  which compares plan tokens against the seeded scope without claim
+  rotation.
+- A multi-strand legacy manifest recovers task by task: while a sibling
+  strand survives, the pre-recovery digest and criteria-map values persist
+  unchanged for the interim manifest, and every validating driver entry
+  fails closed with the unnamed limit ValueError until the last strand
+  heals (the pre-transition legacy consumption path; the seed-time named
+  shape covers the create boundary only). The sanctioned remedy is the
+  remaining strand's raw-tolerant recovery, and the operator instruction is
+  to run the remaining strand recoveries back-to-back in one session. A
+  corrected contract is never misattributed a sibling strand.
+- A never-claimed oversized task has no sanctioned exit until claimed: the
+  recovery admits only the claimed prelaunch shape.
+- Composition routing for the combined drift-plus-stranded state (verified
+  against `recover-task-scope`'s landed entry steps: intent-backed claimed
+  shape, fresh widening-drift preflight fence, review-evidence digest
+  authority, replacement paths from the structured declaration): run the
+  scope recovery FIRST. Its fence is a fresh preflight recomputation, not a
+  historical preflight passage, so a claim that never reached preflight
+  enters through a live widening-drift failure and the scope recovery's own
+  receipt is what the fence requires; it keeps the claim and its prepared
+  intent binding live. The stranded contract does not block it (the scope
+  recovery never validates evidence fields), and the prelaunch recovery
+  runs second on the still-claimed task. The reverse order closes the claim
+  and invalidates the intent binding, after which the scope recovery
+  refuses the re-claimed direct claim as not intent-backed and the scope
+  half falls to the plan-edit-plus-preflight residual; the prelaunch
+  recovery's own preconditions are disjoint from the sibling's, and its
+  distinct receipt identity keeps the two replay fences independent either
+  way.
+
 The standard reason codes are `completed`, `worker-hesitation`,
 `contract-violation`, `approval-required`, `timeout`, `dirty-worktree`,
 `cleanup-required`, `cleanup-unverified`, `malformed-result`, `owner-mismatch`,
@@ -323,7 +504,8 @@ normalization rejects a missing or unknown reason code as a malformed result
 instead of defaulting it. The CLI create operation emits `created` as its own
 CLI envelope outside the adapter normalization boundary (which stays closed
 over the documented adapter codes); the CLI reclaim operation emits
-`reclaimed` the same way for a successful release, and the CLI readiness
+`reclaimed` the same way for a successful release and `prelaunch-reclaim-cap`
+for the exhausted prelaunch-reclaim budget, and the CLI readiness
 operation emits its decision codes `direct-continuation`, `observe-worker`,
 `recovery`, and `terminal-path` as CLI-envelope reason codes the same way.
 
@@ -432,13 +614,41 @@ inventory is the provider witness that no owned process remains. The normal
 `reconcile_startup` path continues to own commit recovery and follows this
 interruption check on continuation.
 
+After an initial terminal consult, inspect one fresh raw process snapshot.
+The snapshot proves absence only when the process command succeeded and
+returned a well-formed result. A failed, malformed, or unavailable first
+snapshot preserves quarantine and does not start a re-observation. When the
+successful first snapshot still contains the quarantined worker's provider
+session, treat that match as suspicious and allow exactly one bounded
+terminal re-observation. Both
+terminal reads are bound to the same provider session and the same persisted
+worker launch identity (task, claim token, owner, generation, worker id, and
+process identity). The re-observation must itself be fresh, verified, and
+identity-matched; terminal completion timestamps do not establish read
+freshness. After it, take one more bounded raw process snapshot. Release is
+allowed only when that snapshot succeeds, is well-formed, and proves no resume
+for the session is visible. A visible resume, unavailable snapshot, missing or
+malformed observation, stale proof, or identity mismatch preserves worker and
+launch reservation quarantine. No path retries the terminal read more than
+once.
+
 The claim `timestamp` is written once at claim time and never renewed for a
 single-task claim; a batch member's timestamp is refreshed at activation
 (anchor launch, member advance), so its lease measures member liveness. The
 `reclaim` operation releases an interrupted claim only once
 `CLAIM_LEASE_SECONDS` (14400 seconds, four hours) have elapsed since that
 timestamp - an order of magnitude above the execute-plan 20-minute per-worker
-timeout, so a live worker's task normally completes well inside the lease. The
+timeout, so a live worker's task normally completes well inside the lease -
+except three identity-fenced prelaunch exits that waive the wait: the
+prepared-intent done-successor exit, which reclaims a live claim backed by
+a fresh `prepared` handoff intent whose recorded successor identity
+matches the claim; the direct-claim prelaunch fast path, which reclaims a
+blocked direct initial claim immediately under the two-attempt
+prelaunch-reclaim budget when its persisted `runtime-policy-unavailable`
+receipt carries the live claim identity and its approval evidence is
+supplied at the invocation or already recorded (the `reclaimed` transition
+row owns the full conjunct list); and the r4 F2 lease-waived live-group
+exit (below). The
 constant is driver-owned code: no environment variable and no CLI flag
 overrides it, so the no-bypass property covers more than the flag surface. A
 task still running past the lease keeps running, but its post-reclaim
@@ -673,10 +883,17 @@ action, then re-classify the state.
 | `dirty-worktree` | No startup dirty-worktree refusal is emitted | No claim mutation | 0 | Not emitted by startup reconciliation | Uncommitted paths are excluded from the task commit by explicit pathspecs. |
 | `cleanup-required` | No startup ambient-noise refusal is emitted | No claim mutation | 0 | Not emitted by startup reconciliation | Uncommitted paths are excluded from the task commit by explicit pathspecs. |
 | `cleanup-unverified` | Owned process and failed termination evidence | Preserve claim; never take over | 0 | `blocked`, `resume_allowed: false` | Require operator cleanup verification; do not retry. |
-| `reclaimed` | Expired claim lease (at least `CLAIM_LEASE_SECONDS`) on a claim in `claimed`, `launched`, or `blocked`, with the task outside the progressed set, with the machine `workflow_state` outside the closed non-active set (`aborted`, `complete`, `terminal` - a finished-workflow reclaim is refused with the `explicit-abort` preserve-and-stop envelope before any lease accounting, its evidence naming the finished state), and the claim not a member of a live batch claim group (a live-group member is refused with the resumable `stale-claim` outcome naming the group, r3 F1; the one exit, r4 F2: a live-group member whose task is blocked with `resume_allowed` false reclaims through with no lease wait, and the same compare-and-swap fails its group) | Replace generation and token, mark the old claim `replaced`, reset the task to `pending` with the previous session's resume fields stripped, recorded checkpoints preserved as evidence; on the r4 F2 exit the group is also marked `failed` with its active member cleared and the still-staged member claims closed | 0 | `pending` task under the `replaced` claim; the next claim takes the freed task under a fresh generation; on the r4 F2 exit the staged members' pending tasks also re-enter the individual queue | Re-claim and relaunch the freed task; a post-reclaim checkpoint or launch receipt from the replaced owner fails fenced as `owner-mismatch`, while a late done handoff refuses as unfenced done evidence; the replaced claim is reconciled by rotation and never quarantined at startup; a workflow in the closed non-active set returns `explicit-abort` (preserve-and-stop; the evidence names the finished state) and is never released. |
+| `reclaimed` | Expired claim lease (at least `CLAIM_LEASE_SECONDS`) - or, without the lease wait, the direct-claim prelaunch fast path defined at the end of this cell - on a claim in `claimed`, `launched`, or `blocked`, with the task outside the progressed set, with the machine `workflow_state` outside the closed non-active set (`aborted`, `complete`, `terminal` - a finished-workflow reclaim is refused with the `explicit-abort` preserve-and-stop envelope before any lease accounting, its evidence naming the finished state), and the claim not a member of a live batch claim group (a live-group member is refused with the resumable `stale-claim` outcome naming the group, r3 F1; the one exit, r4 F2: a live-group member whose task is blocked with `resume_allowed` false reclaims through with no lease wait, and the same compare-and-swap fails its group); the direct-claim prelaunch fast path: a direct initial claim (no handoff intent lineage, no registered worker, no launch residue - no launch record on the claim and no capacity reservation on the task) blocked with a receipt whose reason code is exactly `runtime-policy-unavailable` and whose embedded claim token and generation equal the live claim's, with approval evidence supplied at the invocation (`--approval-receipt` plus `--runtime`) or already recorded, and with the task-record prelaunch-reclaim count under the two-attempt budget (the initial recovery invocation plus exactly one transient retry) - at the budget, every other conjunct holding is refused as `prelaunch-reclaim-cap` before lease accounting, and the cap gates only this lease-bypass path (an expired lease rotates regardless of the count); the path's proof boundary and fencing: supplied-at-reclaim evidence
+persists on success only (prelaunch-fence refusals persist nothing, so the
+manifest stays byte-identical; the one post-sweep exception is the
+capacity-gate refusal, which persists only the stale-reservation sweep
+that ran before it and never the supplied evidence), and a claim rotated
+between the block and the reclaim fails the receipt-equality fence back to
+the ordinary lease wait | Replace generation and token, mark the old claim `replaced`, reset the task to `pending` with the previous session's resume fields stripped, recorded checkpoints preserved as evidence; on the r4 F2 exit the group is also marked `failed` with its active member cleared and the still-staged member claims closed | 0 | `pending` task under the `replaced` claim; the next claim takes the freed task under a fresh generation; on the r4 F2 exit the staged members' pending tasks also re-enter the individual queue | Re-claim and relaunch the freed task; a post-reclaim checkpoint or launch receipt from the replaced owner fails fenced as `owner-mismatch`, while a late done handoff refuses as unfenced done evidence; the replaced claim is reconciled by rotation and never quarantined at startup; a workflow in the closed non-active set returns `explicit-abort` (preserve-and-stop; the evidence names the finished state) and is never released. |
 | `commit-pending` | Started receipt and task identity | Keep claim fenced during reconciliation | 0 | `blocked`, `checkpointed`, or `aborted` (the wedged-claim abort exit) | Inspect the exact commit before deciding whether work is complete. Abort with the current token is permitted when the recorded commit provably does not exist (the wedged-claim runtime exit; preserve-and-stop). |
 | `done-pending` | Worker checkpoint plus done handoff evidence | Keep claim until done boundary closes | 0 | `blocked` or `checkpointed` | Do not launch the next task until commit (or the documented no-commit justification), checkbox, task-scoped commit-path evidence, and log evidence exist. |
 | `done-pending-recovery` (the operator-invoked `recover-done-pending` operation; the single sanctioned exit from `done-pending`) | Exact claim identity (owner, token, and generation), task status `done-pending`, no live claim group (parallel or batch alike) owning the claim, bounded terminal evidence naming the claim's session or launch identity, and no `done-pending-recovery` receipt already recorded for the same task id, token, and generation | Close the claim under the manifest lock; every refusal - stale identity or wrong status returns the resumable `stale-claim` outcome, the live-group refusal names the group and leaves the sibling members untouched, and the terminal-evidence and duplicate-receipt refusals are blocked `precondition-unverified` - leaves the manifest byte-identical | 0 | `requeue`: task `pending` with the dead-session resume fields stripped under a generation bumped exactly once; `defer`: task `deferred` with the claim closed and the backlog evidence recorded; `abort`: task, claim, and `workflow_state` `aborted` | `requeue`: reconcile the plan section through the skill-gated plan edit first, then let the ordinary claim path relaunch under the fresh policy token; `defer`: continue with the next provable task, never relaunching the deferred task; `abort`: do not resume without a new explicit run. |
+| `scope-recovery` (the operator-invoked `recover-task-scope` operation; the single sanctioned exit for a legitimate reviewed prelaunch scope change that ordinary preflight refuses as scope drift) | Exact prior claim identity only (task id, prior claim token, prior claim generation - every evidence surface is derived from repository state, never the payload); the intent-backed claimed prelaunch shape (the prepared handoff intent keyed to the claim with its unconsumed prelaunch binding), no launch record, registered worker, or launch reservation, no live claim-group ownership (a member exits through the group path, `continue --batch`, or the blocked-member reclaim exit when `resume_allowed` is false); the plan file binding by full-stem identity to the manifest's recorded plan slug; a fresh preflight recomputation failing with exactly the target task's widening scope drift (widening-only: a reviewed narrowing passes ordinary preflight and is out of scope); the latest ready review round's recorded digest equal to the recomputed plan-bytes digest (the single digest authority, re-verified before the receipt is written); and replacement paths parsed only from the structured `Files:` declaration with canonicalization and duplicate-alias refusals; the replay fence is evaluated first and an identical replay whose rotated identity is still the live intent-backed prelaunch claim returns the recorded outcome with a replay marker and writes nothing; every refusal leaves the manifest byte-identical and appends no receipt | Rotate the claim under the manifest lock: fresh token and bumped generation with the manifest generation bumped once (owner and launch id preserved, five-field parity intact), the three handoff-intent identity carriers re-stamped, the task's canonical allowed paths replaced from the reviewed declaration, `evidence_contract_digest` recomputed, and one `scope-recovery` receipt appended keyed on the prior identity | 0 | Claimed prelaunch claim under the rotated identity on the same task, its seeded scope replaced by the reviewed `Files:` declaration | Run ordinary preflight over the post-recovery manifest (it passes and emits the successor advance command), then launch through the emitted outcome action with only the rotated claim token; manual manifest edits stay prohibited. |
 | `committed` | Commit identity, checkbox, task-scoped commit-path evidence, and log evidence | Close matching claim | 0 | `checkpointed` | Record the commit and continue once, idempotently; unrelated dirty paths do not block it. |
 
 Illegal transitions, unknown statuses, missing evidence, generation mismatch,
@@ -709,6 +926,23 @@ delete these files as dirt or hygiene violations; the human-facing
 the source of truth. The runtime driver does not write or authorize from that
 Markdown receipt. Machine-manifest writes are atomic, mode `0600`, and fenced
 by a generation token and owner claim.
+
+Resolution policy (normative): the driver implementation is one shared
+deployed copy of `scripts/execute_plan_runtime.py`, while every run artifact
+stays under the target project's facts-resolved tmp dir - the repository
+root, the machine manifest, and the tmp resolution come from the target
+project (`--repo-root` or the invocation working directory), never from the
+checkout the shared copy itself lives in. A project-local entry point (a
+copy or wrapper under the target project's own tree) is legitimate only as
+a deliberate, explicitly configured override, never as an accident of path
+resolution. The canonical continuation command the preflight operation
+emits pins its own absolute script path, the recorded runtime id
+(`--runtime`), and the repository root (`--repo-root`), every interpolated
+value shell-quoted, so that command re-invoked verbatim from the shared
+tooling checkout still resolves the same manifest and the same target root
+and lands its artifacts under the target project's resolved tmp dir;
+invocation from the shared checkout therefore cannot silently retarget
+the run.
 
 The driver accepts adapter results only after closed-result validation and
 default-deny policy validation. It persists a worker checkpoint as
@@ -810,7 +1044,31 @@ created or rotated: it reports plan-versus-claim scope drift with the plan
 paths and the machine-seeded scopes side by side, re-validates the recorded
 approval receipt where one is seeded, and names one canonical continuation
 command, and it never mutates state - a failing preflight leaves every
-claim and handoff retryable.
+claim and handoff retryable. A `runtime-policy-unavailable` block raises
+the policy-evidence problem naming both candidate causes (the claim or
+continuation boundary ran without `--approval-receipt`, or the supplied
+receipt failed validation) with reclaim-with-flags first among the remedies
+(claim-with-flags only where a claim boundary is still ahead - a pending
+task; re-create only for the genuine pre-claim case). Preflight admits the exact fresh
+done-successor (a live claim backed by a `prepared` handoff intent whose
+task, token, and generation agree) as authorized prelaunch state: the
+admission and its exemption from the activation-evidence problem are
+preflight-local, the passing preflight emits the successor's canonical
+advance command under the same self-sufficiency shape, and the shared
+readiness decision's returned tuple and the readiness operation's
+documented closed decision set are unchanged (identity-mismatched or
+already-consumed intents are never admitted). The emission is fail-closed:
+the command exists only on a passing preflight (a failing preflight emits
+no command), and a manifest recording no usable runtime id fails the
+emission with a named problem instead of emitting a line that cannot pin
+the recorded runtime. That problem's remedies are the canonical
+claim-boundary remedy text: re-create the run with `--runtime` at the
+create boundary, or run the `recover-run-identity` migration operation
+(which requires a driver whose `--operation` table registers it; update
+the deployed driver first), or supply `--runtime` together with
+`--approval-receipt` at the next claim boundary; a bare `--runtime` at a
+claim boundary is refused, and the manifest's recorded receipt never
+substitutes for the receipt flag.
 
 ## Live-session discovery ladder
 
@@ -907,9 +1165,10 @@ are:
 | `watcher-supersede` | `build_supersede_transition` + `record_resume_watcher` (clears a pending watcher under compare-and-swap; the outgoing receipt's armed carrier is torn down in the same operation, r6 F3) |
 | `watcher-fire` | `fire_watcher` over `RuntimeResumeWatcherAdapter` (the automation prompt's fire entry: evaluates the fences and four stand-down checks, clears the guard flag and fired marker only on a resume decision, and consumes the launchd one-shot carrier from the receipt alone) |
 | `readiness` | `readiness` (via `_operation_readiness`; read-only decision, requires `--plan`; `persist_construction=False` construction, the operation writes nothing) |
-| `reclaim` | `reclaim` (via `_operation_reclaim`; lease-gated interrupted-claim recovery, requires `--task-id`; the one lease-waived exit reclaims a non-resumable live-group member and atomically fails its group, r4 F2; `persist_construction=False` construction, the claim compare-and-swap is the operation's single write) |
+| `reclaim` | `reclaim` (via `_operation_reclaim`; lease-gated interrupted-claim recovery, requires `--task-id`; the lease-waived exits reclaim a non-resumable live-group member and atomically fail its group, r4 F2, and reclaim a proven prelaunch blocked direct claim immediately under the two-attempt prelaunch-reclaim budget with `--approval-receipt` and `--runtime` supplied, the at-cap shape refused as `prelaunch-reclaim-cap`; `persist_construction=False` construction, the claim compare-and-swap is the operation's single write) |
 | `diagnose` | `diagnose` (via `_operation_diagnose`; read-only first-failed-transition report; `persist_construction=False` construction, the operation writes nothing) |
 | `recover-done-pending` | `recover_done_pending` (via `_operation_recover_done_pending`; operator-invoked done-pending recovery, requires the JSON payload `task_id`, `token`, `disposition`, and `terminal_evidence`, with optional `backlog_evidence` for the defer disposition; `persist_construction=False` construction, the locked recovery transition is the operation's single manifest write; see "Terminal-worker done-pending recovery") |
+| `recover-run-identity` | `recover_run_identity` (via `_operation_recover_run_identity`; operator-invoked legacy-run identity migration for a manifest recording no runtime id, requires the JSON payload `task_id`, `runtime_id`, `repo_root`, `generation`, and `token`, with optional `receipt_path`; the already-bound `runtime`-field replay fence is evaluated first, the never-launched poisoned intermediate claim or claim group is cleared inside the same locked transition when that is the only obstruction, and the closed-residue readiness decision admits the post-state before anything persists; `persist_construction=False` construction, the locked recovery transition is the operation's single manifest write; see "Run-identity migration") |
 
 The address fan-out parent surface is a separate executable boundary (r2
 F9): `python3 scripts/execute_plan_address_fanout.py --operation <op>
@@ -1105,6 +1364,24 @@ records `none` as the task's completion identity and in the `done-commit`
 history event, and hands the group advance the current HEAD revision as the
 next claim's baseline.
 
+The recovery completion identity is the exact literal `baseline-unchanged`
+after stripping, recorded only by the driver's recovery completion arm: a
+claim carrying `recovery_path: true` (recorded by the `--recovery` claim
+flag, the execute-plan Recovery route's marker) closing a `Commit:`-line
+task whose allowed-path bytes are hash-identical to the claim's recorded
+baseline revision, with the task-local validation evidence envelope present
+and matching the current allowed-path bytes. The driver skips the commit
+lookup for the literal, proves those conjuncts under the manifest lock, and
+refuses with the failed conjunct named when any of them fails: a
+non-recovery claim, a task without a `Commit:` criterion, baseline drift, a
+missing or mismatched validation envelope, or the identity replayed against
+a different claim token or generation (the cross-claim replay fence records
+the consuming token and generation per task at the first acceptance). The
+recovery completion records `baseline-unchanged` as the task's completion
+identity and in the `done-commit` history event, and hands the group
+advance the current HEAD revision as the next claim's baseline, exactly
+like the none receipt.
+
 ### Readiness decision
 
 The `readiness` operation answers one question for the orchestrator: can the
@@ -1225,8 +1502,9 @@ and leaving the manifest untouched; the CLI refuses `--operation readiness`
 without `--plan` before any driver construction. The digest, review-scope,
 and unresolved-finding conditions stay delegated to the Step 0.5 validator
 and the review artifacts; the readiness operation never reads review sidecars;
-the terminal gate's clean-round sidecar read is the only documented
-extension, so there is one owner per condition.
+the terminal gate's clean-round sidecar read and the reviewed scope-recovery
+operation's review-evidence composition (that one operation only) are the
+documented exceptions, so there is one owner per condition.
 
 The structured `runtime_state.json` is the sole machine-state source. The
 orchestrator-maintained Markdown `manifest.md` is a human audit receipt, and
@@ -1286,9 +1564,11 @@ ancestor-or-self of HEAD; a present `residual_policy` input is validated in
 the input shape guard (non-empty integer finding ids, a non-empty grant
 source, a finite numeric recorded-at epoch) and opens an OR-branch in this clause:
 the gate additionally accepts the focused verification-round sidecar when
-the policy's recorded-at predates the sidecar's round `date` (the proof is
-strict at day precision, so a policy recorded at or after the round day
-refuses) and no findings row is both `blocking: true` and a member of the
+the policy's recorded-at falls before the end of the sidecar's round `date`
+(the proof is strict at day precision and anchored at machine-local midnights,
+so a policy recorded on the round's own calendar day passes, the normal
+record-then-round shape, and a policy recorded at or after the
+following local midnight refuses) and no findings row is both `blocking: true` and a member of the
 policy's finding ids; blocking rows outside the set are the backlogged
 residuals and are permitted, a blocking row inside the set still refuses,
 under this branch a present verdict must be `yes` or `no` (the sidecar verdict
@@ -1405,6 +1685,45 @@ through the skill-gated plan-edit step, never by mutating the machine
 manifest to match the plan; the manifest's task statuses, claims, and
 generation fence every transition.
 
+#### The one Files: declaration contract
+
+Task scope declarations follow one documented grammar on both deciding
+surfaces: the runtime parser (`_plan_declared_files` in
+scripts/execute_plan_runtime.py, the sole runtime declaration-parsing
+source; no second parser and no parallel declaration reader exists) at
+every preflight and recovery consumption, and the pre-round readiness
+check's authoring-side record collector (scripts/plan_readiness.py, the
+sanctioned second grammar consumer). A declaration decides the same way
+on both surfaces:
+
+- Opener: only the exact, unindented `Files:` line opens a declaration
+  block. A case-variant opener (`files:` or `FILES:` carrying entries) is
+  refused with the named case-variant problem; the documented grammar
+  accepts the exact `Files:` heading only. An indented `Files:` line is
+  never a block opener: a task section whose only opener is indented
+  produces the named missing-declaration refusal. A path-shaped bullet
+  ABOVE the heading is inert prose: the recorded lookalike decision is
+  that the scan starts at the opener and never looks upward, so a
+  lookalike bullet neither contributes an entry nor truncates the block.
+- Duplicate declaration: a second exact `Files:` heading inside one task
+  section is the named `duplicate Files: heading` refusal on both
+  surfaces, whether it sits adjacent to the first block or after a blank
+  line; the union-collection of two blocks and the silent first-list-only
+  read are both refused shapes.
+- Entries: entries sit immediately under the heading (a blank line before
+  a later entry keeps the existing named refusal); an indented entry
+  under a valid heading is an entry like any other; a checkbox item ends
+  the block. An entry may carry the planned-new annotation family (the
+  `*(new` prefix with optional elaboration before the closer, for example
+  a backticked path followed by `*(new)*` or by `*(new; this plan)*`): it
+  records creation intent on a not-yet-created path and the parse strips
+  it to the bare path, the same family the readiness record check
+  recognizes. Any other trailing prose after the path token keeps the
+  existing malformed-entry refusal.
+
+The named problem strings are shared verbatim between the two surfaces so
+the same shape emits the same problem family wherever it is decided.
+
 ## Predecessor verification
 
 Before a plan step whose work depends on predecessor work starts, the
@@ -1463,6 +1782,19 @@ closed for malformed adapter data and must never report `PASS` for a missing
 registration.
 
 ## Lock liveness and generation fencing
+
+### Terminal worker reservation release
+
+Normal `done` and `recover_done_pending` use the same locked release contract.
+The driver constructs a terminal receipt bound to the claim's task id, claim
+token, generation, and launch id. Under the manifest lock, release proceeds
+only when all four receipt fields exactly match the claim. It removes only a
+reservation with that same four-field identity and releases only worker
+capacity entries whose worker identity also matches the claim owner. A
+reservation for another token, generation, or launch remains unchanged. The
+done transition persists this cleanup with task completion before the lock is
+released; recovery persists it with its recovery disposition. Ordinary
+successor selection then follows the existing driver path after the lock.
 
 The done lock metadata records a unique generation, holder PID, holder process
 identity, start time, and the repository session fence. A matching session fence

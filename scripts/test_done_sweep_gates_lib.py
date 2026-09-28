@@ -3338,3 +3338,574 @@ def test_plans_archive_twin_warns_on_fallback_and_absent_dirs(tmp_path, sweep_en
     assert result.rc == 0, result.message
     assert any("plans_completed_dir" in w for w in result.warnings)
     assert any("does not exist on disk" in w for w in result.warnings)
+
+
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-09-28-p79-done-closeout-manifest-attribution-
+# and-marker-contracts.md, Task 6: mechanical selftest. The six named tests
+# below pin the landed closeout contracts (identity round trip, named legacy
+# mismatch, marker self-check both polarities, fused ledger interleaving,
+# deterministic foreign-candidate emission); every existing test above is
+# frozen. The recipe-side tests execute the plan's prescribed snippets
+# verbatim in scratch trees, per the plan's assumption that attribution and
+# marker placement are recipe-side bash, not lib functions.
+# --------------------------------------------------------------------------- #
+PRESCRIBED_MARKER_CHECK_BLOCK = r'''# Post-write location self-check: independent fresh parse, resolved-path compare.
+TMP_DIR_FRESH="$(sed -n 's/^tmp_dir = ["'\'']\(.*\)["'\'']$/\1/p' "$REPO_TOP/.ai-playbook/facts.md" 2>/dev/null | head -n 1)"
+TMP_DIR_FRESH="${TMP_DIR_FRESH:-$REPO_TOP/docs/tmp/}"
+case "$TMP_DIR_FRESH" in /*) ;; *) TMP_DIR_FRESH="$REPO_TOP/$TMP_DIR_FRESH";; esac
+EXPECTED_ROOT="${TMP_DIR_FRESH%/}/done-session"
+EXPECTED_ROOT="$(cd "$EXPECTED_ROOT" 2>/dev/null && pwd)" || EXPECTED_ROOT=""
+MARKER_DIR="$(cd "$(dirname "$MARKER")" 2>/dev/null && pwd)" || MARKER_DIR=""
+if [ -z "$EXPECTED_ROOT" ] || [ "$MARKER_DIR" != "$EXPECTED_ROOT" ]; then
+  rm -f "$MARKER"
+  echo "run-start marker: resolved path ${MARKER_DIR:-unresolvable} is not the expected done-session root ${EXPECTED_ROOT:-unresolvable}; stray marker removed" >&2
+  exit 1
+fi'''
+
+PRESCRIBED_LEDGER_APPEND_LINE = 'git rev-parse HEAD >> "$LEDGER"'
+
+
+def _plan_prescribed_fence(lead: str) -> str | None:
+    """Best-effort provenance cross-check: extract the verbatim fence that
+    follows ``lead`` in this plan's markdown record (the plans dir, or the
+    completed archive once the plan lands there); None when the record cannot
+    be located, so the embedded constants stay the hermetic source of truth."""
+    plan_name = (
+        "2026-09-28-p79-done-closeout-manifest-attribution-"
+        "and-marker-contracts.md"
+    )
+    for path in sorted(SCRIPTS_DIR.parent.glob(f"docs/history/**/{plan_name}")):
+        text = path.read_text(encoding="utf-8")
+        start = text.find(lead)
+        if start == -1:
+            continue
+        fence_open = text.find("```\n", start)
+        fence_close = text.find("\n```\n", fence_open + 4)
+        if fence_open == -1 or fence_close == -1:
+            return None
+        return text[fence_open + 4 : fence_close]
+    return None
+
+
+def _run_bash_snippet(
+    script: str, env_overrides: dict[str, str]
+) -> subprocess.CompletedProcess:
+    """Run one bash snippet with variables handed over through the
+    environment, so the snippet body itself stays byte-verbatim."""
+    return subprocess.run(
+        ["bash", "-c", script],
+        env={**os.environ, **env_overrides},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def test_round_trip_writer_to_finalizer(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given a fixture repo with a content-bearing
+    run-start marker, expects the production writer to emit the 64-hex
+    fingerprint root and the finalize path to resolve that same fingerprint
+    and mark the run complete in place (one versioned identity contract on
+    both sides; the raw root spelling never enters the record)."""
+    root = mktemp_repo("roundtrip")
+    make_marker(root, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    assert lib.main(["write-manifest"]) == 0
+    manifests = list(done_session.glob("run-manifest-*.json"))
+    assert len(manifests) == 1
+    run_id = manifests[0].name[len("run-manifest-") : -len(".json")]
+    assert run_id
+    before = json.loads(manifests[0].read_text(encoding="utf-8"))
+    fingerprint = before["repo_root"]
+    assert fingerprint == root_digest(root)
+    assert len(fingerprint) == 64
+
+    assert lib.main(["finalize-manifest", "--run-id", run_id]) == 0
+    assert run_id in capsys.readouterr().out
+    after = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert after["complete"] is True
+    assert after["run_id"] == run_id
+    assert after["repo_root"] == fingerprint
+    assert after["start_commit"] == before["start_commit"]
+
+
+def test_legacy_manifest_rejected_with_named_mismatch(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given a wrong-version manifest and a
+    schema-valid manifest carrying a foreign 64-hex root, expects
+    finalize-manifest to abort non-zero on both with the exact
+    ``run-manifest identity mismatch`` sentence and to leave each file
+    byte-identical (the root arm cannot regress to silent acceptance)."""
+    root = mktemp_repo("legacy-mismatch")
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    def payload_for(run_id: str, schema: int, repo_root: str) -> dict:
+        return {
+            "schema": schema,
+            "run_id": run_id,
+            "marker": marker_name(time.time()),
+            "created_epoch": time.time(),
+            "repo_root": repo_root,
+            "pid": os.getpid(),
+            "start_commit": git(root, "rev-parse", "HEAD").stdout.strip(),
+            "start_porcelain": [],
+            "owned_plan_paths": [],
+            "owned_review_paths": [],
+            "foreign_review_paths": [],
+            "adopted_from": None,
+            "complete": False,
+        }
+
+    arms = [
+        (
+            "run-legacy-v2",
+            payload_for("run-legacy-v2", 2, root_digest(root)),
+            "manifest schema_version 2 repo_root fingerprint",
+        ),
+        (
+            "run-foreign-root",
+            payload_for(
+                "run-foreign-root",
+                1,
+                hashlib.sha256(b"/elsewhere/repo").hexdigest(),
+            ),
+            "manifest schema_version 1 repo_root fingerprint",
+        ),
+    ]
+    for run_id, payload, rendered in arms:
+        done_session.mkdir(parents=True, exist_ok=True)
+        manifest_path = done_session / f"run-manifest-{run_id}.json"
+        manifest_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        before = manifest_path.read_bytes()
+
+        rc = lib.main(["finalize-manifest", "--run-id", run_id])
+
+        assert rc != 0, f"arm {run_id} must abort non-zero"
+        err = capsys.readouterr().err
+        assert "run-manifest identity mismatch" in err
+        assert (
+            "run-manifest identity mismatch: " + rendered
+            in err
+        )
+        assert "is not supported by this finalizer" in err
+        assert "manifest left unchanged" in err
+        assert manifest_path.read_bytes() == before
+
+
+def test_marker_check_passes_on_correct_derivation(tmp_path):
+    """[class: REPOSITORY_TEST] The prescribed Step 0 marker post-write check
+    executed verbatim in a scratch tree: with a facts ``tmp_dir`` key the
+    block passes and the marker stays under the resolved done-session root,
+    and with the facts key absent the documented fallback derivation passes
+    the same way (exit 0, no stray removal)."""
+    planned = _plan_prescribed_fence("Prescribed marker check block (verbatim):")
+    if planned is not None:
+        assert planned == PRESCRIBED_MARKER_CHECK_BLOCK
+
+    # Correct derivation: the facts document carries tmp_dir.
+    repo_top = tmp_path / "scratch-pass-keyed"
+    (repo_top / ".ai-playbook").mkdir(parents=True)
+    (repo_top / ".ai-playbook" / "facts.md").write_text(
+        "```toml\n"
+        'plans_dir = "docs/history/plans/"\n'
+        'tmp_dir = "docs/tmp/"\n'
+        "```\n",
+        encoding="utf-8",
+    )
+    done_session = repo_top / "docs" / "tmp" / "done-session"
+    done_session.mkdir(parents=True)
+    marker = done_session / marker_name(time.time())
+    marker.write_text(f"{int(time.time())} {repo_top} {os.getpid()}\n", encoding="utf-8")
+
+    proc = _run_bash_snippet(
+        PRESCRIBED_MARKER_CHECK_BLOCK,
+        {"REPO_TOP": str(repo_top), "MARKER": str(marker)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert marker.exists(), "correct derivation must not remove the marker"
+    assert "stray marker removed" not in proc.stderr
+
+    # No-facts-key fallback polarity: the key is absent, the documented
+    # default derivation applies.
+    repo_top_fb = tmp_path / "scratch-pass-fallback"
+    (repo_top_fb / ".ai-playbook").mkdir(parents=True)
+    (repo_top_fb / ".ai-playbook" / "facts.md").write_text(
+        "```toml\n" 'plans_dir = "docs/history/plans/"\n' "```\n",
+        encoding="utf-8",
+    )
+    done_session_fb = repo_top_fb / "docs" / "tmp" / "done-session"
+    done_session_fb.mkdir(parents=True)
+    marker_fb = done_session_fb / marker_name(time.time())
+    marker_fb.write_text(
+        f"{int(time.time())} {repo_top_fb} {os.getpid()}\n", encoding="utf-8"
+    )
+
+    proc_fb = _run_bash_snippet(
+        PRESCRIBED_MARKER_CHECK_BLOCK,
+        {"REPO_TOP": str(repo_top_fb), "MARKER": str(marker_fb)},
+    )
+    assert proc_fb.returncode == 0, proc_fb.stderr
+    assert marker_fb.exists(), "fallback polarity must not remove the marker"
+    assert "stray marker removed" not in proc_fb.stderr
+
+
+def test_marker_check_fails_loud_on_corrupted_derivation(tmp_path):
+    """[class: REPOSITORY_TEST] The prescribed Step 0 marker post-write check
+    executed verbatim in a scratch tree: a marker stray-landed under a
+    system-temp anchor and one stray-landed inside the repository both exit
+    non-zero naming the resolved stray path against the expected done-session
+    root, and no stray marker survives (the check removes it)."""
+    def corrupted_arm(repo_top: Path, marker: Path) -> subprocess.CompletedProcess:
+        (repo_top / ".ai-playbook").mkdir(parents=True)
+        (repo_top / ".ai-playbook" / "facts.md").write_text(
+            "```toml\n" 'tmp_dir = "docs/tmp/"\n' "```\n",
+            encoding="utf-8",
+        )
+        (repo_top / "docs" / "tmp" / "done-session").mkdir(parents=True)
+        return _run_bash_snippet(
+            PRESCRIBED_MARKER_CHECK_BLOCK,
+            {"REPO_TOP": str(repo_top), "MARKER": str(marker)},
+        )
+
+    # Stray anchored in system temp (a misderived absolute path).
+    stray_dir = Path(tempfile.mkdtemp(prefix="stray-marker-"))
+    try:
+        stray = stray_dir / marker_name(time.time())
+        stray.write_text("stray marker body\n", encoding="utf-8")
+        proc = corrupted_arm(tmp_path / "scratch-temp-stray", stray)
+        assert proc.returncode != 0, proc.stderr
+        assert "run-start marker" in proc.stderr
+        assert "is not the expected done-session root" in proc.stderr
+        assert str(stray_dir) in proc.stderr
+        assert "stray marker removed" in proc.stderr
+        assert not stray.exists(), "the stray marker must be removed"
+    finally:
+        shutil.rmtree(stray_dir, ignore_errors=True)
+
+    # Stray anchored inside the repository but outside the done-session root
+    # (a misderived relative path).
+    repo_top = tmp_path / "scratch-repo-stray"
+    notes_dir = repo_top / "docs" / "notes"
+    notes_dir.mkdir(parents=True)
+    stray_internal = notes_dir / marker_name(time.time())
+    stray_internal.write_text("stray marker body\n", encoding="utf-8")
+    proc_internal = corrupted_arm(repo_top, stray_internal)
+    assert proc_internal.returncode != 0, proc_internal.stderr
+    assert "is not the expected done-session root" in proc_internal.stderr
+    assert "stray marker removed" in proc_internal.stderr
+    assert not stray_internal.exists(), "the stray marker must be removed"
+
+
+def test_ledger_interleaving_simulation(tmp_path, sweep_env, mktemp_repo):
+    """[class: REPOSITORY_TEST] The prescribed fused ledger line executed in a
+    scratch git repository: two owned commits each append at their own return
+    while a peer worktree's commit lands in between; the ledger holds exactly
+    the two owned SHAs in order and the peer sha (which the retired range
+    enumeration would have swept from the same branch range) never enters it."""
+    planned = _plan_prescribed_fence("Prescribed ledger append line (verbatim")
+    if planned is not None:
+        assert planned == PRESCRIBED_LEDGER_APPEND_LINE
+
+    root = mktemp_repo("interleaving")
+    done_session = root / "docs" / "tmp" / "done-session"
+    done_session.mkdir(parents=True)
+    ledger = done_session / "owned-commits-run-itl.txt"
+
+    def fused_commit(fname: str, message: str) -> subprocess.CompletedProcess:
+        script = (
+            "set -e\n"
+            'cd "$REPO_TOP"\n'
+            f"git add -- {fname}\n"
+            f'git commit -m "{message}" -- {fname} && '
+            f"{PRESCRIBED_LEDGER_APPEND_LINE}\n"
+        )
+        return _run_bash_snippet(
+            script, {"REPO_TOP": str(root), "LEDGER": str(ledger)}
+        )
+
+    # Owned commit one, fused with its append (one shell invocation).
+    (root / "owned-one.txt").write_text("owned one\n", encoding="utf-8")
+    assert fused_commit("owned-one.txt", "owned one").returncode == 0
+    owned_one = git(root, "rev-parse", "HEAD").stdout.strip()
+    assert ledger.read_text(encoding="utf-8") == owned_one + "\n"
+
+    # A peer worktree's commit interleaves into the same branch history.
+    peer_wt = tmp_path / "peer-wt"
+    assert git(root, "worktree", "add", str(peer_wt), "-b", "peer-branch").returncode == 0
+    (peer_wt / "peer-note.txt").write_text("peer work\n", encoding="utf-8")
+    assert sh(["git", "-C", str(peer_wt), "add", "peer-note.txt"], peer_wt).returncode == 0
+    assert sh(
+        [
+            "git", "-C", str(peer_wt),
+            "-c", "user.name=peer-worktree",
+            "-c", "user.email=peer@example.invalid",
+            "commit", "-m", "peer commit lands mid-run", "-q",
+        ],
+        peer_wt,
+    ).returncode == 0
+    assert git(root, "merge", "--ff-only", "peer-branch").returncode == 0
+    peer_sha = git(root, "rev-parse", "HEAD").stdout.strip()
+    assert peer_sha != owned_one
+
+    # Owned commit two, fused with its append, after the peer landed.
+    (root / "owned-two.txt").write_text("owned two\n", encoding="utf-8")
+    assert fused_commit("owned-two.txt", "owned two").returncode == 0
+    owned_two = git(root, "rev-parse", "HEAD").stdout.strip()
+
+    try:
+        assert ledger.read_text(encoding="utf-8").splitlines() == [
+            owned_one,
+            owned_two,
+        ]
+        ledger_lines = ledger.read_text(encoding="utf-8").splitlines()
+        assert peer_sha not in ledger_lines
+        # The interleaving is real: the retired range enumeration over the
+        # same branch range would have swept the peer commit in.
+        swept = git(root, "rev-list", f"{owned_one}..HEAD").stdout.split()
+        assert swept == [owned_two, peer_sha]
+    finally:
+        git(root, "worktree", "remove", "--force", str(peer_wt))
+
+
+def test_emit_foreign_candidates_deterministic(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Two ``--emit-foreign-candidates`` invocations
+    over the same tree emit byte-identical files, one sorted repo-relative
+    path per line; the ``--owned-review`` claimed artifact never appears and
+    no manifest is written."""
+    root = mktemp_repo("emit-det")
+    make_marker(root, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    (root / "docs/reviews").mkdir(parents=True)
+    owned_rel = "docs/reviews/2026-09-28-owned-review-r1.md"
+    unowned = [
+        "docs/reviews/2026-09-28-peer-review-b-r1.md",
+        "docs/reviews/2026-09-28-peer-review-a-r1.md",
+    ]
+    for rel in [owned_rel] + unowned:
+        (root / rel).write_text("staging review body\n", encoding="utf-8")
+    done_session = root / "docs" / "tmp" / "done-session"
+    out1 = tmp_path / "candidates-first.txt"
+    out2 = tmp_path / "candidates-second.txt"
+
+    assert lib.main(
+        ["write-manifest", "--emit-foreign-candidates", str(out1),
+         "--owned-review", owned_rel]
+    ) == 0
+    assert lib.main(
+        ["write-manifest", "--emit-foreign-candidates", str(out2),
+         "--owned-review", owned_rel]
+    ) == 0
+
+    assert out1.read_bytes() == out2.read_bytes()
+    lines = out1.read_text(encoding="utf-8").splitlines()
+    assert lines == sorted(lines)
+    assert lines == sorted(unowned)
+    assert owned_rel not in lines
+    assert list(done_session.glob("run-manifest-*.json")) == []
+
+
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-09-28-em-dash-whole-file-gate-added-lines-selection.md
+# Task 2: done gate falls back to added-lines on pre-existing violations.
+# Fixture em-dash bytes are constructed at run time via the Python source
+# escape "\u2014"; a literal U+2014 byte never appears in this source.
+# --------------------------------------------------------------------------- #
+def copy_em_dash_script(root: Path) -> Path:
+    """Copy the repo's real check-no-em-dash.sh into the fixture scripts dir."""
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    target = scripts / "check-no-em-dash.sh"
+    target.write_text(
+        (SCRIPTS_DIR / "check-no-em-dash.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    return target
+
+
+def test_em_dash_fallback_preexisting_tracked_passes(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given a fixture repo whose tracked prose file
+    carries one committed em dash on an unchanged line while the working tree
+    adds one clean line to that file, expects the em-dash-scan gate to return
+    rc 0 with a message carrying the full baseline row shape
+    ``pre-existing (known-violation baseline): <path>:<line>`` for the fixture
+    path and line."""
+    root = make_repo(tmp_path, "emdash-preexisting", gitignore_docs=True)
+    write_facts(root)
+    copy_em_dash_script(root)
+    prose = root / "notes.md"
+    prose.write_text(
+        "committed intro\n" + "kept line with \u2014 dash\n", encoding="utf-8"
+    )
+    git(root, "add", "notes.md")
+    git(root, "commit", "-m", "prose with known violation", "-q")
+    prose.write_text(
+        "committed intro\n"
+        + "kept line with \u2014 dash\n"
+        + "clean added line\n",
+        encoding="utf-8",
+    )
+
+    result = run_gate("em-dash-scan", ctx_for(root))
+
+    assert result.rc == 0
+    assert "pre-existing (known-violation baseline): notes.md:2" in result.message
+
+
+def test_em_dash_fallback_untracked_still_fails(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given the same fixture shape but the dirty
+    prose path untracked, expects rc 1 naming that path with the reason marker
+    ``new prose must be whole-file clean``."""
+    root = make_repo(tmp_path, "emdash-untracked", gitignore_docs=True)
+    write_facts(root)
+    copy_em_dash_script(root)
+    (root / "draft.md").write_text(
+        "fresh prose with \u2014 dash\n", encoding="utf-8"
+    )
+
+    result = run_gate("em-dash-scan", ctx_for(root))
+
+    assert result.rc == 1
+    assert "draft.md" in result.message
+    assert "new prose must be whole-file clean" in result.message
+
+
+def test_em_dash_fallback_dirty_added_lines_still_fails(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given a tracked file whose working tree adds a
+    line carrying an em dash, expects rc 1 naming that path with the reason
+    marker ``added-lines`` (the fallback never launders dirty insertions)."""
+    root = make_repo(tmp_path, "emdash-dirty", gitignore_docs=True)
+    write_facts(root)
+    copy_em_dash_script(root)
+    prose = root / "prose.md"
+    prose.write_text("clean committed line\n", encoding="utf-8")
+    git(root, "add", "prose.md")
+    git(root, "commit", "-m", "clean prose", "-q")
+    prose.write_text(
+        "clean committed line\n" + "dirty insertion with \u2014 dash\n",
+        encoding="utf-8",
+    )
+
+    result = run_gate("em-dash-scan", ctx_for(root))
+
+    assert result.rc == 1
+    assert "prose.md" in result.message
+    assert "added-lines" in result.message
+
+
+def test_em_dash_fallback_mixed_hits_fail_untracked(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given a fixture repo holding one tracked file
+    with a committed dash on an unchanged line (clean added lines) plus one
+    untracked prose file carrying a dash, expects rc 1 naming the untracked
+    path with the reason marker ``new prose must be whole-file clean``; the
+    tracked pre-existing file must not short-circuit the untracked failure."""
+    root = make_repo(tmp_path, "emdash-mixed", gitignore_docs=True)
+    write_facts(root)
+    copy_em_dash_script(root)
+    tracked = root / "kept.md"
+    tracked.write_text(
+        "kept intro\n" + "kept line with \u2014 dash\n", encoding="utf-8"
+    )
+    git(root, "add", "kept.md")
+    git(root, "commit", "-m", "kept prose with known violation", "-q")
+    tracked.write_text(
+        "kept intro\n" + "kept line with \u2014 dash\n" + "kept clean tail\n",
+        encoding="utf-8",
+    )
+    (root / "fresh.md").write_text(
+        "fresh prose with \u2014 dash\n", encoding="utf-8"
+    )
+
+    result = run_gate("em-dash-scan", ctx_for(root))
+
+    assert result.rc == 1
+    assert "fresh.md" in result.message
+    assert "new prose must be whole-file clean" in result.message
+
+
+def test_em_dash_fallback_many_hits_full_enumeration(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given eleven tracked prose files each carrying
+    one committed em dash on an unchanged line while the working tree adds
+    only clean lines, expects rc 0 and one baseline row per hitting file in
+    the gate message, proving fallback enumeration is not limited to ten hits."""
+    root = make_repo(tmp_path, "emdash-many", gitignore_docs=True)
+    write_facts(root)
+    copy_em_dash_script(root)
+    paths = [f"notes-{index:02d}.md" for index in range(11)]
+    for rel_path in paths:
+        prose = root / rel_path
+        prose.write_text(
+            "committed intro\n" + "kept line with \u2014 dash\n", encoding="utf-8"
+        )
+    git(root, "add", *paths)
+    git(root, "commit", "-m", "prose with known violations", "-q")
+    for rel_path in paths:
+        prose = root / rel_path
+        prose.write_text(
+            "committed intro\n"
+            + "kept line with \u2014 dash\n"
+            + "clean added line\n",
+            encoding="utf-8",
+        )
+
+    result = run_gate("em-dash-scan", ctx_for(root))
+
+    expected_rows = [
+        f"pre-existing (known-violation baseline): {rel_path}:2"
+        for rel_path in paths
+    ]
+    assert result.rc == 0
+    assert [row for row in expected_rows if row in result.message] == expected_rows
+    assert result.message.count("pre-existing (known-violation baseline):") == 11
+
+
+def test_docs_tmp_sweep_keeps_baseline_holding_archived_session(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] An archived-plan execute-plan session still
+    holding its captured closeout-baseline.json (regular file) survives the
+    sweep with the kept witness rendered in the gate message; a baseline-less
+    archived session is still removed; a pending-plan session holding a
+    baseline keeps the active: reason (the two exemptions never collide)."""
+    root = make_repo(tmp_path, "sweep-baseline", gitignore_docs=True)
+    write_facts(root)
+    plans_dir = root / "docs/history/plans"
+    completed_dir = root / "docs/history/plans/completed"
+    plans_dir.mkdir(parents=True)
+    completed_dir.mkdir(parents=True)
+    arch_plan = "2026-09-30-archived-baseline-plan.md"
+    live_plan = "2026-09-30-live-baseline-plan.md"
+    (completed_dir / arch_plan).write_text("archived\n", encoding="utf-8")
+    (plans_dir / live_plan).write_text("live\n", encoding="utf-8")
+    tmp_dir = root / "docs/tmp"
+    holder = tmp_dir / "execute-plan" / arch_plan[:-3]
+    holder.mkdir(parents=True)
+    (holder / "closeout-baseline.json").write_text("{}\n", encoding="utf-8")
+    (holder / "task-1-implement.log.md").write_text("log\n", encoding="utf-8")
+    bare = tmp_dir / "execute-plan" / "2026-09-30-archived-bare-plan.md"
+    bare.mkdir(parents=True)
+    (bare / "manifest.md").write_text("stale\n", encoding="utf-8")
+    (completed_dir / "2026-09-30-archived-bare-plan.md").write_text("archived\n", encoding="utf-8")
+    pending_holder = tmp_dir / "execute-plan" / live_plan[:-3]
+    pending_holder.mkdir(parents=True)
+    (pending_holder / "closeout-baseline.json").write_text("{}\n", encoding="utf-8")
+    write_manifest(root, live_plan[:-3], fresh_iso())
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+    assert result.rc == 0
+    assert holder.exists() and (holder / "closeout-baseline.json").is_file()
+    assert (holder / "task-1-implement.log.md").exists(), "baseline-holding session survives whole"
+    assert not bare.exists(), "baseline-less archived session still removed"
+    assert pending_holder.exists()
+    assert "closeout baseline present" in result.message, result.message
+    assert "transfer-out may be pending" in result.message, result.message
+    assert "(active: plan still pending)" in result.message, result.message

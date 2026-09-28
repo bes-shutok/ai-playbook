@@ -13,6 +13,7 @@ Two thin modes over one detection core, plus one commit-inspection mode:
       orphan-squash defect (2026-09-27: commit 351f704f) and is refused.
 
 Exit codes: 0 clean, 1 refusal with named evidence, 2 tool failure.
+  Stale-checkout adjudication: a refused or suspect entry whose blob equals the path's blob at an ancestor commit is a stale witness per the stale-checkout discriminator in the Worktree-first standard section of agents/skills/execute-plan/SKILL.md; restore-and-record, never commit.
 """
 
 import re

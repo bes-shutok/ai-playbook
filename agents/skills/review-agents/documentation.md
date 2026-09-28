@@ -229,7 +229,7 @@ Apply when a comment, doc section, or document contradicts what the current code
 
 Boundary: when the outdated text is a normative contract consumers rely on (OpenAPI, public API docs), the mismatch is a correctness/contract finding owned by `quality.md`; this agent still owns the prose disposition (fix in place, soften, remove, or freeze).
 
-Contradictions between two normative statements stay with consistency.md; the stale-semantics sweep above stages findings for single statements of the old semantics, not for inter-statement contradiction arbitration.
+Contradictions between two normative statements stay with consistency.md; the stale-semantics sweep above stages findings for single statements of the old semantics, not for inter-statement contradiction arbitration; in code reviews the sweep still stages each stale statement, and the consistency pointer does not retract that behavior.
 
 Use pattern `documentation#prose-outdated-doc` for remove-or-freeze findings. In code review, scope is prose in the diff plus contradictions the diff introduces into existing docs; docs outside the diff follow the orchestrator's doc-scope rules (`doing-code-review` §4.9.2).
 
@@ -251,9 +251,9 @@ Pattern: `documentation#prose-relocatable-identifier-inventory`
 
 ### Severity (phase 2)
 
-**Default Low** for all prose findings (per doing-code-review §4.9.0: documentation/inline-comment asks are Low, subject to the same-diff relocatable-inventory override below). Carve-out: a comment or operator-doc inventory that contradicts a path in the same diff is operability drift staged Medium per the new severity-calibration row (see the Relocatable identifier inventory gate).
+**Default Low** for all prose findings (per doing-code-review §4.9.0: documentation/inline-comment asks are Low, subject to the same-diff relocatable-inventory override below). Carve-out: a comment or operator-doc inventory that contradicts a path in the same diff is operability drift staged Medium per the severity-calibration Category defaults row (see the Relocatable identifier inventory gate).
 
-Do not assign Medium+ to prose findings outside that class: prose findings stage Low except the same-diff relocatable-inventory contradiction class, which stages Medium operability drift per the new severity-calibration row.
+Do not assign Medium+ to prose findings outside that class: prose findings stage Low except the same-diff relocatable-inventory contradiction class, which stages Medium operability drift per the severity-calibration Category defaults row. Prose findings stage Low except the relocatable-inventory class and the severity-calibration promotion rows, which follow their recorded promotion columns (the calibration-promotion exception).
 
 ### Output (code review)
 

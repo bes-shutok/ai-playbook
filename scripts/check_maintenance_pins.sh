@@ -826,8 +826,10 @@ pin "authoring slice payload-region wording" grep -qF 'observed dispatch practic
 # recipe-delegating re-arm sentences take the count to 2
 pin "payload re-arm sentence set count" test "$(grep -oF 'restore the maintenance loop parent state-first, without listing first' "$P" | wc -l | tr -d ' ')" -eq 2
 # 2026-09-25 parked-dependency visibility Task 6: the unblock template's
-# closing park-discharge and compaction duties take the counts up by one each
-pin "FINAL STEP compaction sentence count" test "$(grep -oF 'FINAL STEP, after the report: compact this session' "$P" | wc -l | tr -d ' ')" -eq 4
+# closing park-discharge and compaction duties take the counts up by one each;
+# 2026-09-28 continuation policy plan: the tails are reworded (compaction is
+# operator-only) and gated by the plan's positive-count checks, the prefix stays
+pin "FINAL STEP prefix count" test "$(grep -oF 'FINAL STEP, after the report:' "$P" | wc -l | tr -d ' ')" -eq 4
 
 # --- authoring claim file surfaces (scheduler ops lanes and durability plan, Task 1) ---
 # The 2026-09-18 authoring-lane collision (automation-343ce2b0 vs a foreign
@@ -959,11 +961,16 @@ if "cron expression" in paras[0]:
     print("PIN FAIL: re-arm paragraph hardcodes the cadence; creation must follow the recipe"); sys.exit(1)
 # ordering pins (region-scoped to the execution inner block): the payload must
 # chain the successor before the final compaction step, and the resume rule
-# must sit after the PRE-STEP gate; every predecessor anchor is fail-closed
-for needle in ("Finally squash merge to main", "SUCCESSOR DISPATCH", "FINAL STEP",
+# must sit after the PRE-STEP gate; every predecessor anchor is fail-closed.
+# r2 F7: the final-merge lead-in keys on the landing-target wording, never on
+# the bare old lead-in (the literal "to main" was a shared-prose hardcode the
+# consolidation review retired). r5 resolution: the tail pins the default
+# branch per the majority reading; the literal 'to main' stays retired, and
+# the generic default-branch wording is not a repository-name hardcode.
+for needle in ("Finally squash merge to the repository's default branch", "SUCCESSOR DISPATCH", "FINAL STEP",
                "once the gate exits 0", "this is a resume run"):
     need(inner, needle)
-if not inner.index("Finally squash merge to main") < inner.index("SUCCESSOR DISPATCH") < inner.index("FINAL STEP"):
+if not inner.index("Finally squash merge to the repository's default branch") < inner.index("SUCCESSOR DISPATCH") < inner.index("FINAL STEP"):
     print("PIN FAIL: execution payload ordering drifted (squash merge < SUCCESSOR DISPATCH < FINAL STEP)"); sys.exit(1)
 if not inner.index("once the gate exits 0") < inner.index("this is a resume run"):
     print("PIN FAIL: execution payload ordering drifted (resume rule must follow the PRE-STEP gate)"); sys.exit(1)
@@ -1024,13 +1031,16 @@ if "carries a mode of `authoring-only` or `execution-only`" not in recipe_region
 # merge landing lock group (plan 2026-09-20-merge-landing-lock-grouping):
 # each blueprint acquires the merge landing lock exactly once (the dated
 # deviation-list entries paraphrase the literal, so the count stays 2), the
-# authoring blueprint carries the worktree isolation fragment, and the
+# authoring blueprint carries the worktree-first reference span (re-keyed
+# 2026-09-28 by the worktree-first standard consolidation, plan
+# 2026-09-28-worktree-first-standard-only-mode.md Task 4: the retired
+# create-command literal was the old key), and the
 # superseded riding sentence is absent from the fenced blueprint bodies
 # (region-scoped like the checkbox-regex pin above, so the dated deviation-list
 # history entry outside the fences stays legal).
 if p.count("merge-wait-acquire") != 2:
     print("PIN FAIL: merge-wait-acquire count %d != 2 in prompt-templates.md (once per blueprint)" % p.count("merge-wait-acquire")); sys.exit(1)
-need(norm(p), "git worktree add -b YYYY-MM-DD-authoring-<slug> <sibling-path> <default-branch>")
+need(norm(p), "per the Worktree-first standard section in agents/skills/execute-plan/SKILL.md; that worktree's own branch is the authoring branch")
 fence = "```"
 bodies = re.findall(r"^" + fence + r"\n(.*?)^" + fence + r"$", p, re.S | re.M)
 if not bodies:
@@ -1043,9 +1053,18 @@ if hits:
 # r2-generation landing invariants are pinned scoped to the authoring body
 # itself; the dated deviation-list entries only paraphrase these literals,
 # so a body-scoped check cannot be satisfied by the registration prose.
-auth_bodies = [b for b in bodies if "git worktree add -b YYYY-MM-DD-authoring-<slug>" in norm(b)]
+# The filter keys on the new authoring reference sentence's distinctive span
+# (re-keyed 2026-09-28, worktree-first standard consolidation, plan
+# 2026-09-28-worktree-first-standard-only-mode.md Task 4; the span lives
+# inside the authoring fenced body and is unique there and whole-file).
+auth_bodies = [b for b in bodies if "per the Worktree-first standard section in agents/skills/execute-plan/SKILL.md; that worktree's own branch is the authoring branch" in norm(b)]
 if len(auth_bodies) != 1:
     print("PIN FAIL: could not uniquely identify the authoring blueprint body"); sys.exit(1)
+# r2 F5: the authoring span's exactly-once whole-file count is normalized
+# here (beside the filter it protects) instead of a line-bound grep -oF, so
+# the whole re-keyed pin family shares one wrap tolerance.
+if norm(p).count("per the Worktree-first standard section in agents/skills/execute-plan/SKILL.md; that worktree's own branch is the authoring branch") != 1:
+    print("PIN FAIL: authoring worktree-first reference span count != 1 (auth_bodies identification would degenerate)"); sys.exit(1)
 for needle in ("git add -- <paths>",
                "git update-ref refs/heads/<default> <new> <old>",
                "git show refs/heads/<default>:"):
@@ -1067,14 +1086,24 @@ if len(exec_bodies) != 1:
     print("PIN FAIL: could not uniquely identify the execution blueprint body"); sys.exit(1)
 if "authoring-claims" in exec_bodies[0] or "authoring-claims" in inner:
     print("PIN FAIL: execution blueprint carries the authoring-claims literal (a foreign-claim false trip would stall G1a)"); sys.exit(1)
-# P57 per-execution worktree isolation plan Task 4 (plan
-# 2026-09-24-p57-per-execution-worktree-isolation.md): the execution body must
-# never carry the authoring worktree literal (mirroring the authoring-claims
-# absence half above; the execution run's worktree branches per its own
-# create command, and a stray authoring literal here would also break the
-# auth_bodies exactly-once identification pinned in the Task 4 block below).
-if "git worktree add -b YYYY-MM-DD-authoring-<slug>" in exec_bodies[0]:
-    print("PIN FAIL: execution blueprint carries the authoring worktree literal (the execution run's worktree branches per its own create command)"); sys.exit(1)
+# r1 F10 (worktree-first consolidation review): the execution-body absence half for the authoring identification span was dropped as provably unreachable: the auth_bodies exactly-once check above already fails every corruption shape it claimed (a stray copy in the execution body makes len(auth_bodies) != 1, and the python block's normalized whole-file count pin above catches any copy anywhere; the shell section below carries no such pin), so no check remains here on purpose.
+# r1 F3 (worktree-first consolidation review): the execution blueprint's and
+# the unblock template's worktree-first reference sentences are pinned
+# exactly-once whole-file (wrap-tolerant, normalized) and body-scoped, so
+# wholesale deletion of either paragraph fails the suite; the deviation-list
+# entries outside the fences paraphrase and must not carry the spans.
+# r2 F5: the unblock identification filter keys on norm(b) like the
+# auth_bodies filter above, so the pin family shares one wrap tolerance.
+exec_wf_span = "own ad-hoc worktree on its own branch per the Worktree-first standard section in agents/skills/execute-plan/SKILL.md"
+unblock_wf_span = "works inside its own ad-hoc worktree created per the Worktree-first standard section in agents/skills/execute-plan/SKILL.md"
+unblock_bodies = [b for b in bodies if "WORK ORDER (the target plan is the serialized plan" in norm(b)]
+if len(unblock_bodies) != 1:
+    print("PIN FAIL: could not uniquely identify the unblock blueprint body"); sys.exit(1)
+for wf_span, wf_body, wf_desc in ((exec_wf_span, exec_bodies[0], "execution"), (unblock_wf_span, unblock_bodies[0], "unblock")):
+    if norm(p).count(wf_span) != 1:
+        print("PIN FAIL: %s worktree-first reference span count %d != 1 (wrap-tolerant whole-file)" % (wf_desc, norm(p).count(wf_span))); sys.exit(1)
+    if wf_span not in norm(wf_body):
+        print("PIN FAIL: %s worktree-first reference span missing from its fenced blueprint body" % wf_desc); sys.exit(1)
 # execution-integrity worker-evidence plan Task 3: the payload tail claim
 # duty. Scoped to the Schedule-at paragraph itself (distinct from the
 # whole-body authoring pin above): the payload paragraph is what scheduled
@@ -1232,6 +1261,27 @@ pin "worktree bootstrap names the unlanded-plan remedy" grep -qF 'cherry-pick on
 # must name the store's turn_usage table (the live-verified source or the
 # recorded negative, per the variant applied).
 pin "measurement primitive names turn_usage" grep -qF 'turn_usage' "$Z"
+# --- worktree-first r3 witness needles (plan
+# 2026-09-28-worktree-first-standard-only-mode.md, review round 3 address) ---
+# Exactly-once, wrap-tolerant (normalized) presence pins over the canonical
+# Worktree-first section's two r2/r3 fix-commit paragraphs in execute-plan
+# SKILL.md: the Provisioned-worktree adoption paragraph and the Base-branch
+# resolution rule's origin-HEAD fallback arm. Whole-file greps would satisfy a
+# stray copy in another file's prose, so both are scoped to "$E" and counted
+# normalized, per the r2 F5 wrap-tolerance convention; wholesale deletion of
+# either paragraph empties its count and fails here.
+python3 - "$E" <<'EOF' || fail=1  # r7 F1: propagate the block status; without this the block is fail-open at the exit-code surface
+import sys
+e = open(sys.argv[1]).read()
+def norm(t): return " ".join(t.split())
+for desc, needle in (
+    ("Provisioned-worktree adoption paragraph", "Provisioned-worktree adoption"),
+    ("base-branch origin-HEAD fallback arm", "resolves its default branch via the origin HEAD symbolic ref"),
+):
+    n = norm(e).count(needle)
+    if n != 1:
+        print("PIN FAIL: %s count %d != 1 in execute-plan SKILL.md" % (desc, n)); sys.exit(1)
+EOF
 [ "$fail" -eq 1 ] && exit 1
 
 # --- discovery ladder rung 1 bound (P36 scheduler durability and audit plan, Task 5) ---
@@ -1647,7 +1697,7 @@ pin "P57 S21 ref-based archival read" grep -qF 'the archival arm is read ref-bas
 # P54 Revisions ledger entry's lowercase historical wording cannot satisfy or
 # break them; the S10 count is exactly-once so a duplicated ledger entry fails.
 pin "P57 S7 fleet-cap execution-isolation sentence" grep -qF 'EXECUTION ISOLATION (landed 2026-09-24, P57' "$S"
-pin "P57 S8 Invariants worktree-isolated fleet-member clause" grep -qF 'execution children run in per-execution ad-hoc worktrees off the default-branch snapshot' "$S"
+pin "P57 S8 Invariants worktree-isolated fleet-member clause" grep -qF 'execution children run in per-execution ad-hoc worktrees per the Worktree-first standard' "$S"
 pin "P57 S9 stance rework-executed lead-in (region-scoped)" bash -c "awk '/^### Execution-lane concurrency stance/{f=1; next} /^## Revisions/{f=0} f' \"$S\" | grep -qF 'REWORK EXECUTED (landed 2026-09-24, P57'"
 pin "P57 S9 stance overlap-shapes tail (region-scoped)" bash -c "awk '/^### Execution-lane concurrency stance/{f=1; next} /^## Revisions/{f=0} f' \"$S\" | grep -qF 'up to four concurrent children across mixed kinds with executions worktree-isolated'"
 expect_absent "retired INTERIM EXECUTION CONSTRAINT heading must be absent from SKILL.md (the ledger's lowercase historical wording must not satisfy or break this)" 'INTERIM EXECUTION CONSTRAINT' "$S"
@@ -1670,22 +1720,35 @@ pin "P57 S11 zcode markers worktree-isolated fleet clause" grep -qF 'execution c
 pin "P57 S12 zcode ladder single-child-hold-retired clause" grep -qF 'retired 2026-09-24 by P57' "$Z"
 [ "$fail" -eq 1 ] && exit 1
 
-# --- execution blueprint Phase 0 per-execution worktree pins (plan
-# 2026-09-24-p57-per-execution-worktree-isolation.md, Task 4) ---
-# Companion pins for the blueprint's PER-EXECUTION WORKTREE paragraph, the
-# per-run pre-Phase-0 gate rewording, and the Execute-paragraph rewording. S13
-# is counted exactly-once across the whole file: the literal lives only inside
-# the execution body (the authoring worktree literal is barred from the execution body by the
-# python absence half above, and the dated deviation-list entry paraphrases
-# the command, never quoting it), so the whole-file count is body-scoped by uniqueness. The authoring
-# worktree literal stays exactly-once for the same reason: a stray copy
-# anywhere would degenerate the suite's auth_bodies identification above (the
-# authoring-body python filter keys on it). S14 and S15 are dedicated
-# fixed-string presence greps that fail when their span is deleted.
-[ "$(grep -oF 'git worktree add -b <execution-branch> <sibling-path> <default-branch>' "$P" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: P57 S13 execution worktree create-literal count != 1"; fail=1; }
-[ "$(grep -oF 'YYYY-MM-DD-authoring-<slug>' "$P" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: authoring worktree literal count != 1 (auth_bodies identification would degenerate)"; fail=1; }
-pin "P57 S14 Linked-worktree bootstrap recipe span" grep -qF 'Linked-worktree bootstrap recipe' "$P"
-pin "P57 S15 per-run pre-Phase-0 gate span" grep -qF "the run's own done lock is free (done locks are keyed per-worktree" "$P"
+# --- execution blueprint per-execution worktree pins (plan
+# 2026-09-24-p57-per-execution-worktree-isolation.md, Task 4; dispositions
+# re-keyed by the worktree-first standard consolidation, plan
+# 2026-09-28-worktree-first-standard-only-mode.md Task 4) ---
+# The 2026-09-28 consolidation replaced the blueprint's per-execution
+# worktree paragraph and its per-run pre-work gate paragraph with references
+# to the Worktree-first standard section in the execute-plan skill, retiring
+# the P57 payload spans: S13 (the execution create-literal count) and the
+# authoring create-literal count became wrap-tolerant freeze-absent pins (the
+# create commands are canonical-section owned; the retired literals must not
+# return); S14 (the Linked-worktree bootstrap recipe span pin) is dropped
+# (that recipe name was REMOVED from the skill by that plan's Task 2, not
+# folded under it; the canonical section's Transfer-in implementation is the
+# successor span, and scripts/test_execute_plan_worktree_bootstrap.py is that
+# span's operative guard, so no span pin remains here to protect); S15 is
+# re-keyed on the rewritten per-run pre-work gate span. The
+# new authoring reference span is count-gated exactly-once whole-file for the
+# same reason the old authoring create literal was: a stray copy anywhere
+# would degenerate the suite's auth_bodies identification above (the
+# authoring-body python filter keys on it); the count itself lives in the
+# python block beside that filter as a normalized count (r2 F5), replacing
+# the line-bound grep this block used to carry. The execution and unblock
+# bodies' own worktree-first reference sentences are pinned exactly-once
+# (wrap-tolerant) and body-scoped in the python block above (consolidation
+# review r1 F3), so wholesale deletion of either paragraph fails the suite.
+expect_absent_flat "retired execution worktree create literal must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-09-28 by the worktree-first consolidation)" 'git worktree add -b <execution-branch> <sibling-path> <default-branch>' "$P"
+expect_absent_flat "retired authoring worktree create literal must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-09-28 by the worktree-first consolidation)" 'git worktree add -b YYYY-MM-DD-authoring-<slug> <sibling-path> <default-branch>' "$P"
+expect_absent_flat "retired authoring payload worktree create literal must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-09-28 by the worktree-first consolidation)" 'git worktree add -b <date>-authoring-<slug> <sibling-path> <default-branch>' "$P"
+pin "per-run pre-work gate span (re-keyed 2026-09-28; was P57 S15)" grep -qF "the run's own per-worktree done lock is free" "$P"
 [ "$fail" -eq 1 ] && exit 1
 
 # --- execution blueprint dual-arm landing and per-worktree archive pins (plan
@@ -1828,9 +1891,9 @@ expect_absent "retired no-clock execution dispatch wording must be absent from S
 expect_absent "retired clocked-only trap-sentence wording must be absent from zcode.md" 'stays clocked-only' "$Z"
 [ "$fail" -eq 1 ] && exit 1
 
-# --- task-boundary compaction duty and queue-drain fold pins (plan
+# --- task-boundary checkpoint duty and queue-drain fold pins (plan
 # 2026-09-26-p64-execution-lane-liveness-long-session-continuity.md, Task 3) ---
-# Companion pins for the task-boundary compaction duty and the densified
+# Companion pins for the task-boundary checkpoint duty and the densified
 # execution-claim refresh record. The two P pins are count-gated at exactly
 # once whole-file (the grep -oF | wc -l count form) so the deviation-ledger
 # entry (which names the anchors by description only) or any stray duplicate
@@ -1842,9 +1905,11 @@ expect_absent "retired clocked-only trap-sentence wording must be absent from zc
 # (rc 1 = clean, rc >= 2 = grep error fails), freezing the retired
 # one-execution-child guard wording out of the execute-plan skill after the
 # queue-drain fold named the asserted-unchanged guard family instead.
-pin "execution blueprint task-boundary compaction paragraph anchor" test "$(grep -oF 'TASK-BOUNDARY COMPACTION' "$P" | wc -l | tr -d ' ')" -eq 1
+# 2026-09-28 continuation policy plan: duty renamed TASK-BOUNDARY CHECKPOINT
+pin "execution blueprint task-boundary checkpoint paragraph anchor" test "$(grep -oF 'TASK-BOUNDARY CHECKPOINT' "$P" | wc -l | tr -d ' ')" -eq 1
 pin "densified execution-claim refresh record exactly-once" test "$(grep -oF 'at every task completion inside the implementation loop' "$P" | wc -l | tr -d ' ')" -eq 1
-pin "execute-plan task-boundary compaction duty policy anchor" grep -qF 'Task-boundary compaction duty' "$E"
+# 2026-09-28 continuation policy plan: mirrored duty rename in execute-plan
+pin "execute-plan task-boundary checkpoint duty policy anchor" grep -qF 'Task-boundary checkpoint duty' "$E"
 pin "queue-drain fold names the asserted-unchanged guard family" grep -qF 'lane guard and the P54 fleet cap' "$E"
 pin "pins header existence loop covers E" grep -qE '^for f in "\$S" "\$Z" "\$P" "\$D" "\$E"; do$' "${BASH_SOURCE[0]}"
 expect_absent "retired one-execution-child guard wording must be absent from the execute-plan skill" 'one-execution-child guard' "$E"

@@ -11,9 +11,9 @@ description: "Full plan lifecycle; create, edit, and complete implementation pla
 
 **Announce at start (update / complete):** "I'm using the plans skill to update the plan." (or "…mark the plan complete.")
 
-**Create vs update:** Run **Phase 0 (branch setup)** and **Phase 1 (requirements discovery)** only when **creating** a new plan. Skip both phases for plan updates or completion unless the repo is in detached HEAD or the user asks to switch branches.
+**Create vs update:** Run **Phase 0 (authoring worktree setup)** at the start of every authoring session: plan creation, plan updates, and completion (marking a plan done) each set up the ad-hoc worktree first per the **Worktree-first standard** (see Phase 0 below). Only **Phase 1 (requirements discovery)** is create-only; skip it for plan updates or completion.
 
-**Writing:** Follow `agent_workflow_guidelines.md` §45. Use plain English in **Gist & Examples** and **Design Invariants** (e.g. "public API response shape unchanged", not "wire contract stable"). When a plan's correctness story requires verbatim multi-line bash embedded in a skill or document, treat that as a design smell and prescribe a runnable carrier instead: a real script file under scripts/ that tests call directly, with the prose carrying only invocation and judgment steps; a review lens treats a verbatim-block prescription in a plan as a finding candidate. Add `## Terms` after the title when the plan uses 3+ project-specific words. TDD labels (RED/GREEN) stay in task checklists only. When a plan embeds an exact-content artifact that itself contains fenced code blocks (a canary fixture, a file template), wrap the outer fence in four backticks; a three-backtick outer fence closes at the artifact's first inner fence and makes the content boundary ambiguous. Before each plan-file Write, refresh the skill-gate marker per `ai-playbook/agents/hooks/skill-gate/README.md` (the recipe derives `project` and `session` per Terms (Skill-gate marker; Session key), invokes the shared `session_channel.py` subprocess VERBATIM, ensures `~/.ai-playbook/runtime/skill-invoked/` exists, then ATOMICALLY writes the marker, and is FAIL-LOUD). Run this on EVERY plan-file write, including updates and completion, not only at create-only Phase 0. In an ad-hoc-worktree session the marker MUST be keyed to the WRITE TARGET's project derivation (the worktree root): run the recipe CLI from inside the worktree or pass `--cwd <write-target project root>`, never from the session's default or primary-checkout cwd. This skill and the gate adapter share the ONE helper subprocess (Family D: single source of truth); do NOT inline the path/body/window constants here, the full `project`/`session` derivation lives only in the plan Terms. **After each successful plan-file mutation under `{plans_dir}` (Write, Edit, or StrReplace; excluding `{plans_completed_dir}`), append the repo-relative plan path to `{tmp_dir}/done-session/plan-deliverables.txt`** (create the directory/file if missing; one path per line; skip duplicates). That file is the producer the pre-docs sweep gate run's plan-readiness gate reads when porcelain is clean after a mid-session commit.
+**Writing:** Follow `agent_workflow_guidelines.md` §45. Use plain English in **Gist & Examples** and **Design Invariants** (e.g. "public API response shape unchanged", not "wire contract stable"). When a plan's correctness story requires verbatim multi-line bash embedded in a skill or document, treat that as a design smell and prescribe a runnable carrier instead: a real script file under scripts/ that tests call directly, with the prose carrying only invocation and judgment steps; a review lens treats a verbatim-block prescription in a plan as a finding candidate. Add `## Terms` after the title when the plan uses 3+ project-specific words. TDD labels (RED/GREEN) stay in task checklists only. When a plan embeds an exact-content artifact that itself contains fenced code blocks (a canary fixture, a file template), wrap the outer fence in four backticks; a three-backtick outer fence closes at the artifact's first inner fence and makes the content boundary ambiguous. Before each plan-file Write, refresh the skill-gate marker per `ai-playbook/agents/hooks/skill-gate/README.md` (the recipe derives `project` and `session` per Terms (Skill-gate marker; Session key), invokes the shared `session_channel.py` subprocess VERBATIM, ensures `~/.ai-playbook/runtime/skill-invoked/` exists, then ATOMICALLY writes the marker, and is FAIL-LOUD). Run this on EVERY plan-file write, including updates and completion. In an ad-hoc-worktree session the marker MUST be keyed to the WRITE TARGET's project derivation (the worktree root): run the recipe CLI from inside the worktree or pass `--cwd <write-target project root>`, never from the session's default or primary-checkout cwd. This skill and the gate adapter share the ONE helper subprocess (Family D: single source of truth); do NOT inline the path/body/window constants here, the full `project`/`session` derivation lives only in the plan Terms. **After each successful plan-file mutation under `{plans_dir}` (Write, Edit, or StrReplace; excluding `{plans_completed_dir}`), append the repo-relative plan path to `{tmp_dir}/done-session/plan-deliverables.txt`** (create the directory/file if missing; one path per line; skip duplicates). That file is the producer the pre-docs sweep gate run's plan-readiness gate reads when porcelain is clean after a mid-session commit.
 
 **Exploration discipline:** When creating a plan, use targeted grep/glob to find file paths, class names, and method signatures. Do not read full test files or deeply explore implementation details beyond what is needed to write accurate file paths and test method names in plan tasks. Produce the plan file promptly; do not keep exploring after you have enough to write the tasks. **Before writing any exact file path in a plan task, verify it exists** with glob/bash; an unverified path is a review blocker that only the quality gate catches. **Verify batch semantics against the local source and migration documents before choosing a generic partitioning or classification design:** distinguish the documented payload shape, per-item outcome contract, and adjacent event flows from the rollout scope actually requested. **Behavioral claims need a probe, not an absence-grep:** verify what passes/fails and the exact error text by exercising the real function or validator once; absence of a gate's error string in the source, or a claim inherited from a backlog item or review finding, is not verification (user-level lessons #56, #246). Superlative or comparative prose claims inherited from the origin prompt or backlog text ("the oldest X", "the only Y") are measured against the actual corpus before entering plan prose; the origin text asserting them is not evidence (a review caught "oldest unclaimed backlog item" as false: an older open item existed). **Origin acceptance that contradicts a current SOT placement rule is rewritten, not inherited:** when the origin backlog item's acceptance criteria encode a superseded placement or process, rewrite them to the SOT-correct form before authoring tasks and record the rewrite in the plan's assumptions; never carry the stale acceptance into tasks. Standing example: a completed-history item asking to "document local enablement in the ops guide" is rewritten to the doc-hierarchy one-recipe form per the `doc-hierarchy` company-decisions Layer 2 placement (review-side backstop: the review-plan closure matrix bullet). A behavior-change fixture's expected post-state is such a claim: produce it by running today's code on the fixture input and then the prescribed rule (a simulation suffices), never by hand-editing today's transcript, and execute every defang or parity assert against the real fixture build (user-level lesson #253). When the plan prescribes a fix, the defect probe alone is not enough: simulate the prescribed fix against the real code for every variant the acceptance criterion quantifies, and pin each family member with its own RED canary; a sibling shape can re-mask through the fix's remaining code paths when only one representative instance was probed (user-level lesson #317). Shared-body forbidden-term precheck (P51 origin 4): when a plan prescribes literal insertions into a shared skill body covered by the consumer repository's shared-body forbidden-term gates (this repository: the shared-file set and forbidden-term tuple of test_shared_skill_bodies_remain_runtime_neutral in scripts/test_execute_plan_runtime.py), sweep each prescribed insertion's exact text against that gate's term list before certification, honoring the gate's sanctioned path-literal replacements, and either reword the prescribed text or declare the gate amendment in the plan's Review Scope; an insertion that ships a forbidden term turns the consumer repo's mid-run full suite RED outside the plan's declared scope, and the executor then widens a frozen test file as plan-related regression repair.
 
@@ -32,107 +32,27 @@ When an RFC phase already has its own implementation Jira task, use that phase t
 
 **Origins block shape:** when the plan header uses the plural `Backlog origins (scope of record):` block, the bulleted origin list is contiguous with the header line or separated by exactly one blank line; a blank line after the list begins ends the block. The origins checker parses exactly this grammar and warns when its parsed origin count undercounts the plan's origins-dispositions list, so a deviant shape silently ungates promoted items.
 
-## Phase 0: Branch Setup (Run Once at Plan Creation Start)
+## Phase 0: Authoring Worktree Setup (Run at Every Authoring Session Start)
 
-Before writing the plan file, set up a dedicated branch when appropriate. Planning often overlaps with early exploration, scaffolding, and the first commits; isolating that work on a feature branch keeps `main`/`develop` clean and aligns the plan with the branch that will carry implementation.
+Before any plan work, set up the session's ad-hoc worktree. The **Worktree-first standard** section in `agents/skills/execute-plan/SKILL.md` owns the canonical lifecycle; this phase adds only the authoring specifics below and never restates those steps. Plan creation, plan updates, and completion all run this setup (see **Create vs update** above).
 
-**Announce:** "Before creating the plan, I'll set up a dedicated branch. This keeps planning and implementation isolated from other work."
+**Announce:** "Before writing or editing the plan, I'll set up the session's ad-hoc worktree. This keeps authoring isolated from the primary checkout."
 
-### Step 0.1; Propose branch creation
+### Step 0.1: Create the worktree and transfer the facts in
 
-Ask the user for confirmation to create a new branch:
+Create the ad-hoc worktree on its own branch off the base branch resolved by the canonical section's **Base-branch resolution rule**, and report the worktree path and branch name. Then transfer the project facts document in per the canonical section's **Transfer-in implementation**: a worktree's gitignored directories start empty, so copy `.ai-playbook/facts.md` (plus any other gitignored inputs this authoring session resolves, such as the reviews directory) in before any gate or plan-file write.
 
-**Branch naming convention:**
+Already-provisioned recognition arm: when the authoring session already runs inside its dispatch-provisioned ad-hoc worktree, that payload-created worktree satisfies this phase per the canonical section's provisioned-worktree adoption rule (Worktree-first standard, lifecycle step 1): adopt it instead of creating a second, key plan-file writes to its root per Step 0.2, and treat the worktree setup as complete once the adoption check passes. The worktree's own branch is the authoring branch.
 
-1. Extract Jira task ID from user context if present (pattern: `[A-Z]+-\d+`, e.g. `PROJ-1234`)
-2. If found: branch name = `<JIRA-TASKID>-<short-description>`
-3. If not found: branch name = `YYYY-MM-DD-<short-description>`
+### Step 0.2: Key plan-file writes to the worktree root
 
-`<short-description>` is derived from the feature name or planned plan slug, kebab-case, max ~40 chars.
+Every plan-file write in this session lands inside the worktree, and the skill-gate marker recipe keys its project root from the write target (see **Writing** above): refresh the marker against the worktree root before each write, never against the primary checkout.
 
-**Automatic path from clean trunk (fail-closed):** before asking, check the auto-branch conditions. When all of the following hold:
-
-- the current branch is exactly `master` or `main` (not detached HEAD, not any other branch),
-- both `git status --porcelain` and `git status --porcelain --ignored` are empty (non-empty ignored content keeps the confirmation; it may be user content that must not be buried by a branch switch),
-- the proposed branch name is derived from the requested task or plan slug via the naming convention above, and
-- the destination branch does not already exist (`git rev-parse --verify` fails for it, local or remote),
-
-then create and verify the local feature branch via Step 0.2 without asking for branch confirmation, and report what was created. Every other case keeps the explicit confirmation ask below: detached HEAD, dirty tracked content, untracked content, non-empty ignored content, a non-trunk base, an ambiguous target, an existing destination branch, or any history-rewriting operation. The automatic path does not skip or satisfy the requirements confirmation (Phase 1 still runs in full).
-
-Truth table (A = auto-branch without ask, C = explicit confirmation):
-
-```
-- clean `master`, computed name, no destination: A
-- clean `main`, computed name, no destination: A
-- dirty tracked content on trunk: C
-- untracked content on trunk: C
-- non-empty ignored content on trunk: C
-- non-trunk base (e.g. `develop` or a feature branch): C
-- detached HEAD: C
-- existing destination branch: C
-- ambiguous target or any history-rewriting operation: C
-```
-
-Ask the user:
-
-```
-I'll create a new local branch for this plan:
-- Base: current branch (<current-branch>)
-- New branch name: <computed-branch-name>
-- Push stays off until you explicitly ask to push
-
-Proceed with branch creation? (yes/no)
-```
-
-Wait for explicit user confirmation before proceeding.
-
-### Step 0.2; Create the branch
-
-If the user confirms (yes):
-
-```bash
-# From user context / ticket / proposed filename
-JIRA_ID="<PROJ-1234-or-empty>"
-FEATURE_DESC="<short feature description>"
-
-if [ -n "$JIRA_ID" ]; then
-    SHORT_DESC="$(echo "$FEATURE_DESC" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g' | sed 's/-$//' | cut -c1-40)"
-    BRANCH_NAME="${JIRA_ID}-${SHORT_DESC}"
-else
-    SHORT_DESC="$(echo "$FEATURE_DESC" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g' | sed 's/-$//' | cut -c1-40)"
-    BRANCH_NAME="$(date +%Y-%m-%d)-${SHORT_DESC}"
-fi
-
-git checkout -b "$BRANCH_NAME"
-```
-
-Do **not** run `git push` here. Branch-create confirmation is not push authorization. Push only after an explicit user request in the current message (user `AGENTS.md` Git Push Policy).
-
-If the user declines (no):
-
-```
-Understood. I'll proceed on the current branch: <current-branch>
-Note: Plan work and any early commits will mix with existing changes on this branch.
-```
-
-### Step 0.3; Verify branch state
-
-Before writing the plan file:
-
-```bash
-git rev-parse --abbrev-ref HEAD
-git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "No tracking branch yet"
-```
-
-If detached HEAD: refuse to proceed and ask the user to create or switch to a branch first.
-
-Report the final branch state to the user before continuing.
-
-**Hard gate:** Do not write the plan file until branch setup is complete or explicitly declined by the user.
+**Hard gate:** Do not write the plan file until the worktree setup is complete. A worktree creation failure stands the session down per the canonical section's fail-closed stand-downs: report the failure and end the session without writing anything (no plan writes, no marker writes, no session logs); never fall back to working in the primary checkout.
 
 ## Phase 1: Requirements Discovery & Validation (Run Once at Plan Creation Start)
 
-After branch setup and before writing the plan content, interview the user to validate requirements, scope, and key decisions. This prevents wasted effort on misunderstood goals or over-scoped plans.
+After the Phase 0 worktree setup and before writing the plan content, interview the user to validate requirements, scope, and key decisions. This prevents wasted effort on misunderstood goals or over-scoped plans.
 
 **Announce:** "Now I'll validate requirements and key decisions before writing the plan. This ensures we build the right thing with clear boundaries."
 
@@ -153,7 +73,7 @@ After branch setup and before writing the plan content, interview the user to va
 
 Keep every high-confidence assumption in one running list in the requirements buffer and present that list in the Step 1.4 confirmation block; the user's yes confirms the listed assumptions as a batch. A rejected assumption is either adjusted and reconfirmed, or downgraded to a low-confidence point and resolved via `grill-with-docs` before the plan is written. Carry the final list into the plan's `## Assumptions` section. Never build a plan on silent assumptions.
 
-**Authoring-session constraints are not plan constraints:** constraints in the authoring task prompt that scope the authoring session's own git behavior (branching, pushing, commit placement, staying on the current branch) are session-scoped; do not write them into the plan document as assumptions (not even with `basis: task constraint`), Gist lines, or acceptance criteria, and keep plans branch-agnostic and push-agnostic so Phase 0 branch setup and the executor's normal git workflow stay intact. Before finishing authoring, sweep the plan's Assumptions, Gist & Examples, Evaluation Criteria, and Validation Commands sections for "current branch", "no new branch", hardcoded branch names, and "never push"; delete any hit (user-level lesson #296).
+**Authoring-session constraints are not plan constraints:** constraints in the authoring task prompt that scope the authoring session's own git behavior (branching, pushing, commit placement, staying on the current branch) are session-scoped; do not write them into the plan document as assumptions (not even with `basis: task constraint`), Gist lines, or acceptance criteria, and keep plans branch-agnostic and push-agnostic so the Phase 0 worktree-first run setup and the executor's normal git workflow stay intact. Before finishing authoring, sweep the plan's Assumptions, Gist & Examples, Evaluation Criteria, and Validation Commands sections for "current branch", "no new branch", hardcoded branch names, and "never push"; delete any hit (user-level lesson #296).
 
 ### Step 1.1: Discover the real goal
 
@@ -273,6 +193,8 @@ Plan review record: the staging series {reviews_dir}/YYYY-MM-DD-plan-review-<fea
 - <Positive result.>
 - <Optional positive result.>
 
+[Required: Gate delta: one line declaring the plan's net machinery delta across refusal classes, hard gates, fences, protocol layers, and schema state fields, each addition (including growth of an existing item's refusal surface or checked-condition set) priced with its paying sibling arm, its cited completed-integrity-failure witness, or, for a fix-class origin's refusal-path addition, an origin-cited no-exit justification addressing the class-default alternatives, and every removal or simplification counted, a claimed simplification naming the concrete refusal, check, or field removed; for the five runtime counted classes the completed-integrity-failure bar supersedes the witness triple of the Driving-force annotation above, while the same bar continues to apply to machinery a plan extends or keeps when it could delete it instead; a review-layer duty whose violation blocks is declared on the line separately and witnessed in its own text; a plan with no delta writes the explicit none form]
+
 [Required: ## Outcome; the first section immediately after the header metadata block, before the optional ## Terms; see the required-elements prose for the plain-globish bar]
 
 [Optional: ## Terms; required when 3+ project-specific terms; see agent_workflow_guidelines.md §45]
@@ -328,6 +250,9 @@ Files:
 - `path/to/NewFile.ext` *(new)*
 - `path/to/ExistingFile.ext`
 
+Evidence:
+- `<verification-command>`; covers `<one checklist criterion>`
+
 - [ ] `SomeClassTest#methodName`; given `<input/scenario>`, expects `<outcome>`
 - [ ] `SomeClassTest#methodName_edgeCase`; given `<boundary condition>`, expects `<outcome>`
 - [ ] Run → expect RED: `<test-command>`
@@ -335,6 +260,8 @@ Files:
 - [ ] Run → expect GREEN
 - [ ] Commit: `feat: <short description>`
 ```
+
+**Evidence declaration; required:** Every plan task carrying implementation work declares its `Evidence:` block immediately after its `Files:` list at authoring time. Include one line per verification command, with the exact runnable command and the checklist criteria it covers. Each command must be runnable at that task boundary, and criteria deferred to the final gate stay out of the task's required criteria. Execute-plan seeds the task's evidence contract only from this declaration: a task without an `Evidence:` declaration stops execution at seeding, before manifest creation, so the declaration is part of plan completeness. Add a missing declaration through the semantic plan-edit path and complete a fresh whole-plan review round before continuation.
 
 **Test item format; required:**
 
@@ -355,7 +282,7 @@ Examples:
 
 **Rules:**
 - Title is always `# Plan: <name>`; no other heading format.
-- Every plan must include an **Outcome section** (`## Outcome`) as the first section immediately after the header metadata block: one plain-globish aim sentence plus two to four result bullets stating what works after execution; the summary is self-contained (understandable without Terms or Tasks), uses no internal codenames or task jargon, and is specific enough to classify the plan (what breaks today, what works after); the plans review flags its absence like any other required element.
+- Every plan must include an **Outcome section** (`## Outcome`) as the first section immediately after the header metadata block: one plain-globish aim sentence plus two to four result bullets stating what works after execution; the summary is self-contained (understandable without Terms or Tasks), uses no internal codenames or task jargon, and is specific enough to classify the plan (what breaks today, what works after); the plans review flags its absence like any other required element. The Outcome region also carries the required `Gate delta:` line per the template spec.
 - The Gist section opens with a required one-line summary: the first line of `## Gist & Examples` says what changes and why in one or two phrases, naming the plan's declared force; everything already in the section stays below that opening line (the placeholder form lives only in the Plan Format template block above).
 - **Metadata retrofit rule:** existing certified plans (the latest review sidecar digest matches the plan's current bytes) are never rewritten solely to add the header metadata fields or the Gist opening summary; they gain them at the next natural edit or at deferred/ revival.
 - Every included task item is `- [ ]`; concrete and verifiable, never vague.
@@ -543,9 +470,9 @@ Every plan must include a `## Validation Commands` fenced bash block (see plan t
 
 27. **Build prescribed fixtures literally before certifying (path arithmetic is a behavioral claim):** when a task prescribes test fixtures with literal paths, symlink targets, or relative references, construct the fixture EXACTLY as written and run the prescribed assertions against that construction before certifying the plan. A symlink target resolves relative to the LINK's own directory, not the repo root, and `../` segments stack from the link's parent; path arithmetic written in prose is as mistake-prone as code. Validating the BEHAVIOR with an ad-hoc, differently-built fixture proves the mechanism but not the prescribed recipe; a wrong path string makes the GREEN gate unsatisfiable and the implementer can only improvise (witness: symlink fixtures certified on behavior probes built with different targets, then a reviewer rebuilt them verbatim and every target path was wrong). Carry the fixture text as copyable code lines whose lines never begin with a fence marker; never keep prose renderable by inserting invisible characters (a zero-width space before a fence run renders fine and copies corrupted), and describe a fence inline (for example "three-backtick-open") instead of embedding it in checklist prose (witness: fixture bodies drafted with zero-width spaces so the plan's Markdown would not break; caught at authoring, but a copied fixture would have carried corrupted bytes).
 
-28. **Scope never-allowed hygiene sweeps to authored content:** a Validation Command that forbids a pattern (em-dash, stale phrase, legacy token) across files whose existing content legitimately carries it (frozen regions, historical prose) is unsatisfiable on arrival and forces the executor to either violate the Review Scope freeze or fail the gate. Sweep whole only files this plan creates; for edited files, scope to the prescribed insertions, or drop the sweep when the introduced content is already fenced verbatim in the plan. Execute every forbidden-pattern command against today's tree at authoring to prove the scope: a gate that fires on content no task touches is mis-scoped, not effective (witness: an em-dash sweep over two validators carrying 15 and 23 legacy hits in frozen regions blocked an otherwise clean plan as a blocking r1 finding).
+28. **Scope never-allowed hygiene sweeps to authored content:** a Validation Command that forbids a pattern (em-dash, stale phrase, legacy token) across files whose existing content legitimately carries it (frozen regions, historical prose) is unsatisfiable on arrival and forces the executor to either violate the Review Scope freeze or fail the gate. Sweep whole only files this plan creates; for edited files, scope to the prescribed insertions, or drop the sweep when the introduced content is already fenced verbatim in the plan. Execute every forbidden-pattern command against today's tree at authoring to prove the scope: a gate that fires on content no task touches is mis-scoped, not effective (witness: an em-dash sweep over two validators carrying 15 and 23 legacy hits in frozen regions blocked an otherwise clean plan as a blocking r1 finding). whole-file modes are for files the plan leaves whole-file clean; when a validation gate must bind a file whose committed bytes carry known pre-existing violations in frozen spans (the maintenance skill before Task 1 is the standing example), the gate selects `added-lines --base REF` over the prescribed insertions.
 
-29. **Run the repo's cheap mechanical format gates over the plan bytes before the first review round:** the no-em-dash scan (real subcommand form: `bash scripts/check-no-em-dash.sh touched`, or `added-lines --base REF` for committed baselines; never argless (argless prints usage and exits 0 scanning nothing); naming the witnessed defect class: a validation line that runs the scanner without a subcommand proves nothing) and the public-hygiene scan cost seconds and any post-certification byte change forces a fresh certification round, because the digest binding makes no distinction between a formatting fix and a semantic fold. A formatting defect discovered at commit time converts a finished review loop into a full extra round; both witnessed occurrences (2026-09-04 and 2026-09-05 em-dash recerts) were avoidable by running the scan at authoring time. After the em-dash and hygiene scans, run the readiness validator's structural-only pre-round invocation over the plan bytes: `( cd <repo-root> && python3 scripts/plan_readiness.py --pre-round docs/plans/<plan-file>.md )`. The invocation executes exactly the checks that do not depend on a review record (decision-points trailer, Review Scope path categories, plan-ownership static checks, classification tags) and never consults the review record; the deployed home fallback is a symlink to this repo's copy and inherits the mode at landing, so keep it a symlink. The only tolerated failure class is the no-review-artifact/missing-sidecar condition (the pre-round mode is immune to it by construction; when the full gate is invoked pre-round instead, its no-review-artifact/missing-sidecar reasons are the tolerated class). Any other structural failure blocks round 1 exactly like a hygiene-scan hit: fix before launching round 1. Record the pre-round gate outcome, and any failure class, in the plan's Validation preamble; a structural-clean pre-round pass converts the done-time exit gate into a pure review-record binding check (sidecar schema, source_kind, digest, verdict, zero blocking).
+29. **Run the repo's cheap mechanical format gates over the plan bytes before the first review round:** the no-em-dash scan (real subcommand form: `bash scripts/check-no-em-dash.sh touched`, or `added-lines --base REF` for committed baselines; at authoring time the plan bytes are the touched set (a new file), so `touched` is the authoring-time self-check; an executor-facing Validation block gating an edited file with known pre-existing committed violations selects added-lines per rule 28; never argless (argless prints usage and exits 0 scanning nothing); naming the witnessed defect class: a validation line that runs the scanner without a subcommand proves nothing) and the public-hygiene scan cost seconds and any post-certification byte change forces a fresh certification round, because the digest binding makes no distinction between a formatting fix and a semantic fold. A formatting defect discovered at commit time converts a finished review loop into a full extra round; both witnessed occurrences (2026-09-04 and 2026-09-05 em-dash recerts) were avoidable by running the scan at authoring time. After the em-dash and hygiene scans, run the readiness validator's structural-only pre-round invocation over the plan bytes: `( cd <repo-root> && python3 scripts/plan_readiness.py --pre-round docs/plans/<plan-file>.md )`. The invocation executes exactly the checks that do not depend on a review record (decision-points trailer, Review Scope path categories, plan-ownership static checks, classification tags) and never consults the review record; the deployed home fallback is a symlink to this repo's copy and inherits the mode at landing, so keep it a symlink. The only tolerated failure class is the no-review-artifact/missing-sidecar condition (the pre-round mode is immune to it by construction; when the full gate is invoked pre-round instead, its no-review-artifact/missing-sidecar reasons are the tolerated class). Any other structural failure blocks round 1 exactly like a hygiene-scan hit: fix before launching round 1. Record the pre-round gate outcome, any failure class, the rule 19 RED-today execution evidence, and the rule 22 authoring-time mechanical audit in the plan's Validation preamble; a structural-clean pre-round pass converts the done-time exit gate into a pure review-record binding check (sidecar schema, source_kind, digest, verdict, zero blocking).
 
 30. **Derive mutation-probe failing sets empirically, not by prediction:** when a task prescribes a temporary mutation probe with an expected failing-test set, sweep the whole selector for every assertion that observes the mutated call, including PRE-EXISTING witnesses in sibling tests, or execute the probe once at authoring time and paste the observed set. A prediction scoped to the asserts the new test adds misses siblings the selector already runs, and the probe's RED expectation is wrong on arrival (witness: a guard plan's probe predicted two failing tests while an unconditional probe call also tripped the policy-only sibling's pre-existing transport witness; the r1 reviewer found it by execution).
 
@@ -568,6 +495,8 @@ Every plan must include a `## Validation Commands` fenced bash block (see plan t
 40. **Replacement-span boundary rule (name the tail, guarantee its survival):** when a task prescribes replacing a quoted span inside a live sentence or bullet, the prescription must either quote the span ending at a sentence terminator, or name the exact tail text that follows the quoted span and assert verbatim that the tail survives the replacement; a replacement text that duplicates or paraphrases the quoted span's continuation clauses is invalid, and a mid-sentence boundary that leaves tail bytes outside both the replaced span and the verbatim guarantee lets a literal reading silently drop real content (standing witness: origin item docs/history/backlog/2026-09-18-plans-replacement-span-boundary-must-name-its-tail.md, three consecutive review rounds staging the same defect class with one boundary flavor per round: prefix of a longer sentence, replacement duplicating the continuation, mid-sentence tail drop). The mechanically enforceable pattern: the task's validation lines pin the pre-replacement span and its tail as ONE contiguous fixed string against the target file, so the boundary reading is forced by the gate instead of reviewer inference, and the pin executes RED-today at authoring per rule 19.
 
 41. **Execute every fold-added fail-closed gate in both polarities, and sweep external pin suites before rewording gated prose:** when a fold adds or rewrites a validation command, run it once against the state that must pass and once against a scratch state carrying the defect it must catch; syntax and pin-presence audits do not substitute (an inverted comparison arm or a wrong exit mapping is invisible to both). A negated sweep whose scan surface contains files this plan sanctions as retention records excludes them explicitly and proves the exclusion both ways: the sanctioned record present passes, a genuine defect elsewhere still fails. When any task edit rewords, renames, or deletes prose that an external pin suite gates, grep every such suite for touched literals and reconcile each beside its provenance comment in the same edit; pins gate full literals and exact counts, never prefixes or intents (user-level lessons #453 and #454).
+
+42. **Filing-class consumption (an authoring-behavior duty, carried in this list for numbered derivation):** before shaping arms, read the origin's `Class:` line (receiving-review Backlog capture owns the convention) and re-derive the class from the origin body; a declared line that contradicts the body-recorded substance is recorded as a disagreement in the plan's Assumptions and the arms shape to the stricter class. fix-class arms remove the block or false positive or add the sanctioned exit; growing an existing item's refusal surface or checked-condition set is an addition of the grown surface, not a keep or extend; a refusal-path addition (a refusal class, hard gate, or fence) on a fix-class origin records why no exit or false-positive removal was possible, naming the three class-default alternatives (add the sanctioned exit, remove the false positive, simplify the flow) and any further alternatives the origin body records, each with the concrete reason it is impossible, cited to the origin body, as the recorded justification in the plan's Gate delta line; an origin body that records none of the three defaults cannot price the addition (it then takes only a paying sibling or a cited completed-integrity-failure witness), and a conclusory assertion that names no alternative is not the recorded justification. fence-class arms may add fences only when the origin cites its completed failure. A filed origin with no `Class:` line is judged from its body at authoring and the judgment is recorded in the plan's Assumptions with the origin-body evidence a reviewer can re-check, never by editing the origin; the no-exit justification form is available to that author-judged path only under the same origin-cited bar.
 
 ## Budget gate (plan-authoring pause and resume)
 
@@ -631,7 +560,7 @@ Read the actual source files referenced in the plan to verify assumptions about 
 function signatures, pipeline ordering, and return contracts. The plan file itself is
 READ-ONLY for you: record findings only in the review artifact (never edit the plan).
 
-Anti-idle runtime discipline (required in every review-round launch): emit a tool call or a progress message at least every 2-3 minutes; chunk file reads to at most 400 lines per read; never launch a single command expected to run longer than 60 seconds; on a rate-limit error from one of your own tool calls, retry that call once after a short pause before treating the round as failed.
+Anti-idle runtime discipline (required in every review-round launch): emit a tool call or a progress message at least every 2-3 minutes; chunk file reads to at most 400 lines per read; never launch a single command expected to run longer than 60 seconds; on a rate-limit error from one of your own tool calls, retry that call once after a short pause before treating the round as failed. Git discipline (required in every review-round launch): no commits, branches, refs, stashes, or worktree operations in the reviewed repository; the plan file is read-only and so is its git state; build simulation fixtures outside any worktree-linked .git directory.
 
 Classify every finding as Critical, High, Medium, or Low, with independent blocking status.
 
@@ -838,10 +767,12 @@ Announce: "Running `done` to finalize the plan-creation session (learn + docs-br
 Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-skills` Step 0). This skill reads `{plans_dir}`, `{plans_completed_dir}`, `{reviews_dir}`, `{tmp_dir}`, and `{rfcs_dir}` from that file.
 
 ### With `execute-plan` skill
-Consumer of plan format, task order, `## Validation Commands`, `## Review Scope`, per-task commit lines, and completed-plan archival. Task prose names observable commands, paths, test identities, and acceptance criteria, with evidence and validation criteria the selected runtime adapter can verify; host identity, worker lifecycle, capacity, and interruption receipts come from the adapter profile per `agents/skills/execute-plan/runtime-contract.md` and `agents/skills/execute-plan/runtime-adapters/`, never from plan task prose. It executes only tasks admitted by the Checklist inclusion gate: repository implementation, or a release gate with a current bound exception receipt plus `why executable now` and observable `completion evidence`. External prerequisites are never exception-admissible. Shares Phase 0 branch-setup semantics: `plans` runs it at plan creation; `execute-plan` runs it at implementation start and reuses an existing feature branch when appropriate. Both skills refresh the plans-class skill-gate marker per `ai-playbook/agents/hooks/skill-gate/README.md` Marker WRITE RECIPE before plan-file edits. After plan creation or update, hand off to `execute-plan` when the user wants automated iterative implementation with per-task commits and post-implementation review loops. Scope control happens at plan authoring: execute-plan stays faithful to the plan and never re-grills or re-opens scope mid-implementation; overscope discovered during execution is reported, not silently implemented beyond the plan, and not silently dropped. The plans skill's Budget gate mirrors the execute-plan Budget gate protocol (the canonical home) at plan-authoring boundaries.
+Consumer of plan format, task order, `## Validation Commands`, `## Review Scope`, per-task commit lines, and completed-plan archival. Each task's `Evidence:` declaration is the sole source for execute-plan's task evidence-contract seeding; a missing declaration stops seeding before manifest creation. Task prose names observable commands, paths, test identities, and acceptance criteria, with evidence and validation criteria the selected runtime adapter can verify; host identity, worker lifecycle, capacity, and interruption receipts come from the adapter profile per `agents/skills/execute-plan/runtime-contract.md` and `agents/skills/execute-plan/runtime-adapters/`, never from plan task prose. It executes only tasks admitted by the Checklist inclusion gate: repository implementation, or a release gate with a current bound exception receipt plus `why executable now` and observable `completion evidence`. External prerequisites are never exception-admissible. Both skills run under the **Worktree-first standard** section in `agents/skills/execute-plan/SKILL.md`: `plans` runs the authoring worktree setup at every authoring session start (creation, update, and completion); `execute-plan` runs the same standard's lifecycle as its Phase 0 run setup. Both skills refresh the plans-class skill-gate marker per `ai-playbook/agents/hooks/skill-gate/README.md` Marker WRITE RECIPE before plan-file edits. After plan creation or update, hand off to `execute-plan` when the user wants automated iterative implementation with per-task commits and post-implementation review loops. Scope control happens at plan authoring: execute-plan stays faithful to the plan and never re-grills or re-opens scope mid-implementation; overscope discovered during execution is reported, not silently implemented beyond the plan, and not silently dropped. The plans skill's Budget gate mirrors the execute-plan Budget gate protocol (the canonical home) at plan-authoring boundaries.
 
 ### With `review-plan` skill
 The `plans` skill provides the Checklist inclusion gate to its consumer, `review-plan`. Plan review verifies that checklist items are repository implementation, and that every release-gate exception has a current bound receipt plus a meaningful `why executable now` and observable `completion evidence`. External prerequisites remain blocking and are never exception-admissible.
+
+review-plan's Declaration findings paragraph verifies the Outcome `Gate delta` declaration and escalates unpaid counted-class additions (consumer: review-plan); the authoring rules consume the origin `Class:` line owned by receiving-review's Backlog capture.
 
 ### With `grill-with-docs` skill
 The Phase 1 confidence gate invokes `grill-with-docs` for every unclear point rated low-confidence. That skill runs a `grilling` interview with `domain-modeling` active throughout, capturing glossary terms and ADRs inline while each point is resolved; confirmed answers feed the requirements buffer, and the plan references the updated glossary/decision docs instead of duplicating terms. High-confidence points skip the grill and land in the plan's `## Assumptions` section instead. The Phase 1 scope-extension hard gate routes every proposed scope extension through this skill before the plan file admits it; the confirmed outcome (in / split / defer) lands in the Step 1.4 confirmation block as a grilled scope extension.

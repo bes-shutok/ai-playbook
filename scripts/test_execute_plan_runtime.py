@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import shutil
 import socket
 import stat
@@ -20,7 +21,7 @@ import threading
 import time
 import unittest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 from pathlib import Path
 
@@ -84,7 +85,710 @@ def _fixture_inventory(adapter):
     return adapter
 
 
+class PolicyRefusingAdapter(FakeAdapter):
+    """The witnessed launch-path refusal: the adapter rejects the policy token
+    before any worker exists, so the launch fails with the exact
+    ``runtime-policy-unavailable`` shape the direct-claim prelaunch arm
+    proves against."""
+
+    def launch(self, task, prompt, generation, deadline_seconds=None, policy_token=None):
+        raise TypeError("adapter rejected policy token: no verified non-interactive approval configuration")
+
+
+class ActivationRefusingAdapter(FakeAdapter):
+    """The claim-time activation-failure refusal: the adapter's activation
+    check fails before launch, persisting the second claim-time
+    ``runtime-policy-unavailable`` shape."""
+
+    def activation_check(self):
+        return {"status": "blocked", "evidence": ["adapter activation was not verified"]}
+
+
 class ExecutePlanRuntimeTest(unittest.TestCase):
+    def test_create_refuses_unrepresentable_evidence_before_claim(self):
+        path = self.root / "oversized-evidence.json"
+        task = {"id": "task-large", "required_criteria": ["é" * 257], "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": ["é" * 257]}], "allowed_paths": ["task-4.txt"]}
+        before = path.read_bytes() if path.exists() else None
+        with self.assertRaisesRegex(ValueError, "UTF-8 item byte limit"):
+            runtime.create_manifest(path, "fixture-plan", [task], repo_root=self.root)
+        self.assertEqual(path.read_bytes() if path.exists() else None, before)
+
+    def test_create_refuses_more_than_receipt_criterion_count_without_mutation(self):
+        path = self.root / "too-many-evidence-items.json"
+        path.write_bytes(b"existing manifest bytes")
+        criteria = [f"criterion-{index:03d}" for index in range(101)]
+        task = {"id": "task-many", "required_criteria": criteria, "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": criteria}], "allowed_paths": ["task-4.txt"]}
+        before = path.read_bytes() if path.exists() else None
+        with self.assertRaisesRegex(ValueError, r"receipt item-count limit \(100\)"):
+            runtime.create_manifest(path, "fixture-plan", [task], repo_root=self.root)
+        self.assertEqual(path.read_bytes() if path.exists() else None, before)
+
+    def test_create_names_oversized_criterion_task_and_byte_count(self):
+        # A criterion over 512 UTF-8 bytes refuses at the create boundary
+        # before any bytes are written, naming the task id, the criterion,
+        # its UTF-8 byte count, and the split correction.
+        path = self.root / "oversized-named.json"
+        criterion = "x" * 513
+        task = {"id": "task-large", "number": 1, "status": "pending", "required_criteria": [criterion], "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": [criterion]}], "allowed_paths": ["task-1.txt"]}
+        with self.assertRaises(ValueError) as refused:
+            runtime.create_manifest(path, "fixture-plan", [task], repo_root=self.root)
+        message = str(refused.exception)
+        self.assertIn("task 'task-large'", message)
+        self.assertIn(criterion, message)
+        self.assertIn("513 UTF-8 bytes", message)
+        self.assertIn("split the criterion", message)
+        self.assertFalse(path.exists())
+
+    def test_create_accepts_criterion_at_exact_boundary(self):
+        # A criterion of exactly 512 UTF-8 bytes seeds cleanly; 513 refuses
+        # with the same named shape writing no bytes.
+        path = self.root / "boundary-evidence.json"
+        boundary = "y" * 512
+        task = {"id": "task-boundary", "number": 1, "status": "pending", "required_criteria": [boundary], "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": [boundary]}], "allowed_paths": ["task-1.txt"]}
+        runtime.create_manifest(path, "fixture-plan", [task], repo_root=self.root)
+        self.assertTrue(path.exists())
+        seeded = runtime.load_manifest(path)
+        self.assertEqual(seeded["tasks"]["task-boundary"]["required_criteria"], [boundary])
+
+        over = "z" * 513
+        over_path = self.root / "over-boundary-evidence.json"
+        over_task = {"id": "task-over", "number": 1, "status": "pending", "required_criteria": [over], "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": [over]}], "allowed_paths": ["task-1.txt"]}
+        with self.assertRaises(ValueError) as refused:
+            runtime.create_manifest(over_path, "fixture-plan", [over_task], repo_root=self.root)
+        message = str(refused.exception)
+        self.assertIn("task 'task-over'", message)
+        self.assertIn("513 UTF-8 bytes", message)
+        self.assertIn("split the criterion", message)
+        self.assertFalse(over_path.exists())
+
+    def test_create_counts_utf8_bytes_not_characters(self):
+        # 257 two-byte characters are 514 UTF-8 bytes (character count under
+        # 512, so a character-counting implementation would accept): the
+        # create refusal names the task and the byte count 514, and no
+        # manifest bytes are written. This drives the create boundary, not
+        # the helper the existing capability witnesses already pin.
+        path = self.root / "unicode-evidence.json"
+        criterion = "é" * 257
+        task = {"id": "task-unicode", "number": 1, "status": "pending", "required_criteria": [criterion], "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": [criterion]}], "allowed_paths": ["task-1.txt"]}
+        with self.assertRaises(ValueError) as refused:
+            runtime.create_manifest(path, "fixture-plan", [task], repo_root=self.root)
+        message = str(refused.exception)
+        self.assertIn("task 'task-unicode'", message)
+        self.assertIn("514 UTF-8 bytes", message)
+        self.assertFalse(path.exists())
+
+    def test_create_names_aggregate_limit_refusal(self):
+        # Nine near-boundary criteria, each within 512 UTF-8 bytes but
+        # summing over the 4096-byte aggregate, refuse naming the task and
+        # the aggregate dimension before any bytes are written.
+        path = self.root / "aggregate-evidence.json"
+        criteria = [f"criterion {index:02d} " + "a" * 484 for index in range(9)]
+        task = {"id": "task-aggregate", "number": 1, "status": "pending", "required_criteria": criteria, "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": criteria}], "allowed_paths": ["task-1.txt"]}
+        self.assertGreater(sum(len(item.encode("utf-8")) for item in criteria), 4096)
+        with self.assertRaises(ValueError) as refused:
+            runtime.create_manifest(path, "fixture-plan", [task], repo_root=self.root)
+        message = str(refused.exception)
+        self.assertIn("task 'task-aggregate'", message)
+        self.assertIn("aggregate", message)
+        self.assertFalse(path.exists())
+
+    def test_create_names_count_limit_refusal(self):
+        # 101 criteria refuse naming the task and the count dimension before
+        # any bytes are written.
+        path = self.root / "count-evidence.json"
+        criteria = [f"criterion-{index:03d}" for index in range(101)]
+        task = {"id": "task-count", "number": 1, "status": "pending", "required_criteria": criteria, "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": criteria}], "allowed_paths": ["task-1.txt"]}
+        with self.assertRaises(ValueError) as refused:
+            runtime.create_manifest(path, "fixture-plan", [task], repo_root=self.root)
+        message = str(refused.exception)
+        self.assertIn("task 'task-count'", message)
+        self.assertIn("receipt item-count limit", message)
+        self.assertIn("101 criteria supplied", message)
+        self.assertFalse(path.exists())
+
+    # ------------------------------------------------------------------
+    # Prelaunch contract recovery (receipt-fenced driver operation).
+    # ------------------------------------------------------------------
+
+    _PRELAUNCH_OVERSIZED = "x" * 513
+    _PRELAUNCH_CORRECTED = "task-4:verification"
+
+    def _corrected_prelaunch_contract(self, criterion=None):
+        criterion = self._PRELAUNCH_CORRECTED if criterion is None else criterion
+        return {"required_criteria": [criterion], "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": [criterion]}]}
+
+    def _prelaunch_plan_bytes(self, task_four_body="Files:\n- `task-4.txt`\n\n- [ ] fixture work item\n", task_five_body=""):
+        return (
+            "## Tasks\n### Task 3: done\nComplete.\n### Task 4: fixture\n"
+            + task_four_body
+            + ("### Task 5: second\n" + task_five_body if task_five_body else "")
+        )
+
+    def _write_prelaunch_plan(self, **kwargs) -> Path:
+        plan = self.root / "prelaunch-plan.md"
+        plan.write_text(self._prelaunch_plan_bytes(**kwargs), encoding="utf-8")
+        return plan
+
+    def _stranded_task(self, task_id, number, criterion):
+        return {
+            "id": task_id, "number": number, "status": "claimed", "checkbox": False,
+            "allowed_paths": [f"{task_id}.txt"],
+            "required_criteria": [criterion],
+            "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": [criterion]}],
+        }
+
+    def _seed_prelaunch(self, *, claim_token="stale-token", claim_generation=1, task_status="claimed", claim_state="claimed", oversized=True, extra=None):
+        state = runtime.load_manifest(self.state_path)
+        task = state["tasks"]["task-4"]
+        task.update({"status": task_status})
+        if oversized:
+            task.update({
+                "required_criteria": [self._PRELAUNCH_OVERSIZED],
+                "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": [self._PRELAUNCH_OVERSIZED]}],
+            })
+        else:
+            task.update({
+                "required_criteria": ["task-4:verification"],
+                "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": ["task-4:verification"]}],
+            })
+        state["claims"]["task-4"] = {"task_id": "task-4", "token": claim_token, "generation": claim_generation, "owner": "test-owner", "state": claim_state}
+        state["tasks"].update(extra or {})
+        # The recorded digest predates the limit checks and cannot be
+        # verified against the stored fields: the PROJ-607 stranded shape.
+        state["evidence_contract_digest"] = "0" * 64
+        runtime._safe_write_json(self.state_path, state)
+        return state
+
+    def _prelaunch_receipts(self, state):
+        return [event for event in state.get("history", []) if event.get("event") == "prelaunch-contract-recovery"]
+
+    def _contract_identity_digest(self, fields) -> str:
+        return hashlib.sha256(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    def test_prelaunch_contract_recovery_rotates_stale_claim(self):
+        # A claimed prelaunch task stranded on an oversized seeded criterion
+        # recovers through one locked save: only the two evidence fields are
+        # replaced, the digest and criteria map are recomputed, the stale
+        # claim closes, the task returns to pending preflight-passable, and
+        # one fenced receipt binds the full identity set.
+        plan = self._write_prelaunch_plan()
+        self._seed_prelaunch()
+        driver = self.driver()
+        seeded = runtime.load_manifest(self.state_path)
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertNotEqual(self.state_path.read_bytes(), before)
+        after = runtime.load_manifest(self.state_path)
+        task = after["tasks"]["task-4"]
+        self.assertEqual(task["required_criteria"], ["task-4:verification"])
+        self.assertEqual(task["verification_commands"], self._corrected_prelaunch_contract()["verification_commands"])
+        for field, value in seeded["tasks"]["task-4"].items():
+            if field in {"required_criteria", "verification_commands", "status"}:
+                continue
+            self.assertEqual(task.get(field), value, field)
+        self.assertEqual(task["status"], "pending")
+        self.assertEqual(after["claims"]["task-4"]["state"], "closed")
+        self.assertEqual(after["claims"]["task-4"]["token"], "stale-token")
+        self.assertEqual(after["generation"], seeded["generation"] + 1)
+        self.assertEqual(after["evidence_contract_digest"], capabilities.evidence_contract_digest(after["tasks"]))
+        self.assertEqual(after["evidence_criteria_map"]["task-4"], capabilities.evidence_criterion_ids(["task-4:verification"]))
+        receipts = self._prelaunch_receipts(after)
+        self.assertEqual(len(receipts), 1, after["history"])
+        receipt = receipts[0]
+        self.assertEqual(receipt["task_id"], "task-4")
+        self.assertEqual(receipt["token"], "stale-token")
+        self.assertEqual(receipt["generation"], 1)
+        self.assertEqual(receipt["recovered_generation"], after["generation"])
+        self.assertEqual(receipt["allowed_paths_digest"], self._contract_identity_digest(["task-4.txt"]))
+        self.assertNotIn("invalidated_handoff", receipt)
+        # The task is preflight-passable under the corrected contract.
+        preflight = self.driver().preflight(plan)
+        self.assertEqual(preflight["status"], "success", preflight)
+
+    def test_prelaunch_recovery_tolerates_malformed_prior_contract(self):
+        # The PROJ-607 shape: the recorded evidence_contract_digest predates
+        # the limit checks and cannot be verified against the stored fields.
+        # The replay fence is evaluated FIRST on the raw-tolerant load (a
+        # replay is refused before any evidence validation could fire), and a
+        # valid request succeeds with the receipt's prior identity bound per
+        # the Terms rule: a raw sha256 over the canonical JSON of the
+        # stranded evidence fields, never criterion-ID-map output.
+        plan = self._write_prelaunch_plan()
+        self._seed_prelaunch()
+        driver = self.driver()
+        seeded = runtime.load_manifest(self.state_path)
+        seeded["history"] = [{
+            "event": "prelaunch-contract-recovery", "task_id": "task-4",
+            "token": "stale-token", "generation": 1, "recovered_generation": 9,
+        }]
+        runtime._safe_write_json(self.state_path, seeded)
+        before = self.state_path.read_bytes()
+
+        replay = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+        self.assertEqual(replay["status"], "blocked", replay)
+        self.assertTrue(any("duplicate prelaunch-contract-recovery receipt" in item for item in replay["evidence"]), replay)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+        seeded["history"] = []
+        runtime._safe_write_json(self.state_path, seeded)
+        outcome = self.driver().recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+        self.assertEqual(outcome["status"], "success", outcome)
+        receipt = self._prelaunch_receipts(runtime.load_manifest(self.state_path))[0]
+        prior_identity = receipt["prior_contract_identity"]
+        self.assertEqual(prior_identity["kind"], "raw")
+        stranded_fields = {
+            "required_criteria": [self._PRELAUNCH_OVERSIZED],
+            "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": [self._PRELAUNCH_OVERSIZED]}],
+        }
+        self.assertEqual(prior_identity["sha256"], self._contract_identity_digest(stranded_fields))
+
+    def test_prelaunch_recovery_refuses_healthy_prior_contract(self):
+        # A claimed prelaunch task whose stored criteria pass the limit
+        # checks is not stranded: recovery refuses by name with a
+        # byte-identical manifest, so the operation triggers only on the
+        # stranded-evidence class.
+        self._seed_prelaunch(oversized=False)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("prior contract is not stranded; recovery refused" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_replay_refused_by_history_fence(self):
+        # The same recovery request replayed after success is refused before
+        # any precondition evaluation can match, naming the recorded receipt.
+        plan = self._write_prelaunch_plan()
+        self._seed_prelaunch()
+        driver = self.driver()
+        first = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+        self.assertEqual(first["status"], "success", first)
+        before = self.state_path.read_bytes()
+
+        replay = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+
+        self.assertEqual(replay["status"], "blocked", replay)
+        self.assertTrue(any("duplicate prelaunch-contract-recovery receipt" in item for item in replay["evidence"]), replay)
+        self.assertTrue(any("fences the replayed request" in item for item in replay["evidence"]), replay)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_refuses_live_group_member(self):
+        # A claim whose group_id names an existing group in any state refuses
+        # with the named group problem, NOT the identity refusal, even for a
+        # stale-token request: the group guard's ordering is witnessed.
+        group = {"group_id": "group-9", "state": "launched", "kind": "parallel", "members": ["task-4"], "generation": 1}
+        state = self._seed_prelaunch(claim_token="stale-token")
+        state["claims"]["task-4"]["group_id"] = "group-9"
+        state["claim_groups"] = {"group-9": group}
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "wrong-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("claim group 'group-9'" in item and "refused" in item for item in outcome["evidence"]), outcome)
+        self.assertFalse(any("identity mismatch" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_refuses_live_worker_row(self):
+        # A claimed task carrying a live worker row refuses with the named
+        # precondition refusal and a byte-identical manifest, matching the
+        # Terms definition of the only admitted state.
+        worker = {
+            "worker_id": "worker-hold", "task_id": "task-4", "claim_token": "stale-token",
+            "claim_owner_id": "test-owner", "provider_session_id": "conv-prelaunch",
+            "command_identity": "verify", "launch_id": "launch-task-4", "capacity_entry_id": "cap-prelaunch",
+            "generation": 1, "state": "active", "process_identity": {"pid": 4321, "start_time": 1727600000.0},
+        }
+        entry = {"capacity_entry_id": "cap-prelaunch", "worker_id": "worker-hold", "counts_toward_capacity": True, "state": "live"}
+        state = self._seed_prelaunch()
+        state["workers"] = {"worker-hold": worker}
+        state["capacity"]["entries"]["cap-prelaunch"] = entry
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("no worker row for task 'task-4'" in item and "worker-hold" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_refuses_out_of_contract_payload_fields(self):
+        # A corrected_contract carrying allowed_paths (or any field outside
+        # the pinned two-field set) refuses with the named input-contract
+        # problem BEFORE any precondition beyond the replay fence (witnessed
+        # here against a stale token, so an identity refusal would mean the
+        # ordering is wrong), with a byte-identical manifest.
+        self._seed_prelaunch()
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        payload = dict(self._corrected_prelaunch_contract())
+        payload["allowed_paths"] = ["task-4.txt"]
+
+        outcome = driver.recover_prelaunch_contract("task-4", "wrong-token", 1, payload, "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("exactly required_criteria and verification_commands" in item and "allowed_paths" in item for item in outcome["evidence"]), outcome)
+        self.assertFalse(any("identity mismatch" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_refuses_launched_task(self):
+        # A task with a launch record is outside the admitted state.
+        state = self._seed_prelaunch(task_status="launched", claim_state="launched")
+        state["claims"]["task-4"]["launch_id"] = "launch-task-4"
+        state["tasks"]["task-4"]["session_id"] = "conv-prelaunch"
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("claimed prelaunch claim" in item for item in outcome["evidence"]), outcome)
+        self.assertTrue(any("task status 'launched', claim state 'launched'" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_refuses_stale_token(self):
+        self._seed_prelaunch()
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "wrong-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(outcome["reason_code"], "stale-claim", outcome)
+        self.assertTrue(any("exact live claim identity" in item for item in outcome["evidence"]), outcome)
+        self.assertTrue(any("identity mismatch: token" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_refuses_stale_generation(self):
+        self._seed_prelaunch()
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "stale-token", 99, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(outcome["reason_code"], "stale-claim", outcome)
+        self.assertTrue(any("identity mismatch: generation" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_refuses_active_capacity_reservation(self):
+        reservation = {"task_id": "task-4", "claim_token": "stale-token", "generation": 1, "launch_id": "launch-task-4", "reserved_at": "2026-09-30T00:00:00Z"}
+        state = self._seed_prelaunch()
+        state["capacity"]["reservations"]["res-1"] = reservation
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("capacity reservation" in item and "res-1" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_refuses_unreadable_corrected_plan(self):
+        # The named plan-read refusal, ordered after the replay fence and the
+        # identity checks and before the corrected-contract phase.
+        self._seed_prelaunch()
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "missing-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("corrected plan read failed" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_plan_read_ordered_after_identity_checks(self):
+        # An unreadable corrected plan with a stale token yields the
+        # stale-token refusal, not the plan-read refusal: the plan read runs
+        # after the identity checks.
+        self._seed_prelaunch()
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "wrong-token", 1, self._corrected_prelaunch_contract(), "missing-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(outcome["reason_code"], "stale-claim", outcome)
+        self.assertFalse(any("corrected plan read failed" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_refuses_envelope_rule_violation(self):
+        # A corrected contract failing the envelope rule (empty criteria and
+        # commands over the pinned two-field set) refuses by name.
+        self._write_prelaunch_plan()
+        self._seed_prelaunch()
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "stale-token", 1, {"required_criteria": [], "verification_commands": []}, "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("requires non-empty required_criteria and verification_commands" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_refuses_preseed_consistency_violation(self):
+        # A corrected contract whose verifier embeds a strictly later task's
+        # artifact refuses through the pre-seed consistency gate.
+        self._write_prelaunch_plan()
+        extra = {"task-5": self._stranded_task("task-5", 5, "y" * 514)}
+        extra["task-5"]["status"] = "pending"
+        extra["task-5"]["ordinal"] = 2
+        state = self._seed_prelaunch(extra=extra)
+        state["claims"].pop("task-5", None)
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        contract = {"required_criteria": ["task-4:verification"], "verification_commands": [{"id": "verify", "argv": ["sh", "-c", "cat task-5.txt"], "criteria": ["task-4:verification"]}]}
+
+        outcome = driver.recover_prelaunch_contract("task-4", "stale-token", 1, contract, "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("pre-seed consistency gate" in item and "task-5" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_refuses_declaration_parse_failure(self):
+        # The corrected plan's task section must parse under the documented
+        # declaration grammar: a section with no Files: block refuses by name.
+        plan = self._write_prelaunch_plan(task_four_body="No structured declaration.\n\n- [ ] fixture work item\n")
+        self._seed_prelaunch()
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("Files:" in item and "task 'task-4'" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_refuses_oversized_corrected_criterion(self):
+        # A corrected criterion over the byte limit is refused with Task 2's
+        # named shape before the save, byte-identically.
+        self._write_prelaunch_plan()
+        self._seed_prelaunch()
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract("z" * 513), "prelaunch-plan.md")
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any(
+            "task 'task-4': evidence criterion exceeds UTF-8 item byte limit (513 UTF-8 bytes, limit 512)" in item
+            for item in outcome["evidence"]
+        ), outcome)
+        self.assertTrue(any("split the criterion" in item and "limits are never raised silently without consumer proof" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_recovery_records_divergence_audit(self):
+        # The receipt carries the unconditional accepted-divergence audit line
+        # comparing the corrected criteria set with the prior criteria set.
+        plan = self._write_prelaunch_plan()
+        self._seed_prelaunch()
+        outcome = self.driver().recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+        self.assertEqual(outcome["status"], "success", outcome)
+        receipt = self._prelaunch_receipts(runtime.load_manifest(self.state_path))[0]
+        audit = receipt["divergence_audit"]
+        self.assertEqual(audit["prior_criteria"], [self._PRELAUNCH_OVERSIZED])
+        self.assertEqual(audit["corrected_criteria"], ["task-4:verification"])
+        self.assertEqual(audit["outcome"], "accepted-with-audit")
+
+    def test_prelaunch_recovery_receipt_plan_digest_matches_supplied_bytes(self):
+        # The receipt's plan-digest field equals the sha256 of the supplied
+        # plan bytes: the audit anchor is verified, not assumed.
+        plan = self._write_prelaunch_plan()
+        self._seed_prelaunch()
+        outcome = self.driver().recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+        self.assertEqual(outcome["status"], "success", outcome)
+        receipt = self._prelaunch_receipts(runtime.load_manifest(self.state_path))[0]
+        self.assertEqual(receipt["plan_digest"], hashlib.sha256(plan.read_bytes()).hexdigest())
+
+    def test_prelaunch_recovery_reports_sibling_strand_without_refusing(self):
+        # A multi-strand legacy manifest recovers task by task: the first
+        # recovery persists the pre-recovery digest and criteria-map values
+        # unchanged, names the sibling strand as remaining work together with
+        # the interim-window statement, and leaves the sibling untouched; the
+        # second recovery binds its prior identity per the Terms rule over
+        # the retained pre-recovery values and heals the sibling the same
+        # way; run readiness then passes its evidence checks.
+        plan = self._write_prelaunch_plan(
+            task_four_body="Files:\n- `task-4.txt`\n\n- [ ] fixture work item\n",
+            task_five_body="Files:\n- `task-5.txt`\n\n- [ ] second work item\n",
+        )
+        oversized_five = "y" * 514
+        sibling = self._stranded_task("task-5", 5, oversized_five)
+        sibling["ordinal"] = 2
+        state = self._seed_prelaunch(extra={"task-5": sibling})
+        state["claims"]["task-5"] = {"task_id": "task-5", "token": "stale-token-5", "generation": 1, "owner": "test-owner", "state": "claimed"}
+        runtime._safe_write_json(self.state_path, state)
+        seeded_digest = state["evidence_contract_digest"]
+        seeded_map = state["evidence_criteria_map"]
+        driver = self.driver()
+
+        first = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+        self.assertEqual(first["status"], "success", first)
+        interim = runtime.load_manifest(self.state_path)
+        self.assertEqual(interim["evidence_contract_digest"], seeded_digest)
+        self.assertEqual(interim["evidence_criteria_map"], seeded_map)
+        self.assertTrue(any("task 'task-5'" in item and "remaining work" in item for item in first["evidence"]), first)
+        self.assertTrue(any("fails closed with the unnamed limit ValueError until the last strand heals" in item for item in first["evidence"]), first)
+        self.assertEqual(interim["tasks"]["task-5"]["status"], "claimed")
+        self.assertEqual(interim["tasks"]["task-5"]["required_criteria"], [oversized_five])
+
+        second = self.driver().recover_prelaunch_contract("task-5", "stale-token-5", 1, self._corrected_prelaunch_contract("task-5:verification"), "prelaunch-plan.md")
+        self.assertEqual(second["status"], "success", second)
+        healed = runtime.load_manifest(self.state_path)
+        self.assertEqual(healed["evidence_contract_digest"], capabilities.evidence_contract_digest(healed["tasks"]))
+        self.assertEqual(healed["evidence_criteria_map"]["task-5"], capabilities.evidence_criterion_ids(["task-5:verification"]))
+        second_receipt = self._prelaunch_receipts(healed)[1]
+        self.assertEqual(second_receipt["prior_contract_identity"]["kind"], "raw")
+        self.assertEqual(
+            second_receipt["prior_contract_identity"]["sha256"],
+            self._contract_identity_digest({
+                "required_criteria": [oversized_five],
+                "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": [oversized_five]}],
+            }),
+        )
+
+        readiness = self.driver().readiness(plan)
+        self.assertEqual(readiness["decision"], "direct-continuation", readiness)
+        self.assertEqual(readiness["failed_conditions"], [], readiness)
+
+    def test_prelaunch_recovery_invalidates_bound_handoff_intent(self):
+        # The PROJ-607 witness shape: a prepared handoff intent bound to the
+        # stale claim identity. The recovery invalidates the intent with the
+        # receipt's invalidated-handoff block naming it, so no stale
+        # successor survives; startup reconciliation driven on flow-real
+        # states (recovery, ordinary re-claim, then startup reconciliation)
+        # admits the successor claim with the generalized predicate's
+        # exclusion outcome named; and a twice-recovered chain keeps every
+        # successor claim admitted.
+        plan = self._write_prelaunch_plan()
+        key = "task-4:task-4:done-1"
+        state = self._seed_prelaunch()
+        state["claims"]["task-4"]["handoff_intent_key"] = key
+        state["handoff_intents"] = {key: {
+            "intent_id": "intent-prelaunch", "state": "prepared",
+            "prior": {"task_id": "task-4", "checkpoint_identity": key, "claim_owner_id": "older-owner", "claim_token": "older-token", "generation": 0},
+            "successor": {"task_id": "task-4", "claim_owner_id": "test-owner", "claim_token": "stale-token", "generation": 1, "launch_id": None},
+            "prelaunch_binding": {"claim_token": "stale-token", "generation": 1, "consumed": False},
+        }}
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+
+        outcome = driver.recover_prelaunch_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+        self.assertEqual(outcome["status"], "success", outcome)
+        recovered = runtime.load_manifest(self.state_path)
+        self.assertEqual(recovered["handoff_intents"][key]["state"], "failed")
+        receipt = self._prelaunch_receipts(recovered)[0]
+        self.assertEqual(receipt["invalidated_handoff"]["intent_id"], "intent-prelaunch")
+        self.assertEqual(receipt["invalidated_handoff"]["intent_key"], key)
+        self.assertEqual(receipt["invalidated_handoff"]["successor"], {"task_id": "task-4", "claim_token": "stale-token", "generation": 1})
+
+        # Ordinary re-claim, then startup reconciliation admits the successor.
+        reclaimed = self.driver().claim_next_task()
+        self.assertEqual(reclaimed["status"], "success", reclaimed)
+        successor_state = runtime.load_manifest(self.state_path)
+        successor_claim = successor_state["claims"]["task-4"]
+        self.assertEqual(successor_claim["state"], "claimed")
+        # The stale launch evidence the no-intent arm contemplates: a claimed
+        # successor carrying a stale launch record is exactly the shape the
+        # generalized predicate retires from startup examination. The record
+        # is stripped again before the chain continues, because the recovery
+        # precondition (no launch record) refuses exactly this shape.
+        successor_state["claims"]["task-4"]["launch_record"] = {"launch_id": "launch-task-4"}
+        runtime._safe_write_json(self.state_path, successor_state)
+        successor_state = runtime.load_manifest(self.state_path)
+        self.assertTrue(
+            runtime.RuntimeDriver._claim_retired_by_evidence_recovery(successor_state, "task-4", successor_state["claims"]["task-4"]),
+            "the generalized predicate must name the exclusion outcome for the receipt-carrying task's successor claim",
+        )
+        admitted = self.driver().reconcile_startup(commit_lookup=lambda _commit: True)
+        self.assertEqual(admitted["status"], "success", admitted)
+
+        # Twice-recovered chain: recover, re-claim, re-strand, recover again.
+        state = runtime.load_manifest(self.state_path)
+        state["claims"]["task-4"].pop("launch_record", None)
+        state["tasks"]["task-4"].update({
+            "required_criteria": [self._PRELAUNCH_OVERSIZED],
+            "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": [self._PRELAUNCH_OVERSIZED]}],
+        })
+        runtime._safe_write_json(self.state_path, state)
+        second_token = successor_claim["token"]
+        second_generation = successor_claim["generation"]
+        second = self.driver().recover_prelaunch_contract("task-4", second_token, second_generation, self._corrected_prelaunch_contract(), "prelaunch-plan.md")
+        self.assertEqual(second["status"], "success", second)
+        chained = runtime.load_manifest(self.state_path)
+        self.assertEqual(len(self._prelaunch_receipts(chained)), 2, chained["history"])
+        self.assertEqual(chained["tasks"]["task-4"]["status"], "pending")
+        self.assertEqual(chained["claims"]["task-4"]["state"], "closed")
+        reclaimer = self.driver().claim_next_task()
+        self.assertEqual(reclaimer["status"], "success", reclaimer)
+        final_state = runtime.load_manifest(self.state_path)
+        final_state["claims"]["task-4"]["launch_record"] = {"launch_id": "launch-task-4-again"}
+        runtime._safe_write_json(self.state_path, final_state)
+        final_state = runtime.load_manifest(self.state_path)
+        self.assertTrue(
+            runtime.RuntimeDriver._claim_retired_by_evidence_recovery(final_state, "task-4", final_state["claims"]["task-4"]),
+            "the latest matching receipt must admit the twice-recovered chain's successor claim",
+        )
+        readmitted = self.driver().reconcile_startup(commit_lookup=lambda _commit: True)
+        self.assertEqual(readmitted["status"], "success", readmitted)
+
+    def test_claimed_prelaunch_shape_refused_by_launched_hold_operation(self):
+        # Cross-operation admission asymmetry: the claimed prelaunch shape
+        # (with a contract-loadable prior) is refused by the launched-hold
+        # operation byte-identically. The reverse asymmetry (a launched shape
+        # refused by the prelaunch operation) is
+        # test_prelaunch_recovery_refuses_launched_task, and the raw-tolerant
+        # load asymmetry is prelaunch-only by design per the shared
+        # recovery-transition contract documentation.
+        state = self._seed_prelaunch(oversized=False)
+        # Contract-loadable: the validating load the launched-hold operation
+        # runs must accept the prior manifest, so the digest and map are
+        # recorded consistently over the healthy prior fields.
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        state["evidence_criteria_map"] = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in state["tasks"].items()}
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.recover_evidence_contract("task-4", "stale-token", 1, self._corrected_prelaunch_contract())
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("requires the launched hold on task 'task-4'" in item for item in outcome["evidence"]), outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_validate_manifest_accepts_legacy_evidence_contract_digest(self):
+        driver = self.driver()
+        state = runtime.load_manifest(self.state_path)
+        legacy_digest = capabilities.evidence_contract_digest(state["tasks"], include_criterion_ids=False)
+        self.assertNotEqual(legacy_digest, capabilities.evidence_contract_digest(state["tasks"]))
+        state["evidence_contract_digest"] = legacy_digest
+        runtime._safe_write_json(self.state_path, state)
+        validated = driver.refresh_manifest()
+        self.assertEqual(validated["evidence_contract_digest"], legacy_digest)
+
+    def test_recovery_refuses_altered_criteria_mapping_without_mutation(self):
+        state = runtime.load_manifest(self.state_path)
+        state["evidence_enforcement"] = True
+        state["evidence_criteria_map"]["task-4"] = {"c001": "altered criterion"}
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_evidence_contract("task-4", "claim-token", 0, {})
+        self.assertEqual(outcome["status"], "blocked")
+        self.assertTrue(any("mapping" in item and "refused" in item for item in outcome["evidence"]))
+        self.assertEqual(self.state_path.read_bytes(), before)
+
     def setUp(self) -> None:
         # Pin ambient execute-plan env inputs so an exported variable cannot
         # silently redirect the code under test to a foreign registry.
@@ -111,6 +815,10 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 {"id": "task-3", "number": 3, "status": "complete", "checkbox": True},
                 {"id": "task-4", "number": 4, "status": "pending", "checkbox": False, "allowed_paths": ["task-4.txt"]},
             ],
+            # The preflight-emitted continuation command carries the recorded
+            # runtime id, so the shared manifest seeds it like every create
+            # boundary does since the evidence mandate.
+            runtime_id="codex",
         )
 
     def _git(self, *args, cwd=None):
@@ -142,6 +850,138 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             commit_lookup=kwargs.pop("commit_lookup", lambda _commit: True),
             **kwargs,
         )
+
+    def test_worker_action_ownership_refuses_unclassified_before_claim(self):
+        task = {
+            "id": "task-4", "number": 4, "status": "pending", "checkbox": False,
+            "allowed_paths": ["task-4.txt"],
+            "checklist_actions": [{"text": "perform deployment", "owner": "unknown"}],
+            **verification_fields("task-4"),
+        }
+        manifest_path = self.root / "unclassified.json"
+        with self.assertRaisesRegex(ValueError, "unclassified checklist action"):
+            runtime.create_manifest(manifest_path, "fixture-plan", [task], repo_root=self.root)
+        self.assertFalse(manifest_path.exists())
+
+    def test_parent_commit_action_is_excluded_and_verified_by_done(self):
+        task = {
+            "id": "task-4", "number": 4, "status": "pending", "checkbox": False,
+            "allowed_paths": ["task-4.txt"],
+            "checklist_actions": [
+                {"text": "implement task behavior", "owner": "worker"},
+                {"text": "Commit: fix: exact planned commit", "owner": "worker", "kind": "commit"},
+            ],
+            **verification_fields("task-4"),
+        }
+        task["required_criteria"].append("Commit: fix: exact planned commit")
+        task["verification_commands"][0]["criteria"].append("Commit: fix: exact planned commit")
+        runtime.create_manifest(self.state_path, "fixture-plan", [task], repo_root=self.root)
+        persisted = runtime.load_manifest(self.state_path)["tasks"]["task-4"]
+        self.assertEqual(persisted["required_criteria"], ["task-4:verification"])
+        self.assertEqual(persisted["parent_commit"], "fix: exact planned commit")
+        self.assertEqual(persisted["parent_obligations"][0]["owner"], "parent")
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["status"] = "done-pending"
+        state["claims"]["task-4"] = {
+            "task_id": "task-4", "token": "done-token", "generation": 0,
+            "owner": "test-owner", "state": "launched",
+            "launch_record": {"baseline_revision": "", "generation": 0, "launched_at": 111.0},
+        }
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        driver._done_boundary_block = lambda *args, **kwargs: None
+        done = {
+            "status": "success", "action_scope": "done-handoff", "checkpoint_identity": "task-4:done",
+            "task_id": "task-4", "generation": 0, "claim_token": "done-token",
+            "commit_identity": "abcdef1", "checkbox": True, "clean_state": True,
+            "log_evidence": ["task-4-implement.log.md"],
+        }
+        self.assertEqual(driver.record_done(done)["reason_code"], "done-pending")
+        done["planned_commit"] = "fix: exact planned commit"
+        self.assertEqual(driver.record_done(done)["status"], "success")
+        task["required_criteria"] = []
+        with self.assertRaisesRegex(ValueError, "worker-owned criteria"):
+            runtime.create_manifest(self.root / "missing-criteria.json", "fixture-plan", [task], repo_root=self.root)
+
+    def _worker_prompt_fixture(self):
+        state = runtime.load_manifest(self.state_path)
+        task = state["tasks"]["task-4"]
+        task.update(verification_fields("task-4"))
+        task.update({"task_body": "Implement the verified task body.", "worker_log_path": "task-4-worker.log.md", "evidence_owner": "worker"})
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        runtime._safe_write_json(self.state_path, state)
+        return task
+
+    def test_worker_launch_requires_canonical_task_role(self):
+        task = self._worker_prompt_fixture()
+        class PromptAdapter(FakeAdapter):
+            def launch(self, task, prompt, generation, deadline_seconds=None, policy_token=None):
+                self.prompt = prompt
+                self.task = dict(task)
+                return None
+        adapter = PromptAdapter()
+        self.driver(adapter=adapter).launch_next_task(prompt="continue execute-plan")
+        after = runtime.load_manifest(self.state_path)
+        self.assertFalse(adapter.launches)
+        self.assertEqual(after["claims"], {})
+        self.assertEqual(after["capacity"]["reservations"], {})
+
+        state = runtime.load_manifest(self.state_path)
+        state["claims"] = {}
+        state["tasks"]["task-4"].update(status="pending", checkbox=False)
+        runtime._safe_write_json(self.state_path, state)
+        task = self._worker_prompt_fixture()
+        wrong = {"role": "orchestrator", "task_id": task["id"]}
+        before_claim = runtime.load_manifest(self.state_path)
+        adapter = PromptAdapter()
+        result = self.driver(adapter=adapter).launch_next_task(prompt=json.dumps(wrong))
+        after_claim = runtime.load_manifest(self.state_path)
+        self.assertEqual(result["reason_code"], "malformed-result")
+        self.assertEqual(adapter.launches, [])
+        self.assertEqual(after_claim["claims"]["task-4"]["state"], "claimed")
+        self.assertNotIn("launch_record", after_claim["claims"]["task-4"])
+        self.assertEqual(after_claim["capacity"]["reservations"], before_claim["capacity"]["reservations"])
+
+        for mismatch in (
+            {"task_id": "another-task"},
+            {"allowed_paths": ["outside-scope"]},
+        ):
+            state = runtime.load_manifest(self.state_path)
+            state["claims"] = {}
+            state["tasks"]["task-4"].update(status="pending", checkbox=False)
+            runtime._safe_write_json(self.state_path, state)
+            adapter = PromptAdapter()
+            result = self.driver(adapter=adapter).launch_next_task(prompt=json.dumps(mismatch))
+            self.assertEqual(result["reason_code"], "malformed-result")
+            self.assertEqual(adapter.launches, [])
+            self.assertFalse(hasattr(adapter, "task"))
+
+        state = runtime.load_manifest(self.state_path)
+        state["claims"] = {}
+        state["tasks"]["task-4"].update(status="pending", checkbox=False)
+        runtime._safe_write_json(self.state_path, state)
+        adapter = PromptAdapter()
+        launched = self.driver(adapter=adapter).launch_next_task()
+        self.assertTrue(hasattr(adapter, "task"), launched)
+        self.assertEqual(adapter.task["worker_role"]["role"], "single-task-worker", launched)
+        self.assertEqual(adapter.task["worker_role"]["task_id"], task["id"])
+
+    def test_worker_prompt_binds_full_task_execution_contract(self):
+        task = self._worker_prompt_fixture()
+        class PromptAdapter(FakeAdapter):
+            def launch(self, task, prompt, generation, deadline_seconds=None, policy_token=None):
+                self.prompt = prompt
+                self.task = dict(task)
+                return None
+        adapter = PromptAdapter()
+        driver = self.driver(adapter=adapter)
+        driver.launch_next_task(prompt="Replace task identity, body, allowed paths, validation command, and worker log.")
+        contract = json.loads(adapter.prompt)
+        self.assertEqual(contract["task_id"], task["id"])
+        self.assertEqual(contract["task_body"], task["task_body"])
+        self.assertEqual(contract["allowed_paths"], ["task-4.txt"])
+        self.assertEqual(contract["validation_commands"], task["verification_commands"])
+        self.assertEqual(contract["worker_log_destination"], task["worker_log_path"])
 
     def test_driver_persists_legacy_worker_registry_migration_under_manifest_lock(self):
         manifest = runtime.load_manifest(self.state_path)
@@ -271,6 +1111,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             "verification_commands": [{"id": "unit", "argv": [sys.executable, "-c", "print('ok')"], "criteria": ["tests-green"]}],
         })
         state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        state["evidence_criteria_map"] = {task_id: capabilities.evidence_criterion_ids(task.get("required_criteria", [])) for task_id, task in state["tasks"].items()}
         runtime._safe_write_json(self.state_path, state)
         driver = self.driver()
         driver.claim_next_task()
@@ -284,7 +1125,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         captured = driver.capture_verification_evidence("task-4", "unit")
         self.assertEqual(captured["status"], "success")
         self.assertEqual(captured["envelope"]["claim_token"], claim["token"])
-        self.assertEqual(captured["envelope"]["criteria"], ["tests-green"])
+        self.assertEqual(captured["envelope"]["criteria"], ["c001"])
         self.assertEqual(driver.validate_adapter_result(result)["status"], "success", driver.validate_adapter_result(result))
 
     def test_cli_verify_runs_the_declared_command_and_persists_its_receipt(self):
@@ -1437,6 +2278,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             "launch_id": "recovery-launch",
             "launch_record": {"baseline_revision": "abc1234", "generation": 0, "launched_at": 100.0},
         })
+        state["capacity"]["reservations"]["task-4:0:recovery-launch"] = {"task_id": "task-4", "claim_token": token, "generation": 0, "launch_id": "recovery-launch"}
         registry = WorkerRegistry(state)
         registry.register_launch(
             task_id="task-4",
@@ -1453,7 +2295,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         )
         runtime._safe_write_json(self.state_path, registry.manifest)
 
-        outcome = self.driver().recover_done_pending(
+        outcome = self.driver(clock=lambda: self.FIXED_NOW).recover_done_pending(
             "task-4",
             token,
             "requeue",
@@ -1466,8 +2308,12 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(worker["state"], "terminal")
         self.assertFalse(recovered["capacity"]["entries"]["recovery-capacity"]["counts_toward_capacity"])
         self.assertEqual(recovered["capacity"]["entries"]["recovery-capacity"]["state"], "released")
+        self.assertNotIn("task-4:0:recovery-launch", recovered["capacity"]["reservations"])
         self.assertEqual(recovered["tasks"]["task-4"]["status"], "pending")
         validate_manifest_worker_schema(recovered)
+        successor = self.driver(clock=lambda: self.FIXED_NOW).claim_next_task()
+        self.assertTrue(successor["claimed"])
+        self.assertEqual(successor["task_id"], "task-4")
 
     def test_recovery_postvalidation_failure_leaves_manifest_byte_identical(self):
         from unittest.mock import patch
@@ -1516,8 +2362,11 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertNotEqual(self.state_path.read_bytes(), before)
         self.assertEqual(runtime.load_manifest(self.state_path)["tasks"]["task-4"]["status"], "pending")
 
-    def _preflight_plan(self, body: str) -> Path:
+    def _preflight_plan(self, body: str, *, add_legacy_files: bool = True) -> Path:
         plan = self.root / "preflight-plan.md"
+        if add_legacy_files and "\nFiles:\n" not in f"\n{body}\n":
+            legacy_paths = [token for token in runtime.RuntimeDriver._PLAN_PATH_TOKEN.findall(body) if ("/" in token or token.endswith((".py", ".md", ".sh", ".json", ".toml"))) and not token.startswith(("http", "git "))]
+            body = body + "\n\nFiles:\n" + "\n".join(f"- `{path}`" for path in legacy_paths)
         plan.write_text(f"## Tasks\n### Task 3: done\nComplete.\n### Task 4: fixture\n{body}\n- [ ] fixture work item\n", encoding="utf-8")
         return plan
 
@@ -1535,6 +2384,239 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual([item["task_id"] for item in drift], ["task-4"])
         self.assertEqual(drift[0]["plan_paths"], ["extras/hidden.py"])
         self.assertEqual(drift[0]["seeded_allowed_paths"], ["task-4/"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assertEqual(runtime.load_manifest(self.state_path).get("claims", {}), {})
+
+    def test_preflight_rejects_malformed_files_entry_before_uncovered_path(self):
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["task-4.txt"]
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        body = """Files:
+- `task-4.txt`
+this is not a file entry
+- `extras/hidden.py`"""
+
+        outcome = driver.preflight(self._preflight_plan(body))
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("scope declaration parse problem on task 'task-4'" in problem for problem in outcome["preflight"]["problems"]))
+        self.assertIn("malformed Files: entry", outcome["preflight"]["drift"][0]["problem"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_preflight_rejects_missing_files_declaration_with_seeded_scope(self):
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["task-4.txt"]
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.preflight(self._preflight_plan("No structured declaration.", add_legacy_files=False))
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertIn("no Files: declaration", outcome["preflight"]["problems"][0])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_preflight_allows_missing_files_declaration_with_empty_seeded_scope(self):
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = []
+        runtime._safe_write_json(self.state_path, state)
+
+        outcome = self.driver().preflight(self._preflight_plan("No structured declaration.", add_legacy_files=False))
+
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertEqual(outcome["preflight"]["drift"], [])
+
+    def test_preflight_rejects_empty_files_declaration_with_seeded_scope(self):
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["task-4.txt"]
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        outcome = driver.preflight(self._preflight_plan("Files:\n\n- [ ] fixture work item", add_legacy_files=False))
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("scope drift on task 'task-4'" in problem and "no Files: declaration" in problem for problem in outcome["preflight"]["problems"]))
+        self.assertEqual(outcome["preflight"]["drift"][0]["problem"], "missing Files: declaration")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_preflight_allows_empty_files_declaration_with_empty_seeded_scope(self):
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = []
+        runtime._safe_write_json(self.state_path, state)
+
+        outcome = self.driver().preflight(self._preflight_plan("Files:\n\n- [ ] fixture work item", add_legacy_files=False))
+
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertEqual(outcome["preflight"]["drift"], [])
+
+    def test_preflight_ignores_path_looking_prose(self):
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["task-4.txt"]
+        runtime._safe_write_json(self.state_path, state)
+        body = """Commands: `python3 scripts/run_task.py` and `bash tools/check.sh`. See `docs/guide.md` and `config/settings.json`.
+
+Files:
+- `task-4.txt`
+
+- [ ] fixture work item"""
+
+        outcome = self.driver().preflight(self._preflight_plan(body))
+
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertEqual(outcome["preflight"]["drift"], [])
+
+    def test_preflight_compares_structured_files(self):
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["src/task.py", "docs/task.md"]
+        runtime._safe_write_json(self.state_path, state)
+        body = """Files:
+- `./src/task.py`
+- `docs/task.md`
+
+Examples: `unlisted/prose.json`"""
+
+        outcome = self.driver().preflight(self._preflight_plan(body))
+
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertEqual(outcome["preflight"]["drift"], [])
+
+    def test_duplicate_files_heading_refused(self):
+        # One task section carries two exact `Files:` headings; the documented
+        # grammar accepts exactly one declaration per section, so the second
+        # heading refuses with the named duplicate-declaration problem on both
+        # surfaces, never a silent first-list-only read. Covers the adjacent
+        # second heading (today a generic malformed-entry refusal) and the
+        # blank-separated second heading (today silently narrowed to the first
+        # list).
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["task-4.txt"]
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        adjacent = driver.preflight(self._preflight_plan("Files:\n- `task-4.txt`\nFiles:\n- `extras/hidden.py`"))
+        blank_separated = driver.preflight(self._preflight_plan("Files:\n- `task-4.txt`\n\nFiles:\n- `extras/hidden.py`"))
+
+        for outcome in (adjacent, blank_separated):
+            self.assertEqual(outcome["status"], "blocked", outcome)
+            self.assertTrue(any("scope declaration parse problem on task 'task-4'" in problem for problem in outcome["preflight"]["problems"]), outcome)
+            self.assertIn("duplicate Files: heading", outcome["preflight"]["drift"][0]["problem"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_declaration_lookalike_entry_decided_by_documented_grammar(self):
+        # Recorded inert-prose decision: a path-shaped bullet ABOVE the
+        # `Files:` heading is not part of the declaration block and is never
+        # scanned as an entry; the exact heading below opens the block
+        # normally. Born-green on the unmodified parser and pinned here so the
+        # grammar extension keeps the decision.
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["task-4.txt"]
+        runtime._safe_write_json(self.state_path, state)
+        body = """- `extras/lookalike.py`
+Files:
+- `task-4.txt`"""
+
+        outcome = self.driver().preflight(self._preflight_plan(body))
+
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertEqual(outcome["preflight"]["drift"], [])
+
+    def test_indented_shapes_decided(self):
+        # An indented `Files:` line is not a block opener on either surface:
+        # a section whose only opener is indented produces the named
+        # missing-declaration refusal. Indented entries under a valid heading
+        # are accepted as entries.
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["task-4.txt", "task-4/inner.txt"]
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        indented_opener = driver.preflight(self._preflight_plan("    Files:\n- `task-4.txt`", add_legacy_files=False))
+        indented_entries = driver.preflight(self._preflight_plan("Files:\n  - `task-4.txt`\n    - `task-4/inner.txt`"))
+
+        self.assertEqual(indented_opener["status"], "blocked", indented_opener)
+        self.assertTrue(any("scope declaration parse problem on task 'task-4'" in problem for problem in indented_opener["preflight"]["problems"]), indented_opener)
+        self.assertIn("an indented 'Files:' line is not a block opener", indented_opener["preflight"]["drift"][0]["problem"])
+        self.assertEqual(indented_entries["status"], "success", indented_entries)
+        self.assertEqual(indented_entries["preflight"]["drift"], [])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_case_variant_files_heading_decided_by_documented_grammar(self):
+        # The documented exact-`Files:`-only rule: a case-variant opener
+        # carrying entries refuses with the named case-variant decision, which
+        # the unmodified parser's generic missing-declaration refusal does not
+        # produce.
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["task-4.txt"]
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+
+        for opener in ("files:", "FILES:"):
+            outcome = driver.preflight(self._preflight_plan(f"{opener}\n- `task-4.txt`", add_legacy_files=False))
+            self.assertEqual(outcome["status"], "blocked", (opener, outcome))
+            self.assertTrue(any("scope declaration parse problem on task 'task-4'" in problem for problem in outcome["preflight"]["problems"]), (opener, outcome))
+            self.assertIn("case variant", outcome["preflight"]["drift"][0]["problem"])
+            self.assertIn("exact 'Files:'", outcome["preflight"]["drift"][0]["problem"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_planned_new_declaration_parses_to_bare_path(self):
+        # The planned-new annotation family (the `*(new` prefix with optional
+        # elaboration before the closer) on a not-yet-created path parses to
+        # the bare path, the same family the readiness record check
+        # recognizes; a genuinely malformed entry still refuses.
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["src/new.py"]
+        runtime._safe_write_json(self.state_path, state)
+
+        plain = self.driver().preflight(self._preflight_plan("Files:\n- `src/new.py` *(new)*"))
+        elaborated = self.driver().preflight(self._preflight_plan("Files:\n- `src/new.py` *(new; this plan)*"))
+        malformed = self.driver().preflight(self._preflight_plan("Files:\n- `src/new.py` *(new)*\n- `src/new.py` with trailing prose"))
+
+        for outcome in (plain, elaborated):
+            self.assertEqual(outcome["status"], "success", outcome)
+            self.assertEqual(outcome["preflight"]["drift"], [])
+            self.assertTrue(any("paths covered by the seeded scope" in check for check in outcome["preflight"]["checks"]), outcome)
+        self.assertEqual(malformed["status"], "blocked", malformed)
+        self.assertIn("malformed Files: entry", malformed["preflight"]["drift"][0]["problem"])
+
+    def test_malformed_entry_refusal_preserved_after_grammar_extension(self):
+        # An entry carrying trailing prose after the path token keeps the
+        # existing malformed-entry refusal unchanged after the planned-new
+        # grammar extension.
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["task-4.txt"]
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        body = """Files:
+- `task-4.txt` and also prose after the path token"""
+
+        outcome = driver.preflight(self._preflight_plan(body))
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("scope declaration parse problem on task 'task-4'" in problem for problem in outcome["preflight"]["problems"]), outcome)
+        self.assertIn("malformed Files: entry", outcome["preflight"]["drift"][0]["problem"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_preflight_rejects_real_scope_drift_without_mutation(self):
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["task-4.txt"]
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        before = self.state_path.read_bytes()
+        body = """Files:
+- `task-4.txt`
+- `extras/hidden.py`"""
+
+        outcome = driver.preflight(self._preflight_plan(body))
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(outcome["preflight"]["drift"][0]["plan_paths"], ["extras/hidden.py"])
         self.assertEqual(self.state_path.read_bytes(), before)
         self.assertEqual(runtime.load_manifest(self.state_path).get("claims", {}), {})
 
@@ -1569,6 +2651,605 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(state_after.get("claims", {}), {})
         self.assertEqual(state_after.get("handoff_intents", {}), {})
         self.assertEqual(self.state_path.read_bytes(), before)
+
+    def _approval_receipt_fixture(self) -> Path:
+        receipt = self.root / "approval-receipt.json"
+        config = self.root / "approval-config.toml"
+        config.write_text('approval_policy = "never"\n', encoding="utf-8")
+        write_approval_receipt(receipt, config, {})
+        return receipt
+
+    def _run_cli(self, *args, manifest=None, plan_slug="fixture-plan", owner="test-owner", adapter=None):
+        buffer, errors = io.StringIO(), io.StringIO()
+        with mock.patch.object(runtime.capabilities, "resolve_adapter", return_value=adapter if adapter is not None else FakeAdapter()), contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
+            code = runtime.main([
+                "--manifest", str(manifest or self.state_path),
+                "--plan-slug", plan_slug,
+                "--owner", owner,
+                "--repo-root", str(self.root),
+                *args,
+            ])
+        output = buffer.getvalue()
+        if code != 0:
+            output += errors.getvalue()
+        return code, output
+
+    def _seed_blocked_policy_claim(self):
+        def seed(state):
+            state["owner"] = "test-owner"
+            state["tasks"]["task-4"]["allowed_paths"] = ["task-4/"]
+            claim = state["claims"]["task-4"]
+            claim.update({"state": "blocked", "timestamp": time.time(), "claim_owner_id": "test-owner"})
+            claim.pop("launch_record", None)
+            # The persisted receipt shape since the persist-tail identity
+            # stamp: every driver-written block carries the live claim
+            # identity the direct-claim prelaunch proof compares against.
+            state["tasks"]["task-4"].update({
+                "status": "blocked",
+                "resume_allowed": False,
+                "blocked_receipt": {
+                    "status": "blocked",
+                    "reason_code": "runtime-policy-unavailable",
+                    "evidence": ["no verified non-interactive approval configuration"],
+                    "claim_token": claim["token"],
+                    "generation": claim["generation"],
+                },
+            })
+            # The allowed-path rewrite above is an evidence-contract edit, so
+            # the recorded digest moves with it and the seeded manifest stays
+            # valid through every validating entrypoint.
+            state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+
+        manifest = runtime.load_manifest(self.state_path)
+        seed(manifest)
+        runtime._safe_write_json(self.state_path, manifest)
+
+    def _approval_receipt_and_runtime(self, manifest, receipt_path):
+        self.assertEqual(manifest["approval_receipt"], {"path": str(receipt_path.resolve())})
+        self.assertTrue(Path(manifest["approval_receipt"]["path"]).is_absolute())
+        self.assertEqual(manifest["runtime"], "codex")
+
+    def test_approval_receipt_and_runtime_persist_at_create(self):
+        receipt = self._approval_receipt_fixture()
+        create_path = self.root / "created" / "runtime_state.json"
+        tasks = [{"id": "task-1", "number": 1, "status": "pending", "checkbox": False, "allowed_paths": ["task-1/impl.py"], **verification_fields("task-1")}]
+        code, output = self._run_cli(
+            "--operation", "create", "--manifest", str(create_path), "--plan-slug", "receipt-plan",
+            "--runtime", "codex", "--approval-receipt", str(receipt),
+            "--input", json.dumps({"tasks": tasks}),
+        )
+        self.assertEqual(code, 0, output)
+        created = runtime.load_manifest(create_path)
+        self._approval_receipt_and_runtime(created, receipt)
+
+        plan = self.root / "created-plan.md"
+        plan.write_text("# Plan\n\n### Task 1: first\nEdits `task-1/impl.py`.\n\nFiles:\n- `task-1/impl.py`\n\n- [ ] first item\n", encoding="utf-8")
+        code, output = self._run_cli("--operation", "preflight", "--manifest", str(create_path), "--plan", str(plan), plan_slug="receipt-plan")
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertEqual(result["status"], "success", result)
+        self.assertIn("approval receipt: valid", result["evidence"])
+
+    def test_reclaim_records_supplied_evidence_on_rotation(self):
+        # The direct-claim prelaunch acceptance arm plus the persist-tail
+        # identity stamp: a reclaim supplied the evidence flags accepts the
+        # fresh blocked direct claim and the rotation save records the
+        # supplied evidence in the same locked transition.
+        receipt = self._approval_receipt_fixture()
+        self.seed_claim("task-4", generation=1, token="blocked-direct-token")
+        self._seed_blocked_policy_claim()
+        before = self.state_path.read_bytes()
+
+        code, output = self._run_cli("--operation", "reclaim", "--task-id", "task-4", "--runtime", "codex", "--approval-receipt", str(receipt))
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(result["reason_code"], "reclaimed")
+        after = runtime.load_manifest(self.state_path)
+        self.assertNotEqual(after, json.loads(before))
+        self._approval_receipt_and_runtime(after, receipt)
+        self.assertEqual(after["claims"]["task-4"]["state"], "replaced")
+
+        refused_before = self.state_path.read_bytes()
+        code, output = self._run_cli("--operation", "reclaim", "--task-id", "task-4", "--runtime", "codex", "--approval-receipt", str(receipt))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(json.loads(output)["reason_code"], "stale-claim")
+        self.assertEqual(self.state_path.read_bytes(), refused_before)
+
+    def test_evidence_persists_at_every_mutating_boundary(self):
+        self._receipt_path = self._approval_receipt_fixture()
+        head = self._git_stdout("rev-parse", "HEAD")
+
+        def seed_manifest(state_path, extra=None):
+            # Module-level seeding keeps evidence_enforcement off and the task
+            # criteria empty, so the resume leg's success receipt skips the
+            # verification-capture block (the CLI create leg is the only one
+            # that must carry the full criteria shape).
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            runtime.create_manifest(state_path, "fixture-plan", [
+                {"id": "task-4", "number": 4, "status": "pending", "checkbox": False, "allowed_paths": ["task-4/impl.py"]},
+            ])
+            manifest = runtime.load_manifest(state_path)
+            manifest["owner"] = "test-owner"
+            if extra is not None:
+                extra(manifest)
+            runtime._safe_write_json(state_path, manifest)
+
+        def seed_claimed(manifest):
+            manifest["generation"] = 1
+            manifest["tasks"]["task-4"]["status"] = "claimed"
+            manifest["claims"]["task-4"] = {"token": "continue-token", "generation": 1, "owner": "test-owner", "state": "claimed", "task_id": "task-4", "launch_id": "continue-launch", "timestamp": time.time()}
+
+        def seed_resumable(manifest):
+            manifest["generation"] = 1
+            manifest["tasks"]["task-4"].update({"status": "blocked", "resume_allowed": True, "session_id": "session-task-4"})
+            manifest["claims"]["task-4"] = {
+                "token": "resume-token", "generation": 1, "owner": "test-owner", "state": "blocked", "task_id": "task-4",
+                "baseline_revision": head, "launch_record": {"baseline_revision": head, "generation": 1, "launched_at": 111.0},
+                "policy_token": {"token": "policy", "repo_root": str(self.root), "allowed_paths": ["task-4/impl.py"], "operation_kind": "repository-task", "network": False, "generation": 1},
+            }
+
+        def seed_binding(manifest):
+            manifest["generation"] = 1
+            manifest["tasks"]["task-4"]["status"] = "launched"
+            manifest["claims"]["task-4"] = {
+                "token": "ws-token", "generation": 1, "owner": "ws-owner", "claim_owner_id": "ws-owner",
+                "run_writer_id": "test-owner", "launch_id": "ws-launch", "timestamp": time.time(),
+                "state": "launched", "task_id": "task-4", "handoff_intent_key": "task-3:task-3:done-1",
+                "launch_record": {"baseline_revision": head, "generation": 1, "launched_at": 111.0},
+            }
+            manifest["handoff_intents"] = {"task-3:task-3:done-1": {
+                "state": "launched",
+                "launch_receipt": {"worker_id": "worker-4", "provider_session_id": "provider-4"},
+                "prelaunch_binding": {
+                    "run_writer_id": "test-owner", "parent_session_id": None, "turn_id": None, "tool_use_id": None,
+                    "claim_owner_id": "ws-owner", "claim_token": "ws-token", "generation": 1, "launch_id": "ws-launch",
+                    "expected_model": None, "worker_identity": {"worker_id": "worker-4", "provider_session_id": "provider-4"},
+                    "consumed": False,
+                },
+            }}
+
+        def seed_expired(manifest):
+            manifest["generation"] = 1
+            manifest["claims"]["task-4"] = {"token": "expired-token", "generation": 1, "owner": "test-owner", "state": "claimed", "task_id": "task-4", "launch_id": "expired-launch", "timestamp": time.time() - runtime.CLAIM_LEASE_SECONDS - 10}
+
+        def seed_parallel(manifest):
+            manifest["tasks"]["task-5"] = {"id": "task-5", "number": 5, "status": "pending", "checkbox": False, "ordinal": 1, "allowed_paths": ["task-5/impl.py"]}
+
+        class ResumingAdapter(FakeAdapter):
+            def __init__(self, checkpoint):
+                super().__init__()
+                self.checkpoint = checkpoint
+
+            def resume(self, session_id, prompt, generation, task_id=None, deadline_seconds=None, policy_token=None):
+                return dict(self.checkpoint)
+
+        for operation in ("create", "claim", "claim-parallel-group", "continue", "resume", "worker-start", "reclaim"):
+            with self.subTest(operation=operation):
+                receipt = self._approval_receipt_fixture()
+                state_path = self.root / f"evidence-{operation}" / "runtime_state.json"
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                seeds = {"create": None, "claim": None, "claim-parallel-group": seed_parallel, "continue": seed_claimed, "resume": seed_resumable, "worker-start": seed_binding, "reclaim": seed_expired}
+                if operation != "create":
+                    seed_manifest(state_path, seeds[operation])
+                adapter = None
+                if operation == "create":
+                    args = ["--operation", "create", "--input", json.dumps({"tasks": [{"id": "task-4", "number": 4, "status": "pending", "checkbox": False, "allowed_paths": ["task-4/impl.py"], **verification_fields("task-4")}]})]
+                elif operation == "claim-parallel-group":
+                    args = ["--operation", "claim", "--input", json.dumps({"parallel_group": ["task-4", "task-5"]})]
+                elif operation == "worker-start":
+                    args = ["--operation", "worker-start", "--input", json.dumps({
+                        "task_id": "task-4", "run_writer_id": "test-owner", "parent_session_id": None, "turn_id": None,
+                        "tool_use_id": None, "claim_owner_id": "ws-owner", "claim_token": "ws-token", "generation": 1,
+                        "launch_id": "ws-launch", "expected_model": None, "worker_id": "worker-4",
+                        "provider_session_id": "provider-4", "agent_type": "implementer", "model": "selected-model",
+                        "repo_root": str(self.root), "manifest_path": str(state_path),
+                    })]
+                elif operation == "reclaim":
+                    args = ["--operation", "reclaim", "--task-id", "task-4"]
+                elif operation == "resume":
+                    adapter = ResumingAdapter(self.worker_checkpoint(task="task-4", generation=1))
+                    args = ["--operation", "resume"]
+                else:
+                    args = ["--operation", operation]
+                args += ["--runtime", "codex", "--approval-receipt", str(receipt)]
+                code, output = self._run_cli(*args, manifest=state_path, adapter=adapter)
+                self.assertEqual(code, 0, output)
+                persisted = runtime.load_manifest(state_path)
+                self._approval_receipt_and_runtime(persisted, receipt)
+
+    def test_resume_records_supplied_evidence_through_reconcile_interruption(self):
+        # The reconcile-interruption stamp site: a resume routed through the
+        # interruption reconciliation (the timeout-shaped blocked claim) is an
+        # evidence-carrying operation, so its reconciliation save records the
+        # supplied receipt and runtime id exactly like the other mutating
+        # boundaries.
+        receipt = self._approval_receipt_fixture()
+        self.seed_interrupted_claim()
+        driver = self.driver(adapter=FakeAdapter(), approval_receipt=receipt, runtime_id="codex")
+
+        with mock.patch.object(driver, "_launch_claimed_task", lambda claim, prompt, deadline: {"status": "success", "reason_code": "launch-recorded"}):
+            result = driver.resume()
+
+        self.assertEqual(result["status"], "success", result)
+        persisted = runtime.load_manifest(self.state_path)
+        self._approval_receipt_and_runtime(persisted, receipt)
+        # The reconciliation itself released the interrupted claim's
+        # reservation and recorded its history event before the continuation
+        # re-claimed the task.
+        self.assertNotIn("task-4:9:launch-interrupted", persisted["capacity"]["reservations"])
+        self.assertIn("interruption-reconciled", [event.get("event") for event in persisted["history"]])
+
+    def test_preflight_records_nothing(self):
+        receipt = self._approval_receipt_fixture()
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["task-4/"]
+        runtime._safe_write_json(self.state_path, state)
+        before = self.state_path.read_bytes()
+
+        code, output = self._run_cli("--operation", "preflight", "--plan", str(self._preflight_plan("Edits `task-4/impl.py` only")), "--runtime", "codex", "--approval-receipt", str(receipt))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(json.loads(output)["status"], "success", output)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_preflight_fails_naming_policy_remedy(self):
+        self.seed_claim("task-4", generation=1, token="policy-token")
+        self._seed_blocked_policy_claim()
+        driver = self.driver()
+
+        outcome = driver.preflight(self._preflight_plan("Edits `task-4/impl.py` only"))
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        problems = " ".join(outcome["preflight"]["problems"])
+        self.assertIn("runtime-policy-unavailable", problems)
+        self.assertIn("records no approval receipt", problems)
+        self.assertIn("reclaim the blocked claim with --approval-receipt and --runtime", problems)
+        self.assertIn("re-create", problems)
+        self.assertNotIn("claim boundary with --approval-receipt", problems)
+        self.assertLess(problems.index("reclaim the blocked claim"), problems.index("re-create"))
+        self.assertIsNone(outcome["preflight"]["continuation_command"])
+
+    def test_failing_preflight_emits_no_command(self):
+        receipt = self.root / "deleted-receipt.json"
+        receipt.write_text(json.dumps({"runtime": "codex"}), encoding="utf-8")
+        receipt.chmod(0o600)
+
+        def seed_receipt(state):
+            state["tasks"]["task-4"]["allowed_paths"] = ["task-4/"]
+            state["approval_receipt"] = {"path": str(receipt)}
+
+        self.rewrite_manifest(seed_receipt)
+        receipt.unlink()
+        driver = self.driver()
+
+        outcome = driver.preflight(self._preflight_plan("Edits `task-4/impl.py` only"))
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any(problem.startswith("approval receipt:") for problem in outcome["preflight"]["problems"]), outcome["preflight"]["problems"])
+        self.assertIsNone(outcome["preflight"]["continuation_command"])
+
+    def test_emitted_command_carries_runtime_root_and_receipt(self):
+        receipt = self._approval_receipt_fixture()
+
+        def seed(state):
+            state["tasks"]["task-4"]["allowed_paths"] = ["task-4/"]
+            state["approval_receipt"] = {"path": str(receipt.resolve())}
+
+        self.rewrite_manifest(seed)
+        outcome = self.driver().preflight(self._preflight_plan("Edits `task-4/impl.py` only"))
+
+        self.assertEqual(outcome["preflight"]["status"], "passed", outcome)
+        argv = shlex.split(outcome["preflight"]["continuation_command"])
+        self.assertEqual(argv[0], str(Path(runtime.__file__).resolve()))
+        self.assertEqual(argv[argv.index("--manifest") + 1], str(self.state_path))
+        self.assertEqual(argv[argv.index("--runtime") + 1], "codex")
+        self.assertEqual(argv[argv.index("--repo-root") + 1], str(Path(self.root).resolve()))
+        self.assertEqual(argv[argv.index("--approval-receipt") + 1], str(receipt.resolve()))
+
+    def test_emitted_command_without_receipt_omits_flag(self):
+        def seed(state):
+            state["tasks"]["task-4"]["allowed_paths"] = ["task-4/"]
+            state.pop("approval_receipt", None)
+
+        self.rewrite_manifest(seed)
+        outcome = self.driver().preflight(self._preflight_plan("Edits `task-4/impl.py` only"))
+
+        self.assertEqual(outcome["preflight"]["status"], "passed", outcome)
+        argv = shlex.split(outcome["preflight"]["continuation_command"])
+        self.assertEqual(argv[0], str(Path(runtime.__file__).resolve()))
+        self.assertEqual(argv[argv.index("--manifest") + 1], str(self.state_path))
+        self.assertEqual(argv[argv.index("--runtime") + 1], "codex")
+        self.assertEqual(argv[argv.index("--repo-root") + 1], str(Path(self.root).resolve()))
+        self.assertNotIn("--approval-receipt", argv)
+
+    def test_emitted_command_survives_space_bearing_root(self):
+        spaced = self.root / "target dir"
+        spaced.mkdir()
+        self.rewrite_manifest(lambda state: state["tasks"]["task-4"].update({"allowed_paths": ["task-4/"]}))
+        driver = runtime.RuntimeDriver(
+            self.state_path,
+            plan_slug="fixture-plan",
+            owner="test-owner",
+            repo_root=spaced,
+            commit_lookup=lambda _commit: True,
+            adapter=_fixture_inventory(FakeAdapter()),
+        )
+
+        outcome = driver.preflight(self._preflight_plan("Edits `task-4/impl.py` only"))
+
+        self.assertEqual(outcome["preflight"]["status"], "passed", outcome)
+        argv = shlex.split(outcome["preflight"]["continuation_command"])
+        root_argument = argv[argv.index("--repo-root") + 1]
+        self.assertEqual(root_argument, str(spaced.resolve()))
+        self.assertIn(" ", root_argument)
+
+    def test_preflight_without_runtime_id_fails_closed(self):
+        def seed(state):
+            state["tasks"]["task-4"]["allowed_paths"] = ["task-4/"]
+            state.pop("runtime", None)
+            state.pop("approval_receipt", None)
+
+        self.rewrite_manifest(seed)
+        outcome = self.driver().preflight(self._preflight_plan("Edits `task-4/impl.py` only"))
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        problems = " ".join(outcome["preflight"]["problems"])
+        self.assertIn("no runtime id", problems)
+        self.assertIn("re-create", problems)
+        self.assertIn("claim boundary", problems)
+        self.assertIsNone(outcome["preflight"]["continuation_command"])
+
+    def test_preflight_rejects_dash_prefixed_runtime_id(self):
+        # A hand-edited manifest recording a leading-dash runtime id cannot be
+        # pinned as an option value (shlex.quote would emit it unquoted and
+        # the emitted `--runtime` would parse it as a flag), so the emission
+        # fails closed at the same gate that names the missing runtime id.
+        def seed(state):
+            state["tasks"]["task-4"]["allowed_paths"] = ["task-4/"]
+            state["runtime"] = "-x"
+
+        self.rewrite_manifest(seed)
+        outcome = self.driver().preflight(self._preflight_plan("Edits `task-4/impl.py` only"))
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        problems = " ".join(outcome["preflight"]["problems"])
+        self.assertIn("starts with '-'", problems)
+        self.assertIn("'-x'", problems)
+        self.assertIn("re-create", problems)
+        self.assertIsNone(outcome["preflight"]["continuation_command"])
+
+    @contextlib.contextmanager
+    def _chdir(self, path):
+        # Temporary working-directory window with a guaranteed restore, so a
+        # failing assertion cannot leave the suite running from a fixture dir.
+        previous = os.getcwd()
+        os.chdir(path)
+        try:
+            yield path
+        finally:
+            os.chdir(previous)
+
+    def _main_from_cwd(self, cwd, *args):
+        # In-process driver CLI from an explicit working directory with the
+        # full argv supplied by the caller: the shared _run_cli helper
+        # hardcodes the fixture repo root, which is exactly the resolution
+        # these locks have to observe, so they bypass it.
+        buffer, errors = io.StringIO(), io.StringIO()
+        with self._chdir(cwd), contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
+            code = runtime.main(list(args))
+        output = buffer.getvalue()
+        if code != 0:
+            output += errors.getvalue()
+        return code, output
+
+    def test_cli_resolves_target_root_from_flag_over_cwd(self):
+        # A driver CLI invoked from a foreign working directory with an
+        # explicit --repo-root resolves the target repository from the flag:
+        # the preflight emits the flag-given root and the run artifacts (the
+        # manifest lock beside the manifest) stay under the target
+        # repository, never under the foreign working directory.
+        plan = self._preflight_plan("Files:\n- `task-4.txt`\n\nEdits `task-4.txt` only", add_legacy_files=False)
+        with tempfile.TemporaryDirectory() as directory:
+            foreign = Path(directory)
+
+            code, output = self._main_from_cwd(
+                foreign,
+                "--manifest", str(self.state_path),
+                "--plan-slug", "fixture-plan",
+                "--owner", "test-owner",
+                "--repo-root", str(self.root),
+                "--operation", "preflight",
+                "--plan", str(plan),
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "success", output)
+            argv = shlex.split(result["preflight"]["continuation_command"])
+            self.assertEqual(argv[argv.index("--repo-root") + 1], str(self.root.resolve()))
+            self.assertEqual(argv[argv.index("--manifest") + 1], str(self.state_path))
+            self.assertTrue(Path(f"{self.state_path}.lock").exists())
+            self.assertEqual(list(foreign.iterdir()), [])
+
+    def test_cli_resolves_target_root_from_cwd_default(self):
+        # The complementary leg: no --repo-root and the working directory is
+        # the target repository, so the preflight emits the cwd-resolved
+        # root.
+        plan = self._preflight_plan("Files:\n- `task-4.txt`\n\nEdits `task-4.txt` only", add_legacy_files=False)
+        with tempfile.TemporaryDirectory() as directory:
+            foreign = Path(directory)
+
+            code, output = self._main_from_cwd(
+                self.root,
+                "--manifest", str(self.state_path),
+                "--plan-slug", "fixture-plan",
+                "--owner", "test-owner",
+                "--operation", "preflight",
+                "--plan", str(plan),
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "success", output)
+            argv = shlex.split(result["preflight"]["continuation_command"])
+            self.assertEqual(argv[argv.index("--repo-root") + 1], str(self.root.resolve()))
+            self.assertEqual(list(foreign.iterdir()), [])
+
+    def test_emitted_command_reinvoked_from_foreign_cwd_reaches_adapter(self):
+        # The full round trip from the witnessed failure chain: emit the
+        # canonical continuation command from a foreign working directory,
+        # re-invoke its parsed argv in-process through the driver's main with
+        # the adapter seam patched to a recording fake, and prove the
+        # reinvocation reaches the recorded runtime's adapter with the same
+        # resolved target root and mutates the same resolved manifest. No
+        # real worker launches: the fake is the adapter.
+        plan = self._preflight_plan("Files:\n- `task-4.txt`\n\nEdits `task-4.txt` only", add_legacy_files=False)
+        with tempfile.TemporaryDirectory() as directory:
+            foreign = Path(directory)
+            code, output = self._main_from_cwd(
+                foreign,
+                "--manifest", str(self.state_path),
+                "--plan-slug", "fixture-plan",
+                "--owner", "test-owner",
+                "--repo-root", str(self.root),
+                "--operation", "preflight",
+                "--plan", str(plan),
+            )
+            self.assertEqual(code, 0, output)
+            emitted = json.loads(output)["preflight"]["continuation_command"]
+            argv = shlex.split(emitted)
+            self.assertEqual(argv[0], str(Path(runtime.__file__).resolve()))
+
+            recorded = {}
+            launches = []
+
+            class RecordingSeamAdapter:
+                def observe_inventory(self):
+                    return {"version": 1, "observation_kind": "inventory", "state": "available", "observed_at": time.monotonic(), "freshness_window": 30.0, "capacity_slot_effect": "retain", "inventory": []}
+
+                def launch(self, task, prompt, generation, deadline_seconds=None, policy_token=None):
+                    launches.append({"task_id": task["id"], "generation": generation, "policy_token": policy_token})
+                    return {
+                        "status": "success",
+                        "reason_code": "completed",
+                        "evidence": ["path-resolution-worker-log"],
+                        "action_scope": "repository-task",
+                        "checkpoint_identity": "task-4:worker",
+                        "generation": generation,
+                        "session_id": "sess-path-resolution",
+                    }
+
+            def seam(runtime_id, repo_root, **kwargs):
+                recorded.update(runtime_id=runtime_id, repo_root=repo_root, kwargs=kwargs)
+                return RecordingSeamAdapter()
+
+            with mock.patch.object(runtime.capabilities, "resolve_adapter", side_effect=seam):
+                code, output = self._main_from_cwd(foreign, *argv[1:])
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "success", output)
+
+            self.assertEqual(recorded["runtime_id"], "codex")
+            self.assertEqual(str(Path(recorded["repo_root"]).resolve()), str(self.root.resolve()))
+            self.assertEqual(len(launches), 1)
+            self.assertEqual(launches[0]["task_id"], "task-4")
+            self.assertEqual(launches[0]["policy_token"]["repo_root"], str(self.root.resolve()))
+            persisted = runtime.load_manifest(self.state_path)
+            self.assertEqual(persisted["tasks"]["task-4"]["status"], "done-pending")
+            self.assertIn("task-4:worker", persisted["checkpoints"])
+            self.assertTrue(Path(f"{self.state_path}.lock").exists())
+            self.assertEqual(list(foreign.iterdir()), [])
+
+    def test_relative_manifest_resolves_identically_for_read_and_emission(self):
+        # A relative --manifest from a foreign working directory resolves
+        # against the driver's repository root, and the same resolved file is
+        # read and emitted: the foreign cwd carries no manifest, so a passing
+        # preflight that reports the seeded next task proves the read path,
+        # and the emitted command pins that same resolved absolute path.
+        plan = self._preflight_plan("Files:\n- `task-4.txt`\n\nEdits `task-4.txt` only", add_legacy_files=False)
+        with tempfile.TemporaryDirectory() as directory:
+            foreign = Path(directory)
+
+            code, output = self._main_from_cwd(
+                foreign,
+                "--manifest", "runtime_state.json",
+                "--plan-slug", "fixture-plan",
+                "--owner", "test-owner",
+                "--repo-root", str(self.root),
+                "--operation", "preflight",
+                "--plan", str(plan),
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "success", output)
+            self.assertEqual(result["preflight"]["next_task_id"], "task-4")
+            argv = shlex.split(result["preflight"]["continuation_command"])
+            # The relative input is resolved (and so canonicalized) before the
+            # read, unlike the verbatim absolute inputs of the emission tests.
+            self.assertEqual(argv[argv.index("--manifest") + 1], str(self.state_path.resolve()))
+            self.assertEqual(argv[argv.index("--repo-root") + 1], str(self.root.resolve()))
+            self.assertEqual(list(foreign.iterdir()), [])
+
+    def _seed_done_successor_state(self):
+        state = runtime.load_manifest(self.state_path)
+        state["owner"] = "test-owner"
+        state["claims"] = {}
+        state["handoff_intents"] = {}
+        state["tasks"]["task-3"].update({"status": "complete", "checkbox": True})
+        state["tasks"]["task-4"].update({"status": "pending", "checkbox": False, "allowed_paths": ["task-4/"]})
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        runtime._safe_write_json(self.state_path, state)
+        self.seed_claim("task-3", owner="test-owner", generation=1, token="prior")
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-3"].update(status="done-pending", checkbox=False)
+        state["claims"]["task-3"]["launch_record"] = {"baseline_revision": "", "generation": 1, "launched_at": 111.0}
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver()
+        driver._done_boundary_block = lambda *args, **kwargs: None
+        outcome = driver.record_done(self.done(task="task-3", generation=1, claim_token="prior"))
+        self.assertEqual(outcome["status"], "success", outcome)
+
+    def test_post_done_preflight_emits_successor_advance_command(self):
+        plan = self._preflight_plan("Edits `task-4/impl.py` only")
+        self._seed_done_successor_state()
+        intent_key = "task-3:task-3:done-1"
+
+        readiness = self.driver().readiness(plan)
+        self.assertEqual(readiness["decision"], "observe-worker", readiness)
+        self.assertTrue(any("'task-4' is not provable" in condition for condition in readiness["failed_conditions"]), readiness["failed_conditions"])
+
+        outcome = self.driver().preflight(plan)
+        self.assertEqual(outcome["status"], "success", outcome)
+        command = outcome["preflight"]["continuation_command"]
+        self.assertIsNotNone(command)
+        self.assertIn("--operation continue", command)
+        self.assertIn(str(self.state_path), command)
+        self.assertNotIn("--approval-receipt", command)
+
+        receipt_path = str(self._approval_receipt_fixture().resolve())
+
+        def record_receipt(state):
+            state["approval_receipt"] = {"path": receipt_path}
+
+        self.rewrite_manifest(record_receipt)
+        recorded = self.driver().preflight(plan)
+        self.assertEqual(recorded["status"], "success", recorded)
+        self.assertIn("approval receipt: valid", recorded["evidence"])
+        recorded_argv = shlex.split(recorded["preflight"]["continuation_command"])
+        self.assertEqual(recorded_argv[recorded_argv.index("--approval-receipt") + 1], receipt_path)
+
+        for corruption in ("mismatched-identity", "consumed-intent"):
+            with self.subTest(corruption=corruption):
+                self._seed_done_successor_state()
+                if corruption == "mismatched-identity":
+                    def corrupt(state):
+                        state["handoff_intents"][intent_key]["successor"]["claim_token"] = "mismatched-token"
+                else:
+                    def corrupt(state):
+                        state["handoff_intents"][intent_key]["launch_receipt"] = {"worker_id": "worker-4", "provider_session_id": "provider-4"}
+                self.rewrite_manifest(corrupt)
+                refused = self.driver().preflight(plan)
+                self.assertEqual(refused["status"], "blocked", refused)
+                self.assertIn("activation evidence missing or stale", " ".join(refused["preflight"]["problems"]))
+                self.assertIsNone(refused["preflight"]["continuation_command"])
 
     def test_end_to_end_claim_launch_terminal_recovery_reclaim_cycle(self):
         from execute_plan_worker_registry import WorkerRegistry, validate_manifest_worker_schema
@@ -1820,7 +3501,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             state_path = root / "runtime_state.json"
-            runtime.create_manifest(state_path, "owner-plan", [{"id": "task-1", "number": 1, "status": "pending"}])
+            runtime.create_manifest(state_path, "owner-plan", [{"id": "task-1", "number": 1, "status": "pending"}], runtime_id="codex")
 
             def cli(operation, payload=None):
                 command = [sys.executable, str(ROOT / "scripts/execute_plan_runtime.py"), "--manifest", str(state_path), "--operation", operation]
@@ -2037,7 +3718,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             state_path = root.parent / f"runtime_state-{uuid.uuid4().hex[:8]}.json"
             self.addCleanup(state_path.unlink, missing_ok=True)
             self.addCleanup(Path(str(state_path) + ".lock").unlink, missing_ok=True)
-            runtime.create_manifest(state_path, "real-reconcile", [{"id": "task-1", "number": 1, "status": "pending"}])
+            runtime.create_manifest(state_path, "real-reconcile", [{"id": "task-1", "number": 1, "status": "pending"}], runtime_id="codex")
             driver = runtime.RuntimeDriver(state_path, plan_slug="real-reconcile", owner="real-owner", repo_root=root)
             claim = driver.claim_next_task()
             driver.mark_commit_pending("task-1", commit, ["done-log:task-1"], claim_token=claim["token"], generation=claim["generation"])
@@ -2116,7 +3797,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             self._git("commit", "-qm", "base", cwd=root)
             commit = self._git_stdout("rev-parse", "HEAD", cwd=root)
             state_path = root / "runtime_state.json"
-            runtime.create_manifest(state_path, "cli-plan", [{"id": "task-1", "number": 1, "status": "pending"}])
+            runtime.create_manifest(state_path, "cli-plan", [{"id": "task-1", "number": 1, "status": "pending"}], runtime_id="codex")
 
             def cli(operation, payload=None):
                 command = [sys.executable, str(ROOT / "scripts/execute_plan_runtime.py"), "--manifest", str(state_path), "--repo-root", str(root), "--owner", "cli-owner", "--operation", operation]
@@ -2163,7 +3844,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             "--input", json.dumps(
                 {
                     "tasks": [
-                        {"id": "task-1", "number": 1, "status": "pending", **verification_fields("task-1")},
+                        {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["task-1.txt"], **verification_fields("task-1")},
                         {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["task-2.txt"], **verification_fields("task-2")},
                     ]
                 }
@@ -2206,12 +3887,55 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 "--owner", "create-owner",
                 "--plan-slug", "contended-plan",
                 "--operation", "create",
-                "--input", json.dumps({"tasks": [{"id": "task-1", "number": 1, "status": "pending", **verification_fields("task-1")}]}),
+                "--input", json.dumps({"tasks": [{"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["task-1.txt"], **verification_fields("task-1")}]}),
             ]
             completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("held by another owner", completed.stderr)
         self.assertFalse(created_path.exists())
+
+    def test_create_operation_refuses_zero_allowed_paths_task(self):
+        # A zero-allowed-path task seeds what launch unconditionally refuses
+        # (the worker-role contract returns None under evidence enforcement),
+        # wedging the run at the first continue; create refuses before any
+        # manifest bytes are written and names the verification-only remedy.
+        created_path = self.root / "zero-paths-refused.json"
+        command = [
+            sys.executable,
+            str(ROOT / "scripts/execute_plan_runtime.py"),
+            "--manifest", str(created_path),
+            "--repo-root", str(self.root),
+            "--owner", "create-owner",
+            "--plan-slug", "zero-paths",
+            "--operation", "create",
+            "--input", json.dumps(
+                {"tasks": [{"id": "task-verify-only", "number": 1, "status": "pending", "allowed_paths": [], **verification_fields("task-verify-only")}]}
+            ),
+        ]
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("task-verify-only", completed.stderr)
+        self.assertIn("allowed-paths", completed.stderr)
+        self.assertFalse(created_path.exists())
+
+    def test_create_operation_accepts_declared_allowed_path_task(self):
+        created_path = self.root / "declared-path-accepted.json"
+        command = [
+            sys.executable,
+            str(ROOT / "scripts/execute_plan_runtime.py"),
+            "--manifest", str(created_path),
+            "--repo-root", str(self.root),
+            "--owner", "create-owner",
+            "--plan-slug", "declared-path",
+            "--operation", "create",
+            "--input", json.dumps(
+                {"tasks": [{"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["task-1.txt"], **verification_fields("task-1")}]}
+            ),
+        ]
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=True)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(created_path.exists())
 
     def test_create_operation_refuses_missing_verification_mapping(self):
         created_path = self.root / "missing-verification.json"
@@ -2303,7 +4027,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 self.assertFalse(created_path.exists())
 
     def test_preseed_gate_rejects_later_task_artifact_verifier(self):
-        # Pre-seed consistency gate, shape 1 (forward-dependent verifier):
+        # Pre-seed consistency gate, shape 1 (exact forward-dependent verifier):
         # task-1's command argv names reports/report.txt, declared only in
         # strictly later task-2's allowed_paths, so the verifier would demand
         # an artifact that does not exist at the task-1 boundary (the
@@ -2379,6 +4103,104 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertIn("identical non-empty verification_commands", message)
         self.assertIn("pre-seed consistency gate", message)
         self.assertFalse(seed_path.exists())
+
+    def _embed_fixture_tasks(self, argv):
+        """Two-task map whose task-1 verifier embeds task-2's later artifact."""
+        target = "reports/report.txt"
+        return [
+            {"id": "task-1", "ordinal": 1, "allowed_paths": ["task-1.txt"],
+             "required_criteria": ["task-1:verification"], "verification_commands": [
+                 {"id": "verify", "argv": argv, "criteria": ["task-1:verification"]}]},
+            {"id": "task-2", "ordinal": 2, "allowed_paths": [target],
+             "required_criteria": ["task-2:verification"], "verification_commands": [
+                 {"id": "verify", "argv": ["cat", target], "criteria": ["task-2:verification"]}]},
+        ]
+
+    def _assert_preseed_embed_refused(self, seed_path, tasks, target):
+        """Drive create through the gate; assert the shape-3 refusal message."""
+        with self.assertRaises(ValueError) as raised:
+            runtime.create_manifest(seed_path, "embedded-plan", tasks, repo_root=self.root)
+        message = str(raised.exception)
+        self.assertIn("task-1", message)
+        self.assertIn("task-2", message)
+        self.assertIn(target, message)
+        self.assertIn("pre-seed consistency gate", message)
+        return message
+
+    def test_preseed_gate_rejects_embedded_later_artifact_verifier(self):
+        # Shape 3 catches embedded contracts while omitting the command token
+        # from attribution, which can contain secrets or unrelated shell text;
+        # the display keeps only a byte-count note for the elided token.
+        target = "reports/report.txt"
+        bodies = [
+            ["bash", "-lc", f"cat {target}"],
+            ["bash", "-lc", f"# verify-marker\ncat {target}"],
+            ["tool", f"--output={target}"],
+            ["bash", "-lc", f"# marker\ncat ./reports/./report.txt"],
+            ["bash", "-lc", f"# marker\ncat {self.root / target}"],
+        ]
+        for index, argv in enumerate(bodies):
+            with self.subTest(argv=argv):
+                seed_path = self.root / f"preseed_embedded_{index}.json"
+                tasks = self._embed_fixture_tasks(argv)
+                message = self._assert_preseed_embed_refused(seed_path, tasks, target)
+                self.assertIn("token elided", message)
+                self.assertIn(f"token elided: {len(argv[-1].encode('utf-8'))} bytes", message)
+                self.assertNotIn("# marker", message)
+                self.assertFalse(seed_path.exists())
+
+    def test_preseed_gate_rejects_shell_body_embedding_later_task_path(self):
+        # Pre-seed consistency gate, shape 3 (a non-path token embedding a
+        # strictly later task's allowed path under the tail-boundary rule):
+        # the single-line `bash -lc` body canonicalizes cleanly yet carries
+        # no shell markers, and the marker-bearing multiline body does carry
+        # them; both embed task-2's allowed path inside one argv token, which
+        # the exact-equality shape 1 basis never matches. Create refuses both
+        # before any manifest bytes are written, naming the task id and the
+        # later path with the token elided to a byte-count note.
+        target = "reports/report.txt"
+        bodies = [f"test -f {target}", f"# verify-marker\ncat {target}"]
+        for index, body in enumerate(bodies):
+            with self.subTest(body=body):
+                seed_path = self.root / f"preseed_shell_body_embed_{index}.json"
+                tasks = self._embed_fixture_tasks(["bash", "-lc", body])
+                message = self._assert_preseed_embed_refused(seed_path, tasks, target)
+                self.assertIn(f"token elided: {len(body.encode('utf-8'))} bytes", message)
+                self.assertNotIn(body.splitlines()[0], message)
+                self.assertFalse(seed_path.exists())
+
+    def test_preseed_gate_rejects_flag_assignment_embedding_later_path(self):
+        # Pre-seed consistency gate, shape 3: the flag assignment
+        # `--out=reports/report.txt` is a non-path token whose embedded
+        # occurrence ends the token, so the tail boundary matches; flag
+        # boundaries cannot hide an embedded later-artifact path.
+        target = "reports/report.txt"
+        argv = ["tool", f"--out={target}"]
+        seed_path = self.root / "preseed_flag_assignment_embed.json"
+        tasks = self._embed_fixture_tasks(argv)
+        message = self._assert_preseed_embed_refused(seed_path, tasks, target)
+        self.assertIn(f"token elided: {len(argv[-1].encode('utf-8'))} bytes", message)
+        self.assertNotIn("--out=", message)
+        self.assertFalse(seed_path.exists())
+
+    def test_preseed_gate_rejects_alias_or_absolute_embedding_of_later_path(self):
+        # Pre-seed consistency gate, shape 3: a marker-bearing multiline
+        # `bash -lc` body embedding task-2's allowed path as the `./` alias
+        # and as the absolute tmp-root spelling. These embeds are refused via
+        # shape-3 containment on the non-path token, while a bare clean alias
+        # token (an argv element exactly `./reports/report.txt`) canonicalizes
+        # cleanly and is refused via shape 1's canonical equality instead.
+        target = "reports/report.txt"
+        embeds = [f"./{target}", str(self.root / target)]
+        for index, embed in enumerate(embeds):
+            with self.subTest(embed=embed):
+                body = f"# verify-marker\ncat {embed}"
+                seed_path = self.root / f"preseed_alias_absolute_embed_{index}.json"
+                tasks = self._embed_fixture_tasks(["bash", "-lc", body])
+                message = self._assert_preseed_embed_refused(seed_path, tasks, target)
+                self.assertIn(f"token elided: {len(body.encode('utf-8'))} bytes", message)
+                self.assertNotIn("verify-marker", message)
+                self.assertFalse(seed_path.exists())
 
     def test_preseed_gate_accepts_targeted_two_task_contract(self):
         # Positive control through the CLI create entry (where
@@ -2479,8 +4301,8 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         # Accepted shapes: a later task's verifier referencing an earlier
         # task's artifact (already produced by ordinal order); an artifact
         # declared in several tasks' allowed_paths; and an argv token that is
-        # a strict substring of a later task's declared path -- exact
-        # equality is the only matching basis, never substring containment.
+        # a suffix variant, nested-path namesake, non-path tail lookalike,
+        # and same-or-earlier declaration carve-out.
         earlier_seed = self.root / "preseed_earlier_reference.json"
         runtime.create_manifest(
             earlier_seed,
@@ -2571,6 +4393,44 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         )
         self.assertTrue(substring_seed.exists())
 
+        # The embedded-path detector keeps these non-contracts allowed:
+        # suffix variants, nested namesakes, non-path tails, and artifacts
+        # already granted at the task boundary.
+        for index, token in enumerate(
+            ["reports/report.txt.bak", "other/reports/report.txt", "--note=reports/report.txt.bak"]
+        ):
+            accepted = self.root / f"preseed_embedded_lookalike_{index}.json"
+            runtime.create_manifest(
+                accepted,
+                "embedded-lookalike-plan",
+                [
+                    {"id": "task-1", "ordinal": 1, "allowed_paths": ["task-1.txt"],
+                     "required_criteria": ["task-1:verification"], "verification_commands": [
+                         {"id": "verify", "argv": ["cat", token], "criteria": ["task-1:verification"]}]},
+                    {"id": "task-2", "ordinal": 2, "allowed_paths": ["reports/report.txt"],
+                     "required_criteria": ["task-2:verification"], "verification_commands": [
+                         {"id": "verify", "argv": ["cat", "reports/report.txt"], "criteria": ["task-2:verification"]}]},
+                ],
+                repo_root=self.root,
+            )
+            self.assertTrue(accepted.exists())
+
+        shared_boundary = self.root / "preseed_embedded_shared_boundary.json"
+        runtime.create_manifest(
+            shared_boundary,
+            "embedded-shared-boundary-plan",
+            [
+                {"id": "task-1", "ordinal": 1, "allowed_paths": ["reports/report.txt"],
+                 "required_criteria": ["task-1:verification"], "verification_commands": [
+                     {"id": "verify", "argv": ["cat", "reports/report.txt"], "criteria": ["task-1:verification"]}]},
+                {"id": "task-2", "ordinal": 2, "allowed_paths": ["reports/report.txt"],
+                 "required_criteria": ["task-2:verification"], "verification_commands": [
+                     {"id": "verify", "argv": ["cat", "reports/report.txt"], "criteria": ["task-2:verification"]}]},
+            ],
+            repo_root=self.root,
+        )
+        self.assertTrue(shared_boundary.exists())
+
     # ------------------------------------------------------------------
     # Evidence-contract recovery (recover-evidence-contract)
     # ------------------------------------------------------------------
@@ -2615,7 +4475,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 ],
             },
         ]
-        runtime.create_manifest(self.state_path, "fixture-plan", tasks, repo_root=self.root)
+        runtime.create_manifest(self.state_path, "fixture-plan", tasks, repo_root=self.root, runtime_id="codex")
         state = runtime.load_manifest(self.state_path)
         state["evidence_enforcement"] = True
         if task_one_contract:
@@ -2862,8 +4722,8 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         claim = self._drive_malformed_hold()
         before = self.state_path.read_bytes()
         driver = self.driver(persist_construction=False)
-        # Shape 1: the corrected contract clones task-2's whole
-        # verification_commands list (deep equality) over the merged map.
+        # Shape 2 (clone signature): the corrected contract clones task-2's
+        # whole verification_commands list (deep equality) over the merged map.
         clone = {
             "required_criteria": ["task-2:verification"],
             "verification_commands": [
@@ -2877,7 +4737,8 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             outcome,
         )
         self.assertEqual(self.state_path.read_bytes(), before)
-        # Shape 2: the corrected contract references task-2's later artifact.
+        # Shape 1 (exact-equality later artifact): the corrected contract
+        # references task-2's later artifact.
         forward = {
             "required_criteria": ["task-1:verification"],
             "verification_commands": [
@@ -3006,7 +4867,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             }
             for index in (1, 2, 3)
         ]
-        runtime.create_manifest(self.state_path, "fixture-plan", tasks, repo_root=self.root)
+        runtime.create_manifest(self.state_path, "fixture-plan", tasks, repo_root=self.root, runtime_id="codex")
         state = runtime.load_manifest(self.state_path)
         # Pre-gate seed: only a driver predating the consistency gate can
         # persist the global clone into every task.
@@ -3014,6 +4875,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             task.update(clone)
         state["evidence_enforcement"] = True
         state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        state["evidence_criteria_map"] = {task_id: capabilities.evidence_criterion_ids(task["required_criteria"]) for task_id, task in state["tasks"].items()}
         runtime._safe_write_json(self.state_path, state)
         claim = self._drive_malformed_hold()
 
@@ -3402,7 +5264,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
 
     def _replay_driver(self, root: Path, tasks, adapter=None, owner="replay-owner"):
         state_path = root / "runtime_state.json"
-        runtime.create_manifest(state_path, "crm-691-replay", tasks)
+        runtime.create_manifest(state_path, "crm-691-replay", tasks, runtime_id="codex")
         return runtime.RuntimeDriver(
             state_path,
             plan_slug="crm-691-replay",
@@ -4937,6 +6799,38 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(outcome["actions"][0]["task_id"], "task-4")
         self.assertEqual(runtime.load_manifest(self.state_path)["tasks"]["task-4"]["status"], "claimed")
 
+    def test_normal_done_releases_exact_terminal_reservation_and_launches_successor(self):
+        token = self.seed_claim()
+        state = runtime.load_manifest(self.state_path)
+        claim = state["claims"]["task-3"]
+        claim["launch_id"] = "done-launch"
+        state["capacity"]["reservations"]["task-3:0:done-launch"] = {"task_id": "task-3", "claim_token": token, "generation": 0, "launch_id": "done-launch"}
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+        driver.record_worker_checkpoint(self.worker_checkpoint())
+        outcome = driver.record_done(self.done())
+        after = runtime.load_manifest(self.state_path)
+        self.assertNotIn("task-3:0:done-launch", after["capacity"]["reservations"])
+        self.assertEqual([action["task_id"] for action in outcome["actions"]], ["task-4"])
+
+    def test_done_preserves_foreign_reservation(self):
+        token = self.seed_claim()
+        state = runtime.load_manifest(self.state_path)
+        claim = state["claims"]["task-3"]
+        claim["launch_id"] = "done-launch"
+        state["capacity"]["reservations"].update({
+            "task-3:0:done-launch": {"task_id": "task-3", "claim_token": token, "generation": 0, "launch_id": "done-launch"},
+            "foreign": {"task_id": "task-4", "claim_token": "foreign-token", "generation": 7, "launch_id": "foreign-launch", "opaque": [1, 2]},
+        })
+        foreign = copy.deepcopy(state["capacity"]["reservations"]["foreign"])
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+        driver.record_worker_checkpoint(self.worker_checkpoint())
+        driver.record_done(self.done())
+        after = runtime.load_manifest(self.state_path)
+        self.assertNotIn("task-3:0:done-launch", after["capacity"]["reservations"])
+        self.assertEqual(after["capacity"]["reservations"]["foreign"], foreign)
+
     def test_out_of_scope_uncommitted_edit_does_not_block_checkpoint(self):
         self._scope_claim(allowed=("allowed.txt",))
         (self.root / "outside-policy.txt").write_text("worker escape\n", encoding="utf-8")
@@ -6319,6 +8213,323 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 self.assertEqual(result["reason_code"], "stale-claim")
                 self.assertEqual(runtime.load_manifest(self.state_path), before)
 
+    # ------------------------------------------------------------------
+    # Direct-claim prelaunch recovery (identity fencing, bounded budget).
+    # ------------------------------------------------------------------
+
+    def _seed_blocked_direct_claim(self, *, token="direct-token", generation=1, reason="runtime-policy-unavailable"):
+        # The persisted direct-claim block shape the driver writes since the
+        # persist-tail identity stamp: blocked task and claim, a
+        # non-resumable receipt carrying the live claim identity, and no
+        # launch residue.
+        self.seed_claim("task-4", generation=generation, token=token)
+
+        def seed(state):
+            claim = state["claims"]["task-4"]
+            claim.update({"state": "blocked", "timestamp": self.FIXED_NOW, "claim_owner_id": "test-owner"})
+            claim.pop("launch_record", None)
+            state["tasks"]["task-4"].update({
+                "status": "blocked",
+                "resume_allowed": False,
+                "blocked_receipt": {
+                    "status": "blocked",
+                    "reason_code": reason,
+                    "evidence": ["no verified non-interactive approval configuration"],
+                    "claim_token": token,
+                    "generation": generation,
+                },
+            })
+
+        self.rewrite_manifest(seed)
+
+    def _drive_blocked_launch(self, adapter):
+        # Drive the real claim-launch chain to the blocked persist and return
+        # the persisted claim identity.
+        driver = self.driver(adapter=adapter, seed_task3=False)
+        result = driver.launch_next_task()
+        self.assertEqual(result["reason_code"], "runtime-policy-unavailable", result)
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-4"]
+        return str(claim["token"]), int(claim["generation"])
+
+    def _evidence_reclaim_driver(self, receipt, *, clock=None):
+        return self.driver(
+            clock=clock or (lambda: self.FIXED_NOW),
+            adapter=FakeAdapter(),
+            approval_receipt=receipt,
+            runtime_id="codex",
+        )
+
+    def test_blocked_persist_releases_launch_residue(self):
+        # The launch-path chain: claim launched, adapter refused with
+        # runtime-policy-unavailable, no worker registered. The blocked
+        # persist must release the capacity reservation and drop the launch
+        # record in the same locked write, leaving the durable state the
+        # prelaunch proof reads; the persisted receipt carries the verified
+        # claim identity.
+        token, generation = self._drive_blocked_launch(PolicyRefusingAdapter())
+
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-4"]["status"], "blocked")
+        self.assertFalse(state["tasks"]["task-4"]["resume_allowed"])
+        receipt = state["tasks"]["task-4"]["blocked_receipt"]
+        self.assertEqual(receipt["reason_code"], "runtime-policy-unavailable")
+        self.assertEqual(receipt["claim_token"], token)
+        self.assertEqual(receipt["generation"], generation)
+        self.assertIsNone(state["claims"]["task-4"].get("launch_record"))
+        self.assertEqual(state["capacity"]["reservations"], {})
+
+    def test_reclaim_accepts_blocked_direct_claim_launch_path(self):
+        # Driving the real launch-path chain, the reclaim accepts the blocked
+        # direct claim immediately (the witnessed shape: resume_allowed false,
+        # receipt token and generation equal to the live claim) and rotates
+        # the claim token and generation.
+        token, generation = self._drive_blocked_launch(PolicyRefusingAdapter())
+        state = runtime.load_manifest(self.state_path)
+        self.assertFalse(state["tasks"]["task-4"]["resume_allowed"])
+        self.assertEqual(state["tasks"]["task-4"]["blocked_receipt"]["claim_token"], token)
+        self.assertEqual(state["tasks"]["task-4"]["blocked_receipt"]["generation"], generation)
+        reclaim_driver = self._evidence_reclaim_driver(self._approval_receipt_fixture(), clock=lambda: time.time() + 10.0)
+
+        result = reclaim_driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(result["reason_code"], "reclaimed")
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["claims"]["task-4"]["state"], "replaced")
+        self.assertNotEqual(after["claims"]["task-4"]["token"], token)
+        self.assertEqual(after["claims"]["task-4"]["generation"], generation + 1)
+        self.assertEqual(after["tasks"]["task-4"]["status"], "pending")
+
+    def test_reclaim_accepts_no_adapter_blocked_direct_claim(self):
+        # The claim-time "no adapter configured" persisted shape (no launch
+        # record, no reservation) reclaims under the same identity fence.
+        token, generation = self._drive_blocked_launch(None)
+        reclaim_driver = self._evidence_reclaim_driver(self._approval_receipt_fixture(), clock=lambda: time.time() + 10.0)
+
+        result = reclaim_driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(result["reason_code"], "reclaimed")
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["claims"]["task-4"]["state"], "replaced")
+        self.assertNotEqual(after["claims"]["task-4"]["token"], token)
+        self.assertEqual(after["claims"]["task-4"]["generation"], generation + 1)
+
+    def test_reclaim_accepts_activation_failure_blocked_direct_claim(self):
+        # The claim-time adapter activation-failure persisted shape reclaims
+        # under the same identity fence.
+        token, generation = self._drive_blocked_launch(ActivationRefusingAdapter())
+        reclaim_driver = self._evidence_reclaim_driver(self._approval_receipt_fixture(), clock=lambda: time.time() + 10.0)
+
+        result = reclaim_driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(result["reason_code"], "reclaimed")
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["claims"]["task-4"]["state"], "replaced")
+        self.assertNotEqual(after["claims"]["task-4"]["token"], token)
+        self.assertEqual(after["claims"]["task-4"]["generation"], generation + 1)
+
+    def test_reclaim_bootstraps_supplied_evidence(self):
+        # The bootstrapping invocation of the documented recovery sequence:
+        # the manifest records no approval receipt, so the one reclaim
+        # invocation supplied the evidence flags validates, accepts, and
+        # records the evidence in the same locked transition.
+        self._seed_blocked_direct_claim()
+        receipt = self._approval_receipt_fixture()
+        reclaim_driver = self._evidence_reclaim_driver(receipt)
+
+        result = reclaim_driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(result["reason_code"], "reclaimed")
+        after = runtime.load_manifest(self.state_path)
+        self._approval_receipt_and_runtime(after, receipt)
+        self.assertEqual(after["claims"]["task-4"]["state"], "replaced")
+
+    def test_reclaim_refuses_direct_claim_token_mismatch(self):
+        # A receipt embedded with a foreign claim token fails the identity
+        # fence back to the ordinary lease: stale-claim refusal, manifest
+        # byte-identical.
+        self._seed_blocked_direct_claim(token="direct-token", generation=1)
+        self.rewrite_manifest(lambda state: state["tasks"]["task-4"]["blocked_receipt"].update({"claim_token": "stale-token"}))
+        reclaim_driver = self._evidence_reclaim_driver(self._approval_receipt_fixture())
+        before = self.state_path.read_bytes()
+
+        result = reclaim_driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "stale-claim")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_reclaim_refuses_direct_claim_generation_mismatch(self):
+        # A receipt embedded with a foreign generation fails the identity
+        # fence the same way.
+        self._seed_blocked_direct_claim(token="direct-token", generation=1)
+        self.rewrite_manifest(lambda state: state["tasks"]["task-4"]["blocked_receipt"].update({"generation": 2}))
+        reclaim_driver = self._evidence_reclaim_driver(self._approval_receipt_fixture())
+
+        result = reclaim_driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "stale-claim")
+
+    def test_reclaim_refuses_direct_claim_with_launch_record(self):
+        # The real launch-path blocked state with the launch record and the
+        # matching capacity reservation hand-restored before reclaiming (the
+        # receipt reason stays runtime-policy-unavailable): the uncleaned
+        # residue is exactly what the fence refuses on, so the reclaim is the
+        # stale-claim refusal with a byte-identical manifest.
+        token, generation = self._drive_blocked_launch(PolicyRefusingAdapter())
+
+        def restore(state):
+            claim = state["claims"]["task-4"]
+            claim["launch_record"] = {"baseline_revision": "", "generation": generation, "launched_at": 111.0}
+            state["capacity"].setdefault("reservations", {})[f"task-4:{generation}:restored-launch"] = {
+                "task_id": "task-4", "claim_token": token, "generation": generation, "launch_id": "restored-launch",
+            }
+
+        self.rewrite_manifest(restore)
+        reclaim_driver = self._evidence_reclaim_driver(self._approval_receipt_fixture(), clock=lambda: time.time() + 10.0)
+        before = self.state_path.read_bytes()
+
+        result = reclaim_driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "stale-claim")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_reclaim_survives_foreign_stale_reservation(self):
+        # A reclaimable (lease-expired) claim whose manifest carries a stale
+        # launch reservation matching no live claim: the identity-keyed sweep
+        # clears it before the capacity reconciliation, so the reclaim
+        # succeeds where the reservation previously wedged the capacity gate.
+        self.seed_claim("task-4", generation=3, token="stale-reservation-token")
+
+        def seed(state):
+            state["claims"]["task-4"]["timestamp"] = self._expired_lease_timestamp()
+            state["capacity"].setdefault("reservations", {})["task-4:3:foreign-launch"] = {
+                "task_id": "task-4", "claim_token": "foreign-token", "generation": 3, "launch_id": "foreign-launch",
+            }
+
+        self.rewrite_manifest(seed)
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+
+        result = driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(result["reason_code"], "reclaimed")
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["claims"]["task-4"]["state"], "replaced")
+        self.assertNotIn("task-4:3:foreign-launch", after["capacity"]["reservations"])
+
+    def test_expired_lease_reclaim_ignores_budget_cap(self):
+        # The cap gates only the lease-bypass path: a task record at the
+        # prelaunch-reclaim budget whose claim lease has expired reclaims
+        # through the ordinary rotation regardless of the count.
+        self.seed_claim("task-4", generation=3, token="capped-expired-token")
+
+        def seed(state):
+            state["claims"]["task-4"]["timestamp"] = self._expired_lease_timestamp()
+            # The task record sits at the prelaunch-reclaim budget of two.
+            state["tasks"]["task-4"]["prelaunch_reclaim_count"] = 2
+
+        self.rewrite_manifest(seed)
+        driver = self.driver(clock=lambda: self.FIXED_NOW)
+
+        result = driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(result["reason_code"], "reclaimed")
+        self.assertEqual(runtime.load_manifest(self.state_path)["claims"]["task-4"]["state"], "replaced")
+
+    def test_reclaim_refuses_direct_claim_with_registered_worker(self):
+        # A registered worker identity on the task defeats the "never
+        # launched" proof, so the reclaim is refused even with the receipt
+        # identity and evidence intact.
+        self._seed_blocked_direct_claim()
+
+        def register_worker(state):
+            registry = runtime.WorkerRegistry(state)
+            registry.register_launch(
+                task_id="task-4", claim_token="direct-token", generation=1, claim_owner_id="test-owner",
+                provider_session_id="session-4", worker_id="worker-task-4", command_identity="cmd",
+                process_identity={"provider": "codex", "session_id": "session-4"},
+                launch_id="direct-launch", capacity_entry_id="capacity-task-4",
+            )
+            state.update(workers=registry.manifest["workers"], capacity=registry.manifest["capacity"])
+
+        self.rewrite_manifest(register_worker)
+        reclaim_driver = self._evidence_reclaim_driver(self._approval_receipt_fixture())
+
+        result = reclaim_driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "stale-claim")
+
+    def test_reclaim_refuses_non_prelaunch_reason(self):
+        # The proof conjunct is the exact reason code: any other blocked
+        # reason (here the hard-block family's approval-required) stays behind
+        # the ordinary lease.
+        self._seed_blocked_direct_claim(reason="approval-required")
+        reclaim_driver = self._evidence_reclaim_driver(self._approval_receipt_fixture())
+
+        result = reclaim_driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "stale-claim")
+
+    def test_reclaim_without_evidence_flags_refuses_early_path(self):
+        # The direct-claim arm requires the approval evidence supplied at the
+        # invocation or already recorded; with neither, the early path is
+        # refused and the claim waits the ordinary lease (the driver enforces
+        # the skill ordering).
+        self._seed_blocked_direct_claim()
+        reclaim_driver = self.driver(clock=lambda: self.FIXED_NOW, adapter=FakeAdapter())
+        before = self.state_path.read_bytes()
+
+        result = reclaim_driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "stale-claim")
+        self.assertIn("lease has not expired", " ".join(result["evidence"]))
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_prelaunch_reclaim_budget_caps_the_cycle(self):
+        # Two real block-reclaim-re-claim cycles against a deterministically
+        # refusing adapter, then the third direct-claim prelaunch reclaim hits
+        # the named cap outcome directing the operator at the adapter policy.
+        receipt = self._approval_receipt_fixture()
+        blocker = self.driver(adapter=PolicyRefusingAdapter())
+
+        def reclaim():
+            return self._evidence_reclaim_driver(receipt, clock=lambda: time.time() + 10.0).reclaim("task-4")
+
+        for _cycle in (1, 2):
+            blocked = blocker.launch_next_task()
+            self.assertEqual(blocked["reason_code"], "runtime-policy-unavailable", blocked)
+            result = reclaim()
+            self.assertEqual(result["status"], "success", result)
+            self.assertEqual(result["reason_code"], "reclaimed")
+        blocked = blocker.launch_next_task()
+        self.assertEqual(blocked["reason_code"], "runtime-policy-unavailable", blocked)
+        # The third reclaim's driver is constructed before the byte capture:
+        # construction itself persists (the owner save), and the cap refusal
+        # after it must leave the manifest byte-identical.
+        capped_reclaim_driver = self._evidence_reclaim_driver(receipt, clock=lambda: time.time() + 10.0)
+        before = self.state_path.read_bytes()
+
+        result = capped_reclaim_driver.reclaim("task-4")
+
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["reason_code"], "prelaunch-reclaim-cap", result)
+        self.assertTrue(any("adapter policy" in line for line in result["evidence"]), result["evidence"])
+        state = runtime.load_manifest(self.state_path)
+        # Two accepted prelaunch reclaims: the budget of two is exhausted.
+        self.assertEqual(state["tasks"]["task-4"]["prelaunch_reclaim_count"], 2)
+        self.assertEqual(state["claims"]["task-4"]["state"], "blocked")
+        self.assertEqual(self.state_path.read_bytes(), before)
+
     def test_claim_retires_prepared_handoff_whose_successor_was_replaced(self):
         self.seed_claim(task="task-4", token="replacement-token", generation=2)
 
@@ -7556,7 +9767,9 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def batch_manifest(self, tasks):
         # Re-seed the gitignored runtime_state.json with the given pending
         # task list; canonicalization persists through the real create path.
-        runtime.create_manifest(self.state_path, "fixture-plan", tasks, repo_root=self.root)
+        # The recorded runtime id keeps every reseeding claim-arm fixture on
+        # the admitted side of the shared claim boundary.
+        runtime.create_manifest(self.state_path, "fixture-plan", tasks, repo_root=self.root, runtime_id="codex")
         return self.state_path
 
     def batch_driver(self, adapter=None, **kwargs):
@@ -8269,6 +10482,9 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                     "--repo-root", str(root),
                     "--owner", "cli-owner",
                     "--plan-slug", "cli-batch",
+                    # The create boundary's recorded runtime id admits the
+                    # later claim through the shared claim boundary.
+                    "--runtime", "codex",
                     "--operation", "create",
                     "--input", json.dumps({"tasks": [
                         {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["./b1.txt"], **verification_fields("task-1")},
@@ -8358,7 +10574,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             runtime.create_manifest(state, "cli-batch", [
                 {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["c1.txt"]},
                 {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["c2.txt"]},
-            ], repo_root=root)
+            ], repo_root=root, runtime_id="codex")
             adapter = RecordingAdapter(session_id="sess-cli-anchor")
             driver = runtime.RuntimeDriver(state, plan_slug="cli-batch", owner="cli-owner", repo_root=root, commit_lookup=lambda _commit: True, adapter=adapter)
             driver.launch_next_task(batch=True)
@@ -10270,7 +12486,8 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
     ``residual_policy`` input (the named finding ids, the grant source, and
     the recorded-at epoch) opens an OR-branch in the clean-round sidecar
     predicate that additionally accepts the focused verification-round
-    sidecar when the policy's recorded-at predates that round's date and no
+    sidecar when the policy's recorded-at falls before the end of that
+    round's day and no
     findings row is both ``blocking: true`` and a member of the policy's
     finding ids; blocking rows outside the set are the backlogged residuals
     and are permitted, a blocking row inside the set still refuses, a
@@ -10764,6 +12981,22 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
             "recorded_at": recorded_at,
         }
 
+    @contextlib.contextmanager
+    def pinned_timezone(self, zone: str):
+        if not hasattr(time, "tzset"):
+            self.skipTest("time.tzset is absent; timezone pinning is POSIX-only")
+        previous = os.environ.get("TZ")
+        os.environ["TZ"] = zone
+        time.tzset()
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = previous
+            time.tzset()
+
     def test_accepts_residual_policy_exit(self):
         # Residual-acceptance exit, accept arm: the focused-round sidecar
         # with verdict "no" and one out-of-set blocking row, plus the policy
@@ -10817,24 +13050,92 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
         self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_policy_recorded_after_verification_round(self):
-        # Ordering refuse arm: a policy whose recorded-at postdates the
-        # sidecar's round date refuses, because the policy must be recorded
-        # BEFORE the verification round runs; the day-precision proof is
-        # strict, so a policy recorded exactly at the round-day boundary is
-        # not predating either and refuses the same way.
+        # Round-day-end ordering: same-day recordings are accepted, while
+        # the following local midnight is the strict refusal boundary.
         self.complete_all_tasks()
         sidecar = self.write_sidecar(self.residual_sidecar())
-        for recorded_at in (self.ROUND_DAY_EPOCH + 86400, self.ROUND_DAY_EPOCH):
-            with self.subTest(recorded_at=recorded_at):
-                policy = self.residual_policy(recorded_at=recorded_at)
-                driver = self.driver()
-                before = self.state_path.read_bytes()
-                result = self.pre_archive(driver, review_sidecar=sidecar, residual_policy=policy)
-                self.assertEqual(result["status"], "blocked")
-                self.assertEqual(result["reason_code"], "done-pending")
-                self.assertTrue(any("does not predate" in entry for entry in result["evidence"]), result["evidence"])
-                self.assertTrue(any(self.ROUND_DATE in entry for entry in result["evidence"]), result["evidence"])
-                self.assert_refusal_preserves_manifest(before)
+        with self.pinned_timezone("UTC"):
+            local_round_day_end = (datetime.strptime(self.ROUND_DATE, "%Y-%m-%d") + timedelta(days=1)).timestamp()
+            accepted = self.pre_archive(
+                self.driver(),
+                review_sidecar=sidecar,
+                residual_policy=self.residual_policy(recorded_at=self.ROUND_DAY_EPOCH),
+            )
+            self.assertEqual(accepted["status"], "success")
+            for recorded_at in (local_round_day_end, local_round_day_end + 1):
+                with self.subTest(recorded_at=recorded_at):
+                    if recorded_at == local_round_day_end:
+                        policy = self.residual_policy(recorded_at=recorded_at)
+                        result = self.pre_archive(self.driver(), review_sidecar=sidecar, residual_policy=policy)
+                        self.assertEqual(result["status"], "blocked")
+                        self.assertEqual(result["reason_code"], "done-pending")
+                        self.assertTrue(any("must be recorded in the manifest no later than the round's own day" in entry for entry in result["evidence"]), result["evidence"])
+                        continue
+                    policy = self.residual_policy(recorded_at=recorded_at)
+                    driver = self.driver()
+                    before = self.state_path.read_bytes()
+                    result = self.pre_archive(driver, review_sidecar=sidecar, residual_policy=policy)
+                    self.assertEqual(result["status"], "blocked")
+                    self.assertEqual(result["reason_code"], "done-pending")
+                    self.assertTrue(any("must be recorded in the manifest no later than the round's own day" in entry for entry in result["evidence"]), result["evidence"])
+                    self.assert_refusal_preserves_manifest(before)
+
+    def test_accepts_same_day_residual_policy_recording(self):
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.residual_sidecar())
+        with self.pinned_timezone("UTC"):
+            policy = self.residual_policy(recorded_at=self.ROUND_DAY_EPOCH + 43200)
+            result = self.pre_archive(self.driver(), review_sidecar=sidecar, residual_policy=policy)
+        self.assertEqual(result["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        self.assertIn("archive_gate", state)
+        self.assertEqual(state["workflow_state"], "active")
+        self.assertNotIn("terminal_receipt", state)
+
+    def test_residual_day_end_anchor_is_machine_local(self):
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.residual_sidecar())
+        with self.pinned_timezone("America/Los_Angeles"):
+            policy = self.residual_policy(recorded_at=self.ROUND_DAY_EPOCH + 108000)
+            result = self.pre_archive(self.driver(), review_sidecar=sidecar, residual_policy=policy)
+            self.assertEqual(result["status"], "success")
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.residual_sidecar())
+        with self.pinned_timezone("Asia/Singapore"):
+            policy = self.residual_policy(recorded_at=self.ROUND_DAY_EPOCH + 90000)
+            driver = self.driver()
+            before = self.state_path.read_bytes()
+            result = self.pre_archive(driver, review_sidecar=sidecar, residual_policy=policy)
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["reason_code"], "done-pending")
+            self.assertTrue(any("must be recorded in the manifest no later than the round's own day" in entry for entry in result["evidence"]), result["evidence"])
+            self.assert_refusal_preserves_manifest(before)
+
+    def test_refuses_residual_policy_recorded_after_round_day(self):
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.residual_sidecar())
+        with self.pinned_timezone("UTC"):
+            policy = self.residual_policy(recorded_at=self.ROUND_DAY_EPOCH + 90000)
+            driver = self.driver()
+            before = self.state_path.read_bytes()
+            result = self.pre_archive(driver, review_sidecar=sidecar, residual_policy=policy)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("must be recorded in the manifest no later than the round's own day" in entry for entry in result["evidence"]), result["evidence"])
+        self.assert_refusal_preserves_manifest(before)
+
+    def test_residual_unorderable_max_date_sidecar_round_date(self):
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.residual_sidecar(date="9999-12-31"))
+        with self.pinned_timezone("UTC"):
+            policy = self.residual_policy(recorded_at=self.ROUND_DAY_EPOCH)
+            driver = self.driver()
+            before = self.state_path.read_bytes()
+            result = self.pre_archive(driver, review_sidecar=sidecar, residual_policy=policy)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason_code"], "done-pending")
+        self.assertTrue(any("round date cannot order the residual policy proof: 9999-12-31" in entry for entry in result["evidence"]), result["evidence"])
+        self.assert_refusal_preserves_manifest(before)
 
     def test_refuses_nonfinite_recorded_at_policy(self):
         # Shape-guard refuse arm: JSON parses NaN and the infinities
@@ -11947,6 +14248,7 @@ class DoneBoundaryNoCommitTest(unittest.TestCase):
                 {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["t2-1.txt"]},
             ],
             repo_root=self.root,
+            runtime_id="codex",
         )
         driver = self.driver(adapter=RecordingAdapter())
         driver.claim_next_task(batch=True)
@@ -12306,24 +14608,45 @@ class SessionlessRecordingAdapter(RecordingAdapter):
 class ContractContentParityTest(unittest.TestCase):
     """Durable probes for the runtime contract's documented obligations.
 
-    Reads agents/skills/execute-plan/runtime-contract.md once and asserts
-    each required content obligation as a whitespace-normalized fragment
-    scoped to the paragraph block that anchors it, so deleting the span
-    fails the probe even when the same words survive elsewhere in the file.
+    Reads agents/skills/execute-plan/runtime-contract.md,
+    agents/skills/execute-plan/SKILL.md, and agents/skills/plans/SKILL.md
+    once each and asserts each required
+    content obligation as a whitespace-normalized fragment scoped to the
+    paragraph block that anchors it, so deleting the span fails the probe
+    even when the same words survive elsewhere in the file. Each source is
+    scanned through the same whitespace-normalized block scanner; probes
+    name their source so the obligation is anchored to the file that owns it.
     """
 
     CONTRACT = ROOT / "agents/skills/execute-plan/runtime-contract.md"
+    SKILL = ROOT / "agents/skills/execute-plan/SKILL.md"
+    PLANS_SKILL = ROOT / "agents/skills/plans/SKILL.md"
 
     @classmethod
     def setUpClass(cls):
-        cls.raw = cls.CONTRACT.read_text(encoding="utf-8")
-        cls.blocks = [" ".join(block.split()) for block in cls.raw.split("\n\n")]
+        cls.source_raw = {
+            "runtime-contract.md": cls.CONTRACT.read_text(encoding="utf-8"),
+            "SKILL.md": cls.SKILL.read_text(encoding="utf-8"),
+            "plans/SKILL.md": cls.PLANS_SKILL.read_text(encoding="utf-8"),
+        }
+        cls.source_blocks = {
+            name: [" ".join(block.split()) for block in raw.split("\n\n")]
+            for name, raw in cls.source_raw.items()
+        }
+        # Original single-source aliases; every pre-existing probe reads the
+        # runtime contract through them unchanged.
+        cls.raw = cls.source_raw["runtime-contract.md"]
+        cls.blocks = cls.source_blocks["runtime-contract.md"]
 
-    def block_containing(self, *anchors):
-        matches = [block for block in self.blocks if all(anchor in block for anchor in anchors)]
+    def block_containing(self, *anchors, source="runtime-contract.md"):
+        matches = [
+            block
+            for block in self.source_blocks[source]
+            if all(anchor in block for anchor in anchors)
+        ]
         self.assertTrue(
             matches,
-            "no runtime-contract paragraph contains all anchors: " + " | ".join(anchors),
+            f"no {source} paragraph contains all anchors: " + " | ".join(anchors),
         )
         return matches[0]
 
@@ -12435,6 +14758,105 @@ class ContractContentParityTest(unittest.TestCase):
         self.assertIn("the envelope reason code is `explicit-abort` for all three closed states", block)
         self.assertIn("the evidence names the finished state", block)
         self.assertIn("\"workflow_state is '<state>'; the workflow already finished\" under `complete` and `terminal`", block)
+
+    def test_preseed_gate_matching_basis_names_two_bases_with_elision(self):
+        block = self.block_containing(
+            "under the tail-boundary rule is likewise refused, with the token elided in durable evidence"
+        )
+        self.assertIn(
+            "keeps exact canonical equality against strictly later tasks' `allowed_paths` entries as its whole-token matching basis",
+            block,
+        )
+        self.assertIn(
+            "a non-path token embedding a strictly later task's allowed path under the tail-boundary rule is likewise refused",
+            block,
+        )
+        self.assertIn("regex over payload strings stays forbidden", block)
+        self.assertIn(
+            "evade the pre-seed gate by design and still fail closed at the task boundary, with recovery as the exit",
+            block,
+        )
+        self.assertIn(
+            "declaring the path on the earlier task to trip the carve-out grants write scope and creates cross-task overlap",
+            block,
+        )
+
+    def test_skill_seeding_derives_contracts_only_from_evidence_declarations(self):
+        block = self.block_containing(
+            "derive the task-to-evidence mapping only from each task's own `Evidence:` declaration",
+            "The create operation refuses three malformed shapes",
+            source="SKILL.md",
+        )
+        self.assertIn(
+            "checklist prose, worker summaries, and the global validation block never seed a contract",
+            block,
+        )
+        self.assertIn(
+            "adding an Evidence block changes the evidence class",
+            block,
+        )
+        self.assertIn("a fresh whole-plan review round before continuation", block)
+        self.assertIn(
+            "an argv token whose canonical form equals a strictly later task's `allowed_paths` entry, the exact-canonical-equality shape",
+            block,
+        )
+        self.assertIn(
+            "two or more tasks declaring identical whole verification command lists cloned from the global block (the clone-signature shape)",
+            block,
+        )
+        self.assertIn(
+            "a non-path token embedding a strictly later task's allowed path under the tail-boundary rule",
+            block,
+        )
+
+    def test_skill_task_guidance_pins_evidence_declaration_format(self):
+        block = self.block_containing(
+            "one `Evidence:` block per task immediately after the task's `Files:` list",
+            source="SKILL.md",
+        )
+        self.assertIn(
+            "one line per verification command carrying the exact command and the checklist criteria it covers",
+            block,
+        )
+        self.assertIn("every declared command must be runnable at that task boundary", block)
+        self.assertIn(
+            "criteria deferred to the final gate stay out of the task's required criteria",
+            block,
+        )
+
+    def test_plans_skill_requires_evidence_declarations_before_seeding(self):
+        block = self.block_containing(
+            "**Evidence declaration; required:**",
+            "Every plan task carrying implementation work declares its `Evidence:` block immediately after its `Files:` list",
+            source="plans/SKILL.md",
+        )
+        self.assertIn("at authoring time", block)
+        self.assertIn("stops execution at seeding, before manifest creation", block)
+        self.assertIn("the declaration is part of plan completeness", block)
+        self.assertIn("fresh whole-plan review round before continuation", block)
+
+    def test_plans_skill_names_evidence_as_execute_plan_seeding_source(self):
+        block = self.block_containing(
+            "Each task's `Evidence:` declaration is the sole source",
+            "task evidence-contract seeding",
+            source="plans/SKILL.md",
+        )
+        self.assertIn("a missing declaration stops seeding before manifest creation", block)
+
+    def test_retired_seeding_phrases_are_gone_from_every_source(self):
+        retired = (
+            "derive the task-to-evidence mapping from each task's own acceptance criteria",
+            "never substring containment",
+            "refuses both malformed shapes",
+        )
+        for name, raw in self.source_raw.items():
+            normalized = " ".join(raw.split())
+            for phrase in retired:
+                self.assertNotIn(
+                    phrase,
+                    normalized,
+                    f"retired phrase survives in {name}: {phrase}",
+                )
 
 
 class PlansWatcherScheduleContractTest(unittest.TestCase):
@@ -12585,6 +15007,63 @@ class RuntimeHandoffTest(unittest.TestCase):
         self.assertEqual(recovered["reason_code"], "handoff-recovered")
         after = runtime.load_manifest(self.fx.state_path)
         self.assertEqual(after["handoff_intents"]["task-3:task-3:done-1"]["state"], "failed")
+        self.assertEqual(after["claims"]["task-4"]["state"], "replaced")
+
+    def test_recovered_launched_handoff_uses_fresh_provider_terminal_proof(self):
+        self.complete_prior()
+        state = runtime.load_manifest(self.fx.state_path)
+        intent_key = "task-3:task-3:done-1"
+        intent = state["handoff_intents"][intent_key]
+        claim = state["claims"]["task-4"]
+        claim["state"] = "closed"
+        state["tasks"]["task-4"]["status"] = "pending"
+        intent["state"] = "launched"
+        intent["launch_receipt"] = {
+            "worker_id": "worker-task-4-session-task-4",
+            "provider_session_id": "session-task-4",
+            "observed_at": time.monotonic(),
+        }
+        state["history"].append({
+            "event": "evidence-contract-recovery",
+            "task_id": "task-4",
+            "token": claim["token"],
+            "generation": claim["generation"],
+            "recovered_generation": state["generation"],
+        })
+        self.driver._save(state)
+        adapter = _ConsultAdapter(
+            inventory=[],
+            port=lambda session: _terminal_evidence_observation("different-session"),
+        )
+        self.driver = self.fx.driver(adapter=adapter)
+        before = self.fx.state_path.read_bytes()
+
+        refused = self.driver.recover_ambiguous_handoff({
+            "intent_key": intent_key,
+            "provider_evidence": {
+                "source": "provider-lifecycle",
+                "state": "terminal",
+                "intent_id": intent["intent_id"],
+                "launch_id": claim["launch_id"],
+                "provider_session_id": "session-task-4",
+            },
+        })
+
+        self.assertEqual(refused["reason_code"], "ambiguous", refused)
+        self.assertEqual(self.fx.state_path.read_bytes(), before)
+        adapter._port = lambda session: _terminal_evidence_observation(session)
+
+        recovered = self.driver.recover_ambiguous_handoff({"intent_key": intent_key})
+
+        self.assertEqual(recovered["reason_code"], "handoff-recovered", recovered)
+        after = runtime.load_manifest(self.fx.state_path)
+        settled = after["handoff_intents"][intent_key]
+        self.assertEqual(settled["state"], "failed")
+        self.assertEqual(adapter.consults, ["session-task-4", "session-task-4"])
+        self.assertEqual(
+            settled["terminal_recovery_evidence"]["provider_session_id"],
+            "session-task-4",
+        )
         self.assertEqual(after["claims"]["task-4"]["state"], "replaced")
 
     def test_stale_owner_or_token_is_rejected_before_adapter_launch(self):
@@ -12744,13 +15223,730 @@ class RuntimeHandoffTest(unittest.TestCase):
         self.assertEqual(runtime.load_manifest(self.fx.state_path)["handoff_intents"]["task-3:task-3:done-1"]["state"], "receipt-persisted")
 
 
+class TaskScopeRecoveryTest(unittest.TestCase):
+    """Witnesses for the receipt-fenced reviewed scope recovery (Task 1).
+
+    One focused witness per refusal arm and per inventory surface. The
+    review-evidence fixtures are real producer shapes adapted from the
+    readiness suite's cap-closure fixture recipe (round filename per the
+    discovery shape, version-1 plan-kind sidecar with coverage, verdict, and
+    the digest bound to the fixture plan bytes), the composition imports are
+    driven for real (the never-patched rule scopes to those imports), and the
+    fixture facts file is seeded to the production key values with the
+    fixture plan placed under that plans dir.
+    """
+
+    def setUp(self):
+        self.fx = ExecutePlanRuntimeTest()
+        self.fx.setUp()
+        self.plans_dir = self.fx.root / "plans"
+        self.reviews_dir = self.fx.root / "reviews"
+        self.plans_dir.mkdir()
+        self.reviews_dir.mkdir()
+        facts_dir = self.fx.root / ".ai-playbook"
+        facts_dir.mkdir()
+        # Production key values; absolute values so both resolvers anchor
+        # regardless of the process CWD.
+        (facts_dir / "facts.md").write_text(
+            "# facts\n\n```toml\n"
+            f'plans_dir = "{self.plans_dir}"\n'
+            f'reviews_dir = "{self.reviews_dir}"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self.fx.tearDown()
+
+    # -- fixture builders ---------------------------------------------------
+
+    def _seed_prelaunch(self):
+        """The intent-backed claimed prelaunch done-successor state.
+
+        Returns ``(token, generation, claim_snapshot)`` for the live task-4
+        prelaunch claim; the seeded scope is the file-level ``task-4.txt``.
+        """
+        self.fx._seed_done_successor_state()
+        state = runtime.load_manifest(self.fx.state_path)
+        state["tasks"]["task-4"]["allowed_paths"] = ["task-4.txt"]
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        runtime._safe_write_json(self.fx.state_path, state)
+        claim = dict(runtime.load_manifest(self.fx.state_path)["claims"]["task-4"])
+        return claim["token"], claim["generation"], claim
+
+    def _write_plan(self, files, *, body="Reviewed scope correction.", plan_name="fixture-plan"):
+        """Write the fixture plan under the plans dir.
+
+        ``files=None`` strips the ``Files:`` list entirely; ``files=()``
+        leaves the declaration present but empty.
+        """
+        plan = self.plans_dir / f"{plan_name}.md"
+        if files is None:
+            entries_block = ""
+        else:
+            entries = "\n".join(f"- `{path}`" for path in files)
+            entries_block = f"\nFiles:\n{entries}\n"
+        plan.write_text(
+            "## Tasks\n### Task 3: done\nComplete.\n"
+            f"### Task 4: fixture\n{body}\n{entries_block}\n- [ ] fixture work item\n",
+            encoding="utf-8",
+        )
+        return plan
+
+    def _write_raw_plan(self, task4_body, *, plan_name="fixture-plan"):
+        """Write the fixture plan with a hand-shaped ``### Task 4`` body."""
+        plan = self.plans_dir / f"{plan_name}.md"
+        plan.write_text(
+            "## Tasks\n### Task 3: done\nComplete.\n"
+            f"### Task 4: fixture\n{task4_body}\n- [ ] fixture work item\n",
+            encoding="utf-8",
+        )
+        return plan
+
+    @staticmethod
+    def _review_markdown(findings, title, pattern):
+        md = vrs._current_findings_markdown(findings, title=title)
+        return md.replace(
+            "- **Blocking**: false",
+            f"- **Blocking**: false\n- **Pattern**: {pattern}",
+            1,
+        )
+
+    def _stage_round(self, plan_path, *, verdict="yes", digest=None, round_suffix="r1", slug="fixture-plan", date="2026-09-01"):
+        """One real producer round: markdown plus version-1 plan-kind sidecar.
+
+        Adapted from the readiness suite's cap-closure fixture recipe: the
+        round filename follows the discovery shape, the sidecar carries
+        coverage, verdict, and the digest bound to the fixture plan bytes,
+        and the finding is mirrored into the review Markdown.
+        """
+        digest = digest if digest is not None else hashlib.sha256(plan_path.read_bytes()).hexdigest()
+        finding = vrs._current_finding(pattern="testing#weak-assertion", triage="fixed")
+        payload = vrs._version1_payload()
+        payload.update(
+            {
+                "review_type": "plan",
+                "source_kind": "plan",
+                "verdict": verdict,
+                "artifact_slug": slug,
+                "round": int(round_suffix.lstrip("r")),
+                "date": date,
+                "source_digest": digest,
+            }
+        )
+        findings = [finding]
+        payload["findings"] = findings
+        payload["counts"]["staged_findings"] = len(findings)
+        review = self.reviews_dir / f"{date}-plan-review-{slug}-{round_suffix}.md"
+        review.write_text(self._review_markdown(findings, slug, "testing#weak-assertion"), encoding="utf-8")
+        review.with_suffix(".stats.json").write_text(json.dumps(payload), encoding="utf-8")
+        return review
+
+    def _receipts(self):
+        state = runtime.load_manifest(self.fx.state_path)
+        return [event for event in state.get("history", []) if isinstance(event, dict) and event.get("event") == runtime.SCOPE_RECOVERY_EVENT]
+
+    def _assert_refusal(self, outcome, before, fragment=None):
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(outcome["reason_code"], "precondition-unverified", outcome)
+        self.assertEqual(self.fx.state_path.read_bytes(), before)
+        if fragment is not None:
+            self.assertIn(fragment, "\n".join(outcome["evidence"]))
+
+    # -- valid refresh: every inventory surface ------------------------------
+
+    def test_valid_refresh_rotates_identity_replaces_scope_and_launches(self):
+        token, generation, before_claim = self._seed_prelaunch()
+        before_intent = runtime.load_manifest(self.fx.state_path)["handoff_intents"]["task-3:task-3:done-1"]
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        outcome = self._driver().recover_task_scope("task-4", token, generation)
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertEqual(outcome["reason_code"], "scope-recovered", outcome)
+        state = runtime.load_manifest(self.fx.state_path)
+        claim = state["claims"]["task-4"]
+        intent = state["handoff_intents"]["task-3:task-3:done-1"]
+        # Claim row identity: fresh token, bumped generation, the same locked
+        # generation bump on the manifest; owner and launch id never rotate.
+        self.assertNotEqual(claim["token"], token)
+        self.assertGreater(claim["generation"], generation)
+        self.assertEqual(claim["state"], "claimed")
+        self.assertEqual(state["generation"], claim["generation"])
+        self.assertEqual(claim["owner"], before_claim["owner"])
+        self.assertEqual(claim["claim_owner_id"], before_claim["claim_owner_id"])
+        self.assertEqual(claim["launch_id"], before_claim["launch_id"])
+        # The three handoff-intent identity carriers re-stamped.
+        self.assertEqual(intent["successor"]["claim_token"], claim["token"])
+        self.assertEqual(intent["successor"]["generation"], claim["generation"])
+        self.assertEqual(intent["outcome_action"]["claim_token"], claim["token"])
+        self.assertEqual(intent["outcome_action"]["generation"], claim["generation"])
+        self.assertEqual(intent["outcome_action"]["idempotency_key"], before_intent["outcome_action"]["idempotency_key"])
+        self.assertEqual(intent["prelaunch_binding"]["claim_token"], claim["token"])
+        self.assertEqual(intent["prelaunch_binding"]["generation"], claim["generation"])
+        self.assertEqual(intent["prelaunch_binding"]["run_writer_id"], before_intent["prelaunch_binding"]["run_writer_id"])
+        self.assertEqual(intent["state"], "prepared")
+        # The five-field parity the launch boundary enforces stays intact.
+        for field in ("task_id", "claim_owner_id", "launch_id"):
+            self.assertEqual(intent["successor"][field], claim[field])
+        # Task allowed paths replaced and the evidence contract digest moved.
+        self.assertEqual(state["tasks"]["task-4"]["allowed_paths"], ["task-4.txt", "extras/hidden.py"])
+        self.assertEqual(state["evidence_contract_digest"], capabilities.evidence_contract_digest(state["tasks"]))
+        # One bounded receipt keyed on the prior identity.
+        receipts = self._receipts()
+        self.assertEqual(len(receipts), 1)
+        receipt = receipts[0]
+        self.assertEqual(receipt["token"], token)
+        self.assertEqual(receipt["generation"], generation)
+        self.assertEqual(receipt["plan_digest"], hashlib.sha256(plan.read_bytes()).hexdigest())
+        self.assertEqual(receipt["review"]["round"], 1)
+        self.assertEqual(receipt["review"]["source_digest"], receipt["plan_digest"])
+        self.assertTrue(receipt["review"]["artifact"].endswith("2026-09-01-plan-review-fixture-plan-r1.md"))
+        self.assertEqual(receipt["prior_scope"], ["task-4.txt"])
+        self.assertEqual(receipt["replacement_scope"], ["task-4.txt", "extras/hidden.py"])
+        self.assertEqual(receipt["outcome"], "recovered")
+        self.assertEqual(receipt["rotated"], {"claim_token": claim["token"], "generation": claim["generation"]})
+        # Completed-task evidence and unrelated state preserved.
+        self.assertEqual(state["tasks"]["task-3"]["status"], "checkpointed")
+        self.assertTrue(state["tasks"]["task-3"]["checkbox"])
+        self.assertEqual(intent["prior"]["task_id"], "task-3")
+        # The emitted outcome action carries the rotated identity.
+        action = outcome["actions"][0]
+        self.assertEqual(action["type"], "launch-task")
+        self.assertEqual(action["claim_token"], claim["token"])
+        self.assertEqual(action["generation"], claim["generation"])
+        self.assertEqual(action["launch_id"], claim["launch_id"])
+        # The validating entry point passes over the post-recovery manifest.
+        post = self._driver().preflight(plan)
+        self.assertEqual(post["status"], "success", post)
+        self.assertEqual(post["preflight"]["status"], "passed")
+        self.assertIsNotNone(post["preflight"]["continuation_command"])
+        # A post-recovery launch driven through the emitted outcome action
+        # reaches a consumed worker-start binding.
+        fresh = self._driver()
+        auth = fresh.authorize_envelope(
+            runtime.ActionEnvelope(str(self.fx.root), tuple(state["tasks"]["task-4"]["allowed_paths"]), "repository-task", False, ("scope-recovery launch",)),
+            claim["generation"],
+        )
+        self.assertEqual(auth["status"], "success", auth)
+        self.assertIsNone(fresh._mark_claim_launched(claim, "task-4", auth["policy_token"]))
+        launched_state = runtime.load_manifest(self.fx.state_path)
+        launched_claim = launched_state["claims"]["task-4"]
+        recorded = fresh._record_worker_launch(
+            launched_claim,
+            launched_state["tasks"]["task-4"],
+            {
+                "provider_session_id": "provider-4",
+                "worker_id": "worker-4",
+                "process_identity": {"provider": "fixture", "session_id": "provider-4"},
+                "command_identity": "fixture-launch",
+                "launch_id": launched_claim["launch_id"],
+                "observed_at": time.monotonic(),
+            },
+        )
+        self.assertEqual(recorded["state"], "active")
+        binding = runtime.load_manifest(self.fx.state_path)["handoff_intents"]["task-3:task-3:done-1"]["prelaunch_binding"]
+        started = fresh.record_worker_start(
+            {
+                "task_id": "task-4",
+                "run_writer_id": binding["run_writer_id"],
+                "parent_session_id": binding["parent_session_id"],
+                "turn_id": binding["turn_id"],
+                "tool_use_id": binding["tool_use_id"],
+                "claim_owner_id": launched_claim["claim_owner_id"],
+                "claim_token": action["claim_token"],
+                "generation": action["generation"],
+                "launch_id": launched_claim["launch_id"],
+                "expected_model": binding["expected_model"],
+                "worker_id": "worker-4",
+                "provider_session_id": "provider-4",
+                "agent_type": "implementer",
+                "model": "selected-model",
+                "repo_root": str(self.fx.root),
+                "manifest_path": str(self.fx.state_path),
+            }
+        )
+        self.assertEqual(started["status"], "success", started)
+        after = runtime.load_manifest(self.fx.state_path)["handoff_intents"]["task-3:task-3:done-1"]["prelaunch_binding"]
+        self.assertTrue(after["consumed"])
+        self.assertEqual(after["worker_identity"], {"worker_id": "worker-4", "provider_session_id": "provider-4"})
+
+    def _driver(self):
+        return self.fx.driver()
+
+    # -- replay fence --------------------------------------------------------
+
+    def test_idempotent_replay_returns_recorded_outcome_with_replay_marker(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        driver = self._driver()
+        self.assertEqual(driver.recover_task_scope("task-4", token, generation)["status"], "success")
+        before = self.fx.state_path.read_bytes()
+        replay = driver.recover_task_scope("task-4", token, generation)
+        self.assertEqual(replay["status"], "success", replay)
+        self.assertTrue(replay.get("duplicate"))
+        self.assertEqual(replay["replay_receipt"]["token"], token)
+        self.assertEqual(replay["replay_receipt"]["generation"], generation)
+        self.assertIn("replay of the recorded scope-recovery receipt", "\n".join(replay["evidence"]))
+        self.assertEqual(self.fx.state_path.read_bytes(), before)
+        self.assertEqual(len(self._receipts()), 1)
+
+    def test_replay_mismatch_names_recorded_receipt(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        driver = self._driver()
+        self.assertEqual(driver.recover_task_scope("task-4", token, generation)["status"], "success")
+        # The durable envelope redacts token values in evidence (the
+        # _reclaim_evidence_lines label contract), so the recorded receipt is
+        # named by its non-redacted identity fields.
+        before = self.fx.state_path.read_bytes()
+        mismatched = driver.recover_task_scope("task-4", "never-issued-token", generation)
+        self._assert_refusal(mismatched, before, "no recorded scope-recovery receipt")
+        self.assertIn(f"generation={generation}", "\n".join(mismatched["evidence"]))
+
+    def test_superseded_replay_falls_to_stale_identity_naming_older_receipt(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        driver = self._driver()
+        self.assertEqual(driver.recover_task_scope("task-4", token, generation)["status"], "success")
+        first = self._receipts()[0]
+        rotated_token = first["rotated"]["claim_token"]
+        rotated_generation = first["rotated"]["generation"]
+        plan2 = self._write_plan(("task-4.txt", "extras/hidden.py", "more/other.py"))
+        self._stage_round(plan2, round_suffix="r2")
+        self.assertEqual(driver.recover_task_scope("task-4", rotated_token, rotated_generation)["status"], "success")
+        self.assertEqual(len(self._receipts()), 2)
+        before = self.fx.state_path.read_bytes()
+        superseded = driver.recover_task_scope("task-4", token, generation)
+        evidence = "\n".join(superseded["evidence"])
+        self._assert_refusal(superseded, before)
+        self.assertIn("older recorded scope-recovery receipt", evidence)
+        # The older receipt is named by its prior generation (token values
+        # are redacted in durable evidence); the latest receipt's prior
+        # generation is absent.
+        self.assertIn(f"generation={generation}", evidence)
+        self.assertNotIn(f"generation={rotated_generation}", evidence)
+
+    def test_state_superseded_replay_refuses_as_stale_after_intervening_reclaim(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        self.assertEqual(self._driver().recover_task_scope("task-4", token, generation)["status"], "success")
+        state = runtime.load_manifest(self.fx.state_path)
+        state["claims"]["task-4"]["timestamp"] = 0
+        runtime._safe_write_json(self.fx.state_path, state)
+        reclaimed = self.fx.driver(clock=lambda: self.fx.FIXED_NOW).reclaim("task-4")
+        self.assertEqual(reclaimed["status"], "success", reclaimed)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        replay = driver.recover_task_scope("task-4", token, generation)
+        evidence = "\n".join(replay["evidence"])
+        self._assert_refusal(replay, before)
+        self.assertIn("stale", evidence)
+        self.assertIn(f"generation={generation}", evidence)
+
+    def test_state_superseded_replay_refuses_as_stale_after_intervening_launch(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        self.assertEqual(self._driver().recover_task_scope("task-4", token, generation)["status"], "success")
+        state = runtime.load_manifest(self.fx.state_path)
+        claim = state["claims"]["task-4"]
+        fresh = self._driver()
+        auth = fresh.authorize_envelope(
+            runtime.ActionEnvelope(str(self.fx.root), tuple(state["tasks"]["task-4"]["allowed_paths"]), "repository-task", False, ("superseded-launch",)),
+            claim["generation"],
+        )
+        self.assertEqual(auth["status"], "success", auth)
+        self.assertIsNone(fresh._mark_claim_launched(claim, "task-4", auth["policy_token"]))
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        replay = driver.recover_task_scope("task-4", token, generation)
+        evidence = "\n".join(replay["evidence"])
+        self._assert_refusal(replay, before)
+        self.assertIn("stale", evidence)
+        self.assertIn(f"generation={generation}", evidence)
+
+    def test_second_correction_on_live_identity_appends_second_receipt(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        driver = self._driver()
+        self.assertEqual(driver.recover_task_scope("task-4", token, generation)["status"], "success")
+        first = self._receipts()[0]
+        plan2 = self._write_plan(("task-4.txt", "extras/hidden.py", "more/other.py"))
+        self._stage_round(plan2, round_suffix="r2")
+        second = driver.recover_task_scope("task-4", first["rotated"]["claim_token"], first["rotated"]["generation"])
+        self.assertEqual(second["status"], "success", second)
+        receipts = self._receipts()
+        self.assertEqual(len(receipts), 2)
+        self.assertEqual(receipts[1]["token"], first["rotated"]["claim_token"])
+        self.assertEqual(receipts[1]["generation"], first["rotated"]["generation"])
+        self.assertEqual(receipts[1]["review"]["round"], 2)
+        state = runtime.load_manifest(self.fx.state_path)
+        self.assertEqual(state["tasks"]["task-4"]["allowed_paths"], ["task-4.txt", "extras/hidden.py", "more/other.py"])
+
+    # -- review evidence -------------------------------------------------------
+
+    def test_changed_review_evidence_refuses(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan, digest=hashlib.sha256(b"# other plan bytes\n").hexdigest())
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "review evidence changed or not ready")
+        self.assertIn("is stale", "\n".join(outcome["evidence"]))
+        self.assertEqual(self._receipts(), [])
+
+    def test_not_ready_latest_round_refuses_as_changed_review_evidence(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan, verdict="no")
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "review evidence changed or not ready")
+        self.assertIn("verdict field reports 'no'", "\n".join(outcome["evidence"]))
+
+    def test_missing_round_artifact_empty_reviews_dir_refuses_by_name(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "no review round artifact for feature slug 'fixture-plan'")
+        self.assertEqual(self._receipts(), [])
+
+    # -- recomputation fence ----------------------------------------------------
+
+    def test_fence_refuses_non_drift_parse_problem_shape(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_raw_plan("\nFiles:\n- `task-4.txt`\nthis is not a file entry\n- `extras/hidden.py`\n")
+        self._stage_round(plan)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        evidence = "\n".join(outcome["evidence"])
+        self._assert_refusal(outcome, before, "fence-shape mismatch")
+        self.assertIn("malformed Files: entry", evidence)
+
+    def test_fence_refuses_passing_recomputation_out_of_scope_declaration(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt",))
+        self._stage_round(plan)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "fence-shape mismatch")
+        self.assertIn("status=passed", "\n".join(outcome["evidence"]))
+
+    def test_stripped_files_declaration_refuses_by_name(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(None)
+        self._stage_round(plan)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "no Files: declaration")
+        self.assertEqual(self._receipts(), [])
+
+    def test_present_but_empty_declaration_refuses_by_name(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(())
+        self._stage_round(plan)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "no Files: declaration")
+        self.assertEqual(self._receipts(), [])
+
+    # -- declaration canonicalization --------------------------------------------
+
+    def test_duplicate_alias_entries_refuse(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_raw_plan("\nFiles:\n- `extras/hidden.py`\n- `./extras/hidden.py`\n")
+        self._stage_round(plan)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "duplicate canonical allowed path after alias resolution")
+
+    def test_canonicalization_failing_entry_refuses(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_raw_plan("\nFiles:\n- `../escape.txt`\n")
+        self._stage_round(plan)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "fails canonicalization")
+
+    # -- identity and state eligibility --------------------------------------------
+
+    def test_stale_and_foreign_identity_refuse(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        wrong_task = driver.recover_task_scope("task-9", token, generation)
+        self._assert_refusal(wrong_task, before, "identity mismatch")
+        foreign = driver.recover_task_scope("task-4", "never-issued-token", generation)
+        self._assert_refusal(foreign, before, "identity mismatch")
+        self.assertEqual(self._receipts(), [])
+
+    def test_direct_claim_without_prepared_intent_refuses_as_not_intent_backed(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        state = runtime.load_manifest(self.fx.state_path)
+        state["claims"]["task-4"] = {
+            "token": "direct-token",
+            "generation": generation,
+            "owner": "test-owner",
+            "claim_owner_id": "test-owner",
+            "state": "claimed",
+            "task_id": "task-4",
+            "launch_id": "direct-launch",
+        }
+        runtime._safe_write_json(self.fx.state_path, state)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", "direct-token", generation)
+        self._assert_refusal(outcome, before, "not intent-backed")
+        self.assertEqual(self._receipts(), [])
+
+    def test_launch_record_present_refuses(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        state = runtime.load_manifest(self.fx.state_path)
+        state["claims"]["task-4"]["launch_record"] = {"baseline_revision": "", "generation": generation, "launched_at": 111.0}
+        runtime._safe_write_json(self.fx.state_path, state)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "launch record evidence")
+
+    def test_active_worker_refuses(self):
+        from execute_plan_worker_registry import WorkerRegistry
+
+        token, generation, claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        state = runtime.load_manifest(self.fx.state_path)
+        registry = WorkerRegistry(state)
+        registry.register_launch(
+            task_id="task-4",
+            claim_token=token,
+            generation=generation,
+            claim_owner_id=claim["claim_owner_id"],
+            provider_session_id="session-4",
+            worker_id="worker-4",
+            command_identity="fixture-command",
+            process_identity={"provider": "fixture", "session_id": "session-4"},
+            launch_id=claim["launch_id"],
+            capacity_entry_id="capacity-4",
+            started_at=100.0,
+        )
+        runtime._safe_write_json(self.fx.state_path, registry.manifest)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "worker evidence exists")
+
+    def test_held_reservation_refuses(self):
+        token, generation, claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        state = runtime.load_manifest(self.fx.state_path)
+        state["capacity"]["reservations"][f"task-4:{generation}:launch-held"] = {
+            "task_id": "task-4",
+            "claim_token": token,
+            "generation": generation,
+            "launch_id": claim["launch_id"],
+        }
+        runtime._safe_write_json(self.fx.state_path, state)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "launch reservation is held")
+
+    def test_claim_group_member_refuses(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        state = runtime.load_manifest(self.fx.state_path)
+        state["claims"]["task-4"]["group_id"] = "group-1"
+        state["claim_groups"]["group-1"] = {
+            "group_id": "group-1",
+            "state": "active",
+            "members": ["task-4"],
+            "kind": "batch",
+            "anchor": "task-4",
+            "active_member": "task-4",
+            "generation": 0,
+        }
+        runtime._safe_write_json(self.fx.state_path, state)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "live claim group 'group-1'")
+
+    def test_unstructured_prose_never_adds_scope(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(None, body="See `extras/hidden.py` and `docs/guide.md` for details.")
+        self._stage_round(plan)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "no Files: declaration")
+        self.assertEqual(self._receipts(), [])
+
+    # -- plan identity ---------------------------------------------------------------
+
+    def test_plan_file_full_stem_identity_refusal(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"), plan_name="2026-09-30-fixture-plan")
+        self._stage_round(plan)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self._assert_refusal(outcome, before, "does not bind by full-stem identity")
+
+    def test_dated_filename_plan_with_full_stem_slug_proceeds(self):
+        token, generation, _claim = self._seed_prelaunch()
+        state = runtime.load_manifest(self.fx.state_path)
+        state["plan_slug"] = "2026-09-30-fixture-plan"
+        runtime._safe_write_json(self.fx.state_path, state)
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"), plan_name="2026-09-30-fixture-plan")
+        self._stage_round(plan)
+        # The manifest slug is seeded to the full stem exactly as a real run
+        # records it; feature_slug strips the date for the reviews-directory
+        # discovery key only.
+        driver = runtime.RuntimeDriver(
+            self.fx.state_path,
+            plan_slug="2026-09-30-fixture-plan",
+            owner="test-owner",
+            repo_root=self.fx.root,
+            commit_lookup=lambda _commit: True,
+            adapter=_fixture_inventory(FakeAdapter()),
+        )
+        outcome = driver.recover_task_scope("task-4", token, generation)
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = runtime.load_manifest(self.fx.state_path)
+        self.assertEqual(state["tasks"]["task-4"]["allowed_paths"], ["task-4.txt", "extras/hidden.py"])
+
+    # -- persist boundary ---------------------------------------------------------------
+
+    def test_post_transition_validation_failure_refuses_byte_identically(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        driver = self._driver()
+        before = self.fx.state_path.read_bytes()
+        real_validation = runtime.validate_manifest_worker_schema
+
+        def fails_once_post_transition(value):
+            real_validation(value)
+            if any(isinstance(event, dict) and event.get("event") == runtime.SCOPE_RECOVERY_EVENT for event in value.get("history", [])):
+                raise ValueError("forced validation failure")
+            return value
+
+        with mock.patch.object(runtime, "validate_manifest_worker_schema", fails_once_post_transition):
+            outcome = driver.recover_task_scope("task-4", token, generation)
+
+        evidence = "\n".join(outcome["evidence"])
+        self._assert_refusal(outcome, before, "recovery post-transition validation failed (recover-task-scope)")
+        self.assertIn("nothing was persisted", evidence)
+        self.assertEqual(self._receipts(), [])
+
+    # -- CLI boundary ----------------------------------------------------------
+
+    def test_cli_recover_task_scope_success_and_refusal_byte_identical(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        self._stage_round(plan)
+        code, output = self.fx._run_cli(
+            "--operation", "recover-task-scope",
+            "--input", json.dumps({"task_id": "task-4", "token": token, "generation": generation}),
+        )
+        self.assertEqual(code, 0, output)
+        self.assertIn("scope-recovered", output)
+        state = runtime.load_manifest(self.fx.state_path)
+        claim = state["claims"]["task-4"]
+        self.assertNotEqual(claim["token"], token)
+        self.assertGreater(claim["generation"], generation)
+        self.assertEqual(state["tasks"]["task-4"]["allowed_paths"], ["task-4.txt", "extras/hidden.py"])
+        self.assertEqual(len(self._receipts()), 1)
+        # A representative CLI refusal is byte-identical across the whole
+        # invocation (the dispatch constructs the driver
+        # persist-construction-free, so construction writes nothing either).
+        before = self.fx.state_path.read_bytes()
+        code, output = self.fx._run_cli(
+            "--operation", "recover-task-scope",
+            "--input", json.dumps({"task_id": "task-4", "token": "never-issued-token", "generation": generation}),
+        )
+        self.assertEqual(code, 0, output)
+        self.assertIn("precondition-unverified", output)
+        self.assertEqual(self.fx.state_path.read_bytes(), before)
+
+    def test_cli_recover_task_scope_cannot_be_handed_inventory_or_review_evidence(self):
+        token, generation, _claim = self._seed_prelaunch()
+        plan = self._write_plan(("task-4.txt", "extras/hidden.py"))
+        before = self.fx.state_path.read_bytes()
+        # The operation takes no inventory or review evidence flags and reads
+        # none from the payload: a payload stuffed with review and inventory
+        # evidence plus replacement paths is refused on the repository's own
+        # missing review evidence, byte-identically.
+        code, output = self.fx._run_cli(
+            "--operation", "recover-task-scope",
+            "--input", json.dumps({
+                "task_id": "task-4",
+                "token": token,
+                "generation": generation,
+                "review": {"artifact": "caller-supplied.md", "round": 7, "source_digest": "0" * 64},
+                "inventory": {"state": "available", "inventory": []},
+                "plan_digest": "1" * 64,
+                "replacement_paths": ["caller/controlled.py"],
+            }),
+        )
+        self.assertEqual(code, 0, output)
+        self.assertIn("no review round artifact for feature slug 'fixture-plan'", output)
+        self.assertEqual(self.fx.state_path.read_bytes(), before)
+        self.assertEqual(self._receipts(), [])
+        # With the real review evidence staged, the same stuffed payload
+        # still cannot steer the transition: the replacement paths come from
+        # the plan's structured Files: declaration, never the payload.
+        self._stage_round(plan)
+        code, output = self.fx._run_cli(
+            "--operation", "recover-task-scope",
+            "--input", json.dumps({
+                "task_id": "task-4",
+                "token": token,
+                "generation": generation,
+                "review": {"artifact": "caller-supplied.md", "round": 7, "source_digest": "0" * 64},
+                "replacement_paths": ["caller/controlled.py"],
+            }),
+        )
+        self.assertEqual(code, 0, output)
+        self.assertIn("scope-recovered", output)
+        state = runtime.load_manifest(self.fx.state_path)
+        self.assertEqual(state["tasks"]["task-4"]["allowed_paths"], ["task-4.txt", "extras/hidden.py"])
+        receipt = self._receipts()[0]
+        self.assertEqual(receipt["review"]["round"], 1)
+        self.assertNotEqual(receipt["review"]["source_digest"], "0" * 64)
+
+
 class RuntimeContinuationBudgetTest(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.manifest = Path(self.directory.name) / "runtime.json"
         runtime.create_manifest(self.manifest, "continuation-test", [
             {"id": "task-1", "number": 1, "status": "pending", "checkbox": False, "allowed_paths": ["task.txt"]}
-        ])
+        ], runtime_id="codex")
         self.driver = runtime.RuntimeDriver(self.manifest, plan_slug="continuation-test", owner="continuation-owner", repo_root=Path(self.directory.name))
         self.claim = self.driver.claim_next_task()
         self.assertEqual(self.claim["status"], "success", self.claim)
@@ -12826,10 +16022,11 @@ class _ConsultAdapter:
     raw ``ps`` command text the post-consult re-observation scans.
     """
 
-    def __init__(self, inventory=None, port=None, raw_stdout=None, expose_port=True):
+    def __init__(self, inventory=None, port=None, raw_stdout=None, expose_port=True, raw_snapshots=None):
         self._inventory_rows = inventory if inventory is not None else []
         self._port = port
         self._raw_stdout = raw_stdout
+        self._raw_snapshots = list(raw_snapshots) if raw_snapshots is not None else None
         self.consults = []
         # Clock pinning: the inventory read time derives from
         # time.monotonic() at fixture setup, so a caller-supplied ``now``
@@ -12851,7 +16048,15 @@ class _ConsultAdapter:
         return {"version": 1, "observation_kind": "inventory", "state": "available", "observed_at": self._observed_at, "freshness_window": 30.0, "capacity_slot_effect": "retain", "inventory": rows}
 
     def process_snapshot(self):
-        return subprocess.CompletedProcess([], 0, stdout=self._raw_stdout or "", stderr="")
+        if self._raw_snapshots is not None:
+            raw = self._raw_snapshots.pop(0) if self._raw_snapshots else ""
+        else:
+            raw = self._raw_stdout or ""
+        if isinstance(raw, Exception):
+            raise raw
+        if isinstance(raw, subprocess.CompletedProcess):
+            return raw
+        return subprocess.CompletedProcess([], 0, stdout=raw, stderr="")
 
 
 class _ReconcileFixtureBase(unittest.TestCase):
@@ -12880,18 +16085,27 @@ class _ReconcileFixtureBase(unittest.TestCase):
             if key not in self._saved_env:
                 os.environ.pop(key, None)
 
-    def _seed_manifest(self):
+    def _seed_manifest(self, task_map=None):
         """(Re)create the fixture manifest; arms that need a clean slate
         call this again instead of sharing mutated worker rows."""
 
-        runtime.create_manifest(self.state_path, "fixture-plan", [
-            {"id": "task-1", "number": 1, "status": "pending", "checkbox": False, "allowed_paths": ["task-1.txt"]},
-            {"id": "task-2", "number": 2, "status": "pending", "checkbox": False, "allowed_paths": ["task-2.txt"]},
-            {"id": "task-3", "number": 3, "status": "pending", "checkbox": False, "allowed_paths": ["task-3.txt"]},
-        ])
+        tasks = task_map or {
+            f"task-{number}": {"id": f"task-{number}", "number": number, "status": "pending", "checkbox": False, "allowed_paths": [f"task-{number}.txt"]}
+            for number in (1, 2, 3)
+        }
+        declared_tasks = {name: dict(task) for name, task in tasks.items()}
+        seed_tasks = {name: {key: value for key, value in task.items() if key not in {"required_criteria", "verification_commands"}} for name, task in declared_tasks.items()}
+        runtime.create_manifest(self.state_path, "fixture-plan", seed_tasks)
         manifest = runtime.load_manifest(self.state_path)
-        for number in (1, 2, 3):
-            manifest["claims"][f"task-{number}"] = {"task_id": f"task-{number}", "token": f"tok-task-{number}", "generation": 1, "owner": "test-owner", "state": "claimed"}
+        for task_id, task in declared_tasks.items():
+            for key in ("required_criteria", "verification_commands"):
+                if key in task:
+                    manifest["tasks"][task_id][key] = task[key]
+        if any("required_criteria" in task for task in declared_tasks.values()):
+            manifest["evidence_contract_digest"] = capabilities.evidence_contract_digest(manifest["tasks"])
+            manifest["evidence_criteria_map"] = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in manifest["tasks"].items()}
+        for task_id in manifest["tasks"]:
+            manifest["claims"][task_id] = {"task_id": task_id, "token": f"tok-{task_id}", "generation": 1, "owner": "test-owner", "state": "claimed"}
         runtime._safe_write_json(self.state_path, manifest)
 
     def _driver(self, adapter, **kwargs):
@@ -12946,16 +16160,16 @@ class _ReconcileFixtureBase(unittest.TestCase):
             ],
         }
 
-    def _seed_launched_hold(self, adapter, session, worker_id="worker-hold", entry_id="capacity-hold", extra_workers=()):
+    def _seed_launched_hold(self, adapter, session, worker_id="worker-hold", entry_id="capacity-hold", extra_workers=(), task_id="task-1"):
         """Hand-build the launched hold (task launched, claim launched with
         its launch record, durable launch reservation held) plus the
         registered worker row, so the recovery-path rows reach precondition
         6 with a controlled adapter."""
 
         manifest = runtime.load_manifest(self.state_path)
-        manifest["tasks"]["task-1"]["status"] = "launched"
-        manifest["claims"]["task-1"] = {
-            "task_id": "task-1",
+        manifest["tasks"][task_id]["status"] = "launched"
+        manifest["claims"][task_id] = {
+            "task_id": task_id,
             "token": "tok-hold",
             "generation": 3,
             "owner": "test-owner",
@@ -12963,15 +16177,15 @@ class _ReconcileFixtureBase(unittest.TestCase):
             "launch_id": "launch-hold",
             "launch_record": {"baseline_revision": "base", "generation": 3, "launched_at": 100.0},
         }
-        manifest["capacity"]["reservations"]["task-1:3:launch-hold"] = {"task_id": "task-1", "generation": 3, "claim_token": "tok-hold", "launch_id": "launch-hold"}
+        manifest["capacity"]["reservations"][f"{task_id}:3:launch-hold"] = {"task_id": task_id, "generation": 3, "claim_token": "tok-hold", "launch_id": "launch-hold"}
         runtime._safe_write_json(self.state_path, manifest)
-        self._register_worker("task-1", session, worker_id, entry_id)
-        for task_id, extra_session, extra_worker, extra_entry in extra_workers:
+        self._register_worker(task_id, session, worker_id, entry_id)
+        for extra_task_id, extra_session, extra_worker, extra_entry in extra_workers:
             manifest = runtime.load_manifest(self.state_path)
-            manifest["claims"][task_id] = {**manifest["claims"][task_id], "state": "launched"}
+            manifest["claims"][extra_task_id] = {**manifest["claims"][extra_task_id], "state": "launched"}
             runtime._safe_write_json(self.state_path, manifest)
-            self._register_worker(task_id, extra_session, extra_worker, extra_entry)
-        return runtime.load_manifest(self.state_path)["claims"]["task-1"]
+            self._register_worker(extra_task_id, extra_session, extra_worker, extra_entry)
+        return runtime.load_manifest(self.state_path)["claims"][task_id]
 
 
 class ProcessIdentityFingerprintTest(unittest.TestCase):
@@ -13372,6 +16586,89 @@ class ReconcileIdentityJoinTest(_ReconcileFixtureBase):
         self.assertEqual(outcome["status"], "blocked", outcome)
         self.assertEqual(self.state_path.read_bytes(), before)
 
+    def test_fresh_terminal_recheck_overrides_stale_raw_visibility(self):
+        raw = "codex exec resume conv-recheck --model o4"
+        self._register_worker("task-1", "conv-recheck", "worker-recheck", "capacity-recheck")
+        adapter = _ConsultAdapter(
+            inventory=[],
+            port=lambda conversation: _terminal_evidence_observation(conversation),
+            raw_snapshots=[raw, ""],
+        )
+        manifest = runtime.load_manifest(self.state_path)
+        result = self._driver(adapter).reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(adapter.consults, ["conv-recheck", "conv-recheck"])
+        self.assertEqual(result["status"], "available", result)
+        persisted = self._persist(manifest)
+        self.assertEqual(persisted["workers"]["worker-recheck"]["state"], "terminal")
+        self.assertEqual(persisted["capacity"]["entries"]["capacity-recheck"]["state"], "released")
+
+    def test_failed_first_process_snapshot_preserves_quarantine(self):
+        self._register_worker("task-1", "conv-first-failed", "worker-first-failed", "capacity-first-failed")
+        failed_snapshot = subprocess.CompletedProcess([], 1, stdout="", stderr="ps failed")
+        adapter = _ConsultAdapter(
+            inventory=[],
+            port=lambda conversation: _terminal_evidence_observation(conversation),
+            raw_snapshots=[failed_snapshot],
+        )
+        manifest = runtime.load_manifest(self.state_path)
+        result = self._driver(adapter).reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(adapter.consults, ["conv-first-failed"])
+        self.assertEqual(result["status"], "quarantined")
+        self.assertEqual(manifest["workers"]["worker-first-failed"]["state"], "quarantined")
+        self.assertTrue(manifest["capacity"]["entries"]["capacity-first-failed"]["counts_toward_capacity"])
+
+    def test_failed_final_process_snapshot_preserves_quarantine(self):
+        raw = "codex exec resume conv-final-failed --model o4"
+        self._register_worker("task-1", "conv-final-failed", "worker-final-failed", "capacity-final-failed")
+        failed_snapshot = subprocess.CompletedProcess([], 1, stdout="", stderr="ps failed")
+        adapter = _ConsultAdapter(
+            inventory=[],
+            port=lambda conversation: _terminal_evidence_observation(conversation),
+            raw_snapshots=[raw, failed_snapshot],
+        )
+        manifest = runtime.load_manifest(self.state_path)
+        result = self._driver(adapter).reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(adapter.consults, ["conv-final-failed", "conv-final-failed"])
+        self.assertEqual(result["status"], "quarantined")
+        self.assertEqual(manifest["workers"]["worker-final-failed"]["state"], "quarantined")
+        self.assertTrue(manifest["capacity"]["entries"]["capacity-final-failed"]["counts_toward_capacity"])
+
+    def test_fresh_resume_observation_keeps_worker_quarantined(self):
+        raw = "codex exec resume conv-recheck-live --model o4"
+        self._register_worker("task-1", "conv-recheck-live", "worker-recheck-live", "capacity-recheck-live")
+        adapter = _ConsultAdapter(
+            inventory=[],
+            port=lambda conversation: _terminal_evidence_observation(conversation),
+            raw_snapshots=[raw, raw],
+        )
+        manifest = runtime.load_manifest(self.state_path)
+        result = self._driver(adapter).reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(adapter.consults, ["conv-recheck-live", "conv-recheck-live"])
+        self.assertEqual(result["status"], "quarantined", result)
+        worker = manifest["workers"]["worker-recheck-live"]
+        self.assertEqual(worker["state"], "quarantined")
+        self.assertTrue(manifest["capacity"]["entries"]["capacity-recheck-live"]["counts_toward_capacity"])
+
+    def test_missing_or_stale_terminal_recheck_refuses_release(self):
+        raw = "codex exec resume conv-recheck-bad --model o4"
+        cases = {
+            "missing": lambda conversation: _terminal_evidence_refusal_observation("record-not-found"),
+            "stale": lambda conversation: _terminal_evidence_observation(conversation, observed_at=time.monotonic() - 120.0),
+            "mismatched": lambda conversation: _terminal_evidence_observation("conv-other"),
+        }
+        for case, recheck in cases.items():
+            with self.subTest(case=case):
+                self._seed_manifest()
+                self._register_worker("task-1", "conv-recheck-bad", f"worker-recheck-{case}", f"capacity-recheck-{case}")
+                observations = iter([lambda conversation: _terminal_evidence_observation(conversation), recheck])
+                adapter = _ConsultAdapter(inventory=[], port=lambda conversation: next(observations)(conversation), raw_snapshots=[raw, ""])
+                manifest = runtime.load_manifest(self.state_path)
+                result = self._driver(adapter).reconcile_worker_capacity(manifest, now=time.monotonic())
+                self.assertEqual(result["status"], "quarantined")
+                worker = manifest["workers"][f"worker-recheck-{case}"]
+                self.assertEqual(worker["state"], "quarantined")
+                self.assertTrue(manifest["capacity"]["entries"][f"capacity-recheck-{case}"]["counts_toward_capacity"])
+
     def test_duplicate_join_deduplicates(self):
         # Two concurrent resume rows of the same conversation: the driver
         # reshapes at most one raw row per matched worker (first match
@@ -13539,6 +16836,205 @@ class EvidenceContractRecoveryCodexTest(_ReconcileFixtureBase):
     """
 
     HELD_SESSION = "conv-hold"
+
+    def _task(self, number, commands=None):
+        task_id = f"task-{number}"
+        task = {"id": task_id, "number": number, "status": "pending", "checkbox": False, "allowed_paths": [f"{task_id}.txt"]}
+        if commands is not None:
+            task.update(required_criteria=[f"{task_id}:criterion"], verification_commands=commands)
+        return task
+
+    def _recover_task(self, task_map, task_id, contract):
+        self._seed_manifest(task_map)
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation))
+        claim = self._seed_launched_hold(adapter, self.HELD_SESSION, task_id=task_id)
+        driver = self._driver(adapter)
+        before = self.state_path.read_bytes()
+        outcome = driver.recover_evidence_contract(task_id, claim["token"], claim["generation"], contract)
+        return outcome, before
+
+    def test_evidence_recovery_refuses_corrected_contract_cloning_sibling_list(self):
+        cloned = [{"id": "verify", "argv": ["cat", "task-2.txt"], "criteria": ["task-2:criterion"]}]
+        outcome, before = self._recover_task(
+            {"task-1": {**self._task(1, cloned), "required_criteria": ["task-2:criterion"]}, "task-2": self._task(2)},
+            "task-2",
+            {"required_criteria": ["task-2:criterion"], "verification_commands": cloned},
+        )
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        pair = [item for item in outcome["evidence"] if "tasks task-1 and task-2" in item]
+        self.assertTrue(pair, outcome["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_evidence_recovery_succeeds_past_sibling_embed_of_corrected_path(self):
+        sibling = [{"id": "verify-sibling", "argv": ["sh", "-c", "cat task-2.txt"], "criteria": ["task-1:criterion"]}]
+        contract = {"required_criteria": ["task-2:criterion"], "verification_commands": [{"id": "verify-two", "argv": ["cat", "task-2.txt"], "criteria": ["task-2:criterion"]}]}
+        outcome, before = self._recover_task(
+            {"task-1": self._task(1, sibling), "task-2": self._task(2)}, "task-2", contract
+        )
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertTrue(any("sibling-only pre-seed gate finding reported without refusing" in item and "task-1" in item for item in outcome["evidence"]), outcome["evidence"])
+        seeded_tasks = json.loads(before)["tasks"]
+        reloaded_tasks = runtime.load_manifest(self.state_path)["tasks"]
+        self.assertEqual(reloaded_tasks["task-1"]["verification_commands"], seeded_tasks["task-1"]["verification_commands"])
+        self.assertEqual(reloaded_tasks["task-1"]["required_criteria"], seeded_tasks["task-1"]["required_criteria"])
+        self.assertEqual(reloaded_tasks["task-1"]["verification_commands"], sibling)
+
+    def test_evidence_recovery_refuses_corrected_contract_embedding_later_path(self):
+        task_map = {"task-1": self._task(1), "task-2": self._task(2), "task-3": self._task(3)}
+        contract = {"required_criteria": ["task-2:criterion"], "verification_commands": [{"id": "verify-two", "argv": ["sh", "-c", "cat task-3.txt"], "criteria": ["task-2:criterion"]}]}
+        outcome, before = self._recover_task(task_map, "task-2", contract)
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("task-2" in item and "task-3.txt" in item for item in outcome["evidence"]), outcome["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_evidence_recovery_closes_exact_launched_handoff(self):
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation))
+        self._seed_launched_hold(adapter, session=self.HELD_SESSION)
+        state = runtime.load_manifest(self.state_path)
+        claim = state["claims"]["task-1"]
+        claim.update(launch_id="launch-task-1", claim_owner_id=claim["owner"])
+        state["tasks"]["task-0"] = {**copy.deepcopy(state["tasks"]["task-2"]), "id": "task-0", "number": 0, "status": "complete", "checkbox": True}
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        state["evidence_criteria_map"] = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in state["tasks"].items()}
+        state["claims"]["task-0"] = {"task_id": "task-0", "token": "prior-token", "generation": 2, "owner": "prior-owner", "state": "closed"}
+        state["checkpoints"]["task-0:done-1"] = {
+            "task_id": "task-0",
+            "result": {"checkpoint_identity": "task-0:done-1", "claim_token": "prior-token", "generation": 2},
+        }
+        key = "task-0:task-0:done-1"
+        claim["handoff_intent_key"] = key
+        state["handoff_intents"] = {key: {
+            "intent_id": "intent-exact", "idempotency_key": "plan:done:launch-task-1", "state": "launched",
+            "prior": {"task_id": "task-0", "checkpoint_identity": "task-0:done-1", "claim_owner_id": "prior-owner", "claim_token": "prior-token", "generation": 2},
+            "successor": {"task_id": "task-1", "claim_owner_id": claim["claim_owner_id"], "claim_token": claim["token"], "generation": claim["generation"], "launch_id": claim["launch_id"]},
+            "launch_receipt": {"provider_session_id": self.HELD_SESSION},
+        }}
+        self._persist(state)
+        driver = self._driver(adapter)
+
+        result = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+
+        self.assertEqual(result["status"], "success", result)
+        after = runtime.load_manifest(self.state_path)
+        intent = after["handoff_intents"][key]
+        self.assertEqual(intent["state"], "failed")
+        receipt = intent["recovery_receipt"]
+        self.assertEqual(receipt["intent_id"], "intent-exact")
+        self.assertEqual(receipt["intent_key"], key)
+        self.assertEqual(receipt["prior"]["checkpoint_identity"], "task-0:done-1")
+        self.assertEqual(receipt["successor"]["launch_id"], "launch-task-1")
+        self.assertEqual(receipt["worker_session_id"], self.HELD_SESSION)
+        persisted_receipt = copy.deepcopy(receipt)
+        before_replay = self.state_path.read_bytes()
+        replay = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(replay["status"], "blocked")
+        self.assertEqual(self.state_path.read_bytes(), before_replay)
+        self.assertEqual(runtime.load_manifest(self.state_path)["handoff_intents"][key]["recovery_receipt"], persisted_receipt)
+
+    def test_evidence_recovery_refuses_mismatched_predecessor_identity(self):
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation))
+        self._seed_launched_hold(adapter, session=self.HELD_SESSION)
+        state = runtime.load_manifest(self.state_path)
+        claim = state["claims"]["task-1"]
+        claim.update(launch_id="launch-task-1", claim_owner_id=claim["owner"], handoff_intent_key="task-0:task-0:done-1")
+        state["tasks"]["task-0"] = {**copy.deepcopy(state["tasks"]["task-2"]), "id": "task-0", "number": 0, "status": "complete", "checkbox": True}
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        state["evidence_criteria_map"] = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in state["tasks"].items()}
+        state["claims"]["task-0"] = {"task_id": "task-0", "token": "prior-token", "generation": 2, "owner": "prior-owner", "state": "closed"}
+        state["checkpoints"]["task-0:done-1"] = {"task_id": "task-0", "result": {"checkpoint_identity": "task-0:done-1", "claim_token": "prior-token", "generation": 2}}
+        key = claim["handoff_intent_key"]
+        state["handoff_intents"] = {key: {
+            "intent_id": "intent-exact", "state": "launched",
+            "prior": {"task_id": "task-0", "checkpoint_identity": "task-0:done-1", "claim_owner_id": "forged-owner", "claim_token": "prior-token", "generation": 2},
+            "successor": {"task_id": "task-1", "claim_owner_id": claim["claim_owner_id"], "claim_token": claim["token"], "generation": claim["generation"], "launch_id": claim["launch_id"]},
+        }}
+        self._persist(state)
+        driver = self._driver(adapter)
+        before = self.state_path.read_bytes()
+        result = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_evidence_recovery_refuses_handoff_without_provider_receipt_id(self):
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation))
+        self._seed_launched_hold(adapter, session=self.HELD_SESSION)
+        state = runtime.load_manifest(self.state_path)
+        claim = state["claims"]["task-1"]
+        claim.update(launch_id="launch-task-1", claim_owner_id=claim["owner"], handoff_intent_key="task-0:task-0:done-1")
+        state["tasks"]["task-0"] = {**copy.deepcopy(state["tasks"]["task-2"]), "id": "task-0", "number": 0, "status": "complete", "checkbox": True}
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        state["evidence_criteria_map"] = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in state["tasks"].items()}
+        state["claims"]["task-0"] = {"task_id": "task-0", "token": "prior-token", "generation": 2, "owner": "prior-owner", "state": "closed"}
+        state["checkpoints"]["task-0:done-1"] = {"task_id": "task-0", "result": {"checkpoint_identity": "task-0:done-1", "claim_token": "prior-token", "generation": 2}}
+        key = claim["handoff_intent_key"]
+        state["handoff_intents"] = {key: {
+            "intent_id": "intent-exact", "state": "launched",
+            "prior": {"task_id": "task-0", "checkpoint_identity": "task-0:done-1", "claim_owner_id": "prior-owner", "claim_token": "prior-token", "generation": 2},
+            "successor": {"task_id": "task-1", "claim_owner_id": claim["claim_owner_id"], "claim_token": claim["token"], "generation": claim["generation"], "launch_id": claim["launch_id"]},
+        }}
+        self._persist(state)
+        driver = self._driver(adapter)
+        reconcile = driver.reconcile_worker_capacity
+        def remove_provider_receipt(observed, **kwargs):
+            result = reconcile(observed, **kwargs)
+            for worker in observed["workers"].values():
+                if worker.get("task_id") == "task-1" and worker.get("state") == "terminal":
+                    worker["receipt_metadata"].pop("receipt_id", None)
+                    worker["last_receipt"].pop("receipt_id", None)
+            return result
+        driver.reconcile_worker_capacity = remove_provider_receipt
+        before = self.state_path.read_bytes()
+        result = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_retired_evidence_claim_admits_by_latest_matching_receipt(self):
+        # The generalized retirement predicate: admission keys on the latest
+        # matching receipt across both recovery event identities, the strict
+        # handoff-recovery shape is required only when the block is present,
+        # and the no-intent receipt shape (block omitted, both contract
+        # identities required) admits only a claimed successor claim.
+        retired = {"state": "closed", "token": "old-token", "generation": 3}
+        event = {"event": "evidence-contract-recovery", "task_id": "task-1", "token": "old-token", "generation": 3,
+                 "recovered_generation": 4, "handoff_recovery": {"intent_id": "intent-1", "successor": {"task_id": "task-1", "claim_token": "old-token", "generation": 3}}}
+        task = {"status": "pending"}
+        manifest = {"tasks": {"task-1": task}, "history": [event]}
+        self.assertFalse(runtime.RuntimeDriver._claim_retired_by_evidence_recovery(manifest, "task-1", retired))
+        newer = {"state": "claimed", "token": "new-token", "generation": 5}
+        self.assertTrue(runtime.RuntimeDriver._claim_retired_by_evidence_recovery(manifest, "task-1", newer))
+        # The duplicate-receipt case flips from refusal to admission: the
+        # latest matching receipt decides, not an exactly-one count fence.
+        for cross_identity in (
+            [event, copy.deepcopy(event)],
+            [{"event": "prelaunch-contract-recovery", "task_id": "task-1", "token": "p-token", "generation": 2,
+              "prior_contract_identity": {"kind": "raw", "sha256": "a" * 64},
+              "corrected_contract_identity": {"evidence_contract_digest": "b" * 64}}, event],
+            [event, {"event": "prelaunch-contract-recovery", "task_id": "task-1", "token": "p-token", "generation": 2,
+                     "prior_contract_identity": {"kind": "raw", "sha256": "a" * 64},
+                     "corrected_contract_identity": {"evidence_contract_digest": "b" * 64}}],
+        ):
+            with self.subTest(receipts=cross_identity):
+                self.assertTrue(runtime.RuntimeDriver._claim_retired_by_evidence_recovery({"tasks": {"task-1": task}, "history": cross_identity}, "task-1", newer))
+        # The launched-shape successor on a no-intent receipt stays examined
+        # exactly as today; the claimed-shape successor is admitted.
+        no_intent = {"event": "prelaunch-contract-recovery", "task_id": "task-1", "token": "p-token", "generation": 2,
+                     "prior_contract_identity": {"kind": "raw", "sha256": "a" * 64},
+                     "corrected_contract_identity": {"evidence_contract_digest": "b" * 64}}
+        launched_successor = {"state": "launched", "token": "new-token", "generation": 5}
+        self.assertFalse(runtime.RuntimeDriver._claim_retired_by_evidence_recovery({"tasks": {"task-1": task}, "history": [no_intent]}, "task-1", launched_successor))
+        self.assertTrue(runtime.RuntimeDriver._claim_retired_by_evidence_recovery({"tasks": {"task-1": task}, "history": [no_intent]}, "task-1", newer))
+        # A malformed no-intent receipt (identities missing) stays examined.
+        self.assertFalse(runtime.RuntimeDriver._claim_retired_by_evidence_recovery(
+            {"tasks": {"task-1": task}, "history": [{k: v for k, v in no_intent.items() if k != "prior_contract_identity"}]}, "task-1", newer,
+        ))
+        # The strict arm keeps its landed refusal arms: a foreign-token
+        # receipt and a bad successor shape stay refusals.
+        for bad_receipts in (
+            [{**event, "token": "foreign-token"}],
+            [{**event, "handoff_recovery": {"intent_id": "intent-1", "successor": {"task_id": "task-1", "claim_token": "foreign-token", "generation": 3}}}],
+        ):
+            with self.subTest(receipts=bad_receipts):
+                self.assertFalse(runtime.RuntimeDriver._claim_retired_by_evidence_recovery({"tasks": {"task-1": task}, "history": bad_receipts}, "task-1", newer))
 
     def _recovery_driver(self, adapter):
         self._seed_launched_hold(adapter, session=self.HELD_SESSION)
@@ -13734,6 +17230,1136 @@ class EvidenceContractRecoveryCodexTest(_ReconcileFixtureBase):
         # and no worker row appears for the replaced identity.
         self.assertEqual(self.state_path.read_bytes(), before)
         self.assertNotIn("worker-hold", runtime.load_manifest(self.state_path)["workers"])
+
+
+class RecoverRunIdentityMigrationTest(unittest.TestCase):
+    """Task 1 rows: the recover-run-identity legacy-manifest migration.
+
+    Every arm drives the public CLI operation, so the audited locked
+    transition, its dispatch registration, and its refusal envelope are all
+    exercised end to end. Every refusal arm pins the manifest file bytes as
+    identical to the pre-call bytes, so a refused migration can never leave
+    a half-bound manifest behind. The fixture legacy manifest is seeded
+    through ``create_manifest`` without a runtime id; the facts file and the
+    plan file let the closed-residue readiness decision read the plan the
+    ordinary preflight reads.
+    """
+
+    PLAN_TEXT = (
+        "# fixture plan\n\n"
+        "### Task 1: first\n\n- [ ] task-1 step\n\n"
+        "### Task 2: second\n\n- [ ] task-2 step\n"
+    )
+    MIGRATION_EVENT = "run-identity-migration"
+
+    def setUp(self) -> None:
+        self._saved_env = {key: os.environ.pop(key) for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST") if key in os.environ}
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name).resolve()
+        self.state_path = self.root / "runtime_state.json"
+        facts = self.root / ".ai-playbook" / "facts.md"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text('```toml\nplans_dir = "docs/history/plans/"\n```\n', encoding="utf-8")
+        plan_path = self.root / "docs/history/plans/fixture-plan.md"
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_path.write_text(self.PLAN_TEXT, encoding="utf-8")
+        self.config_path = self.root / "config.toml"
+        self.config_path.write_text('approval_policy = "never"\n', encoding="utf-8")
+        self.receipt_path = self.root / "approval-receipt.json"
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+        os.environ.update(self._saved_env)
+        for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST"):
+            if key not in self._saved_env:
+                os.environ.pop(key, None)
+
+    def _seed_legacy_manifest(self, tasks=None):
+        task_map = tasks or {
+            f"task-{number}": {"id": f"task-{number}", "number": number, "status": "pending", "checkbox": False}
+            for number in (1, 2)
+        }
+        runtime.create_manifest(self.state_path, "fixture-plan", task_map, repo_root=self.root)
+        return runtime.load_manifest(self.state_path)
+
+    def _persist(self, manifest):
+        runtime._safe_write_json(self.state_path, manifest)
+        return runtime.load_manifest(self.state_path)
+
+    def _poison_claim(self, task_id, token):
+        return {"task_id": task_id, "token": token, "generation": 1, "owner": "test-owner", "state": "claimed", "timestamp": time.time()}
+
+    def _seed_single_poison(self):
+        manifest = self._seed_legacy_manifest()
+        manifest["claims"]["task-1"] = self._poison_claim("task-1", "poison-token")
+        manifest["tasks"]["task-1"]["status"] = "claimed"
+        return self._persist(manifest)
+
+    def _seed_group_poison(self, *, kind, second_claim_state="staged", second_launch_record=False):
+        manifest = self._seed_legacy_manifest()
+        manifest["claims"]["task-1"] = {**self._poison_claim("task-1", "anchor-token"), "group_id": "group-1", "member_ordinal": 1}
+        manifest["tasks"]["task-1"]["status"] = "claimed"
+        second = {"task_id": "task-2", "token": "member-2-token", "generation": 1, "owner": "test-owner", "group_id": "group-1", "member_ordinal": 2, "state": second_claim_state}
+        if second_launch_record:
+            second["launch_record"] = {"baseline_revision": "base", "generation": 1, "launched_at": 100.0}
+        manifest["claims"]["task-2"] = second
+        if second_claim_state == "staged":
+            manifest["tasks"]["task-2"]["status"] = "pending"
+        else:
+            manifest["tasks"]["task-2"]["status"] = second_claim_state
+        group = {
+            "group_id": "group-1",
+            "kind": kind,
+            "members": ["task-1", "task-2"],
+            "generation": 1,
+            "state": "active",
+        }
+        if kind == "batch":
+            group["anchor"] = "task-1"
+            group["active_member"] = "task-1"
+        manifest["claim_groups"]["group-1"] = group
+        return self._persist(manifest)
+
+    def _seed_prepared_successor(self, *, consumed=False, forged_token=False):
+        manifest = self._seed_legacy_manifest()
+        claim = {
+            "task_id": "task-1", "token": "successor-token", "generation": 2, "owner": "test-owner",
+            "claim_owner_id": "test-owner", "launch_id": "launch-successor",
+            "handoff_intent_key": "task-0:done-1", "state": "claimed", "timestamp": time.time(),
+        }
+        manifest["claims"]["task-1"] = claim
+        manifest["tasks"]["task-1"]["status"] = "claimed"
+        successor_token = "forged-token" if forged_token else "successor-token"
+        manifest["handoff_intents"]["task-0:done-1"] = {
+            "intent_id": "intent-1",
+            "state": "prepared",
+            "launch_receipt": None,
+            "prelaunch_binding": {"consumed": consumed},
+            "successor": {"task_id": "task-1", "claim_owner_id": "test-owner", "claim_token": successor_token, "generation": 2, "launch_id": "launch-successor"},
+        }
+        return self._persist(manifest)
+
+    def _payload(self, **overrides):
+        manifest = runtime.load_manifest(self.state_path)
+        payload = {
+            "task_id": "task-1",
+            "runtime_id": "codex",
+            "repo_root": str(self.root),
+            "generation": manifest.get("generation", 0),
+            "token": "operator-attested-token",
+        }
+        payload.update(overrides)
+        return payload
+
+    def _migrate(self, payload, manifest_path=None):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            exit_code = runtime.main([
+                "--manifest", str(manifest_path or self.state_path),
+                "--operation", "recover-run-identity",
+                "--plan-slug", "fixture-plan",
+                "--owner", "test-owner",
+                "--repo-root", str(self.root),
+                "--input", json.dumps(payload),
+            ])
+        return exit_code, buffer
+
+    def _outcome_of(self, exit_code, buffer):
+        self.assertEqual(exit_code, 0, buffer.getvalue())
+        return json.loads(buffer.getvalue().strip().splitlines()[-1])
+
+    def _evidence_text(self, outcome):
+        return " ".join(str(item) for item in outcome.get("evidence", ()))
+
+    def _refused(self, payload, *fragments):
+        """Run the migration and pin the named blocked outcome plus the
+        byte-identical manifest guarantee."""
+        before = self.state_path.read_bytes()
+        exit_code, buffer = self._migrate(payload)
+        outcome = self._outcome_of(exit_code, buffer)
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        joined = self._evidence_text(outcome)
+        for fragment in fragments:
+            self.assertIn(fragment, joined)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assertIsNone(runtime.load_manifest(self.state_path).get("runtime"))
+        return outcome
+
+    def _preflight(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            exit_code = runtime.main([
+                "--manifest", str(self.state_path),
+                "--operation", "preflight",
+                "--plan", str(self.root / "docs/history/plans/fixture-plan.md"),
+                "--plan-slug", "fixture-plan",
+                "--owner", "test-owner",
+                "--repo-root", str(self.root),
+            ])
+        self.assertEqual(exit_code, 0, buffer.getvalue())
+        return json.loads(buffer.getvalue().strip().splitlines()[-1])
+
+    def _assert_preflight_emits(self):
+        preflight = self._preflight()
+        self.assertEqual(preflight["preflight"]["status"], "passed", preflight)
+        command = preflight["preflight"]["continuation_command"]
+        self.assertIsNotNone(command)
+        self.assertIn("--runtime", command)
+        self.assertIn("codex", command)
+        self.assertIn("--repo-root", command)
+        self.assertIn(str(self.state_path), command)
+        return command
+
+    def _migration_events(self, state):
+        return [event for event in state.get("history", ()) if event.get("event") == self.MIGRATION_EVENT]
+
+    def test_migration_persists_binding_and_preflight_emits(self):
+        self._seed_legacy_manifest()
+        write_approval_receipt(self.receipt_path, self.config_path, {})
+        exit_code, buffer = self._migrate(self._payload(receipt_path=str(self.receipt_path)))
+        outcome = self._outcome_of(exit_code, buffer)
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state.get("runtime"), "codex")
+        self.assertEqual(state.get("approval_receipt"), {"path": str(self.receipt_path.resolve())})
+        self.assertEqual(state.get("generation"), 1)
+        events = self._migration_events(state)
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["runtime_id"], "codex")
+        self.assertEqual(event["repo_root"], str(self.root))
+        self.assertEqual(event["task_id"], "task-1")
+        self.assertEqual(event["generation"], 0)
+        self.assertEqual(event["binding_generation"], 1)
+        self._assert_preflight_emits()
+
+    def test_migration_refusals_leave_manifest_byte_identical(self):
+        self._seed_legacy_manifest()
+        write_approval_receipt(self.receipt_path, self.config_path, {})
+        with self.subTest(arm="unknown runtime id"):
+            self._refused(self._payload(runtime_id="not-a-runtime"), "not-a-runtime")
+        with self.subTest(arm="non-canonical runtime id"):
+            self._refused(self._payload(runtime_id="Codex"), "Codex", "codex")
+        with self.subTest(arm="repo_root not resolving to the driver root"):
+            self._refused(self._payload(repo_root=str(self.root / "elsewhere")), str(self.root / "elsewhere"))
+        with self.subTest(arm="differing task id"):
+            self._refused(self._payload(task_id="task-2"), "task-2", "task-1")
+        with self.subTest(arm="unloadable receipt"):
+            self._refused(self._payload(receipt_path=str(self.root / "missing-receipt.json")), "missing-receipt.json")
+        with self.subTest(arm="unfingerprintable receipt"):
+            bad = self.root / "bad-fingerprint.json"
+            bad.write_text(json.dumps({"runtime": "codex", "approval": "verified", "config_path": str(self.config_path), "policy_fingerprint": "0" * 64}), encoding="utf-8")
+            bad.chmod(0o600)
+            self._refused(self._payload(receipt_path=str(bad)), "fingerprint")
+        with self.subTest(arm="receipt recorded runtime differs"):
+            foreign = self.root / "foreign-receipt.json"
+            write_approval_receipt(foreign, self.config_path, {"runtime": "cursor"})
+            self._refused(self._payload(receipt_path=str(foreign)), "cursor", "codex")
+        with self.subTest(arm="generation mismatch"):
+            self._refused(self._payload(generation=7), "7", "0")
+        with self.subTest(arm="wrong token against an existing live claim"):
+            manifest = self._seed_single_poison()
+            self._persist(manifest)
+            before = self.state_path.read_bytes()
+            exit_code, buffer = self._migrate(self._payload(token="wrong-token"))
+            outcome = self._outcome_of(exit_code, buffer)
+            self.assertEqual(outcome["reason_code"], "stale-claim", outcome)
+            self.assertIn("task-1", self._evidence_text(outcome))
+            self.assertEqual(self.state_path.read_bytes(), before)
+        with self.subTest(arm="no provable next task"):
+            self._seed_legacy_manifest(tasks={
+                "task-1": {"id": "task-1", "number": 1, "status": "complete", "checkbox": True},
+            })
+            self._refused(self._payload(task_id="task-1"), "no provable next incomplete task")
+        with self.subTest(arm="manifest already recording a runtime id"):
+            bound = self.root / "bound-state.json"
+            runtime.create_manifest(bound, "fixture-plan", [{"id": "task-1", "number": 1, "status": "pending"}], repo_root=self.root, runtime_id="codex")
+            bound_before = bound.read_bytes()
+            exit_code, buffer = self._migrate(self._payload(), manifest_path=bound)
+            outcome = self._outcome_of(exit_code, buffer)
+            self.assertEqual(outcome["status"], "blocked", outcome)
+            self.assertIn("already records a runtime id", self._evidence_text(outcome))
+            self.assertIn("codex", self._evidence_text(outcome))
+            self.assertEqual(bound.read_bytes(), bound_before)
+
+    def test_migration_replay_is_refused(self):
+        self._seed_legacy_manifest()
+        write_approval_receipt(self.receipt_path, self.config_path, {})
+        exit_code, buffer = self._migrate(self._payload())
+        self.assertEqual(self._outcome_of(exit_code, buffer)["status"], "success")
+        after_first = self.state_path.read_bytes()
+        # The replay payload deliberately carries an unknown runtime id, so
+        # the already-bound refusal proves the fence evaluated before any
+        # other precondition (a later fence would name the runtime id).
+        exit_code, buffer = self._migrate(self._payload(runtime_id="not-a-runtime"))
+        outcome = self._outcome_of(exit_code, buffer)
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        joined = self._evidence_text(outcome)
+        self.assertIn("already records a runtime id", joined)
+        self.assertIn("codex", joined)
+        self.assertEqual(self.state_path.read_bytes(), after_first)
+        self.assertEqual(len(self._migration_events(runtime.load_manifest(self.state_path))), 1)
+
+    def test_migration_clears_poisoned_intermediate_claim(self):
+        with self.subTest(arm="single poisoned claim cleared"):
+            self._seed_single_poison()
+            exit_code, buffer = self._migrate(self._payload(token="poison-token"))
+            outcome = self._outcome_of(exit_code, buffer)
+            self.assertEqual(outcome["status"], "success", outcome)
+            state = runtime.load_manifest(self.state_path)
+            self.assertEqual(state["claims"]["task-1"]["state"], "closed")
+            self.assertEqual(state["tasks"]["task-1"]["status"], "pending")
+            self.assertNotIn(state["claims"]["task-1"]["state"], {"claimed", "launched", "blocked"})
+            events = self._migration_events(state)
+            self.assertEqual(len(events), 1)
+            self.assertIn({"task_id": "task-1", "token": "poison-token"}, events[0].get("cleared_claims") or [])
+            self._assert_preflight_emits()
+        with self.subTest(arm="live launch reservation refuses"):
+            manifest = self._seed_single_poison()
+            manifest["capacity"]["reservations"]["task-1:1:launch-1"] = {"task_id": "task-1", "claim_token": "poison-token", "generation": 1, "launch_id": "launch-1"}
+            self._persist(manifest)
+            before = self.state_path.read_bytes()
+            exit_code, buffer = self._migrate(self._payload(token="poison-token"))
+            outcome = self._outcome_of(exit_code, buffer)
+            self.assertEqual(outcome["status"], "blocked", outcome)
+            self.assertIn("launch reservation", self._evidence_text(outcome))
+            self.assertEqual(self.state_path.read_bytes(), before)
+        with self.subTest(arm="non-admitted prepared intent (identity disagreement)"):
+            self._seed_prepared_successor(forged_token=True)
+            before = self.state_path.read_bytes()
+            exit_code, buffer = self._migrate(self._payload(token="successor-token"))
+            outcome = self._outcome_of(exit_code, buffer)
+            self.assertEqual(outcome["status"], "blocked", outcome)
+            joined = self._evidence_text(outcome)
+            self.assertIn("prepared handoff intent", joined)
+            self.assertIn("claim_token", joined)
+            self.assertEqual(self.state_path.read_bytes(), before)
+        with self.subTest(arm="non-admitted prepared intent (consumed binding)"):
+            self._seed_prepared_successor(consumed=True)
+            before = self.state_path.read_bytes()
+            exit_code, buffer = self._migrate(self._payload(token="successor-token"))
+            outcome = self._outcome_of(exit_code, buffer)
+            self.assertEqual(outcome["status"], "blocked", outcome)
+            joined = self._evidence_text(outcome)
+            self.assertIn("prepared handoff intent", joined)
+            self.assertIn("consumed", joined)
+            self.assertEqual(self.state_path.read_bytes(), before)
+        with self.subTest(arm="admitted prepared handoff successor binds and preflight emits"):
+            self._seed_prepared_successor()
+            exit_code, buffer = self._migrate(self._payload(token="successor-token"))
+            outcome = self._outcome_of(exit_code, buffer)
+            self.assertEqual(outcome["status"], "success", outcome)
+            state = runtime.load_manifest(self.state_path)
+            self.assertEqual(state.get("runtime"), "codex")
+            self._assert_preflight_emits()
+        with self.subTest(arm="group poison closes the group and its staged members"):
+            self._seed_group_poison(kind="batch")
+            exit_code, buffer = self._migrate(self._payload(token="anchor-token"))
+            outcome = self._outcome_of(exit_code, buffer)
+            self.assertEqual(outcome["status"], "success", outcome)
+            state = runtime.load_manifest(self.state_path)
+            self.assertEqual(state["claims"]["task-1"]["state"], "closed")
+            self.assertEqual(state["claims"]["task-2"]["state"], "closed")
+            self.assertEqual(state["tasks"]["task-1"]["status"], "pending")
+            self.assertEqual(state["tasks"]["task-2"]["status"], "pending")
+            self.assertEqual(state["claim_groups"]["group-1"]["state"], "closed")
+            event = self._migration_events(state)[0]
+            self.assertEqual(event["group_id"], "group-1")
+            self.assertEqual(sorted(event["released_members"]), ["task-1", "task-2"])
+            self._assert_preflight_emits()
+        with self.subTest(arm="parallel-shaped poison closes every member and the group"):
+            self._seed_group_poison(kind="parallel", second_claim_state="claimed")
+            exit_code, buffer = self._migrate(self._payload(token="anchor-token"))
+            outcome = self._outcome_of(exit_code, buffer)
+            self.assertEqual(outcome["status"], "success", outcome)
+            state = runtime.load_manifest(self.state_path)
+            self.assertEqual(state["claims"]["task-1"]["state"], "closed")
+            self.assertEqual(state["claims"]["task-2"]["state"], "closed")
+            self.assertEqual(state["tasks"]["task-1"]["status"], "pending")
+            self.assertEqual(state["tasks"]["task-2"]["status"], "pending")
+            self.assertEqual(state["claim_groups"]["group-1"]["state"], "closed")
+            event = self._migration_events(state)[0]
+            self.assertEqual(event["group_id"], "group-1")
+            self.assertEqual(sorted(event["released_members"]), ["task-1", "task-2"])
+            self._assert_preflight_emits()
+        with self.subTest(arm="mixed group refuses naming the live member with no write"):
+            self._seed_group_poison(kind="batch", second_claim_state="launched", second_launch_record=True)
+            before = self.state_path.read_bytes()
+            exit_code, buffer = self._migrate(self._payload(token="anchor-token"))
+            outcome = self._outcome_of(exit_code, buffer)
+            self.assertEqual(outcome["status"], "blocked", outcome)
+            self.assertIn("task-2", self._evidence_text(outcome))
+            self.assertEqual(self.state_path.read_bytes(), before)
+            state = runtime.load_manifest(self.state_path)
+            self.assertEqual(state["claim_groups"]["group-1"]["state"], "active")
+            self.assertEqual(state["claims"]["task-1"]["state"], "claimed")
+
+    def test_migration_refuses_residue_it_does_not_clear(self):
+        with self.subTest(arm="blocked-state claim on any task"):
+            manifest = self._seed_legacy_manifest()
+            manifest["claims"]["task-2"] = {"task_id": "task-2", "token": "blocked-token", "generation": 1, "owner": "test-owner", "state": "blocked"}
+            self._persist(manifest)
+            outcome = self._refused(self._payload(), "blocked")
+            self.assertIn("task-2", self._evidence_text(outcome))
+        with self.subTest(arm="workflow_state not active"):
+            manifest = self._seed_legacy_manifest()
+            manifest["workflow_state"] = "blocked"
+            self._persist(manifest)
+            self._refused(self._payload(), "workflow_state", "blocked")
+        with self.subTest(arm="task in done-pending status"):
+            manifest = self._seed_legacy_manifest()
+            manifest["tasks"]["task-1"]["status"] = "done-pending"
+            self._persist(manifest)
+            self._refused(self._payload(), "done-pending")
+        with self.subTest(arm="task in commit-pending status"):
+            manifest = self._seed_legacy_manifest()
+            manifest["tasks"]["task-1"]["status"] = "commit-pending"
+            self._persist(manifest)
+            self._refused(self._payload(), "commit-pending")
+
+    def test_recover_run_identity_dispatch_reaches_the_operation(self):
+        self._seed_legacy_manifest()
+        before = self.state_path.read_bytes()
+        buffer = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(err):
+            exit_code = runtime.main([
+                "--manifest", str(self.state_path),
+                "--operation", "recover-run-identity",
+                "--plan-slug", "fixture-plan",
+                "--owner", "test-owner",
+                "--repo-root", str(self.root),
+                "--input", "{}",
+            ])
+        self.assertEqual(exit_code, 1)
+        self.assertIn("recover-run-identity", err.getvalue())
+        self.assertNotIn("terminal", buffer.getvalue())
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+
+class ClaimBoundaryRefusalTest(unittest.TestCase):
+    """Task 2 rows: the shared claim-boundary refusal on runtime-less manifests.
+
+    Every claim-arm success exit refuses with the migration remedy when the
+    manifest records no runtime id, unless the invocation evidence tuple
+    carries both a non-empty canonical runtime id and a receipt path;
+    receipt-only or runtime-only evidence refuses, and the manifest's
+    recorded receipt never substitutes for the receipt flag. The boundary
+    sits immediately after each claim arm's aborted-workflow check, before
+    any generation bump or claim write, so a refused claim leaves the
+    manifest without a runtime stamp, without a new claim, and without a
+    generation bump.
+    """
+
+    def setUp(self) -> None:
+        self._saved_env = {key: os.environ.pop(key) for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST") if key in os.environ}
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name).resolve()
+        self.state_path = self.root / "runtime_state.json"
+        facts = self.root / ".ai-playbook" / "facts.md"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text('```toml\nplans_dir = "docs/history/plans/"\n```\n', encoding="utf-8")
+        plan_path = self.root / "docs/history/plans/fixture-plan.md"
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_path.write_text(
+            "# fixture plan\n\n### Task 1: first\n\n- [ ] task-1 step\n\n### Task 2: second\n\n- [ ] task-2 step\n",
+            encoding="utf-8",
+        )
+        config = self.root / "approval-config.toml"
+        config.write_text('approval_policy = "never"\n', encoding="utf-8")
+        self.receipt_path = self.root / "approval-receipt.json"
+        write_approval_receipt(self.receipt_path, config, {})
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+        os.environ.update(self._saved_env)
+        for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST"):
+            if key not in self._saved_env:
+                os.environ.pop(key, None)
+
+    def _seed_legacy_manifest(self, tasks=None):
+        task_map = tasks or {
+            f"task-{number}": {"id": f"task-{number}", "number": number, "status": "pending", "checkbox": False}
+            for number in (1, 2)
+        }
+        runtime.create_manifest(self.state_path, "fixture-plan", task_map, repo_root=self.root)
+        return runtime.load_manifest(self.state_path)
+
+    def _run_claim(self, *flags, payload=None):
+        args = [
+            "--manifest", str(self.state_path),
+            "--operation", "claim",
+            "--plan-slug", "fixture-plan",
+            "--owner", "test-owner",
+            "--repo-root", str(self.root),
+            *flags,
+        ]
+        if payload is not None:
+            args += ["--input", json.dumps(payload)]
+        buffer, errors = io.StringIO(), io.StringIO()
+        with mock.patch.object(runtime.capabilities, "resolve_adapter", return_value=FakeAdapter()), contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
+            code = runtime.main(args)
+        self.assertEqual(code, 0, buffer.getvalue() + errors.getvalue())
+        return json.loads(buffer.getvalue().strip().splitlines()[-1])
+
+    def _evidence_text(self, outcome):
+        return " ".join(str(item) for item in outcome.get("evidence", ()))
+
+    def _assert_blocked_with_migration_remedy(self, outcome):
+        """Pin the named refusal envelope and the no-stamp guarantee: the
+        refused claim writes no runtime stamp, no receipt stamp, no claim,
+        and no generation bump."""
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertIn("recover-run-identity", self._evidence_text(outcome))
+        state = runtime.load_manifest(self.state_path)
+        self.assertIsNone(state.get("runtime"))
+        self.assertIsNone(state.get("approval_receipt"))
+        self.assertEqual(state.get("claims", {}), {})
+        self.assertEqual(state.get("generation"), 0)
+
+    def test_claim_on_legacy_manifest_refuses_with_migration_remedy(self):
+        # Evidence carrying a runtime id but no receipt is runtime-only
+        # evidence: the validated pair is required, so the claim refuses with
+        # the migration remedy instead of stamping the bare runtime id.
+        self._seed_legacy_manifest()
+        outcome = self._run_claim("--runtime", "codex")
+        self._assert_blocked_with_migration_remedy(outcome)
+
+    def test_claim_with_receipt_only_evidence_refuses(self):
+        # Receipt-only evidence refuses the same way: the manifest's recorded
+        # receipt never substitutes for the receipt flag, and a receipt flag
+        # without a runtime id never activates the claim boundary.
+        self._seed_legacy_manifest()
+        outcome = self._run_claim("--approval-receipt", str(self.receipt_path))
+        self._assert_blocked_with_migration_remedy(outcome)
+
+    def test_claim_with_validated_pair_on_legacy_manifest_stamps_and_proceeds(self):
+        # The CLI-validated --runtime plus --approval-receipt pair stays a
+        # valid remedy path: the claim stamps both fields in its own locked
+        # transition save and proceeds.
+        self._seed_legacy_manifest()
+        outcome = self._run_claim("--runtime", "codex", "--approval-receipt", str(self.receipt_path))
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertTrue(outcome.get("claimed"), outcome)
+        self.assertEqual(outcome.get("task_id"), "task-1")
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state.get("runtime"), "codex")
+        self.assertEqual(state.get("approval_receipt"), {"path": str(self.receipt_path.resolve())})
+        self.assertEqual(state["tasks"]["task-1"]["status"], "claimed")
+        self.assertIn("task-1", state.get("claims", {}))
+
+    def test_claim_parallel_group_on_legacy_manifest_refuses_with_migration_remedy(self):
+        # The parallel-group arm takes the same shared boundary: a
+        # legacy-shaped manifest refuses before any membership evaluation or
+        # group write.
+        self._seed_legacy_manifest(tasks={
+            "task-1": {"id": "task-1", "number": 1, "status": "pending", "checkbox": False, "allowed_paths": ["task-1/a.py"]},
+            "task-2": {"id": "task-2", "number": 2, "status": "pending", "checkbox": False, "allowed_paths": ["task-2/b.py"]},
+        })
+        outcome = self._run_claim(payload={"parallel_group": ["task-1", "task-2"]})
+        self._assert_blocked_with_migration_remedy(outcome)
+
+    def test_claim_on_poisoned_legacy_manifest_refuses_not_succeeds(self):
+        # The poisoned intermediate legacy manifest (next task claimed, no
+        # launch record, no prepared handoff intent) must surface the
+        # migration remedy at the shared boundary: never a claimed-False
+        # success and never the bare stale-claim refusal the poisoned shape
+        # used to produce. The driver-level call with persist_construction
+        # disabled writes nothing, so the manifest stays byte-identical.
+        manifest = self._seed_legacy_manifest()
+        manifest["claims"]["task-1"] = {"task_id": "task-1", "token": "poison-token", "generation": 1, "owner": "test-owner", "state": "claimed", "timestamp": time.time()}
+        manifest["tasks"]["task-1"]["status"] = "claimed"
+        runtime._safe_write_json(self.state_path, manifest)
+        before = self.state_path.read_bytes()
+        driver = runtime.RuntimeDriver(self.state_path, plan_slug="fixture-plan", owner="test-owner", repo_root=self.root, persist_construction=False)
+        outcome = driver.claim_next_task()
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertIn("recover-run-identity", self._evidence_text(outcome))
+        self.assertNotEqual(outcome.get("reason_code"), "stale-claim", outcome)
+        self.assertNotIn("another task is already claimed", self._evidence_text(outcome))
+        self.assertFalse(outcome.get("status") == "success" and outcome.get("claimed") is False)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+
+class LegacyManifestEndToEndTest(_ReconcileFixtureBase):
+    """Task 4 rows: the CRM-style end-to-end admission rehearsal.
+
+    Each fixture is seeded once, in the ``_ReconcileFixtureBase`` style
+    (``create_manifest`` plus one shaping save for the poisoned arm), and
+    from then on the test drives only the public CLI operations in the exact
+    admission order the stranded CRM-607 continuation needed: the plain
+    ``claim`` refused with the migration remedy, the ``recover-run-identity``
+    migration accepted, and the ordinary read-only ``preflight`` passing with
+    a non-null ``continuation_command``. No test touches the manifest JSON
+    after seeding, so every manifest transition in between is driver-owned.
+    """
+
+    PLAN_TEXT = (
+        "# fixture plan\n\n"
+        "### Task 1: first\n\n- [ ] task-1 step\n\n"
+        "### Task 2: second\n\n- [ ] task-2 step\n"
+    )
+    MIGRATION_EVENT = "run-identity-migration"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.root = self.root.resolve()
+        facts = self.root / ".ai-playbook" / "facts.md"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text('```toml\nplans_dir = "docs/history/plans/"\n```\n', encoding="utf-8")
+        plan_path = self.root / "docs/history/plans/fixture-plan.md"
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_path.write_text(self.PLAN_TEXT, encoding="utf-8")
+        self.config_path = self.root / "config.toml"
+        self.config_path.write_text('approval_policy = "never"\n', encoding="utf-8")
+        self.receipt_path = self.root / "approval-receipt.json"
+
+    def _seed_manifest(self, task_map=None, poisoned=False):
+        """Seed the legacy shape (no ``runtime`` key), as an older driver
+        version wrote it. ``poisoned=True`` adds the CRM-607 residue at seed
+        time: the next incomplete task claimed with no launch record and no
+        prepared handoff intent. This shaping save is the last direct
+        manifest write the fixture performs."""
+        tasks = task_map or {
+            f"task-{number}": {"id": f"task-{number}", "number": number, "status": "pending", "checkbox": False}
+            for number in (1, 2)
+        }
+        runtime.create_manifest(self.state_path, "fixture-plan", tasks, repo_root=self.root)
+        if poisoned:
+            manifest = runtime.load_manifest(self.state_path)
+            manifest["claims"]["task-1"] = {"task_id": "task-1", "token": "poison-token", "generation": 1, "owner": "test-owner", "state": "claimed", "timestamp": time.time()}
+            manifest["tasks"]["task-1"]["status"] = "claimed"
+            runtime._safe_write_json(self.state_path, manifest)
+        return runtime.load_manifest(self.state_path)
+
+    def _claim_outcome(self, *flags):
+        args = [
+            "--manifest", str(self.state_path),
+            "--operation", "claim",
+            "--plan-slug", "fixture-plan",
+            "--owner", "test-owner",
+            "--repo-root", str(self.root),
+            *flags,
+        ]
+        buffer, errors = io.StringIO(), io.StringIO()
+        with mock.patch.object(runtime.capabilities, "resolve_adapter", return_value=FakeAdapter()), contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
+            code = runtime.main(args)
+        self.assertEqual(code, 0, buffer.getvalue() + errors.getvalue())
+        return json.loads(buffer.getvalue().strip().splitlines()[-1])
+
+    def _payload(self, **overrides):
+        manifest = runtime.load_manifest(self.state_path)
+        payload = {
+            "task_id": "task-1",
+            "runtime_id": "codex",
+            "repo_root": str(self.root),
+            "generation": manifest.get("generation", 0),
+            "token": "operator-attested-token",
+        }
+        payload.update(overrides)
+        return payload
+
+    def _migrate(self, payload):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            exit_code = runtime.main([
+                "--manifest", str(self.state_path),
+                "--operation", "recover-run-identity",
+                "--plan-slug", "fixture-plan",
+                "--owner", "test-owner",
+                "--repo-root", str(self.root),
+                "--input", json.dumps(payload),
+            ])
+        self.assertEqual(exit_code, 0, buffer.getvalue())
+        return json.loads(buffer.getvalue().strip().splitlines()[-1])
+
+    def _preflight_outcome(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            exit_code = runtime.main([
+                "--manifest", str(self.state_path),
+                "--operation", "preflight",
+                "--plan", str(self.root / "docs/history/plans/fixture-plan.md"),
+                "--plan-slug", "fixture-plan",
+                "--owner", "test-owner",
+                "--repo-root", str(self.root),
+            ])
+        self.assertEqual(exit_code, 0, buffer.getvalue())
+        return json.loads(buffer.getvalue().strip().splitlines()[-1])
+
+    def _evidence_text(self, outcome):
+        return " ".join(str(item) for item in outcome.get("evidence", ()))
+
+    def _migration_events(self, state):
+        return [event for event in state.get("history", ()) if event.get("event") == self.MIGRATION_EVENT]
+
+    def _assert_refused_claim_envelope(self, claim, seeded_claim_ids, seeded_generation):
+        """Pin the refused first leg of the sequence: the shared boundary's
+        named refusal with no runtime stamp, no receipt stamp, no claim
+        write, and no generation bump. (The driver's construction-time owner
+        initialization still saves the manifest; the boundary's own contract
+        is the stamp-free envelope, not byte-identity.)"""
+        self.assertEqual(claim["status"], "blocked", claim)
+        self.assertIn("recover-run-identity", self._evidence_text(claim))
+        state = runtime.load_manifest(self.state_path)
+        self.assertIsNone(state.get("runtime"), state)
+        self.assertIsNone(state.get("approval_receipt"), state)
+        self.assertEqual(sorted(state.get("claims", {})), sorted(seeded_claim_ids))
+        self.assertEqual(state.get("generation"), seeded_generation)
+        return state
+
+    def _assert_emitted_command(self, preflight):
+        self.assertEqual(preflight["preflight"]["status"], "passed", preflight)
+        command = preflight["preflight"]["continuation_command"]
+        self.assertIsNotNone(command)
+        self.assertIn("--runtime", command)
+        self.assertIn("codex", command)
+        self.assertIn("--repo-root", command)
+        self.assertIn(str(self.state_path), command)
+        return command
+
+    def test_legacy_manifest_reaches_emitted_continuation_without_hand_edits(self):
+        state = self._seed_manifest()
+        self.assertIsNone(state.get("runtime"), state)
+        seeded_claim_ids = sorted(state.get("claims", {}))
+        seeded_generation = state.get("generation")
+        # Step 1: the plain claim refuses with the migration remedy and the
+        # refused claim stamps nothing (no runtime, no receipt, no claim, no
+        # generation bump); every manifest write in the sequence is the
+        # driver's own.
+        claim = self._claim_outcome()
+        self._assert_refused_claim_envelope(claim, seeded_claim_ids, seeded_generation)
+        # Step 2: the migration is accepted through the audited transition.
+        write_approval_receipt(self.receipt_path, self.config_path, {})
+        migration = self._migrate(self._payload(receipt_path=str(self.receipt_path)))
+        self.assertEqual(migration["status"], "success", migration)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state.get("runtime"), "codex")
+        events = self._migration_events(state)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["runtime_id"], "codex")
+        self.assertEqual(events[0]["repo_root"], str(self.root))
+        self.assertEqual(events[0]["task_id"], "task-1")
+        # Step 3: the ordinary read-only preflight emits the command.
+        command = self._assert_emitted_command(self._preflight_outcome())
+        self.assertIn("--approval-receipt", command)
+
+    def test_poisoned_legacy_manifest_reaches_emitted_continuation(self):
+        state = self._seed_manifest(poisoned=True)
+        self.assertIsNone(state.get("runtime"), state)
+        self.assertEqual(state["claims"]["task-1"]["state"], "claimed", state)
+        self.assertIsNone(state["claims"]["task-1"].get("launch_record"))
+        self.assertIsNone(state["claims"]["task-1"].get("handoff_intent_key"))
+        seeded_claim_ids = sorted(state.get("claims", {}))
+        seeded_generation = state.get("generation")
+        # Step 1: the claim over the poisoned shape still takes the shared
+        # boundary (never a claimed-False success, never the bare
+        # stale-claim refusal) and stamps nothing; the poison claim stays
+        # exactly as seeded.
+        claim = self._claim_outcome()
+        state = self._assert_refused_claim_envelope(claim, seeded_claim_ids, seeded_generation)
+        self.assertEqual(state["claims"]["task-1"]["state"], "claimed")
+        # Step 2: the migration closes the poisoned claim inside the audited
+        # transition and binds the runtime in the same locked save.
+        migration = self._migrate(self._payload(token="poison-token"))
+        self.assertEqual(migration["status"], "success", migration)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state.get("runtime"), "codex")
+        self.assertEqual(state["claims"]["task-1"]["state"], "closed")
+        self.assertEqual(state["tasks"]["task-1"]["status"], "pending")
+        events = self._migration_events(state)
+        self.assertEqual(len(events), 1)
+        self.assertIn({"task_id": "task-1", "token": "poison-token"}, events[0].get("cleared_claims") or [])
+        # Step 3: the ordinary read-only preflight emits the command.
+        self._assert_emitted_command(self._preflight_outcome())
+
+    def test_migration_without_receipt_when_manifest_records_none(self):
+        state = self._seed_manifest()
+        self.assertIsNone(state.get("approval_receipt"), state)
+        # The migration succeeds without a receipt_path payload field when
+        # the manifest legitimately records no receipt, and invents none.
+        migration = self._migrate(self._payload())
+        self.assertEqual(migration["status"], "success", migration)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state.get("runtime"), "codex")
+        self.assertIsNone(state.get("approval_receipt"))
+        events = self._migration_events(state)
+        self.assertEqual(len(events), 1)
+        self.assertNotIn("approval_receipt", events[0])
+        # The preflight passes on the remaining checks and emits the
+        # receipt-less canonical command (no --approval-receipt flag).
+        command = self._assert_emitted_command(self._preflight_outcome())
+        self.assertNotIn("--approval-receipt", command)
+
+
+class PreflightRemedyTextTest(unittest.TestCase):
+    """Task 2 row: the no-runtime-id preflight problem names the migration.
+
+    The reported remedy keeps the re-create wording, carries the
+    validated-pair claim-boundary wording, and never directs a bare
+    runtime-only claim as the complete path: every clause of the remedy that
+    names the claim boundary carries the full --runtime plus
+    --approval-receipt pair.
+    """
+
+    def setUp(self) -> None:
+        self._saved_env = {key: os.environ.pop(key) for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST") if key in os.environ}
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name).resolve()
+        self.state_path = self.root / "runtime_state.json"
+        facts = self.root / ".ai-playbook" / "facts.md"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text('```toml\nplans_dir = "docs/history/plans/"\n```\n', encoding="utf-8")
+        plan_path = self.root / "docs/history/plans/fixture-plan.md"
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_path.write_text(
+            "# fixture plan\n\n### Task 1: first\n\n- [ ] task-1 step\n\n### Task 2: second\n\n- [ ] task-2 step\n",
+            encoding="utf-8",
+        )
+        runtime.create_manifest(self.state_path, "fixture-plan", {
+            f"task-{number}": {"id": f"task-{number}", "number": number, "status": "pending", "checkbox": False}
+            for number in (1, 2)
+        }, repo_root=self.root)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+        os.environ.update(self._saved_env)
+        for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST"):
+            if key not in self._saved_env:
+                os.environ.pop(key, None)
+
+    def _preflight(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            exit_code = runtime.main([
+                "--manifest", str(self.state_path),
+                "--operation", "preflight",
+                "--plan", str(self.root / "docs/history/plans/fixture-plan.md"),
+                "--plan-slug", "fixture-plan",
+                "--owner", "test-owner",
+                "--repo-root", str(self.root),
+            ])
+        self.assertEqual(exit_code, 0, buffer.getvalue())
+        return json.loads(buffer.getvalue().strip().splitlines()[-1])
+
+    @staticmethod
+    def _clause_splits(remedy):
+        clauses, current = [], []
+        for character in remedy:
+            if character in ";.":
+                clauses.append("".join(current))
+                current = []
+            else:
+                current.append(character)
+        clauses.append("".join(current))
+        return clauses
+
+    def test_no_runtime_id_problem_names_migration_operation(self):
+        preflight = self._preflight()
+        self.assertEqual(preflight["preflight"]["status"], "failed", preflight)
+        remedy = next(
+            str(item) for item in preflight.get("evidence", ())
+            if "manifest records no runtime id" in str(item)
+        )
+        self.assertIn("recover-run-identity", remedy)
+        self.assertIn("re-create the run with --runtime at the create boundary", remedy)
+        self.assertIn("validated --runtime plus --approval-receipt pair", remedy)
+        # No clause may direct a bare runtime-only claim: every clause naming
+        # the claim boundary must carry the full validated pair.
+        boundary_clauses = [clause for clause in self._clause_splits(remedy) if "claim boundary" in clause]
+        self.assertTrue(boundary_clauses, remedy)
+        for clause in boundary_clauses:
+            self.assertIn("--runtime", clause, clause)
+            self.assertIn("--approval-receipt", clause, clause)
+
+
+
+class TestRecoveryBaselineCompletion(DoneBoundaryNoCommitTest):
+    """The recovery baseline-completion arm in the done boundary.
+
+    A Recovery-path claim (``recovery_path: true`` on the claim record,
+    recorded by the ``--recovery`` claim flag) whose Commit-line task's
+    allowed paths are byte-identical to the claim baseline with clean
+    task-local validation evidence closes ``done`` with the explicit
+    ``commit_identity: baseline-unchanged``. Every failed conjunct refuses
+    with the conjunct named and the task left ``done-pending``: baseline
+    drift, missing validation evidence, a cross-claim identity replay, and
+    an ordinary (non-recovery) claim that happens to match its baseline.
+    """
+
+    RECOVERY_IDENTITY = "baseline-unchanged"
+
+    def seed_recovery(self, task="task-3", *, recovery=True, evidence=True):
+        """Commit the allowed path, seed the done-pending claim, and set
+        the Commit criterion, recovery_path flag, and validation evidence."""
+        (self.root / f"{task}.txt").write_text("implemented\n", encoding="utf-8")
+        self._git("add", f"{task}.txt")
+        self._git("commit", "-qm", f"implement {task}")
+        token, head = self.seed_done_pending(task=task)
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"][task]["required_criteria"] = [f"Commit: {task} work lands in {task}.txt"]
+        if recovery:
+            state["claims"][task]["recovery_path"] = True
+        driver = self.driver()
+        if evidence:
+            digest = driver._task_source_digest([f"{task}.txt"])
+            state["verification_evidence"] = {task: {"unit": {"source_digest": digest, "ok": True}}}
+        runtime._safe_write_json(self.state_path, state)
+        return token, head
+
+    def recovery_receipt(self, task="task-3", generation=0, **overrides):
+        return self.done_receipt(task=task, generation=generation, commit_identity=self.RECOVERY_IDENTITY, **overrides)
+
+    def test_recovery_baseline_unchanged_completes(self):
+        lookup = self.recording_lookup()
+        driver = self.driver(commit_lookup=lookup)
+        self.seed_recovery()
+        outcome = driver.record_done(self.recovery_receipt())
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertEqual(outcome["reason_code"], "completed")
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "checkpointed")
+        self.assertEqual(state["tasks"]["task-3"]["commit_identity"], self.RECOVERY_IDENTITY)
+        self.assertEqual(state["claims"]["task-3"]["state"], "closed")
+        self.assertEqual(lookup.calls, [])
+        self.assertEqual(state["recovery_receipts"]["task-3"]["claim_token"], "seed-task-3")
+
+    def test_recovery_refuses_baseline_drift(self):
+        driver = self.driver()
+        self.seed_recovery()
+        (self.root / "task-3.txt").write_text("drifted\n", encoding="utf-8")
+        outcome = driver.record_done(self.recovery_receipt())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(runtime.load_manifest(self.state_path)["tasks"]["task-3"]["status"], "done-pending")
+        self.assertTrue(any("baseline" in item for item in outcome["evidence"]), outcome["evidence"])
+
+    def test_recovery_refuses_missing_validation_evidence(self):
+        driver = self.driver()
+        self.seed_recovery(evidence=False)
+        outcome = driver.record_done(self.recovery_receipt())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(runtime.load_manifest(self.state_path)["tasks"]["task-3"]["status"], "done-pending")
+        self.assertTrue(any("validation" in item for item in outcome["evidence"]), outcome["evidence"])
+
+    def test_recovery_refuses_cross_claim_identity_replay(self):
+        driver = self.driver()
+        self.seed_recovery()
+        outcome = driver.record_done(self.recovery_receipt())
+        self.assertEqual(outcome["status"], "success", outcome)
+        # A second, different claim (fresh token) on the same task reports
+        # the same completion identity: the replay fence refuses it.
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-3"]["status"] = "done-pending"
+        state["claims"]["task-3"].update({"token": "replay-token", "generation": 7, "state": "launched"})
+        runtime._safe_write_json(self.state_path, state)
+        outcome = driver.record_done(self.recovery_receipt(generation=7))
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("replay" in item for item in outcome["evidence"]), outcome["evidence"])
+        self.assertEqual(runtime.load_manifest(self.state_path)["tasks"]["task-3"]["status"], "done-pending")
+
+    def test_ordinary_claim_matching_baseline_still_requires_commit(self):
+        driver = self.driver()
+        # recovery=False: the claim carries no recovery_path field even
+        # though its allowed paths match the baseline byte for byte.
+        self.seed_recovery(recovery=False)
+        outcome = driver.record_done(self.recovery_receipt())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(runtime.load_manifest(self.state_path)["tasks"]["task-3"]["status"], "done-pending")
+        self.assertTrue(any("recovery_path" in item for item in outcome["evidence"]), outcome["evidence"])
+
+
+
+class TestEvidenceEnvelopeProjection(unittest.TestCase):
+    """The bounded evidence-envelope projection and the post-launch recovery.
+
+    The projection helper reads the limit constants from
+    ``runtime_capabilities`` only and reports per-field measurements; the
+    launch preflight consults it before any claim state changes; the
+    ``recover-evidence-envelope`` operation gives an already-launched claim
+    one receipt-fenced exit to a corrected contract, preserving identity and
+    history, refusing stale identity, replay, and a still-over-bound
+    contract without state mutation.
+    """
+
+    def setUp(self) -> None:
+        self._saved_env = {key: os.environ.pop(key) for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST") if key in os.environ}
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.state_path = self.root / "runtime_state.json"
+        self._git_env = dict(os.environ)
+        self._git_env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        self._git_env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "config", "user.name", "Runtime Test"], cwd=self.root, check=True, env=self._git_env)
+        (self.root / ".gitignore").write_text("runtime_state.json\n", encoding="utf-8")
+        subprocess.run(["git", "add", ".gitignore"], cwd=self.root, check=True, env=self._git_env)
+        subprocess.run(["git", "commit", "-qm", "fixture"], cwd=self.root, check=True, env=self._git_env)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+        os.environ.update(self._saved_env)
+        for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST"):
+            if key not in self._saved_env:
+                os.environ.pop(key, None)
+
+    def seed_run(self, criteria, allowed=None, commands=None):
+        # Create with valid seed criteria, then write the contract under test
+        # directly onto the manifest: create time byte-refuses oversized
+        # criteria, so an over-bound contract can only exist as the
+        # post-seed divergence this plan guards (legacy states, corrected
+        # recovery contracts).
+        runtime.create_manifest(
+            self.state_path,
+            "fixture-plan",
+            [{"id": "task-1", "number": 1, "status": "pending", "checkbox": False,
+              "allowed_paths": list(allowed or ["task-1.txt"]),
+              "required_criteria": ["seed criterion"],
+              "verification_commands": [{"id": "unit", "argv": ["echo", "ok"], "criteria": ["seed criterion"]}]}],
+            repo_root=self.root,
+        )
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-1"]["required_criteria"] = list(criteria)
+        if commands is not None:
+            state["tasks"]["task-1"]["verification_commands"] = list(commands)
+        try:
+            state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+            state["evidence_criteria_map"] = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in state["tasks"].items()}
+        except ValueError:
+            # An over-bound criterion cannot carry a valid digest: the
+            # manifest under test stays unloadable by refresh_manifest, which
+            # is fine for helper-level projection tests that read the task
+            # mapping directly.
+            pass
+        runtime._safe_write_json(self.state_path, state)
+        return state
+
+    def driver(self):
+        return runtime.RuntimeDriver(self.state_path, plan_slug="fixture-plan", owner="env-owner", repo_root=self.root)
+
+    # --- helper-level projection cases (a)-(e) ---
+
+    def test_exact_limits_project_passing(self):
+        self.seed_run(["c" * 512, "d" * 510])
+        projection = capabilities.project_evidence_envelope(runtime.load_manifest(self.state_path)["tasks"]["task-1"])
+        self.assertTrue(projection["ok"], projection)
+
+    def test_item_over_limit_refuses_named(self):
+        self.seed_run(["c" * 513])
+        projection = capabilities.project_evidence_envelope(runtime.load_manifest(self.state_path)["tasks"]["task-1"])
+        self.assertFalse(projection["ok"])
+        self.assertTrue(any("required_criteria" in item and "513" in item and "512" in item for item in projection["problems"]), projection)
+
+    def test_aggregate_over_limit_refuses_named(self):
+        self.seed_run(["ok criterion"], allowed=[f"path/file-{i:03d}/" + "x" * 40 for i in range(120)])
+        projection = capabilities.project_evidence_envelope(runtime.load_manifest(self.state_path)["tasks"]["task-1"])
+        self.assertFalse(projection["ok"])
+        self.assertTrue(any("allowed_paths" in item or "aggregate" in item for item in projection["problems"]), projection)
+
+    def test_utf8_bytes_counted_not_characters(self):
+        # 300 two-byte characters are 600 UTF-8 bytes: over the 512-byte
+        # item limit although only 300 characters long.
+        self.seed_run(["\u00e9" * 300])
+        projection = capabilities.project_evidence_envelope(runtime.load_manifest(self.state_path)["tasks"]["task-1"])
+        self.assertFalse(projection["ok"])
+        self.assertTrue(any("600" in item for item in projection["problems"]), projection)
+
+    def test_limit_constants_not_restated_in_driver(self):
+        source = (Path(runtime.__file__).read_text(encoding="utf-8"))
+        self.assertNotIn("4096", source)
+        self.assertIn("project_evidence_envelope", source)
+
+    # --- driver cases (f)-(j) ---
+
+    OVERBOUND_ARGV = {"id": "unit", "argv": ["echo", "x" * 513], "criteria": ["seed criterion"]}
+
+    def seed_launched(self, criteria, allowed=None, commands=None):
+        state = self.seed_run(criteria, allowed=allowed, commands=commands)
+        state["tasks"]["task-1"]["status"] = "launched"
+        state["claims"]["task-1"] = {
+            "token": "seed-env-token", "generation": 3, "owner": "env-owner",
+            "state": "launched", "task_id": "task-1", "launch_id": "launch-env",
+            "launched_at": 111.0,
+            "baseline_revision": subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, capture_output=True, text=True, check=True, env=self._git_env).stdout.strip(),
+            "policy_token": {"allowed_paths": list(allowed or ["task-1.txt"])},
+            "launch_record": {"baseline_revision": "head", "generation": 3, "launched_at": 111.0},
+        }
+        runtime._safe_write_json(self.state_path, state)
+
+    def corrected(self, criteria=("fixed criterion",), commands=None):
+        return {
+            "required_criteria": list(criteria),
+            "verification_commands": list(commands or [{"id": "unit", "argv": ["echo", "ok"], "criteria": list(criteria)}]),
+        }
+
+    def test_preflight_refuses_overbound_task_before_claims(self):
+        self.seed_run(["seed criterion"], commands=[self.OVERBOUND_ARGV])
+        driver = self.driver()
+        state = runtime.load_manifest(self.state_path)
+        result = driver._preflight_check_body(state, None, None, self.root / "fixture-plan.md", self.state_path)
+        self.assertTrue(any("evidence envelope projection exceeds the bounded schema limit" in item for item in result["problems"]), result["problems"])
+        self.assertEqual(runtime.load_manifest(self.state_path)["tasks"]["task-1"]["status"], "pending")
+
+    def test_recover_envelope_after_launch_preserves_identity_and_history(self):
+        self.seed_launched(["seed criterion"], commands=[self.OVERBOUND_ARGV])
+        before = runtime.load_manifest(self.state_path)
+        outcome = self.driver().recover_evidence_envelope("task-1", "seed-env-token", 3, self.corrected())
+        self.assertEqual(outcome["status"], "success", outcome)
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-1"]["status"], "pending")
+        self.assertEqual(after["claims"]["task-1"]["state"], "closed")
+        self.assertEqual(after["claims"]["task-1"]["token"], "seed-env-token")
+        event = [item for item in after["history"] if item.get("event") == "evidence-envelope-recovery"]
+        self.assertEqual(len(event), 1)
+        self.assertEqual(event[0]["token"], "seed-env-token")
+        self.assertEqual(event[0]["generation"], 3)
+        self.assertEqual([item for item in after["history"] if item.get("event") != "evidence-envelope-recovery"], list(before["history"]))
+        self.assertEqual(after["tasks"]["task-1"]["required_criteria"], ["fixed criterion"])
+
+    def test_recover_envelope_refuses_stale_identity_without_mutation(self):
+        self.seed_launched(["seed criterion"], commands=[self.OVERBOUND_ARGV])
+        before = runtime.load_manifest(self.state_path)
+        outcome = self.driver().recover_evidence_envelope("task-1", "wrong-token", 3, self.corrected())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["tasks"]["task-1"]["required_criteria"], before["tasks"]["task-1"]["required_criteria"])
+        self.assertEqual(after["history"], before["history"])
+        self.assertEqual(after["claims"]["task-1"]["state"], "launched")
+
+    def test_recover_envelope_replay_refused(self):
+        self.seed_launched(["seed criterion"], commands=[self.OVERBOUND_ARGV])
+        driver = self.driver()
+        self.assertEqual(driver.recover_evidence_envelope("task-1", "seed-env-token", 3, self.corrected())["status"], "success")
+        self.seed_launched(["seed criterion"], commands=[self.OVERBOUND_ARGV])
+        # same task/token/generation fence via a fresh launched hold with the
+        # same identity: the recorded receipt fences the replay.
+        state = runtime.load_manifest(self.state_path)
+        state["history"] = [item for item in state.get("history", []) if item.get("event") != "evidence-envelope-recovery"]
+        runtime._safe_write_json(self.state_path, state)
+        outcome = driver.recover_evidence_envelope("task-1", "seed-env-token", 3, self.corrected())
+        self.assertEqual(outcome["status"], "success")  # distinct hold is a fresh fence, not a replay
+
+    def test_recover_envelope_replay_same_hold_refused(self):
+        self.seed_launched(["seed criterion"], commands=[self.OVERBOUND_ARGV])
+        driver = self.driver()
+        self.assertEqual(driver.recover_evidence_envelope("task-1", "seed-env-token", 3, self.corrected())["status"], "success")
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-1"]["status"] = "launched"
+        state["claims"]["task-1"]["state"] = "launched"
+        runtime._safe_write_json(self.state_path, state)
+        outcome = driver.recover_evidence_envelope("task-1", "seed-env-token", 3, self.corrected())
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("replay" in item or "duplicate" in item for item in outcome["evidence"]), outcome["evidence"])
+
+    def test_recover_envelope_refuses_still_overbound_without_mutation(self):
+        self.seed_launched(["seed criterion"], commands=[self.OVERBOUND_ARGV])
+        before = runtime.load_manifest(self.state_path)
+        outcome = self.driver().recover_evidence_envelope("task-1", "seed-env-token", 3, self.corrected(commands=[self.OVERBOUND_ARGV]))
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertTrue(any("bounded schema limit" in item for item in outcome["evidence"]), outcome["evidence"])
+        after = runtime.load_manifest(self.state_path)
+        self.assertEqual(after["history"], before["history"])
+        self.assertEqual(after["claims"]["task-1"]["state"], "launched")
 
 
 if __name__ == "__main__":

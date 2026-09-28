@@ -17,3 +17,7 @@ Enforce the baseline capture in the ad-hoc-worktree path (execute-plan Phase 0 o
 ## Acceptance
 
 - An ad-hoc worktree run either has the baseline file at closeout or a recorded skip note naming the scoped-copy fallback and its artifact list.
+
+## Witness append (2026-09-29, em-dash gate mode-selection run)
+
+Same skill and step family (execute-plan Phase 0 capture recipe), second failure mode: the recipe at `agents/skills/execute-plan/SKILL.md` shows the capture as `--dirs "{reviews_dir}" "{tmp_dir}"` (two separate quoted arguments), but `worktree_closeout_migrate.py` declares `--dirs` as a single string consumed by a whitespace-splitting helper (`_configured_dirs` does `raw.split()`), so the recipe's two-argument shape is rejected at parse time and the baseline capture cannot succeed with it. The single quoted space-separated form `--dirs "<dir-a> <dir-b>"` works and is what this run used. Remediation should fix the recipe text (or widen the parser) together with this item's Phase 0 enforcement; recorded as project lesson 8 in `docs/maintenance/development_lessons.md`.
