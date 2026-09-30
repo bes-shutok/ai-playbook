@@ -1,6 +1,6 @@
 # Backlog: quota probe wait_minutes unbounded under threshold overrides
 
-Status: open
+Status: done (2026-10-01; both wait-window overrides are bounded at the 300-minute cadence window at CLI validation (scripts/quota_window_probe.py "Origin 10" bound, parser comment and refusal), with the two discriminating tests test_minutes_before_override_above_cadence_window_refused and test_min_protocol_minutes_override_above_cadence_window_refused green on the venv runner today; the upper-sanity-bound direction the item proposed)
 Priority: medium
 Urgency remark: witnessed-class: unbounded wait on the live CLI under operator overrides
 Promoted: 2026-09-26 from docs/history/backlog/deferred/ under the direction triage (source class: self-serving witnessed defect)

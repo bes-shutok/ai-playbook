@@ -8,9 +8,8 @@ description: >
   caller-supplied choices; display an image inline; type into a session, copy its selection or search its
   scrollback; manage windows; change font size; set the theme; reload or edit the keymap and the
   agterm-scoped ghostty config; subscribe to status, notification, lifecycle and tree-change events.
-  Covers the window/workspace/session addressing model and the AGTERM_* environment a spawned shell sees,
-  attaching a session running on another Mac, the cookbook recipes, the running version, and diagnosing
-  problems or filing an agterm bug or feature request.
+  Covers the window/workspace/session addressing model, the AGTERM_* environment a spawned shell sees,
+  and the cookbook recipes.
 when_to_use: >
   Trigger on: agterm, agtermctl, AGTERM_SESSION_ID, and, from inside a session, plain requests such as
   split the pane, close the overlay, show a message over the session, show an image inline, search the

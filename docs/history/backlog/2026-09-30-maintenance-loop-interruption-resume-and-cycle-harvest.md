@@ -1,4 +1,4 @@
-Status: open
+Status: done (2026-09-30; executed+landed docs/history/plans/completed/2026-09-30-maintenance-loop-interruption-resume-and-cycle-harvest.md, squash main 8e6722b5, exec review r1 ready=yes zero blocking)
 Priority: high
 Workflow: backlog
 Class: automation

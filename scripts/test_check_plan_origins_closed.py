@@ -599,5 +599,277 @@ class OriginsBlockGrammarTest(unittest.TestCase):
         self.assertIn("3", combined)
 
 
+class TestOriginCoverage(unittest.TestCase):
+    """The covered classification, the duplicate-origin coverage gate,
+    and the mark-covered writer (plan 2026-09-30-origin-coverage)."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="origin-coverage-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.backlog = self.root / "docs" / "history" / "backlog"
+        self.completed = self.backlog / "completed"
+        self.active = self.root / "docs" / "history" / "plans"
+        self.plans_dir = self.active / "completed"
+        for directory in (self.completed, self.plans_dir, self.root / ".ai-playbook"):
+            directory.mkdir(parents=True)
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+
+    def _write(self, path: Path, text: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _open_top(self, name: str, status: str = "open") -> Path:
+        return self._write(
+            self.backlog / name,
+            f"# Backlog: {name}\n\nStatus: {status}\n\nbody\n",
+        )
+
+    def _rejected_top(self, name: str) -> Path:
+        return self._write(
+            self.backlog / "rejected" / name,
+            f"# Backlog: {name}\n\nStatus: rejected (fixture reason)\n\nbody\n",
+        )
+
+    def _archived(self, name: str) -> Path:
+        return self._write(
+            self.completed / name,
+            f"# Backlog: {name}\n\nStatus: done\n\nbody\n",
+        )
+
+    def _archived_plan(self, name: str, origin: str) -> Path:
+        return self._write(
+            self.plans_dir / name,
+            f"# Plan: {name}\n\nBacklog origin: docs/history/backlog/{origin}\n",
+        )
+
+    def _active_plan(self, name: str, origin: str, header: str | None = None) -> Path:
+        text = header if header is not None else (
+            f"# Plan: {name}\n\nBacklog origin: docs/history/backlog/{origin}\n"
+        )
+        return self._write(self.active / name, text)
+
+    def _run(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--repo-root", str(self.root)]
+            + list(args),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def test_classify_covered_status(self) -> None:
+        self._open_top(ALPHA, 'covered (docs/history/plans/2026-01-01-a.md)')
+        proc = self._run()
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotIn(f"origin {ALPHA} unresolved", proc.stdout)
+
+    def test_covered_is_not_closed(self) -> None:
+        self._open_top(ALPHA, 'covered (docs/history/plans/2026-01-01-a.md)')
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        self._archived_plan("2026-01-01-old.md", ALPHA)
+        proc = self._run()
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotIn("closed in place", proc.stdout)
+        self.assertNotIn("no longer top-level", proc.stdout)
+
+    def _check(self, plan: str) -> subprocess.CompletedProcess:
+        return self._run(
+            "--check-coverage", plan,
+            "--active-plans-dir", "docs/history/plans",
+            "--plans-dir", "docs/history/plans/completed",
+            "--backlog-dir", "docs/history/backlog",
+        )
+
+    def test_check_coverage_clean(self) -> None:
+        self._open_top(ALPHA)
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        proc = self._check("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_check_coverage_conflict(self) -> None:
+        self._open_top(ALPHA)
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        self._active_plan("2026-01-01-b.md", ALPHA)
+        proc = self._check("docs/history/plans/2026-01-01-b.md")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("2026-01-01-a.md", proc.stdout + proc.stderr)
+        self.assertIn("first-landed wins", proc.stdout + proc.stderr)
+
+    def test_check_coverage_excludes_self(self) -> None:
+        self._open_top(ALPHA)
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        proc = self._check("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 0)
+
+    def test_check_coverage_scans_completed_and_rejected(self) -> None:
+        self._open_top(ALPHA)
+        self._write(
+            self.plans_dir / "2026-01-01-done.md",
+            f"# Plan: done\n\nBacklog origin: docs/history/backlog/{ALPHA}\n",
+        )
+        self._active_plan("2026-01-01-live.md", ALPHA)
+        proc = self._check("docs/history/plans/2026-01-01-live.md")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("2026-01-01-done.md", proc.stdout + proc.stderr)
+        # Rejected citer.
+        self._write(
+            self.active / "rejected" / "2026-01-01-rej.md",
+            f"# Plan: rej\n\nBacklog origin: docs/history/backlog/{BETA}\n",
+        )
+        self._open_top(BETA)
+        self._active_plan("2026-01-01-live2.md", BETA)
+        proc = self._check("docs/history/plans/2026-01-01-live2.md")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("2026-01-01-rej.md", proc.stdout + proc.stderr)
+
+    def test_check_coverage_scans_deferred(self) -> None:
+        self._open_top(ALPHA)
+        self._write(
+            self.active / "deferred" / "2026-01-01-parked.md",
+            f"# Plan: parked\n\nBacklog origin: docs/history/backlog/{ALPHA}\n",
+        )
+        self._active_plan("2026-01-01-live.md", ALPHA)
+        proc = self._check("docs/history/plans/2026-01-01-live.md")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("2026-01-01-parked.md", proc.stdout + proc.stderr)
+        self.assertIn("deferred", proc.stdout + proc.stderr)
+
+    def test_coverage_extractor_parses_bare_origin_header(self) -> None:
+        self._open_top(ALPHA)
+        self._active_plan(
+            "2026-01-01-a.md", ALPHA,
+            header=(
+                f"# Plan: A\n\n[github: https://example.com/repo] Origin: "
+                f"docs/history/backlog/{ALPHA}\n"
+            ),
+        )
+        proc = self._check("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 0)
+        # The bare header origin must have been EXTRACTED: a second citer
+        # using the block form must conflict with it.
+        self._active_plan("2026-01-01-b.md", ALPHA)
+        proc = self._check("docs/history/plans/2026-01-01-b.md")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("2026-01-01-a.md", proc.stdout + proc.stderr)
+
+    def test_coverage_extractor_ignores_bare_origin_in_body(self) -> None:
+        self._open_top(ALPHA)
+        self._write(
+            self.active / "2026-01-01-a.md",
+            "# Plan: A\n\n## Tasks\n\nOrigin: docs/history/backlog/"
+            f"{ALPHA} mentioned in body prose\n",
+        )
+        proc = self._check("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("no origins", proc.stdout + proc.stderr)
+
+    def test_active_and_rejected_dir_resolution(self) -> None:
+        self._open_top(ALPHA)
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        # No --active-plans-dir flag and no plans_dir facts key: the
+        # default docs/history/plans must resolve (the fixture already
+        # uses that layout), and rejected/deferred derive beneath it.
+        proc = self._run(
+            "--check-coverage", "docs/history/plans/2026-01-01-a.md",
+            "--plans-dir", "docs/history/plans/completed",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self._write(
+            self.active / "rejected" / "2026-01-01-rej.md",
+            f"# Plan: rej\n\nBacklog origin: docs/history/backlog/{ALPHA}\n",
+        )
+        proc = self._run(
+            "--check-coverage", "docs/history/plans/2026-01-01-a.md",
+            "--plans-dir", "docs/history/plans/completed",
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("rejected", proc.stdout + proc.stderr)
+
+    def _mark(self, plan: str) -> subprocess.CompletedProcess:
+        return self._run("--mark-covered", plan)
+
+    def test_mark_covered_flips_open(self) -> None:
+        self._open_top(ALPHA)
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        proc = self._mark("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        item = (self.backlog / ALPHA).read_text(encoding="utf-8")
+        self.assertIn(
+            "Status: covered (docs/history/plans/2026-01-01-a.md)", item
+        )
+
+    def test_mark_covered_flips_bullet_bold_shape(self) -> None:
+        item = self._write(
+            self.backlog / ALPHA,
+            f"# Backlog: {ALPHA}\n\n- **Status:** open\n\nbody\n",
+        )
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        proc = self._mark("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        text = item.read_text(encoding="utf-8")
+        self.assertIn(
+            "- **Status:** covered (docs/history/plans/2026-01-01-a.md)", text
+        )
+        # The classification must now read covered (same-plan re-run stays
+        # idempotent instead of re-flipping a corrupted line).
+        proc = self._mark("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 0)
+
+    def test_mark_covered_idempotent_same_plan(self) -> None:
+        self._open_top(ALPHA)
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        self._mark("docs/history/plans/2026-01-01-a.md")
+        before = (self.backlog / ALPHA).read_bytes()
+        proc = self._mark("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual((self.backlog / ALPHA).read_bytes(), before)
+
+    def test_mark_covered_refuses_conflict(self) -> None:
+        self._open_top(ALPHA, 'covered (docs/history/plans/2026-01-01-other.md)')
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        before = (self.backlog / ALPHA).read_bytes()
+        proc = self._mark("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual((self.backlog / ALPHA).read_bytes(), before)
+        self.assertIn("2026-01-01-other.md", proc.stdout + proc.stderr)
+
+    def test_mark_covered_skips_non_open(self) -> None:
+        self._archived(GAMMA)
+        self._rejected_top(BETA)
+        self._open_top(ALPHA, "closed (fixture closure)")
+        missing = "2026-09-01-origin-missing.md"
+        self._write(
+            self.active / "2026-01-01-a.md",
+            "# Plan: multi\n\nBacklog origins (scope of record): "
+            f"`docs/history/backlog/{ALPHA}`, `docs/history/backlog/{BETA}`, "
+            f"`docs/history/backlog/{GAMMA}`, `docs/history/backlog/{missing}`.\n",
+        )
+        proc = self._mark("docs/history/plans/2026-01-01-a.md")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn(f"skip: {GAMMA}: completed", combined)
+        self.assertIn(f"skip: {BETA}: rejected", combined)
+        self.assertIn(f"skip: {ALPHA}: closed", combined)
+        self.assertIn(f"skip: {missing}: missing", combined)
+
+    def test_corpus_covered_with_live_plan_quiet(self) -> None:
+        self._open_top(ALPHA, "covered (docs/history/plans/2026-01-01-a.md)")
+        self._active_plan("2026-01-01-a.md", ALPHA)
+        proc = self._run()
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotIn("no longer top-level", proc.stdout)
+
+    def test_corpus_covered_without_live_plan_warns(self) -> None:
+        self._open_top(ALPHA, "covered (docs/history/plans/2026-01-01-gone.md)")
+        self._archived_plan("2026-01-01-old.md", ALPHA)
+        proc = self._run()
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("no longer top-level", proc.stdout)
+        self.assertIn("2026-01-01-gone.md", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

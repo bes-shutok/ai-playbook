@@ -47,6 +47,7 @@ except ImportError:  # pragma: no cover
 DEFAULT_BACKLOG_DIR = "docs/history/backlog"
 DEFAULT_COMPLETED_DIR = "docs/history/backlog/completed"
 DEFAULT_PLANS_DIR = "docs/history/plans/completed"
+DEFAULT_ACTIVE_PLANS_DIR = "docs/history/plans"
 # Rejected archive: a top-level backlog item moved here after an explicit
 # decision against the work counts as closed (never a live straggler).
 REJECTED_DIR_NAME = "rejected"
@@ -69,13 +70,21 @@ BACKTICK_SPAN_RE = re.compile(r"`([^`]+)`")
 # and ``Status: done; plan created ...``: an optional bullet, optional
 # bold, then the ``status:`` label.
 STATUS_LINE_RE = re.compile(
-    r"^\s*(?:[-*+]\s*)?(?:\*\*)?\s*status\s*(?:\*\*)?\s*:\s*(.+?)\s*$",
+    r"^\s*(?:[-*+]\s*)?(?:\*\*)?\s*status\s*(?:\*\*)?\s*:\s*(?:\*\*)?\s*(.+?)\s*$",
     re.IGNORECASE,
 )
 # closed/done as the status VALUE; a hyphenated continuation such as
 # ``done-for-now`` is not a closure declaration.
 STATUS_CLOSED_VALUE_RE = re.compile(
     r"^(?:closed|done)(?![A-Za-z0-9_-])", re.IGNORECASE
+)
+
+# covered as the status VALUE with the covering-plan witness:
+# ``covered (docs/history/plans/<plan>.md)``. A new classification,
+# never a closed one: a covered-not-yet-executed origin still owes the
+# execution-time fold, so it stays outside PASS_STATES.
+STATUS_COVERED_VALUE_RE = re.compile(
+    r"^covered\s*\(([^)]+)\)", re.IGNORECASE
 )
 
 PASS_STATES = ("completed", "closed", "rejected")
@@ -348,6 +357,41 @@ def extract_origin_basenames(
     return basenames
 
 
+BARE_ORIGIN_LINE_RE = re.compile(
+    r"^\s*(?:\[[^\]]*\]\s*)?(?:Backlog\s+)?[Oo]rigin\s*:\s*`?([^`\s]+\.md)`?\s*$",
+    re.IGNORECASE,
+)
+
+
+def extract_coverage_origin_basenames(
+    plan_text: str, backlog_dir: Path, completed_dir: Path
+) -> list[str]:
+    """Coverage-scoped superset of ``extract_origin_basenames``: the
+    origins block and singular line, PLUS bare ``Origin:`` header lines
+    (including a ``[github: ...]`` prefix). Bare lines count only in the
+    plan's header region (title line through the first ``## `` heading)
+    so body prose never matches, and only when the ``.md`` path is a
+    backlog reference."""
+    basenames = list(extract_origin_basenames(plan_text, backlog_dir, completed_dir))
+    seen = set(basenames)
+    header_region = plan_text
+    heading = re.search(r"^## ", plan_text, re.MULTILINE)
+    if heading:
+        header_region = plan_text[: heading.start()]
+    for line in header_region.splitlines():
+        match = BARE_ORIGIN_LINE_RE.match(line)
+        if not match:
+            continue
+        text = match.group(1)
+        if not _is_backlog_ref(text, backlog_dir, completed_dir):
+            continue
+        name = Path(text.replace(os.sep, "/")).name
+        if name not in seen:
+            seen.add(name)
+            basenames.append(name)
+    return basenames
+
+
 def classify_origin(
     basename: str, backlog_dir: Path, completed_dir: Path
 ) -> tuple[str, str]:
@@ -387,8 +431,16 @@ def classify_origin(
             return "open", f"unreadable at the backlog top level: {exc}"
         for line in lines:
             match = STATUS_LINE_RE.match(line)
-            if match and STATUS_CLOSED_VALUE_RE.match(match.group(1)):
-                return "closed", "closed in place (status closed/done)"
+            if match:
+                value = match.group(1)
+                if STATUS_CLOSED_VALUE_RE.match(value):
+                    return "closed", "closed in place (status closed/done)"
+                covered = STATUS_COVERED_VALUE_RE.match(value)
+                if covered:
+                    return (
+                        "covered",
+                        f"covered by {covered.group(1).strip()}",
+                    )
         return "open", "open at the backlog top level"
     return "missing", "not found under the backlog directory"
 
@@ -459,6 +511,7 @@ def run_corpus_mode(
     backlog_dir: Path,
     completed_dir: Path,
     repo_root: Path | None = None,
+    active_plans_dir: Path | None = None,
 ) -> int:
     """Corpus warn arm: scan every archived plan, warn per unresolved
     origin, always exit 0 (the maintenance survey owns this surface)."""
@@ -481,6 +534,28 @@ def run_corpus_mode(
             continue
         for name in extract_origin_basenames(text, backlog_dir, completed_dir):
             state, detail = classify_origin(name, backlog_dir, completed_dir)
+            if state == "covered":
+                # Covered items classify as covered, never closed; the
+                # corpus warn fires only when the covering plan is no
+                # longer top-level under the active plans directory.
+                witness = detail[len("covered by "):].strip()
+                witness_path = Path(witness)
+                if not witness_path.is_absolute() and repo_root is not None:
+                    witness_path = repo_root / witness
+                witness_live = (
+                    witness_path.is_absolute()
+                    and witness_path.is_file()
+                    and active_plans_dir is not None
+                    and witness_path.parent == active_plans_dir
+                )
+                if not witness_live:
+                    print(
+                        f"warning: {plan.name}: origin {name} covered by "
+                        f"{witness}, which is no longer top-level under "
+                        f"the active plans directory"
+                    )
+                    unresolved += 1
+                continue
             if state in PASS_STATES:
                 continue
             if state == "missing" and repo_root is not None:
@@ -498,6 +573,171 @@ def run_corpus_mode(
         f"check_plan_origins_closed: corpus scan: {len(plans)} archived "
         f"plan(s), {unresolved} unresolved origin(s) (warn arm; exit 0)"
     )
+    return 0
+
+
+REMEDY_BY_STATE = {
+    "completed": (
+        "supersede-or-explicit-revival: the covering plan already executed; "
+        "reject the later plan as superseded or explicitly revive the origin "
+        "with the decision recorded"
+    ),
+    "rejected": (
+        "revival-is-a-new-decision: the origin was rejected; using it again "
+        "requires a recorded revival decision, not a silent new plan"
+    ),
+    "deferred": (
+        "revive-or-explicitly-supersede: the covering plan is parked under "
+        "deferred; revive it or record the later plan as its supersession"
+    ),
+}
+
+
+def _find_covering_citers(
+    origin_name: str,
+    scan_dirs: list[tuple[Path, str]],
+    declaring: Path,
+    backlog_dir: Path,
+    completed_dir: Path,
+) -> list[tuple[Path, str]]:
+    """Every OTHER plan citing ``origin_name`` across the scan surfaces,
+    as (plan path, citer state) pairs."""
+    citers: list[tuple[Path, str]] = []
+    for directory, state in scan_dirs:
+        if not directory.is_dir():
+            continue
+        for plan in sorted(directory.rglob("*.md")):
+            if plan.resolve() == declaring.resolve():
+                continue
+            try:
+                text = plan.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            names = extract_coverage_origin_basenames(
+                text, backlog_dir, completed_dir
+            )
+            if origin_name in names:
+                citers.append((plan, state))
+    return citers
+
+
+def run_check_coverage_mode(
+    plan_path: Path,
+    backlog_dir: Path,
+    completed_dir: Path,
+    active_plans_dir: Path,
+    completed_plans_dir: Path,
+) -> int:
+    """Duplicate-origin coverage gate: exit 0 clean, 1 conflict naming the
+    covering plan and the state-specific remedy, 2 tool error."""
+    try:
+        text = plan_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(f"error: cannot read plan {plan_path}: {exc}", file=sys.stderr)
+        return 2
+    names = extract_coverage_origin_basenames(text, backlog_dir, completed_dir)
+    if not names:
+        print("check_plan_origins_closed: no origins; coverage gate trivially clean")
+        return 0
+    scan_dirs = [
+        (active_plans_dir, "active"),
+        (active_plans_dir / "deferred", "deferred"),
+        (completed_plans_dir, "completed"),
+        (active_plans_dir / "rejected", "rejected"),
+    ]
+    conflicts = 0
+    for name in names:
+        for citer, citer_state in _find_covering_citers(
+            name, scan_dirs, plan_path, backlog_dir, completed_dir
+        ):
+            conflicts += 1
+            remedy = REMEDY_BY_STATE.get(
+                citer_state,
+                "first-landed wins - fold the later plan into the covering "
+                "plan as an amendment, or reject the later plan as superseded",
+            )
+            print(
+                f"origin coverage conflict: {name} is already cited by "
+                f"{citer} ({citer_state}); {remedy}"
+            )
+    if conflicts:
+        return 1
+    print("check_plan_origins_closed: coverage gate clean; no covering citer")
+    return 0
+
+
+def _flip_status_line(text: str, witness: str) -> tuple[str, bool]:
+    """Rewrite the first header ``Status:`` line's value to the covered
+    witness, preserving the line's non-status prefix. Returns
+    (new text, flipped)."""
+    for line in text.splitlines()[:STATUS_HEADER_LINES]:
+        match = STATUS_LINE_RE.match(line)
+        if not match:
+            continue
+        value = match.group(1)
+        covered = STATUS_COVERED_VALUE_RE.match(value)
+        if covered and covered.group(1).strip() == witness:
+            return text, False  # idempotent: same-plan witness already present
+        if covered:
+            return text, False  # caller reports the conflict
+        new_line = line[: match.start(1)] + f"covered ({witness})"
+        return text.replace(line, new_line, 1), True
+    return text, False
+
+
+def run_mark_covered_mode(
+    plan_path: Path,
+    backlog_dir: Path,
+    completed_dir: Path,
+    repo_root: Path,
+) -> int:
+    """Landing-closeout covered flip: each named open top-level origin's
+    header Status becomes ``covered (<repo-relative plan path>)``. Exit 0
+    on success/no-op-with-skips, 1 on a different-plan-witness conflict
+    (bytes unchanged), 2 on tool error."""
+    try:
+        text = plan_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(f"error: cannot read plan {plan_path}: {exc}", file=sys.stderr)
+        return 2
+    names = extract_coverage_origin_basenames(text, backlog_dir, completed_dir)
+    if not names:
+        print("check_plan_origins_closed: no origins; nothing to mark covered")
+        return 0
+    try:
+        witness = plan_path.resolve().relative_to(repo_root).as_posix()
+    except ValueError:
+        witness = plan_path.as_posix()
+    flipped = 0
+    for name in names:
+        state, detail = classify_origin(name, backlog_dir, completed_dir)
+        if state == "covered":
+            covering = detail[len("covered by "):].strip()
+            if covering == witness:
+                print(f"already covered by this plan: {name}")
+                continue
+            print(
+                f"refusing to mark covered: {name} is already covered by "
+                f"{covering} (a different plan); first-landed wins"
+            )
+            return 1
+        if state == "open":
+            top = backlog_dir / name
+            try:
+                item_text = top.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                print(f"skip: {name}: unreadable ({exc})")
+                continue
+            new_text, did = _flip_status_line(item_text, witness)
+            if did:
+                top.write_text(new_text, encoding="utf-8")
+                flipped += 1
+                print(f"covered: {name} (by {witness})")
+            else:
+                print(f"skip: {name}: no open status header line found")
+        else:
+            print(f"skip: {name}: {state} ({detail})")
+    print(f"check_plan_origins_closed: marked {flipped} origin(s) covered")
     return 0
 
 
@@ -542,6 +782,23 @@ def main(argv: list[str] | None = None) -> int:
             "(overrides the facts key plans_completed_dir)"
         ),
     )
+    parser.add_argument(
+        "--active-plans-dir",
+        help=(
+            "active plans directory for the coverage modes "
+            "(overrides the facts key plans_dir)"
+        ),
+    )
+    parser.add_argument(
+        "--check-coverage",
+        dest="check_coverage",
+        help="plan file to gate in duplicate-origin coverage mode",
+    )
+    parser.add_argument(
+        "--mark-covered",
+        dest="mark_covered",
+        help="plan file whose named open origins flip to covered",
+    )
     args = parser.parse_args(argv)
 
     repo_root = resolve_repo_root(args.repo_root)
@@ -555,6 +812,31 @@ def main(argv: list[str] | None = None) -> int:
         DEFAULT_COMPLETED_DIR,
     )
 
+    if args.check_coverage or args.mark_covered:
+        target = args.check_coverage or args.mark_covered
+        plan_path = Path(target).expanduser()
+        if not plan_path.is_absolute():
+            plan_path = repo_root / plan_path
+        if not plan_path.is_file():
+            parser.error(f"plan file not found: {plan_path}")
+        if args.mark_covered:
+            return run_mark_covered_mode(
+                plan_path, backlog_dir, completed_dir, repo_root
+            )
+        active_plans_dir = resolve_dir(
+            args.active_plans_dir, repo_root, "plans_dir", DEFAULT_ACTIVE_PLANS_DIR
+        )
+        completed_plans_dir = resolve_dir(
+            args.plans_dir, repo_root, "plans_completed_dir", DEFAULT_PLANS_DIR
+        )
+        return run_check_coverage_mode(
+            plan_path,
+            backlog_dir,
+            completed_dir,
+            active_plans_dir,
+            completed_plans_dir,
+        )
+
     if args.plan:
         plan_path = Path(args.plan).expanduser()
         if not plan_path.is_absolute():
@@ -566,7 +848,12 @@ def main(argv: list[str] | None = None) -> int:
     plans_dir = resolve_dir(
         args.plans_dir, repo_root, "plans_completed_dir", DEFAULT_PLANS_DIR
     )
-    return run_corpus_mode(plans_dir, backlog_dir, completed_dir, repo_root)
+    active_plans_dir = resolve_dir(
+        args.active_plans_dir, repo_root, "plans_dir", DEFAULT_ACTIVE_PLANS_DIR
+    )
+    return run_corpus_mode(
+        plans_dir, backlog_dir, completed_dir, repo_root, active_plans_dir
+    )
 
 
 if __name__ == "__main__":

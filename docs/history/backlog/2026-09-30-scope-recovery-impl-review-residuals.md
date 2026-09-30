@@ -1,7 +1,7 @@
 # Reviewed-scope-recovery impl review residual (r1 F1, Low)
 
 - **Date:** 2026-09-30
-- **Status:** open
+- **Status:** done (2026-09-30; F1 executed+landed via docs/history/plans/completed/2026-09-30-reconciliation-coupling-residuals.md, squash main 3029d820)
 - **Origin class:** self-serving
 - **Priority:** Low
 

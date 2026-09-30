@@ -1,5 +1,10 @@
 # Backlog: Legacy evidence-contract compatibility for oversized pre-upgrade contracts
 
+Cluster: docs/history/backlog/2026-09-29-execute-plan-launch-boundary-hardening.md
+Cluster: docs/history/backlog/2026-09-29-execute-plan-recovery-receipt-identity-hardening.md
+Cluster: docs/history/backlog/2026-09-30-baseline-aware-stale-session-cleanup.md
+
+
 Driving force: code-quality
 Status: open
 Priority: low

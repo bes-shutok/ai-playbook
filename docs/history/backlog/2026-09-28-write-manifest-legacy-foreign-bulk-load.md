@@ -1,5 +1,15 @@
 # Write-manifest claim-or-foreign gate drowns fresh runs in legacy review candidates
 
+Cluster: docs/history/backlog/2026-09-28-done-lock-one-shot-reclaim-releases-documentation.md
+Cluster: docs/history/backlog/2026-09-29-done-sweep-consumes-run-tmp-before-worktree-migration.md
+Cluster: docs/history/backlog/2026-09-29-em-dash-gate-run-backlog-candidates.md
+Cluster: docs/history/backlog/2026-09-29-emit-roundtrip-vt-ff-unreachability.md
+Cluster: docs/history/backlog/2026-09-29-p79-gates-no-r1-fix-behavior-pins.md
+Cluster: docs/history/backlog/2026-09-29-step1-ledger-tmp-dir-loss-residual.md
+Cluster: docs/history/backlog/2026-09-30-execution-ceremony-prevention-witnesses.md
+Cluster: docs/history/backlog/2026-09-30-plan-archive-cited-review-receipts.md
+
+
 Captured: 2026-09-28 (source: release-skill-follow-ups done closeout, manifest finalize)
 Status: open
 Priority: low

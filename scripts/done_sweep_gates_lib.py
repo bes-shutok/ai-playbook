@@ -12,10 +12,10 @@ them stay in the skill):
   plan-readiness, confluence-hygiene, doc-registry, backlog-inbox,
   review-staging, vim-swap-sweep, docs-tmp-sweep.
 - ``pre-commit`` (done Step 2.7 mechanical half, 2.76, 2.8):
-  sensitive-data-scan, em-dash-scan, instruction-size.
+  sensitive-data-scan, em-dash-scan, instruction-size, description-length.
 
 Contract:
-- gate registry == the twelve absorbed steps at gate and named sub-check
+- gate registry == the absorbed steps at gate and named sub-check
   granularity (Design Invariant: gate preservation); report order is registry
   order, every gate reports even after an earlier failure, and the
   implementation runs every phase strictly sequentially in registry order (a
@@ -53,6 +53,11 @@ other manifest adopts): a retry continues an interrupted run's boundary only
 through an explicit ``--adopt <run_id>`` boundary copy, never implicitly.
 The ``finalize-manifest`` sub-command sets a run manifest's ``complete`` flag
 to true in place (done Step 6, immediately before the done-lock release).
+The ``disposition-manifest`` sub-command stamps a one-time ``dispositioned``
+record onto an unadoptable interrupted manifest (a recorded ``repo_root`` no
+checkout satisfies, so adoption and finalize refuse it forever) after its
+owned deliverables verify as landed; ``list-interrupted-manifests`` prints
+the interrupted manifests classified by root liveness, read-only.
 """
 
 from __future__ import annotations
@@ -97,6 +102,7 @@ PRE_COMMIT_GATES = [
     "sensitive-data-scan",
     "em-dash-scan",
     "instruction-size",
+    "description-length",
     "foreign-staging",
     "plans-archive-twin",
 ]
@@ -108,18 +114,28 @@ PHASES = {
 # done Step 2.7 item 2 diff-content grep patterns. Credential terms are
 # intentionally assignment-shaped so domain prose such as "claim token" does
 # not become a false positive while credential-like values remain blocked.
-DIFF_CONTENT_PATTERNS = [
-    r"/Users/",
-    r"/home/",
-    r"\.atlassian\.net",
-    r"@[a-z]+\.(com|io|net)",
+# Credential-shaped patterns are active in every repository regardless of
+# declared visibility; the public-artifact family is audience hygiene and
+# drops out when the repo declares artifact_visibility = "private" in its
+# repo facts (absent or unparseable reads as public: today's strictness).
+CREDENTIAL_CONTENT_PATTERNS = [
     r"(?i)\bapi[_-]?key\s*[:=]\s*['\"]?[A-Za-z0-9._+/=-]{8,}",
     r"(?i)\b(?:access|auth|claim|policy|refresh|session)?[_-]?token\s*[:=]\s*['\"]?[A-Za-z0-9._+/=-]{8,}",
     r"(?i)\b(?:password|secret)\s*[:=]\s*\S+",
 ]
+PUBLIC_ARTIFACT_CONTENT_PATTERNS = [
+    r"/Users/",
+    r"/home/",
+    r"\.atlassian\.net",
+    r"@[a-z]+\.(com|io|net)",
+]
 CO_AUTHORED_RE = re.compile(r"co-authored-by", re.IGNORECASE)
 
 MANIFEST_MAX_AGE_H = 24.0
+# Closeout-baseline grace window: a baseline-holding execute-plan session
+# whose baseline mtime is older than this many hours is a crashed run's
+# debris, not an in-flight transfer-out, and the sweep removes it.
+STALE_BASELINE_GRACE_H = 48.0
 
 
 # --------------------------------------------------------------------------- #
@@ -161,6 +177,16 @@ class GateContext:
             runtime_home=runtime_home,
             user_facts=user_facts,
         )
+
+    @property
+    def artifact_visibility(self) -> str:
+        """Declared repository audience from the repo facts TOML; "private"
+        only on an exact case-insensitive match, anything else (absent,
+        malformed, other values) reads as "public" (fail-safe strictness)."""
+        raw = facts_paths.resolve_toml_key_raw(self.repo_root, "artifact_visibility")
+        if isinstance(raw, str) and raw.strip().lower() == "private":
+            return "private"
+        return "public"
 
     @property
     def done_session_dir(self) -> Path:
@@ -437,7 +463,10 @@ class RunManifest:
     explicit adoption link, and the completion flag (false until the run
     finalizes). ``repo_root`` carries the same 64-hex identity digest the
     run-start marker records (legacy records keep the raw path and stay
-    loadable through the two-arm root match)."""
+    loadable through the two-arm root match). ``dispositioned`` carries the
+    optional one-time disposition record (an object with ``reason``, ``date``
+    and ``note`` keys, or unset/None) stamped by the ``disposition-manifest``
+    sub-command; it suppresses the interrupted-run detection."""
 
     schema: int
     run_id: str
@@ -453,6 +482,7 @@ class RunManifest:
     foreign_review_paths: list[str]
     adopted_from: Optional[str]
     complete: bool
+    dispositioned: Optional[dict] = None
 
     def as_dict(self) -> dict:
         return {
@@ -470,6 +500,7 @@ class RunManifest:
             "foreign_review_paths": list(self.foreign_review_paths),
             "adopted_from": self.adopted_from,
             "complete": self.complete,
+            "dispositioned": self.dispositioned,
         }
 
     @classmethod
@@ -510,6 +541,12 @@ class RunManifest:
         adopted = payload.get("adopted_from")
         if not isinstance(adopted, str):
             adopted = None
+        # The dispositioned record is optional and additive: a non-dict value
+        # (corrupt or hand-edited) degrades to unset, never to an exception -
+        # the loader's fixed-key reconstruction must not strip a valid record.
+        dispositioned = payload.get("dispositioned")
+        if not isinstance(dispositioned, dict):
+            dispositioned = None
         return cls(
             schema=MANIFEST_SCHEMA_VERSION,
             run_id=run_id,
@@ -530,6 +567,7 @@ class RunManifest:
             foreign_review_paths=str_list("foreign_review_paths"),
             adopted_from=adopted,
             complete=bool(payload.get("complete", False)),
+            dispositioned=dispositioned,
         )
 
 
@@ -722,13 +760,22 @@ def _finalize_identity_mismatch(
 def _detect_interrupted_runs(
     done_session_dir: Path, repo_root: Path, warnings: Optional[list[str]] = None
 ) -> list[RunManifest]:
-    """Every root-matched manifest whose ``complete`` flag is still false and
-    which no other manifest adopts (an ``adopted_from`` link names it): the
+    """Every manifest whose ``complete`` flag is still false and which no
+    other manifest adopts (an ``adopted_from`` link names it): the
     interrupted runs this Step 0 reports. A finalized (``complete`` true)
     manifest is never an orphan - that is what keeps a completed commit-less
     run from misfiring the detection - and adoption is itself the suppression
-    record. Unreadable and foreign-root records are skipped, never raised;
-    a corrupt record is named through ``warnings`` when provided (F10)."""
+    record. Two widenings shape the set: a dead-root record (its recorded
+    ``repo_root`` value fails the two-arm match - the manifest of a checkout
+    that no longer exists) stays in the orphan set when ``complete`` is false
+    and nothing adopts it, instead of being silently skipped by the root
+    filter, so a dead-boundary incident surfaces until it closes; and a
+    manifest carrying a ``dispositioned`` record is
+    no longer detected as an orphan
+    (the disposition is the sanctioned one-time closure: the adoption
+    link is the first suppression shape, the disposition record the second).
+    Unreadable records are skipped, never raised; a corrupt record is named
+    through ``warnings`` when provided (F10)."""
     manifests: list[RunManifest] = []
     if not done_session_dir.is_dir():
         return manifests
@@ -750,11 +797,15 @@ def _detect_interrupted_runs(
                     "(schema or field validation failed)"
                 )
             continue
-        if not _manifest_root_matches(manifest.repo_root, repo_root):
-            continue
         manifests.append(manifest)
     adopted = {m.adopted_from for m in manifests if m.adopted_from}
-    return [m for m in manifests if not m.complete and m.run_id not in adopted]
+    return [
+        m
+        for m in manifests
+        if not m.complete
+        and m.run_id not in adopted
+        and m.dispositioned is None
+    ]
 
 
 def _adopted_chain_run_ids(
@@ -1786,12 +1837,26 @@ def gate_review_staging(ctx: GateContext) -> GateResult:
         )
     failed: list[str] = []
     for candidate in candidates:
+        target = candidate
+        if candidate.name.endswith(".stats.json"):
+            # A sidecar candidate is validated through its markdown twin:
+            # the validator's --hard markdown path already covers sidecar
+            # schema, agreement, and digest, while the markdown shape checks
+            # produce only wrong-shape failures against JSON. String slicing
+            # (not Path.with_suffix, which would replace only the final
+            # .json and yield .stats.md). A missing twin is an owned
+            # half-pair: fail closed naming the sidecar.
+            twin = candidate.with_name(candidate.name[: -len(".stats.json")] + ".md")
+            if not twin.is_file():
+                failed.append(str(candidate) + " (sidecar without markdown twin)")
+                continue
+            target = twin
         proc = ctx.run(
-            [sys.executable, str(validator), "--hard", str(candidate)],
+            [sys.executable, str(validator), "--hard", str(target)],
             cwd=ctx.repo_root,
         )
         if proc.returncode != 0:
-            failed.append(str(candidate))
+            failed.append(str(target))
     if failed:
         return GateResult(
             gate,
@@ -2061,11 +2126,29 @@ def _sweep_execute_plan_sessions(
     check is recursive over plans_dir, mirroring how the readiness
     candidate derivation accepts nested plan paths. An archived-plan session
     that still holds its captured ``closeout-baseline.json`` as a regular
-    file is also never removed: the baseline is the mechanical witness that a
-    run owns the directory and its transfer-out (execute-plan lifecycle
-    step 5) may still be pending; a crashed run's directory lingers by the
-    same witness and is dispositioned through the interrupted-run report,
-    not destruction."""
+    file is exempt from removal only while the baseline is fresh: the
+    baseline is the mechanical witness that a run owns the directory and its
+    transfer-out (execute-plan lifecycle step 5) may still be pending. The
+    exemption is age-bounded by ``STALE_BASELINE_GRACE_H``: a baseline whose
+    mtime age is within the grace window keeps the transfer-out-pending
+    exemption unchanged; the boundary comparison keeps via ``<=``, so a
+    baseline whose age is exactly 48h is within the window. The pending-plan
+    arm's ``continue`` precedes the baseline branch, so an active session's
+    stale baseline is kept by precedence, not by the exemption. A crashed
+    run's directory lingers by the same
+    witness only up to that window: once the baseline's age exceeds it,
+    nothing has consumed the baseline for two days and the directory IS
+    removed here as a stale closeout baseline (destruction for the stale
+    class moves from the interrupted-run report to this arm), and the
+    removal deletes the session manifest, ending the interrupted-run
+    report's surfacing of that run. A stale removal whose rmtree raises
+    OSError appends ``str(session) + " (stale closeout baseline
+    removal-failed)"`` to removed instead of a kept row: the row lands in
+    removed while the directory survives (removed is report-visible, not
+    existential), so a repeatedly failing stale sweep is visible as a
+    distinct class instead of retrying silently. An unreadable baseline
+    mtime keeps the
+    exemption (fail-open to keep, the safe direction for a witness file)."""
     if not execute_dir.is_dir():
         return
     pending_stems = {
@@ -2080,7 +2163,26 @@ def _sweep_execute_plan_sessions(
             kept.append(str(session) + " (active: plan still pending)")
             continue
         if (session / "closeout-baseline.json").is_file():
-            kept.append(str(session) + " (kept: closeout baseline present; transfer-out may be pending)")
+            baseline_path = session / "closeout-baseline.json"
+            try:
+                age_hours = (time.time() - os.path.getmtime(baseline_path)) / 3600
+            except OSError:
+                # Unreadable baseline mtime keeps the exemption: fail-open to
+                # keep, the safe direction for a witness file.
+                age_hours = 0.0
+            if age_hours <= STALE_BASELINE_GRACE_H:
+                kept.append(str(session) + " (kept: closeout baseline present; transfer-out may be pending)")
+                continue
+            try:
+                shutil.rmtree(session)
+                removed.append(str(session) + " (stale closeout baseline)")
+            except OSError:
+                # The directory survives the failed rmtree; the report still
+                # names the sweep's failed attempt (not a kept row), so a
+                # repeatedly failing stale removal stays visible per retry.
+                removed.append(
+                    str(session) + " (stale closeout baseline removal-failed)"
+                )
             continue
         try:
             shutil.rmtree(session)
@@ -2113,6 +2215,12 @@ def gate_sensitive_data_scan(ctx: GateContext) -> GateResult:
     gate = "sensitive-data-scan"
     findings: list[str] = []
     warnings: list[str] = []
+    content_patterns = list(CREDENTIAL_CONTENT_PATTERNS)
+    if ctx.artifact_visibility != "private":
+        content_patterns.extend(PUBLIC_ARTIFACT_CONTENT_PATTERNS)
+        families = "content families: credential+public-artifact"
+    else:
+        families = "content families: credential (repo declares private visibility)"
 
     # Arm 1: diff-content grep over staged content (git diff --cached -U0).
     staged = ctx.git("diff", "--cached", "--name-only")
@@ -2126,7 +2234,7 @@ def gate_sensitive_data_scan(ctx: GateContext) -> GateResult:
             for line in diff.stdout.splitlines():
                 if not line.startswith("+") or line.startswith("+++"):
                     continue
-                for pattern in DIFF_CONTENT_PATTERNS:
+                for pattern in content_patterns:
                     if re.search(pattern, line, re.IGNORECASE):
                         findings.append(
                             f"staged {rel}: diff content matches pattern "
@@ -2146,7 +2254,7 @@ def gate_sensitive_data_scan(ctx: GateContext) -> GateResult:
             except OSError:
                 continue
             for lineno, line in enumerate(content.splitlines(), start=1):
-                for pattern in DIFF_CONTENT_PATTERNS:
+                for pattern in content_patterns:
                     if re.search(pattern, line, re.IGNORECASE):
                         findings.append(
                             f"untracked {rel}:{lineno}: content matches pattern "
@@ -2236,7 +2344,7 @@ def gate_sensitive_data_scan(ctx: GateContext) -> GateResult:
         0,
         "sensitive-data scan clean (diff content, untracked content"
         + (", push-range commit messages" if push_range_ran else "")
-        + ")",
+        + "); " + families,
         warnings=warnings,
     )
 
@@ -2369,6 +2477,48 @@ def gate_instruction_size(ctx: GateContext) -> GateResult:
             warnings=[],
         )
     return GateResult(gate, 0, "instruction size gate passed", warnings=[])
+
+
+def gate_description_length(ctx: GateContext) -> GateResult:
+    gate = "description-length"
+    script = ctx.resolve_script(
+        "DESCRIPTION_LENGTH_CHECK_SCRIPT", "check_skill_description_length.py"
+    )
+    if script is None:
+        message = (
+            "deployment gap: check_skill_description_length.py absent at "
+            "every resolved path (env override, repo-local scripts/, runtime "
+            "home copy); remedy: deploy the script to the runtime home "
+            "scripts/ directory; never use the recorded-stop exception for a "
+            "deployment gap"
+        )
+        return GateResult(gate, 1, message, warnings=[])
+    proc = ctx.run([sys.executable, str(script)], cwd=ctx.repo_root)
+    if proc.returncode != 0:
+        # The checker names over-cap files on stderr and warns on stderr;
+        # tail both so the failure message carries the named files.
+        tail_rows = [
+            row
+            for row in (
+                (proc.stdout or "") + "\n" + (proc.stderr or "")
+            ).strip().splitlines()
+            if row.strip()
+        ][-10:]
+        return GateResult(
+            gate,
+            1,
+            "description length gate failed: " + " | ".join(tail_rows),
+            warnings=[],
+        )
+    warn_rows = [
+        row for row in (proc.stderr or "").strip().splitlines() if row.strip()
+    ]
+    return GateResult(
+        gate,
+        0,
+        "description length gate passed",
+        warnings=warn_rows,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -2555,6 +2705,7 @@ GATES: dict[str, Callable[[GateContext], GateResult]] = {
     "sensitive-data-scan": gate_sensitive_data_scan,
     "em-dash-scan": gate_em_dash_scan,
     "instruction-size": gate_instruction_size,
+    "description-length": gate_description_length,
     "foreign-staging": gate_foreign_staging,
     "plans-archive-twin": gate_plans_archive_twin,
 }
@@ -2593,10 +2744,11 @@ def phase_exit(results: list[GateResult]) -> int:
 def _usage() -> str:
     return (
         "usage: done_sweep_gates.sh "
-        "<pre-docs|pre-commit|list-gates|write-manifest|finalize-manifest>\n"
+        "<pre-docs|pre-commit|list-gates|write-manifest|finalize-manifest|"
+        "disposition-manifest|list-interrupted-manifests>\n"
         "phases: pre-docs (done Steps 1.5..2.62 gates), pre-commit (done "
         "Steps 2.7/2.76/2.8 mechanical gates)\n"
-        "list-gates prints the twelve absorbed gate ids in phase order, "
+        "list-gates prints the absorbed gate ids in phase order, "
         "deduped at first phase (the twin runs in both phases)\n"
         "write-manifest writes the done Step 0 run manifest record "
         "(run-manifest-<run_id>.json under the done-session directory), "
@@ -2609,7 +2761,16 @@ def _usage() -> str:
         "place (done Step 6; --run-id required; an absent manifest file is "
         "a named not-found note with a zero exit, while a present manifest "
         "carrying a wrong schema version or another repository's repo_root "
-        "is a named non-zero abort that leaves the record unchanged)"
+        "is a named non-zero abort that leaves the record unchanged)\n"
+        "disposition-manifest stamps the one-time dispositioned record "
+        "(work-verified-landed) onto an unadoptable interrupted run manifest "
+        "(--run-id required, --note optional; a live root or an adopted "
+        "boundary refuses; the deliverables witness refuses naming the "
+        "first missing owned deliverable; an already-dispositioned manifest "
+        "reprints its record with a zero exit)\n"
+        "list-interrupted-manifests prints one line per interrupted run "
+        "manifest (root=<live|dead>, dispositioned, adopted, created); "
+        "read-only, never mutates"
     )
 
 
@@ -2784,6 +2945,20 @@ def _cmd_write_manifest(argv: list[str]) -> int:
                 "interrupted run: adopting the boundary of "
                 f"{orphan.run_id} (start_commit and owned paths carried "
                 "verbatim from its manifest)"
+            )
+            continue
+        if not _manifest_root_matches(orphan.repo_root, ctx.repo_root):
+            # Dead-root orphan (the widened detection surfaces the class):
+            # adoption refuses a dead root, so the line names the disposition
+            # path instead of the adoption advice.
+            print(
+                "interrupted run: "
+                f"{_manifest_path(ctx.done_session_dir, orphan.run_id).name} "
+                "(complete=false, never finalized; the recorded repo_root "
+                "matches no checkout here, so adoption refuses this "
+                "boundary); close it once with disposition-manifest --run-id "
+                f"{orphan.run_id} (the done skill's Manifest disposition "
+                "(dead-boundary close) paragraph is the procedure of record)"
             )
             continue
         print(
@@ -3064,6 +3239,306 @@ def _cmd_finalize_manifest(argv: list[str]) -> int:
     return 0
 
 
+def _disposition_first_missing_deliverable(
+    manifest: RunManifest, ctx: GateContext
+) -> Optional[str]:
+    """The disposition operation's deliverables witness, resolved set by set:
+    an ``owned_plan_paths`` entry passes at its recorded path in the current
+    checkout or at its ``plans_completed`` archive twin at HEAD; an
+    ``owned_review_paths`` entry passes against the docs branch
+    (``git cat-file -e docs:<path>``; review staging docs are gitignored on
+    the default branch); an ``owned_paths`` entry passes at ``HEAD:<path>``.
+    Returns None when every owned deliverable resolves, else a one-line
+    message naming the first missing one."""
+    for plan_path in manifest.owned_plan_paths:
+        on_disk = (ctx.repo_root / plan_path).is_file()
+        at_head = ctx.git("cat-file", "-e", f"HEAD:{plan_path}").returncode == 0
+        if on_disk or at_head:
+            continue
+        twin = ctx.plans_completed_dir / Path(plan_path).name
+        twin_rel = _repo_relative(str(twin), ctx.repo_root)
+        if ctx.git("cat-file", "-e", f"HEAD:{twin_rel}").returncode == 0:
+            continue
+        return (
+            f"owned_plan_paths entry {plan_path} resolves neither at its "
+            "recorded path nor at its plans_completed archive twin at HEAD"
+        )
+    for review_path in manifest.owned_review_paths:
+        if ctx.git("cat-file", "-e", f"docs:{review_path}").returncode == 0:
+            continue
+        return (
+            f"owned_review_paths entry {review_path} does not resolve on the "
+            "docs branch"
+        )
+    for owned_path in manifest.owned_paths:
+        if ctx.git("cat-file", "-e", f"HEAD:{owned_path}").returncode == 0:
+            continue
+        return f"owned_paths entry {owned_path} does not resolve at HEAD"
+    return None
+
+
+def _manifest_adopted_by_another(done_session_dir: Path, run_id: str) -> bool:
+    """True when any run manifest in the directory carries an ``adopted_from``
+    link naming ``run_id`` (the boundary was continued by another run; the
+    scan is over the raw payloads, so an adopter is never missed by a root or
+    schema filter)."""
+    if not done_session_dir.is_dir():
+        return False
+    for path in sorted(done_session_dir.glob("run-manifest-*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        link = payload.get("adopted_from")
+        if isinstance(link, str) and link == run_id:
+            return True
+    return False
+
+
+def _cmd_disposition_manifest(argv: list[str]) -> int:
+    """Stamp the one-time ``dispositioned`` record onto an unadoptable
+    interrupted run manifest (an interrupted run whose recorded ``repo_root``
+    names a checkout that no longer exists, so the adoption boundary and the
+    finalize identity check refuse it forever). Refusals, each a named
+    one-line error with no mutation: an absent manifest; ``complete`` already
+    true; an ``adopted_from`` link naming the run (another manifest adopted
+    this boundary); a recorded root matching the current repository through
+    either arm of ``_repo_root_matches_value`` (a live root is
+    adoption/resume territory; the refusal names the resume path). A
+    ``dispositioned`` record already present is the idempotent arm: the
+    existing record is printed and the exit is 0, never a refusal, so a
+    re-run after the deliverable vanished cannot un-close the run. On
+    success the deliverables witness resolves every owned deliverable by set
+    (naming the first missing one on refusal; three empty owned sets print
+    and stamp a named no-deliverables note - the witness is vacuously true).
+    Immediately before the write a stamp CAS re-checks with two fresh reads:
+    (a) this manifest's payload re-read from disk through the reader's parse
+    contract (``_read_manifest_by_run_id``), refusing fail-closed when the
+    re-read returns None (absent, unreadable, or schema-mismatched; post-check
+    state loss), refusing when
+    ``complete`` is now true (post-check finalize), and degrading to the
+    idempotent reprint of the racer's record when a ``dispositioned`` record
+    landed after the pre-checks (other field drift does not block the
+    stamp); (b) a fresh ``_manifest_adopted_by_another`` directory re-scan,
+    refusing on post-check adoption (adoption writes ``adopted_from`` on the
+    ADOPTER's manifest, invisible to a payload-only re-read). Only then is
+    ``dispositioned: {reason: "work-verified-landed", date, note}`` stamped
+    through the writer's atomic manifest-update path."""
+    parser = argparse.ArgumentParser(
+        prog="done_sweep_gates.py disposition-manifest",
+        description=(
+            "Stamp the one-time disposition record onto an unadoptable "
+            "interrupted run manifest."
+        ),
+    )
+    parser.add_argument(
+        "--run-id", required=True, metavar="RUN_ID",
+        help="the run_id recorded when Step 0 wrote the manifest",
+    )
+    parser.add_argument(
+        "--note", default=None, metavar="TEXT",
+        help="optional closure note recorded inside the dispositioned record",
+    )
+    args = parser.parse_args(argv)
+
+    root = os.environ.get("DONE_SWEEP_REPO_ROOT")
+    ctx = GateContext.discover(Path(root) if root else None)
+
+    if not args.run_id or Path(args.run_id).name != args.run_id:
+        return _cli_fail(
+            f"disposition-manifest: refusing {args.run_id!r}: not a bare "
+            "run_id filename"
+        )
+    # The root-agnostic reader (the root-filtered loader would refuse the
+    # dead-root record this operation exists to close).
+    manifest = _read_manifest_by_run_id(ctx.done_session_dir, args.run_id)
+    if manifest is None:
+        return _cli_fail(
+            "disposition-manifest: no run manifest found for run_id "
+            f"{args.run_id} under {ctx.done_session_dir}"
+        )
+    if manifest.dispositioned is not None:
+        # Idempotent re-run: print the existing record, exit 0, never refuse.
+        record = manifest.dispositioned
+        date = record.get("date") if isinstance(record.get("date"), str) else ""
+        print(f"dispositioned: {manifest.run_id} ({date}) (already dispositioned)")
+        print(json.dumps(record, sort_keys=True))
+        return 0
+    if manifest.complete:
+        return _cli_fail(
+            f"disposition-manifest: refusing {manifest.run_id}: the run "
+            "already finalized (complete=true); a finalized run is never an "
+            "interrupted run"
+        )
+    if _manifest_adopted_by_another(ctx.done_session_dir, manifest.run_id):
+        return _cli_fail(
+            f"disposition-manifest: refusing {manifest.run_id}: another "
+            "manifest adopts this boundary (an adopted_from link names it); "
+            "adoption owns the continuation"
+        )
+    if _repo_root_matches_value(manifest.repo_root, ctx.repo_root):
+        return _cli_fail(
+            f"disposition-manifest: refusing {manifest.run_id}: the recorded "
+            "repo_root matches this repository (a live root); resume the run "
+            "in its checkout and close it through the adoption boundary "
+            f"(write-manifest --adopt {manifest.run_id}) or with "
+            f"finalize-manifest --run-id {manifest.run_id}, never disposition"
+        )
+    date_str = datetime.now(timezone.utc).date().isoformat()
+    if (
+        not manifest.owned_plan_paths
+        and not manifest.owned_review_paths
+        and not manifest.owned_paths
+    ):
+        note = (
+            "no-deliverables: the manifest owns no deliverables "
+            "(owned_plan_paths, owned_review_paths, owned_paths all empty); "
+            "the deliverables witness is vacuously true"
+        )
+        if args.note:
+            note = f"{note}; operator note: {args.note}"
+        print(f"disposition-manifest: {note}")
+    else:
+        missing = _disposition_first_missing_deliverable(manifest, ctx)
+        if missing is not None:
+            return _cli_fail(
+                f"disposition-manifest: refusing {manifest.run_id}: "
+                f"deliverables witness failed: {missing}"
+            )
+        note = args.note or ""
+    manifest.dispositioned = {
+        "reason": "work-verified-landed",
+        "date": date_str,
+        "note": note,
+    }
+    # Stamp CAS: two fresh reads close the check-then-write window so a
+    # finalize, a competing disposition, or an adoption landing between the
+    # pre-checks and the stamp cannot blur the record. (a) This manifest's
+    # payload re-read fresh from disk through the reader's parse contract
+    # (the same helper the initial read used), so absent, unreadable, and
+    # schema-mismatched fresh payloads all refuse identically to
+    # _read_manifest_by_run_id's semantics. A None return conflates those
+    # three shapes (an accepted narrowing: each refuses fail-closed here)
+    # and never covers a complete-but-valid manifest, which the helper
+    # parses through to the dataclass, so the post-check finalize shape
+    # stays reachable. Any other field drift between the two reads does
+    # not block the stamp.
+    fresh = _read_manifest_by_run_id(ctx.done_session_dir, manifest.run_id)
+    if fresh is None:
+        return _cli_fail(
+            f"disposition-manifest: refusing {manifest.run_id}: the manifest "
+            "payload is absent, unreadable, or schema-mismatched at the "
+            "stamp (post-check state loss); refusing to stamp over an "
+            "unknown state"
+        )
+    if fresh.complete:
+        return _cli_fail(
+            f"disposition-manifest: refusing {manifest.run_id}: the run "
+            "finalized between the pre-checks and the stamp (post-check "
+            "finalize); a finalized run is never an interrupted run"
+        )
+    racer = fresh.dispositioned
+    if racer is not None:
+        # A concurrent disposition won the race: print the EXISTING record
+        # (the racer's date/note, not this call's) and exit 0, the same
+        # idempotent path as a pre-existing stamp.
+        racer_date = (
+            racer.get("date") if isinstance(racer.get("date"), str) else ""
+        )
+        print(
+            "disposition-manifest: a dispositioned record landed after the "
+            "pre-checks (a concurrent disposition won the race); printing "
+            "the existing record"
+        )
+        print(
+            f"dispositioned: {manifest.run_id} ({racer_date}) "
+            "(already dispositioned)"
+        )
+        print(json.dumps(racer, sort_keys=True))
+        return 0
+    # (b) A fresh directory re-scan: adoption writes adopted_from on the
+    # ADOPTER's manifest, invisible to a payload-only re-read.
+    if _manifest_adopted_by_another(ctx.done_session_dir, manifest.run_id):
+        return _cli_fail(
+            f"disposition-manifest: refusing {manifest.run_id}: another "
+            "manifest adopted this boundary between the pre-checks and the "
+            "stamp (post-check adoption); adoption owns the continuation"
+        )
+    try:
+        path = write_run_manifest(manifest, ctx.done_session_dir)
+    except OSError as exc:
+        return _cli_fail(
+            f"disposition-manifest: cannot rewrite the run manifest: {exc}"
+        )
+    print(f"dispositioned: {manifest.run_id} ({date_str}) written to {path}")
+    return 0
+
+
+def _cmd_list_interrupted_manifests(argv: list[str]) -> int:
+    """Print one line per detected interrupted manifest (read-only, never
+    mutates): ``<run_id> root=<live|dead> dispositioned=<yes|no>
+    adopted=<yes|no> created=<iso date>``. The enumeration walks every
+    ``run-manifest-*.json`` payload itself - never the root-filtered
+    ``load_run_manifest`` and never ``_detect_interrupted_runs``, whose
+    suppression shapes (dispositioned records) must stay visible as columns
+    here. The keep-filter holds ``complete`` false and nothing adopting the
+    record (no other manifest's ``adopted_from`` link names it); the
+    ``adopted`` column reports the record's own ``adopted_from`` link, so an
+    adopted boundary stays distinguishable in the output; root liveness goes
+    through both arms of ``_repo_root_matches_value`` (a 64-hex digest
+    compares against the current digest, any other value by realpath). An
+    empty set prints ``no interrupted manifests`` and exits 0."""
+    parser = argparse.ArgumentParser(
+        prog="done_sweep_gates.py list-interrupted-manifests",
+        description=(
+            "List the interrupted run manifests classified by root liveness "
+            "(read-only)."
+        ),
+    )
+    parser.parse_args(argv)
+
+    root = os.environ.get("DONE_SWEEP_REPO_ROOT")
+    ctx = GateContext.discover(Path(root) if root else None)
+    parsed: list[RunManifest] = []
+    if ctx.done_session_dir.is_dir():
+        for path in sorted(ctx.done_session_dir.glob("run-manifest-*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            manifest = RunManifest.from_dict(payload)
+            if manifest is None:
+                continue
+            parsed.append(manifest)
+    adopted_ids = {m.adopted_from for m in parsed if m.adopted_from}
+    lines: list[str] = []
+    for manifest in parsed:
+        if manifest.complete or manifest.run_id in adopted_ids:
+            continue
+        root_state = (
+            "live"
+            if _repo_root_matches_value(manifest.repo_root, ctx.repo_root)
+            else "dead"
+        )
+        created = datetime.fromtimestamp(
+            manifest.created_epoch, tz=timezone.utc
+        ).date().isoformat()
+        lines.append(
+            f"{manifest.run_id} root={root_state} "
+            f"dispositioned={'yes' if manifest.dispositioned else 'no'} "
+            f"adopted={'yes' if manifest.adopted_from else 'no'} "
+            f"created={created}"
+        )
+    if not lines:
+        print("no interrupted manifests")
+        return 0
+    for line in lines:
+        print(line)
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in ("-h", "--help"):
@@ -3080,6 +3555,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _cmd_write_manifest(args[1:])
     if command == "finalize-manifest":
         return _cmd_finalize_manifest(args[1:])
+    if command == "disposition-manifest":
+        return _cmd_disposition_manifest(args[1:])
+    if command == "list-interrupted-manifests":
+        return _cmd_list_interrupted_manifests(args[1:])
     if command in PHASES:
         root = os.environ.get("DONE_SWEEP_REPO_ROOT")
         ctx = GateContext.discover(Path(root) if root else None)

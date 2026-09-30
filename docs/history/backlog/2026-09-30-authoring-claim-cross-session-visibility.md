@@ -1,4 +1,4 @@
-Status: open
+Status: done (2026-09-30; executed+landed docs/history/plans/completed/2026-09-30-authoring-claim-cross-session-visibility.md, squash main 10cc9d22, exec review r2 ready=yes zero blocking)
 Priority: high
 Workflow: backlog
 Class: automation

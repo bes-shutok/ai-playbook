@@ -1,4 +1,4 @@
-Status: open
+Status: done (2026-09-30; executed+landed docs/history/plans/completed/2026-09-30-pins-consolidation-comment-narrowed-claim.md, squash main 6251d8e2, exec review r1 ready=yes zero blocking)
 Priority: high
 Workflow: backlog
 Class: formal (stale explanatory comment above a pin block; no pin keys on the comment text)

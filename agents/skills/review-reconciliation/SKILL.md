@@ -96,6 +96,8 @@ Return a concise result with these sections, and write the durable artifact when
 5. **Decision requests**: only material choices that cannot be resolved from the available evidence.
 6. **Handoff**: the original orchestrator, fresh source digest to review, worker set, and the condition for resuming or stopping.
 
+**Fold-propagation probe**: when the reconciliation trigger was fold-propagation class (fold batches whose edits failed to propagate to the plan's accounting surfaces: Review Scope editable-region and read-only lists, the Gate delta count, pinned Validation Command literals, or the Evaluation Criteria's ownership), the reconciliation's own fold batch re-runs the review-plan Step 5 accounting-surface re-derivation over the amended plan before the result may declare reconciled.
+
 Use these terminal statuses:
 
 - `reconciled`: the artifact or review machinery was coherently refactored and is ready for a fresh caller-owned review;
@@ -115,7 +117,7 @@ Review reconciliation handoff
 - Current digest: <digest or unknown>
 - Review artifacts: <chronological paths or identifiers>
 - Fix and triage history: <paths or summaries>
-- Recurring trigger: <same root, regeneration, contradiction, cap, or evidence gap>
+- Recurring trigger: <same root, regeneration, contradiction, cap, evidence gap, or fold-propagation>
 - Mutation scope: <read-only | named artifact/catalog paths>
 - Required return: recurrence map, closure ledger, changes, decisions, and fresh-review handoff
 ```
@@ -125,6 +127,7 @@ The caller owns the next review. Its final report must link the reconciliation a
 ## Integration Points
 
 ### With review orchestrators
+The review-plan Step 5 fold discipline's accounting-surface re-derivation runs inside this skill's fold batch when the trigger was fold-propagation class (the output contract's Fold-propagation probe).
 
 `review-loop`, `review-plan`, `execute-plan`, `rfc-design`, and `receiving-review` invoke this skill at their documented non-convergence trigger. They provide the history and mutation scope, then resume only after the reconciliation result is recorded. After a change, the same original orchestrator runs the fresh review.
 

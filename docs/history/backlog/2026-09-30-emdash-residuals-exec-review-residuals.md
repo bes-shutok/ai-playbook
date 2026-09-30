@@ -1,7 +1,13 @@
 # emdash-residuals execution review residuals (r1, 2 Low)
 
+Cluster: docs/history/backlog/2026-09-29-p93-impl-review-nonblocking-residuals.md
+Cluster: docs/history/backlog/2026-09-29-residual-exit-impl-review-residuals.md
+Cluster: docs/history/backlog/2026-09-29-execute-plan-review-residuals.md
+Cluster: docs/history/backlog/2026-09-30-prelaunch-recovery-impl-review-residuals.md
+
+
 - **Date:** 2026-09-30
-- **Status:** open
+- **Status: done (2026-10-01; family closeout executed+landed docs/history/plans/completed/2026-09-30-impl-review-residuals-family.md, squash main db5786c2, exec review r1 ready=yes zero blocking)(docs/history/plans/2026-09-30-impl-review-residuals-family.md)
 - **Origin class:** self-serving
 - **Priority:** Low
 

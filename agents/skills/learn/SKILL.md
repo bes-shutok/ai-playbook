@@ -597,5 +597,8 @@ Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-sk
 ### With `done` skill
 `done` Step 1 invokes `learn`; learn's skills-repo commit (Step 1.8 backlog items and the skill-placement commit workflow) lands during that step, before any `done` commit step. `done` Step 4 keeps only the non-learn fallback for remaining skills-repo changes.
 
+### With `maintenance` skill
+Bidirectional. Consumer side (maintenance): the loop's per-cycle harvest duty (maintenance SKILL.md Step 3) invokes learn once per completed cycle under a live standing directive, over the cycle's session logs and outputs; learn's own placement, scope, and duplicate-refusal rules govern what lands - the duty invokes the skill and never restates them. Producer side (learn): lessons harvested by the harvest duty follow learn's normal placement rules, and learn records nothing about the loop itself.
+
 ### With `receiving-review` skill
 `receiving-review`'s "Backlog capture for valid findings not fixed in scope" is the shape provider for Step 1.8's backlog items. The sources are disjoint: `receiving-review` captures review findings in the current project, learn Step 1.8 captures skills-corpus defects in the skills repo's resolved backlog home; neither owns the other's path.

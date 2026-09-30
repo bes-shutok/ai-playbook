@@ -1,9 +1,4 @@
-Status: open
-Priority: high
-Workflow: backlog
-Class: automation
-Driving force: reliability
-Origin class: witnessed-incident (the 2026-09-29 interrupted closeout 20260929T023532Z-3fb1c11bb98b, the stranded-captures landing ee0b2e15, and the same-run lock recovery; user direction: collect ideas on how to avoid such things)
+Status: done (2026-10-01; arms B/D/E executed+landed via docs/history/plans/completed/2026-09-30-interrupted-run-disposition-and-survey-arm.md, squash main 1aef6343, exec review r1 ready=yes zero blocking; ideas A and F ride their open family items 2026-09-28-worktree-closeout-baseline-capture.md and 2026-09-28-done-lock-one-shot-reclaim-releases-documentation.md; idea C deferred pending a fresh witness)(the 2026-09-29 interrupted closeout 20260929T023532Z-3fb1c11bb98b, the stranded-captures landing ee0b2e15, and the same-run lock recovery; user direction: collect ideas on how to avoid such things)
 
 # Interrupted-run and stranded-work prevention: idea set
 

@@ -1,9 +1,14 @@
-Status: open
+Status: done (2026-10-01; family closeout executed+landed docs/history/plans/completed/2026-09-30-impl-review-residuals-family.md, squash main db5786c2, exec review r1 ready=yes zero blocking)(docs/history/plans/2026-09-30-impl-review-residuals-family.md)
 Priority: medium
 Workflow: backlog
 Class: tooling
 Driving force: reliability
 Origin class: review-residual (2026-09-29: execute-plan-task-local-verifier-declarations r1 full-panel review, verdict clean, seven non-blocking findings; staging record docs/reviews/2026-09-29-code-review-execute-plan-task-local-verifier-declarations-r1.md)
+
+Cluster: docs/history/backlog/2026-09-29-p93-impl-review-nonblocking-residuals.md
+Cluster: docs/history/backlog/2026-09-29-residual-exit-impl-review-residuals.md
+Cluster: docs/history/backlog/2026-09-30-emdash-residuals-exec-review-residuals.md
+Cluster: docs/history/backlog/2026-09-30-prelaunch-recovery-impl-review-residuals.md
 
 # Execute-plan task-local-verifier landing residuals
 

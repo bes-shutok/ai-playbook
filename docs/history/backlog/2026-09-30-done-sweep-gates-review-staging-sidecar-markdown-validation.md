@@ -1,7 +1,7 @@
 # Backlog: done sweep-gates review-staging gate validates `.stats.json` sidecars as markdown staging docs
 
 - **Filed:** 2026-09-30
-- **Status:** open
+- **Status:** done (2026-09-30; executed+landed docs/history/plans/completed/2026-09-30-review-staging-sidecar-kind-validation.md, squash main f40713a3, exec review r1 ready=yes zero blocking)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** skill-defect (company): the fault traces to the done sweep-gates lib's staging-candidate classification, not to consumer-project code.

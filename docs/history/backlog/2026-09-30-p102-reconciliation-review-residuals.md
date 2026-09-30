@@ -1,5 +1,5 @@
 - **Filed:** 2026-09-30
-- **Status:** open
+- **Status:** done (2026-09-30; executed+landed docs/history/plans/completed/2026-09-30-reconciliation-coupling-residuals.md, squash main 3029d820, exec review r1 ready=yes zero blocking)
 - **Workflow:** done (learn Step 1.8)
 - **Priority:** medium
 - **Origin class:** self-serving

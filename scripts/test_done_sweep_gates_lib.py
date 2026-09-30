@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -49,8 +50,9 @@ from done_sweep_gates_lib import (
     run_gate,
 )
 
-# The twelve absorbed gate ids, in done SKILL.md step order (plan Terms + G2).
-EXPECTED_TWELVE_GATES = [
+# The absorbed gate ids, in done SKILL.md step order (plan Terms + G2);
+# order-neutral name since the count is now thirteen.
+EXPECTED_GATE_ORDER = [
     "plan-readiness",
     "confluence-hygiene",
     "doc-registry",
@@ -62,6 +64,7 @@ EXPECTED_TWELVE_GATES = [
     "sensitive-data-scan",
     "em-dash-scan",
     "instruction-size",
+    "description-length",
     "foreign-staging",
 ]
 
@@ -309,28 +312,28 @@ def mktemp_repo(tmp_path):
 # [class: REPOSITORY_TEST]
 # --------------------------------------------------------------------------- #
 def test_gate_registry_matches_absorbed_steps(capsys):
-    """[class: REPOSITORY_TEST] Given the lib gate registry, expects exactly ten
+    """[class: REPOSITORY_TEST] Given the lib gate registry, expects exactly thirteen
     gate ids in the two phase slices, in done SKILL.md order, matching
     plan-readiness, confluence-hygiene, doc-registry, backlog-inbox,
     review-staging, vim-swap-sweep, docs-tmp-sweep, sensitive-data-scan,
-    em-dash-scan, instruction-size."""
-    assert PRE_DOCS_GATES == EXPECTED_TWELVE_GATES[:8]
-    assert PRE_COMMIT_GATES[:3] == EXPECTED_TWELVE_GATES[8:11]
-    assert PRE_COMMIT_GATES[3] == "foreign-staging"
-    assert PRE_COMMIT_GATES[4] == "plans-archive-twin"
+    em-dash-scan, instruction-size, description-length."""
+    assert PRE_DOCS_GATES == EXPECTED_GATE_ORDER[:8]
+    assert PRE_COMMIT_GATES[:4] == EXPECTED_GATE_ORDER[8:12]
+    assert PRE_COMMIT_GATES[4] == "foreign-staging"
+    assert PRE_COMMIT_GATES[5] == "plans-archive-twin"
     assert lib.PHASES["pre-docs"] == PRE_DOCS_GATES
     assert lib.PHASES["pre-commit"] == PRE_COMMIT_GATES
     assert list(lib.PHASES.keys()) == ["pre-docs", "pre-commit"]
     # Every registry entry has an implementation and a phase slice.
-    assert set(lib.GATES.keys()) == set(EXPECTED_TWELVE_GATES)
+    assert set(lib.GATES.keys()) == set(EXPECTED_GATE_ORDER)
     # The dead READ_ONLY_GATES set stays deleted (sequential execution).
     assert not hasattr(lib, "READ_ONLY_GATES")
-    # list-gates prints the twelve ids, deduped at first phase (the twin
+    # list-gates prints the gate ids, deduped at first phase (the twin
     # runs in both phases; printed once at pre-docs).
     assert lib.main(["list-gates"]) == 0
-    assert capsys.readouterr().out.splitlines() == EXPECTED_TWELVE_GATES
-    assert len(EXPECTED_TWELVE_GATES) == 12
-    assert len(set(EXPECTED_TWELVE_GATES)) == 12
+    assert capsys.readouterr().out.splitlines() == EXPECTED_GATE_ORDER
+    assert len(EXPECTED_GATE_ORDER) == 13
+    assert len(set(EXPECTED_GATE_ORDER)) == 13
 
 
 # --------------------------------------------------------------------------- #
@@ -1243,12 +1246,14 @@ def _seed_run_manifest(
     foreign_review_paths: list[str] | None = None,
     adopted_from: str | None = None,
     complete: bool = False,
+    dispositioned: dict | None = None,
 ) -> Path:
     """Seed one run-manifest JSON through the lib's own model so loader tests
     exercise the real serialization shape. ``start_commit`` defaults to the
     current HEAD; ``start_porcelain`` defaults to an empty snapshot; the
     owned/foreign lists (including ``owned_paths``) default to empty; ``adopted_from`` defaults to null
-    and ``complete`` to false (an interrupted run)."""
+    and ``complete`` to false (an interrupted run); ``dispositioned`` defaults
+    to unset (no disposition record)."""
     head = git(root, "rev-parse", "HEAD").stdout.strip()
     manifest = lib.RunManifest(
         schema=1,
@@ -1265,6 +1270,7 @@ def _seed_run_manifest(
         foreign_review_paths=list(foreign_review_paths or []),
         adopted_from=adopted_from,
         complete=complete,
+        dispositioned=dispositioned,
     )
     return lib.write_run_manifest(
         manifest, root / "docs" / "tmp" / "done-session"
@@ -2943,6 +2949,621 @@ def test_parse_marker_hex_mismatch_returns_none_without_realpath(
     assert parsed.repo_root == lib._repo_root_digest(root)
 
 
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-09-30-interrupted-run-disposition-and-survey-arm.md
+# Task 1: disposition operation, listing operation, detection filter.
+# --------------------------------------------------------------------------- #
+def test_disposition_manifest_refusal_set(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan arm (a): given a fixture per refusal
+    class, expects ``disposition-manifest`` to refuse with a named one-line
+    error and a non-zero exit, leaving the manifest bytes byte-identical,
+    for an absent manifest, a complete run, an adopted boundary (another
+    manifest's adopted_from link names the run), a live root recorded as a
+    legacy raw path equal to the fixture root (so a digest-equality bypass
+    fails and the refusal names the resume path), and a missing deliverable;
+    an already-dispositioned manifest instead reprints its existing record
+    with a zero exit."""
+    root = mktemp_repo("disposition-refusals")
+    now = time.time()
+    done_session = root / "docs" / "tmp" / "done-session"
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    # Arm: absent manifest refuses, non-zero, named.
+    assert lib.main(["disposition-manifest", "--run-id", "run-absent"]) == 1
+    assert "no run manifest" in capsys.readouterr().err
+
+    # Arm: complete run refuses (a finalized run is never an interrupted run).
+    complete_id = "run-complete"
+    _seed_run_manifest(
+        root, complete_id, marker_name(now), str(root.resolve()), now, complete=True
+    )
+    before = (done_session / f"run-manifest-{complete_id}.json").read_bytes()
+    assert lib.main(["disposition-manifest", "--run-id", complete_id]) == 1
+    assert "already finalized" in capsys.readouterr().err
+    assert (done_session / f"run-manifest-{complete_id}.json").read_bytes() == before
+
+    # Arm: adopted boundary refuses (an adopted_from link names the run).
+    victim_id = "run-adopted-victim"
+    _seed_run_manifest(
+        root, victim_id, marker_name(now), str(tmp_path / "deleted-wt"), now
+    )
+    _seed_run_manifest(
+        root,
+        "run-adopter",
+        marker_name(now),
+        str(root.resolve()),
+        now,
+        adopted_from=victim_id,
+    )
+    before = (done_session / f"run-manifest-{victim_id}.json").read_bytes()
+    assert lib.main(["disposition-manifest", "--run-id", victim_id]) == 1
+    assert "adopts this boundary" in capsys.readouterr().err
+    assert (done_session / f"run-manifest-{victim_id}.json").read_bytes() == before
+
+    # Arm: live root refuses. The recorded root is the LEGACY RAW PATH equal
+    # to the fixture root, so a digest-equality bypass would misclassify it
+    # as dead and (wrongly) proceed to the stamp; the two-arm matcher catches
+    # it and the refusal names the resume path (the adoption boundary).
+    live_id = "run-live-root"
+    _seed_run_manifest(root, live_id, marker_name(now), str(root), now)
+    before = (done_session / f"run-manifest-{live_id}.json").read_bytes()
+    assert lib.main(["disposition-manifest", "--run-id", live_id]) == 1
+    err = capsys.readouterr().err
+    assert "live root" in err
+    assert "--adopt" in err  # the named resume path
+    assert (done_session / f"run-manifest-{live_id}.json").read_bytes() == before
+
+    # Arm: already-dispositioned reprints the existing record, exit 0.
+    stamped_id = "run-already-dispositioned"
+    stamp = {
+        "reason": "work-verified-landed",
+        "date": "2026-09-29",
+        "note": "witnessed closure",
+    }
+    _seed_run_manifest(
+        root,
+        stamped_id,
+        marker_name(now),
+        str(tmp_path / "deleted-wt-2"),
+        now,
+        dispositioned=stamp,
+    )
+    before = (done_session / f"run-manifest-{stamped_id}.json").read_bytes()
+    assert lib.main(["disposition-manifest", "--run-id", stamped_id]) == 0
+    out = capsys.readouterr().out
+    assert f"dispositioned: {stamped_id} (2026-09-29)" in out
+    assert "work-verified-landed" in out
+    assert (done_session / f"run-manifest-{stamped_id}.json").read_bytes() == before
+
+    # Arm: missing deliverable refuses naming the first missing path.
+    missing_id = "run-missing-deliverable"
+    missing_review = "docs/reviews/2026-09-30-never-landed-r1.md"
+    _seed_run_manifest(
+        root,
+        missing_id,
+        marker_name(now),
+        str(tmp_path / "deleted-wt-3"),
+        now,
+        owned_review_paths=[missing_review],
+    )
+    before = (done_session / f"run-manifest-{missing_id}.json").read_bytes()
+    assert lib.main(["disposition-manifest", "--run-id", missing_id]) == 1
+    err = capsys.readouterr().err
+    assert "deliverables witness failed" in err
+    assert missing_review in err
+    assert (done_session / f"run-manifest-{missing_id}.json").read_bytes() == before
+
+
+def test_disposition_stamp_round_trip_dead_root(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan arm (b): given a fixture dead-root
+    manifest (a recorded root naming a checkout that no longer exists, so
+    both matcher arms fail) whose owned deliverable resolves at HEAD, expects
+    ``disposition-manifest`` to stamp
+    ``{reason: "work-verified-landed", date, note}`` and to print the
+    ``dispositioned: <run_id> (<date>)`` line; the record survives a reload
+    through the root-agnostic reader and through ``from_dict`` on the raw
+    payload (the root-filtered loader would refuse the dead-root record),
+    and a non-dict ``dispositioned`` payload degrades to unset."""
+    root = mktemp_repo("disposition-roundtrip")
+    now = time.time()
+    run_id = "run-disposition-roundtrip"
+    _seed_run_manifest(
+        root,
+        run_id,
+        marker_name(now),
+        str(tmp_path / "deleted-worktree"),
+        now,
+        owned_paths=["README.md"],  # committed by the fixture's init commit
+    )
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    manifest_path = (
+        root / "docs" / "tmp" / "done-session" / f"run-manifest-{run_id}.json"
+    )
+
+    rc = lib.main(
+        [
+            "disposition-manifest",
+            "--run-id",
+            run_id,
+            "--note",
+            "witnessed incident closure",
+        ]
+    )
+
+    assert rc == 0
+    today = datetime.now(timezone.utc).date().isoformat()
+    assert f"dispositioned: {run_id} ({today})" in capsys.readouterr().out
+    expected = {
+        "reason": "work-verified-landed",
+        "date": today,
+        "note": "witnessed incident closure",
+    }
+    # Root-agnostic reader reload (the root-filtered loader refuses the
+    # dead-root record this operation exists to close).
+    reloaded = lib._read_manifest_by_run_id(
+        root / "docs" / "tmp" / "done-session", run_id
+    )
+    assert reloaded is not None
+    assert reloaded.dispositioned == expected
+    assert reloaded.complete is False  # the stamp closes without finalizing
+    # The tolerant from_dict mapping reads the record back from raw bytes.
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["dispositioned"] == expected
+    assert lib.RunManifest.from_dict(payload).dispositioned == expected
+    # A non-dict dispositioned value degrades to unset, never an exception.
+    corrupt = dict(payload)
+    corrupt["dispositioned"] = "bogus"
+    assert lib.RunManifest.from_dict(corrupt).dispositioned is None
+    # as_dict emits the field so a write-through keeps it first-class.
+    assert lib.RunManifest.from_dict(payload).as_dict()["dispositioned"] == expected
+
+
+def test_disposition_rerun_reprints_after_deliverable_vanishes(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan arm (c): given a stamped manifest whose
+    owned deliverable has since vanished from the checkout, expects a
+    ``disposition-manifest`` re-run to print the existing record and exit 0
+    instead of refusing: the closure is one-time and a vanished deliverable
+    cannot un-close it."""
+    root = mktemp_repo("disposition-rerun")
+    now = time.time()
+    run_id = "run-disposition-rerun"
+    plan_rel = "docs/history/plans/2026-09-30-vanishing-plan.md"
+    plan = root / plan_rel
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("plan body\n", encoding="utf-8")  # on-disk arm, unstaged
+    _seed_run_manifest(
+        root,
+        run_id,
+        marker_name(now),
+        str(tmp_path / "deleted-worktree"),
+        now,
+        owned_plan_paths=[plan_rel],
+    )
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    assert lib.main(["disposition-manifest", "--run-id", run_id]) == 0
+    capsys.readouterr()
+    plan.unlink()
+    assert not plan.exists()
+
+    rc = lib.main(["disposition-manifest", "--run-id", run_id])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "already dispositioned" in out
+    assert "work-verified-landed" in out
+
+
+def test_disposition_zero_owned_sets_prints_and_stamps_note(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan arm (d): given a dead-root manifest
+    whose three owned sets are all empty, expects ``disposition-manifest``
+    to print the named no-deliverables note on stdout and to stamp it inside
+    the dispositioned record (the witness is vacuously true and the note
+    keeps the closure honest), with the work-verified-landed reason and the
+    canonical dispositioned line still present."""
+    root = mktemp_repo("disposition-zero")
+    now = time.time()
+    run_id = "run-zero-deliverables"
+    _seed_run_manifest(
+        root, run_id, marker_name(now), str(tmp_path / "deleted-worktree"), now
+    )
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    rc = lib.main(["disposition-manifest", "--run-id", run_id])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no-deliverables" in out
+    assert "vacuously true" in out
+    assert f"dispositioned: {run_id}" in out
+    record = lib._read_manifest_by_run_id(
+        root / "docs" / "tmp" / "done-session", run_id
+    )
+    assert record is not None
+    assert record.dispositioned["reason"] == "work-verified-landed"
+    assert "no-deliverables" in record.dispositioned["note"]
+    assert "vacuously true" in record.dispositioned["note"]
+
+
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-10-01-disposition-machinery-followups.md
+# Task 3: the stamp CAS race arm and the skill anchor phrases.
+# --------------------------------------------------------------------------- #
+def test_disposition_stamp_cas_refuses_post_check_finalize(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan arm: given a dead-root manifest whose
+    witness is vacuously true and a finalize landing between the
+    disposition's initial read and the stamp (``complete`` flips true on
+    disk), expects ``disposition-manifest`` to refuse with the post-check
+    finalize named and to leave no ``dispositioned`` record in the on-disk
+    payload: the stamp CAS re-read closes the check-then-write window. The
+    racer's flip fires when the initial read returns, inside the window the
+    CAS guards (``write_run_manifest`` is reached only after the CAS has
+    passed, so a flip hooked there would be clobbered by the original write
+    and never seen by the re-read)."""
+    root = mktemp_repo("disposition-cas-finalize")
+    now = time.time()
+    run_id = "run-cas-finalize-race"
+    done_session = root / "docs" / "tmp" / "done-session"
+    manifest_path = done_session / f"run-manifest-{run_id}.json"
+    _seed_run_manifest(
+        root, run_id, marker_name(now), str(tmp_path / "deleted-worktree"), now
+    )
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    original_read = lib._read_manifest_by_run_id
+
+    def racing_read(done_session_dir, rid):
+        manifest = original_read(done_session_dir, rid)
+        if manifest is not None and manifest.run_id == rid:
+            # The racer: a finalize writes its payload right after the
+            # disposition's initial read, before the stamp.
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            payload["complete"] = True
+            manifest_path.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        return manifest
+
+    monkeypatch.setattr(lib, "_read_manifest_by_run_id", racing_read)
+
+    rc = lib.main(["disposition-manifest", "--run-id", run_id])
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "post-check finalize" in err
+    assert run_id in err
+    # No dispositioned record landed: the payload holds the racer's
+    # finalize shape, never this call's stamp.
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["complete"] is True
+    assert payload["dispositioned"] is None
+    reloaded = original_read(done_session, run_id)
+    assert reloaded is not None
+    assert reloaded.complete is True
+    assert reloaded.dispositioned is None
+
+
+def test_disposition_stamp_cas_refuses_post_check_adoption(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan arm: given a dead-root manifest whose
+    witness is vacuously true and a competing manifest whose ``adopted_from``
+    link names the run landing between the disposition's initial read and
+    the stamp, expects ``disposition-manifest`` to refuse with the post-check
+    adoption named and to leave no ``dispositioned`` record in the on-disk
+    payload: the stamp CAS directory re-scan closes the window a payload-only
+    re-read cannot see (adoption writes ``adopted_from`` on the ADOPTER's
+    manifest). The adopter seeds on the scan helper's SECOND invocation:
+    the first invocation is the disposition pre-check and must pass through
+    unchanged, otherwise the pre-check refusal fires before the stamp and
+    the post-check shape is never reached."""
+    root = mktemp_repo("disposition-cas-adoption")
+    now = time.time()
+    run_id = "run-cas-adoption-race"
+    done_session = root / "docs" / "tmp" / "done-session"
+    manifest_path = done_session / f"run-manifest-{run_id}.json"
+    _seed_run_manifest(
+        root, run_id, marker_name(now), str(tmp_path / "deleted-worktree"), now
+    )
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    original_adopted = lib._manifest_adopted_by_another
+
+    def racing_adopted_scan(done_session_dir, rid):
+        calls = getattr(racing_adopted_scan, "calls", 0) + 1
+        racing_adopted_scan.calls = calls
+        if calls == 2 and rid == run_id:
+            # The racer: a competing run adopts this boundary right after
+            # the pre-checks, before the stamp-time re-scan. Seeding through
+            # the real writer keeps the production scan (no stub) honest.
+            _seed_run_manifest(
+                root,
+                "run-cas-adopter",
+                marker_name(now),
+                str(root),
+                now + 1,
+                adopted_from=rid,
+            )
+        return original_adopted(done_session_dir, rid)
+
+    monkeypatch.setattr(lib, "_manifest_adopted_by_another", racing_adopted_scan)
+
+    rc = lib.main(["disposition-manifest", "--run-id", run_id])
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "post-check adoption" in err
+    assert run_id in err
+    # No dispositioned record landed on the dead-root manifest: the payload
+    # keeps its pre-stamp shape, never this call's stamp.
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["dispositioned"] is None
+    assert payload["complete"] is False
+    reloaded = lib._read_manifest_by_run_id(done_session, run_id)
+    assert reloaded is not None
+    assert reloaded.dispositioned is None
+    # The adopter is on disk with the link naming the run (the real scan
+    # saw it, the refusal names the post-check shape).
+    adopter = lib._read_manifest_by_run_id(done_session, "run-cas-adopter")
+    assert adopter is not None
+    assert adopter.adopted_from == run_id
+
+
+def test_disposition_stamp_cas_dispositioned_race_reprints_idempotent(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan arm: given a dead-root manifest and a
+    concurrent disposition landing between the disposition's initial read
+    and the stamp, expects ``disposition-manifest`` to exit 0 and reprint
+    the RACER's record (the racer's date and record JSON echoed, not this
+    call's): the stamp CAS fresh re-read degrades to the idempotent path.
+    No new write lands: the on-disk payload keeps the racer's record
+    unchanged. The racer fires on the reader helper's SECOND call, the
+    CAS's fresh re-read, which only reaches the hook through the rerouted
+    parse path (a raw-json fresh read never makes the second call)."""
+    root = mktemp_repo("disposition-cas-dispositioned")
+    now = time.time()
+    run_id = "run-cas-dispositioned-race"
+    done_session = root / "docs" / "tmp" / "done-session"
+    manifest_path = done_session / f"run-manifest-{run_id}.json"
+    _seed_run_manifest(
+        root, run_id, marker_name(now), str(tmp_path / "deleted-worktree"), now
+    )
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    racer_record = {
+        "reason": "work-verified-landed",
+        "date": "2026-09-29",
+        "note": "racer note",
+    }
+
+    original_read = lib._read_manifest_by_run_id
+
+    def racing_read(done_session_dir, rid):
+        calls = getattr(racing_read, "calls", 0) + 1
+        racing_read.calls = calls
+        manifest = original_read(done_session_dir, rid)
+        if calls == 2 and manifest is not None and manifest.run_id == rid:
+            # The racer: a concurrent disposition stamps its record after
+            # the pre-checks; the CAS's fresh re-read must see it. The
+            # returned manifest is the honest parse of the flipped disk.
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            payload["dispositioned"] = dict(racer_record)
+            manifest_path.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            manifest = original_read(done_session_dir, rid)
+        return manifest
+
+    monkeypatch.setattr(lib, "_read_manifest_by_run_id", racing_read)
+
+    rc = lib.main(["disposition-manifest", "--run-id", run_id])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "concurrent disposition won the race" in out
+    assert "2026-09-29" in out  # the racer's date, not this call's
+    assert "racer note" in out
+    assert json.dumps(racer_record, sort_keys=True) in out
+    # No new write: the on-disk payload carries the racer's record exactly
+    # (this call's stamp would carry an empty note and today's date).
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["dispositioned"] == racer_record
+    assert payload["complete"] is False
+
+
+def test_disposition_skill_anchor_phrases_present():
+    """[class: REPOSITORY_TEST] Plan arm: the two skill anchors from the
+    plan's Validation Commands hold - the done skill's witness sentence
+    names the third plan arm (``HEAD:<recorded path>``) and the maintenance
+    skill's interrupted-manifest classification arm pins the proactive
+    stale-deployment probe."""
+    repo_root = Path(__file__).resolve().parents[1]
+    done_text = (repo_root / "agents/skills/done/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    maintenance_text = (
+        repo_root / "agents/skills/maintenance/SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "HEAD:<recorded path>" in done_text
+    assert "stale-deployment" in maintenance_text
+
+
+def test_list_interrupted_manifests_columns_and_non_mutation(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Plan arm (e): a dead-root fixture prints its
+    ``root=dead`` line with ``dispositioned=no`` flipping to ``yes`` after a
+    stamp; the ``adopted`` column reports the record's own ``adopted_from``
+    link while a complete record never lists; a clean fixture prints the
+    empty-set line; and the listing never mutates (byte-identical manifest
+    set before and after)."""
+    # Empty set on a clean fixture.
+    empty_root = mktemp_repo("listing-empty")
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(empty_root))
+    assert lib.main(["list-interrupted-manifests"]) == 0
+    assert capsys.readouterr().out.strip() == "no interrupted manifests"
+
+    root = mktemp_repo("listing-dead")
+    now = time.time()
+    created_iso = datetime.fromtimestamp(now, tz=timezone.utc).date().isoformat()
+    dead_id = "run-dead-root"
+    _seed_run_manifest(
+        root, dead_id, marker_name(now), str(tmp_path / "deleted-wt"), now
+    )
+    # A live-root record that itself adopted an older boundary: root=live,
+    # adopted=yes (its own adopted_from link), still an interrupted run.
+    _seed_run_manifest(
+        root,
+        "run-live-adopter",
+        marker_name(now),
+        str(root.resolve()),
+        now,
+        adopted_from="run-older-parent",
+    )
+    # A finalized record never lists.
+    _seed_run_manifest(
+        root,
+        "run-live-complete",
+        marker_name(now),
+        str(root.resolve()),
+        now,
+        complete=True,
+    )
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    done_session = root / "docs" / "tmp" / "done-session"
+    before = {p.name: p.read_bytes() for p in done_session.glob("run-manifest-*.json")}
+
+    assert lib.main(["list-interrupted-manifests"]) == 0
+    out = capsys.readouterr().out
+    assert (
+        f"{dead_id} root=dead dispositioned=no adopted=no created={created_iso}"
+        in out
+    )
+    assert (
+        f"run-live-adopter root=live dispositioned=no adopted=yes "
+        f"created={created_iso}" in out
+    )
+    assert "run-live-complete" not in out
+    # Non-mutation: the listing is read-only over the manifest set.
+    after = {p.name: p.read_bytes() for p in done_session.glob("run-manifest-*.json")}
+    assert after == before
+
+    # A stamp flips the dispositioned column on the dead-root line.
+    assert lib.main(["disposition-manifest", "--run-id", dead_id]) == 0
+    capsys.readouterr()
+    assert lib.main(["list-interrupted-manifests"]) == 0
+    out2 = capsys.readouterr().out
+    assert (
+        f"{dead_id} root=dead dispositioned=yes adopted=no created={created_iso}"
+        in out2
+    )
+
+
+def test_detect_interrupted_runs_dispositioned_and_dead_root_arms(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Plan arm (f): the widened orphan detection
+    includes a dead-root unadopted fixture (its recorded root fails both
+    matcher arms, yet it stays an orphan when complete is false and nothing
+    adopts it - the class the old root filter silently skipped) and excludes
+    a dispositioned fixture (the second suppression shape); an adopted
+    dead-root record and a live-root orphan line up on the adoption side of
+    the contract."""
+    root = mktemp_repo("detection-arms")
+    now = time.time()
+    dead_id = "run-dead-unadopted"
+    _seed_run_manifest(
+        root, dead_id, marker_name(now), str(tmp_path / "deleted-wt"), now
+    )
+    disp_id = "run-dispositioned"
+    _seed_run_manifest(
+        root,
+        disp_id,
+        marker_name(now),
+        str(tmp_path / "deleted-wt-2"),
+        now,
+        dispositioned={
+            "reason": "work-verified-landed",
+            "date": "2026-09-29",
+            "note": "closed",
+        },
+    )
+    adopted_dead_id = "run-dead-adopted"
+    _seed_run_manifest(
+        root,
+        adopted_dead_id,
+        marker_name(now),
+        str(tmp_path / "deleted-wt-3"),
+        now,
+    )
+    _seed_run_manifest(
+        root,
+        "run-adopter-final",
+        marker_name(now),
+        str(root.resolve()),
+        now,
+        adopted_from=adopted_dead_id,
+        complete=True,
+    )
+    live_id = "run-live-orphan"
+    _seed_run_manifest(root, live_id, marker_name(now), str(root.resolve()), now)
+
+    orphans = lib._detect_interrupted_runs(
+        root / "docs" / "tmp" / "done-session", root
+    )
+    orphan_ids = [m.run_id for m in orphans]
+
+    assert dead_id in orphan_ids  # dead-root unadopted surfaces
+    assert disp_id not in orphan_ids  # dispositioned suppresses
+    assert adopted_dead_id not in orphan_ids  # adoption suppresses (dead root)
+    assert live_id in orphan_ids  # the live-root orphan contract is unchanged
+
+
+def test_write_manifest_dead_root_orphan_names_disposition_path(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] The write-manifest orphan-report loop's
+    dead-root line names the disposition path (the done skill's Manifest
+    disposition (dead-boundary close) paragraph) instead of the adoption
+    advice, since adoption refuses a dead root; the dead-root orphan itself
+    still surfaces through the widened detection."""
+    root = mktemp_repo("dead-orphan-line")
+    now = time.time()
+    make_marker(root, now - 3600, os.getpid())
+    dead_id = "run-dead-orphan"
+    _seed_run_manifest(
+        root,
+        dead_id,
+        marker_name(now - 3600),
+        str(tmp_path / "deleted-worktree"),
+        now - 10,
+    )
+    make_marker(root, now, os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    rc = lib.main(["write-manifest", "--claim-none"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "interrupted run" in out
+    assert dead_id in out
+    assert "disposition-manifest" in out
+    assert "--adopt" not in out  # adoption advice is replaced, not kept
+
+
 def test_session_window_mixed_format_legacy_prev_digest_current(
     tmp_path, mktemp_repo
 ):
@@ -3909,3 +4530,342 @@ def test_docs_tmp_sweep_keeps_baseline_holding_archived_session(tmp_path, sweep_
     assert "closeout baseline present" in result.message, result.message
     assert "transfer-out may be pending" in result.message, result.message
     assert "(active: plan still pending)" in result.message, result.message
+
+
+def test_docs_tmp_sweep_stale_baseline_archived_session_removed(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] An archived-plan execute-plan session whose
+    closeout-baseline.json is backdated beyond the grace window (os.utime to
+    three days ago, 72h > 48h) no longer lingers: the sweep removes the
+    whole directory, including the session manifest the interrupted-run
+    report would otherwise keep surfacing, and the gate message names the
+    stale closeout baseline as the removal reason."""
+    root = make_repo(tmp_path, "sweep-stale-baseline", gitignore_docs=True)
+    write_facts(root)
+    plans_dir = root / "docs/history/plans"
+    completed_dir = root / "docs/history/plans/completed"
+    plans_dir.mkdir(parents=True)
+    completed_dir.mkdir(parents=True)
+    arch_plan = "2026-09-30-archived-stale-baseline-plan.md"
+    (completed_dir / arch_plan).write_text("archived\n", encoding="utf-8")
+    tmp_dir = root / "docs/tmp"
+    stale = tmp_dir / "execute-plan" / arch_plan[:-3]
+    stale.mkdir(parents=True)
+    (stale / "closeout-baseline.json").write_text("{}\n", encoding="utf-8")
+    (stale / "manifest.md").write_text("stale run manifest\n", encoding="utf-8")
+    stale_epoch = time.time() - 72 * 3600
+    os.utime(stale / "closeout-baseline.json", (stale_epoch, stale_epoch))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+    assert result.rc == 0
+    assert not stale.exists(), "stale closeout baseline no longer keeps the directory"
+    assert "(stale closeout baseline)" in result.message, result.message
+
+
+@unittest.skipIf(os.getuid() == 0, "root ignores chmod")
+def test_docs_tmp_sweep_stale_baseline_removal_failure_reported(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] An archived-plan execute-plan session whose
+    closeout-baseline.json is backdated 72h (beyond the 48h grace) but whose
+    session directory is undeletable (chmod 0o500) exercises the stale
+    branch's OSError path: the gate message carries the dedicated
+    ``(stale closeout baseline removal-failed)`` row in the removed section
+    (not a kept row) and the directory survives for a retry."""
+    root = make_repo(tmp_path, "sweep-stale-removal-failed", gitignore_docs=True)
+    write_facts(root)
+    plans_dir = root / "docs/history/plans"
+    completed_dir = root / "docs/history/plans/completed"
+    plans_dir.mkdir(parents=True)
+    completed_dir.mkdir(parents=True)
+    arch_plan = "2026-09-30-archived-stale-baseline-undeleter-plan.md"
+    (completed_dir / arch_plan).write_text("archived\n", encoding="utf-8")
+    tmp_dir = root / "docs/tmp"
+    stale = tmp_dir / "execute-plan" / arch_plan[:-3]
+    stale.mkdir(parents=True)
+    (stale / "closeout-baseline.json").write_text("{}\n", encoding="utf-8")
+    stale_epoch = time.time() - 72 * 3600
+    os.utime(stale / "closeout-baseline.json", (stale_epoch, stale_epoch))
+    os.chmod(stale, 0o500)
+    try:
+        result = run_gate("docs-tmp-sweep", ctx_for(root))
+        assert result.rc == 0
+        assert stale.exists(), "removal-failed directory survives the failed rmtree"
+        assert "(stale closeout baseline removal-failed)" in result.message, (
+            result.message
+        )
+        assert "(removal failed)" not in result.message, (
+            "failing stale removal must not degrade to a kept row"
+        )
+    finally:
+        os.chmod(stale, 0o755)
+
+
+def test_docs_tmp_sweep_fresh_baseline_archived_session_kept(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] An archived-plan execute-plan session whose
+    closeout-baseline.json is only one hour old (1h <= 48h grace) keeps the
+    transfer-out-pending exemption: the directory survives whole and the
+    gate message carries the unchanged kept wording."""
+    root = make_repo(tmp_path, "sweep-fresh-baseline", gitignore_docs=True)
+    write_facts(root)
+    plans_dir = root / "docs/history/plans"
+    completed_dir = root / "docs/history/plans/completed"
+    plans_dir.mkdir(parents=True)
+    completed_dir.mkdir(parents=True)
+    arch_plan = "2026-09-30-archived-fresh-baseline-plan.md"
+    (completed_dir / arch_plan).write_text("archived\n", encoding="utf-8")
+    tmp_dir = root / "docs/tmp"
+    fresh = tmp_dir / "execute-plan" / arch_plan[:-3]
+    fresh.mkdir(parents=True)
+    (fresh / "closeout-baseline.json").write_text("{}\n", encoding="utf-8")
+    fresh_epoch = time.time() - 3600
+    os.utime(fresh / "closeout-baseline.json", (fresh_epoch, fresh_epoch))
+
+    result = run_gate("docs-tmp-sweep", ctx_for(root))
+    assert result.rc == 0
+    assert fresh.exists() and (fresh / "closeout-baseline.json").is_file()
+    assert "(kept: closeout baseline present; transfer-out may be pending)" in result.message, result.message
+
+
+# --------------------------------------------------------------------------- #
+# Plan checkbox: visibility-scoped sensitive-data scan contract
+# [class: REPOSITORY_TEST]
+# --------------------------------------------------------------------------- #
+def _write_facts_with_visibility(root: Path, declaration: str | None) -> Path:
+    """Repo facts file in the production TOML-fence form, optionally carrying
+    the artifact_visibility declaration inside the fence (the only block
+    facts_paths.resolve_toml_key_raw parses)."""
+    facts_dir = root / ".ai-playbook"
+    facts_dir.mkdir(parents=True, exist_ok=True)
+    facts = facts_dir / "facts.md"
+    lines = [
+        "```toml\n",
+        'plans_dir = "docs/history/plans/"\n',
+        'plans_completed_dir = "docs/history/plans/completed/"\n',
+        'backlog_dir = "docs/history/backlog/"\n',
+        'reviews_dir = "docs/reviews/"\n',
+        'tmp_dir = "docs/tmp/"\n',
+    ]
+    if declaration is not None:
+        lines.append(declaration + "\n")
+    lines.append("```\n")
+    facts.write_text("".join(lines), encoding="utf-8")
+    return facts
+
+
+def _visibility_fixture(tmp_path: Path, name: str, declaration: str | None):
+    """Scratch repo with a committed Jira-link file, an untracked Jira-link
+    file, and a separate credential-bearing control file."""
+    root = make_repo(tmp_path, name, gitignore_docs=True)
+    _write_facts_with_visibility(root, declaration)
+    link = root / "service-link.md"
+    link.write_text(
+        "see https://company.atlassian.net/browse/TEAM-123\n",
+        encoding="utf-8",
+    )
+    git(root, "add", "service-link.md")
+    git(root, "commit", "-m", "add service link", "-q")
+    (root / "untracked-link.md").write_text(
+        "also https://company.atlassian.net/browse/TEAM-456\n",
+        encoding="utf-8",
+    )
+    (root / "credential-control.txt").write_text(
+        'api_key = "AKIAIOSFODNN7EXAMPLE"\n', encoding="utf-8"
+    )
+    return root
+
+
+def test_visibility_scoped_private_repo_passes_valid_service_link(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A repository declaring
+    artifact_visibility = "private" passes valid internal service links
+    through both the staged and the untracked content arms; the credential
+    control is absent, so the gate returns rc 0."""
+    root = _visibility_fixture(
+        tmp_path, "private-link", 'artifact_visibility = "private"'
+    )
+    (root / "credential-control.txt").unlink()
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+    assert result.rc == 0, result.message
+
+
+def test_visibility_scoped_undeclared_repo_keeps_strict_default(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Without the declaration the Jira-link file
+    fails rc 1 exactly as today, naming the atlassian pattern."""
+    root = _visibility_fixture(tmp_path, "undeclared-link", None)
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+    assert result.rc == 1
+    assert "\\.atlassian\\.net" in result.message
+
+
+def test_visibility_scoped_public_declaration_keeps_strict_default(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] An explicit artifact_visibility = "public"
+    keeps today's strict behavior for the same link."""
+    root = _visibility_fixture(
+        tmp_path, "public-link", 'artifact_visibility = "public"'
+    )
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+    assert result.rc == 1
+    assert "\\.atlassian\\.net" in result.message
+
+
+def test_visibility_scoped_private_repo_still_fails_credentials(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] With the private declaration, credential
+    material alone still fails rc 1."""
+    root = _visibility_fixture(
+        tmp_path, "private-cred", 'artifact_visibility = "private"'
+    )
+    (root / "untracked-link.md").unlink()
+    git(root, "add", "credential-control.txt")
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+    assert result.rc == 1
+    assert "credential-control.txt" in result.message
+
+
+def test_visibility_scoped_families_partition_the_old_constant():
+    """[class: REPOSITORY_TEST] The two family constants exist, are disjoint,
+    and their union equals the seven patterns of today's DIFF_CONTENT_PATTERNS."""
+    old = [
+        r"/Users/",
+        r"/home/",
+        r"\.atlassian\.net",
+        r"@[a-z]+\.(com|io|net)",
+        r"(?i)\bapi[_-]?key\s*[:=]\s*['\"]?[A-Za-z0-9._+/=-]{8,}",
+        r"(?i)\b(?:access|auth|claim|policy|refresh|session)?[_-]?token\s*[:=]\s*['\"]?[A-Za-z0-9._+/=-]{8,}",
+        r"(?i)\b(?:password|secret)\s*[:=]\s*\S+",
+    ]
+    cred = set(lib.CREDENTIAL_CONTENT_PATTERNS)
+    pub = set(lib.PUBLIC_ARTIFACT_CONTENT_PATTERNS)
+    assert not (cred & pub), "families overlap"
+    assert cred | pub == set(old), "old set not fully partitioned"
+
+
+# --------------------------------------------------------------------------- #
+# Plan checkbox: review-staging sidecar-kind validation contract
+# [class: REPOSITORY_TEST]
+# --------------------------------------------------------------------------- #
+def test_review_staging_sidecar_candidate_validates_markdown_twin(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] A manifest-owned .stats.json sidecar candidate
+    is validated through its markdown twin: the stub invocation log names the
+    .md twin and never the .stats.json path, and the gate passes."""
+    root = mktemp_repo("sidecar-twin")
+    write_stub_review_staging_validator(root)
+    now = time.time()
+    make_marker(root, now - 3600, os.getpid())
+    current = make_marker(root, now, os.getpid())
+    sidecar_rel = "docs/reviews/2026-09-30-own-review-r1.stats.json"
+    twin_rel = "docs/reviews/2026-09-30-own-review-r1.md"
+    (root / "docs/reviews").mkdir(parents=True, exist_ok=True)
+    (root / sidecar_rel).write_text("{}\n", encoding="utf-8")
+    (root / twin_rel).write_text("owned staging review\n", encoding="utf-8")
+    _seed_run_manifest(
+        root, "run-sidecar", current.name, str(root), now,
+        owned_review_paths=[sidecar_rel],
+    )
+    stub_log = tmp_path / "sidecar-twin-invocations.txt"
+    monkeypatch.setenv("REVIEW_STAGING_STUB_LOG", str(stub_log))
+
+    result = run_gate("review-staging", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    invocations = stub_log.read_text(encoding="utf-8")
+    assert twin_rel in invocations
+    assert sidecar_rel not in invocations
+
+
+def test_review_staging_sidecar_candidate_missing_twin_fails_closed(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] A manifest-owned .stats.json sidecar whose
+    markdown twin is absent fails the gate naming the sidecar."""
+    root = mktemp_repo("sidecar-orphan")
+    write_stub_review_staging_validator(root)
+    now = time.time()
+    make_marker(root, now - 3600, os.getpid())
+    current = make_marker(root, now, os.getpid())
+    sidecar_rel = "docs/reviews/2026-09-30-own-review-r1.stats.json"
+    (root / "docs/reviews").mkdir(parents=True, exist_ok=True)
+    (root / sidecar_rel).write_text("{}\n", encoding="utf-8")
+    _seed_run_manifest(
+        root, "run-sidecar-orphan", current.name, str(root), now,
+        owned_review_paths=[sidecar_rel],
+    )
+
+    result = run_gate("review-staging", ctx_for(root))
+
+    assert result.rc == 1
+    assert sidecar_rel in result.message
+
+
+def test_review_staging_markdown_candidate_validated_directly(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] A manifest-owned plain .md staging doc is
+    validated directly (the branch must not misroute markdown)."""
+    root = mktemp_repo("markdown-direct")
+    write_stub_review_staging_validator(root)
+    now = time.time()
+    make_marker(root, now - 3600, os.getpid())
+    current = make_marker(root, now, os.getpid())
+    owned_rel = "docs/reviews/2026-09-30-own-review-r1.md"
+    (root / "docs/reviews").mkdir(parents=True, exist_ok=True)
+    (root / owned_rel).write_text("owned staging review\n", encoding="utf-8")
+    _seed_run_manifest(
+        root, "run-md", current.name, str(root), now,
+        owned_review_paths=[owned_rel],
+    )
+    stub_log = tmp_path / "markdown-direct-invocations.txt"
+    monkeypatch.setenv("REVIEW_STAGING_STUB_LOG", str(stub_log))
+
+    result = run_gate("review-staging", ctx_for(root))
+
+    assert result.rc == 0, result.message
+    invocations = stub_log.read_text(encoding="utf-8")
+    assert owned_rel in invocations
+
+
+# --------------------------------------------------------------------------- #
+# Plan checkbox: test_description_length_gate  [class: REPOSITORY_TEST]
+# --------------------------------------------------------------------------- #
+def test_description_length_gate(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] The description-length gate fails rc 1
+    naming an over-cap fixture skill and passes rc 0 on an under-cap tree
+    (the checker is copied repo-local into each fixture so the deployment
+    -gap path is not exercised here)."""
+    # Over-cap fixture skill.
+    root = make_repo(tmp_path, "desc-over", gitignore_docs=True)
+    write_facts(root)
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    shutil.copy(SCRIPTS_DIR / "check_skill_description_length.py", scripts / "check_skill_description_length.py")
+    skill_dir = root / "agents" / "skills" / "overcap"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: overcap\ndescription: " + "x" * 1025 + "\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    result = run_gate("description-length", ctx_for(root))
+    assert result.rc == 1
+    assert "overcap" in result.message
+    assert "1025" in result.message
+
+    # Under-cap tree.
+    root2 = make_repo(tmp_path, "desc-under", gitignore_docs=True)
+    write_facts(root2)
+    scripts2 = root2 / "scripts"
+    scripts2.mkdir(parents=True, exist_ok=True)
+    shutil.copy(SCRIPTS_DIR / "check_skill_description_length.py", scripts2 / "check_skill_description_length.py")
+    under = root2 / "agents" / "skills" / "fine"
+    under.mkdir(parents=True)
+    (under / "SKILL.md").write_text(
+        "---\nname: fine\ndescription: short\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    result2 = run_gate("description-length", ctx_for(root2))
+    assert result2.rc == 0, result2.message

@@ -3388,6 +3388,48 @@ Files:
         self.assertEqual(pending["tasks"]["task-4"]["status"], "pending")
         self.assertEqual(pending["claims"]["task-4"]["state"], "closed")
 
+    def test_startup_reconciliation_closed_claim_completes(self):
+        # Residual pin (impl-review residuals family plan, Task 2; closes
+        # docs/history/backlog/2026-09-29-execute-plan-review-residuals.md
+        # item 2b): a closed claim on a requeued-pending task completes
+        # startup reconciliation instead of quarantining as an ambiguous
+        # live worker. Arm 1 carries the exact requeued shape (the
+        # done-pending-recovery requeue receipt excludes the closed
+        # historical claim from the launch-evidence list); arm 2 drops the
+        # receipt so ONLY the continuation exam's closed-state exclusion
+        # stands between the closed claim and the owner-mismatch
+        # quarantine - that exam exclusion is the residual's named fence,
+        # and the arm is the one that fails if it regresses.
+        def seed_closed_claim(state):
+            state["tasks"]["task-4"]["status"] = "pending"
+            state["claims"]["task-4"] = {
+                "task_id": "task-4", "token": "requeued-token", "generation": 3,
+                "owner": "test-owner", "state": "closed",
+                "launch_record": {"baseline_revision": "base", "generation": 3, "launched_at": 100.0},
+            }
+            state["history"] = [
+                event for event in state.get("history", [])
+                if not (isinstance(event, dict) and event.get("event") == "done-pending-recovery")
+            ]
+
+        for arm, requeue_event in (("requeue-receipt excluded", True), ("exam closed-state exclusion", False)):
+            with self.subTest(arm=arm):
+                def mutate(state):
+                    seed_closed_claim(state)
+                    if requeue_event:
+                        state["history"].append({
+                            "event": "done-pending-recovery", "task_id": "task-4",
+                            "token": "requeued-token", "generation": 3, "disposition": "requeue",
+                        })
+                self.rewrite_manifest(mutate)
+                startup = self.driver().reconcile_startup()
+                self.assertEqual(startup["status"], "success", startup)
+                self.assertNotEqual(startup.get("reason_code"), "owner-mismatch", startup)
+                self.assertEqual(startup.get("evidence"), ["no ambiguous claims"], startup)
+                state = runtime.load_manifest(self.state_path)
+                self.assertEqual(state["tasks"]["task-4"]["status"], "pending")
+                self.assertEqual(state["claims"]["task-4"]["state"], "closed")
+
     def test_startup_ambient_and_unrelated_dirty_paths_do_not_block(self):
         self._prelaunch_claim()
         (self.root / ".DS_Store").write_text("ambient\n", encoding="utf-8")
@@ -4430,6 +4472,62 @@ Files:
             repo_root=self.root,
         )
         self.assertTrue(shared_boundary.exists())
+
+    def test_acceptance_nested_namesake_src_reports_shape(self):
+        # Residual pin (impl-review residuals family plan, Task 2; closes
+        # docs/history/backlog/2026-09-29-execute-plan-review-residuals.md
+        # item 3, nested-namesake half): the plan-pinned nested-namesake
+        # literal is a pure-path token, so its clean canonicalization keeps
+        # exact canonical equality as the sole matching basis and the seed
+        # is accepted. The landed acceptance arm used the
+        # other/reports/report.txt sibling; this pins the exact
+        # src/reports/report.txt shape the plan letter pinned.
+        seed_path = self.root / "preseed_nested_namesake_src_reports.json"
+        tasks = self._embed_fixture_tasks(["cat", "src/reports/report.txt"])
+        runtime.create_manifest(seed_path, "nested-namesake-src-plan", tasks, repo_root=self.root)
+        self.assertTrue(seed_path.exists())
+        seeded = runtime.load_manifest(seed_path)
+        self.assertEqual(seeded["tasks"]["task-1"]["verification_commands"][0]["argv"], ["cat", "src/reports/report.txt"])
+
+    def test_acceptance_tail_boundary_marker_body_shape(self):
+        # Residual pin (impl-review residuals family plan, Task 2; closes
+        # docs/history/backlog/2026-09-29-execute-plan-review-residuals.md
+        # item 3, tail-boundary half): the plan-pinned marker-bearing body
+        # embedding the .bak suffix variant is accepted - the tail-boundary
+        # rule stops the scan at the dot, so the suffix variant never
+        # matches the later declaration. The landed acceptance arm was a
+        # flag-assignment token; this pins the exact marker-bearing body
+        # shape the plan letter pinned.
+        seed_path = self.root / "preseed_tail_boundary_marker_body.json"
+        body = "# verify-marker\ncat reports/report.txt.bak"
+        tasks = self._embed_fixture_tasks(["bash", "-lc", body])
+        runtime.create_manifest(seed_path, "tail-boundary-marker-plan", tasks, repo_root=self.root)
+        self.assertTrue(seed_path.exists())
+        seeded = runtime.load_manifest(seed_path)
+        self.assertEqual(seeded["tasks"]["task-1"]["verification_commands"][0]["argv"], ["bash", "-lc", body])
+
+    def test_acceptance_same_or_earlier_marker_body_shape(self):
+        # Residual pin (impl-review residuals family plan, Task 2; closes
+        # docs/history/backlog/2026-09-29-execute-plan-review-residuals.md
+        # item 3, same-or-earlier half): the plan-pinned marker-bearing
+        # body embedding a same-task-declared path is accepted through the
+        # same-or-earlier carve-out - a non-path token whose embedded path
+        # is already granted at this task boundary never refuses. The
+        # landed carve-out arm used pure-path tokens; this pins the exact
+        # marker-bearing body shape the plan letter pinned.
+        seed_path = self.root / "preseed_same_or_earlier_marker_body.json"
+        tasks = [
+            {"id": "task-1", "ordinal": 1, "allowed_paths": ["reports/report.txt"],
+             "required_criteria": ["task-1:verification"], "verification_commands": [
+                 {"id": "verify", "argv": ["bash", "-lc", "# verify-marker\ncat reports/report.txt"], "criteria": ["task-1:verification"]}]},
+            {"id": "task-2", "ordinal": 2, "allowed_paths": ["reports/report.txt"],
+             "required_criteria": ["task-2:verification"], "verification_commands": [
+                 {"id": "verify", "argv": ["cat", "reports/report.txt"], "criteria": ["task-2:verification"]}]},
+        ]
+        runtime.create_manifest(seed_path, "same-or-earlier-marker-plan", tasks, repo_root=self.root)
+        self.assertTrue(seed_path.exists())
+        seeded = runtime.load_manifest(seed_path)
+        self.assertEqual(seeded["tasks"]["task-1"]["allowed_paths"], ["reports/report.txt"])
 
     # ------------------------------------------------------------------
     # Evidence-contract recovery (recover-evidence-contract)
@@ -8767,6 +8865,65 @@ Files:
         self.assertEqual(result["status"], "refused")
         self.assertEqual(runtime.load_manifest(self.state_path), before)
 
+    def test_record_worker_launch_process_identity_presence_omitted_key_synthesizes_compatibility_identity(self):
+        self.seed_claim(task="task-4", token="s4", generation=0)
+        driver = self.driver(adapter=FakeAdapter())
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-4"]
+
+        result = driver._record_worker_launch(claim, {"id": "task-4"}, {
+            "provider_session_id": "thread-123",
+            "status": "success",
+        })
+
+        self.assertEqual(result["state"], "active")
+        self.assertEqual(result["process_identity"], {"provider": "fakeadapter", "session_id": "thread-123"})
+        self.assertEqual(runtime.load_manifest(self.state_path)["workers"][result["worker_id"]]["process_identity"], {"provider": "fakeadapter", "session_id": "thread-123"})
+
+    def test_record_worker_launch_process_identity_presence_refuses_each_explicitly_invalid_shape_without_persistence(self):
+        self.seed_claim(task="task-4", token="s4", generation=0)
+        driver = self.driver(adapter=FakeAdapter())
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-4"]
+        # Each arm resets the pristine seeded manifest: on the pre-fix tree the
+        # falsy shapes synthesize and persist a worker, and that residue must
+        # not poison the next arm's claim fence or identity-collision checks.
+        pristine = runtime.load_manifest(self.state_path)
+        invalid_identities = (
+            ("null", None),
+            ("empty-string", ""),
+            ("empty-mapping", {}),
+            ("non-mapping", ["codex", "thread-123"]),
+            ("missing-provider", {"session_id": "thread-123"}),
+            ("missing-session-id", {"provider": "codex"}),
+        )
+        for label, process_identity in invalid_identities:
+            with self.subTest(shape=label):
+                runtime._safe_write_json(self.state_path, copy.deepcopy(pristine))
+                before = runtime.load_manifest(self.state_path)
+
+                result = driver._record_worker_launch(claim, {"id": "task-4"}, {
+                    "provider_session_id": "thread-123",
+                    "process_identity": process_identity,
+                    "status": "success",
+                })
+
+                self.assertEqual(result, {"status": "refused", "reason": "process-identity-invalid"})
+                self.assertEqual(runtime.load_manifest(self.state_path), before)
+
+    def test_record_worker_launch_process_identity_presence_passes_valid_supplied_mapping_through_unchanged(self):
+        self.seed_claim(task="task-4", token="s4", generation=0)
+        driver = self.driver(adapter=FakeAdapter())
+        claim = runtime.load_manifest(self.state_path)["claims"]["task-4"]
+
+        result = driver._record_worker_launch(claim, {"id": "task-4"}, {
+            "provider_session_id": "thread-123",
+            "process_identity": {"provider": "codex", "session_id": "thread-123"},
+            "status": "success",
+        })
+
+        self.assertEqual(result["state"], "active")
+        self.assertEqual(result["process_identity"], {"provider": "codex", "session_id": "thread-123"})
+        self.assertEqual(runtime.load_manifest(self.state_path)["workers"][result["worker_id"]]["process_identity"], {"provider": "codex", "session_id": "thread-123"})
+
     def test_adapter_lifecycle_refuses_incomplete_identity_without_mutation(self):
         self.seed_claim(task="task-4", token="s4", generation=0)
         driver = self.driver(adapter=FakeAdapter())
@@ -13080,6 +13237,28 @@ class ArchiveGatePreArchiveTest(ArchiveGateFixtureBase):
                     self.assertTrue(any("must be recorded in the manifest no later than the round's own day" in entry for entry in result["evidence"]), result["evidence"])
                     self.assert_refusal_preserves_manifest(before)
 
+    def test_boundary_equality_refusal_preserves_manifest_bytes(self):
+        # Residual pin (impl-review residuals family plan, Task 2; closes
+        # docs/history/backlog/2026-09-29-residual-exit-impl-review-residuals.md
+        # item 1): the retargeted at-or-after strictness arm's
+        # boundary-equality refusal carries the refusal-preservation
+        # (manifest byte-identity) assertion its strictly-past sibling
+        # carries: a residual policy recorded exactly at the round's local
+        # day-end refuses with the manifest byte-identical outside the
+        # terminal-refused history tail.
+        self.complete_all_tasks()
+        sidecar = self.write_sidecar(self.residual_sidecar())
+        with self.pinned_timezone("UTC"):
+            local_round_day_end = (datetime.strptime(self.ROUND_DATE, "%Y-%m-%d") + timedelta(days=1)).timestamp()
+            policy = self.residual_policy(recorded_at=local_round_day_end)
+            driver = self.driver()
+            before = self.state_path.read_bytes()
+            result = self.pre_archive(driver, review_sidecar=sidecar, residual_policy=policy)
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["reason_code"], "done-pending")
+            self.assertTrue(any("must be recorded in the manifest no later than the round's own day" in entry for entry in result["evidence"]), result["evidence"])
+            self.assert_refusal_preserves_manifest(before)
+
     def test_accepts_same_day_residual_policy_recording(self):
         self.complete_all_tasks()
         sidecar = self.write_sidecar(self.residual_sidecar())
@@ -16955,6 +17134,73 @@ class EvidenceContractRecoveryCodexTest(_ReconcileFixtureBase):
         self.assertEqual(result["status"], "blocked", result)
         self.assertEqual(self.state_path.read_bytes(), before)
 
+    def test_recovery_prior_checkpoint_claim_token_mismatch_refuses(self):
+        # Residual pin (impl-review residuals family plan, Task 2; closes
+        # docs/history/backlog/2026-09-29-execute-plan-review-residuals.md
+        # item 2a, refusal half): the exact handoff recovery's prior_exact
+        # fence refuses when the prior checkpoint record carries a
+        # claim_token that mismatches the handoff intent's recorded prior
+        # claim token; every other prior_exact field matches, so the token
+        # equality is the discriminating fence, and the refusal leaves the
+        # manifest byte-identical.
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation))
+        self._seed_launched_hold(adapter, session=self.HELD_SESSION)
+        state = runtime.load_manifest(self.state_path)
+        claim = state["claims"]["task-1"]
+        claim.update(launch_id="launch-task-1", claim_owner_id=claim["owner"], handoff_intent_key="task-0:task-0:done-1")
+        state["tasks"]["task-0"] = {**copy.deepcopy(state["tasks"]["task-2"]), "id": "task-0", "number": 0, "status": "complete", "checkbox": True}
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        state["evidence_criteria_map"] = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in state["tasks"].items()}
+        state["claims"]["task-0"] = {"task_id": "task-0", "token": "prior-token", "generation": 2, "owner": "prior-owner", "state": "closed"}
+        state["checkpoints"]["task-0:done-1"] = {"task_id": "task-0", "result": {"checkpoint_identity": "task-0:done-1", "claim_token": "foreign-token", "generation": 2}}
+        key = claim["handoff_intent_key"]
+        state["handoff_intents"] = {key: {
+            "intent_id": "intent-exact", "state": "launched",
+            "prior": {"task_id": "task-0", "checkpoint_identity": "task-0:done-1", "claim_owner_id": "prior-owner", "claim_token": "prior-token", "generation": 2},
+            "successor": {"task_id": "task-1", "claim_owner_id": claim["claim_owner_id"], "claim_token": claim["token"], "generation": claim["generation"], "launch_id": claim["launch_id"]},
+        }}
+        self._persist(state)
+        driver = self._driver(adapter)
+        before = self.state_path.read_bytes()
+        result = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertTrue(any("mismatched handoff identity" in item for item in result["evidence"]), result["evidence"])
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_recovery_prior_checkpoint_claim_token_omitted_accepted(self):
+        # Residual pin (impl-review residuals family plan, Task 2; closes
+        # docs/history/backlog/2026-09-29-execute-plan-review-residuals.md
+        # item 2a, acceptance half): the same exact handoff recovery shape
+        # accepts when the prior checkpoint record OMITS claim_token
+        # entirely (records written before the token-fence landing carry
+        # none): the closed prior claim's token was already pinned by the
+        # claim-equality arm of prior_exact, so the omission is not a
+        # mismatch and the recovery lands its receipt.
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation))
+        self._seed_launched_hold(adapter, session=self.HELD_SESSION)
+        state = runtime.load_manifest(self.state_path)
+        claim = state["claims"]["task-1"]
+        claim.update(launch_id="launch-task-1", claim_owner_id=claim["owner"], handoff_intent_key="task-0:task-0:done-1")
+        state["tasks"]["task-0"] = {**copy.deepcopy(state["tasks"]["task-2"]), "id": "task-0", "number": 0, "status": "complete", "checkbox": True}
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        state["evidence_criteria_map"] = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in state["tasks"].items()}
+        state["claims"]["task-0"] = {"task_id": "task-0", "token": "prior-token", "generation": 2, "owner": "prior-owner", "state": "closed"}
+        state["checkpoints"]["task-0:done-1"] = {"task_id": "task-0", "result": {"checkpoint_identity": "task-0:done-1", "generation": 2}}
+        key = claim["handoff_intent_key"]
+        state["handoff_intents"] = {key: {
+            "intent_id": "intent-exact", "state": "launched",
+            "prior": {"task_id": "task-0", "checkpoint_identity": "task-0:done-1", "claim_owner_id": "prior-owner", "claim_token": "prior-token", "generation": 2},
+            "successor": {"task_id": "task-1", "claim_owner_id": claim["claim_owner_id"], "claim_token": claim["token"], "generation": claim["generation"], "launch_id": claim["launch_id"]},
+        }}
+        self._persist(state)
+        driver = self._driver(adapter)
+        result = driver.recover_evidence_contract("task-1", claim["token"], claim["generation"], self._corrected_contract())
+        self.assertEqual(result["status"], "success", result)
+        intent = runtime.load_manifest(self.state_path)["handoff_intents"][key]
+        self.assertEqual(intent["state"], "failed")
+        self.assertEqual(intent["recovery_receipt"]["prior"]["claim_token"], "prior-token")
+        self.assertEqual(intent["recovery_receipt"]["successor"]["launch_id"], "launch-task-1")
+
     def test_evidence_recovery_refuses_handoff_without_provider_receipt_id(self):
         adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation))
         self._seed_launched_hold(adapter, session=self.HELD_SESSION)
@@ -17482,6 +17728,32 @@ class RecoverRunIdentityMigrationTest(unittest.TestCase):
             self.assertIn("codex", self._evidence_text(outcome))
             self.assertEqual(bound.read_bytes(), bound_before)
 
+    def test_recover_run_identity_payload_token_rejects_non_string(self):
+        # Residual pin (impl-review residuals family plan, Task 3; closes
+        # docs/history/backlog/2026-09-29-p93-impl-review-nonblocking-residuals.md
+        # item 2, payload-token-coercion): the recover-run-identity payload
+        # token is isinstance-strict like its sibling fields - a non-string
+        # token payload refuses at the CLI boundary (exit 1, naming the
+        # token field, no manifest write) instead of being accepted through
+        # the str() coercion and binding a coerced operator token.
+        self._seed_legacy_manifest()
+        before = self.state_path.read_bytes()
+        buffer = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(err):
+            exit_code = runtime.main([
+                "--manifest", str(self.state_path),
+                "--operation", "recover-run-identity",
+                "--plan-slug", "fixture-plan",
+                "--owner", "test-owner",
+                "--repo-root", str(self.root),
+                "--input", json.dumps(self._payload(token=123)),
+            ])
+        self.assertEqual(exit_code, 1, buffer.getvalue())
+        self.assertIn("token", err.getvalue())
+        self.assertEqual(self.state_path.read_bytes(), before)
+        self.assertIsNone(runtime.load_manifest(self.state_path).get("runtime"))
+
     def test_migration_replay_is_refused(self):
         self._seed_legacy_manifest()
         write_approval_receipt(self.receipt_path, self.config_path, {})
@@ -17509,7 +17781,15 @@ class RecoverRunIdentityMigrationTest(unittest.TestCase):
             state = runtime.load_manifest(self.state_path)
             self.assertEqual(state["claims"]["task-1"]["state"], "closed")
             self.assertEqual(state["tasks"]["task-1"]["status"], "pending")
-            self.assertNotIn(state["claims"]["task-1"]["state"], {"claimed", "launched", "blocked"})
+            # Real complement check (impl-review residuals family plan,
+            # Task 3): the closed-state contract excludes every other legal
+            # claim state, so the observed value must sit outside the full
+            # state vocabulary minus "closed" - a distinct assertion from
+            # the exact-equality check above, not its vacuous restatement.
+            self.assertNotIn(
+                state["claims"]["task-1"]["state"],
+                {"claimed", "launched", "blocked", "waiting-capacity", "aborted", "replaced", "staged"},
+            )
             events = self._migration_events(state)
             self.assertEqual(len(events), 1)
             self.assertIn({"task_id": "task-1", "token": "poison-token"}, events[0].get("cleared_claims") or [])
@@ -17748,6 +18028,27 @@ class ClaimBoundaryRefusalTest(unittest.TestCase):
         self.assertEqual(state["tasks"]["task-1"]["status"], "claimed")
         self.assertIn("task-1", state.get("claims", {}))
 
+    def test_deferred_runtime_boundary_narrowing_refusal(self):
+        # Residual pin (impl-review residuals family plan, Task 2; closes
+        # docs/history/backlog/2026-09-29-p93-impl-review-nonblocking-residuals.md
+        # item 1, deferred-runtime-boundary-narrowing): the claim boundary
+        # validates the evidence runtime id against ELIGIBLE profiles only,
+        # so a CLI-validated --runtime <deferred-id> plus receipt pair (the
+        # id canonicalizes at the CLI boundary and the receipt's recorded
+        # runtime matches) on a legacy manifest refuses at the claim gate
+        # with the migration remedy instead of stamping the deferred id.
+        # Fail-closed narrowing: the deferred runtime's launch would have
+        # refused later anyway.
+        self._seed_legacy_manifest()
+        config = self.root / "approval-config-deferred.toml"
+        config.write_text('approval_policy = "never"\n', encoding="utf-8")
+        deferred_receipt = self.root / "deferred-receipt.json"
+        write_approval_receipt(deferred_receipt, config, {"runtime": "claude"})
+        self.assertEqual(capabilities.canonicalize_runtime_id("claude"), "claude")
+        self.assertNotIn("claude", capabilities.load_profiles())
+        outcome = self._run_claim("--runtime", "claude", "--approval-receipt", str(deferred_receipt))
+        self._assert_blocked_with_migration_remedy(outcome)
+
     def test_claim_parallel_group_on_legacy_manifest_refuses_with_migration_remedy(self):
         # The parallel-group arm takes the same shared boundary: a
         # legacy-shaped manifest refuses before any membership evaluation or
@@ -17787,7 +18088,7 @@ class LegacyManifestEndToEndTest(_ReconcileFixtureBase):
     Each fixture is seeded once, in the ``_ReconcileFixtureBase`` style
     (``create_manifest`` plus one shaping save for the poisoned arm), and
     from then on the test drives only the public CLI operations in the exact
-    admission order the stranded CRM-607 continuation needed: the plain
+    admission order the stranded CRM-<ID> continuation needed: the plain
     ``claim`` refused with the migration remedy, the ``recover-run-identity``
     migration accepted, and the ordinary read-only ``preflight`` passing with
     a non-null ``continuation_command``. No test touches the manifest JSON
@@ -17816,7 +18117,7 @@ class LegacyManifestEndToEndTest(_ReconcileFixtureBase):
 
     def _seed_manifest(self, task_map=None, poisoned=False):
         """Seed the legacy shape (no ``runtime`` key), as an older driver
-        version wrote it. ``poisoned=True`` adds the CRM-607 residue at seed
+        version wrote it. ``poisoned=True`` adds the CRM-<ID> residue at seed
         time: the next incomplete task claimed with no launch record and no
         prepared handoff intent. This shaping save is the last direct
         manifest write the fixture performs."""

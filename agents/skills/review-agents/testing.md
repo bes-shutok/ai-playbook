@@ -162,6 +162,14 @@ configuration boundary, or test runner hook:
    the non-container fast path before any container discovery; container
    probes on classes needing no container are a runner defect, not an
    accepted slow path. Pattern: `testing#container-discovery-fast-path`.
+7. **Wrapper-converted SUT naming:** an expectation whose named-or-implicit
+   layer cannot produce the expected outcome at a wrapper-converted seam (the
+   wrapper post-processes or can veto the lower layer's result) is a layer
+   defect: the item must name its system under test, the wrapper's
+   post-conversion outcome must carry its own assertion, and a reducer-level
+   expectation today's wrapper already satisfies is a green-at-RED regression
+   pin, not a RED target. Authoring-side rule: plans rule 43.
+   Pattern: `testing#sut-naming-wrapper-converted-results`.
 
 ## Changed-code family inventory
 

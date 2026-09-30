@@ -1,8 +1,14 @@
 # p93 implementation review r1 non-blocking residuals
 
+Cluster: docs/history/backlog/2026-09-29-residual-exit-impl-review-residuals.md
+Cluster: docs/history/backlog/2026-09-29-execute-plan-review-residuals.md
+Cluster: docs/history/backlog/2026-09-30-emdash-residuals-exec-review-residuals.md
+Cluster: docs/history/backlog/2026-09-30-prelaunch-recovery-impl-review-residuals.md
+
+
 Origin class: consumer-company
 Priority: low
-Status: open
+Status: done (2026-10-01; family closeout executed+landed docs/history/plans/completed/2026-09-30-impl-review-residuals-family.md, squash main db5786c2, exec review r1 ready=yes zero blocking)(docs/history/plans/2026-09-30-impl-review-residuals-family.md)
 
 Five non-blocking findings from the p93 continuation-admission execution's r1 three-worker implementation review (landing 9ffee738). None blocked landing; recorded for a future polish pass.
 

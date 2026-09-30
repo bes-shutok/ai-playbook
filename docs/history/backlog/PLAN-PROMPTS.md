@@ -29,60 +29,30 @@ Prompt: <full ready-to-dispatch authoring prompt payload>
 Rejected alternatives:
 - <one line per rejected alternative, with the reason>
 ```
+## p98-done-boundary-receipt-and-closeout-gate-sweep
 
-## p90-execute-plan-invocation-scope-revalidation
-
-Added: 2026-09-29 (investigate skill, interactive scope-correction witness)
-
-Origins:
-- docs/history/backlog/2026-09-29-execute-plan-prior-invocation-scope-leak.md
-
-Urgency: High; a prior execute-plan selection was carried from one plan objective into a later authoring-and-merge request, causing an implement worker and runtime claim to start before the user corrected the scope.
-
-Prompt: using the plans skill, author one focused implementation plan (authoring only, do not execute) to bind execute-plan continuation intent to the active plan and objective. Read the origin backlog in full and inspect the current execute-plan invocation detector, its change history, and any tests or evals that cover prior gate choices. Preserve seamless continuation within a single explicitly selected plan run. Specify that every new user message is checked for a clear objective or plan switch before prior invocation state is reused, and that a current authoring, review, or branch-landing request supersedes stale execution intent unless execution is explicitly resumed in the current request. Include deterministic positive and negative witnesses: same-plan explicit continuation remains invoked; author-and-merge after a prior execute choice remains authoring-only; a bare plan reference follows the plan-path gate when no active matching execution run exists; and explicit user narrowing immediately stops implementation activity. Keep commit, merge, and push authorization separate from plan execution. Do not broaden the change into a general session-memory redesign.
-
-Rejected alternatives:
-- Removing prior-choice continuation entirely: rejected because it would reintroduce repeated gates within one active plan execution.
-- Treating "finish the plan" as execution by default: rejected because it conflates plan authoring with task implementation.
-- Reusing any earlier session choice regardless of current objective: rejected because current user intent can replace prior scope.
-
-## p80-execute-plan-baseline-satisfied-task-closeout
-
-Added: 2026-09-28 (investigate skill, consumer execute-plan blocker)
+Added: 2026-09-30 (investigate skill, operator-directed audit follow-up; anchored on the receipt-trail witness, Stage 0 cluster of nine)
 
 Origins:
-- docs/history/backlog/2026-09-28-execute-plan-preimplemented-task-closeout.md
+- docs/history/backlog/2026-09-30-plan-archive-cited-review-receipts.md
+- docs/history/backlog/2026-09-30-execution-ceremony-prevention-witnesses.md
+- docs/history/backlog/2026-09-29-p79-gates-no-r1-fix-behavior-pins.md
+- docs/history/backlog/2026-09-29-emit-roundtrip-vt-ff-unreachability.md
+- docs/history/backlog/2026-09-29-step1-ledger-tmp-dir-loss-residual.md
+- docs/history/backlog/2026-09-29-done-sweep-consumes-run-tmp-before-worktree-migration.md
+- docs/history/backlog/2026-09-29-em-dash-gate-run-backlog-candidates.md
+- docs/history/backlog/2026-09-28-done-lock-one-shot-reclaim-releases-documentation.md
+- docs/history/backlog/2026-09-28-write-manifest-legacy-foreign-bulk-load.md
 
-Urgency: High; witnessed active execution is fenced at `done-pending` despite terminal worker evidence, a passing task-local validation, and implementation already present at the claim baseline. This is a distinct completion-boundary gap from p78's claim admission and terminal reservation defects, though the runtime code and tests overlap.
+Urgency: High (queue top, 2026-09-30). Class: receipt-integrity and done-boundary gate coverage. Witness: three completion-ceremony skips in one day (21178a3f, 66b91d23, 85122e7e), the third claiming "exec review r1 ready=yes" and citing an authoring review path that exists on no branch; the shared surface is one gate library (scripts/done_sweep_gates_lib.py) plus the archive acceptance path, both introduced by the concurrent-landing gates plan (3bb03453) and the p79 closeout contract pass (89fa19b1), neither of which parses the receipts an archive cites or requires the records a closeout claims.
 
-Prompt: using the plans skill, author one implementation plan (authoring only, do not execute) to close out execute-plan recovery tasks whose implementation already exists at their claim baseline. Read the origin backlog in full and re-verify current code, contracts, tests, and the completed recovery plan before fixing scope. The witnessed consumer case had source paths unchanged from the task baseline, valid task-local test evidence and terminal worker evidence, but the driver's done handoff rejected the only closeout commit because it changed the plan checklist outside `allowed_paths`; `commit_identity: none` is intentionally unavailable to a plan task with a `Commit:` criterion, and the baseline implementation commit is not new work. Specify a driver-owned, receipt-fenced recovery completion arm for this exact shape: bind task id, token, generation, plan digest, current allowed paths, exact source snapshot, verification command identity and result, terminal worker receipt, checklist state, and done log; prove source equals the claimed baseline and satisfies the task's required criteria; use a distinct auditable recovery completion identity; atomically close the claim and advance. Preserve ordinary task done commits and the existing `none` arm unchanged. Include negative cases for changed source, missing/stale validation, plan or allowlist drift, foreign/stale identity, replay, and any task whose implementation is not demonstrably complete at baseline. Recovery-mode orchestration must use this arm without manufacturing edits, loosening path boundaries, or editing the manifest directly. Add acceptance tests for the complete unchanged-baseline case and each refusal, and update the skill/runtime contract to route only that proven shape. Include the consumer workaround path in scope only if it can be completed through supported driver transitions without weakening fencing; otherwise document it as a separately bounded limitation. Keep this a focused runtime-contract plan, not a broad redesign of claim fencing or done commit policy.
-
-Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
-
-Rejected alternatives:
-- Marking the task complete from the plan checkbox or worker prose alone: rejected; neither proves the source snapshot or driver-owned validation/terminal evidence.
-- Reusing `commit_identity: none` for implementation tasks: rejected; its current contract is explicitly reserved for tasks with no `Commit:` line.
-- Expanding task allowlists to include the plan file: rejected; checklist closeout is not implementation evidence and would weaken task-scoped commit boundaries.
-- Creating an unrelated source edit only to mint an allowed commit: rejected; it manufactures code churn and can conceal missing criteria.
-- Editing `runtime_state.json` directly or bypassing the claim fence: rejected; recovery must remain a locked driver transition with exact receipt identity.
-
-## p92-authoring-payload-park-discharge-explicit-root
-
-Added: 2026-09-29 (grouping pass, single-origin carry from the unassigned backlog)
-
-Origins:
-- docs/history/backlog/2026-09-28-maintenance-authoring-park-discharge-cwd-relative.md
-
-Urgency: High; consumer urgency witnessed class. The authoring payload's CLOSING PARK DISCHARGE DUTY paragraph (agents/skills/maintenance/prompt-templates.md, "read .ai-playbook/scheduler-state.json" bare) still reads the state file cwd-relative, so an authoring child running in its ad-hoc worktree discharges parked intents against the per-worktree gitignored state copy no reader reads: the discharge silently no-ops and the parked intent survives unowned. The execution and unblock-child discharge twins were rooted by the worktree-first r4 fix; the authoring twin was missed, so the once-identical paragraphs have already diverged once.
-
-Prompt: using the plans skill, author one small plan (authoring only, do not execute) rooting every cross-checkout scheduler-state access in the maintenance payload bodies. Read the origin's full text and treat it as the scope of record. Re-verify on disk before pinning: the r4 fix's explicit-rooted clause sits on four sites (authoring successor-carrier closeout verification, execution successor dispatch, execution closing park discharge, unblock-child closing park discharge), and the authoring body's CLOSING PARK DISCHARGE DUTY paragraph is the remaining bare read. Scope arms: (1) apply the same explicit-rooted clause (read and write the primary checkout's `.ai-playbook/scheduler-state.json`, explicit-rooted form per the claim duty's precedent) to the authoring body's discharge paragraph; (2) honor the origin's round-5 refinement: the FIRST ACTION re-arm state probes stay bare-by-design (they fire pre-worktree, in the primary checkout where the bare read resolves the real state file) -- record that half as withdrawn in the plan, never rooted; (3) a mechanical guard (a pins-suite grep arm or a test) fails when any post-worktree scheduler-state access inside either payload body lacks the explicit-rooted clause, so the twins cannot silently diverge again; (4) re-run the pins suite and re-key any shifted anchor in the same edit; (5) the vendored twin (runtime-side agents/skills/maintenance/) carries the same bytes in the same run or a tracked landing path.
-
-Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
+Prompt: using the plans skill, author one plan (authoring only, do not execute) over the nine-origin roster as one gate-pass sweep. Read each origin in full as its task's scope of record and re-verify every disposition below from current bytes at authoring time. Scope arms, in priority order: (1) archive-gate receipt existence: at archive acceptance (the plans skill archive step and the plans-archive-twin sweep gate), parse the plan header's cited review paths (the Plan review line and any review-round references) and require each cited file to exist under the resolved reviews_dir; fail closed, blocking the archive or demoting it to an explicitly recorded reconstruction; (2) done-boundary exec-review record existence: the owned-commits ledger gate additionally requires that an exec-review record claimed by the landing commit message exists under docs/reviews/ (match the claimed round against the plan slug's staging series); (3) backfill task: append a backfill-marked completion record to docs/history/plans/completed/2026-09-30-investigate-cluster-survey-anchored.md citing the audit re-verification (all seven Validation Commands green on main; exec squash 85122e7e touching exactly the two in-scope files) and check its four boxes with the same marking; (4) implement items 1-3 of docs/history/backlog/2026-09-30-execution-ceremony-prevention-witnesses.md (archive-checkbox gate, archived-plan review-coverage surface, unfinalized-manifest surfacing); its items 4-6 (queue enumeration, stale-base guard, payload-level binding) stay out of this plan; (5) the five done-machinery residuals as a tail: suite-level behavior pins for the p79 r1 fixes (stronger than grep pins), the emit roundtrip VT/FF term (unquote octal-escaped enumeration output or drop the term and document the enumeration-side behavior), the Step 1 TMP_DIR presence guard, the done-lock one-shot reclaim documentation, and the write-manifest legacy bulk-load usability fix; plus verify the landed closeout-baseline exemption (completed plan 2026-09-30-done-sweep-closeout-baseline-exemption, remedy (c), executed 3d5bcce2) and flip the run-tmp origin's status to done with a dated receipt instead of re-implementing it. Coordination: fold the em-dash gates-lib ls-files polarity candidate (candidate 1 of the em-dash candidates origin) into the gates work and sequence its candidate 2 behind the em-dash gate owners; the hygiene-residue scan-scope origin (high) owns scan scope over completed plans, coordinate rather than double-claim it; the rolling-log machinery pair (prune enforcement, prompt possibility-space review) owns the log lines and is out of scope. Validation: hygiene scan, em-dash added-lines gate, and the maintenance pins suite over the touched skills, exit 0; carry the vendored runtime twins or leave a tracked landing path.
 
 Rejected alternatives:
-- Rooting the FIRST ACTION re-arm probes too: rejected by the round-5 re-derivation; those probes run before the ad-hoc worktree exists, where the bare read is correct.
-- Editing only the discharge line and trusting the twins to stay in sync: rejected; the r4 fix already diverged the once-identical paragraphs, so the guard arm is the fix, not the line edit.
-- Moving discharge duties out of the payload bodies: rejected; scope creep beyond the witnessed defect, and the discharge duty's home is the payload closeout.
+- One plan per origin: rejected; nine landing ceremonies over one shared gate library, when the cluster exists because the surfaces are one lib. (basis: scripts/done_sweep_gates_lib.py)
+- Host-side git hooks as the enforcement point: rejected; the repo's gate surface is the done and plans sweep suites, and hooks are host state this repository does not own. (basis: scripts/done_sweep_gates.sh)
+- Re-running the skipped reviews instead of recording a reconstruction: rejected; the implementation is already verified by its own validation commands, and a post-hoc record presented as the original review would be worse than a marked reconstruction. (basis: witnessed incident 85122e7e)
+- Advisory receipt warnings instead of fail-closed blocks: rejected; the witnessed failure is claimed-but-absent receipts passing silently, which only a blocking check changes.
 
 ## p93-review-posting-landing-evidence
 
@@ -102,29 +72,9 @@ Standing pre-authorization: accept all recommended options and suggestions throu
 
 Rejected alternatives:
 - Treating the provider's submission success response as landing evidence: rejected; that trust is the witnessed failure.
-- Batch-reposting all findings when one is missing: rejected; it duplicates live PR comments, and the individual-repost recovery path already exists.
-- Editing review-staging inside the drift plan retroactively: rejected by that plan's scope decision; the row lands as the tracked companion item it was filed to be.
-- Blocking POSTED on a human eyeball check: rejected; the requirement already says verify live -- the gap is that nothing mechanical fails the skip, so the fix is a machine-checkable receipt.
-
-## p94-skill-description-length-gate
-
-Added: 2026-09-29 (grouping pass, single-origin carry; witnessed the same day in this repository)
-
-Origins:
-- docs/history/backlog/2026-09-29-skill-description-length-gate.md
-
-Urgency: High; witnessed 2026-09-29 in this repository: execute-plan's folded description reached 1167 characters and the runtime silently dropped the skill from the registry (recovered by the trim landing f6a135a6); agterm sits at 956 as the next candidate, and the 1024-character cap exists only as prose in how-to-write-skills with no mechanical check anywhere (re-verified 2026-09-29: no scan arm, no validator, no script).
-
-Prompt: using the plans skill, author one focused tooling plan (authoring only, do not execute) adding a mechanical SKILL.md description-length gate. Read the origin's full text and treat it as the scope of record. Scope arms: (1) extend the public hygiene scan (or a sibling check wired into the done pre-commit sweep gate) with a description-length arm: parse each SKILL.md frontmatter bounded to the closing `---` fence, fold `>`/`|` block scalars to single-spaced text, measure the folded description, fail over 1024 characters, and warn over about 950 so chronic growers are visible before they trip; (2) the parse bound is load-bearing and tested: a greedy indented-line match swallows fenced code blocks in the body, so the fixture set includes a skill whose body carries fenced blocks containing dashed lines and indented text, asserting the measured length stays bounded to the frontmatter; (3) the gate runs green over the whole corpus at landing (execute-plan trimmed to 922, agterm 956 warned); (4) the cap and warn thresholds are named constants, and how-to-write-skills' Frontmatter Requirements names the gate in both directions per the Integration Points convention, so the rule text and the enforcer cannot drift apart.
-
-Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
-
-Rejected alternatives:
-- Fixing only the two witnessed skills: rejected; the failure mode is silent, so only a corpus-wide gate closes the class.
-- A warn-only gate: rejected; a warning is exactly how the 1167-character drop shipped.
-- Enforcing at runtime registration: rejected; the runtime is an external host surface this repository does not own, and the drop happens before any repo-side code runs.
-- Measuring raw (unfolded) description bytes: rejected; the runtime folds block scalars before applying the cap, so unfolded length misclassifies.
-
+- Batch-reposting all findings when one is missing: rejected; it duplicates live PR comments, and the individual-repost recovery path already exists. (basis: agents/skills/doing-code-review/SKILL.md individual-repost recovery)
+- Editing review-staging inside the drift plan retroactively: rejected by that plan's scope decision; the row lands as the tracked companion item it was filed to be. (basis: docs/history/plans/completed/2026-09-28-review-plan-inline-sidecar-schema-drift.md scope decision)
+- Blocking POSTED on a human eyeball check: rejected; the requirement already says verify live -- the gap is that nothing mechanical fails the skip, so the fix is a machine-checkable receipt. (basis: docs/history/backlog/completed/2026-09-28-review-posting-completion-evidence.md verify-live requirement)
 ## p95-interrupted-run-stranded-work-prevention
 
 Added: 2026-09-29 (grouping pass, single-origin carry of the six-idea prevention set)
@@ -141,10 +91,10 @@ Prompt: using the plans skill, author one plan (authoring only, do not execute) 
 Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
 
 Rejected alternatives:
-- One flat six-idea pass without the value order: rejected by the origin's own ordering; B+D retire the perpetual advisory cheapest and de-risk the rest.
+- One flat six-idea pass without the value order: rejected by the origin's own ordering; B+D retire the perpetual advisory cheapest and de-risk the rest. (basis: docs/history/backlog/2026-09-29-interrupted-run-and-stranded-work-prevention-ideas.md value order)
 - Auto-deleting interrupted manifests as the disposition: rejected; the witnessed disposition requires verified-deliverables evidence, never silent deletion of an unresolvable record.
-- Re-implementing loop-darkness recovery inside this plan: rejected; the executed maintenance-autonomous-pipeline plan owns that class.
-- Splitting the ideas file into six separate backlog items: rejected; the file is the origin of record with its own cross-references, and one plan keeps the value order coherent.
+- Re-implementing loop-darkness recovery inside this plan: rejected; the executed maintenance-autonomous-pipeline plan owns that class. (basis: docs/history/plans/completed/2026-09-28-maintenance-autonomous-pipeline.md)
+- Splitting the ideas file into six separate backlog items: rejected; the file is the origin of record with its own cross-references, and one plan keeps the value order coherent. (basis: docs/history/backlog/2026-09-29-interrupted-run-and-stranded-work-prevention-ideas.md)
 
 ## p80-worktree-closeout-artifact-migration-and-residue
 
@@ -165,15 +115,15 @@ Prompt: using the plans skill, author one plan (authoring only, do not execute):
 Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
 
 Rejected alternatives:
-- Tracking docs/reviews so records cannot be lost: rejected; staging docs are working artifacts tracked selectively at landings, and tracking them changes review-staging semantics wholesale.
-- Blanket git clean after landings to remove orphans: rejected; it sweeps live peer dirt, violating the never-touch-foreign-dirt discipline.
+- Tracking docs/reviews so records cannot be lost: rejected; staging docs are working artifacts tracked selectively at landings, and tracking them changes review-staging semantics wholesale. (basis: agents/skills/review-staging/SKILL.md staging-docs tracked-selectively semantics)
+- Blanket git clean after landings to remove orphans: rejected; it sweeps live peer dirt, violating the never-touch-foreign-dirt discipline. (basis: scripts/worktree_closeout_migrate.py)
 - Removing the implicit-empty-baseline guard so closeout proceeds without capture: rejected; the guard's refusal prevented an unverified full-dir sweep that would have carried done-session markers into the primary checkout's session window (witnessed).
-- Making teardown proceed despite migration failure: rejected; the existing do-NOT-remove stance is correct, the gap is upstream enforcement and the done-side recovery arm.
-- Applying worktree landing changes to the primary checkout at landing time instead of sweeping orphans after: rejected; the checkout is deliberately left to live peers during landings, and re-applying changes under them would race active sessions.
-- Removing run worktree isolation: rejected; the incident was duplicate run identity, not a failure of isolation.
-- Creating separate worktrees for every task or checklist edit: rejected as the default; this same-run correction had no independent concurrency or merge contract and created competing branch state.
-- Cherry-picking Task 5 and later merging its original branch: rejected; one landing method must preserve each source commit exactly once.
-- Deleting a protected worktree directory directly: rejected; managed archival preserves a recoverable snapshot and enforces workspace protection.
+- Making teardown proceed despite migration failure: rejected; the existing do-NOT-remove stance is correct, the gap is upstream enforcement and the done-side recovery arm. (basis: agents/skills/execute-plan/SKILL.md do-NOT-remove guard)
+- Applying worktree landing changes to the primary checkout at landing time instead of sweeping orphans after: rejected; the checkout is deliberately left to live peers during landings, and re-applying changes under them would race active sessions. (basis: docs/history/backlog/2026-09-28-machinery-deletion-primary-checkout-orphans.md)
+- Removing run worktree isolation: rejected; the incident was duplicate run identity, not a failure of isolation. (basis: docs/history/backlog/2026-09-29-execute-plan-single-worktree-run-identity.md)
+- Creating separate worktrees for every task or checklist edit: rejected as the default; this same-run correction had no independent concurrency or merge contract and created competing branch state. (basis: docs/history/backlog/2026-09-29-execute-plan-single-worktree-run-identity.md consumer witness)
+- Cherry-picking Task 5 and later merging its original branch: rejected; one landing method must preserve each source commit exactly once. (basis: docs/history/backlog/2026-09-29-execute-plan-single-worktree-run-identity.md consumer witness)
+- Deleting a protected worktree directory directly: rejected; managed archival preserves a recoverable snapshot and enforces workspace protection. (basis: docs/history/backlog/completed/2026-09-28-review-record-destroyed-with-exec-worktree.md)
 
 ## p96-worktree-first-standard-hardening
 
@@ -196,10 +146,10 @@ Prompt: using the plans skill, author one plan (authoring only, do not execute) 
 Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
 
 Rejected alternatives:
-- Folding the p80-worktree closeout origins into this group: rejected; entry/adoption/resume and teardown/closeout are different halves of the lifecycle with different witnesses, and the closeout group is already logged and scoped.
-- Keeping the guard-absent skip with a louder message: rejected by the corpus's fail-closed convention; a missing validator elsewhere is stop-and-report, and a silent skip in a removal gate is the one direction that destroys evidence.
-- Deciding branch naming inside passing prose without the recorded decision: rejected by the origin; the two options are a design choice the plan must make explicitly, either as a stated rule or a recorded free-form decision.
-- Sanitizing only the recipe subprocess and leaving the validator call ambient: rejected; the validator runs git plumbing against the same fixture and inherits the same leak class.
+- Folding the p80-worktree closeout origins into this group: rejected; entry/adoption/resume and teardown/closeout are different halves of the lifecycle with different witnesses, and the closeout group is already logged and scoped. (basis: docs/history/backlog/PLAN-PROMPTS.md p80-worktree entry)
+- Keeping the guard-absent skip with a louder message: rejected by the corpus's fail-closed convention; a missing validator elsewhere is stop-and-report, and a silent skip in a removal gate is the one direction that destroys evidence. (basis: agents/skills/done/SKILL.md plan-readiness missing-validator stop-and-report)
+- Deciding branch naming inside passing prose without the recorded decision: rejected by the origin; the two options are a design choice the plan must make explicitly, either as a stated rule or a recorded free-form decision. (basis: docs/history/backlog/2026-09-28-worktree-branch-naming-single-home.md)
+- Sanitizing only the recipe subprocess and leaving the validator call ambient: rejected; the validator runs git plumbing against the same fixture and inherits the same leak class. (basis: scripts/plan_readiness.py)
 
 ## p81-execute-plan-worker-identity-and-terminal-evidence-edges
 
@@ -219,73 +169,10 @@ Prompt: using the plans skill, author one plan (authoring only, do not execute):
 Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
 
 Rejected alternatives:
-- Keeping synthesis for all falsy identities: rejected; the receipt must distinguish omitted from invalid, otherwise an adapter contract violation is concealed at persistence.
-- Refusing omitted identities too: rejected; the compatibility identity for omitted values is documented behavior adapters rely on.
-- Leaving the stale recovery_action label: rejected; the history event is an audit input and a refused-path label on a reconciled outcome misstates what happened.
-- Letting the release stand on a failed re-observation: rejected; the guard exists precisely to not release over a live resumed conversation, and tooling failure is not evidence of absence, so the downgrade is the only safe direction.
-
-## p84-plans-sut-naming-and-lessons-recovery-branching
-
-Added: 2026-09-28 (investigate skill, user-directed two-origin group investigation)
-
-Origins:
-- docs/history/backlog/2026-09-28-plans-sut-naming-rule-for-wrapper-converted-results.md
-- docs/history/backlog/2026-09-21-lessons-gate-recovery-distinguish-duplicate-ids.md
-
-Grouping: one group by defect class over the skills corpus: a witnessed failure class whose skill text lacks the branching rule or named remedy, so the operator or reviewer is misdirected (a plans Validation gap that cost three review rounds five staged findings, and a lessons recovery message whose offered command does nothing for the witnessed failure category). Shared surfaces are the skill bodies plus their regression witnesses, and both fixes must respect the vendored-twin rule (the runtime-side catalog twin lands in the same run or carries a tracked landing path). Near-siblings examined and left out: the p83 residual sweep (recorded findings on executed plans, not missing rules in living skills), the p88 closure group.
-
-Urgency: High; the plans rule's witness is recurring review churn (the terminal-recovery plan's r2-r4 re-derived the same defect five times across four workers before pinning the system under test), and the Validation Commands rules are consumed by every future plan in every project, so the rule pays back immediately. Position: after the p81 driver-edge group, before the Medium singles.
-
-Prompt: using the plans skill, author one plan (authoring only, do not execute): a system-under-test naming rule for the plans skill and category-branched lessons recovery text. Read each origin's full text from docs/history/backlog/ and treat the files as the scope of record. Established mechanism facts to author from (re-verify each on disk before pinning): the plans skill's Validation Commands authoring rules end at rule 41 (file around line 570), so the new rule is 42; the existing rules cover task-coupling (25) and whole-tree gate states (21) but nothing requires naming WHERE a behavior is observed when a wrapper sits between the tested unit and the outcome (the witnessed seam: a pure reducer returns `available` while the driver wrapper structurally downgrades it to `capacity-live` under a live worker, so a test written against the reducer layer is unreachable at the wrapper). The lessons recovery text in BOTH agents/skills/learn/SKILL.md (around line 532) and agents/skills/done/SKILL.md (around line 194) offers only the `untagged / invalid-family` branch with `lessons.py adopt --tag-unclassified`, while the validator also reports duplicate and multiple-tags categories, and the witnessed duplicate-id recovery attempt returned "0 lessons rewritten (all already tagged)". Scope arms: (1) plans rule 42: when a wrapper transforms or can veto a lower layer's result, every test item names its system under test; the wrapper's post-conversion outcome gets its own named assertion, and any reducer-level expectation today's wrapper already satisfies is labeled a green-at-RED regression pin rather than a RED target; (2) a matching lens pattern lands in the review-agents catalog the same run (the panel cannot flag what no lens owns; the iteration-discipline rule requires the catalog gap close before re-review); (3) the learn and done recovery texts branch on the validator category: untagged/invalid-family keeps the tagging workflow, duplicate gets inspect-colliding-headings-choose-unique-number-update-references-rerun, multiple-tags gets remove-competing-tags-after-classifying; (4) regression witnesses per category (a validator-output-shaped fixture per branch), repair stays operator-driven (no automatic renumbering or reference rewriting); (5) both runtime-side skill twins carry the same text in the same run or a tracked vendored-sync landing path.
-
-Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
-
-Rejected alternatives:
-- Teaching the wrapper seam only in the review lens catalog without the plans rule: rejected; authoring-time prevention beats review-time detection, and the witness shows reviewers re-derive the defect without a rule to cite, so both surfaces land together.
-- Automatically renumbering duplicate lesson ids: rejected by the origin; cross-references are semantic, so repair stays operator-driven.
-- Extending --tag-unclassified to also resolve duplicates: rejected; a tagging command renumbering identifiers would silently rewrite the corpus, the opposite of the operator-driven scope.
-- Fixing only the vendored repo copy and leaving the runtime twin to drift: rejected; the vendored-sync rule requires the twin landed or tracked, never orphaned.
-
-## p85-user-directed-override-for-interactive-guard-standdowns
-
-Added: 2026-09-28 (investigate skill, single-origin investigation)
-
-Origins:
-- docs/history/backlog/2026-09-28-user-direct-request-overrides-standdown.md
-
-Grouping: single origin over the maintenance skill's guard precedence for interactive sessions (agents/skills/maintenance/SKILL.md Step 2 guards and Step 3 decisions, mirrored in agents/skills/maintenance/zcode.md). Related rules that already landed and are left out of scope: the authoring-lane target-distinctness carve-out with the 09:32 witness (landed by the executed maintenance-autonomous-pipeline plan; the sibling origin docs/history/backlog/2026-09-28-authoring-lane-guard-precedence.md is satisfied by it and dispositioned in the closure group), and the continue-loop condition. What does not exist anywhere (verified by search): a user-directed-override rule for interactive sessions.
-
-Urgency: High; the operator corrected this twice in one day (the 09:32 authoring stand-down and the 18:21 execution stand-down), and the 18:21 correction proved the stand-down bought nothing (the peer had already landed both runs by re-survey). An interactive session carrying a live user directive has the operator present; the guards were written for unattended sessions that share the same code path.
-
-Prompt: using the plans skill, author one plan (authoring only, do not execute): a user-directed override rule for interactive guard stand-downs. Read the origin's full text from docs/history/backlog/ and treat the file as the scope of record. Established mechanism facts to author from (re-verify each on disk before pinning): the maintenance skill's G3 stands the whole turn down when a merge or rebase is in progress or the done lock is held (D3 recorded), G1e/G1a occupancy resolves to stand-down or deferral, and the landing gate defers dispatch while outstanding unlanded runs survive; none of these texts distinguishes an interactive session carrying a live user directive from an automation-born turn. The state file's children ledger records the override happening in practice (the 2026-09-28 19:14 execution entry carries "override of 18:21 stand-down"), so the practice exists but the rule does not. Scope arms: (1) a User-directed override rule in the maintenance skill, mirrored in the runtime overlay: when the session is interactive (the current directive came from a live user message) and a guard that would only defer or stand down trips (G1e/G1a occupancy, the G3 done-lock hold, the landing gate), the session states the tripped guard and its evidence in one line, chooses a non-colliding execution surface (its own per-execution worktree, landing-completion work for a completed unlanded run, or a target verified disjoint from the peer's in-flight one), and proceeds instead of standing down; (2) integrity guards are never overridable (the G2 failure cap, corrupted merge-lock metadata, foreign-dirt gates); (3) the override records the literal `user-directed-override` plus the tripped guard's name in decision_reason; (4) unattended sessions keep today's stand-down semantics unchanged (the predicate is user presence, never confidence); (5) a witness-based self-test or review checklist item verifies the override predicate stays user-presence-based.
-
-Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
-
-Rejected alternatives:
-- Removing the deferral-class guards for all sessions: rejected; unattended turns share the code path and have no operator to accept the risk, so the guards keep protecting them.
-- A confidence-based override ("the session judges the peer stalled"): rejected by the origin's own predicate; the override binds to user presence, not to the session's mood, and a dead-PID probe is not crash evidence (the 18:21 witness).
-- Documentation-only guidance without the recorded literal: rejected; the practice already happened without a rule, so the rule must carry the auditable `user-directed-override` marker the state reader can surface.
-
-## p86-secret-scan-visibility-scoped-domain-redaction
-
-Added: 2026-09-28 (investigate skill, single-origin investigation)
-
-Origins:
-- docs/history/backlog/2026-09-28-secret-scan-preserve-valid-service-links.md
-
-Grouping: single origin over the done skill's sensitive-data-scan gate policy (agents/skills/done/SKILL.md pre-commit gates and the resolved hygiene scanner's employer-domain patterns). Near-siblings examined and left out: the rejected 2026-09-22 credential-shaped-patterns item (bare credential vocabulary false positives; it explicitly deferred domain changes without a consumer witness, which this origin now supplies), and the 2026-09-27 release-gate adjudication (result-only scanning for the release skill's own gate; a scope decision for a different surface, not a visibility policy).
-
-Urgency: High; consumer-company witnessed: a valid internal Jira link was redacted to a bare ticket id in a private company repository, which made the plan less useful and changed its digest, forcing a fresh full review round that found nothing. The skills-repo personal profile must not defer this as formal-hardening because the gate and scanner are shared done-workflow machinery.
-
-Prompt: using the plans skill, author one plan (authoring only, do not execute): repository-visibility-scoped domain redaction for the done sensitive-data scan. Read the origin's full text from docs/history/backlog/ and treat the file as the scope of record. Established mechanism facts to author from (re-verify each on disk before pinning): the done skill's sensitive-data-scan gate (around line 376) runs a diff-content pattern grep plus a full-content scan of untracked files with employer-brand patterns resolved from the facts document, and its remediation guidance (around line 381) instructs replacing internal hostnames with generic placeholders such as `<your-org>.atlassian.net` unconditionally; the hygiene patterns file matches the employer org as a word (domain OR path segment), and the scanner receives no repository-visibility or confidentiality input, so a private company repository is scanned under public-artifact rules. Scope arms: (1) the gate learns a visibility or explicit confidentiality classification (facts-derived, never a global hostname allowlist) and applies employer-domain redaction only to public artifacts; (2) credential, token, secret-query-parameter, and known-secret-format checks stay active in both private and public contexts, and the whole URL is still inspected for secrets before any link is preserved; (3) focused fixtures: a valid internal service link in a private-repository scan (preserved), the same link in a public-artifact scan (redacted), and credential-bearing URLs in both contexts (flagged); (4) the done skill's remediation guidance is updated to state the scoping so an operator does not hand-redact a valid link again.
-
-Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
-
-Rejected alternatives:
-- A global Jira-host allowlist: rejected by the origin; the decision must depend on repository visibility or an explicit confidentiality policy, and an allowlist neither generalizes nor protects public artifacts.
-- Dropping employer-domain patterns everywhere: rejected; public-artifact hygiene genuinely needs them (the release-gate witness), so the patterns stay and the scope narrows.
-- Leaving remediation to operator judgment without gate support: rejected; the witnessed failure was a hand-redaction made to pass the gate, so the gate itself must carry the policy.
-
+- Keeping synthesis for all falsy identities: rejected; the receipt must distinguish omitted from invalid, otherwise an adapter contract violation is concealed at persistence. (basis: scripts/execute_plan_runtime.py _record_worker_launch)
+- Refusing omitted identities too: rejected; the compatibility identity for omitted values is documented behavior adapters rely on. (basis: docs/history/backlog/2026-09-22-execute-plan-empty-process-identity.md)
+- Leaving the stale recovery_action label: rejected; the history event is an audit input and a refused-path label on a reconciled outcome misstates what happened. (basis: scripts/execute_plan_runtime.py worker-reconciled history append)
+- Letting the release stand on a failed re-observation: rejected; the guard exists precisely to not release over a live resumed conversation, and tooling failure is not evidence of absence, so the downgrade is the only safe direction. (basis: scripts/execute_plan_runtime.py release-window guard)
 ## p82-codex-model-guard-activation-probe-and-recovery
 
 Added: 2026-09-28 (investigate skill, single-origin investigation)
@@ -303,7 +190,7 @@ Standing pre-authorization: accept all recommended options and suggestions throu
 
 Rejected alternatives:
 - Weakening the guard to permit the blocked session's recovery edits: rejected; fail-closed on mismatch is the guard's purpose, and the witnessed deadlock is resolved by an out-of-band probe and procedure, not by loosening the gate.
-- Host-side auto-sync of the active hook from the versioned source: rejected; silently rewriting host wiring masks the drift the probe must surface, and host wiring is an operator-owned surface.
+- Host-side auto-sync of the active hook from the versioned source: rejected; silently rewriting host wiring masks the drift the probe must surface, and host wiring is an operator-owned surface. (basis: agents/hooks/codex-model-guard/require-luna.py)
 - Documentation-only recovery guidance: rejected; the witnessed failure is procedural deadlock under an active denial, so the detection must be mechanical (the probe) and the refusal must carry the remedy, not prose alone.
 
 ## p87-docs-branch-single-marker-window-witness
@@ -322,9 +209,9 @@ Prompt: using the plans skill, author one plan (authoring only, do not execute):
 Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
 
 Rejected alternatives:
-- Syncing unconditionally when the window is unanchorable: rejected; conservative gating exists because an unanchored window cannot bound what the run produced, and syncing unbound would sweep peer runs' artifacts.
-- Treating the single-marker case as expected and documenting manual re-sync: rejected by the origin; interactive done runs routinely produce exactly one marker, so the "rare" case is the common case, and manual re-sync by memory is the defect.
-- Lowering the content-confirmation bar to make recent markers confirmable: rejected; content confirmation is the cross-repo safety fence (a marker whose digest cannot be recomputed belongs to another repo), so the witness pair, not weaker confirmation, is the complement.
+- Syncing unconditionally when the window is unanchorable: rejected; conservative gating exists because an unanchored window cannot bound what the run produced, and syncing unbound would sweep peer runs' artifacts. (basis: agents/skills/done/SKILL.md conservative gating)
+- Treating the single-marker case as expected and documenting manual re-sync: rejected by the origin; interactive done runs routinely produce exactly one marker, so the "rare" case is the common case, and manual re-sync by memory is the defect. (basis: docs/history/backlog/2026-09-28-docs-branch-sync-single-marker-unanchorable-window.md)
+- Lowering the content-confirmation bar to make recent markers confirmable: rejected; content confirmation is the cross-repo safety fence (a marker whose digest cannot be recomputed belongs to another repo), so the witness pair, not weaker confirmation, is the complement. (basis: agents/skills/done/SKILL.md content confirmation)
 
 ## p83-residual-polish-sweep
 
@@ -349,9 +236,9 @@ Prompt: using the plans skill, author one plan (authoring only, do not execute):
 Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
 
 Rejected alternatives:
-- Fixing all 19 findings as written without re-verification: rejected; six verified-fixed findings would be re-fixed or their re-fixes would fight landed bytes, which is the exact stale-review failure the sweep exists to prevent.
-- Closing the three origin items as stale: rejected; several survivors are real (the N4 report-home placeholder is verified still present), so closure would orphan live defects.
-- Folding the survivors into the closure group's housekeeping plan: rejected; code and prose fixes need their own review surface, not a status-flip plan.
+- Fixing all 19 findings as written without re-verification: rejected; six verified-fixed findings would be re-fixed or their re-fixes would fight landed bytes, which is the exact stale-review failure the sweep exists to prevent. (basis: scripts/check-no-em-dash.sh)
+- Closing the three origin items as stale: rejected; several survivors are real (the N4 report-home placeholder is verified still present), so closure would orphan live defects. (basis: agents/skills/maintenance/SKILL.md weekly rider)
+- Folding the survivors into the closure group's housekeeping plan: rejected; code and prose fixes need their own review surface, not a status-flip plan. (basis: docs/history/backlog/PLAN-PROMPTS.md p88 closure entry)
 
 ## p97-maintenance-payload-landing-pins-ledger-hygiene
 
@@ -376,9 +263,9 @@ Prompt: using the plans skill, author one plan (authoring only, do not execute) 
 Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
 
 Rejected alternatives:
-- Folding these into p83's residual sweep: rejected; the payload-and-pin machinery layer carries behavior-bearing arms (the checkout-flow guard) and pin re-keys that need their own review surface, not a prose-sweep ride-along.
-- Deleting stale pin comments instead of rewording them: rejected; the comments are operator-facing provenance for re-keying, and the suite's freeze-literal discipline expects corrected claims, not absence.
-- A log-and-continue treatment for the checkout-flow mismatch: rejected by the origin's fail-closed direction; an unattended landing must not sweep operator-branch commits onto the default branch.
+- Folding these into p83's residual sweep: rejected; the payload-and-pin machinery layer carries behavior-bearing arms (the checkout-flow guard) and pin re-keys that need their own review surface, not a prose-sweep ride-along. (basis: scripts/check_maintenance_pins.sh)
+- Deleting stale pin comments instead of rewording them: rejected; the comments are operator-facing provenance for re-keying, and the suite's freeze-literal discipline expects corrected claims, not absence. (basis: scripts/check_maintenance_pins.sh freeze-literal discipline)
+- A log-and-continue treatment for the checkout-flow mismatch: rejected by the origin's fail-closed direction; an unattended landing must not sweep operator-branch commits onto the default branch. (basis: docs/history/backlog/2026-09-28-checkout-flow-landing-mismatch-guard.md)
 
 ## p88-executed-plan-origin-closure-sweep
 
@@ -404,9 +291,9 @@ Prompt: using the plans skill, author one plan (authoring only, do not execute):
 Standing pre-authorization: accept all recommended options and suggestions throughout without asking the user.
 
 Rejected alternatives:
-- Closing the three external-gate watchers with the rest: rejected; their host-side halves are unlanded and their acceptance gates (zero persist_failed over 72 hours, diagnosable hook-failure records, zero persisted_missing) are measurable and unmet, so closure would orphan live signals.
-- Re-authoring any of the satisfied items' demands as fresh plans: rejected; the mechanisms are verified on disk and re-authoring executed plans is the exact duplication the do-not-re-author records guard against.
-- Leaving the seven satisfied items open until their external siblings close: rejected; mixing satisfied and external origins in one open pool is what makes the backlog untrustworthy for prioritization.
+- Closing the three external-gate watchers with the rest: rejected; their host-side halves are unlanded and their acceptance gates (zero persist_failed over 72 hours, diagnosable hook-failure records, zero persisted_missing) are measurable and unmet, so closure would orphan live signals. (basis: docs/history/backlog/completed/2026-09-19-hook-outcome-audit-visibility.md Ship-when)
+- Re-authoring any of the satisfied items' demands as fresh plans: rejected; the mechanisms are verified on disk and re-authoring executed plans is the exact duplication the do-not-re-author records guard against. (basis: scripts/execute_plan_runtime.py preseed-verifier gate, landed 07885e0f)
+- Leaving the seven satisfied items open until their external siblings close: rejected; mixing satisfied and external origins in one open pool is what makes the backlog untrustworthy for prioritization. (basis: docs/history/backlog/ open pool; the satisfied items' demands are executed and their origins closed: docs/history/plans/completed/2026-09-27-execute-plan-preseed-verifier-consistency-gate.md, docs/history/plans/completed/2026-09-28-maintenance-autonomous-pipeline.md)
 
 ## p90-execute-plan-certified-progress-sync
 
@@ -420,10 +307,10 @@ Urgency: Medium; the docs-branch guard refused a checklist update before staging
 Prompt: using the plans skill, author one focused implementation plan (authoring only, do not execute) for receipt-backed plan progress synchronization across docs-branch and execute-plan preflight. Re-read the backlog origin and verify the current certified-plan guard, source-plan digest selection, task checkbox ordering, runtime preflight ownership check, verification receipts, `done` commit receipt, and both refusal witnesses. Keep substantive plan certification and acceptance-item checks fail-closed. At docs-branch sync, compare the incoming plan with the latest certified plan after normalizing only task checklist markers `[ ]` and `[x]`; permit the overlay only when normalized bytes match exactly, with a witness naming plan path, sidecar, certified digest, incoming digest, and normalization result. At execute-plan preflight, reconcile each checkpointed task's checklist against exact verification and `done` receipts: close parent-owned `Commit:` items only from matching commit evidence, and represent a TDD RED step that could not be observed with an explicit bounded disposition receipt rather than a false checked marker. Refuse unexplained open acceptance items, stale or absent digests, missing/mismatched receipts, and substantive plan drift. Cover both checkbox flip directions, mixed-task progress, valid and foreign commit receipts, unavailable RED evidence, unexplained open acceptance items, substantive edits with checkbox changes, stale/missing certification, actual guard CLI behavior, actual preflight behavior, and docs-branch sync staging refusal/acceptance. Keep archive/history protections intact and update the relevant docs-branch, execute-plan, and done contracts only where required. Use the existing backlog origin as the plan's Backlog origin.
 
 Rejected alternatives:
-- Remove or bypass certified-plan ordering: rejected because substantive unreviewed plan content must remain protected.
-- Require a fresh full plan review after every task checkbox update: rejected because routine progress is not a substantive contract change and repeated reviews burden the per-task commit path.
-- Delay all docs-branch sync until final plan archival: rejected because per-task done owns the commit and documentation-preservation boundary.
-- Treat every unchecked line as a false completion claim and refuse all future continuation: rejected because receipt-backed task completion can be valid when a parent-owned commit is recorded or a TDD phase was unobservable; the unresolved item still needs an explicit disposition, never an invented pass.
+- Remove or bypass certified-plan ordering: rejected because substantive unreviewed plan content must remain protected. (basis: docs/history/backlog/2026-09-29-docs-branch-certified-plan-progress.md certified-plan guard witness)
+- Require a fresh full plan review after every task checkbox update: rejected because routine progress is not a substantive contract change and repeated reviews burden the per-task commit path. (basis: docs/history/backlog/2026-09-29-docs-branch-certified-plan-progress.md)
+- Delay all docs-branch sync until final plan archival: rejected because per-task done owns the commit and documentation-preservation boundary. (basis: docs/history/backlog/2026-09-29-docs-branch-certified-plan-progress.md staging-refusal witness)
+- Treat every unchecked line as a false completion claim and refuse all future continuation: rejected because receipt-backed task completion can be valid when a parent-owned commit is recorded or a TDD phase was unobservable; the unresolved item still needs an explicit disposition, never an invented pass. (basis: docs/history/backlog/2026-09-29-docs-branch-certified-plan-progress.md TDD-phase witness)
 
 ## p91-execute-plan-post-squash-artifact-cleanup
 
@@ -437,7 +324,7 @@ Urgency: Low; the source ref and archived snapshot are redundant after verified 
 Prompt: using the plans skill, author one focused implementation plan (authoring only, do not execute) to close out exact execute-plan run branches and disposable artifacts after a verified squash landing. Read the origin and `docs/history/backlog/2026-09-29-execute-plan-single-worktree-run-identity.md` in full. Re-verify the current worktree-first lifecycle, managed archive behavior, landing implementation, run-artifact migration, and any supported archived-snapshot cleanup operation before choosing a minimal change. The witnessed source branch `codex/execute-plan-preflight-followup` had no linked worktree after archival; its work was squash-landed (`f0d851a2`), its plan later executed and moved to completed (`41a4dc2b`), yet the source branch remained. The sibling backlog handles same-run worktree identity but only permits branch deletion when ancestry proves source commits reachable, which does not cover squash. Preserve the lifecycle's exact-artifact migration and fail-closed behavior. Add one closeout arm that (1) binds the exact run's source branch, worktree, landing destination, and artifact inventory; (2) proves the run's intended changes landed even when squash breaks source-commit ancestry; (3) verifies required durable review and plan artifacts before cleanup; (4) removes only that run's source branch and disposable artifacts once no live task or process depends on them; (5) preserves durable history, active sibling branches, and platform-managed recovery snapshots when there is no supported deletion operation, reporting retained artifacts honestly. Cover ordinary merge and squash, live sibling preservation, migration failure, plan/review retention, repeat closeout, and unsupported archive deletion. Do not use wildcard branch cleanup, blanket clean, raw managed-worktree deletion, or ancestry-only proof. Keep implementation and tests scoped to the existing lifecycle owner, updating other consumers only when the contract requires it.
 
 Rejected alternatives:
-- Delete every `codex/*` branch after landing: rejected; active worktrees may own those refs.
-- Use source-commit ancestry as the only landed-proof: rejected; it cannot pass after squash.
-- Treat managed archival as complete cleanup: rejected; it retains a recoverable snapshot and branch ref.
-- Delete archived snapshots by raw filesystem path: rejected; it bypasses platform recovery and ownership semantics.
+- Delete every `codex/*` branch after landing: rejected; active worktrees may own those refs. (basis: agents/skills/execute-plan/SKILL.md worktree-first lifecycle)
+- Use source-commit ancestry as the only landed-proof: rejected; it cannot pass after squash. (basis: witnessed squash landing f0d851a2)
+- Treat managed archival as complete cleanup: rejected; it retains a recoverable snapshot and branch ref. (basis: agents/skills/execute-plan/SKILL.md closeout lifecycle)
+- Delete archived snapshots by raw filesystem path: rejected; it bypasses platform recovery and ownership semantics. (basis: agents/skills/execute-plan/SKILL.md managed-archive preservation)

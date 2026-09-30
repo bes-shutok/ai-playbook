@@ -26,7 +26,7 @@ description: >
 | User intent | Mode | Skill path |
 |-------------|------|------------|
 | Create or draft a new Design RFC | **Create** | Steps 0 → 0.1 → 1 → 2 → 3 |
-| Update an existing Markdown RFC file | **Edit** | **Read this skill + `references/rfc-sections.md` first**; skip Steps 0–0.1 unless scope changed; apply editing checklist; run Step 2 (Light) when edit is substantial **or** after a formatting/readability cleanup pass (formatting alone misses contract gaps). Use targeted edits (`StrReplace`), not full-file overwrite, on large RFCs. Step 2.5 applies to edit-mode folds too. |
+| Update an existing Markdown RFC file | **Edit** | **Read this skill + `references/rfc-sections.md` first**; skip Steps 0–0.1 unless scope changed; apply editing checklist (after the Edit mode writeability preflight below); run Step 2 (Light) when edit is substantial **or** after a formatting/readability cleanup pass (formatting alone misses contract gaps). Use targeted edits (`StrReplace`), not full-file overwrite, on large RFCs. Step 2.5 applies to edit-mode folds too. |
 | Review a local Markdown RFC only | **Review-local** | Step 2 on the provided draft; no regeneration |
 | Create a Technical Design Document (TDD) | **Redirect** | `tdd-design` (fixed sections 1-11 completeness gates) |
 | Review an RFC/TDD on Confluence | **Redirect** | `review-confluence-doc` (fetch page, review and comment only) |
@@ -155,7 +155,11 @@ Read `references/rfc-sections.md` for the full section template. Summary:
 
 **Subsection rule:** Inside `### 2. Problem, Goals, Non-goals` (and §3, §5, §7, §8, etc.), use **`#### Subsection title`** plus a blank line, then bullets or prose. Do **not** use nested list labels (`- Problem statement:`) or bold inline titles (`**Goals:**`) as pseudo-headings; they do not separate visually in Confluence or Markdown previews.
 
-**Edit mode (mandatory):** Before changing an existing RFC, read this skill and `references/rfc-sections.md`, then run the **Editing checklist** in `rfc-sections.md` before presenting the update. **Diagrams:** if any edited §4 flow meets a complexity trigger (≥3 decision branches, concurrent actors racing on shared state, or a cross-trust-boundary handoff), ensure a fenced Mermaid diagram exists under that flow or the §3 N/A one-liner is present; do not leave a blanket "no diagrams" stance on a now-complex flow.
+**Edit mode (mandatory):** Before changing an existing RFC, read this skill and `references/rfc-sections.md`, then run the **writeability preflight** below, then run the **Editing checklist** in `rfc-sections.md` before presenting the update.
+
+**Writeability preflight (mandatory, before the editing checklist):** before changing an existing RFC, resolve the document's writeability by running the validator's read-only check-writes mode with a body-edit change letter for the path (or, when the validator is absent, by reading the registry row's state and audit note directly - the gate's own fail-open semantics). An editable living RFC proceeds to the editing checklist. A body frozen with a registered successor routes to that successor document (or the closure-transition rules) instead of a body edit. When project guidance names the document active while the validator blocks body writes, the session records the conflict and routes it through an explicit policy decision before any edit or content move, recording the conflict in the session log.
+
+**Diagrams:** if any edited §4 flow meets a complexity trigger (≥3 decision branches, concurrent actors racing on shared state, or a cross-trust-boundary handoff), ensure a fenced Mermaid diagram exists under that flow or the §3 N/A one-liner is present; do not leave a blanket "no diagrams" stance on a now-complex flow.
 
 **Title alignment:** When an RFC title is authoritative in an external source such as Confluence, verify that source and preserve its exact reader-facing wording unless the user explicitly requests a rename. Do not introduce internal glossary terms or ticket-led framing into the title as a substitute for that source wording.
 

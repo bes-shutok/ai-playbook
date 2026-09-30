@@ -1,5 +1,10 @@
 # Backlog: Evidence-recovery receipt identity hardening in startup retirement
 
+Cluster: docs/history/backlog/2026-09-29-execute-plan-launch-boundary-hardening.md
+Cluster: docs/history/backlog/2026-09-29-execute-plan-legacy-evidence-contract-compat.md
+Cluster: docs/history/backlog/2026-09-30-baseline-aware-stale-session-cleanup.md
+
+
 Driving force: code-quality
 Status: open
 Priority: medium

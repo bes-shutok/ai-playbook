@@ -182,6 +182,12 @@ _CLAIM_BOUNDARY_RUNTIME_REMEDY = (
 # prefix-scanned. The readiness operation applies the same bound to its plan
 # read.
 PLAN_READ_LIMIT = 1_000_000
+
+# Single home for the fail-closed drift problem string that both the
+# preflight check body and the reviewed-scope fence predicate match on:
+# the two sites are coupled by substring equality, so the literal must
+# be defined once and referenced (scope-recovery residual F1).
+RECONCILIATION_DRIFT_PROBLEM = "plan path(s) outside the seeded scope"
 # The diagnose classification map: the fixed, closed mapping from a history
 # failure event to the first-failed-transition classification. The worker-failure
 # class covers the whole non-resumable worker-failure family including
@@ -579,15 +585,17 @@ def _preseed_verifier_consistency_problems(
        ``embedded-path-containment``.
 
     Token classification: a pure-path token (no whitespace or quote
-    characters, canonicalizing through the fail-closed path policy;
-    identity when no repository root is supplied) keeps exact canonical
-    equality as its sole matching basis, and every other token is non-path
-    and is scanned for path occurrences only when the path ends the token
-    or the following character is outside ``[A-Za-z0-9._-]`` (the
-    tail-boundary rule), so suffix variants such as ``.bak`` and
-    nested-path namesakes do not match. Matching is literal substring
-    search over the payload; building a regex from payload strings stays
-    forbidden.
+    characters, canonicalizing through the fail-closed path policy; that
+    pure-path identity holds only when a repository root is supplied --
+    without one the token falls to the containment classification, the
+    deliberate behavior pinned at the classification site below) keeps
+    exact canonical equality as its sole matching basis, and every other
+    token is non-path and is scanned for path occurrences only when the
+    path ends the token or the following character is outside
+    ``[A-Za-z0-9._-]`` (the tail-boundary rule), so suffix variants such
+    as ``.bak`` and nested-path namesakes do not match. Matching is
+    literal substring search over the payload; building a regex from
+    payload strings stays forbidden.
 
     Each problem is a structured mapping: ``task_ids`` (the responsible
     task ids -- the declaring task for shapes 1 and 3, both cloned tasks
@@ -626,7 +634,12 @@ def _preseed_verifier_consistency_problems(
         # characters whose canonicalization through the fail-closed path
         # policy succeeds keeps exact canonical equality as its sole
         # matching basis, so a cleanly canonicalizing non-match is accepted
-        # without any containment scan.
+        # without any containment scan. deliberate behavior pinned by the
+        # impl-review residuals family plan: containment classification
+        # when no repository root is supplied; production paths always
+        # resolve a root. The root-gated arm below is that pin: without a
+        # root the pure-path early return never fires and the token falls
+        # through to the containment scan.
         if not any(character.isspace() or character in "\"'" for character in token):
             try:
                 if canonical_root is not None:
@@ -671,12 +684,25 @@ def _preseed_verifier_consistency_problems(
                         basis = later_path_basis(token, later_path)
                         if basis is None:
                             continue
+                        # deliberate behavior pinned by the impl-review
+                        # residuals family plan: the refusal display stays
+                        # byte-count-only (the plan-letter first-line token
+                        # echo is not added); the display names the task id
+                        # and the declared path, never the offending token.
+                        # The shape-1 arm names its exact-equality token
+                        # basis; only the shape-3 containment arm says
+                        # "embeds".
+                        offense = (
+                            "is an exact-equality token for"
+                            if basis == "exact-canonical-equality"
+                            else "embeds"
+                        )
                         problems.append(
                             {
                                 "task_ids": [task_id],
                                 "basis": basis,
                                 "display": (
-                                    f"pre-seed consistency gate: task {task_id} verification command argv token embeds "
+                                    f"pre-seed consistency gate: task {task_id} verification command argv token {offense} "
                                     f"allowed path {later_path!r} declared only by strictly later task {later_id} "
                                     f"(token elided: {len(token.encode('utf-8'))} bytes); "
                                     "the verifier would demand an artifact that does not exist at this task boundary"
@@ -2841,12 +2867,14 @@ class RuntimeDriver:
         registry = WorkerRegistry(manifest)
         session = str(receipt["provider_session_id"])
         process_identity = receipt.get("process_identity")
-        if not process_identity:
+        if "process_identity" not in receipt:
             adapter = self.adapter
             provider = next((getattr(adapter, name, None) for name in ("provider_name", "name") if isinstance(getattr(adapter, name, None), str) and getattr(adapter, name).strip()), None)
             if provider is None:
                 provider = type(adapter).__name__.lower() if adapter is not None else "runtime"
             process_identity = {"provider": provider, "session_id": session}
+        elif not process_identity or not isinstance(process_identity, Mapping) or not (isinstance(process_identity.get("provider"), str) and process_identity["provider"].strip()) or not (isinstance(process_identity.get("session_id"), str) and process_identity["session_id"].strip()):
+            return {"status": "refused", "reason": "process-identity-invalid"}
         elif isinstance(process_identity, Mapping) and process_identity.get("session_id") is not None and process_identity.get("session_id") != session:
             return {"status": "refused", "reason": "provider-session-identity-mismatch"}
         result = registry.register_launch(
@@ -7179,7 +7207,7 @@ class RuntimeDriver:
                 })
                 if uncovered and not parse_problem:
                     drift.append({"task_id": next_task_id, "plan_paths": uncovered, "seeded_allowed_paths": allowed})
-                    problems.append(f"scope drift on task '{next_task_id}': {len(uncovered)} plan path(s) outside the seeded scope")
+                    problems.append(f"scope drift on task '{next_task_id}': {len(uncovered)} {RECONCILIATION_DRIFT_PROBLEM}")
                 elif not uncovered and not parse_problem and claimed_paths is not None:
                     checks.append(f"plan-versus-claim scope on '{next_task_id}': paths covered by the seeded scope")
         consult_task_id = next_task_id
@@ -10389,7 +10417,7 @@ class RuntimeDriver:
             and drift_entry is not None
             and bool(drift_entry.get("plan_paths"))
             and "problem" not in drift_entry
-            and recomputation.get("problems") == [f"scope drift on task '{task_id}': {len(drift_entry['plan_paths'])} plan path(s) outside the seeded scope"]
+            and recomputation.get("problems") == [f"scope drift on task '{task_id}': {len(drift_entry['plan_paths'])} {RECONCILIATION_DRIFT_PROBLEM}"]
         )
         if not widening:
             recorded_problem = next((str(problem) for problem in recomputation.get("problems", []) if "scope" in str(problem)), None)
@@ -11471,7 +11499,11 @@ def _operation_recover_run_identity(args: argparse.Namespace, payload: Mapping[s
         raise ValueError("recover-run-identity payload requires a non-empty 'repo_root'")
     if isinstance(generation, bool) or not isinstance(generation, int):
         raise ValueError("recover-run-identity payload requires an integer 'generation'")
-    if token is None or not str(token).strip():
+    # isinstance-strict like the sibling fields above: no str() coercion, so
+    # a non-string token payload (for example an integer or a list) refuses
+    # at this boundary instead of binding a coerced operator token
+    # (impl-review residuals family plan, Task 3).
+    if not isinstance(token, str) or not token.strip():
         raise ValueError("recover-run-identity payload requires a non-empty 'token'")
     if receipt_path is not None and (not isinstance(receipt_path, str) or not receipt_path.strip()):
         raise ValueError("recover-run-identity payload requires a non-empty string 'receipt_path' when supplied")
@@ -11487,7 +11519,7 @@ def _operation_recover_run_identity(args: argparse.Namespace, payload: Mapping[s
         runtime_id.strip(),
         repo_root.strip(),
         generation,
-        str(token),
+        token.strip(),
         receipt_path=receipt_path.strip() if isinstance(receipt_path, str) else None,
     )
 

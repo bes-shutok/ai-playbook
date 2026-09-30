@@ -1,4 +1,4 @@
-Status: open
+Status: done (2026-09-30; executed+landed squash main e9f35bba via docs/history/plans/completed/2026-09-30-plans-sut-naming-authoring-rule.md)
 Priority: high
 Origin class: learned-skill-defect (plans skill Validation Commands authoring rules; witnessed 2026-09-28, execute-plan-codex-worker-terminal-recovery plan review rounds r2-r4)
 

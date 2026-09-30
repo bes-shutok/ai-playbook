@@ -1,7 +1,7 @@
 # Recommended-option acknowledgements should close the named decision
 
 - **Filed:** 2026-09-29
-- **Status:** open
+- **Status: done (2026-10-01; executed+landed docs/history/plans/completed/2026-10-01-context-bound-recommended-option-acknowledgement.md, squash main c4396776, exec review r1 ready=yes zero blocking)(docs/history/plans/2026-10-01-context-bound-recommended-option-acknowledgement.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Consumer urgency:** Projects using the shared plans and grilling workflows need natural, context-sensitive confirmation handling; the skills-repo personal priority profile must not park or defer this shared-skill fix as formal-hardening for the skills repo alone.

@@ -249,3 +249,29 @@ Commands). Prevention items: docs/history/backlog/2026-09-30-execution-ceremony-
 
 **See also:** Lesson 6 (integrate the current default tip before building the squash);
 Lesson 7 (re-derive inventories from live bytes at execution start).
+
+## 11. Resolve a Disposition From Every Shape Its Machinery Writes
+
+**Principle:** Family H (verify the real thing, not the abstraction: a disposition is a
+state the lifecycle machinery writes in several shapes, and a probe keyed to one shape
+classifies every other shape as open).
+
+**Trigger:** sweeping a queue or registry for stale or undispositioned items when the
+lifecycle's fold can be either an in-place status flip or a directory move into an
+archive subdirectory.
+
+**Required behavior:** Before classifying an item open, resolve every disposition shape
+the machinery writes: the top-level file carrying a done or covered status line, the move
+into an archive directory (completed/, rejected/), and a covering plan or log record.
+Probe archive destinations by basename, not only the top-level path, and when a sweep
+cuts entries, verify each cut against every shape first and print one receipt per cut.
+
+**Why this matters:** a log-prune sweep's first pass classified every folded origin open
+because it checked only top-level existence and status lines; origins moved into
+completed/ by their executing sessions read as missing-and-open and the sweep cut nothing.
+The corrected criterion (archive-directory membership counts as dispositioned) cut eight
+genuinely landed entries; the naive criterion would have reported the whole registry
+stale.
+
+**See also:** Lesson 7 (re-derive the live inventory from disk at execution start);
+Lesson 10 (prove the landing base and the completion marks).

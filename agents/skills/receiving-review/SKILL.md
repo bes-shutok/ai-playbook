@@ -365,7 +365,7 @@ This gives downstream analysis a ground-truth signal for which agents produce fi
 
 Review-fix cycles exit on zero unresolved **blocking** findings, not zero findings. Every finding assessed **valid (worth fixing)** that is not fixed in the current work must leave a durable backlog item with all known details before the cycle is reported complete. Gitignored staging docs and chat reports are never the only record. Exception: a finding held `pending` for the fix-risk user decision (**Fix-risk triage when fixes regenerate findings**) is recorded as returned-for-ask per review-staging's receiving-review consumer row, not backlogged; once the user decides, apply this section to it (backlog if deferred, fix if directed).
 
-Scope: review findings in the current project. learn's skill-usage-issue capture (learn Step 1.8) reuses this item shape for skills-corpus defects in the skills repo's backlog home; the two sources are disjoint and neither owns the other's path.
+Scope: review findings, recorded in the repository that owns the finding (ownership resolution below); this section's destinations apply to findings this repository owns, and a foreign-origin finding records in its owning repository, never here by fallback. learn's skill-usage-issue capture (learn Step 1.8) reuses this item shape for skills-corpus defects in the skills repo's backlog home; the two sources are disjoint and neither owns the other's path.
 
 Capture an item when a valid finding ends triage as:
 
@@ -374,13 +374,15 @@ Capture an item when a valid finding ends triage as:
 
 Partner-declined fixes and softened reverts stay on the soften watchlist; do not duplicate them as backlog items unless the partner asks for a durable record.
 
+Resolve the finding's owning repository before destination 1: the owning repository is the one whose subject code, documentation, ticket context, or module paths the finding is about, wherever the capturing session runs. Destination 1's `{backlog_dir}` resolves in the owning repository (its own `.ai-playbook/facts.md`), and the bootstrap recovery pass runs there too. This repository records the item directly only when the finding is genuinely about this repository's own repository-agnostic workflow and carries independent cross-project value, and then only after the capture hygiene check's suitability review below. Never record a foreign-origin finding in this repository as a fallback merely because the shared repository is accessible or because the item mentions reusable workflow concerns; describing a destination as shared, in a user ask, a prompt, or a capture flow, does not transfer a project-specific finding's ownership. When the owning repository or its backlog home cannot be resolved, stop and ask the user where to record, returning the ask to the orchestrator in a non-interactive run; a failed ownership resolution never falls through to a later destination or to an accessible shared repository.
+
 Resolve destination 1 before consulting any later destination; a failed resolution never falls through. A missing `{backlog_dir}` key or missing directory is a bootstrap trigger: run a `bootstrap-ai-playbook` recovery pass to resolve or create the backlog home, and if it still does not resolve, stop and ask the user before recording anywhere else. In a non-interactive run, return that ask to the orchestrator per **Fix-risk triage when fixes regenerate findings**; do not resolve it by choosing a later destination.
 
 The mechanical second line of defense is `scripts/check_backlog_inbox_location.py`, run by the done flow, which rejects files matching backlog-inbox filename shapes outside the backlog home, over both the tracked tree and untracked files inside the named hot dirs (the 2026-08-30 incident file was untracked).
 
 Destination, in order:
 
-1. `{backlog_dir}` pre-plan file (key from `.ai-playbook/facts.md`; promote via the `plans` skill when scheduled; on completion fold disposition into `{plans_completed_dir}` and delete the file per `doc-hierarchy` and `plans`; do not keep per-item archives under `backlog_completed_dir`)
+1. The owning repository's `{backlog_dir}` pre-plan file (key from that repository's `.ai-playbook/facts.md`; promote via the `plans` skill when scheduled; on completion fold disposition into `{plans_completed_dir}` and delete the file per `doc-hierarchy` and `plans`; do not keep per-item archives under `backlog_completed_dir`)
 2. Module high-level tasks doc on module-split repos (per `doing-code-review` Step 5.1), only when project guidelines name an existing doc for that module; never create a new doc to hold backlog items.
 3. Project issue tracker via its workflow skill (for example `jira-workflow`) when the project tracks backlog there; external write, so create tickets only on explicit user request or standing pre-authorization
 4. No destination resolves: ask the user where to record; never silently fall back to chat, the staging doc, `docs/tmp/` (ephemeral), or a newly invented location such as `docs/maintenance/` (Layer 2 living ops, not a backlog inbox).
@@ -409,8 +411,11 @@ Before the item counts as captured, run the public-hygiene scanner over the comp
 2. A nonzero verdict stops the capture: fix the draft in place and rerun until the scan passes; never widen or fork the deny-patterns file to make a draft pass. The scanner's two built-in patterns and the shared deny-patterns file stay the only rule sources.
 3. Record the passing verdict in the item's source reference (for example `capture hygiene: scan-public-hygiene --files pass`).
 4. A missing or erroring scanner produces no passing verdict: record the failed-resolution evidence in the item's source reference, route the capture through the `bootstrap-ai-playbook` recovery pass, and stop for user direction when the scanner still cannot be resolved (the shared shape of every unresolved-evidence gate: record the evidence; never guess); never mark such an item captured.
+5. A passing verdict is scan evidence only: it proves the draft matches the scanner's deny patterns, not that the item belongs in this repository or is suitable to publish there. Before a foreign-origin item is recorded in a shared or public repository, apply the ownership resolution above and scrub the project-specific identifiers the scanner does not own: ticket prefixes, organization, service, and module names, internal document or RFC titles, and project-specific paths, each replaced with neutral phrasing (a ticket prefix becomes the project tracker, a service name the owning service, a module path the owning repository's module). When scrubbing would destroy the item's actionable context, record the item in its owning repository instead; this repository keeps only the sanitized, independently reusable process lesson. This suitability review is capture-workflow policy: it never widens or forks the scanner's deny patterns (step 2's rule).
 
 Record the backlog item path on the finding (Analysis section or triage log) so later rounds and downstream analysis can find it.
+
+The capture write carries a same-turn commit duty (the investigate log's standing rule, generalized to all backlog captures): every backlog-file write is committed in the same turn that performs it, and a capture left uncommitted at turn end records a parked recovery note naming the file path, so nothing finished sits silently in a working tree. Witness: the 2026-09-29 app-restart kill stranded two finished, uncommitted backlog captures for 13 hours until a human landed them (ee0b2e15).
 
 ### Backlog driving-force taxonomy
 
@@ -484,7 +489,7 @@ This section also bounds the **Triage Decision Rule**: a Critical, High, or Medi
 ## Integration Points
 
 ### With `bootstrap-ai-playbook` skill
-Provider for `{plans_dir}` when saving grouped fix tasks and for `{backlog_dir}` / `{backlog_completed_dir}` during **Backlog capture**; the recovery rerun resolves or creates the backlog home when the keys are missing. Read path keys from `.ai-playbook/facts.md` (see `using-skills` Step 0).
+Provider for `{plans_dir}` when saving grouped fix tasks and for `{backlog_dir}` / `{backlog_completed_dir}` during **Backlog capture**; the recovery rerun resolves or creates the backlog home when the keys are missing, in the owning repository when the ownership resolution selected a foreign home. Read path keys from `.ai-playbook/facts.md` (see `using-skills` Step 0).
 
 ### With `review-staging` skill
 Triage updates **Triage outcomes** and finding **Triage** fields; preserves immutable synthesis statistics from the review pass. The triage update ends with a `--hard` validator gate (final step of **Staging doc triage outcomes**) before the staging doc is handed back to the orchestrator.

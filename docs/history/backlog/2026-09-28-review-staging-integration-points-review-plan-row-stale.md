@@ -1,4 +1,4 @@
-Status: open
+Status: covered (docs/history/plans/2026-10-01-review-staging-review-plan-row-sync.md)
 Priority: medium
 Origin class: learned-skill-defect (companion landing path of docs/history/plans/2026-09-28-review-plan-inline-sidecar-schema-drift.md; witnessed 2026-09-28, its r2 contract-docs round)
 

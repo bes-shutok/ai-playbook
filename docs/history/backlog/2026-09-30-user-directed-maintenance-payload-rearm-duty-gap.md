@@ -1,5 +1,5 @@
 - **Filed:** 2026-09-30
-- **Status:** open
+- **Status: done (2026-09-30; executed+landed docs/history/plans/completed/2026-09-30-user-directed-maintenance-payload-rearm-duties.md, squash main 89cde29a, exec review r1 ready=yes zero blocking)(docs/history/plans/2026-09-30-user-directed-maintenance-payload-rearm-duties.md)
 - **Workflow:** done (learn Step 1.8)
 - **Priority:** high
 - **Origin class:** self-serving

@@ -8,7 +8,9 @@
 # contract, the state-durability loop_mode/pending_rearm contract, the pricing
 # seed presence, and the budget-gate resume mirrors in
 # the execute-plan and plans skills, and the discovery-ladder rung 1
-# workflow_state bound (terminal-or-complete before a no-live-session closure).
+# workflow_state bound (terminal-or-complete before a no-live-session closure),
+# and the user-directed-payload-duties family (the re-arm-first duty and its
+# liveness report for the user-directed payload class).
 # Exit 0 = all pins hold; exit 1 with
 # PIN FAIL lines otherwise. Repo-relative paths only; run from anywhere.
 set -u
@@ -1413,7 +1415,7 @@ for f in "$EP" "$MS" "$RR" "$RP"; do
 done
 [ "$fail" -eq 1 ] && exit 1
 pin "origins-closure archive arm wired in execute-plan SKILL.md" grep -qF 'check_plan_origins_closed.py' "$EP"
-pin "origins-block survey warn arm wired in maintenance SKILL.md" grep -qF 'Archived-coverage warn arm: an open top-level backlog item' "$MS"
+pin "origins-block survey warn arm wired in maintenance SKILL.md" grep -qF 'Archived-coverage warn arm' "$MS"
 pin "dirt regression merge arm wired in execution blueprint" grep -qF 'dirt_regression_gate.py --base' "$P"
 pin "origins-closure blueprint archive-sentence duty wired" grep -qF 'origins-closure check (`python3' "$P"
 pin "done dirt guard wired" grep -qF 'dirt_regression_gate.py' "$D"
@@ -1578,6 +1580,7 @@ pin "P54 discharge field predicate" grep -qF 'pending_rearm or pending_dispatch'
 pin "P54 discharge duty anchor" grep -qF 'park-discharge duty' "$S"
 pin "P54 discharge operative phrase" grep -qF 'discharges the parked intents in the same session before ending, guard-bound' "$S"
 [ "$(grep -cF 'CLOSING PARK DISCHARGE DUTY' "$P")" -eq 3 ] || { echo "PIN FAIL: blueprint discharge anchor count != 3"; fail=1; }
+[ "$(grep -cF 'DUTY, before ending: read .ai-playbook/scheduler-state.json' "$P")" -eq 0 ] || { echo "PIN FAIL: cwd-relative discharge read reintroduced"; fail=1; }
 # 2026-09-25 parked-dependency visibility Task 6: the new unblock wrapper is
 # count-pinned at exactly one opener beside the existing wrapper-count pin
 pin "parked-dependency unblock wrapper count" test "$(grep -oF '<prompt for the parked-dependency unblock session>' "$P" | wc -l | tr -d ' ')" -eq 1
@@ -1725,9 +1728,11 @@ pin "P57 S12 zcode ladder single-child-hold-retired clause" grep -qF 'retired 20
 # re-keyed by the worktree-first standard consolidation, plan
 # 2026-09-28-worktree-first-standard-only-mode.md Task 4) ---
 # The 2026-09-28 consolidation replaced the blueprint's per-execution
-# worktree paragraph and its per-run pre-work gate paragraph with references
-# to the Worktree-first standard section in the execute-plan skill, retiring
-# the P57 payload spans: S13 (the execution create-literal count) and the
+# worktree paragraphs with references to the Worktree-first standard section
+# in the execute-plan skill; the blueprint's per-run pre-work gate paragraph
+# was rewritten to post-transfer-in scope in that same consolidation, not
+# retired with them (S15 below is re-keyed on the rewritten gate sentence),
+# retiring the P57 payload spans the replacement retired: S13 (the execution create-literal count) and the
 # authoring create-literal count became wrap-tolerant freeze-absent pins (the
 # create commands are canonical-section owned; the retired literals must not
 # return); S14 (the Linked-worktree bootstrap recipe span pin) is dropped
@@ -1987,7 +1992,25 @@ pin "reduced-toolset terminal rung present" grep -qF 'Reduced-toolset terminal' 
 pin "reduced-toolset rung listing-only predicate" grep -qF 'a session whose automation toolset is the listing primitive only parks the decided action with its payload copy' "$Z"
 pin "reduced-toolset rung names the step 0 recovery path" grep -qF 'the SKILL.md Step 0 discharge precedence' "$Z"
 pin "ladder last-resort rung renumbered intact" grep -qF '5. Last resort:' "$Z"
+# --- standing-directive loop continuation contract pins (plan 2026-09-30-maintenance-loop-interruption-resume-and-cycle-harvest.md Task 5) ---
+pin "interruption-resume rule bullet present" grep -qF 'Interruption-resume rule (added 2026-09-30' "$S"
+pin "resumed-standing-directive token present" grep -qF 'resumed-standing-directive' "$S"
+pin "per-cycle harvest duty bullet present" grep -qF 'Per-cycle harvest duty (added 2026-09-30' "$S"
+pin "cycles_completed key present" grep -qF 'cycles_completed' "$S"
+pin "dual-default mapping span present" grep -qF 'defaults to `dual` with the ambiguity recorded in the `note` member' "$S"
+pin "scheduler-turn write-mode clause present" grep -qF 'the resumed-session `decision_reason` targeted edit and the harvest-deferral `decision_reason` record' "$S"
+pin "zcode readiness mirror present" grep -qF 'cycles_completed' "$Z"
+
+# --- user-directed payload re-arm duties pins (plan 2026-09-30-user-directed-maintenance-payload-rearm-duties.md Task 4) ---
+pin "user-directed payload duties bullet in the skill" grep -qF 'User-directed maintenance payload duties' "$S"
+pin "narrowed disclaimer in the overlay" grep -qF 'no blueprint child re-arm duty' "$Z"
+
 [ "$fail" -eq 1 ] && exit 1
 
 echo "maintenance pins: all hold"
 exit 0
+
+# --- user-directed override predicate pins (plan 2026-09-30-user-directed-override-for-interactive-guard-standdowns.md Task 4) ---
+pin "override predicate sentence present in the skill" grep -qF 'The override predicate is user presence, never confidence.' "$S"
+pin "override predicate sentence present in the overlay" grep -qF 'The override predicate is user presence, never confidence.' "$Z"
+pin "override integrity exclusion present in the skill" grep -qF 'Integrity guards are never overridable' "$S"

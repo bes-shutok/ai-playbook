@@ -1,7 +1,12 @@
 # Backlog: Baseline-aware stale execute-plan session cleanup
 
+Cluster: docs/history/backlog/2026-09-29-execute-plan-launch-boundary-hardening.md
+Cluster: docs/history/backlog/2026-09-29-execute-plan-legacy-evidence-contract-compat.md
+Cluster: docs/history/backlog/2026-09-29-execute-plan-recovery-receipt-identity-hardening.md
+
+
 - **Filed:** 2026-09-30
-- **Status:** open
+- **Status: done (2026-10-01; executed+landed docs/history/plans/completed/2026-10-01-baseline-age-bounded-session-cleanup.md, squash main 0741212e, exec review r1 ready=yes zero blocking; cross-lock residual and TOCTOU witness remain recorded accepted edges)(docs/history/plans/2026-10-01-baseline-age-bounded-session-cleanup.md)
 - **Workflow:** backlog
 - **Priority:** medium
 - **Class:** fix-class

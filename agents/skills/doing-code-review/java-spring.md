@@ -120,8 +120,13 @@ the complete branch diff, not only to the highlighted line:
   sink.
 - `jvm_guidelines.md` #20: drop perpetual "old migration path is null" asserts
   after a rename.
+- `jvm_guidelines.md` #12: fully qualified type names replaced by a normal
+  import in added annotations, constructor calls, and type references across
+  the complete branch diff in production and test sources; keep fully
+  qualified names only for the guideline's intentional exceptions
+  (simple-name clashes, package/module metadata).
 
-These two `jvm_guidelines.md` rules are applied on every Java review,
+These three `jvm_guidelines.md` rules are applied on every Java review,
 not only after an incident.
 
 Assign findings to the normal owners: unused surface to simplification,

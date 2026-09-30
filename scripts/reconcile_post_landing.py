@@ -118,19 +118,10 @@ def git(cwd, *args, **kwargs):
 
 def rev_parse_verify(cwd, rev):
     """Resolve rev to a full sha; None when git cannot resolve it (rc 1)."""
-    proc = subprocess.run(
-        ["git", "-C", cwd, "rev-parse", "--verify", "--quiet", rev],
-        capture_output=True,
-        text=True,
-    )
+    proc = git(cwd, "rev-parse", "--verify", "--quiet", rev, ok=(0, 1))
     if proc.returncode == 0:
         return proc.stdout.strip()
-    if proc.returncode == 1:
-        return None
-    raise ToolFailure(
-        "git rev-parse --verify %s failed (rc %d): %s"
-        % (rev, proc.returncode, proc.stderr.strip())
-    )
+    return None
 
 
 def commit_time(repo, sha):
@@ -278,11 +269,16 @@ def git_path_in(checkout, marker):
 
 
 def midflight_witness(checkout):
-    """MERGE_HEAD, rebase-merge, or rebase-apply in the checkout's git dir."""
+    """MERGE_HEAD, rebase-merge, rebase-apply, CHERRY_PICK_HEAD, or the
+    sequencer head in the checkout's git dir. Cherry-pick markers
+    (CHERRY_PICK_HEAD and sequencer/head) map to the mid-cherry-pick
+    witness; rebase markers keep mid-rebase."""
     for marker, witness in (
         ("MERGE_HEAD", "mid-merge"),
         ("rebase-merge", "mid-rebase"),
         ("rebase-apply", "mid-rebase"),
+        ("CHERRY_PICK_HEAD", "mid-cherry-pick"),
+        ("sequencer/head", "mid-cherry-pick"),
     ):
         if os.path.exists(git_path_in(checkout, marker)):
             return witness
@@ -434,7 +430,15 @@ def apply_entry(inv, wt, entry, primary, pre_time):
         and worktree_mtime_postdates(wt, entry["path"], pre_time)
     ):
         return "block %s %s fresh-mtime" % (wt, entry["path"])
-    restore_path(inv, wt, entry["path"], action == RESTORE_WORKTREE)
+    try:
+        restore_path(inv, wt, entry["path"], action == RESTORE_WORKTREE)
+    except ToolFailure:
+        # The witnessed untracked-debris refusal shape: one path the
+        # restore cannot take degrades to its block row (the recorded,
+        # resumable outcome) instead of aborting the run as a tool
+        # failure; classification and other tool failures inside the
+        # entry keep their exit-2 ToolFailure semantics.
+        return "block %s %s restore-refused" % (wt, entry["path"])
     return "restored %s %s" % (wt, entry["path"])
 
 

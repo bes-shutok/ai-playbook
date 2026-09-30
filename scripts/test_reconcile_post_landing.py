@@ -704,3 +704,110 @@ class ReconcilePostLandingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReconciliationResidualsTest(ReconcilePostLandingTest):
+    """Plan 2026-09-30-reconciliation-coupling-residuals fixtures: inherits
+    the fixture repo, driver, and teardown of the main suite."""
+
+    def test_single_path_restore_refusal_degrades_to_block_row(self):
+        """[class: REPOSITORY_TEST] Untracked debris at a landing-ADDED path
+        refuses the single-path restore (git restore refuses to overwrite an
+        untracked file); the run degrades to a
+        ``block <checkout> <path> restore-refused`` row (exit 1) and still
+        restores the landing's other paths."""
+        r = self.repo
+        r.write("skill.md", "v1\n")
+        r.write("gone.md", "bye\n")
+        r.commit_all("v1")
+        pre, post = r.ref_landing({"gone.md": None, "added.md": "brand new\n"})
+        pre_time = r.commit_time(pre)
+        r.backdate("skill.md", pre_time - 100000)
+        r.backdate("gone.md", pre_time - 100000)
+        # The witnessed shape: gone.md leaves the index (untracked in the
+        # checkout) while the worktree keeps the pre bytes, so the deleted
+        # path classifies as a restore and the restore itself refuses.
+        r.git("rm", "--cached", "-q", "gone.md")
+        rc, out, _ = self.run_script(pre, post)
+        self.assertEqual(rc, 1, out)
+        self.assertIn(
+            "block %s gone.md restore-refused" % r.root, out
+        )
+        self.assertIn("restored %s added.md" % r.root, out)
+        self.assertTrue(r.exists("gone.md"))
+
+    def test_mixed_reset_wholesale_residue_worktree_only_restore(self):
+        """[class: REPOSITORY_TEST] The wholesale-residue signature (index at
+        the post-tip blob, worktree at the ancestor blob) takes the
+        worktree-only restore: the index stays at the post-tip blob."""
+        r = self.repo
+        r.write("skill.md", "v1\n")
+        r.commit_all("v1")
+        ancestor = r.head()
+        pre, post = r.ref_landing({"skill.md": "v2\n"})
+        pre_time = r.commit_time(pre)
+        r.backdate("skill.md", pre_time - 100000)
+        wt = r.add_detached_worktree("mixed", ancestor)
+        # Index at the post-tip blob, worktree at the ancestor blob.
+        r.git("-C", wt, "reset", "--soft", post)
+        r.git("-C", wt, "restore", "--source=" + ancestor, "--worktree", "--", "skill.md")
+        rc, out, _ = self.run_script(pre, post)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(
+            r.index_blob("skill.md", cwd=wt), r.blob_at(post, "skill.md")
+        )
+        self.assertEqual(
+            r.worktree_blob("skill.md", cwd=wt), r.blob_at(post, "skill.md")
+        )
+
+    def test_cherry_pick_state_witnessed_midflight(self):
+        """[class: REPOSITORY_TEST] CHERRY_PICK_HEAD in the checkout's git dir
+        witnesses as a midflight state and blocks the checkout."""
+        r = self.repo
+        r.write("skill.md", "v1\n")
+        r.commit_all("v1")
+        pre = r.head()
+        peer = r.add_detached_worktree("cherry", pre)
+        pre, post = r.ref_landing({"skill.md": "v2\n"})
+        with open(os.path.join(r.git_dir(peer), "CHERRY_PICK_HEAD"), "w") as handle:
+            handle.write(post + "\n")
+        status_before = r.status(cwd=peer)
+        rc, out, _ = self.run_script(pre, post)
+        self.assertEqual(rc, 1)
+        self.assertIn("block %s - mid-cherry-pick" % peer, out)
+        self.assertEqual(r.status(cwd=peer), status_before)
+
+    def test_rev_parse_verify_runs_hermetic_env(self):
+        """[class: REPOSITORY_TEST] Construction witness (rev-parse output is
+        not config-sensitive): rev_parse_verify builds its subprocess with
+        the same hermetic environment mapping git() constructs."""
+        import reconcile_post_landing as mod
+
+        captured = {}
+
+        class FakeProc:
+            returncode = 0
+            stdout = "0123456789abcdef" * 5 + "\n"
+            stderr = ""
+
+        original_run = mod.subprocess.run
+
+        def spy(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            captured["argv"] = args[0]
+            return FakeProc()
+
+        mod.subprocess.run = spy
+        try:
+            sha = mod.rev_parse_verify(self.repo.root, "refs/heads/main")
+        finally:
+            mod.subprocess.run = original_run
+        self.assertEqual(sha, "0123456789abcdef" * 5)
+        self.assertEqual(
+            captured["env"].get("GIT_CONFIG_GLOBAL"), "/dev/null"
+        )
+        self.assertEqual(
+            captured["env"].get("GIT_CONFIG_SYSTEM"), "/dev/null"
+        )
+        self.assertEqual(captured["env"].get("GIT_CONFIG_NOSYSTEM"), "1")
+        self.assertIn("rev-parse", captured["argv"])

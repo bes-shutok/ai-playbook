@@ -1,7 +1,7 @@
 # Masked-ticket residue in landed and completed plan artifacts, and the scan scope that hides docs leaks
 
 - **Filed:** 2026-09-29
-- **Status:** open
+- **Status: done (2026-09-30; executed+landed docs/history/plans/completed/2026-09-30-hygiene-residue-masked-ticket-sweep.md, squash main 7d03344f, exec review r1-r3 ready=yes zero blocking; filename-residual recorded in the plan)(docs/history/plans/2026-09-30-hygiene-residue-masked-ticket-sweep.md)
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** witnessed-incident
