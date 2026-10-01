@@ -51,7 +51,7 @@ from done_sweep_gates_lib import (
 )
 
 # The absorbed gate ids, in done SKILL.md step order (plan Terms + G2);
-# order-neutral name since the count is now thirteen.
+# order-neutral name since the count is now fifteen.
 EXPECTED_GATE_ORDER = [
     "plan-readiness",
     "confluence-hygiene",
@@ -66,6 +66,8 @@ EXPECTED_GATE_ORDER = [
     "instruction-size",
     "description-length",
     "foreign-staging",
+    "archive-ceremony",
+    "execute-plan-closeout",
 ]
 
 
@@ -312,15 +314,18 @@ def mktemp_repo(tmp_path):
 # [class: REPOSITORY_TEST]
 # --------------------------------------------------------------------------- #
 def test_gate_registry_matches_absorbed_steps(capsys):
-    """[class: REPOSITORY_TEST] Given the lib gate registry, expects exactly thirteen
+    """[class: REPOSITORY_TEST] Given the lib gate registry, expects exactly fifteen
     gate ids in the two phase slices, in done SKILL.md order, matching
     plan-readiness, confluence-hygiene, doc-registry, backlog-inbox,
     review-staging, vim-swap-sweep, docs-tmp-sweep, sensitive-data-scan,
-    em-dash-scan, instruction-size, description-length."""
+    em-dash-scan, instruction-size, description-length, archive-ceremony,
+    execute-plan-closeout."""
     assert PRE_DOCS_GATES == EXPECTED_GATE_ORDER[:8]
     assert PRE_COMMIT_GATES[:4] == EXPECTED_GATE_ORDER[8:12]
     assert PRE_COMMIT_GATES[4] == "foreign-staging"
-    assert PRE_COMMIT_GATES[5] == "plans-archive-twin"
+    assert PRE_COMMIT_GATES[5] == "archive-ceremony"
+    assert PRE_COMMIT_GATES[6] == "execute-plan-closeout"
+    assert PRE_COMMIT_GATES[7] == "plans-archive-twin"
     assert lib.PHASES["pre-docs"] == PRE_DOCS_GATES
     assert lib.PHASES["pre-commit"] == PRE_COMMIT_GATES
     assert list(lib.PHASES.keys()) == ["pre-docs", "pre-commit"]
@@ -332,8 +337,8 @@ def test_gate_registry_matches_absorbed_steps(capsys):
     # runs in both phases; printed once at pre-docs).
     assert lib.main(["list-gates"]) == 0
     assert capsys.readouterr().out.splitlines() == EXPECTED_GATE_ORDER
-    assert len(EXPECTED_GATE_ORDER) == 13
-    assert len(set(EXPECTED_GATE_ORDER)) == 13
+    assert len(EXPECTED_GATE_ORDER) == 15
+    assert len(set(EXPECTED_GATE_ORDER)) == 15
 
 
 # --------------------------------------------------------------------------- #
@@ -1403,8 +1408,10 @@ def test_write_manifest_run_ids_unique(
     tmp_path, sweep_env, monkeypatch, mktemp_repo
 ):
     """[class: REPOSITORY_TEST] Given two successive writer invocations in the
-    same repo, expects two distinct run_id values and two distinct manifest
-    files, each file's payload run_id matching its filename."""
+    same repo (the first run's boundary finalized in between, since an
+    undisposed interrupted boundary refuses a new write-manifest), expects two
+    distinct run_id values and two distinct manifest files, each file's
+    payload run_id matching its filename."""
     root = mktemp_repo("unique")
     make_marker(root, time.time(), os.getpid())
     monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
@@ -1413,6 +1420,10 @@ def test_write_manifest_run_ids_unique(
     assert lib.main(["write-manifest"]) == 0
     first = sorted(done_session.glob("run-manifest-*.json"))
     assert len(first) == 1
+    id0 = first[0].name[len("run-manifest-") : -len(".json")]
+    # Close the first run's boundary (the Step 6 finalize) so the second
+    # write is not refused over an undisposed interrupted boundary.
+    assert lib.main(["finalize-manifest", "--run-id", id0]) == 0
     assert lib.main(["write-manifest"]) == 0
     both = sorted(done_session.glob("run-manifest-*.json"))
     assert len(both) == 2
@@ -2200,37 +2211,36 @@ def test_write_manifest_reports_orphaned_manifests(
     """[class: REPOSITORY_TEST] Given a done-session dir holding a prior
     manifest with ``complete`` false (never finalized), expects the next
     ``write-manifest`` invocation to print an interrupted-run report line
-    naming the orphan run_id and, without ``--adopt``, to write a manifest
-    whose boundary is the new run's own HEAD; a prior manifest with
-    ``complete`` true is never reported as an orphan (this is what keeps a
-    completed commit-less run from misfiring the detection)."""
-    # Arm 1: an unfinalized prior manifest is reported; the retry keeps its
-    # own HEAD boundary.
+    naming the orphan run_id and to refuse the write with the named
+    ``write-manifest: undisposed-interrupted:`` error (no manifest written
+    past the refusal); a prior manifest with ``complete`` true is never
+    reported as an orphan (this is what keeps a completed commit-less run
+    from misfiring the detection) and never refuses."""
+    # Arm 1: an unfinalized prior manifest is reported AND refuses; the
+    # boundary decision stays explicit.
     root = mktemp_repo("orphan")
-    start = git(root, "rev-parse", "HEAD").stdout.strip()
     prev = make_marker(root, time.time() - 3600, os.getpid())
     orphan_id = "run-orphan-reported"
     _seed_run_manifest(root, orphan_id, prev.name, str(root), time.time() - 10)
-    # HEAD advances after the orphan died: the retry's own boundary is here.
+    # HEAD advances after the orphan died: the refusal is independent of it.
     (root / "post-orphan.md").write_text("committed after the orphan died\n", encoding="utf-8")
     git(root, "add", "post-orphan.md")
     git(root, "commit", "-m", "post orphan", "-q")
-    new_head = git(root, "rev-parse", "HEAD").stdout.strip()
-    assert new_head != start
     make_marker(root, time.time(), os.getpid())
     monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
 
     rc = lib.main(["write-manifest"])
 
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "interrupted run" in out
-    assert orphan_id in out
-    payload = _newest_manifest_payload(root, exclude_run_id=orphan_id)
-    assert payload["start_commit"] == new_head
-    assert payload["adopted_from"] is None
-    assert payload["complete"] is False
-    assert payload["run_id"] != orphan_id
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "interrupted run" in captured.out
+    assert orphan_id in captured.out
+    assert "write-manifest: undisposed-interrupted:" in captured.err
+    assert orphan_id in captured.err
+    done_session = root / "docs" / "tmp" / "done-session"
+    assert [p.name for p in done_session.glob("run-manifest-*.json")] == [
+        f"run-manifest-{orphan_id}.json"
+    ]
 
     # Arm 2: a finalized (complete=true) prior manifest is never an orphan.
     root2 = mktemp_repo("finalized")
@@ -2295,8 +2305,13 @@ def test_adopt_copies_prior_boundary(
     adopter_id = payload["run_id"]
 
     # A third invocation no longer reports the adopted run as an orphan: the
-    # adopted_from link is the suppression record. The unrelated third run
-    # must still cover the on-disk candidate itself (peer artifact: foreign).
+    # adopted_from link is the suppression record. The adopter's own boundary
+    # closes first (the Step 6 finalize, one of the refusal's named exits),
+    # since an undisposed interrupted boundary refuses a new write-manifest.
+    # The unrelated third run must still cover the on-disk candidate itself
+    # (peer artifact: foreign).
+    assert lib.main(["finalize-manifest", "--run-id", adopter_id]) == 0
+    capsys.readouterr()
     rc3 = lib.main(["write-manifest", "--foreign-review", review_rel])
 
     assert rc3 == 0
@@ -2311,12 +2326,14 @@ def test_adoption_is_explicit_only(
     tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
 ):
     """[class: REPOSITORY_TEST] Given an orphan manifest and no ``--adopt``,
-    expects the retry's gates to stay bounded by the retry's own boundary,
-    never by the orphan's (the origin's no-implicit-adoption clause): the
-    orphan is reported (surfaced for an explicit decision) but its boundary is
-    not inherited, so the orphan's committed file never enters the retry's
-    doc-registry check-writes set and is never foreign-reported either (it is
-    simply outside the retry's committed window)."""
+    expects the write-manifest invocation to be refused with the named
+    ``write-manifest: undisposed-interrupted:`` error while the report line
+    still surfaces the orphan (adoption stays explicit only, and the refusal
+    makes the decision bounded instead of passive); with no new manifest
+    written, the doc-registry gate over the same tree keeps the orphan's
+    committed file out of its check-writes set (no manifest binds to the
+    current marker, so nothing classifies the orphan's commit as this
+    run's write)."""
     root = mktemp_repo("explicit")
     write_facts(root)
     write_stub_doc_registry_validator(root)
@@ -2339,14 +2356,22 @@ def test_adoption_is_explicit_only(
 
     rc = lib.main(["write-manifest"])
 
-    assert rc == 0
-    out = capsys.readouterr().out
-    # Surfaced, never silently adopted.
-    assert "interrupted run" in out
-    assert orphan_id in out
-    payload = _newest_manifest_payload(root, exclude_run_id=orphan_id)
-    assert payload["adopted_from"] is None
-    assert payload["start_commit"] == orphan_sha
+    assert rc == 1
+    captured = capsys.readouterr()
+    # Surfaced, never silently adopted: the report line names the orphan and
+    # the refusal carries the bounded decision.
+    assert "interrupted run" in captured.out
+    assert orphan_id in captured.out
+    assert "write-manifest: undisposed-interrupted:" in captured.err
+    assert orphan_id in captured.err
+    assert f"--adopt {orphan_id}" in captured.err
+    # No manifest was written past the refusal: only the orphan remains.
+    done_session_files = sorted(
+        (root / "docs" / "tmp" / "done-session").glob("run-manifest-*.json")
+    )
+    assert [p.name for p in done_session_files] == [
+        f"run-manifest-{orphan_id}.json"
+    ]
 
     stdin_log = tmp_path / "explicit-stdin.txt"
     monkeypatch.setenv("DOC_REGISTRY_STUB_STDIN_LOG", str(stdin_log))
@@ -2520,6 +2545,82 @@ def test_run_manifest_from_dict_rejects_bool_created_epoch(
     assert lib.RunManifest.from_dict(payload) is None
     window = derive_session_window(done_session, root)
     assert lib.load_run_manifest(done_session, root, window) is None
+
+
+def test_run_manifest_created_epoch_float_accepted_bool_never_coerces(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] The p79 r1-fix residual pinned at suite level:
+    a float ``created_epoch`` stays accepted (the writer itself stamps
+    ``time.time()``, so a float-refusing schema would reject every manifest
+    the tool writes), while a bool never coerces through the int-or-float
+    arm (``True`` and ``False`` both degrade to None, the F3 guard)."""
+    root = mktemp_repo("epoch-float-bool")
+    marker = make_marker(root, time.time(), os.getpid())
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    def payload_with(created_epoch: object) -> dict:
+        return {
+            "schema": 1,
+            "run_id": "run-epoch",
+            "marker": marker.name,
+            "created_epoch": created_epoch,
+            "repo_root": str(root),
+            "pid": os.getpid(),
+            "start_commit": git(root, "rev-parse", "HEAD").stdout.strip(),
+            "start_porcelain": [],
+            "owned_plan_paths": [],
+            "owned_review_paths": [],
+            "foreign_review_paths": [],
+            "adopted_from": None,
+            "complete": False,
+        }
+
+    stamp = time.time()
+    parsed = lib.RunManifest.from_dict(payload_with(stamp))
+    assert parsed is not None
+    assert parsed.created_epoch == pytest.approx(stamp)
+    lib.write_run_manifest(parsed, done_session)
+    window = derive_session_window(done_session, root)
+    loaded = lib.load_run_manifest(done_session, root, window)
+    assert loaded is not None
+    assert loaded.run_id == "run-epoch"
+    assert lib.RunManifest.from_dict(payload_with(True)) is None
+    assert lib.RunManifest.from_dict(payload_with(False)) is None
+
+
+def test_sanitize_manifest_error_value_strips_control_characters():
+    """[class: REPOSITORY_TEST] Direct unit over ``_sanitize_manifest_error_value``:
+    control characters are stripped and the render truncates at 64 characters,
+    so newline/CR line forgery is inert in finalize stderr output; printable
+    characters, including quotes, survive by contract."""
+    forged = "safe\nFORGED LINE\rtab\there"
+    assert lib._sanitize_manifest_error_value(forged) == "safeFORGED LINEtabhere"
+    long_value = "x" * 100
+    assert lib._sanitize_manifest_error_value(long_value) == "x" * 64
+    printable = 'schema "9" <v1>'
+    assert lib._sanitize_manifest_error_value(printable) == printable
+
+
+def test_repo_root_matches_value_digest_and_path_arms(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Both arms route through
+    ``_repo_root_matches_value``: a 64-hex root digest equal to this repo's
+    identity digest matches, a legacy raw resolved path matches, a wrong
+    digest and a wrong path refuse."""
+    root = mktemp_repo("root-arms")
+    digest = lib._repo_root_digest(root)
+    assert len(digest) == 64
+    assert all(ch in "0123456789abcdef" for ch in digest)
+    assert lib._repo_root_matches_value(digest, root) is True
+    assert lib._repo_root_matches_value(str(root), root) is True
+    wrong_digest = "b" * 64
+    assert wrong_digest != digest
+    assert lib._repo_root_matches_value(wrong_digest, root) is False
+    assert (
+        lib._repo_root_matches_value(str(tmp_path / "other-checkout"), root) is False
+    )
 
 
 def test_adopted_chain_stops_at_foreign_root_ancestor(
@@ -3160,6 +3261,151 @@ def test_disposition_rerun_reprints_after_deliverable_vanishes(
     assert "work-verified-landed" in out
 
 
+def test_disposition_owned_paths_archive_twin_resolves(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given a dead-root manifest whose ``owned_paths``
+    entry records a plans-tree path that exists only as its ``plans_completed``
+    archive twin at HEAD (schema-1 manifests that recorded plan edits under
+    ``owned_paths`` survive their plan's archive), expects
+    ``disposition-manifest`` to stamp the ``work-verified-landed`` record with
+    the resolution visible in the reloaded record."""
+    root = mktemp_repo("disposition-owned-twin", gitignore_docs=False)
+    now = time.time()
+    run_id = "run-owned-twin"
+    twin_rel = "docs/history/plans/completed/2026-09-30-archived-plan.md"
+    twin = root / twin_rel
+    twin.parent.mkdir(parents=True, exist_ok=True)
+    twin.write_text("archived plan bytes\n", encoding="utf-8")
+    git(root, "add", twin_rel)
+    git(root, "commit", "-m", "archive plan", "-q")
+    _seed_run_manifest(
+        root,
+        run_id,
+        marker_name(now),
+        str(tmp_path / "deleted-worktree"),
+        now,
+        owned_paths=["docs/history/plans/2026-09-30-archived-plan.md"],
+    )
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    assert lib.main(["disposition-manifest", "--run-id", run_id]) == 0
+
+    out = capsys.readouterr().out
+    today = datetime.now(timezone.utc).date().isoformat()
+    assert f"dispositioned: {run_id} ({today})" in out
+    reloaded = lib._read_manifest_by_run_id(
+        root / "docs" / "tmp" / "done-session", run_id
+    )
+    assert reloaded is not None
+    assert reloaded.dispositioned is not None
+    assert reloaded.dispositioned["reason"] == "work-verified-landed"
+
+
+def test_disposition_owned_paths_landed_deletion_witness_resolves(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given a dead-root manifest whose ``owned_paths``
+    entry names a file a landed commit deleted after the run (a deletion in
+    HEAD's history landed through the repo's own gates, so it is the
+    sanctioned outcome, not a loss), expects ``disposition-manifest`` to
+    stamp the record; a never-tracked path with no deletion in history still
+    refuses naming the path."""
+    root = mktemp_repo("disposition-owned-deletion", gitignore_docs=False)
+    now = time.time()
+    run_id = "run-owned-deletion"
+    path_rel = "docs/history/plans/2026-09-30-transient-plan.md"
+    target = root / path_rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("plan bytes\n", encoding="utf-8")
+    git(root, "add", path_rel)
+    git(root, "commit", "-m", "record plan", "-q")
+    git(root, "rm", "-q", path_rel)
+    git(root, "commit", "-m", "landed deletion", "-q")
+    _seed_run_manifest(
+        root, run_id, marker_name(now), str(tmp_path / "deleted-worktree"), now,
+        owned_paths=[path_rel],
+    )
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    assert lib.main(["disposition-manifest", "--run-id", run_id]) == 0
+    capsys.readouterr()
+    reloaded = lib._read_manifest_by_run_id(
+        root / "docs" / "tmp" / "done-session", run_id
+    )
+    assert reloaded is not None
+    assert reloaded.dispositioned is not None
+
+    never_id = "run-never-tracked"
+    _seed_run_manifest(
+        root, never_id, marker_name(now), str(tmp_path / "deleted-wt-2"), now,
+        owned_paths=["docs/reviews/2026-09-30-never-tracked.md"],
+    )
+    assert lib.main(["disposition-manifest", "--run-id", never_id]) == 1
+    err = capsys.readouterr().err
+    assert "deliverables witness failed" in err
+    assert "docs/reviews/2026-09-30-never-tracked.md" in err
+
+
+def test_disposition_note_backed_resolution_closes_cross_checkout(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] Given a dead-root manifest whose
+    ``owned_plan_paths`` entry resolves in no arm of this checkout and an
+    operator ``--note`` naming that path with its home checkout and verifying
+    commit, expects ``disposition-manifest`` to stamp the record with the
+    operator's note carried verbatim; an entry neither armed nor note-named
+    still refuses naming the path, and an empty note changes nothing."""
+    root = mktemp_repo("disposition-note-backed")
+    now = time.time()
+    run_id = "run-note-backed"
+    orphan_plan = "docs/history/plans/2026-09-30-foreign-checkout-plan.md"
+    _seed_run_manifest(
+        root, run_id, marker_name(now), str(tmp_path / "deleted-worktree"), now,
+        owned_plan_paths=[orphan_plan],
+    )
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    note = (
+        "deliverable docs/history/plans/2026-09-30-foreign-checkout-plan.md "
+        "resolved in home checkout /srv/other-checkout at commit 0f1e2d3c "
+        "(verified there)"
+    )
+
+    assert (
+        lib.main(["disposition-manifest", "--run-id", run_id, "--note", note])
+        == 0
+    )
+    capsys.readouterr()
+    reloaded = lib._read_manifest_by_run_id(
+        root / "docs" / "tmp" / "done-session", run_id
+    )
+    assert reloaded is not None
+    assert reloaded.dispositioned is not None
+    assert reloaded.dispositioned["note"] == note
+
+    # An unresolvable entry neither armed nor note-named still refuses.
+    refuse_id = "run-note-miss"
+    _seed_run_manifest(
+        root, refuse_id, marker_name(now), str(tmp_path / "deleted-wt-2"), now,
+        owned_plan_paths=["docs/history/plans/2026-09-30-unnamed-plan.md"],
+    )
+    assert lib.main(["disposition-manifest", "--run-id", refuse_id]) == 1
+    err = capsys.readouterr().err
+    assert "docs/history/plans/2026-09-30-unnamed-plan.md" in err
+
+    # An empty note changes nothing for the refusing shape.
+    empty_id = "run-note-empty"
+    _seed_run_manifest(
+        root, empty_id, marker_name(now), str(tmp_path / "deleted-wt-3"), now,
+        owned_plan_paths=["docs/history/plans/2026-09-30-unnamed-plan.md"],
+    )
+    assert (
+        lib.main(["disposition-manifest", "--run-id", empty_id, "--note", ""])
+        == 1
+    )
+    assert "deliverables witness failed" in capsys.readouterr().err
+
+
 def test_disposition_zero_owned_sets_prints_and_stamps_note(
     tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
 ):
@@ -3539,7 +3785,9 @@ def test_write_manifest_dead_root_orphan_names_disposition_path(
     dead-root line names the disposition path (the done skill's Manifest
     disposition (dead-boundary close) paragraph) instead of the adoption
     advice, since adoption refuses a dead root; the dead-root orphan itself
-    still surfaces through the widened detection."""
+    still surfaces through the widened detection, and the undisposed-
+    interrupted refusal that follows the report names the disposition exit
+    only."""
     root = mktemp_repo("dead-orphan-line")
     now = time.time()
     make_marker(root, now - 3600, os.getpid())
@@ -3556,12 +3804,84 @@ def test_write_manifest_dead_root_orphan_names_disposition_path(
 
     rc = lib.main(["write-manifest", "--claim-none"])
 
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "interrupted run" in out
-    assert dead_id in out
-    assert "disposition-manifest" in out
-    assert "--adopt" not in out  # adoption advice is replaced, not kept
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "interrupted run" in captured.out
+    assert dead_id in captured.out
+    assert "disposition-manifest" in captured.out
+    assert "write-manifest: undisposed-interrupted:" in captured.err
+    assert f"disposition-manifest --run-id {dead_id}" in captured.err
+    assert "--adopt" not in captured.out + captured.err  # disposition only
+
+
+def test_write_manifest_refuses_undisposed_interrupted_boundary(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] A complete:false manifest in the window fails
+    the write with the named ``write-manifest: undisposed-interrupted:``
+    error listing the manifest filename with both live-root remedies
+    (``--adopt <run_id>`` to continue it, ``finalize-manifest --run-id`` to
+    close it) while the interrupted-run report lines are kept and no manifest
+    is written; after ``--adopt`` the write succeeds; on a dead-root fixture
+    the refusal names the disposition exit only (adoption refuses a dead
+    root), and after ``disposition-manifest`` the write succeeds."""
+    # Live-root arm: the refusal, then the adopt exit.
+    root = mktemp_repo("undisposed-live")
+    prev = make_marker(root, time.time() - 3600, os.getpid())
+    orphan_id = "run-undisposed-live"
+    _seed_run_manifest(root, orphan_id, prev.name, str(root), time.time() - 10)
+    make_marker(root, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+
+    rc = lib.main(["write-manifest"])
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "write-manifest: undisposed-interrupted:" in captured.err
+    assert f"run-manifest-{orphan_id}.json" in captured.err
+    assert f"--adopt {orphan_id}" in captured.err
+    assert f"finalize-manifest --run-id {orphan_id}" in captured.err
+    assert "disposition-manifest refuses live roots" in captured.err
+    assert "interrupted run" in captured.out  # the report lines are kept
+    assert orphan_id in captured.out
+    done_session = root / "docs" / "tmp" / "done-session"
+    assert [p.name for p in done_session.glob("run-manifest-*.json")] == [
+        f"run-manifest-{orphan_id}.json"
+    ]  # the refusal leaves no new manifest behind
+
+    rc2 = lib.main(["write-manifest", "--adopt", orphan_id])
+    assert rc2 == 0, capsys.readouterr().err
+    payload = _newest_manifest_payload(root, exclude_run_id=orphan_id)
+    assert payload["adopted_from"] == orphan_id
+
+    # Dead-root arm: the refusal names the disposition exit only; after
+    # disposition-manifest the write succeeds.
+    root2 = mktemp_repo("undisposed-dead")
+    prev2 = make_marker(root2, time.time() - 3600, os.getpid())
+    dead_id = "run-undisposed-dead"
+    _seed_run_manifest(
+        root2,
+        dead_id,
+        prev2.name,
+        str(tmp_path / "deleted-checkout"),
+        time.time() - 10,
+    )
+    make_marker(root2, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root2))
+
+    rc3 = lib.main(["write-manifest"])
+
+    assert rc3 == 1
+    captured3 = capsys.readouterr()
+    assert "write-manifest: undisposed-interrupted:" in captured3.err
+    assert f"run-manifest-{dead_id}.json" in captured3.err
+    assert f"disposition-manifest --run-id {dead_id}" in captured3.err
+    assert "--adopt" not in captured3.err  # dead root: disposition only
+
+    assert lib.main(["disposition-manifest", "--run-id", dead_id]) == 0
+    capsys.readouterr()
+    rc4 = lib.main(["write-manifest"])
+    assert rc4 == 0, capsys.readouterr().err
 
 
 def test_session_window_mixed_format_legacy_prev_digest_current(
@@ -3596,6 +3916,64 @@ def test_session_window_mixed_format_legacy_prev_digest_current(
     assert window.current is not None
     assert window.current.path.name == current.name
     assert window.start_epoch == int(old_epoch)
+
+
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-10-01-docs-branch-single-marker-window.md
+# Task 1: the manifest-plus-ledger fallback anchor in derive_session_window.
+# --------------------------------------------------------------------------- #
+def test_session_window_single_marker_falls_back_to_manifest_witness(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given exactly one content-confirmable marker
+    whose bound manifest carries a ``created_epoch`` and whose run's
+    owned-commits ledger exists on disk (the witness pair), expects the
+    session window to anchor from that pair instead of staying unanchorable:
+    ``anchored`` True, ``anchor`` None (marker pruning keeps its conservative
+    behavior), ``current`` the single marker, ``start_epoch`` the manifest's
+    ``created_epoch``, and a note naming the witness pair."""
+    root = mktemp_repo("witness-fallback")
+    created = time.time() - 120
+    marker = make_marker(root, time.time(), os.getpid())
+    _seed_run_manifest(root, "run-witness", marker.name, str(root), created)
+    done_session = root / "docs" / "tmp" / "done-session"
+    lib._owned_commits_ledger_path(done_session, "run-witness").write_text(
+        "", encoding="utf-8"
+    )
+
+    window = lib.derive_session_window(done_session, root)
+
+    assert window.anchored is True
+    assert window.anchor is None
+    assert window.current is not None
+    assert window.current.path == marker
+    assert window.start_epoch == pytest.approx(created, abs=2)
+    assert any("witness pair" in note for note in window.notes)
+
+
+def test_session_window_manifest_without_ledger_stays_unanchorable(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] Given exactly one content-confirmable marker
+    with its bound manifest but no owned-commits ledger on disk (the witness
+    pair incomplete), expects the window to stay unanchorable exactly as
+    today (``anchored`` False, ``anchor`` None, ``start_epoch`` None) with a
+    witness-pair-incomplete note beside the generic unanchorable note."""
+    root = mktemp_repo("witness-missing-ledger")
+    created = time.time() - 120
+    marker = make_marker(root, time.time(), os.getpid())
+    _seed_run_manifest(root, "run-noledger", marker.name, str(root), created)
+    done_session = root / "docs" / "tmp" / "done-session"
+
+    window = lib.derive_session_window(done_session, root)
+
+    assert window.anchored is False
+    assert window.anchor is None
+    assert window.start_epoch is None
+    assert window.current is not None
+    assert window.current.path == marker
+    assert any("witness pair incomplete" in note for note in window.notes)
+    assert any("unanchorable" in note for note in window.notes)
 
 
 # --------------------------------------------------------------------------- #
@@ -4337,6 +4715,42 @@ def test_emit_foreign_candidates_deterministic(
     assert list(done_session.glob("run-manifest-*.json")) == []
 
 
+def test_emit_roundtrip_rejects_vertical_tab_ignored_candidate(
+    tmp_path, sweep_env, monkeypatch, mktemp_repo, capsys
+):
+    """[class: REPOSITORY_TEST] The emit roundtrip abort's ``[\\\\v\\\\f]\\\\.md$``
+    term becomes reachable: an ignored reviews-home candidate whose name
+    carries a vertical tab immediately before the extension (git emits the
+    C-style ``v`` short escape for it in the ignored enumeration, not octal)
+    aborts the emit invocation with the named roundtrip error listing it,
+    while a control-free ignored candidate still emits."""
+    root = mktemp_repo("vt-ignored-roundtrip")
+    make_marker(root, time.time(), os.getpid())
+    monkeypatch.setenv("DONE_SWEEP_REPO_ROOT", str(root))
+    (root / "docs/reviews").mkdir(parents=True)
+    vt_rel = "docs/reviews/2026-09-29-vt-peer-plan-review\x0b.md"
+    plain_rel = "docs/reviews/2026-09-29-plain-peer-review-r1.md"
+    (root / vt_rel).write_text("peer staging review\n", encoding="utf-8")
+    (root / plain_rel).write_text("peer staging review\n", encoding="utf-8")
+    done_session = root / "docs" / "tmp" / "done-session"
+    out = tmp_path / "candidates.txt"
+
+    rc = lib.main(["write-manifest", "--emit-foreign-candidates", str(out)])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "foreign-candidate-roundtrip" in err
+    # The abort renders the candidate through the control-stripping
+    # sanitizer, so the listed name carries the vertical tab stripped out.
+    assert "docs/reviews/2026-09-29-vt-peer-plan-review.md" in err
+    assert not out.exists()
+    assert list(done_session.glob("run-manifest-*.json")) == []
+
+    # A control-free ignored candidate still emits.
+    (root / vt_rel).unlink()
+    assert lib.main(["write-manifest", "--emit-foreign-candidates", str(out)]) == 0
+    assert out.read_text(encoding="utf-8").splitlines() == [plain_rel]
+
+
 # --------------------------------------------------------------------------- #
 # Plan: docs/history/plans/2026-09-28-em-dash-whole-file-gate-added-lines-selection.md
 # Task 2: done gate falls back to added-lines on pre-existing violations.
@@ -4489,6 +4903,103 @@ def test_em_dash_fallback_many_hits_full_enumeration(tmp_path, sweep_env):
     assert result.rc == 0
     assert [row for row in expected_rows if row in result.message] == expected_rows
     assert result.message.count("pre-existing (known-violation baseline):") == 11
+
+
+def test_em_dash_partition_property_full_stdout(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Standing canary for the partition property:
+    a touched probe whose stdout carries more than ten hits across the
+    tracked/untracked split is partitioned completely, never to the
+    last-ten tail; every untracked hit is named by the whole-file failure
+    and, with the untracked side removed, every tracked hit is classified
+    into its own pre-existing baseline row."""
+    root = make_repo(tmp_path, "emdash-partition", gitignore_docs=True)
+    write_facts(root)
+    copy_em_dash_script(root)
+    untracked_names = [f"a-fresh-{index:02d}.md" for index in range(12)]
+    tracked_names = [f"z-kept-{index:02d}.md" for index in range(4)]
+    for name in untracked_names:
+        (root / name).write_text(
+            "fresh prose with \u2014 dash\n", encoding="utf-8"
+        )
+    for name in tracked_names:
+        prose = root / name
+        prose.write_text(
+            "committed intro\n" + "kept line with \u2014 dash\n", encoding="utf-8"
+        )
+    git(root, "add", *tracked_names)
+    git(root, "commit", "-m", "kept prose with known violations", "-q")
+    for name in tracked_names:
+        prose = root / name
+        prose.write_text(
+            "committed intro\n"
+            + "kept line with \u2014 dash\n"
+            + "clean added line\n",
+            encoding="utf-8",
+        )
+
+    result = run_gate("em-dash-scan", ctx_for(root))
+
+    assert result.rc == 1
+    assert "new prose must be whole-file clean" in result.message
+    for name in untracked_names:
+        assert name in result.message
+
+    # The tracked side of the split classifies completely too: with the
+    # untracked hits gone, every tracked hit lands its own baseline row.
+    for name in untracked_names:
+        (root / name).unlink()
+    tracked_result = run_gate("em-dash-scan", ctx_for(root))
+    assert tracked_result.rc == 0
+    assert (
+        tracked_result.message.count("pre-existing (known-violation baseline):")
+        == 4
+    )
+    for name in tracked_names:
+        assert (
+            f"pre-existing (known-violation baseline): {name}:2"
+            in tracked_result.message
+        )
+
+
+def test_em_dash_ls_files_failure_treats_hits_untracked(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] Fail-closed polarity: when the
+    ``ls-files --others --exclude-standard`` untracked probe fails, every hit
+    is treated as untracked and fails whole-file with the untracked marker,
+    and none is adjudicated into a pre-existing baseline row (a tracking
+    outage must never launder hits through the tracked arm)."""
+    root = make_repo(tmp_path, "emdash-lsfiles-failure", gitignore_docs=True)
+    write_facts(root)
+    copy_em_dash_script(root)
+    prose = root / "kept.md"
+    prose.write_text(
+        "committed intro\n" + "kept line with \u2014 dash\n", encoding="utf-8"
+    )
+    git(root, "add", "kept.md")
+    git(root, "commit", "-m", "kept prose with known violation", "-q")
+    prose.write_text(
+        "committed intro\n" + "kept line with \u2014 dash\n" + "clean added line\n",
+        encoding="utf-8",
+    )
+    ctx = ctx_for(root)
+    real_git = ctx.git
+
+    def failing_untracked_probe(*args, **kwargs):
+        if args and args[0] == "ls-files":
+            return subprocess.CompletedProcess(
+                list(args), 1, stdout="", stderr="fatal: stub ls-files failure"
+            )
+        return real_git(*args, **kwargs)
+
+    monkeypatch.setattr(ctx, "git", failing_untracked_probe)
+
+    result = run_gate("em-dash-scan", ctx)
+
+    assert result.rc == 1
+    assert "new prose must be whole-file clean" in result.message
+    assert "kept.md" in result.message
+    assert "pre-existing (known-violation baseline)" not in result.message
 
 
 def test_docs_tmp_sweep_keeps_baseline_holding_archived_session(tmp_path, sweep_env):
@@ -4869,3 +5380,681 @@ def test_description_length_gate(tmp_path, sweep_env):
     )
     result2 = run_gate("description-length", ctx_for(root2))
     assert result2.rc == 0, result2.message
+
+
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-10-01-done-boundary-receipt-and-closeout-
+# gate-sweep.md, Task 1: archive-ceremony gate (checkbox check) in the
+# pre-commit phase.
+# --------------------------------------------------------------------------- #
+def _staged_plan_archive(root: Path, plan_name: str, body: str) -> str:
+    """Commit a tracked plan under the plans home (the fixture gitignores
+    /docs/, hence the forced add), then stage its rename into the completed
+    archive directory; returns the archive path (repo-relative). This is the
+    same-run staged-rename archive shape the gate's derivation reads."""
+    plans = root / "docs" / "history" / "plans"
+    (plans / "completed").mkdir(parents=True, exist_ok=True)
+    plan_rel = f"docs/history/plans/{plan_name}"
+    (root / plan_rel).write_text(body, encoding="utf-8")
+    git(root, "add", "-f", plan_rel)
+    git(root, "commit", "-m", "plan", "-q")
+    archive_rel = f"docs/history/plans/completed/{plan_name}"
+    assert git(root, "mv", plan_rel, archive_rel).returncode == 0
+    return archive_rel
+
+
+def _committed_plan_archive(root: Path, plan_name: str, body: str) -> str:
+    """Commit a tracked plan, then commit its rename into the completed
+    archive directory (a committed archive rename); returns the archive path.
+    The caller seeds the active run manifest first so the rename sits inside
+    the manifest's start_commit..HEAD window."""
+    (root / "docs" / "history" / "plans" / "completed").mkdir(
+        parents=True, exist_ok=True
+    )
+    plan_rel = f"docs/history/plans/{plan_name}"
+    (root / plan_rel).write_text(body, encoding="utf-8")
+    git(root, "add", "-f", plan_rel)
+    git(root, "commit", "-m", "plan", "-q")
+    archive_rel = f"docs/history/plans/completed/{plan_name}"
+    assert git(root, "mv", plan_rel, archive_rel).returncode == 0
+    assert git(root, "commit", "-m", "archive the plan", "-q").returncode == 0
+    return archive_rel
+
+
+def _write_exec_review_record(root: Path, plan_name: str) -> Path:
+    """A minimal exec-review staging doc for a fixture plan, named per the
+    slug convention the archive-ceremony coverage arm requires (the plan's
+    stem minus its leading date prefix inside a ``-plan-review-`` series
+    name ending ``-exec-r<N>``)."""
+    stem = plan_name[: -len(".md")] if plan_name.endswith(".md") else plan_name
+    slug = stem.split("-", 3)[3] if stem[:4].isdigit() else stem
+    reviews = root / "docs" / "reviews"
+    reviews.mkdir(parents=True, exist_ok=True)
+    record = reviews / f"2026-10-01-plan-review-{slug}-exec-r1.md"
+    record.write_text(
+        "# Exec review r1\n\nVerdict: ready=yes, zero blocking.\n",
+        encoding="utf-8",
+    )
+    return record
+
+
+def test_archive_checkbox_gate_refuses_unchecked_archive(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given a staged-rename plan archive whose bytes
+    still carry unchecked task boxes, expects the archive-ceremony gate to
+    fail rc 1 naming the archive path, the unchecked count, and both sanctioned
+    exits (check the boxes after verified work, or a marked backfill
+    completion record per the archive-correction exception)."""
+    root = make_repo(tmp_path, "ceremony-unchecked", gitignore_docs=True)
+    write_facts(root)
+    body = "# Plan: demo\n\n## Tasks\n\n- [ ] one\n- [ ] two\n"
+    archive_rel = _staged_plan_archive(
+        root, "2026-09-30-ceremony-demo.md", body
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert archive_rel in result.message
+    assert "2 unchecked task box(es)" in result.message
+    assert "check the boxes" in result.message
+    assert "backfill completion record" in result.message
+
+
+def test_archive_checkbox_gate_passes_checked_or_backfilled(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Sanctioned-exit arms: a fully checked staged
+    archive passes; a backfill-marked archive (boxes checked with per-checkbox
+    backfill markings plus a marked backfill completion record) passes; a
+    committed rename archive whose HEAD bytes are fully checked passes; and a
+    stale plan-deliverables line whose archive twin at HEAD is fully checked
+    passes."""
+    # Arm 1: fully checked staged-rename archive (its exec-review record of
+    # record present, so the coverage arm stays green too).
+    root = make_repo(tmp_path, "ceremony-checked", gitignore_docs=True)
+    write_facts(root)
+    _write_exec_review_record(root, "2026-09-30-ceremony-ok.md")
+    _staged_plan_archive(
+        root, "2026-09-30-ceremony-ok.md", "# Plan: ok\n\n- [x] done\n"
+    )
+    result = run_gate("archive-ceremony", ctx_for(root))
+    assert result.rc == 0, result.message
+
+    # Arm 2: backfill-marked archive (no unchecked box remains; the record
+    # documents the evidence and the markings license the body edit).
+    root2 = make_repo(tmp_path, "ceremony-backfilled", gitignore_docs=True)
+    write_facts(root2)
+    _write_exec_review_record(root2, "2026-09-30-ceremony-backfill.md")
+    body2 = (
+        "# Plan: backfilled\n\n"
+        "- [x] done (backfilled 2026-10-01)\n\n"
+        "## Completion record (backfill 2026-10-01)\n\n"
+        "The contemporaneous record was lost with the executing worktree; "
+        "re-verification evidence: every validation command re-run green.\n"
+    )
+    _staged_plan_archive(root2, "2026-09-30-ceremony-backfill.md", body2)
+    result2 = run_gate("archive-ceremony", ctx_for(root2))
+    assert result2.rc == 0, result2.message
+
+    # Arm 3: committed rename since the active run manifest's start_commit
+    # (the rename-detecting name-status arm), HEAD bytes fully checked; plus
+    # the stale deliverables line whose archive twin at HEAD is checked (the
+    # plan path itself no longer exists on disk).
+    root3 = make_repo(tmp_path, "ceremony-committed", gitignore_docs=True)
+    write_facts(root3)
+    now = time.time()
+    marker = make_marker(root3, now, os.getpid())
+    _seed_run_manifest(root3, "ceremony-run", marker.name, str(root3), now)
+    _write_exec_review_record(root3, "2026-09-30-ceremony-committed.md")
+    archive_rel3 = _committed_plan_archive(
+        root3,
+        "2026-09-30-ceremony-committed.md",
+        "# Plan: committed\n\n- [x] done\n",
+    )
+    result3 = run_gate("archive-ceremony", ctx_for(root3))
+    assert result3.rc == 0, result3.message
+    stale_rel = "docs/history/plans/2026-09-30-ceremony-committed.md"
+    assert not (root3 / stale_rel).exists()
+    write_deliverables(root3, [stale_rel])
+    result4 = run_gate("archive-ceremony", ctx_for(root3))
+    assert result4.rc == 0, result4.message
+    assert archive_rel3 in result4.message
+
+
+def test_committed_archive_refuses_unchecked_box(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given a committed-rename plan archive (clean
+    tree, so no staged or worktree rename exists; the rename sits inside the
+    active run manifest's start_commit..HEAD window) whose HEAD bytes carry
+    one unchecked task box, expects the archive-ceremony gate to fail rc 1
+    naming the archive path, the unchecked count, and both sanctioned exits
+    (check the boxes after verified work, or a marked backfill completion
+    record per the archive-correction exception). The fixture pins
+    single-shape reachability: with the shape's input removed (the manifest
+    reseeded with start_commit
+    at HEAD, so the committed-rename window covers nothing) the refusal
+    disappears (rc 0), and with the manifest restored and the box flipped to
+    checked the gate returns rc 0 with the archive still surfaced (the pass
+    arm pins the checked-archives path for this shape alone)."""
+    root = make_repo(
+        tmp_path, "ceremony-committed-unchecked", gitignore_docs=True
+    )
+    write_facts(root)
+    now = time.time()
+    marker = make_marker(root, now, os.getpid())
+    _seed_run_manifest(root, "ceremony-run", marker.name, str(root), now)
+    _write_exec_review_record(root, "2026-09-30-ceremony-committed.md")
+    body = "# Plan: committed\n\n## Tasks\n\n- [ ] one\n"
+    archive_rel = _committed_plan_archive(
+        root, "2026-09-30-ceremony-committed.md", body
+    )
+    # The committed-rename window must hold exactly the archive rename: a
+    # start_commit older than the plan commit turns the base..HEAD tree diff
+    # into a plain add row (rename detection pairs deletions with additions,
+    # and the plan path does not exist on the old side), so the boundary is
+    # reseeded at the post-plan, pre-rename commit (HEAD~1) through the same
+    # run-manifest seeding machinery.
+    boundary = git(root, "rev-parse", "HEAD~1").stdout.strip()
+    manifest_path = _seed_run_manifest(
+        root, "ceremony-run", marker.name, str(root), now,
+        start_commit=boundary,
+    )
+    manifest_bytes = manifest_path.read_bytes()
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert archive_rel in result.message
+    assert "1 unchecked task box(es)" in result.message
+    assert "check the boxes" in result.message
+    assert "backfill completion record" in result.message
+
+    # Single-shape reachability witness: reseed the SAME run id (the write
+    # overwrites the manifest file, sidestepping the loader's
+    # newest-created_epoch selection) with start_commit at HEAD, so the
+    # committed-rename window covers nothing and the refusal disappears.
+    head = git(root, "rev-parse", "HEAD").stdout.strip()
+    _seed_run_manifest(
+        root, "ceremony-run", marker.name, str(root), now, start_commit=head
+    )
+    result2 = run_gate("archive-ceremony", ctx_for(root))
+    assert result2.rc == 0, result2.message
+
+    # Pass arm: restore the snapshotted manifest bytes (the rename sits back
+    # inside the window) and flip the archived body's box to checked; the
+    # gate returns rc 0 with the committed-rename shape fully present.
+    manifest_path.write_bytes(manifest_bytes)
+    (root / archive_rel).write_text(
+        body.replace("- [ ]", "- [x]"), encoding="utf-8"
+    )
+    git(root, "add", "-f", archive_rel)
+    assert git(root, "commit", "-m", "check the box", "-q").returncode == 0
+    result3 = run_gate("archive-ceremony", ctx_for(root))
+    assert result3.rc == 0, result3.message
+    assert archive_rel in result3.message
+
+
+def test_stale_deliverables_archive_refuses_unchecked_twin(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given a stale plan-deliverables line whose
+    recorded top-level plan path no longer exists because the plan now sits
+    archived (the rename committed BEFORE the active run manifest's
+    start_commit, so it sits outside the committed-rename window) and whose
+    archive twin at HEAD carries one unchecked task box, expects the
+    archive-ceremony gate to fail rc 1 naming the archive twin path and the
+    unchecked count. The fixture pins single-shape reachability: with the
+    shape's input removed (the deliverables file rewritten without the
+    stale line) the
+    refusal disappears (rc 0), and with the line restored and the twin's box
+    flipped to checked at HEAD the gate returns rc 0 with the twin still
+    surfaced (the pass arm pins the checked-archives path for this shape
+    alone)."""
+    root = make_repo(
+        tmp_path, "ceremony-stale-unchecked", gitignore_docs=True
+    )
+    write_facts(root)
+    plan_name = "2026-09-30-ceremony-stale.md"
+    stale_rel = f"docs/history/plans/{plan_name}"
+    body = "# Plan: stale\n\n## Tasks\n\n- [ ] one\n"
+    twin_rel = _committed_plan_archive(root, plan_name, body)
+    # One later commit, then the run manifest seeded at it: the rename sits
+    # outside the committed-rename window (start..HEAD covers nothing), so
+    # only the stale-deliverables shape can derive the archive.
+    assert git(root, "commit", "--allow-empty", "-m", "session work", "-q").returncode == 0
+    now = time.time()
+    marker = make_marker(root, now, os.getpid())
+    _seed_run_manifest(
+        root, "ceremony-run", marker.name, str(root), now,
+        start_commit=git(root, "rev-parse", "HEAD").stdout.strip(),
+    )
+    assert not (root / stale_rel).exists()
+    write_deliverables(root, [stale_rel])
+    _write_exec_review_record(root, plan_name)
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert twin_rel in result.message
+    assert "1 unchecked task box(es)" in result.message
+
+    # Single-shape reachability witness: rewrite the deliverables file
+    # without the stale line; no shape derives the archive and the refusal
+    # disappears.
+    write_deliverables(root, [])
+    result2 = run_gate("archive-ceremony", ctx_for(root))
+    assert result2.rc == 0, result2.message
+
+    # Pass arm: restore the stale line and flip the archived twin's box to
+    # checked (amending the twin at HEAD); the gate returns rc 0 with the
+    # stale-deliverables shape fully present.
+    write_deliverables(root, [stale_rel])
+    (root / twin_rel).write_text(
+        body.replace("- [ ]", "- [x]"), encoding="utf-8"
+    )
+    git(root, "add", "-f", twin_rel)
+    assert git(root, "commit", "--amend", "-m", "session work", "-q").returncode == 0
+    result3 = run_gate("archive-ceremony", ctx_for(root))
+    assert result3.rc == 0, result3.message
+    assert twin_rel in result3.message
+
+
+def test_archive_ceremony_gate_requires_exec_review(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Given a derived archive whose boxes are fully
+    checked and no exec-review record under the reviews home, expects the
+    archive-ceremony gate to fail rc 1 naming the plan, the missing
+    ``-plan-review-<slug>-exec-r<N>`` series, and the reconstruction remedy;
+    adding a minimal ``-exec-r1`` staging doc whose name follows the slug
+    convention turns the gate green."""
+    root = make_repo(tmp_path, "ceremony-review", gitignore_docs=True)
+    write_facts(root)
+    archive_rel = _staged_plan_archive(
+        root, "2026-09-30-ceremony-reviewed.md", "# Plan: reviewed\n\n- [x] done\n"
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert archive_rel in result.message
+    assert "ceremony-reviewed" in result.message  # the plan's slug
+    assert "-plan-review-" in result.message
+    assert "-exec-r" in result.message
+    assert "reconstruction" in result.message
+
+    reviews = root / "docs" / "reviews"
+    reviews.mkdir(parents=True)
+    (reviews / "2026-10-01-plan-review-ceremony-reviewed-exec-r1.md").write_text(
+        "# Exec review r1\n\nVerdict: ready=yes, zero blocking.\n",
+        encoding="utf-8",
+    )
+
+    result2 = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result2.rc == 0, result2.message
+    assert archive_rel in result2.message
+
+
+# --------------------------------------------------------------------------- #
+# execute-plan-closeout gate fixtures and witnesses
+# (plan docs/history/plans/2026-10-01-execute-plan-squash-closeout-
+# finalization.md, Tasks 1 and 2). The shared builder seeds a landed-
+# complete run: an archived plan with one closed promoted origin, the
+# ownership registry row, a done-run manifest owning the plan, and the
+# execute-plan session state carrying a receipt whose digest binds the
+# archived bytes.
+# --------------------------------------------------------------------------- #
+CLOSEOUT_SLUG = "2026-10-01-closeout-demo"
+CLOSEOUT_ACTIVE_REL = f"docs/history/plans/{CLOSEOUT_SLUG}.md"
+CLOSEOUT_ARCHIVED_REL = f"docs/history/plans/completed/{CLOSEOUT_SLUG}.md"
+CLOSEOUT_ORIGIN_NAME = "2026-10-01-closeout-origin.md"
+CLOSEOUT_ORIGIN_OPEN_REL = f"docs/history/backlog/{CLOSEOUT_ORIGIN_NAME}"
+CLOSEOUT_ORIGIN_CLOSED_REL = (
+    f"docs/history/backlog/completed/{CLOSEOUT_ORIGIN_NAME}"
+)
+CLOSEOUT_REGISTRY_REL = "docs/maintenance/document-registry.md"
+
+CLOSEOUT_PLAN_TEXT = (
+    "# Execute-plan closeout demo plan\n\n"
+    "Backlog origin: `docs/history/backlog/2026-10-01-closeout-origin.md`\n\n"
+    "### Task 1: land the gate\n\n"
+    "- [x] task one\n"
+)
+
+
+@pytest.fixture
+def closeout_origins_script(monkeypatch):
+    """Point the gate's origins-checker seam at the repo's real script
+    (the hermetic convention: repo-owned validators, fixture facts)."""
+    monkeypatch.setenv(
+        "CHECK_PLAN_ORIGINS_CLOSED_SCRIPT",
+        str(SCRIPTS_DIR / "check_plan_origins_closed.py"),
+    )
+
+
+def _closeout_repo(tmp_path, name: str) -> Path:
+    """The landed-complete fixture repo: archived plan, closed origin under
+    the backlog completed archive, and the ownership registry row."""
+    root = make_repo(tmp_path, name, gitignore_docs=True)
+    write_facts(root)
+    archived = root / CLOSEOUT_ARCHIVED_REL
+    archived.parent.mkdir(parents=True, exist_ok=True)
+    archived.write_text(CLOSEOUT_PLAN_TEXT, encoding="utf-8")
+    closed_origin = root / CLOSEOUT_ORIGIN_CLOSED_REL
+    closed_origin.parent.mkdir(parents=True, exist_ok=True)
+    closed_origin.write_text(
+        "origin disposition: folded into the archived plan\n",
+        encoding="utf-8",
+    )
+    registry = root / CLOSEOUT_REGISTRY_REL
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        "<!-- Document ownership registry fixture -->\n\n"
+        "| identity | sot | state | archived | reason | src | successor"
+        " | aliases | audit |\n"
+        "|---|---|---|---|---|---|---|---|---|\n"
+        f"| closeout-demo | no | completed | 2026-10-01 | executed |"
+        f" {CLOSEOUT_ARCHIVED_REL} |  |  | user-approved |\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def _closeout_receipt(root: Path) -> dict:
+    archived = root / CLOSEOUT_ARCHIVED_REL
+    return {
+        "workflow_state": "complete",
+        "archived_plan_path": CLOSEOUT_ARCHIVED_REL,
+        "last_commit_sha": "0" * 40,
+        "plan_digest": hashlib.sha256(archived.read_bytes()).hexdigest(),
+    }
+
+
+def _closeout_state_payload(
+    root: Path,
+    *,
+    receipt: bool = True,
+    workflow_state: str = "complete",
+    tasks: dict | None = None,
+) -> dict:
+    """The execute-plan session state shape the gate reads (the fields it
+    consumes mirror the runtime's writer: plan_slug, workflow_state,
+    tasks, archive_gate, terminal_receipt)."""
+    payload = {
+        "schema_version": 1,
+        "plan_slug": CLOSEOUT_SLUG,
+        "workflow_state": workflow_state,
+        "tasks": (
+            tasks
+            if tasks is not None
+            else {
+                "task-1": {
+                    "id": "task-1",
+                    "status": "complete",
+                    "checkbox": True,
+                }
+            }
+        ),
+        "archive_gate": {
+            "plan_path": CLOSEOUT_ACTIVE_REL,
+            "declared_destination": CLOSEOUT_ARCHIVED_REL,
+            "plan_digest": _closeout_receipt(root)["plan_digest"],
+        },
+    }
+    if receipt:
+        payload["terminal_receipt"] = _closeout_receipt(root)
+    return payload
+
+
+def _write_closeout_state(root: Path, slug: str, payload: dict) -> Path:
+    session = root / "docs" / "tmp" / "execute-plan" / slug
+    session.mkdir(parents=True, exist_ok=True)
+    path = session / "runtime_state.json"
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def _closeout_done_run(root: Path, *, owned_plan_paths: list[str] | None = None) -> None:
+    """Two confirmable run-start markers plus the active run manifest whose
+    owned plan claim is the closeout plan (newest marker binds)."""
+    now = time.time()
+    make_marker(root, now - 1, os.getpid())
+    marker = make_marker(root, now, os.getpid())
+    _seed_run_manifest(
+        root,
+        "closeout-run",
+        marker.name,
+        str(root),
+        now,
+        owned_plan_paths=(
+            owned_plan_paths
+            if owned_plan_paths is not None
+            else [CLOSEOUT_ACTIVE_REL]
+        ),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Plan checkbox: test_closeout_gate_accepts_landed_complete_run
+# [class: REPOSITORY_TEST]
+# --------------------------------------------------------------------------- #
+def test_closeout_gate_accepts_landed_complete_run(
+    tmp_path, sweep_env, closeout_origins_script
+):
+    """[class: REPOSITORY_TEST] Given an owned execute-plan session manifest
+    with a valid terminal receipt whose archived bytes hash to the receipt
+    digest, the active path gone, the promoted origin closed, and the
+    registry row resolving, expects rc 0 with a pass message."""
+    root = _closeout_repo(tmp_path, "closeout-ok")
+    _write_closeout_state(root, CLOSEOUT_SLUG, _closeout_state_payload(root))
+    _closeout_done_run(root)
+    result = run_gate("execute-plan-closeout", ctx_for(root))
+    assert result.rc == 0, result.message
+    assert "passed" in result.message
+    assert CLOSEOUT_SLUG in result.message
+
+
+def test_closeout_gate_refuses_landed_without_terminal_evidence(
+    tmp_path, sweep_env, closeout_origins_script
+):
+    """[class: REPOSITORY_TEST] Given the origin's witnessed shape (all
+    tasks done, no terminal receipt, the plan still active on the landing
+    target after its implementation landed), expects rc 1 naming the
+    condition and the resume remedy, with the manifest bytes untouched
+    (recovery evidence preserved)."""
+    root = _closeout_repo(tmp_path, "closeout-no-receipt")
+    active = root / CLOSEOUT_ACTIVE_REL
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_text(CLOSEOUT_PLAN_TEXT, encoding="utf-8")
+    state_path = _write_closeout_state(
+        root,
+        CLOSEOUT_SLUG,
+        _closeout_state_payload(root, receipt=False, workflow_state="active"),
+    )
+    _closeout_done_run(root)
+    before = state_path.read_bytes()
+    result = run_gate("execute-plan-closeout", ctx_for(root))
+    assert result.rc == 1, result.message
+    assert "landed without terminal evidence" in result.message
+    assert "resume" in result.message
+    assert state_path.read_bytes() == before
+
+
+def test_closeout_gate_refuses_stale_receipt_digest(
+    tmp_path, sweep_env, closeout_origins_script
+):
+    """[class: REPOSITORY_TEST] Given a receipt whose plan_digest differs
+    from the archived bytes' recomputed sha256, expects rc 1 naming the
+    digest mismatch."""
+    root = _closeout_repo(tmp_path, "closeout-stale-digest")
+    payload = _closeout_state_payload(root)
+    payload["terminal_receipt"]["plan_digest"] = "0" * 64
+    _write_closeout_state(root, CLOSEOUT_SLUG, payload)
+    _closeout_done_run(root)
+    result = run_gate("execute-plan-closeout", ctx_for(root))
+    assert result.rc == 1, result.message
+    assert "digest mismatch" in result.message
+
+
+def test_closeout_gate_refuses_active_twin_surviving(
+    tmp_path, sweep_env, closeout_origins_script
+):
+    """[class: REPOSITORY_TEST] Given a landed-complete run whose archived
+    bytes, origin closure, and registry row all resolve but the active plan
+    path survives, expects rc 1 naming the surviving active path, from the
+    working tree arm and from the index arm (the copy-plus-delete residue
+    detector from the origin's repair incident)."""
+    root = _closeout_repo(tmp_path, "closeout-active-twin")
+    plans = root / "docs/history/plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    active = plans / f"{CLOSEOUT_SLUG}.md"
+    active.write_text("copied, never moved\n", encoding="utf-8")
+    _write_closeout_state(root, CLOSEOUT_SLUG, _closeout_state_payload(root))
+    _closeout_done_run(root)
+    result = run_gate("execute-plan-closeout", ctx_for(root))
+    assert result.rc == 1, result.message
+    assert CLOSEOUT_ACTIVE_REL in result.message
+    # Index arm: the same surviving path tracked in the index (worktree
+    # copy removed) refuses identically.
+    git(root, "add", "-f", CLOSEOUT_ACTIVE_REL)
+    active.unlink()
+    result2 = run_gate("execute-plan-closeout", ctx_for(root))
+    assert result2.rc == 1, result2.message
+    assert CLOSEOUT_ACTIVE_REL in result2.message
+    git(root, "rm", "--cached", "-f", "-q", CLOSEOUT_ACTIVE_REL)
+
+
+# --------------------------------------------------------------------------- #
+# Task 2 witnesses: the origin's remaining shapes (open promoted origin,
+# unpromoted residual backlog, missing execute-plan home, malformed window
+# manifest, unowned peer session, unanchored window).
+# --------------------------------------------------------------------------- #
+def test_closeout_gate_refuses_open_promoted_origin(
+    tmp_path, sweep_env, closeout_origins_script
+):
+    """[class: REPOSITORY_TEST] Given a landed-complete run whose promoted
+    origin still sits open in the backlog top level, or whose origin is
+    dispositioned but the ownership registry row is missing, expects rc 1
+    naming the origin file (arm 1) and the registry gap (arm 2)."""
+    root = _closeout_repo(tmp_path, "closeout-open-origin")
+    open_origin = root / CLOSEOUT_ORIGIN_OPEN_REL
+    open_origin.parent.mkdir(parents=True, exist_ok=True)
+    open_origin.write_text("status: open\n", encoding="utf-8")
+    (root / CLOSEOUT_ORIGIN_CLOSED_REL).unlink()
+    _write_closeout_state(root, CLOSEOUT_SLUG, _closeout_state_payload(root))
+    _closeout_done_run(root)
+    result = run_gate("execute-plan-closeout", ctx_for(root))
+    assert result.rc == 1, result.message
+    assert CLOSEOUT_ORIGIN_NAME in result.message
+    # Arm 2: origin dispositioned, registry row missing.
+    open_origin.unlink()
+    closed = root / CLOSEOUT_ORIGIN_CLOSED_REL
+    closed.write_text(
+        "origin disposition: folded into the archived plan\n",
+        encoding="utf-8",
+    )
+    registry = root / CLOSEOUT_REGISTRY_REL
+    registry.write_text(
+        "<!-- Document ownership registry fixture without the row -->\n",
+        encoding="utf-8",
+    )
+    result2 = run_gate("execute-plan-closeout", ctx_for(root))
+    assert result2.rc == 1, result2.message
+    assert "registry" in result2.message
+    assert CLOSEOUT_SLUG in result2.message
+
+
+def test_closeout_gate_keeps_unpromoted_backlog_open(
+    tmp_path, sweep_env, closeout_origins_script
+):
+    """[class: REPOSITORY_TEST] Given a landed-complete run plus a residual
+    backlog item the plan never promoted, expects rc 0 and the gate message
+    does not name the residual item (the false-positive arm of the origin's
+    sixth witness)."""
+    root = _closeout_repo(tmp_path, "closeout-residual")
+    backlog = root / "docs/history/backlog"
+    backlog.mkdir(parents=True, exist_ok=True)
+    residual = backlog / "2026-10-01-unrelated-residual.md"
+    residual.write_text("status: open\n", encoding="utf-8")
+    _write_closeout_state(root, CLOSEOUT_SLUG, _closeout_state_payload(root))
+    _closeout_done_run(root)
+    result = run_gate("execute-plan-closeout", ctx_for(root))
+    assert result.rc == 0, result.message
+    assert "unrelated-residual" not in result.message
+
+
+def test_closeout_gate_warning_skips_without_execute_plan_home(
+    tmp_path, sweep_env, closeout_origins_script
+):
+    """[class: REPOSITORY_TEST] Given a repo fixture whose tmp home has no
+    execute-plan directory, expects rc 0 and a warning-skip message naming
+    the home (the vacuous-pass guard: absence is reported, never silent)."""
+    root = _closeout_repo(tmp_path, "closeout-no-home")
+    _closeout_done_run(root)
+    assert not (root / "docs/tmp/execute-plan").exists()
+    result = run_gate("execute-plan-closeout", ctx_for(root))
+    assert result.rc == 0, result.message
+    assert "warning skip" in result.message
+    assert "docs/tmp/execute-plan" in result.message
+
+
+def test_closeout_gate_refuses_malformed_window_manifest(
+    tmp_path, sweep_env, closeout_origins_script
+):
+    """[class: REPOSITORY_TEST] Given an owned manifest whose JSON cannot
+    be parsed, expects rc 1 naming the file (fail-closed over
+    subprocess-shaped silent passes)."""
+    root = _closeout_repo(tmp_path, "closeout-malformed")
+    session = root / "docs" / "tmp" / "execute-plan" / CLOSEOUT_SLUG
+    session.mkdir(parents=True, exist_ok=True)
+    state_path = session / "runtime_state.json"
+    state_path.write_text("{not json at all\n", encoding="utf-8")
+    _closeout_done_run(root)
+    result = run_gate("execute-plan-closeout", ctx_for(root))
+    assert result.rc == 1, result.message
+    assert "runtime_state.json" in result.message
+    assert "unreadable or malformed" in result.message
+
+
+def test_closeout_gate_skips_unowned_window_manifests(
+    tmp_path, sweep_env, closeout_origins_script
+):
+    """[class: REPOSITORY_TEST] Given an in-window execute-plan manifest
+    whose plan slug matches none of the run manifest's owned plan claims (a
+    peer's interrupted run sharing the tmp home), expects rc 0 and a pass
+    note that does not demand the peer run's receipt (the
+    never-blocks-unrelated-closeout arm)."""
+    root = _closeout_repo(tmp_path, "closeout-unowned")
+    _write_closeout_state(root, CLOSEOUT_SLUG, _closeout_state_payload(root))
+    peer_slug = "2026-10-01-peer-plan"
+    _write_closeout_state(
+        root,
+        peer_slug,
+        {
+            "schema_version": 1,
+            "plan_slug": peer_slug,
+            "workflow_state": "active",
+            "tasks": {
+                "task-1": {"id": "task-1", "status": "complete", "checkbox": True}
+            },
+        },
+    )
+    _closeout_done_run(root)
+    result = run_gate("execute-plan-closeout", ctx_for(root))
+    assert result.rc == 0, result.message
+    assert "passed" in result.message
+    assert peer_slug in result.message
+    assert "skipped" in result.message
+    assert "landed without terminal evidence" not in result.message
+
+
+def test_closeout_gate_warning_skips_unanchored_window(
+    tmp_path, sweep_env, closeout_origins_script
+):
+    """[class: REPOSITORY_TEST] Given a done-session dir whose window cannot
+    anchor (a single marker and no manifest-plus-ledger witness pair),
+    expects rc 0 and a warning-skip message naming the unanchored window
+    (the fold-added discovery arm's witness)."""
+    root = _closeout_repo(tmp_path, "closeout-unanchored")
+    _write_closeout_state(root, CLOSEOUT_SLUG, _closeout_state_payload(root))
+    make_marker(root, time.time(), os.getpid())
+    result = run_gate("execute-plan-closeout", ctx_for(root))
+    assert result.rc == 0, result.message
+    assert "warning skip" in result.message
+    assert "anchor" in result.message

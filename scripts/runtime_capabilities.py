@@ -318,7 +318,10 @@ def evidence_contract_digest(tasks: Mapping[str, Mapping[str, Any]], *, include_
             raise ValueError(f"task {task_id} required_criteria must be a list of non-empty strings")
         if len(criteria) != len(set(criteria)):
             raise ValueError(f"task {task_id} required_criteria contains duplicates")
-        criterion_id_map = evidence_criterion_ids(criteria)
+        # The legacy digest shape predates criterion ids: their extraction
+        # (and the post-upgrade receipt limits it enforces) is part of the
+        # new shape only, so pre-upgrade criteria are validated as written.
+        criterion_id_map = evidence_criterion_ids(criteria) if include_criterion_ids else {}
         if not isinstance(commands, list) or any(not isinstance(item, Mapping) for item in commands):
             raise ValueError(f"task {task_id} verification_commands must be a list of mappings")
         canonical_commands = []

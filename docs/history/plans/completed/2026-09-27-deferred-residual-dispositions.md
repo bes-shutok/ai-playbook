@@ -283,3 +283,9 @@ Files:
 - [x] Update any pin whose pinned span a reword moves: the `loop-mode-held` retention span is expected to move (keep it pinned at the clause that still carries the retention wording verbatim); the zcode appendix wording-span pin is expected to move with T2; the successor chain-nothing pin (`is a non-dual mode excluding the execution lane`, region-scoped to the successor paragraph) is expected to move, re-anchoring on the named-exclusion reference in the successor paragraph; the Step 0 attempt-bound span pin (`suppresses the repair for that touch`) may move with the arm-tail reduction. [class: IMPLEMENTATION_REQUIRED]
 - [x] Run → expect GREEN or only the recorded baseline-twin failure: `bash scripts/check_maintenance_pins.sh` and the Validation Commands T2/T3/T4 greps. [class: REPOSITORY_TEST]
 - [x] Commit: `maintenance: name the attempt-bound and loop-mode rules once, defer the appendix wording to its literal` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-09-20-phase3-r1-polish-residuals.md`: executed by this plan (declared origin); folded by the 2026-10-02 done-corpus backfill sweep (docs/history/plans/2026-10-01-done-origin-fold-delete-enforcement.md); former backlog file deleted, body recoverable via git history.
+- `docs/history/backlog/completed/2026-09-21-lessons-gate-recovery-distinguish-duplicate-ids.md`: executed by this plan (declared origin); folded by the 2026-10-02 done-corpus backfill sweep (docs/history/plans/2026-10-01-done-origin-fold-delete-enforcement.md); former backlog file deleted, body recoverable via git history.
+- `docs/history/backlog/completed/2026-09-21-r3-review-overflow-residuals.md`: executed by this plan (declared origin); folded by the 2026-10-02 done-corpus backfill sweep (docs/history/plans/2026-10-01-done-origin-fold-delete-enforcement.md); former backlog file deleted, body recoverable via git history.

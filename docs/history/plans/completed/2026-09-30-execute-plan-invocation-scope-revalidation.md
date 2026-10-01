@@ -157,3 +157,7 @@ Evidence:
 ## Superseded disposition (2026-09-30)
 
 Archived as superseded without execution: a parallel authoring session executed its own plan for the same origin (docs/history/backlog/2026-09-29-execute-plan-prior-invocation-scope-leak.md, marked done via docs/history/plans/completed/2026-09-30-execute-plan-prior-choice-scope-binding.md, exec r1 zero blocking), landing an equivalent invocation-scope contract on main (signal E bound to the plan in play plus a reclassification precedence paragraph, main 0f4b7cf5/f97277f9). This plan's pinned spans are absent from the live SKILL.md by design of that landing; executing this plan would rewrite the executed implementation's wording. The r1/r2 review record (docs/reviews/2026-09-30-plan-review-execute-plan-invocation-scope-revalidation-r1/r2) stays as history; this plan's r2 certification (ready=yes, zero blocking, digest c57e3430) attests only its own bytes.
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-09-29-execute-plan-prior-invocation-scope-leak.md`: executed by this plan (declared origin); folded by the 2026-10-02 done-corpus backfill sweep (docs/history/plans/2026-10-01-done-origin-fold-delete-enforcement.md); former backlog file deleted, body recoverable via git history.

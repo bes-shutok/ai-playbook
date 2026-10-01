@@ -40,7 +40,15 @@ judgment above it. It is owned here, never restated in the skill text.
 
 Exit codes: 0 clean; 1 violations (each named on stderr with the entry
 slug and the failing line text, with a summary on stdout); 2 tool failure
-(unreadable log) or CLI usage error.
+(unreadable log), the outside-the-repository-root invocation refusal, or
+CLI usage error.
+
+single-line disposition constraint: each ``- `` line is
+checked separately and must END at its citation, so a multi-line
+disposition style whose citation lands mid-block is rejected (latent
+today, pinned as documented). The ``CITATION_TAIL_CHARS`` strip can
+remove a legitimate trailing character from an exotic filename; that is
+an accepted trade.
 
 Shaped after ``scripts/doc_registry_validator.py`` (argparse CLI,
 fail-loud exits, stdlib only). Repo-relative paths only; no PII.
@@ -51,6 +59,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -73,7 +82,9 @@ OPERATOR_QUOTE_RE = re.compile(r'"[^"]*\boperator\b[^"]*', re.IGNORECASE)
 # stripped before the suffix and on-disk checks. A trailing ``/`` is never
 # stripped, so a bare directory span such as ``docs/history/backlog/``
 # keeps failing.
-CITATION_TAIL_CHARS = ")]}\"'`.,;:!?"
+# tail-strip trade: the strip can drop a legitimate trailing char
+# from an exotic filename; an accepted trade.
+CITATION_TAIL_CHARS = ')]}"\'`.,;:!?'
 
 
 def parse_entries(text: str) -> list[dict]:
@@ -209,6 +220,17 @@ def main(argv: list[str] | None = None) -> int:
         "--log", default=DEFAULT_LOG, metavar="PATH",
         help="rolling prompt log to check (default: %(default)s)")
     args = parser.parse_args(argv)
+
+    top = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True)
+    toplevel = top.stdout.strip() if top.returncode == 0 else ""
+    cwd = os.path.realpath(os.getcwd())
+    top_resolved = os.path.realpath(toplevel) if toplevel else None
+    if not toplevel or top_resolved != cwd:
+        print("entry validator: invoked outside the repository root;"
+              " run from the repository root", file=sys.stderr)
+        return 2
 
     log_path = Path(args.log)
     try:

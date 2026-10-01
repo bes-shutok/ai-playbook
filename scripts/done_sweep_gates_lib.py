@@ -12,7 +12,9 @@ them stay in the skill):
   plan-readiness, confluence-hygiene, doc-registry, backlog-inbox,
   review-staging, vim-swap-sweep, docs-tmp-sweep.
 - ``pre-commit`` (done Step 2.7 mechanical half, 2.76, 2.8):
-  sensitive-data-scan, em-dash-scan, instruction-size, description-length.
+  sensitive-data-scan, em-dash-scan, instruction-size, description-length,
+  foreign-staging, archive-ceremony, execute-plan-closeout,
+  plans-archive-twin.
 
 Contract:
 - gate registry == the absorbed steps at gate and named sub-check
@@ -104,6 +106,8 @@ PRE_COMMIT_GATES = [
     "instruction-size",
     "description-length",
     "foreign-staging",
+    "archive-ceremony",
+    "execute-plan-closeout",
     "plans-archive-twin",
 ]
 PHASES = {
@@ -396,7 +400,10 @@ def _parse_marker(path: Path, repo_root: Path) -> Optional[RunMarker]:
 def derive_session_window(done_session_dir: Path, repo_root: Path) -> SessionWindow:
     """Newest content-confirmed marker is the current run; the newest strictly
     older one is the previous-run anchor; fewer than two confirmable markers
-    means unanchorable (conservative gating downstream)."""
+    means unanchorable (conservative gating downstream), except that a
+    single-marker run whose manifest and owned-commits ledger both exist
+    anchors its own window from that witness pair (``anchor`` stays None, so
+    marker pruning keeps its conservative behavior)."""
     notes: list[str] = []
     markers: list[RunMarker] = []
     cross_repo = 0
@@ -419,15 +426,85 @@ def derive_session_window(done_session_dir: Path, repo_root: Path) -> SessionWin
             )
         if malformed:
             notes.append(f"{malformed} marker(s) unparseable; never guessed")
+        current = markers[-1] if markers else None
+        if current is not None:
+            witness = _single_marker_witness_window(
+                done_session_dir, repo_root, current, notes
+            )
+            if witness is not None:
+                return witness
         notes.append(
             "session window unanchorable: fewer than two content-confirmed "
             "run-start markers under done-session"
         )
-        current = markers[-1] if markers else None
         return SessionWindow(False, None, current, None, notes)
     current = markers[-1]
     anchor = markers[-2]
     return SessionWindow(True, anchor, current, anchor.epoch, notes)
+
+
+def _single_marker_witness_window(
+    done_session_dir: Path,
+    repo_root: Path,
+    current: RunMarker,
+    notes: list[str],
+) -> Optional[SessionWindow]:
+    """The single-marker fallback anchor: this run's manifest plus its
+    owned-commits ledger (the witness pair) anchor the window at the
+    manifest's ``created_epoch``.
+
+    The manifest resolves through the existing loader binding first (its
+    ``marker`` field equals the current marker's filename, root-matched,
+    newest ``created_epoch`` on ties; the loader works on an unanchored
+    window) or, failing that, the newest root-matched manifest in the
+    done-session dir. The ledger for the resolved manifest's run id must
+    exist on disk as a regular file (a dangling symlink or a directory
+    cannot witness ownership). ``anchor`` stays None deliberately: every
+    anchor-keying consumer (marker pruning) keeps its conservative
+    behavior. None when the witness pair is incomplete (no manifest, or a
+    manifest whose ledger is absent, which appends a witness-pair-incomplete
+    note); never raises.
+    """
+    if not done_session_dir.is_dir():
+        return None
+    manifest = load_run_manifest(
+        done_session_dir, repo_root, SessionWindow(False, None, current, None, [])
+    )
+    if manifest is None:
+        # Secondary arm, exactly-one-marker case only: the newest
+        # root-matched manifest in the dir, regardless of its marker field.
+        best: Optional[RunManifest] = None
+        for path in sorted(done_session_dir.glob("run-manifest-*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            candidate = RunManifest.from_dict(payload)
+            if candidate is None:
+                continue
+            if not _manifest_root_matches(candidate.repo_root, repo_root):
+                continue
+            if best is None or candidate.created_epoch > best.created_epoch:
+                best = candidate
+        manifest = best
+    if manifest is None:
+        return None
+    ledger = _owned_commits_ledger_path(done_session_dir, manifest.run_id)
+    if not ledger.is_file():
+        notes.append(
+            "witness pair incomplete: run manifest "
+            f"{_manifest_path(done_session_dir, manifest.run_id).name} present "
+            f"but owned-commits ledger {ledger.name} absent; window stays "
+            "unanchorable"
+        )
+        return None
+    notes.append(
+        "single-marker window anchored from the witness pair: run manifest "
+        f"{_manifest_path(done_session_dir, manifest.run_id).name} plus "
+        f"owned-commits ledger {ledger.name} (anchor unset; marker pruning "
+        "keeps its conservative behavior)"
+    )
+    return SessionWindow(True, None, current, manifest.created_epoch, notes)
 
 
 def _marker_records_other_repo(path: Path, repo_root: Path) -> bool:
@@ -881,7 +958,15 @@ def _ignored_paths(ctx: GateContext, pathspec: str) -> list[str]:
     )
     if proc.returncode != 0:
         return []
-    return [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    # Unquote each row so the ignored arm matches the ordinary arm's quoting
+    # discipline (a C-quoted row keeps literal quote characters no filesystem
+    # path carries); the emit roundtrip abort's [\v\f]\.md$ term is reachable
+    # only through this unquoting.
+    return [
+        _unquote_porcelain_path(ln)
+        for ln in proc.stdout.splitlines()
+        if ln.strip()
+    ]
 
 
 def _session_ignored_paths(ctx: GateContext, paths: list[str]) -> list[str]:
@@ -910,8 +995,8 @@ def _session_ignored_paths(ctx: GateContext, paths: list[str]) -> list[str]:
 def _unquote_porcelain_path(path: str) -> str:
     """Strip git's C-style quoting from a porcelain path (F9): git wraps a
     path with special characters in double quotes and escapes ``"`` ``\\``
-    tab newline CR inside, so the verbatim row keeps literal quote characters
-    that no filesystem path carries."""
+    tab newline CR vertical tab form feed inside, so the verbatim row keeps
+    literal quote characters that no filesystem path carries."""
     if len(path) >= 2 and path.startswith('"') and path.endswith('"'):
         body = path[1:-1]
         return (
@@ -920,6 +1005,8 @@ def _unquote_porcelain_path(path: str) -> str:
             .replace("\\t", "\t")
             .replace("\\n", "\n")
             .replace("\\r", "\r")
+            .replace("\\v", "\v")
+            .replace("\\f", "\f")
             .replace("\x00", "\\")
         )
     return path
@@ -2393,9 +2480,16 @@ def gate_em_dash_scan(ctx: GateContext) -> GateResult:
                 # The touched probe reports the first violating line per file.
                 first_hit_line[parts[0]] = parts[1]
         others = ctx.git("ls-files", "--others", "--exclude-standard")
-        untracked = (
-            set(others.stdout.splitlines()) if others.returncode == 0 else set()
-        )
+        if others.returncode == 0:
+            untracked = set(others.stdout.splitlines())
+        else:
+            # Fail-closed polarity (the em-dash origin's candidate 1): when
+            # the untracked enumeration fails, every hit is treated as
+            # untracked and fails whole-file, so a tracking outage can never
+            # launder hits through the tracked pre-existing baseline arm;
+            # candidate 4's residual-harm note is the reason this arm stays
+            # small rather than load-bearing.
+            untracked = set(hit_paths)
         untracked_hits = [p for p in hit_paths if p in untracked]
         if untracked_hits:
             return GateResult(
@@ -2694,6 +2788,704 @@ def gate_plans_archive_twin(ctx: GateContext) -> GateResult:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Gate: archive-ceremony (done Step 2.8 pre-commit; plan 2026-10-01-done-
+# boundary-receipt-and-closeout-gate-sweep Tasks 1 and 2): for every plan
+# archive the derivation surfaces, checkbox completeness plus the exec-review
+# record of the run that executed it.
+# --------------------------------------------------------------------------- #
+ARCHIVE_SLUG_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+# The series token sits at the end of the record's stem, right before the
+# ``.md`` extension real staging docs carry.
+EXEC_REVIEW_SERIES_RE = re.compile(r"-exec-r\d+\.md$")
+
+
+def _archive_state_dirs(ctx: GateContext) -> list[tuple[str, Path]]:
+    """The archive state directories (the same three the plans-archive-twin
+    gate scans), state name first for report lines."""
+    return [
+        ("completed", ctx.plans_completed_dir),
+        ("deferred", ctx.plans_dir / "deferred"),
+        ("rejected", ctx.plans_dir / "rejected"),
+    ]
+
+
+def _archive_state_of(ctx: GateContext, rel: str) -> Optional[str]:
+    """The state name when a repo-relative path sits inside an archive state
+    directory; None when it sits at the plans root (or anywhere else)."""
+    for state, directory in _archive_state_dirs(ctx):
+        try:
+            prefix = str(
+                directory.resolve().relative_to(ctx.repo_root.resolve())
+            )
+        except ValueError:
+            continue
+        if rel.startswith(prefix + "/"):
+            return state
+    return None
+
+
+def _plans_pathspec(ctx: GateContext) -> str:
+    """The plans home as a repo-relative pathspec (absolute fallback when the
+    resolved home sits outside the repo root), same derivation shape as the
+    plan-readiness candidate enumeration."""
+    if _is_relative_to(ctx.plans_dir, ctx.repo_root):
+        return str(ctx.plans_dir.resolve().relative_to(ctx.repo_root.resolve()))
+    return str(ctx.plans_dir)
+
+
+def _archive_twin_at_head(ctx: GateContext, plan_rel: str) -> Optional[str]:
+    """The repo-relative archive twin of a vanished plan path when one exists
+    at HEAD (same basename in the first archive state directory carrying it);
+    None when no archive twin is committed."""
+    name = Path(plan_rel).name
+    for _state, directory in _archive_state_dirs(ctx):
+        try:
+            prefix = str(
+                directory.resolve().relative_to(ctx.repo_root.resolve())
+            )
+        except ValueError:
+            continue
+        twin_rel = f"{prefix}/{name}"
+        if ctx.git("cat-file", "-e", f"HEAD:{twin_rel}").returncode == 0:
+            return twin_rel
+    return None
+
+
+def _derive_archived_plans(
+    ctx: GateContext,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """archive-ceremony derivation: every plan archive this run's boundary
+    surfaces, as ``(repo-relative archive path, plan bytes)`` pairs, plus
+    non-failing note lines.
+
+    Three shapes, each with its own byte source:
+
+    (a) staged or worktree rename rows over the plans pathspec (the
+        ``R old -> new`` rows ``_porcelain_lines`` returns) whose new side
+        sits in an archive state directory; bytes read from the file at the
+        new path, which exists at both pre-commit invocations;
+    (b) committed renames into ``plans_completed_dir`` since this run's
+        manifest boundary: a ``git diff --find-renames <base>..HEAD
+        --name-status`` over the plans pathspec where ``<base>`` is the
+        active run manifest's ``start_commit`` with the gate_doc_registry
+        precedent's ``ORIG_HEAD`` fallback when absent; when neither
+        resolves, this shape surfaces nothing this run and the skip is
+        noted; bytes from the HEAD blob at the archived path. This is the
+        lib's first rename-detecting name-status diff on purpose: every
+        existing name-status diff uses ``--no-renames`` because its
+        consumers need per-side change-type rows, while this gate needs the
+        rename pairing itself;
+    (c) stale plan-deliverables lines whose recorded plan path no longer
+        exists because it now sits archived; bytes from the archive twin at
+        HEAD.
+    """
+    archives: list[tuple[str, str]] = []
+    notes: list[str] = []
+    seen: set[str] = set()
+    plans_rel = _plans_pathspec(ctx)
+
+    # Shape (a): staged/worktree renames into an archive state directory.
+    for row in _porcelain_lines(ctx, plans_rel):
+        xy = row[:2]
+        rest = row[3:]
+        if " -> " not in rest or not (xy[0] in ("R", "C") or xy[1] == "R"):
+            continue
+        _old, new = rest.split(" -> ", 1)
+        new = _unquote_porcelain_path(new)
+        if _archive_state_of(ctx, new) is None:
+            # A rename inside the plans home is not an archive: the gate
+            # checks archives only, never an ordinary in-root rename.
+            continue
+        try:
+            text = (ctx.repo_root / new).read_text(encoding="utf-8")
+        except OSError:
+            notes.append(
+                f"archive-ceremony: staged archive unreadable, skipped: {new}"
+            )
+            continue
+        if new not in seen:
+            seen.add(new)
+            archives.append((new, text))
+
+    # Shape (b): committed renames into the completed archive since the run
+    # manifest boundary (ORIG_HEAD fallback; neither resolves: skip, noted).
+    window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+    manifest = load_run_manifest(ctx.done_session_dir, ctx.repo_root, window)
+    base = manifest.start_commit if manifest is not None else "ORIG_HEAD"
+    verify = ctx.git("rev-parse", "-q", "--verify", f"{base}^{{commit}}")
+    if verify.returncode != 0:
+        notes.append(
+            "archive-ceremony: committed-rename arm skipped this run (no "
+            "resolvable boundary commit: neither the active run manifest's "
+            f"start_commit nor ORIG_HEAD resolves, tried {base})"
+        )
+    else:
+        diff = ctx.git(
+            "diff",
+            "--find-renames",
+            "--name-status",
+            f"{base}..HEAD",
+            "--",
+            plans_rel,
+        )
+        try:
+            completed_prefix = str(
+                ctx.plans_completed_dir.resolve().relative_to(
+                    ctx.repo_root.resolve()
+                )
+            )
+        except ValueError:
+            completed_prefix = None
+        if diff.returncode != 0:
+            notes.append(
+                "archive-ceremony: committed-rename diff failed, arm "
+                f"skipped: {diff.stderr.strip() or 'git diff failed'}"
+            )
+        elif completed_prefix is not None:
+            for line in diff.stdout.splitlines():
+                fields = line.split("\t")
+                if len(fields) < 3 or not fields[0].startswith("R"):
+                    continue
+                new = _unquote_porcelain_path(fields[-1])
+                if not new.startswith(completed_prefix + "/"):
+                    continue
+                show = ctx.git("show", f"HEAD:{new}")
+                if show.returncode != 0:
+                    notes.append(
+                        "archive-ceremony: committed archive unreadable at "
+                        f"HEAD, skipped: {new}"
+                    )
+                    continue
+                if new not in seen:
+                    seen.add(new)
+                    archives.append((new, show.stdout))
+
+    # Shape (c): stale plan-deliverables lines whose recorded plan path no
+    # longer exists because it now sits archived (twin bytes from HEAD).
+    deliverables_path = ctx.done_session_dir / "plan-deliverables.txt"
+    if deliverables_path.is_file():
+        try:
+            deliverables = [
+                ln.strip()
+                for ln in deliverables_path.read_text(
+                    encoding="utf-8"
+                ).splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+        except OSError:
+            deliverables = []
+        for rel in deliverables:
+            if (ctx.repo_root / rel).exists():
+                continue
+            if _archive_state_of(ctx, rel) is not None:
+                continue
+            twin_rel = _archive_twin_at_head(ctx, rel)
+            if twin_rel is None:
+                continue
+            show = ctx.git("show", f"HEAD:{twin_rel}")
+            if show.returncode != 0:
+                continue
+            if twin_rel not in seen:
+                seen.add(twin_rel)
+                archives.append((twin_rel, show.stdout))
+
+    return archives, notes
+
+
+def _plan_slug(archive_rel: str) -> str:
+    """The archived plan's slug: the file stem minus its leading date prefix
+    (the slug form real review-record names use)."""
+    return ARCHIVE_SLUG_DATE_PREFIX_RE.sub(
+        "", Path(archive_rel).stem, count=1
+    )
+
+
+def _has_exec_review_record(ctx: GateContext, slug: str) -> bool:
+    """True when any file under the resolved reviews home carries the plan's
+    exec-review record: its name contains ``-plan-review-``, contains the
+    archived plan's slug (the slug form is what real records use), and ends
+    ``-exec-r<N>`` (the series token at the end of the stem, before the
+    ``.md`` extension)."""
+    if not ctx.reviews_dir.is_dir():
+        return False
+    for path in ctx.reviews_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        name = path.name
+        if "-plan-review-" not in name or slug not in name:
+            continue
+        if EXEC_REVIEW_SERIES_RE.search(name):
+            return True
+    return False
+
+
+def gate_archive_ceremony(ctx: GateContext) -> GateResult:
+    """Pre-commit gate over the plan archives this run's boundary surfaces.
+
+    For every archive the derivation (``_derive_archived_plans``) surfaces,
+    the gate checks checkbox completeness: plan bytes still carrying a
+    ``- [ ]`` unchecked task box fail with the two sanctioned exits (check
+    the boxes after verified work, or land a marked backfill completion
+    record per the plans skill's archive-correction exception). A derived
+    archive whose boxes are complete must further carry an exec-review
+    record (the ``archived-plan review-coverage`` check)."""
+    gate = "archive-ceremony"
+    archives, notes = _derive_archived_plans(ctx)
+    if not archives:
+        message = "archive-ceremony gate passed: no plan archive surfaced this run"
+        if notes:
+            message += " (" + "; ".join(notes) + ")"
+        return GateResult(gate, 0, message, warnings=notes)
+    findings: list[str] = []
+    for archive_rel, text in archives:
+        unchecked = text.count("- [ ]")
+        if unchecked:
+            findings.append(
+                f"archived plan {archive_rel} carries {unchecked} unchecked "
+                "task box(es); sanctioned exits: check the boxes after the "
+                "work is verified, or land a marked backfill completion "
+                "record per the plans skill's archive-correction exception "
+                "(per-checkbox (backfilled ...) markings on an explicitly "
+                "marked backfill record)"
+            )
+            continue
+        # archived-plan review-coverage: a box-complete archive must still
+        # carry the execution run's review of record; its absence fails with
+        # the reconstruction remedy (the cited-review-receipt-integrity
+        # precedent: a marked reconstruction is valid, a silent one is not).
+        slug = _plan_slug(archive_rel)
+        if not _has_exec_review_record(ctx, slug):
+            findings.append(
+                f"archived plan {archive_rel} has no exec-review record "
+                f"(no *-plan-review-{slug}-exec-r<N> file under the reviews "
+                "home names the missing series); remedy: produce the "
+                "exec-review record for the plan's final bytes, or land a "
+                "marked reconstruction per the cited-review-receipt-"
+                "integrity precedent"
+            )
+    if findings:
+        return GateResult(
+            gate,
+            1,
+            "archive-ceremony gate failed: " + "; ".join(findings),
+            warnings=[],
+        )
+    return GateResult(
+        gate,
+        0,
+        "archive-ceremony gate passed: "
+        + f"{len(archives)} plan archive(s) checked, boxes complete: "
+        + ", ".join(rel for rel, _text in archives),
+        warnings=notes,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Gate: execute-plan-closeout (pre-commit; plan 2026-10-01-execute-plan-
+# squash-closeout-finalization Task 1): for every execute-plan session
+# manifest the active done run owns, the terminal lifecycle evidence at the
+# landing closeout boundary.
+# --------------------------------------------------------------------------- #
+EXECUTE_PLAN_STATE_FILENAME = "runtime_state.json"
+# The runtime's own done statuses plus its checkbox seeding shape, mirrored
+# from the runtime's ``_task_complete`` predicate (deliberately not an
+# import: the runtime module is not a lib dependency), so this gate refuses
+# exactly when the runtime would call the run machine-complete.
+EXECUTE_PLAN_DONE_STATUSES = {"complete", "checkpointed", "deferred"}
+CLOSEOUT_RESUME_REMEDY = (
+    "remedy: re-enter the execute-plan continuation and finish Phase 4; "
+    "the resumable-closeout checkpoint carries the resume"
+)
+
+
+def _closeout_task_done(task: object) -> bool:
+    """One task through the runtime's done predicate: a done status
+    (``complete``, ``checkpointed``, or the recovery ``deferred``) or a
+    truthy plan checkbox."""
+    if not isinstance(task, dict):
+        return False
+    return (
+        task.get("status") in EXECUTE_PLAN_DONE_STATUSES
+        or bool(task.get("checkbox"))
+    )
+
+
+def _closeout_all_tasks_done(payload: dict) -> bool:
+    """True when every entry of the manifest's ``tasks`` map is done under
+    the runtime's done predicate (an empty map is vacuously all-done: a
+    taskless owned session is a broken run, and the closeout must not
+    report it complete without the receipt)."""
+    tasks = payload.get("tasks")
+    if not isinstance(tasks, dict):
+        return False
+    return all(_closeout_task_done(task) for task in tasks.values())
+
+
+def _closeout_owned_plan_slugs(manifest: RunManifest) -> list[str]:
+    """The plan claims the done run owns: each ``owned_plan_paths`` entry's
+    basename minus its ``.md`` suffix (the runtime binds ``plan_slug`` to
+    the plan filename's full stem)."""
+    slugs: list[str] = []
+    for recorded in manifest.owned_plan_paths:
+        name = Path(recorded).name
+        if name.endswith(".md"):
+            name = name[: -len(".md")]
+        if name and name not in slugs:
+            slugs.append(name)
+    return slugs
+
+
+def _closeout_boundary_anchor(text: str, basename: str) -> bool:
+    """True when ``basename`` appears in ``text`` with a non-name character
+    (or an edge) on both sides (the origins checker's boundary rule)."""
+    pattern = re.compile(
+        r"(?<![\w.-])" + re.escape(basename) + r"(?![\w.-])"
+    )
+    return pattern.search(text) is not None
+
+
+def _closeout_registry_path(ctx: GateContext) -> Path:
+    """The ownership registry home: the facts TOML key ``doc_registry_rel``
+    when it resolves, else the conventional document-registry default."""
+    raw = facts_paths.resolve_toml_key_raw(ctx.repo_root, "doc_registry_rel")
+    rel = (
+        raw.strip()
+        if isinstance(raw, str) and raw.strip()
+        else "docs/maintenance/document-registry.md"
+    )
+    path = Path(rel).expanduser()
+    if not path.is_absolute():
+        path = ctx.repo_root / path
+    return path
+
+
+def _closeout_registry_names(ctx: GateContext, archived_rel: str) -> bool:
+    """True when some table row of the ownership registry boundary-anchors
+    the archived plan's basename; a missing or unreadable registry names
+    nothing (the caller refuses)."""
+    try:
+        text = _closeout_registry_path(ctx).read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return False
+    basename = Path(archived_rel).name
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        if _closeout_boundary_anchor(stripped, basename):
+            return True
+    return False
+
+
+def _closeout_session_states(ctx: GateContext) -> list[Path]:
+    """Every execute-plan session state file on disk, sorted by path."""
+    if not ctx.execute_plan_dir.is_dir():
+        return []
+    return sorted(ctx.execute_plan_dir.glob(f"*/{EXECUTE_PLAN_STATE_FILENAME}"))
+
+
+def _closeout_verify_landed_complete(
+    ctx: GateContext, slug: str, payload: dict, receipt: dict
+) -> Optional[str]:
+    """The landed-complete verification arm over one ``terminal_receipt``:
+    the FIRST unmet condition as a named failure line, None when (a) the
+    archived bytes re-hash to the receipt digest, (b) the active plan path
+    (the ``archive_gate.plan_path`` record when present, else
+    ``plans_dir/<plan_slug>.md``) is absent from the index and the working
+    tree, (c) the archived plan's promoted origins are closed per the
+    origins checker invoked with ``--plan`` (no second origins parser), and
+    (d) the ownership registry names the archived path. Review-receipt
+    existence is deliberately NOT a condition here: the receipt path is not
+    persisted in the manifest, and the run-side Phase 5 exec-review receipt
+    check owns that condition fail-closed before this boundary (defense in
+    depth)."""
+    def refuse(condition: str) -> str:
+        return (
+            "execute-plan-closeout gate failed: execute-plan session "
+            f"{slug}: {condition}; {CLOSEOUT_RESUME_REMEDY}"
+        )
+
+    archived_raw = receipt.get("archived_plan_path")
+    digest = receipt.get("plan_digest")
+    if (
+        not isinstance(archived_raw, str)
+        or not archived_raw.strip()
+        or not isinstance(digest, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+    ):
+        return refuse(
+            "the terminal receipt is malformed (a non-empty "
+            "archived_plan_path and a 64-hex plan_digest are required)"
+        )
+    archived_path = Path(archived_raw)
+    if not archived_path.is_absolute():
+        archived_path = ctx.repo_root / archived_path
+    try:
+        archived_bytes = archived_path.read_bytes()
+    except OSError:
+        return refuse(
+            "the terminal receipt's archived plan is unreadable at "
+            f"{archived_raw}"
+        )
+    computed = hashlib.sha256(archived_bytes).hexdigest()
+    if computed != digest:
+        return refuse(
+            "terminal receipt digest mismatch: archived plan bytes at "
+            f"{archived_raw} re-hash to {computed} but the receipt "
+            f"records {digest}"
+        )
+    # (b) The active plan path must be gone from the index and the working
+    # tree: the archive is a move, never an add-plus-keep (the witnessed
+    # copy-plus-delete repair residue).
+    archive_gate = payload.get("archive_gate")
+    if (
+        isinstance(archive_gate, dict)
+        and isinstance(archive_gate.get("plan_path"), str)
+        and archive_gate["plan_path"].strip()
+    ):
+        active_display = archive_gate["plan_path"].strip()
+        active_path = Path(active_display)
+        if not active_path.is_absolute():
+            active_path = ctx.repo_root / active_path
+    elif _is_relative_to(ctx.plans_dir, ctx.repo_root):
+        plans_rel = str(
+            ctx.plans_dir.resolve().relative_to(ctx.repo_root.resolve())
+        )
+        active_display = f"{plans_rel}/{slug}.md"
+        active_path = ctx.repo_root / plans_rel / f"{slug}.md"
+    else:
+        active_path = ctx.plans_dir / f"{slug}.md"
+        active_display = str(active_path)
+    if active_path.exists():
+        return refuse(
+            f"the active plan path {active_display} still survives the "
+            "landed-complete run (present in the working tree); the "
+            "archive is a move, never an add-plus-keep"
+        )
+    active_rel = _repo_relative(str(active_path), ctx.repo_root)
+    indexed = ctx.git("ls-files", "--", active_rel)
+    if indexed.returncode == 0 and indexed.stdout.strip():
+        return refuse(
+            f"the active plan path {active_rel} still survives the "
+            "landed-complete run (tracked in the index); the archive is "
+            "a move, never an add-plus-keep"
+        )
+    # (c) Promoted-origin closure through the origins checker itself (no
+    # second origins parser in the lib, per the plan).
+    validator = ctx.resolve_script(
+        "CHECK_PLAN_ORIGINS_CLOSED_SCRIPT", "check_plan_origins_closed.py"
+    )
+    if validator is None:
+        return (
+            "execute-plan-closeout gate failed: execute-plan session "
+            f"{slug}: deployment gap: check_plan_origins_closed.py absent "
+            "at every resolved path (env override, repo-local scripts/, "
+            "runtime home copy), so the promoted-origin closure could not "
+            "be checked; remedy: deploy the script to the runtime home "
+            "scripts/ directory and re-run; never use the recorded-stop "
+            "exception for a deployment gap"
+        )
+    proc = ctx.run(
+        [sys.executable, str(validator), "--plan", str(archived_path)],
+        cwd=ctx.repo_root,
+    )
+    if proc.returncode != 0:
+        stragglers = [
+            row.strip()
+            for row in (proc.stdout or "").splitlines()
+            if row.strip().startswith("straggler:")
+        ]
+        fallback_rows = [
+            row.strip()
+            for row in (proc.stdout or proc.stderr or "").splitlines()
+            if row.strip()
+        ]
+        detail = "; ".join(stragglers[:4]) or (
+            fallback_rows[-1] if fallback_rows else "origins check failed"
+        )
+        return refuse(
+            "promoted-origin closure failed for the archived plan "
+            f"{archived_raw}: {detail}"
+        )
+    # (d) The ownership registry names the archived path.
+    if not _closeout_registry_names(ctx, archived_raw):
+        return refuse(
+            "the ownership registry does not name the archived plan "
+            f"{Path(archived_raw).name} (no row of "
+            f"{_closeout_registry_path(ctx)} boundary-anchors it)"
+        )
+    return None
+
+
+def gate_execute_plan_closeout(ctx: GateContext) -> GateResult:
+    """Pre-commit gate: the execute-plan lifecycle net at the landing
+    closeout boundary.
+
+    Discovery is ownership-scoped: the gate derives the session window
+    (``derive_session_window``) and the active done-run manifest
+    (``load_run_manifest``) the way the doc-registry and foreign-staging
+    gates pair them, then scans ``{tmp_dir}/execute-plan/`` for
+    ``*/runtime_state.json`` whose ``plan_slug`` matches one of that
+    manifest's owned plan claims (an ``owned_plan_paths`` basename minus
+    its ``.md`` suffix; a state file whose JSON cannot be parsed counts as
+    owned when its session directory is named for an owned claim) and
+    whose ``workflow_state`` is not ``aborted``. A missing execute-plan
+    home, an unanchorable window, no resolvable run manifest, and a run
+    manifest that owns no plans are warning skips naming the reason, never
+    silent vacuous passes, and the scan never widens past the owned claims
+    when the window does not anchor.
+
+    Arms per owned session manifest, in this order:
+
+    - landed-complete verification (``terminal_receipt`` present):
+      ``_closeout_verify_landed_complete``; the first unmet condition fails
+      the gate with that condition and the resume remedy.
+    - landed-without-evidence refusal (the witnessed shape): no
+      ``terminal_receipt`` while every task is done under the runtime's own
+      done predicate refuses unconditionally, wherever the plan bytes sit
+      (still active, archived twin, or already gone); a run paused between
+      the last task and Phase 4 refuses the same way on purpose, because
+      the closeout must not report completion before the receipt exists.
+    - mid-run false-positive guard: tasks not all done pass with a note;
+      the gate never blocks a run that is still executing.
+
+    An unreadable or malformed owned state file fails the gate naming the
+    file (fail-closed over subprocess-shaped silent passes). The gate is
+    read-only: recovery evidence stays byte-identical.
+    """
+    gate = "execute-plan-closeout"
+    if not ctx.execute_plan_dir.is_dir():
+        message = (
+            "execute-plan-closeout: warning skip: execute-plan home does "
+            f"not exist on disk: {ctx.execute_plan_dir}; no execute-plan "
+            "lifecycle evidence was checked"
+        )
+        return GateResult(gate, 0, message, warnings=[message])
+    window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+    if not window.anchored:
+        detail = "; ".join(window.notes) or "unanchorable window"
+        message = (
+            "execute-plan-closeout: warning skip: the session window "
+            f"cannot anchor ({detail}); the owned-plan scan never widens "
+            "past unowned sessions, so no execute-plan lifecycle evidence "
+            "was checked"
+        )
+        return GateResult(gate, 0, message, warnings=[message])
+    manifest = load_run_manifest(ctx.done_session_dir, ctx.repo_root, window)
+    if manifest is None:
+        message = (
+            "execute-plan-closeout: warning skip: no resolvable active run "
+            "manifest (Step 0 record absent, foreign-rooted, or "
+            "schema-invalid); no owned plan claims to scope the scan with"
+        )
+        return GateResult(gate, 0, message, warnings=[message])
+    claimed = _closeout_owned_plan_slugs(manifest)
+    if not claimed:
+        message = (
+            "execute-plan-closeout: warning skip: the active run manifest "
+            f"({manifest.run_id}) owns no plan claims (owned_plan_paths "
+            "empty); no execute-plan session is in scope"
+        )
+        return GateResult(gate, 0, message, warnings=[message])
+
+    passes: list[str] = []
+    unowned: list[str] = []
+    for state_path in _closeout_session_states(ctx):
+        slug_dir = state_path.parent.name
+        try:
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            if slug_dir in claimed:
+                return GateResult(
+                    gate,
+                    1,
+                    "execute-plan-closeout gate failed: owned execute-plan "
+                    "session manifest is unreadable or malformed: "
+                    f"{state_path} (unparseable: {exc})",
+                    warnings=[],
+                )
+            unowned.append(slug_dir)
+            continue
+        if not isinstance(payload, dict):
+            if slug_dir in claimed:
+                return GateResult(
+                    gate,
+                    1,
+                    "execute-plan-closeout gate failed: owned execute-plan "
+                    "session manifest is unreadable or malformed: "
+                    f"{state_path} (the payload is not a JSON object)",
+                    warnings=[],
+                )
+            unowned.append(slug_dir)
+            continue
+        payload_slug = payload.get("plan_slug")
+        owned = (
+            payload_slug in claimed
+            if isinstance(payload_slug, str)
+            else slug_dir in claimed
+        )
+        if not owned:
+            unowned.append(slug_dir)
+            continue
+        if payload.get("workflow_state") == "aborted":
+            passes.append(f"{slug_dir} aborted; out of scope")
+            continue
+        slug = payload_slug if isinstance(payload_slug, str) else slug_dir
+        if not isinstance(payload.get("tasks"), dict):
+            return GateResult(
+                gate,
+                1,
+                "execute-plan-closeout gate failed: owned execute-plan "
+                "session manifest is unreadable or malformed: "
+                f"{state_path} (the tasks record is not a JSON object)",
+                warnings=[],
+            )
+        receipt = payload.get("terminal_receipt")
+        if isinstance(receipt, dict):
+            finding = _closeout_verify_landed_complete(
+                ctx, slug, payload, receipt
+            )
+            if finding is not None:
+                return GateResult(gate, 1, finding, warnings=[])
+            passes.append(
+                f"{slug} landed complete; receipt digest, active-path "
+                "absence, promoted-origin closure, and registry row "
+                "verified"
+            )
+        elif _closeout_all_tasks_done(payload):
+            return GateResult(
+                gate,
+                1,
+                "execute-plan-closeout gate failed: execute-plan session "
+                f"{slug} ({state_path}) landed without terminal evidence: "
+                "every task is done under the runtime done predicate but "
+                "the manifest carries no terminal_receipt (workflow_state "
+                f"{payload.get('workflow_state')!r}); "
+                + CLOSEOUT_RESUME_REMEDY,
+                warnings=[],
+            )
+        else:
+            passes.append(
+                f"{slug} still mid-run (tasks not all done under the "
+                "runtime done predicate); the gate never blocks an "
+                "executing run"
+            )
+    message = "execute-plan-closeout gate passed"
+    if passes:
+        message += ": " + "; ".join(passes)
+    else:
+        message += ": no owned execute-plan session manifest in scope"
+    if unowned:
+        message += (
+            "; unowned session manifest(s) skipped (plan slug matches no "
+            "owned plan claim): " + ", ".join(sorted(set(unowned)))
+        )
+    return GateResult(gate, 0, message, warnings=[])
+
+
 GATES: dict[str, Callable[[GateContext], GateResult]] = {
     "plan-readiness": gate_plan_readiness,
     "confluence-hygiene": gate_confluence_hygiene,
@@ -2707,6 +3499,8 @@ GATES: dict[str, Callable[[GateContext], GateResult]] = {
     "instruction-size": gate_instruction_size,
     "description-length": gate_description_length,
     "foreign-staging": gate_foreign_staging,
+    "archive-ceremony": gate_archive_ceremony,
+    "execute-plan-closeout": gate_execute_plan_closeout,
     "plans-archive-twin": gate_plans_archive_twin,
 }
 
@@ -2796,7 +3590,13 @@ def _cmd_write_manifest(argv: list[str]) -> int:
     adoption is explicit only: ``--adopt <run_id>`` copies the interrupted
     run's boundary (start_commit plus owned paths, foreign markings included)
     verbatim and records ``adopted_from``, and the adopted link suppresses the
-    orphan report for later runs.
+    orphan report for later runs. The report doubles as a refusal: when an
+    orphan remains that this invocation neither adopted nor recognized as
+    closed, the write aborts with ``write-manifest: undisposed-interrupted:``
+    listing each remaining manifest filename with the remedies its root state
+    supports (a live root: ``--adopt`` or ``finalize-manifest``; a dead root:
+    ``disposition-manifest`` only), so an interrupted boundary is classified
+    before any new manifest (the emit-only arm included).
 
     First-finalize bulk load: ``--emit-foreign-candidates <file>`` runs the
     same staging-candidate enumeration as the claim-or-foreign gate,
@@ -2937,9 +3737,10 @@ def _cmd_write_manifest(argv: list[str]) -> int:
     # Interrupted-run report: surfaced for an explicit decision, never
     # implicitly adopted. The adopted target prints its own line.
     corrupt_warnings: list[str] = []
-    for orphan in _detect_interrupted_runs(
+    orphans = _detect_interrupted_runs(
         ctx.done_session_dir, ctx.repo_root, warnings=corrupt_warnings
-    ):
+    )
+    for orphan in orphans:
         if adopted is not None and orphan.run_id == adopted.run_id:
             print(
                 "interrupted run: adopting the boundary of "
@@ -2972,6 +3773,43 @@ def _cmd_write_manifest(argv: list[str]) -> int:
         # F10: a corrupt record in the done-session dir is reported, never
         # silently skipped (an undead run leaves a trace).
         print(line)
+
+    # Undisposed-interrupted refusal (plan 2026-10-01-done-boundary-receipt-
+    # and-closeout-gate-sweep Task 3): the report above stays advisory; the
+    # refusal adds the bounded decision, it does not replace the report. A
+    # complete:false manifest under this checkout's done-session directory is
+    # a past interrupted run of THIS checkout, never a live sibling writing
+    # concurrently: the done lock is exclusive per checkout, which is why no
+    # liveness probe is needed before demanding the classification. An
+    # orphan this invocation neither adopted nor recognized as closed
+    # (dispositioned records never reach the orphan set) refuses the write,
+    # and the refusal sits before the emit-foreign-candidates arm on
+    # purpose: an emit-only invocation also requires the classification
+    # first, deliberately.
+    remaining = [
+        orphan
+        for orphan in orphans
+        if adopted is None or orphan.run_id != adopted.run_id
+    ]
+    if remaining:
+        entries: list[str] = []
+        for orphan in remaining:
+            filename = _manifest_path(ctx.done_session_dir, orphan.run_id).name
+            if not _manifest_root_matches(orphan.repo_root, ctx.repo_root):
+                entries.append(
+                    f"{filename}: disposition-manifest --run-id "
+                    f"{orphan.run_id} only (the recorded repo_root matches "
+                    "no checkout here, so adoption refuses this boundary)"
+                )
+            else:
+                entries.append(
+                    f"{filename}: --adopt {orphan.run_id} to continue it, "
+                    f"or finalize-manifest --run-id {orphan.run_id} to "
+                    "close it (disposition-manifest refuses live roots)"
+                )
+        return _cli_fail(
+            "write-manifest: undisposed-interrupted: " + "; ".join(entries)
+        )
 
     if adopted is not None:
         start_commit = adopted.start_commit
@@ -3239,15 +4077,34 @@ def _cmd_finalize_manifest(argv: list[str]) -> int:
     return 0
 
 
+def _disposition_repo_rel_dir(directory: Path, repo_root: Path) -> str:
+    """Repo-relative form of one of the ctx directories (an absolute resolved
+    path relative to the repo root when containment holds, else the verbatim
+    string), for prefix-matching recorded entry paths against a plans tree."""
+    try:
+        return str(
+            directory.resolve().relative_to(Path(repo_root).resolve())
+        )
+    except (OSError, ValueError):
+        return _repo_relative(str(directory), repo_root)
+
+
 def _disposition_first_missing_deliverable(
-    manifest: RunManifest, ctx: GateContext
+    manifest: RunManifest, ctx: GateContext, note: Optional[str] = None
 ) -> Optional[str]:
     """The disposition operation's deliverables witness, resolved set by set:
     an ``owned_plan_paths`` entry passes at its recorded path in the current
-    checkout or at its ``plans_completed`` archive twin at HEAD; an
-    ``owned_review_paths`` entry passes against the docs branch
-    (``git cat-file -e docs:<path>``; review staging docs are gitignored on
-    the default branch); an ``owned_paths`` entry passes at ``HEAD:<path>``.
+    checkout, at its ``plans_completed`` archive twin at HEAD, or note-backed
+    (the operator's note names the path, recording its home checkout and
+    verifying commit); an ``owned_review_paths`` entry passes against the
+    docs branch (``git cat-file -e docs:<path>``; review staging docs are
+    gitignored on the default branch); an ``owned_paths`` entry passes at
+    ``HEAD:<path>``, at its ``plans_completed`` archive twin at HEAD when the
+    recorded path sits under ``plans_dir``/``plans_completed_dir``
+    (repo-relative prefix; schema-1 manifests that recorded plan edits under
+    ``owned_paths``), through its landed deletion (a commit reachable from
+    HEAD that deleted the path: exit 0 AND non-empty %H output, since a
+    never-tracked path exits 0 with empty output), or note-backed.
     Returns None when every owned deliverable resolves, else a one-line
     message naming the first missing one."""
     for plan_path in manifest.owned_plan_paths:
@@ -3258,6 +4115,8 @@ def _disposition_first_missing_deliverable(
         twin = ctx.plans_completed_dir / Path(plan_path).name
         twin_rel = _repo_relative(str(twin), ctx.repo_root)
         if ctx.git("cat-file", "-e", f"HEAD:{twin_rel}").returncode == 0:
+            continue
+        if note and plan_path in note:
             continue
         return (
             f"owned_plan_paths entry {plan_path} resolves neither at its "
@@ -3272,6 +4131,32 @@ def _disposition_first_missing_deliverable(
         )
     for owned_path in manifest.owned_paths:
         if ctx.git("cat-file", "-e", f"HEAD:{owned_path}").returncode == 0:
+            continue
+        plans_rel = _disposition_repo_rel_dir(ctx.plans_dir, ctx.repo_root)
+        completed_rel = _disposition_repo_rel_dir(
+            ctx.plans_completed_dir, ctx.repo_root
+        )
+        under_plans_tree = owned_path == plans_rel or owned_path.startswith(
+            plans_rel + "/"
+        )
+        under_completed_tree = (
+            owned_path == completed_rel or owned_path.startswith(completed_rel + "/")
+        )
+        if under_plans_tree or under_completed_tree:
+            twin = ctx.plans_completed_dir / Path(owned_path).name
+            twin_rel = _repo_relative(str(twin), ctx.repo_root)
+            if ctx.git("cat-file", "-e", f"HEAD:{twin_rel}").returncode == 0:
+                continue
+        # Landed-deletion arm: a commit reachable from HEAD that deleted the
+        # path landed through the repo's own gates. A never-tracked path
+        # exits 0 with EMPTY %H output, so resolve only when BOTH the exit
+        # is 0 and the commit hash is non-empty.
+        deletion = ctx.git(
+            "log", "--diff-filter=D", "--format=%H", "-n", "1", "--", owned_path
+        )
+        if deletion.returncode == 0 and deletion.stdout.strip():
+            continue
+        if note and owned_path in note:
             continue
         return f"owned_paths entry {owned_path} does not resolve at HEAD"
     return None
@@ -3401,7 +4286,9 @@ def _cmd_disposition_manifest(argv: list[str]) -> int:
             note = f"{note}; operator note: {args.note}"
         print(f"disposition-manifest: {note}")
     else:
-        missing = _disposition_first_missing_deliverable(manifest, ctx)
+        missing = _disposition_first_missing_deliverable(
+            manifest, ctx, note=args.note
+        )
         if missing is not None:
             return _cli_fail(
                 f"disposition-manifest: refusing {manifest.run_id}: "

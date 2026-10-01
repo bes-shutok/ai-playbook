@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "review_type": "plan",
+  "date": "2026-10-02",
+  "artifact_slug": "capacity-slot-test-adjudication",
+  "round": 3,
+  "panel_mode": "full",
+  "selection_reason": "r3 fresh full five-worker panel on the r2-folded digest (correctness-completeness, testing, design-simplicity, contract-docs, risk), launched in parallel, all completed first pass",
+  "source_kind": "plan",
+  "source_digest": "d60bc6d1f2cea4a6d12061641fd1c64d454f078c77e7dd9821ade42da4cda6f8",
+  "escalation_reason": null,
+  "review_mode": "fresh-adversarial",
+  "risk_signals": [],
+  "prior_findings_filter": false,
+  "last_fix_commit": null,
+  "record_kind": "canonical",
+  "verdict": "no",
+  "counts": {
+    "workers_launched": 5,
+    "workers_skipped": 0,
+    "raw_findings": 6,
+    "staged_findings": 6,
+    "discarded": 0,
+    "solo_staged": 6,
+    "echo_staged": 0,
+    "blocking_open": 0
+  },
+  "panel": [
+    {
+      "worker": "correctness-completeness",
+      "lenses": ["implementation", "quality"],
+      "status": "complete",
+      "raw": 1,
+      "solo": 1,
+      "echo": 0,
+      "relaunch": "no",
+      "parent_worker": "none",
+      "descendant_launches": []
+    },
+    {
+      "worker": "testing",
+      "lenses": ["testing"],
+      "status": "complete",
+      "raw": 1,
+      "solo": 1,
+      "echo": 0,
+      "relaunch": "no",
+      "parent_worker": "none",
+      "descendant_launches": []
+    },
+    {
+      "worker": "design-simplicity",
+      "lenses": ["architecture", "simplification"],
+      "status": "complete",
+      "raw": 0,
+      "solo": 0,
+      "echo": 0,
+      "relaunch": "no",
+      "parent_worker": "none",
+      "descendant_launches": []
+    },
+    {
+      "worker": "contract-docs",
+      "lenses": ["consistency", "documentation"],
+      "status": "complete",
+      "raw": 2,
+      "solo": 2,
+      "echo": 0,
+      "relaunch": "no",
+      "parent_worker": "none",
+      "descendant_launches": []
+    },
+    {
+      "worker": "risk",
+      "lenses": ["security"],
+      "status": "complete",
+      "raw": 2,
+      "solo": 2,
+      "echo": 0,
+      "relaunch": "no",
+      "parent_worker": "none",
+      "descendant_launches": []
+    }
+  ],
+  "deduplication_groups": [],
+  "discarded": [],
+  "severity_calibration": [],
+  "triage_outcomes": [
+    {"disposition": "fixed", "count": 6}
+  ],
+  "findings": [
+    {
+      "id": 1,
+      "severity": "Low",
+      "blocking": false,
+      "consequence": "the seed-rejection assumption overstates: a deferral runtime id IS producible at the create boundary (canonicalize_runtime_id resolves deferral ids and the create path writes the canonicalized id verbatim), so 'a manifest shape production cannot produce' is imprecise; what production cannot do is execute one (deferred ids resolve to the fail-closed UnsupportedAdapter), and the rejection decision itself is unaffected",
+      "reachability": "expected",
+      "blast_radius": "local",
+      "confidence": "verified",
+      "pattern": "documentation#assumption-basis-precision",
+      "workers": ["correctness-completeness"],
+      "triage": "fixed"
+    },
+    {
+      "id": 2,
+      "severity": "Low",
+      "blocking": false,
+      "consequence": "check 6's comment labels all 13 guard-substring matches as model-guard contract tests, but two exercise other guard families (the resume-watcher budget-guard cleanup and the launch-drift guard); only 11 are codex model-guard contract tests, so the comment's characterization over-covers (counts and fail-closed behavior unaffected)",
+      "reachability": "expected",
+      "blast_radius": "local",
+      "confidence": "verified",
+      "pattern": "consistency#guard-contract-label-overcovers-substring-matches",
+      "workers": ["contract-docs"],
+      "triage": "fixed"
+    },
+    {
+      "id": 3,
+      "severity": "Low",
+      "blocking": false,
+      "consequence": "the seed-rejection assumption attributes _fixture_inventory to 'the suite's own' harness, but the harness lives in scripts/test_execute_plan_runtime.py, not the witness's file, so a reader verifying against the witness's file finds nothing (the substance is true; the attribution is ambiguous)",
+      "reachability": "expected",
+      "blast_radius": "local",
+      "confidence": "verified",
+      "pattern": "documentation#fixture-harness-suite-attribution",
+      "workers": ["contract-docs"],
+      "triage": "fixed"
+    },
+    {
+      "id": 4,
+      "severity": "Low",
+      "blocking": false,
+      "consequence": "check 8 compares the working tree against the local main tip without asserting main is an ancestor of the execution branch, so legitimate states (main advancing past the branch point, the plan-bytes landing moving the shared ref before a fast-forward) abort the block after the suite has already run; failure is fail-closed and recoverable, but the precondition is unverified and the diagnostic imprecise",
+      "reachability": "plausible-edge",
+      "blast_radius": "local",
+      "confidence": "verified",
+      "pattern": "testing#changed-file-pin-precondition-unverified",
+      "workers": ["risk"],
+      "triage": "fixed"
+    },
+    {
+      "id": 5,
+      "severity": "Low",
+      "blocking": false,
+      "consequence": "check 6's expected collection count (14) is documented but not pinned, so a guard test renamed off the filter silently shrinks the mask-check net while the check still exits 0 and the comment lies; only total filter loss is caught (pytest exit 5)",
+      "reachability": "plausible-edge",
+      "blast_radius": "local",
+      "confidence": "verified",
+      "pattern": "testing#guard-filter-count-unpinned",
+      "workers": ["risk"],
+      "triage": "fixed"
+    },
+    {
+      "id": 6,
+      "severity": "Low",
+      "blocking": false,
+      "consequence": "the GREEN step claims 'a race body with any assertion weakened, cannot pass this step', but presence greps cannot catch a comparator-weakening edit that preserves the needle substring (worker mutation-verified: assertEqual-to-assertTrue with >= 1 keeps all four greps at 1 and the suite green), so the sentence over-claims mutation adequacy; the accurate claim is that the greps catch omission and removal, with checks 4-5 catching strength changes at runtime",
+      "reachability": "plausible-edge",
+      "blast_radius": "local",
+      "confidence": "verified",
+      "pattern": "testing#green-step-mutation-adequacy-overclaim",
+      "workers": ["testing"],
+      "triage": "fixed"
+    }
+  ],
+  "overflow": [],
+  "soften_watchlist": [],
+  "coverage": {
+    "outcome": "clean",
+    "material_lens_set": ["implementation", "quality", "testing", "architecture", "simplification", "consistency", "documentation", "security"],
+    "completed": ["implementation", "quality", "testing", "architecture", "simplification", "consistency", "documentation", "security"],
+    "replacement": [],
+    "inherited_coverage": [],
+    "missing": [],
+    "retry_budget": {
+      "per_attempt_timeout_minutes": 30,
+      "per_worker_max": 2,
+      "exhausted": false,
+      "exhaustion_reason": null
+    },
+    "attempts": [
+      {
+        "attempt_id": "r3-correctness-completeness",
+        "worker": "correctness-completeness",
+        "lenses": ["implementation", "quality"],
+        "started_at": "2026-10-02T12:05:00+01:00",
+        "deadline": "bounded-wait",
+        "attempt_number": 1,
+        "outcome": "complete",
+        "failure_class": null
+      },
+      {
+        "attempt_id": "r3-testing",
+        "worker": "testing",
+        "lenses": ["testing"],
+        "started_at": "2026-10-02T12:05:00+01:00",
+        "deadline": "bounded-wait",
+        "attempt_number": 1,
+        "outcome": "complete",
+        "failure_class": null
+      },
+      {
+        "attempt_id": "r3-design-simplicity",
+        "worker": "design-simplicity",
+        "lenses": ["architecture", "simplification"],
+        "started_at": "2026-10-02T12:05:00+01:00",
+        "deadline": "bounded-wait",
+        "attempt_number": 1,
+        "outcome": "complete",
+        "failure_class": null
+      },
+      {
+        "attempt_id": "r3-contract-docs",
+        "worker": "contract-docs",
+        "lenses": ["consistency", "documentation"],
+        "started_at": "2026-10-02T12:05:00+01:00",
+        "deadline": "bounded-wait",
+        "attempt_number": 1,
+        "outcome": "complete",
+        "failure_class": null
+      },
+      {
+        "attempt_id": "r3-risk",
+        "worker": "risk",
+        "lenses": ["security"],
+        "started_at": "2026-10-02T12:05:00+01:00",
+        "deadline": "bounded-wait",
+        "attempt_number": 1,
+        "outcome": "complete",
+        "failure_class": null
+      }
+    ]
+  },
+  "extensions": {}
+}

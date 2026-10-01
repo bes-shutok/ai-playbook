@@ -252,6 +252,22 @@ class RuntimeCapabilitiesTest(unittest.TestCase):
         tasks["4"]["verification_commands"][0]["criteria"] = ["green", "hygiene"]
         self.assertNotEqual(capabilities.evidence_contract_digest(tasks), initial)
 
+    def test_legacy_digest_skips_enforcement_for_pre_upgrade_criteria(self):
+        # A pre-upgrade manifest's criteria exceed the post-upgrade receipt
+        # limits; the legacy digest shape (include_criterion_ids=False)
+        # validates them as written, while the enforced shape refuses.
+        oversized = "x" * 513
+        tasks = {"4": {"required_criteria": [oversized], "verification_commands": [{"id": "unit", "argv": ["python3", "-m", "unittest"], "criteria": [oversized]}], "allowed_paths": ["a.py"]}}
+        legacy = capabilities.evidence_contract_digest(tasks, include_criterion_ids=False)
+        self.assertTrue(legacy)
+        with self.assertRaises(ValueError):
+            capabilities.evidence_contract_digest(tasks, include_criterion_ids=True)
+        many = [f"criterion-{index:03d}" for index in range(101)]
+        tasks_many = {"4": {"required_criteria": many, "verification_commands": [{"id": "unit", "argv": ["true"], "criteria": many}], "allowed_paths": ["a.py"]}}
+        self.assertTrue(capabilities.evidence_contract_digest(tasks_many, include_criterion_ids=False))
+        with self.assertRaises(ValueError):
+            capabilities.evidence_contract_digest(tasks_many, include_criterion_ids=True)
+
     def test_driver_evidence_is_bound_to_allowlisted_source_contents(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

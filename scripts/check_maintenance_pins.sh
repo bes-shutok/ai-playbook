@@ -1067,10 +1067,12 @@ if len(auth_bodies) != 1:
 # the whole re-keyed pin family shares one wrap tolerance.
 if norm(p).count("per the Worktree-first standard section in agents/skills/execute-plan/SKILL.md; that worktree's own branch is the authoring branch") != 1:
     print("PIN FAIL: authoring worktree-first reference span count != 1 (auth_bodies identification would degenerate)"); sys.exit(1)
-for needle in ("git add -- <paths>",
-               "git update-ref refs/heads/<default> <new> <old>",
+for needle in ("git update-ref refs/heads/<default> <new> <old>",
                "git show refs/heads/<default>:"):
     need(norm(auth_bodies[0]), needle)
+# (the retired pathspec staging needle was dropped from the tuple above by the
+# 2026-10-02 worktree-complete landing lifecycle; the literal is frozen absent
+# whole-file beside the retired-create-literal precedent below.)
 # authoring claim file surfaces (scheduler ops lanes and durability plan,
 # Task 1): body-scoped positives for the authoring blueprint and the
 # expect-absent half for the execution blueprint. The plain greps above are
@@ -1106,6 +1108,21 @@ for wf_span, wf_body, wf_desc in ((exec_wf_span, exec_bodies[0], "execution"), (
         print("PIN FAIL: %s worktree-first reference span count %d != 1 (wrap-tolerant whole-file)" % (wf_desc, norm(p).count(wf_span))); sys.exit(1)
     if wf_span not in norm(wf_body):
         print("PIN FAIL: %s worktree-first reference span missing from its fenced blueprint body" % wf_desc); sys.exit(1)
+# unblock-landing-worktree-rework plan Task 3 pins (b) and (c): the reworked
+# step 6 delegation sentence (the Worktree arm named with its file+section
+# anchor) and the verify-squash needle counted exactly once inside the unblock
+# fenced body. The whole-file landing-race discipline span pin below stays
+# green off the deviation-list history entries, so the body-scoped count is
+# the real enforcement that the clause survives the rewrite.
+rework_delegation = "Worktree arm of the execution blueprint's final-merge paragraph in `agents/skills/maintenance/prompt-templates.md`"
+if norm(p).count(rework_delegation) != 1:
+    print("PIN FAIL: unblock step 6 Worktree-arm delegation sentence count %d != 1 (wrap-tolerant whole-file)" % norm(p).count(rework_delegation)); sys.exit(1)
+if rework_delegation not in norm(unblock_bodies[0]):
+    print("PIN FAIL: unblock step 6 Worktree-arm delegation sentence missing from the unblock fenced body"); sys.exit(1)
+verify_squash_needle = "verify the squash against the actual pre-landing main"
+n = norm(unblock_bodies[0]).count(verify_squash_needle)
+if n != 1:
+    print("PIN FAIL: verify-squash needle count %d != 1 inside the unblock fenced body" % n); sys.exit(1)
 # execution-integrity worker-evidence plan Task 3: the payload tail claim
 # duty. Scoped to the Schedule-at paragraph itself (distinct from the
 # whole-body authoring pin above): the payload paragraph is what scheduled
@@ -1256,7 +1273,8 @@ pin "child lanes analysis home" grep -qF 'as their analysis home' "$E"
 # substitution rule scoped to every telemetry path this policy names, with the
 # maintenance blueprints' payload paths recorded as the pinned literal exception.
 pin "telemetry substitution rule scopes this policy's paths" grep -qF 'governs every telemetry path this policy names' "$E"
-# P48 Task 1 (unlanded-plan worktree cherry-pick): the linked-worktree bootstrap
+# P48 Task 1 (unlanded-plan worktree cherry-pick): the canonical Worktree-first
+# standard's Transfer-in implementation in agents/skills/execute-plan/SKILL.md
 # names the missing-plan remedy for plan bytes living on an unlanded branch.
 pin "worktree bootstrap names the unlanded-plan remedy" grep -qF 'cherry-pick only the plan-authoring commit' "$E"
 # P37 Task 4 (turn-usage live verification): the measurement primitive section
@@ -1414,6 +1432,9 @@ for f in "$EP" "$MS" "$RR" "$RP"; do
   [ -f "$f" ] || { echo "missing $f"; fail=1; }
 done
 [ "$fail" -eq 1 ] && exit 1
+# duty (b) freeze clause presence pin (prompt-log freeze follow-through plan, Task 4):
+# freeze-literal convention, the needle is the operative sentence.
+pin "duty (b) freeze clause wired" grep -qF 'marks any entry whose authoring has started' "$MS"
 pin "origins-closure archive arm wired in execute-plan SKILL.md" grep -qF 'check_plan_origins_closed.py' "$EP"
 pin "origins-block survey warn arm wired in maintenance SKILL.md" grep -qF 'Archived-coverage warn arm' "$MS"
 pin "dirt regression merge arm wired in execution blueprint" grep -qF 'dirt_regression_gate.py --base' "$P"
@@ -1457,8 +1478,8 @@ pin "stash failure path leaves stash in place" grep -qF 'leaves the stash in pla
 pin "release on every completion-work exit" grep -qF 'every completion-work exit' "$S"
 pin "index-preserving stash restore" grep -qF 'git stash pop --index' "$S"
 # --- sequential landing discipline blueprint pins (prompt-templates.md) ---
-pin "blueprint landed-commit verification" grep -qF 'verify the landed commit on main' "$P"
-pin "successor own-landing conjunct" grep -qF 'its own landing is not verified on main' "$P"
+pin "blueprint landed-commit verification" grep -qF "verify the landed commit on the repository's default branch" "$P"
+pin "successor own-landing conjunct" grep -qF 'its own landing is not verified on the default branch' "$P"
 pin "successor outstanding-record conjunct" grep -qF 'an outstanding pending_landing record' "$P"
 pin "execution deferred-landing record lane literal" grep -qF '"lane": "execute"' "$P"
 pin "authoring stranding record lane literal" grep -qF '"lane": "author"' "$P"
@@ -1601,6 +1622,11 @@ pin "deferred landing-duty dependency-branch record identity" grep -qF 'Dependen
 pin "unblock-child progress witness span" grep -qF 'manifest refreshes count as progress for unblock children' "$S"
 pin "lane-hold unblock completion-evidence span" grep -qF 'ledger entry cleared plus the serialized plan present in `execution_queue`' "$S"
 pin "deferred outcome_reason schema note value" grep -qF 'the value `deferred` per the parked-dependency unblock deferral' "$S"
+# --- unblock-landing-worktree-rework pins (plan 2026-10-02-unblock-landing-worktree-rework.md Task 3) ---
+# (a) the retired checkout-holding capture literal is frozen absent from the
+# whole file (wrap-tolerant; superseded 2026-10-02 by the worktree-complete
+# landing shape the unblock landing rework delegated to).
+expect_absent_flat "retired unblock pre-landing capture literal must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-10-02 by the unblock landing rework)" 'UNBLOCK_PRE_TIP' "$P"
 # --- P54 execution queue and priority pins (plan ... Task 3) ---
 pin "P54 execution_queue schema line" grep -qF '"execution_queue": []' "$S"
 pin "P54 execution_priority schema line" grep -qF '"execution_priority": null' "$S"
@@ -1732,7 +1758,8 @@ pin "P57 S12 zcode ladder single-child-hold-retired clause" grep -qF 'retired 20
 # in the execute-plan skill; the blueprint's per-run pre-work gate paragraph
 # was rewritten to post-transfer-in scope in that same consolidation, not
 # retired with them (S15 below is re-keyed on the rewritten gate sentence),
-# retiring the P57 payload spans the replacement retired: S13 (the execution create-literal count) and the
+# retiring the P57 payload spans the replacement retired: S13
+# (the execution create-literal count) and the
 # authoring create-literal count became wrap-tolerant freeze-absent pins (the
 # create commands are canonical-section owned; the retired literals must not
 # return); S14 (the Linked-worktree bootstrap recipe span pin) is dropped
@@ -1753,6 +1780,12 @@ pin "P57 S12 zcode ladder single-child-hold-retired clause" grep -qF 'retired 20
 expect_absent_flat "retired execution worktree create literal must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-09-28 by the worktree-first consolidation)" 'git worktree add -b <execution-branch> <sibling-path> <default-branch>' "$P"
 expect_absent_flat "retired authoring worktree create literal must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-09-28 by the worktree-first consolidation)" 'git worktree add -b YYYY-MM-DD-authoring-<slug> <sibling-path> <default-branch>' "$P"
 expect_absent_flat "retired authoring payload worktree create literal must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-09-28 by the worktree-first consolidation)" 'git worktree add -b <date>-authoring-<slug> <sibling-path> <default-branch>' "$P"
+# Freeze (2026-10-02, worktree-complete landing lifecycle): the authoring
+# self-landing's pathspec arm is retired (staging in the primary checkout is a
+# landing-gate violation), so its explicit staging command is frozen absent
+# whole-file; this origin supersedes the body-scoped need needle the tuple
+# above used to carry, per the suite's freeze-literal convention.
+expect_absent_flat "retired authoring pathspec-arm staging command must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-10-02 by the worktree-complete landing lifecycle)" 'git add -- <paths>' "$P"
 pin "per-run pre-work gate span (re-keyed 2026-09-28; was P57 S15)" grep -qF "the run's own per-worktree done lock is free" "$P"
 [ "$fail" -eq 1 ] && exit 1
 
@@ -1768,16 +1801,41 @@ pin "per-run pre-work gate span (re-keyed 2026-09-28; was P57 S15)" grep -qF "th
 # disjoint).
 # The merge-wait-acquire exactly-2 count pin (each blueprint acquires the merge
 # landing lock once) already lives in the blueprint integrity block above and
-# continues to pass unchanged. The superseded shared-checkout Phase 0 clause is
+# continues to pass unchanged.
+# Restoration note (origin 2026-09-28-s15-rekey-narrowed-done-lock-gate-pin):
+# the 2026-09-28 re-key (plan 2026-09-28-worktree-first-standard-only-mode.md
+# Task 4, archived under docs/history/plans/completed/) narrowed the gate pin
+# to the gate's done-lock conjunct only, leaving the done-lock keying basis
+# between that conjunct span and the S20 scoping span unpinned; the keying
+# pin below restores that coverage. A wording change to the keying sentence
+# must reconcile pin and text in the same edit and record the superseding
+# origin per the suite's freeze-literal convention. The superseded shared-checkout Phase 0 clause is
 # frozen absent with the wrap-tolerant flattened form (expect_absent_flat
 # above): the clause was line-wrapped in the file, so the plain line-oriented
 # expect_absent is a no-op against the wrapped bytes and must not be used here.
-[ "$(grep -oF 'git -C <default-checkout> merge --squash <branch>' "$P" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: P57 S16 primary-arm prefixed squash command count != 1"; fail=1; }
+# Re-key (2026-10-02, worktree-complete landing lifecycle): the dual-arm
+# landing machinery was retired for the single Worktree arm, so the S16
+# primary-arm prefixed count pin and the S17 temp-worktree create-command
+# presence pin are superseded by wrap-tolerant freeze-absent pins (the retired
+# commands must not return); this origin supersedes per the suite's
+# freeze-literal convention. The S16 bare exactly-once count and the S18
+# compare-and-swap presence pin stay untouched (the spelled Worktree arm
+# carries each of those literals).
+expect_absent_flat "retired primary-arm prefixed squash command must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-10-02 by the worktree-complete landing lifecycle)" 'git -C <default-checkout> merge --squash <branch>' "$P"
 [ "$(grep -oF 'git merge --squash <branch>' "$P" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: P57 S16 temp-arm bare squash command count != 1"; fail=1; }
-pin "P57 S17 temp-worktree arm create command" grep -qF 'git worktree add --detach <temp-path> refs/heads/<default>' "$P"
+expect_absent_flat "retired temp-worktree arm create command must be absent from prompt-templates.md (wrap-tolerant; superseded 2026-10-02 by the worktree-complete landing lifecycle)" 'git worktree add --detach <temp-path> refs/heads/<default>' "$P"
 pin "P57 S18 compare-and-swap landing command" grep -qF 'git update-ref refs/heads/<default> <new-tip> <old-tip>' "$P"
 pin "P57 S19 archive per-run worktree commit span" grep -qF 'the archive commit is a per-run worktree commit' "$P"
 pin "P57 S20 done-lock per-run scoping span" grep -qF "so the run's done lock is its own" "$P"
+[ "$(grep -oF 'locks are keyed per-worktree on --show-toplevel' "$P" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: done-lock keying basis (restores pre-consolidation S15 scope; origin 2026-09-28-s15-rekey-narrowed-done-lock-gate-pin)"; fail=1; }
+# Landing-tail parenthetical exactly-once pin (origin
+# 2026-09-28-landing-tail-parenthetical-precedence-and-pin): the landing tail's
+# parenthetical carries the checkout-flow carve-out beside the
+# default-branch-integration equality clause, and the equality fragment is
+# pinned exactly-once (wrap-tolerant, the S16 normalized-count idiom), scoped
+# to "$P", so the reconciling clause cannot silently drift or invert with the
+# suite green.
+[ "$(grep -oF 'equals the resolved base in a default-branch-integration project' "$P" | wc -l | tr -d ' ')" -eq 1 ] || { echo "PIN FAIL: landing-tail parenthetical default-branch-integration equality clause count != 1 (origin 2026-09-28-landing-tail-parenthetical-precedence-and-pin)"; fail=1; }
 expect_absent_flat "superseded shared-checkout Phase 0 clause must be absent from prompt-templates.md (wrap-tolerant)" 'Phase 0 dedicated branch from main' "$P"
 [ "$fail" -eq 1 ] && exit 1
 
@@ -2005,12 +2063,28 @@ pin "zcode readiness mirror present" grep -qF 'cycles_completed' "$Z"
 pin "user-directed payload duties bullet in the skill" grep -qF 'User-directed maintenance payload duties' "$S"
 pin "narrowed disclaimer in the overlay" grep -qF 'no blueprint child re-arm duty' "$Z"
 
-[ "$fail" -eq 1 ] && exit 1
+# --- prompt-log origin checker pin (plan 2026-10-01-prompt-log-prune-check.md) ---
+# The registry's prune clause gains its mechanical home: the checker exits 1 on
+# any PLAN-PROMPTS.md entry whose every origin is served, so the next all-served
+# drift is a suite failure instead of an operator question. Deliberately placed
+# BEFORE the failure gate below: the script has no set -e and pin only sets
+# fail=1, so a pin added after the gate would print PIN FAIL yet the sweep would
+# still exit 0 and the wedge would survive every landing.
+pin "prompt log has no all-served (stale) entry" python3 "$repo/scripts/check_prompt_log_origins.py"
 
-echo "maintenance pins: all hold"
-exit 0
 
 # --- user-directed override predicate pins (plan 2026-09-30-user-directed-override-for-interactive-guard-standdowns.md Task 4) ---
 pin "override predicate sentence present in the skill" grep -qF 'The override predicate is user presence, never confidence.' "$S"
 pin "override predicate sentence present in the overlay" grep -qF 'The override predicate is user presence, never confidence.' "$Z"
 pin "override integrity exclusion present in the skill" grep -qF 'Integrity guards are never overridable' "$S"
+
+pin "dirty-primary classification arm present" grep -qF 'Dirty-primary classification arm' "$S"
+pin "revert-set classifier wired in the survey" grep -qF 'revert_set_classifier.py classify --repo' "$S"
+
+pin "squash tree-equality invariant present" grep -qF 'tree equality between the squashed branch tip and the produced squash commit' "$E"
+pin "squash tree-equality arm wired in the blueprint" grep -qF 'git diff --quiet <branch> <new-tip>' "$P"
+
+[ "$fail" -eq 1 ] && exit 1
+
+echo "maintenance pins: all hold"
+exit 0

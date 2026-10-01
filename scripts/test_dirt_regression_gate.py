@@ -129,6 +129,36 @@ class DirtRegressionGateTest(unittest.TestCase):
         self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
         self.assertIn("PASS", stdout)
 
+    def test_removing_headgained_import_does_not_look_like_reversion(self):
+        base_text = "class Example {}\n"
+        head_text = "import java.util.List;\n" + base_text
+        self._commit("Example.java", base_text, "base")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit("Example.java", head_text, "head adds import")
+
+        # An unused-import cleanup removes a line HEAD gained, but does not
+        # restore any base-era behavior.
+        self._set_dirt("Example.java", base_text)
+        code, stdout, stderr = self._run_gate(
+            "--base", base_sha, "Example.java"
+        )
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("PASS", stdout)
+
+    def test_moving_headgained_line_between_hunks_does_not_look_like_reversion(self):
+        base_text = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\n"
+        moved_line = "branch-added-line\n"
+        self._commit("app.txt", base_text, "base")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit("app.txt", moved_line + base_text, "head adds line")
+
+        # Relocate the HEAD-gained line far enough that git emits separate
+        # deletion and insertion hunks, while retaining the exact content.
+        self._set_dirt("app.txt", base_text + moved_line)
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("PASS", stdout)
+
     def test_revert_to_base_text_is_regression(self):
         base_sha = self._seed_head_gained_lines()
         # Dirt reverts only the "delta" region to its base-era text while

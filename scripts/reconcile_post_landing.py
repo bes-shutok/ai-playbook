@@ -35,12 +35,17 @@ the restore so a mid-window change re-classifies; a path whose bytes match no
 ancestor blob in either state is a genuine modification and a block row,
 never restored, and a landing-deleted path whose index carries a blob
 matching no ancestor (a peer's staged edit) is a block row naming the staged
-state. In the checkout holding the common git dir (the primary), an
+state; a landing-deleted path that is index-absent (nothing staged) has its
+worktree orphan removed directly with ``os.remove`` because the restore
+cannot express removing an index-absent path, and a failed removal degrades
+to the same ``restore-refused`` block row. In the checkout holding the
+common git dir (the primary), an
 ancestor-blob match whose worktree file mtime postdates the pre-landing tip's
 commit time is a block row instead of an auto-restore; other resolved live
 checkouts auto-restore freely.
 
 Output one line per row: ``restored <checkout> <path>``,
+``removed <checkout> <path>``,
 ``block <checkout> <path> <witness>``, ``wholesale <checkout>``,
 ``synced <checkout> <path>``.
 
@@ -82,6 +87,7 @@ class Result(object):
 SYNCED = "synced"
 RESTORE = "restore"                  # restore index and worktree from the post tip
 RESTORE_WORKTREE = "restore-worktree"  # restore the worktree only; index untouched
+REMOVE = "remove"                    # remove the index-absent worktree orphan directly
 BLOCK = "block"
 
 
@@ -226,11 +232,15 @@ def classify(pre_blob, post_blob, idx_blob, wt_blob, ancestors):
         return (RESTORE, "added")
     if post_blob is None and wt_blob == pre_blob:
         # The landing deleted the path and the checkout still carries the
-        # pre-landing bytes: the same restore removes it, but only when the
-        # index agrees, i.e. the index blob is an ancestor blob or the path
-        # is absent from the index (nothing staged). A staged non-ancestor
-        # blob is a peer's edit: block, never restore.
-        if idx_blob is None or idx_blob in ancestors:
+        # pre-landing bytes. When the index carries no blob (nothing staged,
+        # the path index-absent), ``git restore`` cannot express removing an
+        # index-absent path, so the worktree file is removed directly; when
+        # the index blob is an ancestor blob the single-path restore removes
+        # it. A staged non-ancestor blob is a peer's edit: block, never
+        # restore.
+        if idx_blob is None:
+            return (REMOVE, "deleted")
+        if idx_blob in ancestors:
             return (RESTORE, "deleted")
         return (BLOCK, "staged-peer-edit")
     if pre_blob is not None and post_blob is not None:
@@ -249,9 +259,12 @@ FRESH_MTIME_WITNESSES = ("stale", "deleted", "wholesale-residue")
 
 
 def mtime_gated(action, witness):
-    """True when the verdict restores worktree bytes that are an ancestor
-    blob, the only shape the primary fresh-mtime bound gates."""
-    return action in (RESTORE, RESTORE_WORKTREE) and witness in FRESH_MTIME_WITNESSES
+    """True when the verdict restores or removes worktree bytes that are an
+    ancestor blob, the only shape the primary fresh-mtime bound gates."""
+    return (
+        action in (RESTORE, RESTORE_WORKTREE, REMOVE)
+        and witness in FRESH_MTIME_WITNESSES
+    )
 
 
 def worktree_mtime_postdates(checkout, path, epoch):
@@ -430,6 +443,16 @@ def apply_entry(inv, wt, entry, primary, pre_time):
         and worktree_mtime_postdates(wt, entry["path"], pre_time)
     ):
         return "block %s %s fresh-mtime" % (wt, entry["path"])
+    if action == REMOVE:
+        # The index-absent landing-deleted orphan: git restore cannot remove
+        # a path the index does not carry, so the worktree file is removed
+        # directly; a failed removal degrades to the same restore-refused
+        # block row (the recorded, resumable outcome), never a tool failure.
+        try:
+            os.remove(os.path.join(wt, entry["path"]))
+        except OSError:
+            return "block %s %s restore-refused" % (wt, entry["path"])
+        return "removed %s %s" % (wt, entry["path"])
     try:
         restore_path(inv, wt, entry["path"], action == RESTORE_WORKTREE)
     except ToolFailure:

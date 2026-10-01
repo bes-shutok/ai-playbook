@@ -36,7 +36,7 @@ STATE_FIELD_HEADING = "## State file"
 # The plan's named-protocol universe (Task 2 seed rows). Refs resolve at
 # execution; the scaffold emits them with disposition pending.
 SEED_PROTOCOLS = [
-    ("five-round-review-cap", "docs/history/backlog/2026-09-28-review-loop-exit-condition-and-metrics.md"),
+    ("five-round-review-cap", "agents/skills/review-loop/SKILL.md"),
     ("review-staging-governance", None),
     ("plan-readiness-gate", None),
     ("digest-recert-fencing", None),
@@ -45,9 +45,9 @@ SEED_PROTOCOLS = [
     ("done-sweep-gates", None),
     ("reverse-squash-dirt-gates", None),
     ("skills-gate-markers", None),
-    ("quota-probing-budget-guard", "docs/history/backlog/2026-09-28-account-level-quota-governor.md"),
-    ("worktree-recipe", "docs/history/backlog/2026-09-28-worktree-first-standard-only-mode.md"),
-    ("residual-acceptance-exit", "docs/history/backlog/2026-09-19-residual-exit-same-day-ordering-semantics.md"),
+    ("quota-probing-budget-guard", "docs/history/plans/completed/2026-09-28-account-quota-governor.md"),
+    ("worktree-recipe", "docs/history/plans/completed/2026-09-28-worktree-first-standard-only-mode.md"),
+    ("residual-acceptance-exit", "docs/history/plans/completed/2026-09-28-residual-exit-same-day-ordering-gates.md"),
 ]
 
 

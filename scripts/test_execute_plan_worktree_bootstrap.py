@@ -12,9 +12,11 @@ that. This suite proves the recipe is load-bearing end to end:
    step 2 runs)" lead-in in ``agents/skills/execute-plan/SKILL.md`` is
    extracted at test runtime (so skill-text drift fails the test) and
    executed VERBATIM in a linked worktree of a synthetic primary repo
-   fixture. A second fenced block (the transfer-out-and-deletion migration
-   recipe) follows in the same region and must not be picked, so the
-   extractor's pick is asserted against that block's distinctive literals.
+   fixture. The transfer-out-and-deletion migration recipe also lives in
+   the same region (the Post-landing reconciliation section sits between
+   the two recipes) and must not be picked, so the extractor's pick is
+   asserted against that block's distinctive literals; the migration
+   block itself is located by content, not fence ordinal.
 2. After the recipe: the facts file and the review sidecar pair are
    present in the worktree, the run's tmp directory is created empty (the
    canonical recipe mkdirs it; per-run scratch does not transfer in), and
@@ -285,9 +287,62 @@ def extract_bootstrap_recipe(skill_text: str) -> str:
     return skill_text[body_start:body_end]
 
 
+def extract_closeout_migration_block(skill_text: str) -> str:
+    """Extract the FIRST fenced bash block after the bootstrap lead-in
+    carrying both closeout migration literals (``CLOSEOUT_SCRIPT`` and
+    ``migrate``), located by content instead of fence ordinal so inserting
+    prose or recipe sections between the fences cannot desync the pick.
+
+    First match, not a uniqueness assertion: the Step 0.4 capture fence also
+    contains both words, but it sits far later in the file, so the first
+    match after the lead-in is the Transfer-out migration recipe.
+    """
+    search_at = skill_text.find(BOOTSTRAP_LEAD_IN)
+    if search_at < 0:
+        raise AssertionError(
+            f"bootstrap lead-in {BOOTSTRAP_LEAD_IN!r} not found in {SKILL_PATH.name}"
+        )
+    while True:
+        opener_at = skill_text.find("```bash", search_at)
+        if opener_at < 0:
+            raise AssertionError(
+                "no fenced bash block carrying both closeout migration "
+                f"literals after the bootstrap lead-in in {SKILL_PATH.name}"
+            )
+        body_start = skill_text.index("\n", opener_at) + 1
+        body_end = skill_text.index("\n```", body_start)
+        block = skill_text[body_start:body_end]
+        if "CLOSEOUT_SCRIPT" in block and "migrate" in block:
+            return block
+        search_at = body_end
+
+
+def sanitized_env() -> dict:
+    """Minimal subprocess environment: ``PATH`` kept, ``HOME`` pointed at a
+    fresh scratch directory, and the git-redirecting variables (``GIT_DIR``,
+    ``GIT_WORK_TREE``, ``GIT_INDEX_FILE``, ``GIT_CONFIG_GLOBAL``,
+    ``GIT_CONFIG_SYSTEM``) explicitly unset, so a subprocess verdict depends
+    only on its fixture, never on the invoking session's ambient git state."""
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    env["HOME"] = tempfile.mkdtemp(prefix="bootstrap-scratch-home-")
+    for var in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+    ):
+        env.pop(var, None)
+    return env
+
+
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     proc = subprocess.run(
-        ["git", *args], cwd=str(repo), capture_output=True, text=True
+        ["git", *args],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        env=sanitized_env(),
     )
     if proc.returncode != 0:
         raise AssertionError(
@@ -355,7 +410,7 @@ def run_readiness_validator(worktree: Path) -> subprocess.CompletedProcess:
     """Run the repo's plan readiness validator from ``worktree`` on the
     fixture plan, with ``PLAN_READINESS_VALIDATOR`` set the way the
     execute-plan Step 0.5 gate resolves it."""
-    env = dict(os.environ)
+    env = sanitized_env()
     env["PLAN_READINESS_VALIDATOR"] = str(READINESS_VALIDATOR)
     return subprocess.run(
         [sys.executable, str(READINESS_VALIDATOR), PLAN_REL],
@@ -389,25 +444,13 @@ class WorktreeBootstrapTest(unittest.TestCase):
                 "the extractor picked the transfer-out-and-deletion block "
                 "instead of the transfer-in recipe (r1 F8)",
             )
-        # The pick guard has teeth only while the second fenced block in the
-        # same region is the transfer-out-and-deletion migration recipe; pin
-        # that block's position and content so a skill-text change cannot
-        # silently invalidate the discriminator above (r1 F8).
-        recipe_opener = skill_text.index("```bash", skill_text.index(BOOTSTRAP_LEAD_IN))
-        recipe_end = skill_text.index("\n```", recipe_opener)
-        closeout_opener = skill_text.find("```bash", recipe_end)
-        self.assertGreater(
-            closeout_opener,
-            recipe_end,
-            "expected a second fenced bash block (the transfer-out-and-"
-            "deletion migration recipe) after the transfer-in recipe in "
-            "the same region",
-        )
-        closeout_start = skill_text.index("\n", closeout_opener) + 1
-        closeout_block = skill_text[
-            closeout_start : skill_text.index("\n```", closeout_opener)
-        ]
+        # The closeout migration block is located by content, not fence
+        # ordinal (the Post-landing reconciliation section sits between the
+        # Transfer-in recipe and the Transfer-out migration recipe, so an
+        # ordinal pick lands on the RECONCILE_SCRIPT block).
+        closeout_block = extract_closeout_migration_block(skill_text)
         self.assertIn("CLOSEOUT_SCRIPT", closeout_block)
+        self.assertIn("migrate", closeout_block)
 
         _primary, worktree = self._fresh_fixture("recipe")
 
@@ -416,6 +459,7 @@ class WorktreeBootstrapTest(unittest.TestCase):
             cwd=str(worktree),
             capture_output=True,
             text=True,
+            env=sanitized_env(),
         )
         self.assertEqual(
             proc.returncode,

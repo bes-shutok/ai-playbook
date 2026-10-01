@@ -260,3 +260,9 @@ Files:
 - [x] Do not annotate rows 4, 7, 8 (hook-outcome, model-selection, persistence-races): each already carries an accurate owner-naming Disposition line from lanes-durability Task 7 (verified 2026-09-22) [class: REPOSITORY_TEST]
 - [x] Run the Task 6 loop from Validation Commands; expect GREEN on all four items [class: REPOSITORY_TEST]
 - [x] Commit: `docs: P36 origin disposition annotations naming owning plans` [class: IMPLEMENTATION_REQUIRED]
+
+## Disposition of migrated backlog items
+
+- `docs/history/backlog/completed/2026-09-19-hook-outcome-audit-visibility.md`: executed by this plan (declared origin); folded by the 2026-10-02 done-corpus backfill sweep (docs/history/plans/2026-10-01-done-origin-fold-delete-enforcement.md); former backlog file deleted, body recoverable via git history.
+- `docs/history/backlog/completed/2026-09-19-model-selection-persist-foreign-key.md`: executed by this plan (declared origin); folded by the 2026-10-02 done-corpus backfill sweep (docs/history/plans/2026-10-01-done-origin-fold-delete-enforcement.md); former backlog file deleted, body recoverable via git history.
+- `docs/history/backlog/completed/2026-09-19-subagent-session-record-persistence-races.md`: executed by this plan (declared origin); folded by the 2026-10-02 done-corpus backfill sweep (docs/history/plans/2026-10-01-done-origin-fold-delete-enforcement.md); former backlog file deleted, body recoverable via git history.

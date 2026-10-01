@@ -2,7 +2,9 @@
 """Dirt regression gate: fail on restored dirt that reverts content HEAD gained.
 
 Classification is per hunk of each restored file's diff against HEAD, with the
-run's merge base (``--base <merge-base-sha>``) bound:
+run's merge base (``--base <merge-base-sha>``) bound. Import declarations and
+exact lines moved between diff hunks are excluded from the removed-line signal
+because they do not by themselves show a behavior reversion:
 
 - A hunk marks a dirt REGRESSION when it removes at least one line HEAD gained
   since the base (a line present in the HEAD version of the file and absent
@@ -30,6 +32,7 @@ Stamping is manual-only for now; the helper is the sanctioned manual path.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -96,10 +99,30 @@ def _hunks(diff_text: str) -> list[tuple[list[str], list[str]]]:
     return hunks
 
 
+def _is_import_declaration(line: str) -> bool:
+    """Imports are compile-time names, not evidence that behavior was reverted."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    return (
+        stripped.startswith("import ")
+        or stripped.startswith("from ") and " import " in stripped
+        or stripped.startswith("using ")
+        and stripped.endswith(";")
+        and not stripped.startswith(("using (", "using var "))
+        or stripped.startswith("global using ") and stripped.endswith(";")
+        or stripped.startswith("use ") and stripped.endswith(";")
+        or stripped.startswith("#include ")
+    )
+
+
 def _hunk_is_regression(
     removed: list[str], added: list[str], gained: set[str], base_set: set[str]
 ) -> bool:
-    if not any(line in gained for line in removed):
+    behavior_removed = [
+        line for line in removed if not _is_import_declaration(line)
+    ]
+    if not any(line in gained for line in behavior_removed):
         return False
     return all(line in base_set for line in added)
 
@@ -132,8 +155,18 @@ def classify_path(path: str, base: str, cwd: Path) -> tuple[bool, str]:
     head_lines = _blob_lines("HEAD", repo_rel_posix, cwd)
     gained = set(head_lines) - base_set
     diff_text = _git("diff", "HEAD", "--unified=0", "--", path, cwd=cwd)
-    for removed, added in _hunks(diff_text):
-        if _hunk_is_regression(removed, added, gained, base_set):
+    hunks = _hunks(diff_text)
+    removed_counts = Counter(line for removed, _ in hunks for line in removed)
+    added_counts = Counter(line for _, added in hunks for line in added)
+    moved_counts = removed_counts & added_counts
+    for removed, added in hunks:
+        unmatched_removed: list[str] = []
+        for line in removed:
+            if moved_counts[line]:
+                moved_counts[line] -= 1
+            else:
+                unmatched_removed.append(line)
+        if _hunk_is_regression(unmatched_removed, added, gained, base_set):
             return True, "restores base-era text over lines HEAD gained"
     return False, ""
 

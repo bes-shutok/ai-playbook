@@ -215,14 +215,14 @@ class MachineryInventoryTest(unittest.TestCase):
         self.assertFalse(self.repo.exists())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class RealTreeCheck(unittest.TestCase):
     """Enforcing arm of the standing regrowth guard: the real repository tree
-    must pass the check mode (run from a repo checkout)."""
-
+    must pass the check mode. Invocation: `python3 scripts/test_machinery_inventory.py
+    --real-tree` (runs ONLY this arm against the live tracked tree, from a repo
+    checkout; outside one it skips with exit 0). The default run is fixture-only
+    by deliberate contract (plan 2026-10-02-machinery-realtree-arm-run-mode,
+    Task 1): default-run inclusion of this arm is deferred until the default
+    consumers are ready for the arm's red-on-drift semantics."""
     def test_real_tree_checks_green(self):
         root = Path(__file__).parent.parent
         if not (root / ".git").exists():
@@ -230,3 +230,24 @@ class RealTreeCheck(unittest.TestCase):
         out = subprocess.run([sys.executable, str(SCRIPT), "--check"],
                              capture_output=True, text=True, cwd=root)
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+
+
+def load_tests(loader, tests, pattern):
+    """Pattern-aware selection pin (plan 2026-10-02-machinery-realtree-arm-run-mode,
+    Task 1): under unittest DISCOVERY (pattern set) both arms load, preserving
+    discovery's today-semantics; under the documented default invocation
+    (pattern unset) only the fixture arm runs, pinning it to exactly today's
+    14 tests."""
+    fixture = loader.loadTestsFromTestCase(MachineryInventoryTest)
+    realtree = loader.loadTestsFromTestCase(RealTreeCheck)
+    if pattern:
+        return unittest.TestSuite([fixture, realtree])
+    return fixture
+
+
+if __name__ == "__main__":
+    if "--real-tree" in sys.argv:
+        sys.argv.remove("--real-tree")
+        unittest.main(argv=[sys.argv[0], "RealTreeCheck"])
+    else:
+        unittest.main()

@@ -9,8 +9,14 @@ Two subcommands with two distinct postures (never swapped):
   digest. When the write would replace branch bytes that match the
   certification digest with bytes that do not (a certified downgrade),
   collect every such row, print them, and exit 1 so the sync aborts before
-  staging. Upgrades and neither-side matches print info/warn lines and
-  exit 0.
+  staging. One acceptance arm narrows the refusal: when the branch bytes
+  match the certified digest and the incoming plan differs ONLY in
+  unchecked-to-checked checkbox marker flips (every differing line pair an
+  unchecked branch line paired with a checked incoming line on two
+  otherwise byte-identical lines of equal line count), the guard prints a
+  named acceptance line and counts the plan as accepted; any other byte
+  difference still refuses. Upgrades and neither-side matches print
+  info/warn lines and exit 0.
 - ``check-restored`` (warn-and-continue): after the sync's restore-fill
   leg, witness each restored plan file; a file whose bytes do not match the
   certification digest prints a warn line and the command always exits 0.
@@ -158,6 +164,66 @@ def top_level_plan_names(plans_dir: Path) -> set[str]:
     }
 
 
+# Local pairing predicate for the progress-only overlay arm. The unchecked-
+# marker half mirrors ``execute_plan_runtime._unchecked_checkbox_pairs`` as
+# the shape of record (line-anchored GFM task-list markers, ``-``/``*``/``+``
+# bullets); no import edge into ``execute_plan_runtime`` is added (the
+# runtime module is very large and its helper recognizes unchecked markers
+# only, while the pairing rule needs checked markers too).
+_CHECKBOX_LINE_RE = re.compile(r"^(\s*[-*+] )(\[[ xX]])(.*)$")
+
+
+def _split_checkbox_line(line: str) -> tuple[str, str, str] | None:
+    """``(before-marker, marker token, after-marker)`` for a checkbox line.
+
+    A line counts only when its first non-whitespace token is a GFM
+    task-list marker, one of ``- [ ]``, ``- [x]``, ``- [X]`` with any of the
+    ``-``, ``*``, ``+`` bullets. The split keeps the bullet, the spacing,
+    and the post-marker text in the byte-exact prefix and suffix, so
+    normalization in the pairing predicate can touch only the bracketed
+    token. None for every non-checkbox line.
+    """
+
+    match = _CHECKBOX_LINE_RE.match(line)
+    if match is None:
+        return None
+    return match.group(1), match.group(2), match.group(3)
+
+
+def progress_only_overlay_flips(branch_text: str, incoming_text: str) -> int | None:
+    """Flip count when the incoming text is a progress-only overlay.
+
+    The two plans are compared line by line; the line counts must be equal;
+    each line pair must be byte-identical except that the bracketed marker
+    token may differ, and a differing pair is accepted only when the branch
+    side carries the unchecked marker ``[ ]`` and the incoming side a checked
+    marker ``[x]`` or ``[X]``. Any other byte difference (text, structure, a
+    checked-to-unchecked regression, bullet or spacing changes) returns
+    None, which keeps the certified-downgrade refusal.
+    """
+
+    branch_lines = branch_text.splitlines()
+    incoming_lines = incoming_text.splitlines()
+    if len(branch_lines) != len(incoming_lines):
+        return None
+    flips = 0
+    for branch_line, incoming_line in zip(branch_lines, incoming_lines):
+        if branch_line == incoming_line:
+            continue
+        branch_parts = _split_checkbox_line(branch_line)
+        incoming_parts = _split_checkbox_line(incoming_line)
+        if branch_parts is None or incoming_parts is None:
+            return None
+        if branch_parts[0] != incoming_parts[0] or branch_parts[2] != incoming_parts[2]:
+            return None
+        if branch_parts[1] != "[ ]":
+            return None
+        if incoming_parts[1] not in ("[x]", "[X]"):
+            return None
+        flips += 1
+    return flips
+
+
 def cmd_guard(args: argparse.Namespace) -> int:
     incoming_root = Path(args.incoming_root)
     branch_root = Path(args.branch_root)
@@ -199,10 +265,30 @@ def cmd_guard(args: argparse.Namespace) -> int:
         branch_ok = digest_matches(branch_digest, cert_digest)
         incoming_ok = digest_matches(incoming_digest, cert_digest)
         if branch_ok and not incoming_ok:
-            refusals += 1
-            print(f"REFUSE: certified downgrade for {branch_plan}")
-            print(f"  incoming {incoming_plan} does not match the certified digest {cert_digest}")
-            print(f"  sidecar: {sidecar_path.name}")
+            # Progress-only overlay arm: the branch bytes match the certified
+            # digest and the incoming bytes differ only in unchecked-to-checked
+            # marker flips (pairing rule per the plan's Terms). The overlay is
+            # accepted with a named line instead of refused; any other byte
+            # difference keeps the refusal. A plan text that cannot be decoded
+            # or read fails closed into the refusal.
+            try:
+                overlay_flips = progress_only_overlay_flips(
+                    branch_plan.read_text(encoding="utf-8"),
+                    incoming_plan.read_text(encoding="utf-8"),
+                )
+            except (OSError, ValueError):
+                overlay_flips = None
+            if overlay_flips is not None:
+                print(
+                    f"progress-only overlay accepted for {incoming_plan} "
+                    f"({overlay_flips} unchecked-to-checked flip(s); "
+                    f"branch matches certified digest {cert_digest})"
+                )
+            else:
+                refusals += 1
+                print(f"REFUSE: certified downgrade for {branch_plan}")
+                print(f"  incoming {incoming_plan} does not match the certified digest {cert_digest}")
+                print(f"  sidecar: {sidecar_path.name}")
         elif incoming_ok and not branch_ok:
             print(
                 f"UPGRADE: {branch_plan} incoming bytes match the certified digest "

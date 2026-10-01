@@ -29,6 +29,7 @@ import execute_plan_address_fanout as fanout
 import execute_plan_runtime as runtime
 import validate_review_staging as vrs
 import runtime_capabilities as capabilities
+from execute_plan_runtime_codex import CodexAdapter
 
 
 def write_approval_receipt(receipt: Path, config: Path, payload: dict) -> None:
@@ -78,11 +79,117 @@ class FakeAdapter:
     def observe_inventory(self):
         return {"version": 1, "observation_kind": "inventory", "state": "available", "observed_at": time.monotonic(), "freshness_window": 30.0, "capacity_slot_effect": "retain", "inventory": list(self.inventory)}
 
+    def model_guard_check(self):
+        return {"status": "ok"}
+
 
 def _fixture_inventory(adapter):
     if adapter is not None and not callable(getattr(adapter, "observe_inventory", None)):
-        adapter.observe_inventory = lambda: {"version": 1, "observation_kind": "inventory", "state": "available", "observed_at": time.monotonic(), "freshness_window": 30.0, "capacity_slot_effect": "retain", "inventory": []}
+        try:
+            adapter.observe_inventory = lambda: {"version": 1, "observation_kind": "inventory", "state": "available", "observed_at": time.monotonic(), "freshness_window": 30.0, "capacity_slot_effect": "retain", "inventory": []}
+        except (AttributeError, TypeError):
+            pass
+    if adapter is not None and not callable(getattr(adapter, "model_guard_check", None)):
+        try:
+            adapter.model_guard_check = lambda: {"status": "ok"}
+        except (AttributeError, TypeError):
+            return _ProbeFixtureAdapter(adapter)
     return adapter
+
+
+def _capture_declared_verification(driver, adapter):
+    """Fixture pairing for the enriched legacy launch fixtures: the launch
+    boundary requires a non-empty worker contract, and a task with declared
+    verification commands then requires the driver-captured evidence before
+    its success receipt validates. The wrapper runs the driver-owned capture
+    (the CLI verify operation's exact path) inside the adapter window, while
+    the claim is launched; tasks without declared commands are untouched.
+
+    Batch member claims hold no launch record of their own, so the wrapper
+    first gives the member claim the launch identity its launch reservation
+    already carries (mirroring ``_mark_group_launched``'s reservation
+    identity) and stamps the receipt with the live claim token exactly as
+    the resume path does.
+    """
+
+    def capture_for(task_id, raw):
+        if not isinstance(raw, dict) or raw.get("status") != "success" or not task_id:
+            return
+        manifest = driver.refresh_manifest()
+        task = manifest.get("tasks", {}).get(str(task_id)) or {}
+        commands = [item for item in (task.get("verification_commands") or ()) if isinstance(item, dict)]
+        claim = (manifest.get("claims") or {}).get(str(task_id))
+        if not commands or not isinstance(claim, dict):
+            return
+        # A post-create fixture enrichment leaves a stale empty criteria-map
+        # entry that receipt validation prefers over recomputation; repair it
+        # the way the runtime's own recovery transitions recompute the map.
+        if task.get("required_criteria") and not (manifest.get("evidence_criteria_map") or {}).get(str(task_id)):
+            manifest.setdefault("evidence_criteria_map", {})[str(task_id)] = capabilities.evidence_criterion_ids(list(task.get("required_criteria")))
+            runtime._safe_write_json(driver.manifest_path, manifest)
+            manifest = driver.refresh_manifest()
+            claim = (manifest.get("claims") or {}).get(str(task_id))
+        # Batch member claims hold no launch record of their own: give the
+        # member claim the launch identity its launch reservation already
+        # carries (the group id, mirroring _mark_group_launched's reservation
+        # identity) and the launched state the receipt binding requires; the
+        # receipt then binds exactly as the resume path stamps it.
+        if claim.get("group_id") and claim.get("state") in {"claimed", "blocked"}:
+            group = (manifest.get("claim_groups") or {}).get(claim.get("group_id"))
+            claim["launch_id"] = str((group or {}).get("group_id") or f"{task_id}-fixture-launch")
+            claim["state"] = "launched"
+            runtime._safe_write_json(driver.manifest_path, manifest)
+        elif not claim.get("launch_id"):
+            group = (manifest.get("claim_groups") or {}).get(claim.get("group_id")) if claim.get("group_id") else None
+            claim["launch_id"] = str((group or {}).get("group_id") or f"{task_id}-fixture-launch")
+            runtime._safe_write_json(driver.manifest_path, manifest)
+        if claim.get("state") != "launched":
+            return
+        raw.setdefault("claim_token", claim.get("token"))
+        driver.capture_verification_evidence(str(task_id), str(commands[0].get("id") or "verify"))
+
+    launch_impl = getattr(adapter, "launch", None)
+    if callable(launch_impl):
+        def launch(task, prompt, generation, deadline_seconds=None, policy_token=None):
+            raw = launch_impl(task, prompt, generation, deadline_seconds=deadline_seconds, policy_token=policy_token)
+            capture_for(task.get("id") if isinstance(task, dict) else None, raw)
+            return raw
+        adapter.launch = launch
+    resume_impl = getattr(adapter, "resume", None)
+    if callable(resume_impl):
+        def resume(session_id, prompt, generation, task_id=None, deadline_seconds=None, policy_token=None):
+            raw = resume_impl(session_id, prompt, generation, task_id=task_id, deadline_seconds=deadline_seconds, policy_token=policy_token)
+            capture_for(task_id, raw)
+            return raw
+        adapter.resume = resume
+    return driver
+
+
+class _ProbeFixtureAdapter:
+    def __init__(self, adapter):
+        self._adapter = adapter
+
+    def model_guard_check(self):
+        return {"status": "ok"}
+
+    def observe_inventory(self):
+        observe = getattr(self._adapter, "observe_inventory", None)
+        if callable(observe):
+            return observe()
+        return {"version": 1, "observation_kind": "inventory", "state": "available", "observed_at": time.monotonic(), "freshness_window": 30.0, "capacity_slot_effect": "retain", "inventory": []}
+
+    def __getattr__(self, name):
+        return getattr(self._adapter, name)
+
+
+def _runtime_driver(*args, **kwargs):
+    if kwargs.get("adapter") is None:
+        kwargs["adapter"] = FakeAdapter()
+    if kwargs["adapter"] is not None:
+        kwargs["adapter"] = _fixture_inventory(kwargs["adapter"])
+    adapter = kwargs.get("adapter")
+    driver = runtime.RuntimeDriver(*args, **kwargs)
+    return _capture_declared_verification(driver, adapter) if adapter is not None else driver
 
 
 class PolicyRefusingAdapter(FakeAdapter):
@@ -105,6 +212,299 @@ class ActivationRefusingAdapter(FakeAdapter):
 
 
 class ExecutePlanRuntimeTest(unittest.TestCase):
+    @staticmethod
+    def _model_guard_adapter(result):
+        adapter = FakeAdapter()
+        adapter.model_guard_check = lambda: dict(result)
+        return adapter
+
+    def test_codex_claim_fails_closed_without_probe_capable_adapter(self):
+        for adapter in (None, object()):
+            with self.subTest(adapter=type(adapter).__name__ if adapter is not None else None):
+                driver = runtime.RuntimeDriver(self.state_path, repo_root=self.root, owner="test-owner", adapter=adapter)
+                before = self.state_path.read_bytes()
+                outcome = driver.claim_next_task()
+                self.assertEqual(outcome["reason_code"], "runtime-policy-unavailable", outcome)
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_codex_preflight_blocks_guard_drift_before_claim(self):
+        plan = self._preflight_plan("Files:\n- `task-4.txt`\n\nEdits `task-4.txt` only", add_legacy_files=False)
+        adapter = self._model_guard_adapter({"status": "runtime-policy-unavailable", "failed_check": "guard_alignment", "error": "installed bytes differ", "recovery": "restore guard"})
+        driver = self.driver(adapter=adapter)
+        before = self.state_path.read_bytes()
+        outcome = driver.preflight(plan)
+        self.assertEqual(outcome["reason_code"], "runtime-policy-unavailable", outcome)
+        self.assertIsNone(outcome["preflight"]["continuation_command"])
+        self.assertTrue(any("guard_alignment" in item for item in outcome["preflight"]["problems"]))
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_codex_preflight_allows_aligned_guard(self):
+        plan = self._preflight_plan("Files:\n- `task-4.txt`\n\nEdits `task-4.txt` only", add_legacy_files=False)
+        adapter = self._model_guard_adapter({"status": "ok"})
+        outcome = self.driver(adapter=adapter).preflight(plan)
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertTrue(outcome["preflight"]["continuation_command"])
+
+    def test_codex_aligned_guard_allows_claim(self):
+        driver = self.driver(adapter=self._model_guard_adapter({"status": "ok"}))
+        outcome = driver.claim_next_task()
+        self.assertTrue(outcome.get("claimed"), outcome)
+
+    def test_codex_claim_refuses_guard_drift_before_write(self):
+        adapter = self._model_guard_adapter({"status": "runtime-policy-unavailable", "failed_check": "guard_alignment", "error": "drift", "recovery": "restore guard"})
+        driver = self.driver(adapter=adapter)
+        before = self.state_path.read_bytes()
+        outcome = driver.claim_next_task()
+        self.assertEqual(outcome["reason_code"], "runtime-policy-unavailable", outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_codex_parallel_group_claim_refuses_guard_drift_before_write(self):
+        group_path = self.root / "parallel-state.json"
+        runtime.create_manifest(group_path, "fixture-plan", [
+            {"id": "task-4", "number": 4, "status": "pending", "allowed_paths": ["task-4.txt"], **verification_fields("task-4")},
+            {"id": "task-5", "number": 5, "status": "pending", "allowed_paths": ["task-5.txt"], **verification_fields("task-5")},
+        ], repo_root=self.root, runtime_id="codex")
+        adapter = self._model_guard_adapter({"status": "runtime-policy-unavailable", "failed_check": "guard_alignment", "error": "drift", "recovery": "restore guard"})
+        driver = _runtime_driver(group_path, repo_root=self.root, owner="test-owner", adapter=adapter)
+        before = group_path.read_bytes()
+        outcome = driver.claim_parallel_group(["task-4", "task-5"])
+        self.assertEqual(outcome["reason_code"], "runtime-policy-unavailable", outcome)
+        self.assertEqual(group_path.read_bytes(), before)
+
+    def test_codex_batch_claim_refuses_guard_drift_before_write(self):
+        group_path = self.root / "batch-state.json"
+        runtime.create_manifest(group_path, "fixture-plan", [
+            {"id": "task-4", "number": 4, "status": "pending", "allowed_paths": ["task-4.txt"], **verification_fields("task-4")},
+            {"id": "task-5", "number": 5, "status": "pending", "allowed_paths": ["task-5.txt"], **verification_fields("task-5")},
+        ], repo_root=self.root, runtime_id="codex")
+        adapter = self._model_guard_adapter({"status": "runtime-policy-unavailable", "failed_check": "guard_alignment", "error": "drift", "recovery": "restore guard"})
+        driver = _runtime_driver(group_path, repo_root=self.root, owner="test-owner", adapter=adapter)
+        before = group_path.read_bytes()
+        outcome = driver.claim_next_task(batch=True)
+        self.assertEqual(outcome["reason_code"], "runtime-policy-unavailable", outcome)
+        self.assertEqual(group_path.read_bytes(), before)
+
+    def test_codex_parallel_group_claim_aligned_policy_creates_group_claims(self):
+        group_path = self.root / "parallel-aligned-state.json"
+        runtime.create_manifest(group_path, "fixture-plan", [
+            {"id": "task-4", "number": 4, "status": "pending", "allowed_paths": ["task-4.txt"], **verification_fields("task-4")},
+            {"id": "task-5", "number": 5, "status": "pending", "allowed_paths": ["task-5.txt"], **verification_fields("task-5")},
+        ], repo_root=self.root, runtime_id="codex")
+        adapter = self._model_guard_adapter({"status": "ok"})
+        driver = _runtime_driver(group_path, repo_root=self.root, owner="test-owner", adapter=adapter)
+        outcome = driver.claim_parallel_group(["task-4", "task-5"])
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = runtime.load_manifest(group_path)
+        self.assertEqual(state["tasks"]["task-4"]["status"], "claimed")
+        self.assertEqual(state["tasks"]["task-5"]["status"], "claimed")
+
+    def test_codex_done_refuses_guard_drift_before_successor_handoff(self):
+        self.seed_claim("task-3", owner="test-owner", generation=1, token="prior")
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-3"].update(status="done-pending", checkbox=False)
+        runtime._safe_write_json(self.state_path, state)
+        adapter = self._model_guard_adapter({"status": "runtime-policy-unavailable", "failed_check": "selected_config", "error": "missing model", "recovery": "repair config"})
+        driver = self.driver(adapter=adapter)
+        driver._done_boundary_block = lambda *args, **kwargs: None
+        before = self.state_path.read_bytes()
+        outcome = driver.record_done(self.done(task="task-3", generation=1, claim_token="prior"))
+        self.assertEqual(outcome["reason_code"], "runtime-policy-unavailable", outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_codex_aligned_guard_allows_done_successor_handoff(self):
+        self.seed_claim("task-3", owner="test-owner", generation=1, token="prior")
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-3"].update(status="done-pending", checkbox=False)
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver(adapter=self._model_guard_adapter({"status": "ok"}))
+        driver._done_boundary_block = lambda *args, **kwargs: None
+        outcome = driver.record_done(self.done(task="task-3", generation=1, claim_token="prior"))
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "checkpointed")
+        self.assertTrue(state["handoff_intents"])
+
+    def test_codex_commit_reconciliation_refuses_guard_drift_before_successor_handoff(self):
+        self.seed_claim("task-3", owner="test-owner", generation=1, token="prior")
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-3"].update(status="done-pending", checkbox=False, commit_identity="aa11bb22cc33", done_log_evidence=["done.log"])
+        runtime._safe_write_json(self.state_path, state)
+        adapter = self._model_guard_adapter({"status": "runtime-policy-unavailable", "failed_check": "selected_config", "error": "unreadable", "recovery": "repair config"})
+        driver = self.driver(adapter=adapter)
+        driver._done_boundary_block = lambda *args, **kwargs: None
+        before = self.state_path.read_bytes()
+        outcome = driver.reconcile_commit_before_checkpoint("task-3", "aa11bb22cc33", lambda _: True, claim_token="prior", generation=1)
+        self.assertEqual(outcome["reason_code"], "runtime-policy-unavailable", outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_codex_aligned_guard_allows_commit_reconciliation(self):
+        self.seed_claim("task-3", owner="test-owner", generation=1, token="prior")
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-3"].update(status="done-pending", checkbox=False, commit_identity="aa11bb22cc33", done_log_evidence=["done.log"])
+        runtime._safe_write_json(self.state_path, state)
+        driver = self.driver(adapter=self._model_guard_adapter({"status": "ok"}))
+        driver._done_boundary_block = lambda *args, **kwargs: None
+        outcome = driver.reconcile_commit_before_checkpoint("task-3", "aa11bb22cc33", lambda _: True, claim_token="prior", generation=1)
+        self.assertEqual(outcome["status"], "success", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "checkpointed")
+        self.assertTrue(state["handoff_intents"])
+
+    def test_codex_done_replay_with_drift_is_idempotent(self):
+        self.seed_claim("task-3", owner="test-owner", generation=1, token="prior")
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-3"].update(status="checkpointed", checkbox=True, complete=True, commit_identity="aa11bb22cc33")
+        state["claims"]["task-3"]["state"] = "closed"
+        runtime._safe_write_json(self.state_path, state)
+        adapter = self._model_guard_adapter({"status": "runtime-policy-unavailable", "failed_check": "guard_alignment", "error": "drift"})
+        driver = self.driver(adapter=adapter)
+        driver._done_boundary_block = lambda *args, **kwargs: None
+        before = self.state_path.read_bytes()
+        outcome = driver.record_done(self.done(task="task-3", generation=1, claim_token="prior"))
+        self.assertEqual(outcome["reason_code"], "completed", outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_codex_done_drift_then_aligned_retry_completes_once(self):
+        self.seed_claim("task-3", owner="test-owner", generation=1, token="prior")
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-3"].update(status="done-pending", checkbox=False)
+        runtime._safe_write_json(self.state_path, state)
+        policy = {"status": "runtime-policy-unavailable", "failed_check": "guard_alignment", "error": "drift"}
+        adapter = self._model_guard_adapter(policy)
+        driver = self.driver(adapter=adapter)
+        driver._done_boundary_block = lambda *args, **kwargs: None
+        raw = self.done(task="task-3", generation=1, claim_token="prior")
+        before = self.state_path.read_bytes()
+        refused = driver.record_done(raw)
+        self.assertEqual(refused["reason_code"], "runtime-policy-unavailable", refused)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        policy.update(status="ok")
+        completed = driver.record_done(raw)
+        self.assertEqual(completed["status"], "success", completed)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "checkpointed")
+        self.assertEqual(len(state["handoff_intents"]), 1)
+
+    def test_codex_commit_reconciliation_replay_with_drift_is_idempotent(self):
+        self.seed_claim("task-3", owner="test-owner", generation=1, token="prior")
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-3"].update(status="checkpointed", checkbox=True, complete=True, commit_identity="aa11bb22cc33", done_log_evidence=["done.log"])
+        state["claims"]["task-3"]["state"] = "closed"
+        runtime._safe_write_json(self.state_path, state)
+        adapter = self._model_guard_adapter({"status": "runtime-policy-unavailable", "failed_check": "guard_alignment", "error": "drift"})
+        driver = self.driver(adapter=adapter)
+        before = self.state_path.read_bytes()
+        outcome = driver.reconcile_commit_before_checkpoint("task-3", "aa11bb22cc33", lambda _: True, claim_token="prior", generation=1)
+        self.assertEqual(outcome["reason_code"], "completed", outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_codex_reconcile_commit_drift_then_aligned_retry_completes_once(self):
+        self.seed_claim("task-3", owner="test-owner", generation=1, token="prior")
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-3"].update(status="done-pending", checkbox=False, commit_identity="aa11bb22cc33", done_log_evidence=["done.log"])
+        runtime._safe_write_json(self.state_path, state)
+        policy = {"status": "runtime-policy-unavailable", "failed_check": "selected_config", "error": "missing model"}
+        adapter = self._model_guard_adapter(policy)
+        driver = self.driver(adapter=adapter)
+        driver._done_boundary_block = lambda *args, **kwargs: None
+        before = self.state_path.read_bytes()
+        refused = driver.reconcile_commit_before_checkpoint("task-3", "aa11bb22cc33", lambda _: True, claim_token="prior", generation=1)
+        self.assertEqual(refused["reason_code"], "runtime-policy-unavailable", refused)
+        self.assertEqual(self.state_path.read_bytes(), before)
+        policy.update(status="ok")
+        completed = driver.reconcile_commit_before_checkpoint("task-3", "aa11bb22cc33", lambda _: True, claim_token="prior", generation=1)
+        self.assertEqual(completed["status"], "success", completed)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["tasks"]["task-3"]["status"], "checkpointed")
+        self.assertEqual(len(state["handoff_intents"]), 1)
+
+    def test_codex_policy_probe_failure_is_fail_closed_and_read_only(self):
+        for failure in (
+            {"status": "runtime-policy-unavailable", "failed_check": "selected_config", "error": "malformed config"},
+            {"status": "runtime-policy-unavailable", "failed_check": "registration", "error": "unreadable registration"},
+        ):
+            with self.subTest(failure=failure):
+                driver = self.driver(adapter=self._model_guard_adapter(failure))
+                before = self.state_path.read_bytes()
+                outcome = driver.claim_next_task()
+                self.assertEqual(outcome["reason_code"], "runtime-policy-unavailable", outcome)
+                self.assertEqual(self.state_path.read_bytes(), before)
+
+    def test_codex_policy_probe_uses_only_injected_fixture_files(self):
+        source = Path(__file__).resolve().parents[1] / "agents/hooks/codex-model-guard/require-luna.py"
+        home = self.root / "isolated-home"
+        codex_dir = home / ".codex"
+        codex_dir.mkdir(parents=True)
+        installed = codex_dir / "require-luna.py"
+        installed.write_bytes(source.read_bytes())
+        registration = codex_dir / "hooks.json"
+        registration.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": f"python3 {installed}"}]}]}}), encoding="utf-8")
+        config = self.root / "fixture-config.toml"
+        config.write_text("[agents]\ndefault_subagent_model = 'fixture-model'\n", encoding="utf-8")
+        plan = self._preflight_plan("Files:\n- `task-4.txt`\n\nEdits `task-4.txt` only", add_legacy_files=False)
+        previous_home, previous_config = os.environ.get("HOME"), os.environ.get("CODEX_CONFIG")
+        os.environ["HOME"] = str(home)
+        os.environ["CODEX_CONFIG"] = "fixture-config.toml"
+        try:
+            adapter = CodexAdapter(self.root, model_guard_registration=registration, model_guard_source=source)
+            driver = self.driver(adapter=adapter)
+            import io
+
+            opened = []
+            io_open = io.open
+            os_open = os.open
+
+            def observe_open(file, *args, **kwargs):
+                if isinstance(file, (str, os.PathLike)):
+                    opened.append(Path(file).resolve())
+                return io_open(file, *args, **kwargs)
+
+            def observe_os_open(file, flags, *args, **kwargs):
+                if isinstance(file, (str, os.PathLike)):
+                    opened.append(Path(file).resolve())
+                return os_open(file, flags, *args, **kwargs)
+
+            with mock.patch("io.open", side_effect=observe_open), mock.patch("os.open", side_effect=observe_os_open):
+                result = driver.preflight(plan)
+            self.assertEqual(result["status"], "success", result)
+            policy_files = {registration.resolve(), installed.resolve(), source.resolve(), config.resolve()}
+            runtime_files = {
+                self.state_path.resolve(),
+                self.state_path.with_suffix(self.state_path.suffix + ".lock").resolve(),
+                (Path(__file__).resolve().parents[1] / "projects/.ai-playbook/execute-plan-runtime-inventory.toml").resolve(),
+                (self.root / "preflight-plan.md").resolve(),
+            }
+            self.assertTrue(policy_files.issubset(set(opened)), opened)
+            self.assertLessEqual(set(opened), policy_files | runtime_files, opened)
+        finally:
+            if previous_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = previous_home
+            if previous_config is None:
+                os.environ.pop("CODEX_CONFIG", None)
+            else:
+                os.environ["CODEX_CONFIG"] = previous_config
+
+    def test_non_codex_runtime_skips_codex_guard_probe(self):
+        state = runtime.load_manifest(self.state_path)
+        state["runtime"] = "claude"
+        runtime._safe_write_json(self.state_path, state)
+        adapter = self._model_guard_adapter({"status": "runtime-policy-unavailable", "failed_check": "guard_alignment"})
+        adapter.model_guard_check = lambda: self.fail("non-Codex runtime read Codex policy")
+        original_home = os.environ.get("HOME")
+        with tempfile.TemporaryDirectory() as isolated_home:
+            os.environ["HOME"] = isolated_home
+            try:
+                self.assertFalse((Path(isolated_home) / ".codex").exists())
+                outcome = self.driver(adapter=adapter).claim_next_task()
+            finally:
+                if original_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = original_home
+        self.assertEqual(outcome["status"], "success", outcome)
+
     def test_create_refuses_unrepresentable_evidence_before_claim(self):
         path = self.root / "oversized-evidence.json"
         task = {"id": "task-large", "required_criteria": ["é" * 257], "verification_commands": [{"id": "verify", "argv": ["true"], "criteria": ["é" * 257]}], "allowed_paths": ["task-4.txt"]}
@@ -777,6 +1177,29 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         validated = driver.refresh_manifest()
         self.assertEqual(validated["evidence_contract_digest"], legacy_digest)
 
+    def test_legacy_contract_oversized_criteria_refresh_resumes(self):
+        # A pre-upgrade in-progress run: a valid legacy digest whose
+        # criteria exceed the post-upgrade receipt limits still refreshes,
+        # while the same oversized criteria under the new digest refuse.
+        driver = self.driver()
+        state = runtime.load_manifest(self.state_path)
+        oversized = "x" * 513
+        state["tasks"]["task-4"]["required_criteria"] = [oversized]
+        state["tasks"]["task-4"]["verification_commands"] = [{"id": "verify", "argv": ["true"], "criteria": [oversized]}]
+        state["evidence_criteria_map"].pop("task-4", None)
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"], include_criterion_ids=False)
+        runtime._safe_write_json(self.state_path, state)
+        validated = driver.refresh_manifest()
+        self.assertEqual(validated["evidence_contract_digest"], state["evidence_contract_digest"])
+        # The enforced shape is uncomputable for oversized criteria (the
+        # digest itself refuses), so the refusal arm records a digest that
+        # matches neither shape: the strict computation raises, the legacy
+        # fallback mismatches, and the manifest refuses either way.
+        state["evidence_contract_digest"] = "0" * 64
+        runtime._safe_write_json(self.state_path, state)
+        with self.assertRaises(ValueError):
+            driver.refresh_manifest()
+
     def test_recovery_refuses_altered_criteria_mapping_without_mutation(self):
         state = runtime.load_manifest(self.state_path)
         state["evidence_enforcement"] = True
@@ -792,7 +1215,9 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def setUp(self) -> None:
         # Pin ambient execute-plan env inputs so an exported variable cannot
         # silently redirect the code under test to a foreign registry.
-        self._saved_env = {key: os.environ.pop(key) for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST") if key in os.environ}
+        self._saved_env = {key: os.environ.get(key) for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST", "HOME", "CODEX_CONFIG")}
+        for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST"):
+            os.environ.pop(key, None)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
         self.state_path = self.root / "runtime_state.json"
@@ -805,9 +1230,20 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         subprocess.run(["git", "-c", "init.defaultBranch=master", "init", "-q"], cwd=self.root, check=True, env=self._git_env)
         subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.root, check=True, env=self._git_env)
         subprocess.run(["git", "config", "user.name", "Runtime Test"], cwd=self.root, check=True, env=self._git_env)
-        (self.root / ".gitignore").write_text("runtime_state.json\nruntime_state.json.lock\n", encoding="utf-8")
+        (self.root / ".gitignore").write_text("runtime_state.json\nruntime_state.json.lock\n.test-home/\n", encoding="utf-8")
         subprocess.run(["git", "add", ".gitignore"], cwd=self.root, check=True, env=self._git_env)
         subprocess.run(["git", "commit", "-qm", "fixture"], cwd=self.root, check=True, env=self._git_env)
+        home = self.root / ".test-home"
+        codex_dir = home / ".codex"
+        codex_dir.mkdir(parents=True)
+        source_guard = ROOT / "agents/hooks/codex-model-guard/require-luna.py"
+        installed_guard = codex_dir / "require-luna.py"
+        installed_guard.write_bytes(source_guard.read_bytes())
+        (codex_dir / "hooks.json").write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": f"python3 {installed_guard}"}]}]}}), encoding="utf-8")
+        config_path = codex_dir / "config.toml"
+        config_path.write_text("[agents]\ndefault_subagent_model = 'fixture-model'\n", encoding="utf-8")
+        os.environ["HOME"] = str(home)
+        os.environ["CODEX_CONFIG"] = str(config_path)
         runtime.create_manifest(
             self.state_path,
             "fixture-plan",
@@ -834,15 +1270,16 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
-        os.environ.update(self._saved_env)
-        for key in ("EXECUTE_PLAN_RUNTIME_INVENTORY", "EXECUTE_PLAN_PACKAGE_MANIFEST"):
-            if key not in self._saved_env:
+        for key, value in self._saved_env.items():
+            if value is None:
                 os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
     def driver(self, **kwargs):
         seed_task3 = kwargs.pop("seed_task3", True)
         kwargs["adapter"] = _fixture_inventory(kwargs.get("adapter", FakeAdapter()))
-        return runtime.RuntimeDriver(
+        return _runtime_driver(
             self.state_path,
             plan_slug="fixture-plan",
             owner=kwargs.pop("owner", "test-owner"),
@@ -862,6 +1299,27 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unclassified checklist action"):
             runtime.create_manifest(manifest_path, "fixture-plan", [task], repo_root=self.root)
         self.assertFalse(manifest_path.exists())
+
+    def test_checked_checklist_action_requires_classification(self):
+        # The seeding collector reads checked and unchecked boxes alike: a
+        # task body whose `- [x]` action line is unclassified refuses
+        # seeding exactly like an unchecked one, and the classification
+        # record covering the checked line seeds cleanly.
+        base = {
+            "id": "task-5", "number": 5, "status": "pending", "checkbox": False,
+            "allowed_paths": ["task-5.txt"],
+            "task_body": "Steps:\n\n- [ ] implement task behavior\n- [x] perform deployment\n",
+            **verification_fields("task-5"),
+        }
+        with self.assertRaisesRegex(ValueError, "unclassified checklist actions"):
+            runtime.create_manifest(self.root / "checked-unclassified.json", "fixture-plan", [base], repo_root=self.root)
+        classified = {**base, "checklist_actions": [
+            {"text": "implement task behavior", "owner": "worker"},
+            {"text": "perform deployment", "owner": "worker"},
+        ]}
+        manifest_path = self.root / "checked-classified.json"
+        runtime.create_manifest(manifest_path, "fixture-plan", [classified], repo_root=self.root)
+        self.assertTrue(manifest_path.exists())
 
     def test_parent_commit_action_is_excluded_and_verified_by_done(self):
         task = {
@@ -1162,12 +1620,28 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         adapter.observe_inventory = lambda: {"version": 1, "observation_kind": "inventory", "state": "unavailable", "observed_at": time.monotonic(), "freshness_window": 30, "capacity_slot_effect": "quarantine", "inventory": []}
         driver = self.driver(adapter=adapter)
         self.seed_claim("task-4")
+        self.enrich_launch_contract()
         state = runtime.load_manifest(self.state_path)
         state["claims"]["task-4"]["state"] = "waiting-capacity"
         runtime._safe_write_json(self.state_path, state)
         outcome = driver.continue_parent()
         self.assertEqual(outcome["reason_code"], "capacity-unavailable")
         self.assertEqual(runtime.load_manifest(self.state_path)["claims"]["task-4"]["state"], "waiting-capacity")
+
+    def enrich_launch_contract(self, task_id="task-4", state_path=None):
+        """Give a legacy fixture task the non-empty worker contract the
+        launch boundary requires (the verification_fields helper pattern).
+        Post-create enrichment recomputes the digest and the criteria map
+        over the full shape, exactly like the runtime's own recovery
+        transitions recompute them over corrected tasks.
+        """
+
+        path = state_path or self.state_path
+        state = runtime.load_manifest(path)
+        state["tasks"].setdefault(str(task_id), {}).update(verification_fields(str(task_id)))
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        state["evidence_criteria_map"] = {name: capabilities.evidence_criterion_ids(task.get("required_criteria", [])) for name, task in state["tasks"].items()}
+        runtime._safe_write_json(path, state)
 
     def seed_claim(self, task="task-3", owner="test-owner", generation=0, token="seed-task-3"):
         state = runtime.load_manifest(self.state_path)
@@ -1279,12 +1753,18 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             interrupted_reservation_id: interrupted_reservation,
             sibling_reservation_id: sibling_reservation,
         })
-        state["tasks"]["task-4c"] = {"id": "task-4c", "number": 6, "status": "claimed", "checkbox": False, "allowed_paths": ["task-4c.txt"]}
+        state["tasks"]["task-4c"] = {"id": "task-4c", "number": 6, "status": "claimed", "checkbox": False, "allowed_paths": ["task-4c.txt"], **verification_fields("task-4c")}
         state["claims"]["task-4c"] = {"task_id": "task-4c", "owner": "test-owner", "claim_owner_id": "test-owner", "claim_token": "ct4c", "token": "ct4c", "generation": 5, "state": "claimed", "group_id": "parallel-fixture-group", "member_ordinal": 3, "launch_id": "launch-task-4c"}
         state["claim_groups"]["parallel-fixture-group"]["kind"] = "parallel"
         state["claim_groups"]["parallel-fixture-group"].pop("anchor", None)
         state["claim_groups"]["parallel-fixture-group"].pop("active_member", None)
         state["claim_groups"]["parallel-fixture-group"]["members"].append("task-4c")
+        # The recovered member's replacement launch needs the non-empty
+        # worker contract the launch boundary requires; the digest and the
+        # criteria map are recomputed over the complete task set.
+        task.update(verification_fields(task_id))
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        state["evidence_criteria_map"] = {name: capabilities.evidence_criterion_ids(item.get("required_criteria", [])) for name, item in state["tasks"].items()}
         runtime._safe_write_json(self.state_path, state)
 
         adapter = FakeAdapter()
@@ -1400,6 +1880,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
     def test_resume_rotates_identity_when_worker_replacement_is_required(self):
         adapter = FakeAdapter()
         driver, _payload = self.seed_interrupted_claim(adapter)
+        self.enrich_launch_contract()
         before = runtime.load_manifest(self.state_path)["claims"]["task-4"]
         driver.resume()
         final_state = runtime.load_manifest(self.state_path)
@@ -1667,6 +2148,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 return None
 
         adapter = ScalarAdapter()
+        self.enrich_launch_contract()
         result = self.driver(adapter=adapter, seed_task3=False).launch_next_task()
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "malformed-result")
@@ -1684,6 +2166,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             def launch(self, task, prompt, generation, deadline_seconds=None, policy_token=None):
                 return {"status": "success", "evidence": []}
 
+        self.enrich_launch_contract()
         result = self.driver(adapter=MalformedAdapter(), seed_task3=False).launch_next_task()
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "malformed-result")
@@ -1743,6 +2226,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
             def launch(self, task, prompt, generation, deadline_seconds=None, policy_token=None):
                 raise TimeoutError("deadline exceeded")
 
+        self.enrich_launch_contract()
         result = self.driver(adapter=TimeoutAdapter(), seed_task3=False).launch_next_task()
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "timeout")
@@ -1771,6 +2255,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         adapter = FakeAdapter(
             lambda *_: {"status": "blocked", "reason_code": "timeout", "evidence": ["launch deadline"], "action_scope": "repository-task", "checkpoint_identity": "task-4", "generation": 1}
         )
+        self.enrich_launch_contract()
         result = self.driver(adapter=adapter, seed_task3=False).launch_next_task(deadline_seconds=0.01)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "timeout")
@@ -1837,6 +2322,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 task=task["id"], generation=generation, evidence=[f"token={token['token']}"]
             )
         )
+        self.enrich_launch_contract()
         result = self.driver(adapter=adapter).launch_next_task()
         self.assertEqual(result["status"], "success", result)
         self.assertEqual(len(adapter.launches), 1)
@@ -1845,6 +2331,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
 
     def test_two_drivers_claim_and_launch_once(self):
         adapter = FakeAdapter(lambda task, _prompt, generation, _deadline, _token: self.worker_checkpoint(task=task["id"], generation=generation))
+        self.enrich_launch_contract()
         results = []
         barrier = threading.Barrier(2)
 
@@ -1884,6 +2371,22 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         self.assertEqual(after["history"], before["history"])
 
     def test_contract_violation_gets_one_driver_owned_retry(self):
+        # Boundary-order witness: with the launch boundary checking contract
+        # completeness, the adapter is no longer reachable with an empty
+        # contract, so the empty-contract shape refuses at the driver before
+        # any adapter launch; the retry flow itself runs on a non-empty
+        # contract below.
+        empty_adapter = FakeAdapter()
+        empty = self._legacy_contract_driver(empty_adapter).launch_next_task()
+        self.assertEqual(empty["status"], "blocked", empty)
+        self.assertIn("worker contract is incomplete", " ".join(empty["evidence"]))
+        self.assertEqual(empty_adapter.launches, [])
+
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"].update(verification_fields("task-4"))
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        state["evidence_criteria_map"] = {task_id: capabilities.evidence_criterion_ids(task.get("required_criteria", [])) for task_id, task in state["tasks"].items()}
+        runtime._safe_write_json(self.state_path, state)
         token = self.seed_claim(task="task-4", token="seed-task-4")
         attempts = []
 
@@ -1908,6 +2411,15 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         duplicate of the failed attempt.
         """
 
+        # Re-pointed at a non-empty contract: the launch boundary refuses an
+        # empty worker contract before the adapter is reachable, so the retry
+        # flow needs the verification fields (the _worker_prompt_fixture
+        # pattern).
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-4"].update(verification_fields("task-4"))
+        state["evidence_contract_digest"] = capabilities.evidence_contract_digest(state["tasks"])
+        state["evidence_criteria_map"] = {task_id: capabilities.evidence_criterion_ids(task.get("required_criteria", [])) for task_id, task in state["tasks"].items()}
+        runtime._safe_write_json(self.state_path, state)
         token = self.seed_claim(task="task-4", token="seed-task-4")
         attempts = []
 
@@ -1933,6 +2445,65 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
         commit = self.commit_file("task-4.txt")
         done = driver.record_done(self.done(task="task-4", generation=0, commit_identity=commit))
         self.assertEqual(done["status"], "success")
+
+    def _legacy_contract_driver(self, adapter=None):
+        """Dedicated empty-contract fixture for the launch-boundary pins.
+
+        The shared setUp manifest carries a launchable (non-empty) worker
+        contract, so the incomplete-contract refusal pins seed their own
+        legacy manifest with the pre-migration task shape (empty criteria
+        and commands).
+        """
+
+        legacy_path = self.root / "legacy-contract.json"
+        runtime.create_manifest(
+            legacy_path,
+            "fixture-plan",
+            [{"id": "task-4", "number": 4, "status": "pending", "checkbox": False, "allowed_paths": ["task-4.txt"]}],
+            repo_root=self.root,
+            runtime_id="codex",
+        )
+        adapter = adapter if adapter is not None else FakeAdapter()
+        return runtime.RuntimeDriver(
+            legacy_path,
+            plan_slug="fixture-plan",
+            owner="test-owner",
+            repo_root=self.root,
+            commit_lookup=lambda _commit: True,
+            adapter=_fixture_inventory(adapter),
+        )
+
+    def test_launch_refuses_incomplete_contract_before_reservation_legacy_mode(self):
+        # Legacy evidence mode: a task with empty criteria and commands must
+        # refuse at launch with the named incomplete-contract outcome; the
+        # adapter is never the first line to catch an incomplete contract.
+        adapter = FakeAdapter()
+        result = self._legacy_contract_driver(adapter).launch_next_task()
+        self.assertEqual(result["status"], "blocked", result)
+        evidence = " ".join(result["evidence"])
+        self.assertIn("worker contract is incomplete", evidence)
+        self.assertIn("task-4", evidence)
+        self.assertEqual(adapter.launches, [])
+
+    def test_launch_refusal_leaves_no_reservation_state(self):
+        # Boundary order: the refused launch mutates nothing. The claim the
+        # launch path took stays claimed, the task stays unlaunched, and no
+        # worker entry, launch id, or capacity reservation is recorded.
+        driver = self._legacy_contract_driver()
+        before = runtime.load_manifest(driver.manifest_path)
+        result = driver.launch_next_task()
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertIn("worker contract is incomplete", " ".join(result["evidence"]))
+        after = runtime.load_manifest(driver.manifest_path)
+        claim = after["claims"]["task-4"]
+        self.assertEqual(claim["state"], "claimed")
+        self.assertNotIn("launch_record", claim)
+        # The claim the launch path took (claim-time status "claimed") shows
+        # no launch mutation: the task never reaches a launched status.
+        self.assertEqual(after["tasks"]["task-4"]["status"], "claimed")
+        self.assertNotEqual(claim["state"], "launched")
+        self.assertEqual(after["workers"], before["workers"])
+        self.assertEqual(after["capacity"]["reservations"], before["capacity"]["reservations"])
 
     def test_out_of_scope_worktree_change_does_not_block_checkpoint(self):
         baseline = self._git_stdout("rev-parse", "HEAD")
@@ -1997,6 +2568,7 @@ class ExecutePlanRuntimeTest(unittest.TestCase):
                 task=task["id"], generation=generation, checkpoint_identity=f"{task['id']}:worker"
             )
         )
+        self.enrich_launch_contract()
         driver = self.driver(adapter=adapter, seed_task3=False)
         with mock.patch.object(driver, "_git_head_revision", return_value=""):
             result = driver.launch_next_task()
@@ -2483,6 +3055,177 @@ Examples: `unlisted/prose.json`"""
         self.assertEqual(outcome["status"], "success", outcome)
         self.assertEqual(outcome["preflight"]["drift"], [])
 
+    # ------------------------------------------------------------------
+    # Receipt-backed checklist reconciliation (preflight agreement condition)
+    # ------------------------------------------------------------------
+
+    _RECON_TASK4_CRITERION = "task-4:verification"
+
+    def _reconciliation_plan(self, task4_lines):
+        body = "\n".join(task4_lines)
+        plan = self.root / "reconciliation-plan.md"
+        plan.write_text(
+            "## Tasks\n### Task 3: done\nComplete.\n"
+            "### Task 4: fixture\n" + body + "\n"
+            "### Task 5: next\nWork.\n- [ ] next task item\n",
+            encoding="utf-8",
+        )
+        return plan
+
+    def _seed_reconciliation_state(self, *, claim_state="closed", claim_token="attempt-token", claim_generation=7, commit_identity=None, verification_evidence=None, required_criteria=None, plan_digest=None):
+        state = runtime.load_manifest(self.state_path)
+        task = state["tasks"]["task-4"]
+        task.update({"status": "checkpointed", "checkbox": True, "complete": True})
+        if commit_identity is not None:
+            task["commit_identity"] = commit_identity
+        if required_criteria is not None:
+            task["required_criteria"] = list(required_criteria)
+        if verification_evidence is not None:
+            state.setdefault("verification_evidence", {})["task-4"] = verification_evidence
+        state["claims"]["task-4"] = {
+            "task_id": "task-4", "token": claim_token, "generation": claim_generation,
+            "owner": "test-owner", "state": claim_state,
+            "launch_record": {"baseline_revision": "", "generation": claim_generation, "launched_at": 111.0},
+        }
+        if plan_digest is not None:
+            state["plan_digest"] = plan_digest
+        # A pending successor keeps the readiness decision out of the
+        # terminal path, which would discard the failed-condition list.
+        state["tasks"]["task-5"] = {"id": "task-5", "number": 5, "status": "pending", "checkbox": False, "allowed_paths": []}
+        runtime._safe_write_json(self.state_path, state)
+
+    @staticmethod
+    def _verification_envelope(token="attempt-token", generation=7):
+        return {
+            "version": 1, "command": ["python3", "-m", "unittest"], "exit_status": 0,
+            "criteria": ["task-4:verification"], "selected_tests": ["task-4:verification"],
+            "claim_token": token, "generation": generation, "task_id": "task-4",
+            "verified_by": "runtime-driver",
+        }
+
+    def _disagreement_problem(self, outcome):
+        # One condition per refused line plus the summary: the joined text is
+        # the whole per-line disposition list the readiness emits.
+        return "\n".join(item for item in outcome["evidence"] if "plan-manifest disagreement" in item)
+
+    def test_checklist_reconciliation_closes_commit_line_from_receipt(self):
+        # A checkpointed task's unchecked `Commit:` line closes when a receipt
+        # recorded for the task's current attempt names a commit identity:
+        # the task record carries the done receipt's commit_identity and the
+        # task's claim record is the one the done handoff closed.
+        self._seed_reconciliation_state(commit_identity="abc1234")
+        plan = self._reconciliation_plan(["- [ ] Commit: abc1234"])
+
+        outcome = self.driver().preflight(plan)
+
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertTrue(all("plan-manifest disagreement" not in item for item in outcome["evidence"]), outcome["evidence"])
+
+    def test_checklist_reconciliation_closes_verification_item_from_receipt(self):
+        # An unchecked verification item closes when current-attempt recorded
+        # verification evidence matches the item's criteria reference: the
+        # envelope's claim_token and generation equal the live claim record's.
+        self._seed_reconciliation_state(
+            verification_evidence={"verify": self._verification_envelope()},
+            required_criteria=[self._RECON_TASK4_CRITERION],
+        )
+        plan = self._reconciliation_plan(["- [ ] run the suite pinned by task-4:verification and record the digest"])
+
+        outcome = self.driver().preflight(plan)
+
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertTrue(all("plan-manifest disagreement" not in item for item in outcome["evidence"]), outcome["evidence"])
+
+    def test_checklist_reconciliation_red_step_requires_bounded_disposition(self):
+        # An unobserved TDD RED step never closes silently: the refusal's
+        # per-line disposition names the line and requires the explicit
+        # bounded RED disposition recorded beside the check, while the
+        # receipt-closed `Commit:` line on the same section stays closed.
+        self._seed_reconciliation_state(commit_identity="abc1234")
+        plan = self._reconciliation_plan([
+            "- [ ] Commit: abc1234",
+            "- [ ] run the new test and expect RED before implementing",
+        ])
+
+        outcome = self.driver().preflight(plan)
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        problem = self._disagreement_problem(outcome)
+        self.assertIn("task 'task-4'", problem)
+        self.assertIn("bounded RED disposition", problem)
+        self.assertIn("expect RED before implementing", problem)
+        self.assertIn("1 unreconciled unchecked checkbox line(s) of 2 unchecked", problem)
+
+    def test_checklist_reconciliation_refuses_unexplained_acceptance_item(self):
+        # An unchecked line no receipt covers refuses under the
+        # receipt-backed reconciliation token: prose acceptance is never
+        # evidence.
+        self._seed_reconciliation_state(commit_identity="abc1234")
+        plan = self._reconciliation_plan(["- [ ] accept the reviewed contract wording"])
+
+        outcome = self.driver().preflight(plan)
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        problem = self._disagreement_problem(outcome)
+        self.assertIn("receipt-backed reconciliation", problem)
+        self.assertIn("accept the reviewed contract wording", problem)
+        self.assertIn("no recorded receipt", problem)
+
+    def test_checklist_reconciliation_refuses_mismatched_commit(self):
+        # Commit evidence surviving from an earlier attempt refuses: the
+        # task's current claim record is a newer open attempt (fresh token),
+        # so the tokenless receipt cannot be bound to it and recency
+        # matching refuses the line as mismatched stale-attempt evidence.
+        self._seed_reconciliation_state(
+            commit_identity="older-commit",
+            claim_state="launched", claim_token="attempt-2-token", claim_generation=8,
+        )
+        plan = self._reconciliation_plan(["- [ ] Commit: abc1234"])
+
+        outcome = self.driver().preflight(plan)
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        problem = self._disagreement_problem(outcome)
+        self.assertIn("mismatched identity", problem)
+        self.assertIn("stale-attempt evidence", problem)
+        self.assertIn("attempt-2-token", problem)
+
+    def test_checklist_reconciliation_names_refused_lines(self):
+        # The refusal is a per-line disposition list naming the task, the
+        # plan digest, and each refused line's number and reason; the
+        # receipt-closed Commit line does not appear.
+        self._seed_reconciliation_state(commit_identity="abc1234", plan_digest="plandigest123")
+        plan = self._reconciliation_plan([
+            "- [ ] Commit: abc1234",
+            "- [ ] accept the reviewed contract wording",
+            "- [ ] second unexplained item",
+        ])
+
+        outcome = self.driver().preflight(plan)
+
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        problem = self._disagreement_problem(outcome)
+        self.assertIn("task 'task-4'", problem)
+        self.assertIn("plan digest plandigest123", problem)
+        self.assertIn("line 2", problem)
+        self.assertIn("line 3", problem)
+        self.assertIn("accept the reviewed contract wording", problem)
+        self.assertIn("second unexplained item", problem)
+        self.assertIn("2 unreconciled unchecked checkbox line(s) of 3 unchecked", problem)
+
+    def test_checklist_reconciliation_fully_checked_section_unchanged(self):
+        # A fully checked section behaves exactly as before the
+        # reconciliation existed: no disagreement condition fires and the
+        # readiness decision stays direct-continuation.
+        self._seed_reconciliation_state(commit_identity="abc1234")
+        plan = self._reconciliation_plan(["- [x] implement the fixture behavior", "- [x] Commit: abc1234"])
+
+        outcome = self.driver().preflight(plan)
+
+        self.assertEqual(outcome["status"], "success", outcome)
+        self.assertTrue(all("plan-manifest disagreement" not in item for item in outcome["evidence"]), outcome["evidence"])
+        self.assertTrue(any("readiness decision: direct-continuation" in item for item in outcome["evidence"]), outcome["evidence"])
+
     def test_duplicate_files_heading_refused(self):
         # One task section carries two exact `Files:` headings; the documented
         # grammar accepts exactly one declaration per section, so the second
@@ -2777,6 +3520,11 @@ Files:
 
         def seed_claimed(manifest):
             manifest["generation"] = 1
+            # The continue leg launches through the boundary, so its task
+            # carries the full contract shape; the resume leg's task stays
+            # empty-criteria (see seed_manifest's comment).
+            manifest["tasks"]["task-4"].update(verification_fields("task-4"))
+            manifest["evidence_contract_digest"] = runtime.capabilities.evidence_contract_digest(manifest["tasks"])
             manifest["tasks"]["task-4"]["status"] = "claimed"
             manifest["claims"]["task-4"] = {"token": "continue-token", "generation": 1, "owner": "test-owner", "state": "claimed", "task_id": "task-4", "launch_id": "continue-launch", "timestamp": time.time()}
 
@@ -2966,7 +3714,7 @@ Files:
         spaced = self.root / "target dir"
         spaced.mkdir()
         self.rewrite_manifest(lambda state: state["tasks"]["task-4"].update({"allowed_paths": ["task-4/"]}))
-        driver = runtime.RuntimeDriver(
+        driver = _runtime_driver(
             self.state_path,
             plan_slug="fixture-plan",
             owner="test-owner",
@@ -3122,6 +3870,9 @@ Files:
             launches = []
 
             class RecordingSeamAdapter:
+                def model_guard_check(self):
+                    return {"status": "ok"}
+
                 def observe_inventory(self):
                     return {"version": 1, "observation_kind": "inventory", "state": "available", "observed_at": time.monotonic(), "freshness_window": 30.0, "capacity_slot_effect": "retain", "inventory": []}
 
@@ -3141,7 +3892,18 @@ Files:
                 recorded.update(runtime_id=runtime_id, repo_root=repo_root, kwargs=kwargs)
                 return RecordingSeamAdapter()
 
-            with mock.patch.object(runtime.capabilities, "resolve_adapter", side_effect=seam):
+            # The in-process main constructs its own driver over the seam
+            # adapter; the wrapper pairs the enriched fixture with the
+            # driver-captured verification evidence its success receipt
+            # requires.
+            real_driver = runtime.RuntimeDriver
+            def seam_driver(*args, **kwargs):
+                driver = real_driver(*args, **kwargs)
+                seam_adapter = kwargs.get("adapter")
+                return _capture_declared_verification(driver, seam_adapter) if seam_adapter is not None else driver
+            self.enrich_launch_contract()
+            with mock.patch.object(runtime.capabilities, "resolve_adapter", side_effect=seam), \
+                 mock.patch.object(runtime, "RuntimeDriver", seam_driver):
                 code, output = self._main_from_cwd(foreign, *argv[1:])
             self.assertEqual(code, 0, output)
             result = json.loads(output)
@@ -3503,6 +4265,7 @@ Files:
             return self.worker_checkpoint(task=task["id"], generation=generation, checkpoint_identity=f"{task['id']}:worker")
 
         adapter = FakeAdapter(spy_launch)
+        self.enrich_launch_contract()
         result = self.driver(adapter=adapter, seed_task3=False).launch_next_task()
         self.assertEqual(result["state"], "done-pending")
         self.assertEqual(observed["status"], "launched")
@@ -3514,6 +4277,7 @@ Files:
             )
         )
         driver = self.driver(adapter=adapter, seed_task3=False)
+        self.enrich_launch_contract()
         claim = driver.claim_next_task()
         self.assertEqual(claim["task_id"], "task-4")
         aborter = self.driver(seed_task3=False)
@@ -3596,7 +4360,7 @@ Files:
         with tempfile.TemporaryDirectory() as directory:
             copy = Path(directory) / "runtime_state.json"
             copy.write_bytes(fixture.read_bytes())
-            driver = runtime.RuntimeDriver(copy, plan_slug="fixture-plan", repo_root=directory)
+            driver = _runtime_driver(copy, plan_slug="fixture-plan", repo_root=directory)
             validated = driver.validate_manifest()
             self.assertEqual(validated["plan_slug"], "fixture-plan")
             self.assertIn("task-4", validated["tasks"])
@@ -3653,6 +4417,7 @@ Files:
                 task=task["id"], generation=generation, checkpoint_identity=f"{task['id']}:worker"
             )
         )
+        self.enrich_launch_contract()
         first = self.driver(adapter=adapter, seed_task3=False).continue_parent()
         self.assertEqual(first["status"], "success")
         self.assertEqual(first["state"], "done-pending")
@@ -3761,7 +4526,7 @@ Files:
             self.addCleanup(state_path.unlink, missing_ok=True)
             self.addCleanup(Path(str(state_path) + ".lock").unlink, missing_ok=True)
             runtime.create_manifest(state_path, "real-reconcile", [{"id": "task-1", "number": 1, "status": "pending"}], runtime_id="codex")
-            driver = runtime.RuntimeDriver(state_path, plan_slug="real-reconcile", owner="real-owner", repo_root=root)
+            driver = _runtime_driver(state_path, plan_slug="real-reconcile", owner="real-owner", repo_root=root)
             claim = driver.claim_next_task()
             driver.mark_commit_pending("task-1", commit, ["done-log:task-1"], claim_token=claim["token"], generation=claim["generation"])
             marker.write_text("dirty\n", encoding="utf-8")
@@ -5363,14 +6128,38 @@ Files:
     def _replay_driver(self, root: Path, tasks, adapter=None, owner="replay-owner"):
         state_path = root / "runtime_state.json"
         runtime.create_manifest(state_path, "crm-691-replay", tasks, runtime_id="codex")
-        return runtime.RuntimeDriver(
+        return _runtime_driver(
             state_path,
             plan_slug="crm-691-replay",
             owner=owner,
             repo_root=root,
-            adapter=adapter,
+            adapter=_fixture_inventory(adapter if adapter is not None else FakeAdapter()),
             commit_lookup=lambda _commit: True,
         ), state_path
+
+    def _replay_launch_and_capture(self, driver, state_path: Path, task_id: str) -> None:
+        """Bind a replay's direct success checkpoint to a launched claim.
+
+        The replayed incident checkpoint predates the launch fence: the
+        runner gives the claimed claim the launched shape the receipt
+        binding requires and captures the declared verification evidence
+        through the driver-owned verify operation before the checkpoint.
+        """
+
+        state = runtime.load_manifest(state_path)
+        live = state["claims"].get(task_id)
+        if live is None:
+            return
+        if live.get("state") != "launched":
+            live["state"] = "launched"
+            live.setdefault("launch_id", f"replay-launch-{task_id}")
+            live.setdefault("launch_record", {"baseline_revision": "", "generation": live.get("generation"), "launched_at": 111.0})
+            runtime._safe_write_json(state_path, state)
+        manifest = runtime.load_manifest(state_path)
+        task = manifest["tasks"].get(task_id) or {}
+        commands = [item for item in (task.get("verification_commands") or ()) if isinstance(item, dict)]
+        if commands:
+            driver.capture_verification_evidence(task_id, str(commands[0].get("id") or "verify"))
 
     @staticmethod
     def _replay_success(task_id: str, generation: int, checkpoint="worker"):
@@ -5455,17 +6244,20 @@ Files:
                     entries_before = set(parent.iterdir())
                     adapter_result = self._replay_success("task-1", 1)
                     adapter = FakeAdapter(adapter_result)
-                    driver, state_path = self._replay_driver(
-                        root,
-                        fixture.get(
-                            "tasks",
-                            [
-                                {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["task-1.txt"]},
-                                {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["task-2.txt"]},
-                            ],
-                        ),
-                        adapter=adapter,
+                    # The replayed launch paths need the non-empty worker
+                    # contract the launch boundary requires; every replay
+                    # task carries the verification_fields helper shape and
+                    # the driver pairs it with the driver-captured evidence.
+                    replay_tasks = fixture.get(
+                        "tasks",
+                        [
+                            {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["task-1.txt"]},
+                            {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["task-2.txt"]},
+                        ],
                     )
+                    replay_tasks = [{**task, **verification_fields(str(task["id"]))} for task in replay_tasks]
+                    driver, state_path = self._replay_driver(root, replay_tasks, adapter=adapter)
+                    _capture_declared_verification(driver, adapter)
                     final, retry_count = self._run_replay(fixture, driver, state_path, root)
                     self.assertNotEqual(final.get("status"), "user-question")
                     self.assertEqual(final["status"], expected["status"])
@@ -5500,9 +6292,10 @@ Files:
             claim = driver.claim_next_task()
             bad["generation"] = claim["generation"]
             self._fence(state_path, bad)
+            self._replay_launch_and_capture(driver, state_path, str(claim["task_id"]))
             driver.record_worker_checkpoint(bad)
             retries = 1
-            driver = runtime.RuntimeDriver(
+            driver = _runtime_driver(
                 state_path,
                 plan_slug="crm-691-replay",
                 owner="replay-owner",
@@ -5510,6 +6303,7 @@ Files:
                 adapter=FakeAdapter(self._replay_success("task-1", 1)),
                 commit_lookup=lambda _commit: True,
             )
+            _capture_declared_verification(driver, driver.adapter)
             outcome = driver.resume()
             if outcome["status"] == "success":
                 driver.record_done(self._fence(state_path, self._replay_done("task-1", "commit-1")))
@@ -5517,13 +6311,14 @@ Files:
             return driver.terminal_result() or outcome, retries
         if name == "parent-worker-checkpoint":
             claim = driver.claim_next_task()
+            self._replay_launch_and_capture(driver, state_path, str(claim["task_id"]))
             driver.record_worker_checkpoint(self._fence(state_path, self._replay_success("task-1", claim["generation"])))
-            reloaded = runtime.RuntimeDriver(state_path, plan_slug="crm-691-replay", owner="replay-owner", repo_root=root, commit_lookup=lambda _commit: True)
+            reloaded = _runtime_driver(state_path, plan_slug="crm-691-replay", owner="replay-owner", repo_root=root, commit_lookup=lambda _commit: True)
             outcome = reloaded.record_done(self._fence(state_path, self._replay_done("task-1", "commit-1")))
             return outcome, retries
         if name == "dead-session-fenced-done-lock":
             claim = driver.claim_next_task()
-            fenced = runtime.RuntimeDriver(state_path, plan_slug="crm-691-replay", owner="replacement-owner", repo_root=root, commit_lookup=lambda _commit: True)
+            fenced = _runtime_driver(state_path, plan_slug="crm-691-replay", owner="replacement-owner", repo_root=root, commit_lookup=lambda _commit: True)
             result = self._replay_success("task-1", claim["generation"])
             result["claim_token"] = claim["token"]
             return fenced.record_worker_checkpoint(result), retries
@@ -5548,11 +6343,24 @@ Files:
                 "generation": 0,
             })), retries
         if name == "missing-runtime-dependency":
-            unavailable = runtime.RuntimeDriver(
+            class MissingRuntimeAdapter(FakeAdapter):
+                def launch(self, task, prompt, generation, deadline_seconds=None, policy_token=None):
+                    return {
+                        "status": "blocked",
+                        "reason_code": "runtime-policy-unavailable",
+                        "evidence": ["no runtime adapter was available at launch"],
+                        "action_scope": "repository-task",
+                        "checkpoint_identity": f"{task['id']}:launch",
+                        "generation": generation,
+                    }
+
+            unavailable_adapter = MissingRuntimeAdapter()
+            unavailable = _runtime_driver(
                 state_path,
                 plan_slug="crm-691-replay",
                 owner="replay-owner",
                 repo_root=root,
+                adapter=unavailable_adapter,
                 commit_lookup=lambda _commit: True,
             )
             return unavailable.launch_next_task(), retries
@@ -5568,7 +6376,7 @@ Files:
             })), retries
         if name == "concurrent-duplicate-launch":
             first = driver.claim_next_task()
-            second = runtime.RuntimeDriver(state_path, plan_slug="crm-691-replay", owner="other-owner", repo_root=root, commit_lookup=lambda _commit: True)
+            second = _runtime_driver(state_path, plan_slug="crm-691-replay", owner="other-owner", repo_root=root, commit_lookup=lambda _commit: True)
             return second.claim_next_task(), retries
         if name == "resume-after-interruption":
             claim = None
@@ -5583,11 +6391,12 @@ Files:
                 elif event_type == "checkpoint":
                     if claim is None:
                         raise AssertionError("replay checkpoint arrived before claim")
+                    self._replay_launch_and_capture(driver, state_path, str(claim["task_id"]))
                     driver.record_worker_checkpoint(self._fence(state_path, self._replay_success("task-1", claim["generation"])))
                 elif event_type == "duplicate-checkpoint":
                     if claim is None:
                         raise AssertionError("replay duplicate arrived before claim")
-                    reloaded = runtime.RuntimeDriver(state_path, plan_slug="crm-691-replay", owner="replay-owner", repo_root=root, commit_lookup=lambda _commit: True)
+                    reloaded = _runtime_driver(state_path, plan_slug="crm-691-replay", owner="replay-owner", repo_root=root, commit_lookup=lambda _commit: True)
                     reloaded.record_worker_checkpoint(self._fence(state_path, self._replay_success("task-1", claim["generation"])))
                 elif event_type == "done":
                     if reloaded is None:
@@ -5613,6 +6422,7 @@ Files:
             return self.worker_checkpoint(task=task["id"], generation=generation)
 
         driver = self.driver(adapter=FakeAdapter(spy), seed_task3=False)
+        self.enrich_launch_contract()
         result = driver._launch_claimed_task({"task_id": "task-4", "token": "pre-launch-token", "generation": 0}, "continue", None)
         self.assertEqual(result["status"], "success")
         baseline = self._git_stdout("rev-parse", "HEAD")
@@ -5880,14 +6690,14 @@ Files:
                 # its owner, and only then does the loser's read return the
                 # pre-competition snapshot.
                 snapshot = original(path)
-                winner_holder["winner"] = runtime.RuntimeDriver(
+                winner_holder["winner"] = _runtime_driver(
                     fresh, plan_slug="fixture-plan", repo_root=self.root, commit_lookup=lambda _commit: True
                 )
                 return snapshot
             return original(path)
 
         with mock.patch.object(runtime, "load_manifest", side_effect=loader):
-            loser = runtime.RuntimeDriver(fresh, plan_slug="fixture-plan", repo_root=self.root, commit_lookup=lambda _commit: True)
+            loser = _runtime_driver(fresh, plan_slug="fixture-plan", repo_root=self.root, commit_lookup=lambda _commit: True)
         winner = winner_holder["winner"]
         committed = runtime.load_manifest(fresh).get("owner")
         self.assertTrue(isinstance(committed, str) and committed.strip())
@@ -5905,7 +6715,7 @@ Files:
         # later owner fence.
         with runtime._manifest_lock(fresh, "blocking-owner"):
             with self.assertRaises(ValueError) as raised:
-                runtime.RuntimeDriver(fresh, plan_slug="fixture-plan", repo_root=self.root, commit_lookup=lambda _commit: True)
+                _runtime_driver(fresh, plan_slug="fixture-plan", repo_root=self.root, commit_lookup=lambda _commit: True)
             self.assertIn("manifest lock contended at construction", str(raised.exception))
             self.assertIn("no committed owner to adopt", str(raised.exception))
         # A committed owner is adopted through the best-effort unlocked
@@ -5914,12 +6724,12 @@ Files:
         state["owner"] = "committed-owner"
         runtime._safe_write_json(fresh, state)
         with runtime._manifest_lock(fresh, "blocking-owner"):
-            contender = runtime.RuntimeDriver(fresh, plan_slug="fixture-plan", repo_root=self.root, commit_lookup=lambda _commit: True)
+            contender = _runtime_driver(fresh, plan_slug="fixture-plan", repo_root=self.root, commit_lookup=lambda _commit: True)
         self.assertEqual(contender.owner, "committed-owner")
         # An explicit owner is not provisional: contention is tolerated
         # without adoption.
         with runtime._manifest_lock(fresh, "blocking-owner"):
-            explicit = runtime.RuntimeDriver(fresh, plan_slug="fixture-plan", owner="explicit-owner", repo_root=self.root, commit_lookup=lambda _commit: True)
+            explicit = _runtime_driver(fresh, plan_slug="fixture-plan", owner="explicit-owner", repo_root=self.root, commit_lookup=lambda _commit: True)
         self.assertEqual(explicit.owner, "explicit-owner")
 
     def _resume_blocked_claim(self):
@@ -6740,7 +7550,7 @@ Files:
         state["tasks"] = {
             "task-1": {"id": "task-1", "number": 1, "status": "complete", "checkbox": True},
             "task-2": {"id": "task-2", "number": 2, "status": "complete", "checkbox": True},
-            "task-3": {"id": "task-3", "number": 3, "status": "pending", "checkbox": False, "allowed_paths": ["task-3.txt"]},
+            "task-3": {"id": "task-3", "number": 3, "status": "pending", "checkbox": False, "allowed_paths": ["task-3.txt"], **verification_fields("task-3")},
         }
         state["claims"] = {}
         state["checkpoints"] = {}
@@ -7061,6 +7871,7 @@ Files:
                 task=task["id"], generation=generation, checkpoint_identity=f"{task['id']}:worker"
             )
         )
+        self.enrich_launch_contract()
         driver = self.driver(adapter=adapter, seed_task3=False)
         with mock.patch.object(socket, "socket", side_effect=AssertionError("network disabled")):
             guarded = driver.authorize_action("network")
@@ -7436,9 +8247,11 @@ Files:
         # section keeps one unchecked '* [ ]' line disagrees exactly like
         # the dash form. RED before the widening: the dash-only predicate
         # read no disagreement for star lines, so this routed
-        # direct-continuation. The readiness path emits count-only evidence
-        # for its plan-manifest condition (line pins live on the terminal
-        # and pre-archive scans), so no line-number fragment may appear.
+        # direct-continuation. Under the receipt-backed reconciliation the
+        # summary condition carries the unreconciled count and the refused
+        # line adds its own per-line disposition naming the line number and
+        # text (line pins on the terminal and pre-archive scans are
+        # unchanged; this reshapes the preflight agreement surface only).
         plan_path = self.write_plan(
             "# Fixture plan\n\n### Task 3: third\n- [x] done item\n* [ ] forgotten star item\n\n### Task 4: fourth\n- [ ] pending item\n"
         )
@@ -7447,12 +8260,15 @@ Files:
         self.assertEqual(result["decision"], "recovery")
         self.assertTrue(
             any(
-                "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unchecked" in item
+                "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unreconciled unchecked checkbox line(s)" in item
                 for item in result["failed_conditions"]
             ),
             result["failed_conditions"],
         )
-        self.assertFalse(any("line " in item for item in result["failed_conditions"]), result["failed_conditions"])
+        self.assertTrue(
+            any("line 2" in item and "forgotten star item" in item for item in result["failed_conditions"]),
+            result["failed_conditions"],
+        )
         self.assertEqual(result["recovery_action"], "correct-plan-through-skill-gated-plan-edit")
 
     def test_mid_prose_mention_still_ignored(self):
@@ -7931,7 +8747,7 @@ Files:
         self.assertEqual(result["decision"], "recovery")
         self.assertTrue(
             any(
-                "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unchecked" in item
+                "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unreconciled unchecked checkbox line(s)" in item
                 for item in result["failed_conditions"]
             ),
             result["failed_conditions"],
@@ -7951,7 +8767,7 @@ Files:
         self.assertEqual(result["decision"], "recovery")
         self.assertTrue(
             any(
-                "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unchecked" in item
+                "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unreconciled unchecked checkbox line(s)" in item
                 for item in result["failed_conditions"]
             ),
             result["failed_conditions"],
@@ -7976,7 +8792,7 @@ Files:
         self.assertEqual(result["decision"], "recovery")
         self.assertTrue(
             any(
-                "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unchecked" in item
+                "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unreconciled unchecked checkbox line(s)" in item
                 for item in result["failed_conditions"]
             ),
             result["failed_conditions"],
@@ -8002,7 +8818,7 @@ Files:
         self.assertEqual(result["decision"], "recovery")
         self.assertTrue(
             any(
-                "plan-manifest disagreement" in item and "task-3" in item and "carries 2 unchecked" in item
+                "plan-manifest disagreement" in item and "task-3" in item and "carries 2 unreconciled unchecked checkbox line(s)" in item
                 for item in result["failed_conditions"]
             ),
             result["failed_conditions"],
@@ -8070,7 +8886,7 @@ Files:
                 self.assertEqual(result["decision"], "recovery")
                 self.assertTrue(
                     any(
-                        "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unchecked" in item
+                        "plan-manifest disagreement" in item and "task-3" in item and "carries 1 unreconciled unchecked checkbox line(s)" in item
                         for item in result["failed_conditions"]
                     ),
                     result["failed_conditions"],
@@ -8159,7 +8975,7 @@ Files:
         # the section-scanned disagreement text, not the loose "task-10"
         # substring the missing-section message also contains.
         self.assertTrue(
-            any("task-10" in item and "carries 1 unchecked" in item for item in result["failed_conditions"]),
+            any("task-10" in item and "carries 1 unreconciled unchecked checkbox line(s)" in item for item in result["failed_conditions"]),
             result["failed_conditions"],
         )
         self.assertFalse(any("task-1'" in item for item in result["failed_conditions"]), result["failed_conditions"])
@@ -8343,7 +9159,12 @@ Files:
     def _drive_blocked_launch(self, adapter):
         # Drive the real claim-launch chain to the blocked persist and return
         # the persisted claim identity.
-        driver = self.driver(adapter=adapter, seed_task3=False)
+        self.enrich_launch_contract()
+        driver = (
+            runtime.RuntimeDriver(self.state_path, plan_slug="fixture-plan", owner="test-owner", repo_root=self.root, adapter=None)
+            if adapter is None
+            else self.driver(adapter=adapter, seed_task3=False)
+        )
         result = driver.launch_next_task()
         self.assertEqual(result["reason_code"], "runtime-policy-unavailable", result)
         claim = runtime.load_manifest(self.state_path)["claims"]["task-4"]
@@ -8399,13 +9220,12 @@ Files:
         self.assertEqual(after["tasks"]["task-4"]["status"], "pending")
 
     def test_reclaim_accepts_no_adapter_blocked_direct_claim(self):
-        # The claim-time "no adapter configured" persisted shape (no launch
-        # record, no reservation) reclaims under the same identity fence.
+        state = runtime.load_manifest(self.state_path)
+        state["runtime"] = "claude"
+        runtime._safe_write_json(self.state_path, state)
         token, generation = self._drive_blocked_launch(None)
         reclaim_driver = self._evidence_reclaim_driver(self._approval_receipt_fixture(), clock=lambda: time.time() + 10.0)
-
         result = reclaim_driver.reclaim("task-4")
-
         self.assertEqual(result["status"], "success", result)
         self.assertEqual(result["reason_code"], "reclaimed")
         after = runtime.load_manifest(self.state_path)
@@ -8599,6 +9419,7 @@ Files:
         # the named cap outcome directing the operator at the adapter policy.
         receipt = self._approval_receipt_fixture()
         blocker = self.driver(adapter=PolicyRefusingAdapter())
+        self.enrich_launch_contract()
 
         def reclaim():
             return self._evidence_reclaim_driver(receipt, clock=lambda: time.time() + 10.0).reclaim("task-4")
@@ -9155,8 +9976,10 @@ Files:
         # (the replacement launch re-blocks on the missing adapter with its
         # own fresh receipt, not the dead session's).
         self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+        self.enrich_launch_contract()
 
         def seed_resumable(state):
+            state["runtime"] = "claude"
             state["claims"]["task-4"].update({
                 "state": "blocked",
                 "policy_token": {"generation": 0, "allowed_paths": ["task-4.txt"]},
@@ -9169,7 +9992,7 @@ Files:
             })
 
         self.rewrite_manifest(seed_resumable)
-        driver = self.driver(adapter=None)  # No adapter: the recycle path runs.
+        driver = runtime.RuntimeDriver(self.state_path, plan_slug="fixture-plan", owner="test-owner", repo_root=self.root, adapter=None)
         result = driver.resume()
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason_code"], "runtime-policy-unavailable")
@@ -9198,6 +10021,7 @@ Files:
         # carrying the dead attempt's token fences as owner-mismatch instead
         # of resurrecting a second claim.
         self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+        self.enrich_launch_contract()
 
         def seed_dead_attempt(state):
             state["claims"]["task-4"].update({
@@ -9258,6 +10082,7 @@ Files:
         # the replacement worker's checkpoint instead of returning
         # owner-mismatch forever.
         self.seed_claim(task="task-4", token="seed-task-4", generation=0)
+        self.enrich_launch_contract()
         self.rewrite_manifest(lambda state: state["claims"]["task-4"].update({"timestamp": self._expired_lease_timestamp()}))
         adapter = FakeAdapter(result=lambda task, prompt, generation, deadline_seconds=None, policy_token=None: {
             "status": "success",
@@ -9381,6 +10206,7 @@ Files:
         # standard bounded retry policy on the claim, and the blocked task
         # fields the parking branch writes.
         self.seed_claim(task=task, token=token, generation=generation)
+        self.enrich_launch_contract(task)
         self.rewrite_manifest(lambda state: (
             state["claims"][task].update({
                 "state": "waiting-capacity",
@@ -9930,13 +10756,14 @@ Files:
         return self.state_path
 
     def batch_driver(self, adapter=None, **kwargs):
-        return runtime.RuntimeDriver(
+        adapter = adapter if adapter is not None else FakeAdapter()
+        return _runtime_driver(
             self.state_path,
             plan_slug="fixture-plan",
             owner=kwargs.pop("owner", "test-owner"),
             repo_root=self.root,
             commit_lookup=lambda _commit: True,
-            adapter=_fixture_inventory(adapter),
+            adapter=adapter,
             **kwargs,
         )
 
@@ -9944,7 +10771,10 @@ Files:
         tasks = []
         for n in range(1, count + 1):
             paths = [f"./{prefix}{n}-{k}.txt" for k in range(1, files_per_task + 1)]
-            tasks.append({"id": f"task-{n}", "number": n, "status": "pending", "checkbox": False, "allowed_paths": paths})
+            # Every batch/parallel group fixture must launch, so each task
+            # carries the non-empty worker contract the launch boundary
+            # requires (verification_fields helper pattern).
+            tasks.append({"id": f"task-{n}", "number": n, "status": "pending", "checkbox": False, "allowed_paths": paths, **verification_fields(f"task-{n}")})
         return tasks
 
     def commit_files(self, *names):
@@ -10513,6 +11343,16 @@ Files:
         group_id = done["actions"][0]["group_id"]
         anchor_session = runtime.load_manifest(self.state_path)["claim_groups"][group_id]["anchor_session"]
         active = runtime.load_manifest(self.state_path)["claims"]["task-2"]
+        # The direct member checkpoint binds its success receipt to the live
+        # launched claim: give the member the launch identity its group
+        # reservation carries and capture the declared verification evidence
+        # through the driver-owned verify operation first.
+        member_state = runtime.load_manifest(self.state_path)
+        member_state["claims"]["task-2"]["state"] = "launched"
+        member_state["claims"]["task-2"]["launch_id"] = group_id
+        runtime._safe_write_json(self.state_path, member_state)
+        captured = self.batch_driver().capture_verification_evidence("task-2", "verify")
+        self.assertEqual(captured["status"], "success", captured)
         receipt = self.member_receipt("task-2", 2, active["generation"])
         receipt["batch_progress"] = {
             "batch_id": group_id,
@@ -10598,6 +11438,17 @@ Files:
         group_id = done["actions"][0]["group_id"]
         anchor_session = runtime.load_manifest(self.state_path)["claim_groups"][group_id]["anchor_session"]
         active = runtime.load_manifest(self.state_path)["claims"]["task-2"]
+        # The direct member checkpoints bind their success receipts to the
+        # live launched claim: give the member the launch identity its group
+        # reservation carries and capture the declared verification evidence
+        # through the driver-owned verify operation first, so both arms reach
+        # the member receipt fence the test exercises.
+        member_state = runtime.load_manifest(self.state_path)
+        member_state["claims"]["task-2"]["state"] = "launched"
+        member_state["claims"]["task-2"]["launch_id"] = group_id
+        runtime._safe_write_json(self.state_path, member_state)
+        captured = self.batch_driver().capture_verification_evidence("task-2", "verify")
+        self.assertEqual(captured["status"], "success", captured)
         before = self.state_path.read_bytes()
         wrong = self.member_receipt("task-2", 2, active["generation"], session_id="sess-rogue-9")
         # The same driver instance: a fresh construction persists its
@@ -10729,11 +11580,11 @@ Files:
             self._git("commit", "-qm", "base", cwd=root)
             state = root / "runtime_state.json"
             runtime.create_manifest(state, "cli-batch", [
-                {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["c1.txt"]},
-                {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["c2.txt"]},
+                {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["c1.txt"], **verification_fields("task-1")},
+                {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["c2.txt"], **verification_fields("task-2")},
             ], repo_root=root, runtime_id="codex")
             adapter = RecordingAdapter(session_id="sess-cli-anchor")
-            driver = runtime.RuntimeDriver(state, plan_slug="cli-batch", owner="cli-owner", repo_root=root, commit_lookup=lambda _commit: True, adapter=adapter)
+            driver = _runtime_driver(state, plan_slug="cli-batch", owner="cli-owner", repo_root=root, commit_lookup=lambda _commit: True, adapter=adapter)
             driver.launch_next_task(batch=True)
             (root / "c1.txt").write_text("one\n", encoding="utf-8")
             commit1 = subprocess.run(["git", "add", "c1.txt"], cwd=root, env=self._git_env, check=True).returncode
@@ -11779,10 +12630,14 @@ Files:
         def reactivate_member(member):
             # Rewind a member the previous arm parked at done-pending or
             # blocked back to the live claimed seat, so the next arm drives
-            # the same active state from a fresh start.
+            # the same active state from a fresh start. The seat carries the
+            # launch identity its group reservation references and the
+            # captured verification evidence its success receipts bind to.
             def mutate(state):
-                state["claims"][member]["state"] = "claimed"
-                state["tasks"][member]["status"] = "claimed"
+                group = next(group for group in state["claim_groups"].values() if member in group.get("members", ()))
+                state["claims"][member]["state"] = "launched"
+                state["claims"][member]["launch_id"] = group["group_id"]
+                state["tasks"][member]["status"] = "launched"
                 state["tasks"][member]["resume_allowed"] = True
             return mutate
 
@@ -11847,7 +12702,12 @@ Files:
         assert_agreement()
 
         # checkpoint success from active: the named active member lands
-        # done-pending; the group is unchanged.
+        # done-pending; the group is unchanged. The seat carries its group
+        # launch identity and the driver-captured verification evidence the
+        # success receipt binds to.
+        self.rewrite_manifest(reactivate_member("task-2"))
+        seat_captured = self.batch_driver().capture_verification_evidence("task-2", "verify")
+        self.assertEqual(seat_captured["status"], "success", seat_captured)
         receipt = self.member_receipt("task-2", 2, 1, session_id=anchor_session)
         landed = driver.record_worker_checkpoint(receipt)
         self.assertEqual(landed["status"], "success", landed)
@@ -12573,7 +13433,7 @@ class ArchiveGateFixtureBase(unittest.TestCase):
 
     def driver(self, **kwargs):
         kwargs.setdefault("commit_lookup", lambda _commit: True)
-        return runtime.RuntimeDriver(
+        return _runtime_driver(
             self.state_path,
             plan_slug=self.PLAN_SLUG,
             owner=self.OWNER,
@@ -13969,6 +14829,7 @@ class CheckpointRecoveryTest(unittest.TestCase):
             plan_slug="checkpoint-recovery",
             owner="recovery-owner",
             repo_root=self.root,
+            adapter=None,
             commit_lookup=lambda _commit: True,
         )
 
@@ -14082,6 +14943,7 @@ class CheckpointMalformedNoMutationTest(unittest.TestCase):
             self.state_path,
             "checkpoint-recovery",
             [{"id": "task-1", "number": 1, "status": "pending"}],
+            runtime_id="claude",
         )
 
     def tearDown(self) -> None:
@@ -14093,6 +14955,7 @@ class CheckpointMalformedNoMutationTest(unittest.TestCase):
             plan_slug="checkpoint-recovery",
             owner="recovery-owner",
             repo_root=self.root,
+            adapter=None,
             commit_lookup=lambda _commit: True,
         )
 
@@ -14150,7 +15013,7 @@ class CheckpointMalformedNoMutationTest(unittest.TestCase):
         driver = self._driver()
         self._seed_claim()
         receipt = driver.record_worker_checkpoint(self._envelope(status="error", reason_code="runtime-error"))
-        self.assertEqual(receipt["status"], "error")
+        self.assertEqual(receipt["status"], "error", receipt)
         self.assertEqual(receipt["reason_code"], "runtime-error")
         state = runtime.load_manifest(self.state_path)
         # The existing latch is unchanged: runtime-error is a resumable
@@ -14266,7 +15129,7 @@ class DoneBoundaryNoCommitTest(unittest.TestCase):
         return lookup
 
     def driver(self, commit_lookup=None, **kwargs):
-        return runtime.RuntimeDriver(
+        return _runtime_driver(
             self.state_path,
             plan_slug="fixture-plan",
             owner="done-owner",
@@ -14423,8 +15286,8 @@ class DoneBoundaryNoCommitTest(unittest.TestCase):
             self.state_path,
             "fixture-plan",
             [
-                {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["t1-1.txt"]},
-                {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["t2-1.txt"]},
+                {"id": "task-1", "number": 1, "status": "pending", "allowed_paths": ["t1-1.txt"], **verification_fields("task-1")},
+                {"id": "task-2", "number": 2, "status": "pending", "allowed_paths": ["t2-1.txt"], **verification_fields("task-2")},
             ],
             repo_root=self.root,
             runtime_id="codex",
@@ -14575,7 +15438,7 @@ class DiagnoseOperationTest(unittest.TestCase):
     def diagnose_driver(self) -> runtime.RuntimeDriver:
         # persist_construction=False mirrors the CLI diagnose construction:
         # no owner backfill or receipt write may precede a read-only report.
-        return runtime.RuntimeDriver(
+        return _runtime_driver(
             self.state_path,
             plan_slug="fixture-plan",
             owner="test-owner",
@@ -15260,6 +16123,7 @@ class RuntimeHandoffTest(unittest.TestCase):
 
     def test_parent_restart_reconciles_auto_advanced_claim(self):
         first = self.complete_prior()
+        self.fx.enrich_launch_contract()
         intent = runtime.load_manifest(self.fx.state_path)["handoff_intents"]["task-3:task-3:done-1"]
         self.assertEqual(intent["state"], "prepared")
         restarted = self.fx.driver(adapter=self.adapter)
@@ -15374,6 +16238,7 @@ class RuntimeHandoffTest(unittest.TestCase):
 
     def test_adapter_io_runs_outside_manifest_lock(self):
         self.complete_prior()
+        self.fx.enrich_launch_contract()
         observed = []
 
         def launch(task, prompt, generation, deadline_seconds=None, policy_token=None):
@@ -16005,7 +16870,7 @@ class TaskScopeRecoveryTest(unittest.TestCase):
         # The manifest slug is seeded to the full stem exactly as a real run
         # records it; feature_slug strips the date for the reviews-directory
         # discovery key only.
-        driver = runtime.RuntimeDriver(
+        driver = _runtime_driver(
             self.fx.state_path,
             plan_slug="2026-09-30-fixture-plan",
             owner="test-owner",
@@ -16126,7 +16991,7 @@ class RuntimeContinuationBudgetTest(unittest.TestCase):
         runtime.create_manifest(self.manifest, "continuation-test", [
             {"id": "task-1", "number": 1, "status": "pending", "checkbox": False, "allowed_paths": ["task.txt"]}
         ], runtime_id="codex")
-        self.driver = runtime.RuntimeDriver(self.manifest, plan_slug="continuation-test", owner="continuation-owner", repo_root=Path(self.directory.name))
+        self.driver = _runtime_driver(self.manifest, plan_slug="continuation-test", owner="continuation-owner", repo_root=Path(self.directory.name))
         self.claim = self.driver.claim_next_task()
         self.assertEqual(self.claim["status"], "success", self.claim)
 
@@ -16288,7 +17153,7 @@ class _ReconcileFixtureBase(unittest.TestCase):
         runtime._safe_write_json(self.state_path, manifest)
 
     def _driver(self, adapter, **kwargs):
-        return runtime.RuntimeDriver(
+        return _runtime_driver(
             self.state_path,
             plan_slug="fixture-plan",
             owner="test-owner",
@@ -16546,6 +17411,30 @@ class ReconcileIdentityJoinTest(_ReconcileFixtureBase):
         self.assertFalse(persisted["capacity"]["entries"]["capacity-done"]["counts_toward_capacity"])
         self.assertEqual(persisted["capacity"]["entries"]["capacity-done"]["state"], "released")
 
+    def test_terminal_release_reconciled_event_carries_no_recovery_action_remnant(self):
+        # Characterization pin beside the clean-release row: the
+        # forced-available override rewrites the reconcile result to
+        # available/reconciled, but the rewrite sets only status and
+        # reason, so the outer quarantine result's
+        # reconcile-provider-inventory label rides the dict copy onto the
+        # appended worker-reconciled history event (current behavior; the
+        # desired clear-or-rewrite is owned by the open origin
+        # 2026-10-01-forced-available-rewrite-keeps-quarantine-recovery-action,
+        # and this pin flips to the None assertion when that fix lands).
+        self._register_worker("task-1", "conv-remnant", "worker-remnant", "capacity-remnant")
+        adapter = _ConsultAdapter(inventory=[], port=lambda conversation: _terminal_evidence_observation(conversation))
+        manifest = runtime.load_manifest(self.state_path)
+        driver = self._driver(adapter)
+        result = driver.reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(adapter.consults, ["conv-remnant"])
+        self.assertEqual(result["status"], "available", result)
+        self.assertEqual(result["reason"], "reconciled")
+        persisted = self._persist(manifest)
+        self.assertEqual(persisted["workers"]["worker-remnant"]["state"], "terminal")
+        reconciled_events = [item for item in persisted.get("history", []) if item.get("event") == "worker-reconciled"]
+        self.assertTrue(reconciled_events)
+        self.assertIsNone(reconciled_events[-1].get("recovery_action"))
+
     def test_identity_mismatch_refuses_release(self):
         # Green-at-RED: terminal evidence keyed to a different conversation
         # never releases the worker; the wrapper item carries the
@@ -16796,6 +17685,26 @@ class ReconcileIdentityJoinTest(_ReconcileFixtureBase):
         self.assertEqual(manifest["workers"]["worker-first-failed"]["state"], "quarantined")
         self.assertTrue(manifest["capacity"]["entries"]["capacity-first-failed"]["counts_toward_capacity"])
 
+    def test_first_pass_unavailable_snapshot_records_process_snapshot_unavailable(self):
+        # Characterization pin beside the failed-first-snapshot canary: the
+        # same fixture shape (first raw visibility read unavailable) also
+        # records the bounded consult outcome label the canary never
+        # asserts, with the pre-consult quarantine restored.
+        self._register_worker("task-1", "conv-first-unavailable", "worker-first-unavailable", "capacity-first-unavailable")
+        failed_snapshot = subprocess.CompletedProcess([], 1, stdout="", stderr="ps failed")
+        adapter = _ConsultAdapter(
+            inventory=[],
+            port=lambda conversation: _terminal_evidence_observation(conversation),
+            raw_snapshots=[failed_snapshot],
+        )
+        manifest = runtime.load_manifest(self.state_path)
+        result = self._driver(adapter).reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(adapter.consults, ["conv-first-unavailable"])
+        self.assertEqual(result["status"], "quarantined")
+        self.assertEqual(result["consult_outcomes"], {"worker-first-unavailable": "process-snapshot-unavailable"})
+        self.assertEqual(manifest["workers"]["worker-first-unavailable"]["state"], "quarantined")
+        self.assertTrue(manifest["capacity"]["entries"]["capacity-first-unavailable"]["counts_toward_capacity"])
+
     def test_failed_final_process_snapshot_preserves_quarantine(self):
         raw = "codex exec resume conv-final-failed --model o4"
         self._register_worker("task-1", "conv-final-failed", "worker-final-failed", "capacity-final-failed")
@@ -16811,6 +17720,27 @@ class ReconcileIdentityJoinTest(_ReconcileFixtureBase):
         self.assertEqual(result["status"], "quarantined")
         self.assertEqual(manifest["workers"]["worker-final-failed"]["state"], "quarantined")
         self.assertTrue(manifest["capacity"]["entries"]["capacity-final-failed"]["counts_toward_capacity"])
+
+    def test_second_pass_unavailable_snapshot_records_live_or_unavailable_at_recheck(self):
+        # Characterization pin beside the failed-final-snapshot canary: the
+        # raw resume line sightings at the first pass force the recheck
+        # consult, and the recheck release's unavailable raw read records
+        # the second-pass label while the pre-consult quarantine stands.
+        raw = "codex exec resume conv-final-unavailable --model o4"
+        self._register_worker("task-1", "conv-final-unavailable", "worker-final-unavailable", "capacity-final-unavailable")
+        failed_snapshot = subprocess.CompletedProcess([], 1, stdout="", stderr="ps failed")
+        adapter = _ConsultAdapter(
+            inventory=[],
+            port=lambda conversation: _terminal_evidence_observation(conversation),
+            raw_snapshots=[raw, failed_snapshot],
+        )
+        manifest = runtime.load_manifest(self.state_path)
+        result = self._driver(adapter).reconcile_worker_capacity(manifest, now=time.monotonic())
+        self.assertEqual(adapter.consults, ["conv-final-unavailable", "conv-final-unavailable"])
+        self.assertEqual(result["status"], "quarantined")
+        self.assertEqual(result["consult_outcomes"], {"worker-final-unavailable": "live-or-unavailable-at-recheck"})
+        self.assertEqual(manifest["workers"]["worker-final-unavailable"]["state"], "quarantined")
+        self.assertTrue(manifest["capacity"]["entries"]["capacity-final-unavailable"]["counts_toward_capacity"])
 
     def test_fresh_resume_observation_keeps_worker_quarantined(self):
         raw = "codex exec resume conv-recheck-live --model o4"
@@ -17239,12 +18169,23 @@ class EvidenceContractRecoveryCodexTest(_ReconcileFixtureBase):
         # matching receipt across both recovery event identities, the strict
         # handoff-recovery shape is required only when the block is present,
         # and the no-intent receipt shape (block omitted, both contract
-        # identities required) admits only a claimed successor claim.
+        # identities required) admits only a claimed successor claim. Every
+        # admitted handoff receipt binds its full identity: the successor
+        # block carries the five production keys (the writer always emits
+        # them) and the manifest resolves the receipt's intent_id to the
+        # matching handoff_intents entry.
         retired = {"state": "closed", "token": "old-token", "generation": 3}
         event = {"event": "evidence-contract-recovery", "task_id": "task-1", "token": "old-token", "generation": 3,
-                 "recovered_generation": 4, "handoff_recovery": {"intent_id": "intent-1", "successor": {"task_id": "task-1", "claim_token": "old-token", "generation": 3}}}
+                 "recovered_generation": 4,
+                 "handoff_recovery": {"intent_id": "intent-1",
+                                      "prior": {"task_id": "task-0", "checkpoint_identity": "task-0:done-1", "claim_owner_id": "prior-owner", "claim_token": "old-token", "generation": 3},
+                                      "successor": {"task_id": "task-1", "claim_owner_id": "retired-owner", "claim_token": "old-token", "generation": 3, "launch_id": "launch-task-1"},
+                                      "provider_terminal_receipt_id": "receipt-1", "worker_session_id": "session-1"}}
+        intent = {"intent_id": "intent-1", "state": "failed",
+                  "prior": {"task_id": "task-0", "checkpoint_identity": "task-0:done-1", "claim_owner_id": "prior-owner", "claim_token": "old-token", "generation": 3},
+                  "successor": {"task_id": "task-1", "claim_owner_id": "retired-owner", "claim_token": "old-token", "generation": 3, "launch_id": "launch-task-1"}}
         task = {"status": "pending"}
-        manifest = {"tasks": {"task-1": task}, "history": [event]}
+        manifest = {"tasks": {"task-1": task}, "history": [event], "handoff_intents": {"task-0:task-0:done-1": intent}}
         self.assertFalse(runtime.RuntimeDriver._claim_retired_by_evidence_recovery(manifest, "task-1", retired))
         newer = {"state": "claimed", "token": "new-token", "generation": 5}
         self.assertTrue(runtime.RuntimeDriver._claim_retired_by_evidence_recovery(manifest, "task-1", newer))
@@ -17260,7 +18201,8 @@ class EvidenceContractRecoveryCodexTest(_ReconcileFixtureBase):
                      "corrected_contract_identity": {"evidence_contract_digest": "b" * 64}}],
         ):
             with self.subTest(receipts=cross_identity):
-                self.assertTrue(runtime.RuntimeDriver._claim_retired_by_evidence_recovery({"tasks": {"task-1": task}, "history": cross_identity}, "task-1", newer))
+                self.assertTrue(runtime.RuntimeDriver._claim_retired_by_evidence_recovery(
+                    {"tasks": {"task-1": task}, "history": cross_identity, "handoff_intents": {"task-0:task-0:done-1": intent}}, "task-1", newer))
         # The launched-shape successor on a no-intent receipt stays examined
         # exactly as today; the claimed-shape successor is admitted.
         no_intent = {"event": "prelaunch-contract-recovery", "task_id": "task-1", "token": "p-token", "generation": 2,
@@ -17274,13 +18216,89 @@ class EvidenceContractRecoveryCodexTest(_ReconcileFixtureBase):
             {"tasks": {"task-1": task}, "history": [{k: v for k, v in no_intent.items() if k != "prior_contract_identity"}]}, "task-1", newer,
         ))
         # The strict arm keeps its landed refusal arms: a foreign-token
-        # receipt and a bad successor shape stay refusals.
+        # receipt and a bad successor shape stay refusals. The identity
+        # binding adds its own refusal arm: a receipt naming an intent id
+        # the manifest cannot resolve stays examined (the full mismatch
+        # matrix is pinned by test_recovery_receipt_rejects_intent_mismatch).
         for bad_receipts in (
             [{**event, "token": "foreign-token"}],
-            [{**event, "handoff_recovery": {"intent_id": "intent-1", "successor": {"task_id": "task-1", "claim_token": "foreign-token", "generation": 3}}}],
+            [{**event, "handoff_recovery": {**event["handoff_recovery"], "successor": {"task_id": "task-1", "claim_owner_id": "retired-owner", "claim_token": "foreign-token", "generation": 3, "launch_id": "launch-task-1"}}}],
+            [{**event, "handoff_recovery": {**event["handoff_recovery"], "intent_id": "intent-unknown"}}],
         ):
             with self.subTest(receipts=bad_receipts):
-                self.assertFalse(runtime.RuntimeDriver._claim_retired_by_evidence_recovery({"tasks": {"task-1": task}, "history": bad_receipts}, "task-1", newer))
+                self.assertFalse(runtime.RuntimeDriver._claim_retired_by_evidence_recovery(
+                    {"tasks": {"task-1": task}, "history": bad_receipts, "handoff_intents": {"task-0:task-0:done-1": intent}}, "task-1", newer))
+
+    def _handoff_recovery_fixture(self):
+        # Shared admission fixture for the identity-binding pins: a receipt
+        # whose successor block matches the resolved intent's successor, and
+        # the manifest entry that resolves its intent_id.
+        event = {"event": "evidence-contract-recovery", "task_id": "task-1", "token": "old-token", "generation": 3,
+                 "recovered_generation": 4,
+                 "handoff_recovery": {"intent_id": "intent-1",
+                                      "prior": {"task_id": "task-0", "checkpoint_identity": "task-0:done-1", "claim_owner_id": "prior-owner", "claim_token": "old-token", "generation": 3},
+                                      "successor": {"task_id": "task-1", "claim_owner_id": "retired-owner", "claim_token": "old-token", "generation": 3, "launch_id": "launch-task-1"},
+                                      "provider_terminal_receipt_id": "receipt-1", "worker_session_id": "session-1"}}
+        intent = {"intent_id": "intent-1", "state": "failed",
+                  "prior": {"task_id": "task-0", "checkpoint_identity": "task-0:done-1", "claim_owner_id": "prior-owner", "claim_token": "old-token", "generation": 3},
+                  "successor": {"task_id": "task-1", "claim_owner_id": "retired-owner", "claim_token": "old-token", "generation": 3, "launch_id": "launch-task-1"}}
+        return event, intent
+
+    def test_recovery_receipt_binds_intent_successor_owner_and_launch(self):
+        # A handoff receipt whose successor owner and launch id match the
+        # resolved intent's successor block admits retirement: the successor
+        # describes the retired claim, so the intent is the binding target.
+        # The binding also holds the receipt's worker session against the
+        # intent's launch receipt when one is present.
+        event, intent = self._handoff_recovery_fixture()
+        task = {"status": "pending"}
+        newer = {"state": "claimed", "token": "new-token", "generation": 5}
+        with self.subTest(intent="successor block only"):
+            self.assertTrue(runtime.RuntimeDriver._claim_retired_by_evidence_recovery(
+                {"tasks": {"task-1": task}, "history": [event], "handoff_intents": {"key": intent}}, "task-1", newer))
+        bound_intent = {**intent, "launch_receipt": {"worker_id": "worker-1", "provider_session_id": "session-1", "observed_at": 1.0}}
+        with self.subTest(intent="matching launch receipt session"):
+            self.assertTrue(runtime.RuntimeDriver._claim_retired_by_evidence_recovery(
+                {"tasks": {"task-1": task}, "history": [event], "handoff_intents": {"key": bound_intent}}, "task-1", newer))
+
+    def test_recovery_receipt_rejects_intent_mismatch(self):
+        # Each identity disagreement refuses the same way: the receipt's
+        # intent_id does not resolve, the successor owner is flipped, or the
+        # successor launch id is flipped - the claim stays examined.
+        event, intent = self._handoff_recovery_fixture()
+        task = {"status": "pending"}
+        newer = {"state": "claimed", "token": "new-token", "generation": 5}
+        unknown = [{**event, "handoff_recovery": {**event["handoff_recovery"], "intent_id": "intent-unknown"}}]
+        owner_flipped = [{**event, "handoff_recovery": {**event["handoff_recovery"],
+                         "successor": {**event["handoff_recovery"]["successor"], "claim_owner_id": "someone-else"}}}]
+        launch_flipped = [{**event, "handoff_recovery": {**event["handoff_recovery"],
+                          "successor": {**event["handoff_recovery"]["successor"], "launch_id": "launch-other"}}}]
+        for name, bad_receipts in (("unknown-intent-id", unknown), ("successor-owner-flipped", owner_flipped), ("successor-launch-flipped", launch_flipped)):
+            with self.subTest(shape=name):
+                self.assertFalse(runtime.RuntimeDriver._claim_retired_by_evidence_recovery(
+                    {"tasks": {"task-1": task}, "history": bad_receipts, "handoff_intents": {"key": intent}}, "task-1", newer))
+
+    def test_recovery_receipt_non_mapping_successor_returns_false(self):
+        # The crash guard: a history event whose handoff_recovery.successor
+        # is a string must never crash startup reconciliation with an
+        # AttributeError. The predicate returns False, so the claim stays
+        # examined (the reconcile surfaces the examined claim's blocked
+        # outcome instead of the retirement exclusion) and nothing mutates.
+        task = {"id": "task-1", "number": 1, "status": "claimed", "checkbox": False, "allowed_paths": ["task-1.txt"], **verification_fields("task-1")}
+        runtime.create_manifest(self.state_path, "fixture-plan", [task], repo_root=self.root)
+        state = runtime.load_manifest(self.state_path)
+        state["tasks"]["task-1"]["status"] = "claimed"
+        state["claims"]["task-1"] = {"task_id": "task-1", "token": "new-token", "generation": 5, "owner": "other-owner", "state": "claimed"}
+        state["history"] = [{"event": "evidence-contract-recovery", "task_id": "task-1", "token": "old-token", "generation": 3,
+                             "recovered_generation": 4,
+                             "handoff_recovery": {"intent_id": "intent-1", "successor": "not-a-mapping"}}]
+        runtime._safe_write_json(self.state_path, state)
+        before = self.state_path.read_bytes()
+        driver = runtime.RuntimeDriver(self.state_path, plan_slug="fixture-plan", owner="test-owner", repo_root=self.root, persist_construction=False)
+        outcome = driver._reconcile_startup_locked(lambda _commit: True, False, None)
+        self.assertEqual(outcome["status"], "blocked", outcome)
+        self.assertEqual(outcome.get("reason_code"), "owner-mismatch", outcome)
+        self.assertEqual(self.state_path.read_bytes(), before)
 
     def _recovery_driver(self, adapter):
         self._seed_launched_hold(adapter, session=self.HELD_SESSION)
@@ -17965,7 +18983,7 @@ class ClaimBoundaryRefusalTest(unittest.TestCase):
         runtime.create_manifest(self.state_path, "fixture-plan", task_map, repo_root=self.root)
         return runtime.load_manifest(self.state_path)
 
-    def _run_claim(self, *flags, payload=None):
+    def _run_claim(self, *flags, payload=None, adapter=None):
         args = [
             "--manifest", str(self.state_path),
             "--operation", "claim",
@@ -17977,7 +18995,7 @@ class ClaimBoundaryRefusalTest(unittest.TestCase):
         if payload is not None:
             args += ["--input", json.dumps(payload)]
         buffer, errors = io.StringIO(), io.StringIO()
-        with mock.patch.object(runtime.capabilities, "resolve_adapter", return_value=FakeAdapter()), contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
+        with mock.patch.object(runtime.capabilities, "resolve_adapter", return_value=adapter or FakeAdapter()), contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
             code = runtime.main(args)
         self.assertEqual(code, 0, buffer.getvalue() + errors.getvalue())
         return json.loads(buffer.getvalue().strip().splitlines()[-1])
@@ -18028,6 +19046,76 @@ class ClaimBoundaryRefusalTest(unittest.TestCase):
         self.assertEqual(state["tasks"]["task-1"]["status"], "claimed")
         self.assertIn("task-1", state.get("claims", {}))
 
+    def test_runtime_less_codex_claim_refuses_policy_drift_before_claim(self):
+        self._seed_legacy_manifest()
+        before_claims = runtime.load_manifest(self.state_path)["claims"].copy()
+        adapter = FakeAdapter()
+        adapter.model_guard_check = lambda: {
+            "status": "runtime-policy-unavailable",
+            "failed_check": "guard_alignment",
+            "error": "fixture guard drift",
+            "recovery": "restore guard alignment",
+        }
+
+        outcome = self._run_claim(
+            "--runtime", "codex", "--approval-receipt", str(self.receipt_path), adapter=adapter
+        )
+
+        self.assertEqual(outcome["reason_code"], "runtime-policy-unavailable", outcome)
+        state = runtime.load_manifest(self.state_path)
+        self.assertEqual(state["claims"], before_claims)
+        self.assertNotIn("runtime", state)
+
+    def test_cli_resolves_real_codex_adapter_and_gates_recorded_runtime_claim(self):
+        self._seed_legacy_manifest()
+        state = runtime.load_manifest(self.state_path)
+        state["runtime"] = "codex"
+        runtime._safe_write_json(self.state_path, state)
+
+        source = ROOT / "agents/hooks/codex-model-guard/require-luna.py"
+        home = self.root / "isolated-home"
+        codex_dir = home / ".codex"
+        codex_dir.mkdir(parents=True)
+        installed = codex_dir / "require-luna.py"
+        installed.write_bytes(source.read_bytes())
+        registration = codex_dir / "hooks.json"
+        registration.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": f"python3 {installed}"}]}]}}), encoding="utf-8")
+        config = self.root / "codex-config.toml"
+        config.write_text("[agents]\ndefault_subagent_model = 'fixture-model'\n", encoding="utf-8")
+        old_home, old_config = os.environ.get("HOME"), os.environ.get("CODEX_CONFIG")
+        os.environ["HOME"], os.environ["CODEX_CONFIG"] = str(home), str(config)
+
+        def invoke():
+            output, errors = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                code = runtime.main(["--manifest", str(self.state_path), "--operation", "claim", "--plan-slug", "fixture-plan", "--owner", "test-owner", "--repo-root", str(self.root)])
+            self.assertEqual(code, 0, output.getvalue() + errors.getvalue())
+            return json.loads(output.getvalue().strip().splitlines()[-1])
+
+        try:
+            aligned = invoke()
+            self.assertEqual(aligned["status"], "success", aligned)
+            self.assertTrue(aligned.get("claimed"), aligned)
+            # Return the fixture to a claim-less state so drift exercises the
+            # same real CLI resolution path on a fresh claim attempt.
+            state = runtime.load_manifest(self.state_path)
+            state["claims"] = {}
+            state["tasks"]["task-1"].update(status="pending", checkbox=False)
+            runtime._safe_write_json(self.state_path, state)
+            registration.write_text("{}", encoding="utf-8")
+            drifted = invoke()
+            self.assertEqual(drifted["reason_code"], "runtime-policy-unavailable", drifted)
+            self.assertEqual(runtime.load_manifest(self.state_path)["claims"], {})
+        finally:
+            if old_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = old_home
+            if old_config is None:
+                os.environ.pop("CODEX_CONFIG", None)
+            else:
+                os.environ["CODEX_CONFIG"] = old_config
+
     def test_deferred_runtime_boundary_narrowing_refusal(self):
         # Residual pin (impl-review residuals family plan, Task 2; closes
         # docs/history/backlog/2026-09-29-p93-impl-review-nonblocking-residuals.md
@@ -18072,7 +19160,7 @@ class ClaimBoundaryRefusalTest(unittest.TestCase):
         manifest["tasks"]["task-1"]["status"] = "claimed"
         runtime._safe_write_json(self.state_path, manifest)
         before = self.state_path.read_bytes()
-        driver = runtime.RuntimeDriver(self.state_path, plan_slug="fixture-plan", owner="test-owner", repo_root=self.root, persist_construction=False)
+        driver = _runtime_driver(self.state_path, plan_slug="fixture-plan", owner="test-owner", repo_root=self.root, persist_construction=False)
         outcome = driver.claim_next_task()
         self.assertEqual(outcome["status"], "blocked", outcome)
         self.assertIn("recover-run-identity", self._evidence_text(outcome))
@@ -18536,7 +19624,7 @@ class TestEvidenceEnvelopeProjection(unittest.TestCase):
         return state
 
     def driver(self):
-        return runtime.RuntimeDriver(self.state_path, plan_slug="fixture-plan", owner="env-owner", repo_root=self.root)
+        return _runtime_driver(self.state_path, plan_slug="fixture-plan", owner="env-owner", repo_root=self.root)
 
     # --- helper-level projection cases (a)-(e) ---
 

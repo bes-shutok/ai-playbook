@@ -10,7 +10,12 @@ origins actually left the backlog top level:
   origin passes when the file sits under the completed directory, under
   the backlog directory's ``rejected/`` archive (an explicit decision
   against the work), or the top-level item's header carries
-  ``Status: closed`` or ``Status: done``.
+  ``Status: closed`` or ``Status: done``. A ``Status: covered (<plan>)``
+  origin passes only when the covering witness names a DIFFERENT plan
+  that exists under the active plans directory or the completed plans
+  directory (basename-scoped); the gated plan's own witness, or a
+  witness naming no existing plan file, straggles with the
+  fold-and-delete remedy.
   A plan with no origins block passes trivially (nothing to verify).
   ``--warn`` downgrades the arm to warn-and-exit-0.
 - Corpus scan (no ``--plan``): walk every archived plan under the plans
@@ -85,6 +90,18 @@ STATUS_CLOSED_VALUE_RE = re.compile(
 # execution-time fold, so it stays outside PASS_STATES.
 STATUS_COVERED_VALUE_RE = re.compile(
     r"^covered\s*\(([^)]+)\)", re.IGNORECASE
+)
+
+# The covered straggler's remedy detail (the self-witness and the
+# unresolvable-witness shapes): the covering archived plan owes the
+# fold-and-delete, and the same completion pass that flips the origin
+# covered performs it, reclassifying the origin through the existing
+# missing-plus-consult path.
+COVERED_FOLD_REMEDY = (
+    "covered: fold a `## Disposition of migrated backlog items` section "
+    "naming the origin onto the covering archived plan and delete the "
+    "origin file in the same completion pass; the completion reclassifies "
+    "the origin through the existing missing-plus-consult path"
 )
 
 PASS_STATES = ("completed", "closed", "rejected")
@@ -445,8 +462,30 @@ def classify_origin(
     return "missing", "not found under the backlog directory"
 
 
+def _witness_plan_exists(
+    witness_basename: str, active_plans_dir: Path, completed_plans_dir: Path
+) -> bool:
+    """Basename-scoped witness existence: a plan file named
+    ``witness_basename`` anywhere under the active plans directory or
+    ``plans_completed_dir`` (never the literal witness path, and never
+    corpus mode's active-directory liveness reading, which would call a
+    witness stale the moment its covering plan archived)."""
+    for directory in (active_plans_dir, completed_plans_dir):
+        if not directory.is_dir():
+            continue
+        for plan in directory.rglob("*.md"):
+            if plan.name == witness_basename and plan.is_file():
+                return True
+    return False
+
+
 def run_plan_mode(
-    plan_path: Path, backlog_dir: Path, completed_dir: Path, warn_only: bool
+    plan_path: Path,
+    backlog_dir: Path,
+    completed_dir: Path,
+    active_plans_dir: Path,
+    completed_plans_dir: Path,
+    warn_only: bool,
 ) -> int:
     """Archive gate: only THIS plan's origins can block, and only without
     ``--warn``. No origins block passes trivially."""
@@ -477,6 +516,29 @@ def run_plan_mode(
             continue
         if state == "missing" and _disposition_consult(text, name):
             continue  # fold-then-delete: the plan's own disposition section anchors it
+        if state == "covered":
+            # Split the covered straggler by its status-value witness.
+            # Basename equality, never raw-path equality: the flip-time
+            # witness carries the active-prefix path form while this gate
+            # runs at the completed path, and date-stamped plan basenames
+            # are unique across both trees.
+            witness = detail[len("covered by "):].strip()
+            witness_name = Path(witness.replace(os.sep, "/")).name
+            if witness_name == plan_path.name:
+                # Self-witness: this plan covered the origin but never
+                # folded and deleted it; its own archive owes the remedy.
+                stragglers.append((name, COVERED_FOLD_REMEDY))
+            elif _witness_plan_exists(
+                witness_name, active_plans_dir, completed_plans_dir
+            ):
+                # Different plan that exists: that plan's own completion
+                # pass owns the fold; this archive must not block on it.
+                continue
+            else:
+                # The witness names no existing plan file: nothing owns
+                # the fold, so the covered straggler keeps the remedy.
+                stragglers.append((name, COVERED_FOLD_REMEDY))
+            continue
         stragglers.append((name, detail))
     if not stragglers:
         print(
@@ -843,7 +905,20 @@ def main(argv: list[str] | None = None) -> int:
             plan_path = repo_root / plan_path
         if not plan_path.is_file():
             parser.error(f"--plan file not found: {plan_path}")
-        return run_plan_mode(plan_path, backlog_dir, completed_dir, args.warn)
+        active_plans_dir = resolve_dir(
+            args.active_plans_dir, repo_root, "plans_dir", DEFAULT_ACTIVE_PLANS_DIR
+        )
+        completed_plans_dir = resolve_dir(
+            args.plans_dir, repo_root, "plans_completed_dir", DEFAULT_PLANS_DIR
+        )
+        return run_plan_mode(
+            plan_path,
+            backlog_dir,
+            completed_dir,
+            active_plans_dir,
+            completed_plans_dir,
+            args.warn,
+        )
 
     plans_dir = resolve_dir(
         args.plans_dir, repo_root, "plans_completed_dir", DEFAULT_PLANS_DIR

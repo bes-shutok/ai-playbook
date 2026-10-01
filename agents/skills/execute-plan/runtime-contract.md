@@ -284,7 +284,8 @@ status `contract-violation` before the closed-set check.
 ### Verification evidence envelope
 
 Tasks may declare immutable `required_criteria` and `verification_commands`
-when the manifest is created. The manifest stores a canonical
+when the manifest is created; both must be non-empty, and launch refuses a
+task whose worker contract leaves either empty. The manifest stores a canonical
 `evidence_contract_digest` over those fields and each task's path allowlist;
 checkboxes and task status are excluded. The manifest also stores a deterministic,
 immutable per-task mapping from compact criterion IDs (`c001`, `c002`, ...) to
@@ -790,10 +791,9 @@ because every retry re-fails the same authorization (r5 F3). The same
 release shape fires when no member session exists anywhere for the anchor
 resume (a schema-legal receipt stream that never carried a session id): the
 done lands and the staged members re-enter the queue as individuals (r6 F1).
-The first
-member is reached through `launch`; later
-members may be reached only through `resume` on the anchor session, and a
-launch that would bypass that rule fails closed. The generic next-claim stays
+The first member is reached through `launch`; later members may be reached
+only through `resume` on the anchor session, and a launch that would bypass
+that rule fails closed. The generic next-claim stays
 suppressed until the group closes; the last member's done closes the group and
 releases the single-task queue.
 
@@ -943,6 +943,51 @@ tooling checkout still resolves the same manifest and the same target root
 and lands its artifacts under the target project's resolved tmp dir;
 invocation from the shared checkout therefore cannot silently retarget
 the run.
+
+### Codex worker model policy and recovery
+
+For Codex runs, the effective Codex config is the single policy source for the
+selected worker model: `agents.default_subagent_model`. A worker-launch guard
+requires each launch request to contain an explicit nonempty model equal to
+that value. The parent session's active model is not part of the comparison,
+and no separate allowed-model set is maintained. The active registered hook
+and the versioned hook source are program copies; the read-only alignment
+probe verifies the registration, selected config, and byte equality. Missing,
+unreadable, malformed, or mismatched policy returns
+`runtime-policy-unavailable` before the worker is invoked.
+
+Before any Codex claim or handoff mutation, the runtime repeats the read-only
+alignment check. This includes direct and parallel-group claims, and
+`record_done` or `reconcile_commit_before_checkpoint` when they can prepare a
+successor handoff. Before changing the registration, installed guard, or
+config, check that no Codex execute-plan run has active claims or handoff
+intents. The probe never writes host files.
+
+Operator repair runs outside the blocked Codex session. Run
+`python3 scripts/codex_model_guard_probe.py`, read its failed check and recovery
+fields, correct the registration or selected config as indicated, or refresh
+the installed target named by `~/.codex/hooks.json` from
+`agents/hooks/codex-model-guard/require-luna.py`, then rerun the probe. Do not
+weaken the policy or ask a blocked agent to edit its own guard.
+
+If drift blocks before worker launch after a claim exists, restore aligned
+policy outside the blocked session and inspect the durable claim or group
+receipt in the machine manifest. Use direct prelaunch reclaim only when the
+existing driver eligibility and evidence requirements hold. For a claim-group
+member, use the blocked non-resumable member reclaim only when that member is
+blocked with `resume_allowed` false and the group conditions hold. Then rerun
+preflight and invoke only its emitted command. If those prelaunch conditions
+do not hold, use ordinary lease-gated reclaim. Do not rerun implementation,
+hand-edit the manifest, or bypass the guard.
+
+If a valid worker result or commit exists but drift blocks `record_done` or
+`reconcile_commit_before_checkpoint`, restore alignment outside the blocked
+session and retry the same receipt-bound operation with the original claim
+identity and evidence. Use commit reconciliation when the commit already
+landed. A replay of an already completed done or commit-reconciliation
+operation returns its recorded outcome without another state mutation or
+handoff rotation, even if current policy has drifted. No new recovery
+transition or automatic host-file synchronization is added.
 
 The driver accepts adapter results only after closed-result validation and
 default-deny policy validation. It persists a worker checkpoint as

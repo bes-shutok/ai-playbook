@@ -10,7 +10,7 @@
 # Usage:
 #   done_sweep_gates.sh pre-docs     # done Steps 1.5, 2.65, 2.648, 2.645, 2.64, 2.63, 2.62 gates
 #   done_sweep_gates.sh pre-commit   # done Steps 2.7 (mechanical half), 2.76, 2.8 gates
-#   done_sweep_gates.sh list-gates   # print the twelve absorbed gate ids, deduped at first phase
+#   done_sweep_gates.sh list-gates   # print the fourteen absorbed gate ids, deduped at first phase
 #   done_sweep_gates.sh write-manifest [flags...]   # done Step 0 manifest write (full flag vector forwarded)
 #
 # Run from the project git root (or set DONE_SWEEP_REPO_ROOT). Path resolution
@@ -30,9 +30,10 @@ Phases:
                review-staging, vim-swap-sweep, docs-tmp-sweep, plans-archive-twin
                (done Steps 1.5, 2.65, 2.648, 2.645, 2.64, 2.63, 2.62)
   pre-commit   sensitive-data-scan, em-dash-scan, instruction-size,
-               foreign-staging, plans-archive-twin
+               description-length, foreign-staging, archive-ceremony,
+               plans-archive-twin
                (done Steps 2.7 mechanical half, 2.76, 2.8)
-  list-gates   print the twelve absorbed gate ids, deduped at first phase
+  list-gates   print the fourteen absorbed gate ids, deduped at first phase
   write-manifest
                done Step 0 run manifest write; the FULL argument vector is
                forwarded to the lib (e.g. --adopt, --owned-review,

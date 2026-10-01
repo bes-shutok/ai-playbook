@@ -30,6 +30,19 @@ _OBSERVATION_PLUMBING_MODULES = {"pathlib", "io", "os", "genericpath", "posixpat
 _GUARDED_READ_MODULES = {"execute_plan_runtime_codex", "runtime_capabilities"}
 
 
+def _worker_guard_argv(guard_path: Path, model: str) -> list[str]:
+    event = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Agent", "tool_input": {"model": model}})
+    source = (
+        "import importlib.util,io,os,sys; from pathlib import Path; "
+        "spec=importlib.util.spec_from_file_location('worker_guard',sys.argv[1]); "
+        "guard=importlib.util.module_from_spec(spec); spec.loader.exec_module(guard); "
+        f"sys.stdin=io.StringIO({event!r}); guard.main(); "
+        "config=Path(os.environ.get('CODEX_CONFIG') or (Path.home()/'.codex/config.toml')); "
+        "print('EFFECTIVE_CONFIG='+str(config.resolve()))"
+    )
+    return [sys.executable, "-c", source, str(guard_path)]
+
+
 def _nearest_caller_module() -> str:
     frame = sys._getframe(1).f_back
     while frame is not None:
@@ -810,6 +823,140 @@ class CodexAdapterTest(unittest.TestCase):
         # __CF_USER_TEXT_ENCODING is injected by macOS posix_spawn itself, not
         # by the runner's allowlist; everything else must match the literal set.
         self.assertEqual(set(json.loads(result["stdout"])) - {"__CF_USER_TEXT_ENCODING"}, expected_child_keys)
+
+    def test_relative_codex_config_is_normalized_from_repo_root_and_forwarded(self):
+        from codex_model_guard_probe import effective_config
+
+        original_env = dict(os.environ)
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo"
+            (root / "config").mkdir(parents=True)
+            config = root / "config" / "codex.toml"
+            config.write_text("[agents]\ndefault_subagent_model = 'gpt-5.6-sol'\n")
+            codex_dir = Path(temp) / "isolated-home" / ".codex"
+            codex_dir.mkdir(parents=True)
+            installed_guard = codex_dir / "require-luna.py"
+            versioned_guard = Path(__file__).resolve().parents[1] / "agents/hooks/codex-model-guard/require-luna.py"
+            installed_guard.write_bytes(versioned_guard.read_bytes())
+            registration = codex_dir / "hooks.json"
+            registration.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": f"python3 {installed_guard}"}]}]}}))
+            caller = Path(temp) / "elsewhere"
+            caller.mkdir()
+            try:
+                os.chdir(caller)
+                os.environ.clear()
+                os.environ.update({"HOME": str(Path(temp) / "isolated-home"), "PATH": original_env.get("PATH", ""), "CODEX_CONFIG": "config/codex.toml"})
+                adapter = CodexAdapter(root, runner=_subprocess_runner, approval_verified=True, model_guard_registration=registration, model_guard_source=versioned_guard)
+                self.assertEqual(adapter.codex_config, str(config.resolve()))
+                self.assertEqual(effective_config(dict(os.environ), root), config.resolve())
+                self.assertNotEqual(effective_config(dict(os.environ), caller), adapter.codex_config)
+                opened = []
+                os_open = os.open
+
+                def observe_open(file, flags, *args, **kwargs):
+                    opened.append(Path(file).resolve())
+                    return os_open(file, flags, *args, **kwargs)
+
+                with mock.patch("os.open", side_effect=observe_open):
+                    policy = adapter.model_guard_check()
+                self.assertEqual(policy["status"], "ok", policy)
+                self.assertEqual(Path(policy["config_path"]), config.resolve())
+                self.assertEqual(set(opened), {registration.resolve(), installed_guard.resolve(), versioned_guard.resolve(), config.resolve()})
+                worker_policy = {"token": "policy", "repo_root": str(root), "allowed_paths": ["task.txt"], "operation_kind": "repository-task", "network": False, "generation": 1}
+                result = adapter._run(
+                    _worker_guard_argv(installed_guard, "gpt-5.6-sol"),
+                    15,
+                    "launch",
+                    policy_token=worker_policy,
+                )
+            finally:
+                os.chdir(original_cwd)
+                os.environ.clear()
+                os.environ.update(original_env)
+        self.assertEqual(result.get("returncode"), 0, result.get("stderr"))
+        self.assertEqual(result["stdout"].strip(), f"EFFECTIVE_CONFIG={policy['config_path']}")
+
+    def test_model_guard_check_matches_absolute_and_default_config_paths(self):
+        from codex_model_guard_probe import effective_config
+
+        source = Path(__file__).resolve().parents[1] / "agents/hooks/codex-model-guard/require-luna.py"
+        original_env = dict(os.environ)
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "home"
+            codex_dir = home / ".codex"
+            codex_dir.mkdir(parents=True)
+            installed = codex_dir / "require-luna.py"
+            installed.write_bytes(source.read_bytes())
+            registration = codex_dir / "hooks.json"
+            registration.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": f"python3 {installed}"}]}]}}))
+            root = Path(temp) / "repo"
+            root.mkdir()
+            caller = Path(temp) / "caller"
+            caller.mkdir()
+            absolute = root / "absolute.toml"
+            fallback = codex_dir / "config.toml"
+            for path in (absolute, fallback):
+                path.write_text("[agents]\ndefault_subagent_model = 'fixture-model'\n")
+            try:
+                for override, expected in ((str(absolute), absolute), (None, fallback)):
+                    with self.subTest(override=override):
+                        os.chdir(caller)
+                        os.environ.clear()
+                        os.environ.update({"HOME": str(home), "PATH": original_env.get("PATH", "")})
+                        if override is not None:
+                            os.environ["CODEX_CONFIG"] = override
+                        adapter = CodexAdapter(root, runner=_subprocess_runner, model_guard_registration=registration, model_guard_source=source)
+                        policy = adapter.model_guard_check()
+                        self.assertEqual(policy["status"], "ok", policy)
+                        self.assertEqual(Path(policy["config_path"]), expected.resolve())
+                        self.assertEqual(effective_config(dict(os.environ), root, default_config=fallback), expected.resolve())
+                        worker_policy = {"token": "policy", "repo_root": str(root), "allowed_paths": ["task.txt"], "operation_kind": "repository-task", "network": False, "generation": 1}
+                        result = adapter._run(_worker_guard_argv(installed, "fixture-model"), 15, "launch", policy_token=worker_policy)
+                        self.assertEqual(result.get("returncode"), 0, result.get("stderr"))
+                        self.assertEqual(result["stdout"].strip(), f"EFFECTIVE_CONFIG={policy['config_path']}")
+            finally:
+                os.chdir(original_cwd)
+                os.environ.clear()
+                os.environ.update(original_env)
+
+    def test_symlink_loop_config_override_refuses_without_mutation(self):
+        # Characterization pin: on the pinned interpreter the loop override
+        # refuses inside the probe's structured resolution (selected_config),
+        # never at adapter construction, and the refusal mutates no run state.
+        source = Path(__file__).resolve().parents[1] / "agents/hooks/codex-model-guard/require-luna.py"
+        original_env = dict(os.environ)
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "home"
+            codex_dir = home / ".codex"
+            codex_dir.mkdir(parents=True)
+            installed = codex_dir / "require-luna.py"
+            installed.write_bytes(source.read_bytes())
+            registration = codex_dir / "hooks.json"
+            registration.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Agent", "hooks": [{"type": "command", "command": f"python3 {installed}"}]}]}}))
+            root = Path(temp) / "repo"
+            root.mkdir()
+            config_loop = root / "config-loop.toml"
+            config_loop.symlink_to(config_loop)
+            snapshot = {path: (path.exists(), path.read_bytes() if path.is_file() and not path.is_symlink() else None) for path in (registration, installed)}
+            try:
+                os.chdir(root)
+                os.environ.clear()
+                os.environ.update({"HOME": str(home), "PATH": original_env.get("PATH", ""), "CODEX_CONFIG": str(config_loop)})
+                adapter = CodexAdapter(root, runner=_subprocess_runner)
+                policy = adapter.model_guard_check()
+                self.assertEqual(policy["status"], "runtime-policy-unavailable", policy)
+                self.assertEqual(policy["failed_check"], "selected_config")
+                self.assertNotIn(str(root), json.dumps(policy))
+                after = {path: (path.exists(), path.read_bytes() if path.is_file() and not path.is_symlink() else None) for path in (registration, installed)}
+                self.assertEqual(after, snapshot)
+                self.assertFalse((root / "runtime_state.json").exists())
+            finally:
+                os.chdir(original_cwd)
+                os.environ.clear()
+                os.environ.update(original_env)
 
     def test_no_live_installation_read(self):
         # The adapter lifecycle must not read any live installation path when

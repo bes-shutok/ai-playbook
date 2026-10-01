@@ -2408,6 +2408,11 @@ def cmd_refresh_baseline(
 def _atomic_write_private(path: Path, data: bytes) -> None:
     """Atomically overwrite ``path`` (0o600) via temp file + rename.
 
+    Missing parent directories are created first (0o700 under the cleared
+    umask), so a fresh reports tree cannot fail the write (exit-metrics N4);
+    the pinned open below stays the symlink authority for whatever the
+    mkdir leaves in place.
+
     Kernel-grade: the parent is pinned with an ``O_DIRECTORY | O_NOFOLLOW``
     dirfd; the temp file is created dirfd-relative with
     ``O_CREAT | O_EXCL | O_NOFOLLOW`` at ``0600`` (never create-then-chmod)
@@ -2421,6 +2426,12 @@ def _atomic_write_private(path: Path, data: bytes) -> None:
     _reject_symlink(path.parent)
     prev = os.umask(0o077)
     try:
+        # Fresh-tree creation (N4): a metrics write into a not-yet-created
+        # reports directory must land, not fail on the pinned open. The
+        # islink pre-checks above already rejected a symlinked target or
+        # final parent component before anything is created, and the pinned
+        # open below still refuses a symlink swapped in after the mkdir.
+        path.parent.mkdir(parents=True, exist_ok=True)
         with _pinned_parent(
             path.parent, f"refusing symlinked parent: {path.parent}"
         ) as parent_fd:
@@ -3004,6 +3015,18 @@ def _rounds_suffix(stats: dict, key: str) -> str:
     )
 
 
+def _rate_rounds_suffix(stats: dict, key: str) -> str:
+    """Format a per-round rate map through the two-decimal rate helper.
+
+    Rates render through the same two-decimal helper as the overall table
+    (exit-metrics N2): a per-band column dumping raw floats beside the
+    overall table's two-decimal column is formatting drift, not information.
+    """
+    return ", ".join(
+        f"r{idx}={_fmt_rate(stats[key][idx])}" for idx in sorted(stats[key])
+    )
+
+
 def serialize_metrics_markdown(report: dict) -> bytes:
     """Aggregate-only Markdown for the metrics report.
 
@@ -3053,7 +3076,7 @@ def serialize_metrics_markdown(report: dict) -> bytes:
             f"| {band} | {stats['loops']} | {stats['cap_closures']} "
             f"| {_fmt_rate(stats['cap_exhaustion_share'])} "
             f"| {_rounds_suffix(stats, 'findings_by_round')} "
-            f"| {_rounds_suffix(stats, 'ready_rate_by_round')} "
+            f"| {_rate_rounds_suffix(stats, 'ready_rate_by_round')} "
             f"| {_rounds_suffix(stats, 'latest_round_distribution')} |"
         )
     lines.append("")
@@ -3061,6 +3084,11 @@ def serialize_metrics_markdown(report: dict) -> bytes:
         "Legacy bucket (sidecars that failed validation or carry no usable "
         "loop identity, counted in the unknown band): "
         f"{report['sidecars_legacy_bucket']}"
+    )
+    lines.append(
+        "Blocking counts read 0 for counts-only sidecars (a sidecar carrying "
+        "a counts block but no findings list): their findings totals count "
+        "in the tables, their blocking columns never do."
     )
     lines.append("")
     return "\n".join(lines).encode("utf-8")
@@ -3749,6 +3777,22 @@ def _t_private_permissions(check) -> None:
                 f"refusing to follow symlink target: {parent_link2}",
             ),
         )
+
+        # Fresh-tree creation (exit-metrics N4): a write into a not-yet-
+        # created reports directory lands (parents created) instead of
+        # failing on the pinned open, and the created tree is private.
+        fresh = td_path / "fresh-root" / "review-telemetry" / "reports"
+        _atomic_write_private(fresh / "review-metrics-1.md", b"# metrics\n")
+        check(
+            "permissions: _atomic_write_private creates missing parents",
+            (fresh / "review-metrics-1.md").read_bytes() == b"# metrics\n",
+            "fresh-tree write failed to land",
+        )
+        check(
+            "permissions: fresh-tree parents created private",
+            _dir_mode(fresh) == 0o700,
+            f"fresh reports dir mode {_dir_mode(fresh):04o}",
+        )
         read_target = tel / "read-target.json"
         read_target.write_text("{}", encoding="utf-8")
         os.chmod(str(read_target), 0o600)
@@ -3865,6 +3909,12 @@ def _t_private_permissions(check) -> None:
         # the symlink refusal text and not a raw OSError. tighten_parent_
         # ai_playbook takes the parent itself; the other three take a child
         # inside it. Message-predicate idiom (r4 advisory-refusal pattern).
+        # Supersession (exit-metrics N4 fix, 2026-10-01): _atomic_write_
+        # private left this loop and flipped to parent-directory creation
+        # for a missing parent (a fresh reports tree must not fail the
+        # metrics write), witnessed by its own checks beside the fresh-tree
+        # block; its symlinked-parent refusal above is unchanged. The four
+        # remaining helpers keep the r5 F3 fail-closed contract.
         missing_parent = td_path / "nope"
 
         def _names_parent_only(msg) -> bool:
@@ -3892,12 +3942,6 @@ def _t_private_permissions(check) -> None:
             (
                 "create_private_file_exclusive",
                 lambda: create_private_file_exclusive(
-                    missing_parent / "child", b"{}"
-                ),
-            ),
-            (
-                "_atomic_write_private",
-                lambda: _atomic_write_private(
                     missing_parent / "child", b"{}"
                 ),
             ),
@@ -6892,6 +6936,30 @@ def _t_metrics_bands(check) -> None:
             and str(td) not in md_text
             and "alpha-feature" not in md_text,
             "slug or path data leaked into metrics Markdown",
+        )
+        # N2 witness: the per-band ready-rate column renders through the
+        # same two-decimal helper as the overall table. Equivalence check
+        # against the report values: every band's rendered ready-rate
+        # column must equal the two-decimal helper's rendering, so a raw
+        # float column (0.2, 1.0) fails while 0.20 and 1.00 pass.
+        bands_section = md_text.split("## Complexity bands", 1)[1]
+        expected_columns = {
+            band: _rate_rounds_suffix(report["bands"][band], "ready_rate_by_round")
+            for band in COMPLEXITY_BANDS
+            if report["bands"][band]["ready_rate_by_round"]
+        }
+        check(
+            "metrics_bands: per-band ready-rate column two-decimal (N2)",
+            expected_columns
+            and all(expected in bands_section for expected in expected_columns.values()),
+            f"two-decimal ready-rate columns missing: {expected_columns}",
+        )
+        # N3 witness: the report legend carries the counts-only blocking
+        # caveat the helper docstring records.
+        check(
+            "metrics_bands: legend carries counts-only blocking caveat (N3)",
+            "Blocking counts read 0 for counts-only sidecars" in md_text,
+            "counts-only blocking caveat missing from the report legend",
         )
     finally:
         shutil.rmtree(td)

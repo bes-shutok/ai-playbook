@@ -3114,18 +3114,18 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **Principle:** Family D (Single source of truth for workflow contracts) applied to skill orchestrators: when the user invokes a slash command or attaches a skill, that is the mode selection; do not re-ask with a softer gate or pause between steps the contract already defines.
 
-**Trigger:** A user runs `/execute-plan <plan-path>`, types `execute plan docs/history/plans/foo.md` or shorthand `execute docs/history/plans/foo.md`, or attaches the execute-plan skill, but the agent still shows the execute-plan / manual / read-only gate, asks to continue on a branch that already matches the plan slug, or ends a task with "want me to proceed to Task N+1?"
+**Trigger:** A user runs `/execute-plan <plan-path>`, types `execute plan docs/history/plans/foo.md` or shorthand `execute docs/history/plans/foo.md`, or attaches the execute-plan skill, but the agent still shows the execute-plan / manual / read-only gate, asks to confirm or re-create the Phase 0 worktree branch the Worktree-first standard already resolves, or ends a task with "want me to proceed to Task N+1?"
 
 **Rule:**
 1. Run **invocation detection first**: `execute plan` + path, shorthand `execute`/`implement`/`run` + plan `.md` path under `.../plans/...`, `/execute-plan`, and skill attachment are equivalent execute-plan choice; the three-way gate applies only when `invoked = false` (bare path or `@mention` with no verb before the plan path).
-2. On Phase 0 branch setup, **auto-continue** when `git branch --show-current` equals the plan slug (basename without `.md`) or the computed plan branch name; prompt only for plausible non-exact matches or new branch creation.
+2. On Phase 0 branch setup, **auto-continue**: the run works inside the ad-hoc worktree on its own branch per the Worktree-first standard (branch named by the run's convention, base per the Base-branch resolution rule); never prompt to confirm the branch and never fall back to the primary checkout. (Correction 2026-10-01, driving incident: the worktree-first standard consolidation, plan `docs/history/plans/completed/2026-09-28-worktree-first-standard-only-mode.md`, deleted Step 0.1a and retired the in-checkout branch-match arm this rule used to teach; "continue when `git branch --show-current` equals the plan slug" is no longer a sanctioned Phase 0 shape.)
 3. After each task `done`, Phase 2 pass, or review-round `done`, **start the next defined step immediately**; brief progress reports are fine, permission prompts are not.
 
 **Why this happens:** Agents pattern-match on "plan path in message" and generic safety habits (confirm branch, confirm next step). Slash commands attach the skill without putting trigger text in the user message, so text-only trigger lists miss the invocation. Step boundaries feel like natural pause points unless the skill forbids asking.
 
 **Shape trigger (when to suspect this family):** User explicitly invoked an orchestrator skill but the agent behaves like they only mentioned a file path, or asks yes/no between tasks on a plan they already asked to execute end-to-end.
 
-**See also:** `agents/skills/execute-plan/SKILL.md` (Invocation detection, Continuous execution, Step 0.1a, Step 1.5), `plan-execution-routing` Cursor rule, `done` skill workflow continuity.
+**See also:** `agents/skills/execute-plan/SKILL.md` (Invocation detection, Continuous execution, the Worktree-first standard section, Step 1.5; corrected 2026-10-01, the previously cited Step 0.1a was deleted by the worktree-first standard consolidation), `plan-execution-routing` Cursor rule, `done` skill workflow continuity.
 
 ## 148. Tune Review Panels From Review Statistics, Not Agent Count Alone
 
@@ -3786,11 +3786,11 @@ The final design (two-tier source-level resolver: registry tier 1, row-evidence 
 
 **Shape trigger (when to suspect this family):** The agent loaded a skill and produced a correct-format artifact, but never proposed a branch, never announced the skill, or skipped a numbered Phase; OR the user asks "did you use the skill?" and the honest answer is "I loaded it and followed its format, not its gates."
 
-**Distinguishing from #147:** #147 is the inverse case from the execute-plan side: do not re-ask when already on the correct branch. This lesson is the initial-gate case: when starting work the skill gates, propose and confirm the branch (or get explicit decline) before the first artifact write, even for an edit to an existing not-ready artifact on the default branch.
+**Distinguishing from #147:** #147 is the inverse case from the execute-plan side: do not re-ask about the Phase 0 branch the Worktree-first standard already resolves (the ad-hoc worktree on its own branch). This lesson is the initial-gate case: when starting work the skill gates, propose and confirm the branch (or get explicit decline) before the first artifact write, even for an edit to an existing not-ready artifact on the default branch.
 
 **Example (2026-07-29 plan revision):** A not-ready plan (10 blocking findings) was revised heavily (cohort redesign, triage-gate asymmetry, dead-subsystem removal, 19 findings folded in) over several review rounds. The plans skill was loaded, but the agent edited the plan file directly on `main` without proposing a feature branch, skipping Phase 0's hard gate ("Do not write the plan file until branch setup is complete or explicitly declined"). The user caught it post-hoc ("did you use the plans skill? why didn't you switch the branch?"). Fix: created the feature branch, carried the working-tree changes over, then committed. Root cause was not ignorance of the gate but rationalizing "plan doc edit" as below the gate's threshold.
 
-**See also:** #147 (auto-continue on the correct branch; the inverse initial-gate case), coding_guidelines.md #25 (Family H parent), `plans` skill Phase 0 Hard gate, `done` skill workflow continuity, `grilling`/`grill-with-docs` announce directives.
+**See also:** #147 (auto-continue through the worktree-first Phase 0 branch setup; the inverse initial-gate case; corrected 2026-10-01 with that lesson's consolidation correction), coding_guidelines.md #25 (Family H parent), `plans` skill Phase 0 Hard gate, `done` skill workflow continuity, `grilling`/`grill-with-docs` announce directives.
 
 ## 179. After Editing a Skill, Re-read It for Internal Contradiction Introduced by the Edit
 
@@ -7638,3 +7638,33 @@ When preparing a batch of structural edits to a shared coordination file that pe
 **Example:** a plan fold mandated full-manifest post-validation after a task-scoped contract repair; the validator's own all-rows recompute raised on an uncorrected sibling, wedging the exact partially repaired runs the fold targeted. The fold had only ever been checked against single-defect fixtures.
 
 **See also:** #246 (an inherited claim is not verification), #253 (execute the defang against the real fixture), #457 (derive guards from fresh bytes).
+
+## 461. A Lock's Environment Dies With the Shell That Acquired It
+
+**Principle:** Family H (Verify the real thing, not the abstraction)
+
+**Trigger:** a multi-step workflow acquires a lock (merge, done, claim) in one tool call and performs the guarded mutation in a later call, passing the lock forward as environment variables.
+
+**Rule:** in one-shot shell environments (each tool call is a fresh shell), a lock held only through exported env dies when the acquiring call exits. Run the ENTIRE critical section - acquire, state capture, mutation, verification gates, release - in ONE shell invocation, or pin the holder to a long-lived process and re-export the token from chat context into every later call before releasing. "The acquire command succeeded earlier" is an abstraction; the real thing is whether the lock is held at the moment the mutation runs.
+
+**Why:** a workflow that split acquire and commit across calls ran its landing's commit and gates after the lock had silently self-released; serialization was only proven after the fact by a parentage gate comparing the commit's parent to the pre-captured tip. The gates caught it; nothing else would have.
+
+**Shape:** any per-worktree or per-repo lock script whose acquire prints `export VAR=...` lines: if the next command runs in a different shell, treat the lock as already released and either re-plan into one invocation or re-export and re-verify with the script's status command immediately before the mutation.
+
+**Concrete incident:** a merge-locked landing acquired the repo merge lock, captured the default-branch tip, and squash-staged the landing in one call; the commit, parentage gate, dirt gate, and hygiene scan ran in the next call - after the lock dir had vanished and status reported free. The landing was correct (no peer interleave occurred) but the mutual exclusion was never held during the commit.
+
+See also #462 for adjudicating who else may hold claims on the same machinery.
+
+## 462. Adjudicate a Claim File's Owner Through an On-Disk Identity Chain, Not Its Self-Report
+
+**Principle:** Family H (Verify the real thing, not the abstraction)
+
+**Trigger:** a multi-agent workspace where sessions coordinate through claim files (authoring claims, execution claims, lock fences) and two actors may target the same artifact. A claim names a session id, but the id space is not directly comparable to your own, and self-reported timestamps can be wrong (future-dated stamps, mismatched ids).
+
+**Rule:** before adopting a claim as yours or standing down as foreign, build the identity chain from artifacts that cannot self-report: marker files written by the same tool (they carry the writer's cwd, a wall-clock timestamp, and a session component), file mtime clusters, and observed mutations during your own turn. One actor's writes land as a same-second cluster across the claim file, its worktree, and its marker; a commit appearing between two of your own read-only commands proves a live concurrent writer regardless of what any file claims. Session-hash components match across worktrees of the same actor lineage, but they do NOT distinguish sibling sessions of one lineage - only a distinct commit mid-turn or a distinct full session id does.
+
+**Why:** a continuation session nearly re-authored a plan already claimed by a live sibling: the claim file carried a future timestamp and an unfamiliar session id (looking like degradation noise), but the marker chain showed the same-second write cluster and the sibling committed the authored plan between two survey commands - proof of a live foreign actor. Standing down was correct; adopting on the claim file's defects alone would have collided.
+
+**Shape:** never treat "the claim file's session id is malformed/absent/future-dated" as evidence the claim is abandoned; treat it as evidence the file's self-report is unreliable, and escalate to mutation-observed evidence (a commit or file change you did not cause) before touching the claimed surface.
+
+See also #461 for the lock-lifetime half of the same one-shot-shell machinery.

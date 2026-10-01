@@ -871,5 +871,167 @@ class TestOriginCoverage(unittest.TestCase):
         self.assertIn("2026-01-01-gone.md", proc.stdout)
 
 
+class CoveredCompletionTest(unittest.TestCase):
+    """The covered straggler's fold-and-delete sharpening (plan
+    2026-10-01-done-origin-fold-delete-enforcement Task 1): the archive
+    gate's covered arm splits by the status-value witness.
+
+    Fixtures pin the PRODUCTION path shapes: the gated plan is invoked at
+    its completed path (under ``plans_completed_dir``) while the flip-time
+    witness carries the active-prefix form ``docs/history/plans/<name>.md``,
+    so only basename equality can match - raw-path equality never would.
+    """
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="covered-completion-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.backlog = self.root / "docs" / "history" / "backlog"
+        self.completed = self.backlog / "completed"
+        self.active = self.root / "docs" / "history" / "plans"
+        self.plans_dir = self.active / "completed"
+        for directory in (self.completed, self.plans_dir, self.root / ".ai-playbook"):
+            directory.mkdir(parents=True)
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+
+    def _write(self, path: Path, text: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _covered_top(self, name: str, witness: str) -> Path:
+        # The witness string is the flip-time active-prefix path form,
+        # exactly as ``--mark-covered`` writes it while the covering plan
+        # is still top-level under the active plans directory.
+        return self._write(
+            self.backlog / name,
+            f"# Backlog: {name}\n\nStatus: covered ({witness})\n\nbody\n",
+        )
+
+    def _gated_plan(self, name: str, origins: list[str], body: str = "") -> Path:
+        """The gated plan, written at its completed path (production
+        archive-gate shape)."""
+        lines = ["# Plan: fixture", ""]
+        lines.append(
+            f"Backlog origins (scope of record): `{origins[0]}`."
+        )
+        lines.append("")
+        lines.extend(["## Tasks", "", "- [ ] fixture task", ""])
+        return self._write(self.plans_dir / name, "\n".join(lines) + body)
+
+    def _run(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--repo-root", str(self.root)]
+            + list(args),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def test_covered_completion_self_witness_names_fold_remedy(self) -> None:
+        # The gated plan itself is the witness: its basename matches even
+        # though the witness path is the active-prefix form and the plan
+        # file lives only at the completed path (basename equality, never
+        # raw-path equality).
+        gated = self._gated_plan(
+            "2026-10-15-fixture-gated.md", [f"docs/history/backlog/{ALPHA}"]
+        )
+        self._covered_top(
+            ALPHA, "docs/history/plans/2026-10-15-fixture-gated.md"
+        )
+        self.assertFalse(
+            (self.active / "2026-10-15-fixture-gated.md").exists(),
+            "fixture precondition: no active-prefix twin of the gated plan",
+        )
+        proc = self._run("--plan", str(gated))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(f"straggler: {ALPHA}", proc.stdout)
+        # The detail names the fold-and-delete remedy, not the generic
+        # covered line.
+        self.assertIn("## Disposition of migrated backlog items", proc.stdout)
+        self.assertIn("same completion pass", proc.stdout)
+        self.assertNotIn(f"covered by docs/history/plans/", proc.stdout)
+
+    def test_covered_completion_other_existing_witness_passes(self) -> None:
+        # A different covering plan THAT EXISTS: its own completion pass
+        # owns the fold, so the gated plan's archive must not block.
+        gated = self._gated_plan(
+            "2026-10-15-fixture-gated.md", [f"docs/history/backlog/{ALPHA}"]
+        )
+        self._covered_top(
+            ALPHA, "docs/history/plans/2026-10-16-covering.md"
+        )
+        self._write(
+            self.active / "2026-10-16-covering.md",
+            "# Plan: covering\n\nbody\n",
+        )
+        proc = self._run("--plan", str(gated))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("ok (1/1 origins closed)", proc.stdout)
+        self.assertNotIn("straggler", proc.stdout)
+
+    def test_covered_completion_stale_prefix_witness_resolves_by_basename(self) -> None:
+        # The discriminating fixture: the witness path is the stale
+        # active-prefix form of a plan that has since archived - it exists
+        # ONLY under plans_completed_dir. Corpus mode's literal-path
+        # liveness reading would call it not live and refuse; the
+        # basename-scoped existence rule across both trees exempts it.
+        gated = self._gated_plan(
+            "2026-10-15-fixture-gated.md", [f"docs/history/backlog/{ALPHA}"]
+        )
+        self._covered_top(
+            ALPHA, "docs/history/plans/2026-10-17-archived-covering.md"
+        )
+        self._write(
+            self.plans_dir / "2026-10-17-archived-covering.md",
+            "# Plan: archived covering\n\nbody\n",
+        )
+        self.assertFalse(
+            (self.active / "2026-10-17-archived-covering.md").exists(),
+            "fixture precondition: the witness exists only at the completed path",
+        )
+        proc = self._run("--plan", str(gated))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("ok (1/1 origins closed)", proc.stdout)
+        self.assertNotIn("straggler", proc.stdout)
+
+    def test_covered_completion_nonexistent_witness_keeps_remedy_straggler(self) -> None:
+        # A witness basename matching NO existing plan file: an
+        # unresolvable witness is not a covering plan; nothing owns the
+        # fold, so the covered straggler stays with the same remedy.
+        gated = self._gated_plan(
+            "2026-10-15-fixture-gated.md", [f"docs/history/backlog/{ALPHA}"]
+        )
+        self._covered_top(
+            ALPHA, "docs/history/plans/2026-10-18-nowhere.md"
+        )
+        proc = self._run("--plan", str(gated))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(f"straggler: {ALPHA}", proc.stdout)
+        self.assertIn("## Disposition of migrated backlog items", proc.stdout)
+        self.assertIn("same completion pass", proc.stdout)
+
+    def test_covered_completion_fold_then_delete_passes(self) -> None:
+        # The completion shape (regression guard): the fold section is
+        # present on the gated plan and the origin file is deleted, so the
+        # origin reclassifies through the existing missing-plus-consult
+        # path and the archive passes.
+        gated = self._gated_plan(
+            "2026-10-15-fixture-gated.md",
+            [f"docs/history/backlog/{ALPHA}"],
+            "\n## Disposition of migrated backlog items\n\n"
+            f"- `docs/history/backlog/{ALPHA}`: folded; per-item file deleted\n",
+        )
+        self.assertFalse(
+            (self.backlog / ALPHA).exists(),
+            "fixture precondition: the origin file is deleted",
+        )
+        proc = self._run("--plan", str(gated))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("ok (1/1 origins closed)", proc.stdout)
+        self.assertNotIn("straggler", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

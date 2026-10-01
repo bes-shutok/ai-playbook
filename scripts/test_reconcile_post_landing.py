@@ -710,12 +710,22 @@ class ReconciliationResidualsTest(ReconcilePostLandingTest):
     """Plan 2026-09-30-reconciliation-coupling-residuals fixtures: inherits
     the fixture repo, driver, and teardown of the main suite."""
 
-    def test_single_path_restore_refusal_degrades_to_block_row(self):
-        """[class: REPOSITORY_TEST] Untracked debris at a landing-ADDED path
-        refuses the single-path restore (git restore refuses to overwrite an
-        untracked file); the run degrades to a
-        ``block <checkout> <path> restore-refused`` row (exit 1) and still
-        restores the landing's other paths."""
+    def tearDown(self):
+        # Restore a non-writable fixture root (the unreadable-removal test)
+        # before the inherited teardown removes the tree.
+        saved = getattr(self, "_nonwritable_root_mode", None)
+        if saved is not None:
+            os.chmod(self.repo.root, saved)
+            self._nonwritable_root_mode = None
+        super().tearDown()
+
+    def test_landing_deleted_untracked_orphan_removed(self):
+        """[class: REPOSITORY_TEST] The machinery-elimination end state: a
+        landing deletes the path, ``git rm --cached`` leaves the worktree copy
+        untracked with the pre-landing bytes, and the mtime is backdated
+        before the pre-tip commit time. The index-absent deleted orphan is
+        removed directly (git restore cannot remove an index-absent path):
+        expects exit 0, the file removed, and clean status."""
         r = self.repo
         r.write("skill.md", "v1\n")
         r.write("gone.md", "bye\n")
@@ -726,14 +736,39 @@ class ReconciliationResidualsTest(ReconcilePostLandingTest):
         r.backdate("gone.md", pre_time - 100000)
         # The witnessed shape: gone.md leaves the index (untracked in the
         # checkout) while the worktree keeps the pre bytes, so the deleted
-        # path classifies as a restore and the restore itself refuses.
+        # path is index-absent and the orphan is removed directly.
         r.git("rm", "--cached", "-q", "gone.md")
         rc, out, _ = self.run_script(pre, post)
-        self.assertEqual(rc, 1, out)
-        self.assertIn(
-            "block %s gone.md restore-refused" % r.root, out
-        )
+        self.assertEqual(rc, 0, out)
+        self.assertIn("removed %s gone.md" % r.root, out)
         self.assertIn("restored %s added.md" % r.root, out)
+        self.assertFalse(r.exists("gone.md"))
+        self.assertEqual(r.status(), "")
+
+    def test_unreadable_removal_degrades_to_block_row(self):
+        """[class: REPOSITORY_TEST] Same untracked-orphan fixture but the
+        file's parent directory made non-writable (chmod 555, restored in
+        tearDown; skipped as root) so the direct removal fails: expects exit
+        1, the gone.md ``restore-refused`` block row, and the file still
+        present. The landing-added sibling may carry its own degraded row
+        (its worktree write hits the same non-writable directory); it is not
+        asserted."""
+        r = self.repo
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("running as root: directory write bits are not enforced")
+        r.write("skill.md", "v1\n")
+        r.write("gone.md", "bye\n")
+        r.commit_all("v1")
+        pre, post = r.ref_landing({"gone.md": None, "added.md": "brand new\n"})
+        pre_time = r.commit_time(pre)
+        r.backdate("skill.md", pre_time - 100000)
+        r.backdate("gone.md", pre_time - 100000)
+        r.git("rm", "--cached", "-q", "gone.md")
+        self._nonwritable_root_mode = os.stat(r.root).st_mode & 0o777
+        os.chmod(r.root, 0o555)
+        rc, out, _ = self.run_script(pre, post)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("block %s gone.md restore-refused" % r.root, out)
         self.assertTrue(r.exists("gone.md"))
 
     def test_mixed_reset_wholesale_residue_worktree_only_restore(self):

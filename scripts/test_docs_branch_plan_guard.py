@@ -25,6 +25,21 @@ CERTIFIED_TEXT = "# Plan: sync guard demo\n\nThe certified shape of the plan byt
 OLDER_TEXT = "# Plan: sync guard demo\n\nThe stale earlier shape of the plan bytes.\n"
 THIRD_TEXT = "# Plan: sync guard demo\n\nA divergent edit shape of the plan bytes.\n"
 
+# Checkbox-bearing certified plan used by the progress-only overlay pins:
+# every bullet form (-, *, +) appears once and one line is already checked,
+# so a checked-to-unchecked regression has a concrete branch side to pair.
+PROGRESS_BASE_TEXT = (
+    "# Plan: sync guard demo\n\n"
+    "Steps:\n\n"
+    "- [ ] first unchecked step\n"
+    "- [x] already checked step\n"
+    "- [ ] second unchecked step\n"
+    "* [ ] third unchecked step\n"
+    "+ [ ] fourth unchecked step\n"
+    "\n"
+    "The certified shape of the plan bytes.\n"
+)
+
 
 def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -364,6 +379,116 @@ class DocsBranchPlanGuardTest(unittest.TestCase):
         code, out, _err = self._run_guard()
         self.assertEqual(code, 1)
         self.assertIn("REFUSE:", out)
+
+    # ------------------------------------------------------------------
+    # guard: progress-only overlay arms (certified-downgrade branch)
+    # ------------------------------------------------------------------
+
+    def _flip(self, text: str, old: str, new: str) -> str:
+        # Byte-exact single-marker replacement used to build overlay shapes.
+        self.assertIn(old, text)
+        return text.replace(old, new, 1)
+
+    def _write_progress_fixture(self, branch_text: str, incoming_text: str, digest: str) -> None:
+        self._write_plan(self.branch, branch_text)
+        self._write_plan(self.incoming, incoming_text)
+        self._write_sidecar(
+            f"2026-09-19-plan-review-{FEATURE}-r1.stats.json",
+            slug=FEATURE,
+            round_="r1",
+            digest=digest,
+        )
+
+    def test_progress_overlay_accepts_marker_flip(self) -> None:
+        # The incoming plan differs from the certified branch copy only in
+        # two bracketed marker tokens, both unchecked-to-checked; one flip
+        # targets the uppercase [X] form to pin the case-fold. The guard
+        # prints the named acceptance line and counts the plan as accepted.
+        incoming = self._flip(PROGRESS_BASE_TEXT, "- [ ] first unchecked step", "- [x] first unchecked step")
+        incoming = self._flip(incoming, "* [ ] third unchecked step", "* [X] third unchecked step")
+        self._write_progress_fixture(PROGRESS_BASE_TEXT, incoming, _digest(PROGRESS_BASE_TEXT))
+        code, out, _err = self._run_guard()
+        self.assertEqual(code, 0)
+        self.assertNotIn("REFUSE:", out)
+        expected = (
+            f"progress-only overlay accepted for {self.incoming / PLANS_REL / PLAN_NAME} "
+            f"(2 unchecked-to-checked flip(s); branch matches certified digest {_digest(PROGRESS_BASE_TEXT)})"
+        )
+        self.assertIn(expected, out)
+
+    def test_progress_overlay_refuses_text_in_checkbox_line(self) -> None:
+        # A checkbox line whose marker flipped AND whose post-marker text
+        # changed is not an unchecked-to-checked flip pair: the certified
+        # downgrade refusal holds.
+        incoming = self._flip(PROGRESS_BASE_TEXT, "- [ ] first unchecked step", "- [x] first unchecked step, revised")
+        self._write_progress_fixture(PROGRESS_BASE_TEXT, incoming, _digest(PROGRESS_BASE_TEXT))
+        code, out, _err = self._run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("REFUSE:", out)
+        self.assertNotIn("progress-only overlay accepted", out)
+
+    def test_progress_overlay_refuses_substantive_edit(self) -> None:
+        # A prose edit on a non-checkbox line is a substantive drift: the
+        # refusal holds even though every marker token is unchanged.
+        incoming = PROGRESS_BASE_TEXT.replace(
+            "The certified shape of the plan bytes.", "A divergent shape of the plan bytes."
+        )
+        self._write_progress_fixture(PROGRESS_BASE_TEXT, incoming, _digest(PROGRESS_BASE_TEXT))
+        code, out, _err = self._run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("REFUSE:", out)
+        self.assertNotIn("progress-only overlay accepted", out)
+
+    def test_progress_overlay_refuses_progress_regression(self) -> None:
+        # A checked-to-unchecked flip is a downgrade of recorded progress,
+        # never an overlay: one legitimate flip plus one regression refuses.
+        incoming = self._flip(PROGRESS_BASE_TEXT, "- [ ] first unchecked step", "- [x] first unchecked step")
+        incoming = self._flip(incoming, "- [x] already checked step", "- [ ] already checked step")
+        self._write_progress_fixture(PROGRESS_BASE_TEXT, incoming, _digest(PROGRESS_BASE_TEXT))
+        code, out, _err = self._run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("REFUSE:", out)
+        self.assertNotIn("progress-only overlay accepted", out)
+
+    def test_progress_overlay_refuses_mixed_edit(self) -> None:
+        # One checkbox flip plus one prose edit is a mixed edit: the pair
+        # rule accepts marker-only differences only, so the refusal holds.
+        incoming = self._flip(PROGRESS_BASE_TEXT, "- [ ] first unchecked step", "- [x] first unchecked step")
+        incoming = incoming.replace(
+            "The certified shape of the plan bytes.", "A divergent shape of the plan bytes."
+        )
+        self._write_progress_fixture(PROGRESS_BASE_TEXT, incoming, _digest(PROGRESS_BASE_TEXT))
+        code, out, _err = self._run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn("REFUSE:", out)
+        self.assertNotIn("progress-only overlay accepted", out)
+
+    def test_progress_overlay_inert_without_certified_sidecar(self) -> None:
+        # Without a certified sidecar the guard has no downgrade boundary to
+        # judge: the pass-through stays silent and the progress arm never
+        # fires (no acceptance line, no refusal).
+        incoming = self._flip(PROGRESS_BASE_TEXT, "- [ ] first unchecked step", "- [x] first unchecked step")
+        self._write_plan(self.branch, PROGRESS_BASE_TEXT)
+        self._write_plan(self.incoming, incoming)
+        code, out, _err = self._run_guard()
+        self.assertEqual(code, 0)
+        self.assertNotIn("REFUSE:", out)
+        self.assertNotIn("progress-only overlay accepted", out)
+
+    def test_progress_overlay_inert_when_branch_digest_stale(self) -> None:
+        # Branch bytes that no longer match the certified digest never reach
+        # the progress arm: today's warn-and-proceed behavior holds (exit 0,
+        # the neither-side warn), and the overlay is not separately accepted.
+        stale_branch = PROGRESS_BASE_TEXT.replace(
+            "The certified shape of the plan bytes.", "A branch-local shape of the plan bytes."
+        )
+        incoming = self._flip(stale_branch, "- [ ] first unchecked step", "- [x] first unchecked step")
+        self._write_progress_fixture(stale_branch, incoming, _digest(PROGRESS_BASE_TEXT))
+        code, out, _err = self._run_guard()
+        self.assertEqual(code, 0)
+        self.assertIn("WARN:", out)
+        self.assertNotIn("REFUSE:", out)
+        self.assertNotIn("progress-only overlay accepted", out)
 
     # ------------------------------------------------------------------
     # check-restored: warn-only witness arms

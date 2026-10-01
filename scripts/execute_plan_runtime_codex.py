@@ -38,10 +38,22 @@ DANGEROUS_FLAGS = {"--approve-for-me", "--dangerously-bypass-approvals-and-sandb
 SAFE_ENV_KEYS = {"PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR"}
 
 
-def _subprocess_runner(argv: list[str], timeout_seconds: float, operation: str, policy_token: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _effective_codex_config(repo_root: Path) -> str | None:
+    value = os.environ.get("CODEX_CONFIG")
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = repo_root / path
+    return str(path.resolve())
+
+
+def _subprocess_runner(argv: list[str], timeout_seconds: float, operation: str, policy_token: Mapping[str, Any] | None = None, codex_config: str | None = None) -> dict[str, Any]:
     if operation in {"launch", "wait", "resume"} and not capabilities.validate_policy_token(policy_token, operation=operation):
         return {"returncode": 2, "stderr": "policy token required at process boundary"}
     environment = {key: os.environ[key] for key in SAFE_ENV_KEYS if key in os.environ}
+    if codex_config:
+        environment["CODEX_CONFIG"] = codex_config
     if policy_token is not None:
         environment["EXECUTE_PLAN_POLICY_TOKEN"] = json.dumps(dict(policy_token), sort_keys=True)
         environment["EXECUTE_PLAN_ALLOWED_PATHS"] = json.dumps(policy_token["allowed_paths"])
@@ -188,8 +200,13 @@ class CodexAdapter:
         capacity_lock_path: Path | str | None = None,
         terminal_records_root: Path | str | None = None,
         consult_timeout_seconds: float | None = None,
+        model_guard_registration: Path | str | None = None,
+        model_guard_source: Path | str | None = None,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
+        self.codex_config = _effective_codex_config(self.repo_root)
+        self.model_guard_registration = Path(model_guard_registration) if model_guard_registration else None
+        self.model_guard_source = Path(model_guard_source) if model_guard_source else None
         self.runner = runner
         self.approval_receipt_path: str | None = None
         if approval_receipt is not None:
@@ -273,6 +290,8 @@ class CodexAdapter:
         if any(flag in argv for flag in DANGEROUS_FLAGS):
             return {"returncode": 2, "stderr": "dangerous approval flag rejected"}
         try:
+            if self.runner is _subprocess_runner:
+                return self.runner(argv, deadline, operation, policy_token=policy_token, codex_config=self.codex_config)
             if policy_token is None:
                 result = self.runner(argv, deadline, operation)
             else:
@@ -333,6 +352,32 @@ class CodexAdapter:
             "approval_receipt": self.approval_receipt_path or "test-injected",
         }
         return result
+
+    def model_guard_check(self) -> dict[str, Any]:
+        """Read-only alignment check for the active worker-model guard."""
+        try:
+            from codex_model_guard_probe import SOURCE, probe
+
+            environment = dict(os.environ)
+            if self.codex_config:
+                environment["CODEX_CONFIG"] = self.codex_config
+            home = Path(environment.get("HOME", str(Path.home()))).expanduser()
+            registration = self.model_guard_registration or (home / ".codex" / "hooks.json")
+            default_config = home / ".codex" / "config.toml"
+            return probe(
+                registration_path=registration,
+                source_path=self.model_guard_source or SOURCE,
+                env=environment,
+                cwd=self.repo_root,
+                default_config=default_config,
+            )
+        except (ImportError, OSError, RuntimeError) as exc:
+            return {
+                "status": "runtime-policy-unavailable",
+                "failed_check": "probe",
+                "error": f"Codex model-guard probe unavailable: {type(exc).__name__}",
+                "recovery": "Restore the repository model-guard probe and rerun preflight.",
+            }
 
     @staticmethod
     def normalize_observation(kind: str, state: str, *, provider_session_id: str | None = None, process_identity: Mapping[str, Any] | None = None, observed_at: float | None = None, freshness_window: float = 30.0) -> dict[str, Any]:

@@ -862,7 +862,10 @@ def create_manifest(
             checklist_text = [
                 match.group(1).strip()
                 for line in task_body.splitlines()
-                if (match := re.match(r"^\s*[-*+]\s+\[ \]\s+(.*)$", line)) is not None
+                # Checked and unchecked boxes classify alike: the collector
+                # reads ``[[ xX]]`` boxes, so a checked-but-unclassified
+                # action refuses seeding exactly like an unchecked one.
+                if (match := re.match(r"^\s*[-*+]\s+\[[ xX]]\s+(.*)$", line)) is not None
             ]
             if checklist_text and actions is None:
                 raise ValueError(f"task {task_id} has unclassified checklist actions")
@@ -1379,6 +1382,235 @@ def _unchecked_checkbox_lines(lines: Sequence[str]) -> list[str]:
     return [line for _number, line in _unchecked_checkbox_pairs(lines)]
 
 
+# Receipt-backed checklist reconciliation: the preflight agreement condition
+# classifies a progressed task's unchecked plan lines against the manifest's
+# recorded receipts for that task (checkpoints, done receipts, commit
+# evidence, verification evidence entries), never against prose claims.
+RECEIPT_BACKED_RECONCILIATION = "receipt-backed reconciliation"
+COMMIT_ITEM_PREFIX = "Commit:"
+RED_STEP_MARKER = "expect red"
+BOUNDED_RED_DISPOSITION = "bounded RED disposition"
+_DONE_COMMIT_EVENTS = ("done-commit", "commit-pending")
+
+
+def _checkbox_line_payload(line: str) -> str:
+    """The line text after the unchecked marker, stripped; ``""`` when bare."""
+
+    stripped = line.strip()
+    for marker in ("- [ ]", "* [ ]", "+ [ ]"):
+        if stripped.startswith(marker):
+            return stripped[len(marker):].strip()
+    return ""
+
+
+def _task_verification_references(task: Mapping[str, Any]) -> list[str]:
+    """The task contract's verification command ids and criteria ids."""
+
+    references: set[str] = set()
+    commands = task.get("verification_commands", ())
+    for command in commands if isinstance(commands, (list, tuple)) else ():
+        if not isinstance(command, Mapping):
+            continue
+        if isinstance(command.get("id"), str) and command["id"].strip():
+            references.add(command["id"])
+        criteria = command.get("criteria", ())
+        for criterion in criteria if isinstance(criteria, (list, tuple)) else ():
+            if isinstance(criterion, str) and criterion.strip():
+                references.add(criterion)
+    required = task.get("required_criteria", ())
+    for criterion in required if isinstance(required, (list, tuple)) else ():
+        if isinstance(criterion, str) and criterion.strip():
+            references.add(criterion)
+    return sorted(references)
+
+
+def _current_attempt_verification_envelopes(
+    manifest: Mapping[str, Any], task_id: str, claim: Mapping[str, Any] | None
+) -> list[Mapping[str, Any]]:
+    """Verification evidence envelopes bound to the task's CURRENT attempt.
+
+    The envelope writer (``capture_verification_evidence``) stamps every
+    envelope with the live claim's ``claim_token`` and ``generation``;
+    receipts from earlier attempts or generations are stale because task
+    reset and reclaim paths do not clear ``verification_evidence``, so an
+    envelope is current only when its ``claim_token`` equals the task's live
+    claim record token and its ``generation`` equals the live claim record
+    generation.
+    """
+
+    receipts = manifest.get("verification_evidence", {}).get(task_id, {})
+    if not isinstance(receipts, Mapping) or not isinstance(claim, Mapping):
+        return []
+    token = claim.get("token")
+    generation = claim.get("generation")
+    current: list[Mapping[str, Any]] = []
+    for envelope in receipts.values():
+        if not isinstance(envelope, Mapping):
+            continue
+        if envelope.get("claim_token") != token:
+            continue
+        if "generation" in envelope and envelope.get("generation") != generation:
+            continue
+        current.append(envelope)
+    return current
+
+
+def _envelope_covers_reference(envelope: Mapping[str, Any], reference: str) -> bool:
+    """True when the envelope's criteria, selected tests, or command argv
+    carries the item's command or criteria reference."""
+
+    for field in ("criteria", "selected_tests"):
+        values = envelope.get(field)
+        if isinstance(values, (list, tuple)) and reference in (str(item) for item in values):
+            return True
+    command = envelope.get("command")
+    if isinstance(command, (list, tuple)):
+        return reference in " ".join(str(item) for item in command)
+    if isinstance(command, str):
+        return reference in command
+    return False
+
+
+def _commit_identity_receipts(manifest: Mapping[str, Any], task: Mapping[str, Any], task_id: str) -> list[str]:
+    """Every commit identity the in-memory manifest records for the task.
+
+    Traced writer sites: the done receipt's task-record ``commit_identity``
+    (``_record_done_locked``; ``mark_commit_pending`` writes the same field
+    for commit-pending), the commit checkpoint record under the
+    ``{task_id}:commit`` key (``reconcile_commit_before_checkpoint``), and
+    the ``done-commit``/``commit-pending`` history events. None of these
+    records carry an attempt or generation of their own, so recency is
+    judged by the caller off the task's claim record.
+    """
+
+    receipts: list[str] = []
+    identity = task.get("commit_identity")
+    if isinstance(identity, str) and identity.strip():
+        receipts.append(identity.strip())
+    record = manifest.get("checkpoints", {}).get(f"{task_id}:commit")
+    if isinstance(record, Mapping):
+        identity = record.get("commit_identity")
+        if isinstance(identity, str) and identity.strip():
+            receipts.append(identity.strip())
+    history = manifest.get("history", ())
+    for event in history if isinstance(history, (list, tuple)) else ():
+        if not isinstance(event, Mapping) or event.get("event") not in _DONE_COMMIT_EVENTS:
+            continue
+        if str(event.get("task_id")) != str(task_id):
+            continue
+        identity = event.get("commit_identity")
+        if isinstance(identity, str) and identity.strip():
+            receipts.append(identity.strip())
+    return receipts
+
+
+def _bounded_quote(text: str, limit: int = 100) -> str:
+    """A bounded single-line quote of the text for an evidence item."""
+
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[: limit - 3] + "..."
+
+
+def _reconcile_task_checklist(
+    manifest: Mapping[str, Any], task: Mapping[str, Any], task_id: str, section: list[str]
+) -> list[tuple[int, str, str]]:
+    """Classify each unchecked line against recorded receipts; no git reads.
+
+    Returns ``(1-based section line number, line text, reason)`` for every
+    unchecked line the receipts cannot close; an empty list means every
+    unchecked line closed (or none exist) and the agreement condition must
+    not fire. Reads ONLY in-memory manifest state. Closure shapes, fail-
+    closed elsewhere: a ``Commit:`` item closes only when a receipt naming a
+    commit identity is bound to the task's CURRENT attempt (the tokenless
+    commit records key their recency off the task's claim record: the
+    claim state must be closed, because the done handoff and the commit
+    reconciliation write the receipt and close the current claim in one
+    locked save, while a reset-and-reclaim replaces the claim record with a
+    newer open token); a verification or TDD item closes only when a
+    current-attempt verification envelope matches the item's reference; a
+    TDD RED step whose evidence is unavailable never closes silently and
+    its disposition demands the explicit bounded RED disposition recorded
+    beside the check; every other unchecked line refuses with its reason.
+    The line text and the quoted commit identities in the reasons are
+    bounded so one disposition fits an evidence item's byte bound.
+    """
+
+    claim = manifest.get("claims", {}).get(task_id)
+    claim_is_current = isinstance(claim, Mapping) and claim.get("state") == "closed"
+    commit_receipts = _commit_identity_receipts(manifest, task, task_id)
+    envelopes = _current_attempt_verification_envelopes(manifest, task_id, claim)
+    references = _task_verification_references(task)
+    dispositions: list[tuple[int, str, str]] = []
+    for number, line in _unchecked_checkbox_pairs(section):
+        payload = _checkbox_line_payload(line)
+        if payload.startswith(COMMIT_ITEM_PREFIX):
+            if commit_receipts and claim_is_current:
+                continue
+            if commit_receipts:
+                quoted = ", ".join(_bounded_quote(identity, 32) for identity in commit_receipts[:3])
+                dispositions.append(
+                    (
+                        number,
+                        payload,
+                        "mismatched identity: commit evidence ("
+                        + quoted
+                        + ") is not bound to the task's current attempt (claim token '"
+                        + _bounded_quote(str(claim.get("token")), 32)
+                        + "' generation '"
+                        + str(claim.get("generation"))
+                        + "' state '"
+                        + str(claim.get("state"))
+                        + "'); stale-attempt evidence refused",
+                    )
+                )
+            else:
+                dispositions.append(
+                    (
+                        number,
+                        payload,
+                        "absent evidence: no recorded receipt names a commit identity for the task's current attempt",
+                    )
+                )
+            continue
+        referenced = [reference for reference in references if reference in payload]
+        covered = any(
+            _envelope_covers_reference(envelope, reference)
+            for envelope in envelopes
+            for reference in referenced
+        )
+        if referenced and covered:
+            continue
+        red_step = RED_STEP_MARKER in payload.lower()
+        if red_step:
+            dispositions.append(
+                (
+                    number,
+                    payload,
+                    "tdd RED step evidence unavailable (" + BOUNDED_RED_DISPOSITION
+                    + " required beside the check): no current-attempt verification evidence matches the step",
+                )
+            )
+        elif referenced:
+            dispositions.append(
+                (
+                    number,
+                    payload,
+                    "absent evidence: no current-attempt verification evidence matches the item's references ("
+                    + ", ".join(_bounded_quote(reference, 64) for reference in referenced[:3])
+                    + ")",
+                )
+            )
+        else:
+            dispositions.append(
+                (
+                    number,
+                    payload,
+                    "absent evidence: no recorded receipt covers this acceptance item",
+                )
+            )
+    return dispositions
+
+
 def _checkbox_flip_identity(content: str, *, checked: bool) -> str | None:
     """Identity of a checkbox line after its ``- [ ]`` / ``- [x]`` marker.
 
@@ -1619,6 +1851,51 @@ class RuntimeDriver:
             claimed=False,
         )
 
+    def _codex_model_guard_refusal(self, manifest: Mapping[str, Any], checkpoint: str) -> dict[str, Any] | None:
+        runtime_id = manifest.get("runtime")
+        if not isinstance(runtime_id, str) or not runtime_id.strip():
+            evidence = self._approval_evidence
+            runtime_id = evidence[1] if evidence is not None else None
+        if not isinstance(runtime_id, str) or not runtime_id.strip():
+            return None
+        try:
+            if capabilities.canonicalize_runtime_id(runtime_id) != "codex":
+                return None
+        except KeyError:
+            return None
+        check = getattr(self.adapter, "model_guard_check", None)
+        if not callable(check):
+            result = {
+                "status": "runtime-policy-unavailable",
+                "failed_check": "probe",
+                "error": "Codex model-guard probe adapter is unavailable",
+                "recovery": "Resolve a probe-capable Codex adapter and rerun preflight.",
+            }
+        else:
+            try:
+                result = check()
+            except Exception as error:
+                result = {
+                    "status": "runtime-policy-unavailable",
+                    "failed_check": "probe",
+                    "error": f"Codex model-guard probe raised {type(error).__name__}",
+                    "recovery": "Restore access to the Codex model-guard policy inputs and rerun preflight.",
+                }
+        if isinstance(result, Mapping) and result.get("status") == "ok":
+            return None
+        failed_check = result.get("failed_check", "probe") if isinstance(result, Mapping) else "probe"
+        error = result.get("error", "Codex model-guard policy is unavailable") if isinstance(result, Mapping) else "Codex model-guard policy is unavailable"
+        recovery = result.get("recovery", "Restore the aligned Codex model guard and rerun preflight.") if isinstance(result, Mapping) else "Restore the aligned Codex model guard and rerun preflight."
+        return _outcome(
+            "blocked",
+            "runtime-policy-unavailable",
+            [f"Codex model-guard alignment failed ({failed_check}): {error}", str(recovery)],
+            "repository-task",
+            checkpoint,
+            manifest.get("generation", 0),
+            "preserve-and-reconcile",
+        )
+
     def _persist_recovery_transition(self, manifest: dict[str, Any], transition: str) -> str | None:
         """Validate the post-transition manifest through the same worker-schema
         validation the next launch runs, BEFORE persistence.
@@ -1805,6 +2082,7 @@ class RuntimeDriver:
             if not any(worker.get("state") == "quarantined" for worker in registry.manifest["workers"].values()):
                 result["status"] = "available"
                 result["reason"] = "reconciled"
+                result["recovery_action"] = None
             else:
                 result["status"] = "quarantined"
                 result["reason"] = "stale-inventory"
@@ -2318,12 +2596,28 @@ class RuntimeDriver:
             if "ordinal" in task and (isinstance(task["ordinal"], bool) or not isinstance(task["ordinal"], int) or task["ordinal"] < 0):
                 raise ValueError("task ordinal must be a non-negative integer")
         evidence_digest = value.get("evidence_contract_digest")
+        legacy_shaped = False
         if evidence_digest is not None:
-            current_digest = capabilities.evidence_contract_digest(value["tasks"])
-            legacy_digest = capabilities.evidence_contract_digest(value["tasks"], include_criterion_ids=False)
-            if evidence_digest not in {current_digest, legacy_digest}:
-                raise ValueError("manifest evidence contract digest does not match task criteria and allowlists")
-        expected_criteria_map = {task_id: capabilities.evidence_criterion_ids(task.get("required_criteria", [])) for task_id, task in value["tasks"].items()}
+            try:
+                current_digest = capabilities.evidence_contract_digest(value["tasks"])
+            except ValueError:
+                # The post-upgrade criterion limits refuse the criteria as
+                # written; a pre-upgrade manifest is still valid under the
+                # legacy digest shape, so the legacy digest is computed and
+                # matched on its own (the criteria stand as written).
+                legacy_digest = capabilities.evidence_contract_digest(value["tasks"], include_criterion_ids=False)
+                if evidence_digest != legacy_digest:
+                    raise ValueError("manifest evidence contract digest does not match task criteria and allowlists")
+                legacy_shaped = True
+            else:
+                legacy_digest = capabilities.evidence_contract_digest(value["tasks"], include_criterion_ids=False)
+                if evidence_digest not in {current_digest, legacy_digest}:
+                    raise ValueError("manifest evidence contract digest does not match task criteria and allowlists")
+                legacy_shaped = evidence_digest == legacy_digest
+        # A legacy-shaped manifest skips the enforced criterion-id
+        # extraction (the extraction is part of the post-upgrade contract);
+        # new-digest and enforcement-era manifests keep it unchanged.
+        expected_criteria_map = {} if legacy_shaped else {task_id: capabilities.evidence_criterion_ids(task.get("required_criteria", [])) for task_id, task in value["tasks"].items()}
         if value.get("evidence_enforcement") is True and value.get("evidence_criteria_map") is not None and value.get("evidence_criteria_map") != expected_criteria_map:
             raise ValueError("manifest evidence criterion ID mapping does not match digest-bound task criteria")
         if value.get("evidence_enforcement") is True and value.get("evidence_criteria_map") is None:
@@ -3622,6 +3916,9 @@ class RuntimeDriver:
             if isinstance(existing_intent, Mapping) and isinstance(existing_intent.get("outcome_action"), Mapping):
                 actions = [dict(existing_intent["outcome_action"])]
             return _outcome("success", "completed", ["duplicate done handoff"], "done-handoff", checkpoint_identity, manifest.get("generation", 0), "continue-parent", actions=actions, duplicate=True), False
+        policy_refusal = self._codex_model_guard_refusal(manifest, checkpoint_identity)
+        if policy_refusal is not None:
+            return policy_refusal, False
         stored_identity = stripped_identity if none_receipt else str(raw["commit_identity"])
         self._release_terminal_reservation_locked(manifest, claim, {
             "receipt_id": f"done-terminal:{task_id}:{claim.get('generation')}:{claim.get('launch_id')}",
@@ -4304,6 +4601,10 @@ class RuntimeDriver:
             boundary_refusal = self._claim_boundary_runtime_refusal(manifest)
             if boundary_refusal is not None:
                 return boundary_refusal
+            policy_refusal = self._codex_model_guard_refusal(manifest, "claim:model-guard")
+            if policy_refusal is not None:
+                policy_refusal["claimed"] = False
+                return policy_refusal
             pending_handoff = next((
                 (intent_key, intent) for intent_key, intent in manifest.get("handoff_intents", {}).items()
                 if isinstance(intent, Mapping) and intent.get("state") in {"prepared", "launching", "launched", "ambiguous"}
@@ -4409,6 +4710,10 @@ class RuntimeDriver:
             boundary_refusal = self._claim_boundary_runtime_refusal(manifest)
             if boundary_refusal is not None:
                 return boundary_refusal
+            policy_refusal = self._codex_model_guard_refusal(manifest, "claim:parallel-group:model-guard")
+            if policy_refusal is not None:
+                policy_refusal["claimed"] = False
+                return policy_refusal
 
             def refuse(evidence: list[str]) -> dict[str, Any]:
                 return _outcome("blocked", "stale-claim", evidence, "repository-task", "claim:parallel-group", manifest.get("generation", 0), "resumable-conflict", claimed=False)
@@ -4705,6 +5010,13 @@ class RuntimeDriver:
         worker_contract = self._worker_role_contract(task, claim)
         if worker_contract is None:
             return _outcome("blocked", "malformed-result", ["canonical single-task worker role is missing or mismatched"], "repository-task", f"{task_id}:launch", int(claim["generation"]), "preserve-and-reconcile")
+        if not worker_contract.get("allowed_paths") or not worker_contract.get("required_criteria") or not worker_contract.get("validation_commands"):
+            # Boundary-order refusal in both evidence-enforcement modes: an
+            # incomplete worker contract must refuse before the launch
+            # reservation mutates state, so the adapter is never the first
+            # line to catch an incomplete contract. The blocked outcome
+            # writes nothing.
+            return _outcome("blocked", "malformed-result", [f"worker contract is incomplete for task {task_id}: allowed_paths, required_criteria, and validation_commands must be non-empty"], "repository-task", f"{task_id}:launch", int(claim["generation"]), "preserve-and-reconcile")
         operation_kind = str(task.get("operation_kind", "repository-task"))
         # Member claims authorize their own canonical paths, never a
         # group-wide union.
@@ -5539,7 +5851,18 @@ class RuntimeDriver:
         requeued-or-reclaimed gate covers both flow-real post-recovery task
         statuses (the requeue leaves the task ``pending``; an ordinary
         re-claim leaves it ``claimed``); a launched task's claim stays
-        examined exactly as today.
+        examined exactly as today. A handoff receipt further binds its full
+        identity before retirement: the receipt's ``intent_id`` must resolve
+        to exactly one ``handoff_intents`` entry, the receipt-level
+        token/generation (and a recorded ``handoff_recovery.prior`` block)
+        must match the intent's ``prior``, the successor's ``claim_owner_id``
+        and ``launch_id`` must be present and equal the intent's ``successor``
+        block (the successor describes the retired claim; a post-recovery
+        re-claim mints fresh identity, so a current-claim equality could
+        never hold), the receipt's ``worker_session_id`` must equal the
+        intent's ``launch_receipt.provider_session_id`` when that receipt is
+        present, and the receipt-side ``provider_terminal_receipt_id`` must
+        be present. Any disagreement leaves the claim examined.
         """
 
         if (manifest.get("tasks", {}).get(task_id) or {}).get("status") not in {"pending", "claimed"}:
@@ -5563,12 +5886,57 @@ class RuntimeDriver:
         if "handoff_recovery" in receipt:
             if not isinstance(handoff, Mapping):
                 return False
+            successor = handoff.get("successor")
+            if not isinstance(successor, Mapping):
+                # The successor identity is not a mapping: malformed history
+                # must never crash startup reconciliation with an
+                # AttributeError, so the claim stays examined.
+                return False
+            # Identity binding: the successor block describes the retired
+            # claim, so the resolved intent is the only sound binding target
+            # (a post-recovery re-claim mints fresh owner and launch id, and
+            # no current-claim equality is prescribed). Every disagreement
+            # below refuses identically and the claim stays examined: the
+            # recovery receipt does not bind the recorded intent.
+            intent_id = handoff.get("intent_id")
+            if not isinstance(intent_id, str) or not intent_id:
+                return False
+            intents = [candidate for candidate in manifest.get("handoff_intents", {}).values()
+                       if isinstance(candidate, Mapping) and candidate.get("intent_id") == intent_id]
+            if len(intents) != 1:
+                return False
+            intent = intents[0]
+            intent_prior = intent.get("prior")
+            intent_successor = intent.get("successor")
+            if not isinstance(intent_prior, Mapping) or not isinstance(intent_successor, Mapping):
+                return False
+            if receipt.get("token") != intent_prior.get("claim_token") or retired_generation != intent_prior.get("generation"):
+                return False
+            if "prior" in handoff and not (
+                isinstance(handoff.get("prior"), Mapping)
+                and all(intent_prior.get(key) == value for key, value in handoff["prior"].items())
+            ):
+                return False
+            owner_id = successor.get("claim_owner_id")
+            launch_id = successor.get("launch_id")
+            if not owner_id or not launch_id:
+                return False
+            if owner_id != intent_successor.get("claim_owner_id") or launch_id != intent_successor.get("launch_id"):
+                return False
+            launch_receipt = intent.get("launch_receipt")
+            if launch_receipt is not None and not (
+                isinstance(launch_receipt, Mapping)
+                and handoff.get("worker_session_id") == launch_receipt.get("provider_session_id")
+            ):
+                return False
+            terminal_receipt_id = handoff.get("provider_terminal_receipt_id")
+            if not isinstance(terminal_receipt_id, str) or not terminal_receipt_id.strip():
+                return False
             return (
                 receipt.get("token") is not None and retired_generation is not None
-                and handoff.get("successor", {}).get("task_id") == task_id
-                and handoff.get("successor", {}).get("claim_token") == receipt.get("token")
-                and handoff.get("successor", {}).get("generation") == retired_generation
-                and isinstance(handoff.get("intent_id"), str) and bool(handoff.get("intent_id"))
+                and successor.get("task_id") == task_id
+                and successor.get("claim_token") == receipt.get("token")
+                and successor.get("generation") == retired_generation
                 and claim.get("state") != "closed"
             )
         prior_identity = receipt.get("prior_contract_identity")
@@ -6266,6 +6634,9 @@ class RuntimeDriver:
             return _abort_outcome(f"{task_id}:commit", manifest.get("generation", 0), ["workflow was explicitly aborted before the commit reconciliation"], action_scope="done-handoff"), False
         if task.get("status") == "checkpointed" and task.get("commit_identity") == commit_identity:
             return _outcome("success", "completed", ["commit already reconciled"], "done-handoff", f"{task_id}:commit", manifest.get("generation", 0), "continue-parent", actions=[]), False
+        policy_refusal = self._codex_model_guard_refusal(manifest, f"{task_id}:commit")
+        if policy_refusal is not None:
+            return policy_refusal, False
         if task.get("commit_identity") != commit_identity or not task.get("done_log_evidence"):
             return _outcome("blocked", "commit-pending", ["matching done-log evidence and commit identity are required"], "done-handoff", f"{task_id}:commit", claim.get("generation", manifest.get("generation", 0)), "preserve-and-reconcile"), False
         # The none identity never consults the lookup: the boundary witnesses
@@ -7081,9 +7452,13 @@ class RuntimeDriver:
             manifest = load_manifest(manifest_path)
         plan_text, plan_error = _read_plan_bounded(None, plan_path, require_safe_path=False)
         preflight = self._preflight_check_body(manifest, plan_text, plan_error, plan_path, manifest_path)
+        policy_refusal = self._codex_model_guard_refusal(manifest, "runtime:preflight:model-guard")
+        if policy_refusal is not None:
+            preflight["problems"].extend(policy_refusal.get("evidence", []))
+            preflight["continuation_command"] = None
         return _outcome(
             "blocked" if preflight["problems"] else "success",
-            "preflight-passed" if not preflight["problems"] else "preflight-failed",
+            "preflight-passed" if not preflight["problems"] else "runtime-policy-unavailable" if policy_refusal is not None else "preflight-failed",
             preflight["checks"] + preflight["problems"],
             "parent-continuation",
             "runtime:preflight",
@@ -7601,11 +7976,15 @@ class RuntimeDriver:
                     )
                 )
         # (c) Plan-manifest agreement: for every task in the progressed set,
-        # the plan's matching section carries no unchecked checkbox line. The
-        # manifest wins per the seeding boundary, so disagreement is corrected
-        # in the plan through the skill-gated plan-edit step, never by
-        # mutating the manifest. A pending task's unchecked boxes agree with
-        # the manifest.
+        # the plan's matching section carries no unchecked checkbox line that
+        # recorded receipts fail to close. The manifest wins per the seeding
+        # boundary, so disagreement is corrected in the plan through the
+        # skill-gated plan-edit step, never by mutating the manifest. A
+        # pending task's unchecked boxes agree with the manifest; a
+        # progressed task's unchecked lines first pass the receipt-backed
+        # reconciliation (_reconcile_task_checklist), and only the lines it
+        # cannot close from recorded receipts fail the condition, each with
+        # its own per-line disposition.
         # Plan shape first: a plan with zero recognizable
         # '### Task <N>:' headings cannot agree or disagree per-section;
         # failing it keeps a wrong --plan file from producing a vacuous
@@ -7633,13 +8012,32 @@ class RuntimeDriver:
                 )
                 continue
             unchecked = _unchecked_checkbox_lines(section)
-            if unchecked:
-                failed.append(
-                    (
-                        f"plan-manifest disagreement: task '{task_id}' is '{task.get('status')}' in the manifest but its plan section '### Task {number}:' carries {len(unchecked)} unchecked checkbox line(s); the manifest wins per the seeding boundary",
-                        "correct-plan-through-skill-gated-plan-edit",
-                    )
+            dispositions = _reconcile_task_checklist(manifest, task, task_id, section) if unchecked else []
+            if dispositions:
+                # Receipt-backed reconciliation: only the lines no recorded
+                # receipt can close fail the condition. The summary names the
+                # task, the plan digest, and the counts; every refused line
+                # adds its own per-line disposition (line number, bounded
+                # line text, reason) so no evidence item's byte bound can
+                # silently truncate a reason. Receipt-closed lines stay
+                # unchecked in the plan bytes and simply stop blocking
+                # continuation here (the terminal/archive gate's refusal of
+                # any unchecked plan line is the pre-existing next boundary,
+                # out of scope here).
+                digest = manifest.get("plan_digest")
+                if not isinstance(digest, str) or not digest.strip():
+                    digest = hashlib.sha256(plan_text.encode("utf-8")).hexdigest()
+                summary = (
+                    f"plan-manifest disagreement: task '{task_id}' is '{task.get('status')}' in the manifest but its plan section '### Task {number}:' carries {len(dispositions)} unreconciled unchecked checkbox line(s) of {len(unchecked)} unchecked under {RECEIPT_BACKED_RECONCILIATION}; the manifest wins per the seeding boundary; plan digest {digest}"
                 )
+                failed.append((summary, "correct-plan-through-skill-gated-plan-edit"))
+                for line_number, line_text, reason in dispositions:
+                    failed.append(
+                        (
+                            f"plan-manifest disagreement: task '{task_id}' plan digest {digest}; line {line_number}: \"{_bounded_quote(line_text)}\": {reason}",
+                            "correct-plan-through-skill-gated-plan-edit",
+                        )
+                    )
         # (d) The next incomplete task is provable: claimable from pending.
         incomplete = [task for task in ordered_tasks if not self._task_complete(task)]
         next_task_id = str(incomplete[0]["id"]) if incomplete else None
@@ -11941,7 +12339,23 @@ def main(argv: list[str] | None = None) -> int:
             evidence = {"approval_receipt": approval_receipt_abs, "runtime_id": evidence_runtime_id}
         else:
             evidence = {}
-        adapter = capabilities.resolve_adapter(args.runtime, args.repo_root or Path.cwd(), **adapter_kwargs) if args.runtime else None
+        adapter_runtime_id = args.runtime
+        if not adapter_runtime_id and args.manifest is not None and args.operation in ("preflight", "claim", "done"):
+            recorded_manifest = args.manifest
+            if not recorded_manifest.is_absolute():
+                recorded_manifest = (args.repo_root.resolve() if args.repo_root is not None else Path.cwd().resolve()) / recorded_manifest
+            try:
+                recorded_runtime = load_manifest(recorded_manifest).get("runtime")
+            except (OSError, ValueError):
+                recorded_runtime = None
+            if isinstance(recorded_runtime, str) and recorded_runtime.strip():
+                try:
+                    canonical_runtime = capabilities.canonicalize_runtime_id(recorded_runtime)
+                except KeyError:
+                    canonical_runtime = None
+                if canonical_runtime in capabilities.load_profiles():
+                    adapter_runtime_id = canonical_runtime
+        adapter = capabilities.resolve_adapter(adapter_runtime_id, args.repo_root or Path.cwd(), **adapter_kwargs) if adapter_runtime_id else None
         payload = json.loads(args.input) if args.input else {}
         if args.operation == "create":
             # The manifest does not exist yet: create runs before any driver
@@ -11971,6 +12385,7 @@ def main(argv: list[str] | None = None) -> int:
             driver = RuntimeDriver(
                 manifest_path,
                 plan_slug=args.plan_slug,
+                adapter=adapter,
                 owner=args.owner,
                 repo_root=args.repo_root,
                 persist_construction=False,
