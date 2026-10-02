@@ -309,7 +309,7 @@ class ParallelWorkRegressionTest(unittest.TestCase):
         """The narrowing only removes the misclassification: a staged
         whole-file deletion that removes lines HEAD gained since the base is
         still named a dirt REGRESSION (whoever owns the file), and a
-        never-tracked ghost path still fails closed with exit 2."""
+        never-tracked ghost path still fails closed with exit 3 (tool error)."""
         base_sha = self._seed_dirt_fixture()
         # A staged deletion of the task file itself is the regressive shape.
         self._git("rm", "-q", "app.txt")
@@ -319,14 +319,14 @@ class ParallelWorkRegressionTest(unittest.TestCase):
         self.assertIn("app.txt", proc.stdout)
         # A post-base peer file's content is HEAD-gained by definition, so
         # its staged deletion is named a regression too - classified, never
-        # the rc 2 git-environment error this family used to produce.
+        # the rc 3 tool error this family used to produce.
         self._git("rm", "-q", "peer-later.txt")
         proc = self._run_dirt_gate("--base", base_sha, "peer-later.txt")
         self.assertEqual(proc.returncode, 1, f"stderr: {proc.stderr}")
         self.assertIn("dirt REGRESSION: peer-later.txt", proc.stdout)
         # Fail-closed preserved for a path that never existed in HEAD.
         proc = self._run_dirt_gate("--base", base_sha, "ghost.txt")
-        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(proc.returncode, 3)
         self.assertIn("does not exist or is not a tracked file", proc.stderr)
 
 

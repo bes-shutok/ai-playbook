@@ -1033,5 +1033,183 @@ class CoveredCompletionTest(unittest.TestCase):
         self.assertNotIn("straggler", proc.stdout)
 
 
+class CheckPlanOriginsClosedOutcomeTest(unittest.TestCase):
+    """Outcome-contract fixtures (plan 2026-10-03-outcome-contract-migration-
+    batch-1 Task 1): every non-metadata run ends with exactly one final
+    `OUTCOME:` line; an origin unreadable at classification time is
+    indeterminate (exit 2) naming the origin, dominant over stragglers (a
+    mixed open + unreadable corpus names BOTH); an unreadable plans
+    directory is tool error (exit 3); usage errors exit 3 through the
+    argparse override; `--help` stays metadata-exempt."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="origins-outcome-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.backlog = self.root / "docs" / "history" / "backlog"
+        self.completed = self.backlog / "completed"
+        self.plans_dir = self.root / "docs" / "history" / "plans" / "completed"
+        for directory in (
+            self.completed,
+            self.plans_dir,
+            self.root / ".ai-playbook",
+        ):
+            directory.mkdir(parents=True)
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+
+    def _write(self, path: Path, text: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _open_top(self, name: str) -> Path:
+        return self._write(
+            self.backlog / name,
+            f"# Backlog: {name}\n\nStatus: open\n\nbody\n",
+        )
+
+    def _unreadable_top(self, name: str) -> Path:
+        # An origin file that exists but cannot be read at classification
+        # time; permissions are restored on cleanup so rmtree succeeds.
+        path = self._write(
+            self.backlog / name,
+            f"# Backlog: {name}\n\nStatus: open\n\nbody\n",
+        )
+        path.chmod(0o000)
+        self.addCleanup(path.chmod, 0o644)
+        return path
+
+    def _archived(self, name: str) -> Path:
+        return self._write(
+            self.completed / name,
+            f"# Backlog: {name}\n\nStatus: done\n\nbody\n",
+        )
+
+    def _plan(self, name: str, origins: list[str]) -> Path:
+        lines = ["# Plan: fixture", ""]
+        if len(origins) == 1:
+            lines.append(f"Backlog origins (scope of record): `{origins[0]}`.")
+        else:
+            lines.append(
+                f"Backlog origins (scope of record): `{origins[0]}`,"
+            )
+            for origin in origins[1:-1]:
+                lines.append(f"`{origin}`,")
+            lines.append(f"`{origins[-1]}`.")
+        lines.append("")
+        lines.extend(["## Tasks", "", "- [ ] fixture task", ""])
+        return self._write(self.plans_dir / name, "\n".join(lines))
+
+    def _run(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--repo-root", str(self.root)]
+            + list(args),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    @staticmethod
+    def _outcome_lines(proc: subprocess.CompletedProcess) -> list[str]:
+        return [
+            line for line in proc.stdout.splitlines()
+            if line.startswith("OUTCOME:")
+        ]
+
+    def test_pass_emits_single_final_outcome_pass(self) -> None:
+        self._archived(ALPHA)
+        plan = self._plan("2026-09-22-fixture-outcome-pass.md",
+                          [f"docs/history/backlog/{ALPHA}"])
+        proc = self._run("--plan", str(plan))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._outcome_lines(proc), ["OUTCOME: pass"])
+        self.assertTrue(proc.stdout.rstrip().endswith("OUTCOME: pass"))
+
+    def test_straggler_fail_emits_outcome_fail_with_evidence(self) -> None:
+        self._open_top(BETA)
+        plan = self._plan("2026-09-22-fixture-outcome-fail.md",
+                          [f"docs/history/backlog/{BETA}"])
+        proc = self._run("--plan", str(plan))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(self._outcome_lines(proc), ["OUTCOME: fail"])
+        self.assertIn(f"straggler: {BETA}", proc.stdout)
+        self.assertLess(proc.stdout.index("straggler:"),
+                        proc.stdout.index("OUTCOME:"))
+
+    def test_unreadable_origin_is_indeterminate(self) -> None:
+        # Declared preservation exception: today this shape straggles at
+        # exit 1; evidence-insufficient is the contract's indeterminate
+        # definition, so it becomes exit 2 naming the origin.
+        self._unreadable_top(ALPHA)
+        plan = self._plan("2026-09-22-fixture-outcome-unreadable.md",
+                          [f"docs/history/backlog/{ALPHA}"])
+        proc = self._run("--plan", str(plan))
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertEqual(
+            self._outcome_lines(proc), ["OUTCOME: indeterminate"])
+        self.assertIn(ALPHA, proc.stdout)
+        self.assertIn("indeterminate:", proc.stdout)
+
+    def test_mixed_corpus_is_indeterminate(self) -> None:
+        # Dominance rule: one open origin and one unreadable origin report
+        # indeterminate (exit 2) with BOTH named - the open origin keeps its
+        # straggler evidence line, the unreadable origin its own line.
+        self._unreadable_top(ALPHA)
+        self._open_top(BETA)
+        plan = self._plan("2026-09-22-fixture-outcome-mixed.md",
+                          [f"docs/history/backlog/{ALPHA}",
+                           f"docs/history/backlog/{BETA}"])
+        proc = self._run("--plan", str(plan))
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertEqual(
+            self._outcome_lines(proc), ["OUTCOME: indeterminate"])
+        self.assertIn(f"straggler: {BETA}", proc.stdout)
+        self.assertLess(proc.stdout.index(f"straggler: {BETA}"),
+                        proc.stdout.index("OUTCOME:"))
+        self.assertLess(proc.stdout.index(f"indeterminate: origin {ALPHA}"),
+                        proc.stdout.index("OUTCOME:"))
+
+    def test_unreadable_plans_dir_is_tool_error(self) -> None:
+        # Legacy: an unreadable plans directory silently scans as empty and
+        # exits 0 (pathlib rglob suppresses the permission error). Contract:
+        # the check cannot run reliably, so tool error (exit 3).
+        self.plans_dir.chmod(0o000)
+        self.addCleanup(self.plans_dir.chmod, 0o755)
+        proc = self._run()
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertEqual(self._outcome_lines(proc), ["OUTCOME: tool_error"])
+
+    def test_corpus_scan_unreadable_archived_plan_is_indeterminate(self) -> None:
+        # The corpus warn arm keeps exit 0 only for fully-resolved runs:
+        # observed unreadable evidence flips it to indeterminate (exit 2).
+        plan = self._plan("2026-09-22-fixture-outcome-corpus.md",
+                          [f"docs/history/backlog/{ALPHA}"])
+        plan.chmod(0o000)
+        self.addCleanup(plan.chmod, 0o644)
+        proc = self._run()
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertEqual(
+            self._outcome_lines(proc), ["OUTCOME: indeterminate"])
+        self.assertIn(plan.name, proc.stdout + proc.stderr)
+
+    def test_usage_error_is_tool_error_and_help_is_exempt(self) -> None:
+        # Legacy: argparse exits 2 on usage errors (an absent --plan file
+        # included). Contract: exit 3 with a final `OUTCOME: tool_error`
+        # line; --help stays exempt.
+        proc = self._run(
+            "--plan", "docs/history/backlog/PLAN-PROMPTS-does-not-exist.md"
+        )
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertEqual(self._outcome_lines(proc), ["OUTCOME: tool_error"])
+        self.assertIn("--plan file not found", proc.stderr)
+        help_proc = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--help"],
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(help_proc.returncode, 0, help_proc.stdout)
+        self.assertEqual(self._outcome_lines(help_proc), [])
+
+
 if __name__ == "__main__":
     unittest.main()

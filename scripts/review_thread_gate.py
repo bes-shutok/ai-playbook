@@ -5,9 +5,17 @@ Consumes the marker a passive-review session writes when it begins
 processing external PR feedback (duty owned by the receiving-review
 skill, ``docs/tmp/review-threads/<session-slug>.json``) and classifies
 every tracked thread against an inventory of the PR's review threads.
-Exit 0 only on closure: each tracked thread carries a verified agent
-reply or an explicit disposition. Exit 1 otherwise, listing every
-unclosed thread, one line per thread.
+Outcome contract (scripts/OUTCOME_CONTRACT.md): closure is pass (exit 0,
+each tracked thread carries a verified agent reply or an explicit
+disposition); unclosed threads are fail (exit 1), listing every unclosed
+thread, one line per thread; and the tool-shaped read/fetch arms (an
+unresolvable marker PR target, a failed gh inventory fetch, an unreadable
+marker file, a marker that is not a JSON object, a marker without a
+thread list, an unreadable ``--inventory`` file, and a malformed
+inventory JSON) are tool error (exit 3); a usage violation overrides
+argparse to exit 3. Every non-metadata run ends with exactly one final
+``OUTCOME:`` line on stdout after the human-readable evidence; ``--help``
+is a metadata exit with no ``OUTCOME:`` line.
 
 Inventory source, exactly one of:
 
@@ -19,9 +27,10 @@ Inventory source, exactly one of:
   reviewThreads). Network access happens ONLY behind this explicit
   flag; tests stay on canned fixtures.
 
-Missing marker file exits 0 with nothing to check: the documented
-no-marker non-condition, so a session that never processed external
-feedback is unaffected by the gate.
+Missing marker file exits 0 as a modeled pass naming its reason
+("nothing to check"): the documented no-marker non-condition, so a
+session that never processed external feedback is unaffected by the
+gate.
 
 Per-thread classification, in order:
 
@@ -64,6 +73,31 @@ GRAPHQL_QUERY = (
     "reviewThreads(first:100){nodes{id,isResolved,"
     "comments(first:50){nodes{id,author{login,__typename},body}}}}}}}"
 )
+
+# Outcome contract (scripts/OUTCOME_CONTRACT.md): the four outcomes and the
+# argparse override. A usage violation exits 3 with a final `OUTCOME:
+# tool_error` line on stderr before exit (the usage text and the error
+# message share that stream); every other run's final line is on stdout
+# after the human-readable evidence.
+OUTCOME_LABELS = {0: "pass", 1: "fail", 2: "indeterminate", 3: "tool_error"}
+
+
+def emit_outcome(code: int) -> None:
+    """The final `OUTCOME:` line on stdout (the contract's one-line rule)."""
+    print("OUTCOME: %s" % OUTCOME_LABELS[code])
+
+
+class OutcomeArgumentParser(argparse.ArgumentParser):
+    """Argument parser whose usage errors exit 3 (tool error) with a final
+    `OUTCOME: tool_error` line on stderr before exit, overriding argparse's
+    default exit 2; `--help` stays a metadata exit without an `OUTCOME:`
+    line."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        sys.stderr.write("%s: error: %s\n" % (self.prog, message))
+        sys.stderr.write("OUTCOME: %s\n" % OUTCOME_LABELS[3])
+        raise SystemExit(3)
 
 
 def parse_inventory(text: str) -> list[dict]:
@@ -203,7 +237,8 @@ def fetch_live(marker: dict) -> str:
     owner, name, number, error = _resolve_live_target(marker)
     if error:
         print(f"error: {error}", file=sys.stderr)
-        sys.exit(1)
+        emit_outcome(3)
+        sys.exit(3)
     cmd = [
         "gh", "api", "graphql",
         "-f", f"query={GRAPHQL_QUERY}",
@@ -217,12 +252,13 @@ def fetch_live(marker: dict) -> str:
             f"error: gh inventory fetch failed: {proc.stderr.strip()}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        emit_outcome(3)
+        sys.exit(3)
     return proc.stdout
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
+    parser = OutcomeArgumentParser(
         description="Read-only closure gate over a review-thread marker"
     )
     parser.add_argument(
@@ -246,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
             f"review_thread_gate: no review-thread marker at {marker_path}; "
             "nothing to check"
         )
+        emit_outcome(0)
         return 0
     try:
         marker = json.loads(marker_path.read_text(encoding="utf-8"))
@@ -254,20 +291,23 @@ def main(argv: list[str] | None = None) -> int:
             f"error: cannot read review-thread marker {marker_path}: {exc}",
             file=sys.stderr,
         )
-        return 1
+        emit_outcome(3)
+        return 3
     if not isinstance(marker, dict):
         print(
             f"error: review-thread marker {marker_path} is not an object",
             file=sys.stderr,
         )
-        return 1
+        emit_outcome(3)
+        return 3
     tracked = marker.get("threads")
     if not isinstance(tracked, list):
         print(
             f"error: review-thread marker {marker_path} carries no thread list",
             file=sys.stderr,
         )
-        return 1
+        emit_outcome(3)
+        return 3
 
     if args.live:
         inventory_text = fetch_live(marker)
@@ -278,12 +318,14 @@ def main(argv: list[str] | None = None) -> int:
             inventory_text = Path(args.inventory).read_text(encoding="utf-8")
         except OSError as exc:
             print(f"error: cannot read inventory: {exc}", file=sys.stderr)
-            return 1
+            emit_outcome(3)
+            return 3
     try:
         nodes = parse_inventory(inventory_text)
     except ValueError as exc:
         print(f"error: cannot parse inventory: {exc}", file=sys.stderr)
-        return 1
+        emit_outcome(3)
+        return 3
     by_id = {node.get("id"): node for node in nodes}
 
     unclosed = 0
@@ -307,8 +349,10 @@ def main(argv: list[str] | None = None) -> int:
             f"review_thread_gate: {unclosed} unclosed thread(s)",
             file=sys.stderr,
         )
+        emit_outcome(1)
         return 1
     print(f"review_thread_gate: all {len(tracked)} tracked thread(s) closed")
+    emit_outcome(0)
     return 0
 
 

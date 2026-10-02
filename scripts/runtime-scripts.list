@@ -1,0 +1,53 @@
+# Runtime manifest: one deployed filename per line; '#' comments allowed.
+# Admission criterion: a name the maintenance/execute-plan/done skills resolve
+# from the deployed home copy (~/.ai-playbook/scripts). Seed inventory pinned
+# by the 2026-09-26 maintenance-scripts-deployment-step plan; further
+# loop-consumed names join by one-line manifest edits.
+#
+# The ten currently-deployed symlinks among the loop-consumed set:
+harness_detection.py
+check_plan_origins_closed.py
+friction_audit_quant.py
+tool_runtime_stats.py
+test_harness_detection.py
+test_check_plan_origins_closed.py
+test_friction_audit_quant.py
+test_tool_runtime_stats.py
+plan_readiness.py
+quota_window_probe.py
+#
+# The seven regular-file entries with canonical counterparts (conversion
+# class: renamed aside to <name>.bak-YYYYMMDD and symlinked on sync):
+rearm_on_touch.py
+lessons.py
+docs_branch_backlog_dedupe.py
+docs_branch_plan_guard.py
+worktree_closeout_migrate.py
+done_sweep_gates_lib.py
+done_sweep_gates.sh
+#
+# Installed for deployed parity (its sweep consumer stays repo-local-only
+# until the checker learns repo-aware resolution):
+check_backlog_claimed.py
+#
+# Landing-critical guard and selftest (the landing tails resolve the deployed
+# copy when the repo-local probe misses; deployed parity per the vendored-sync
+# rule and the reviews-home and check-landed arms):
+reverse_squash_guard.py
+test_reverse_squash_guard.py
+#
+# Base-branch reflog audit (born under the outcome contract by the
+# ref-move-integrity-fences plan; the landing tails' post-landing audit duty
+# resolves the deployed copy when the repo-local probe misses):
+base_reflog_audit.py
+test_base_reflog_audit.py
+#
+# Evidence-integrity helpers (born by the evidence-integrity-fences plan;
+# the done skill Step 3 and the landing tail resolve the deployed copy when
+# the repo-local probe misses):
+read_freshness_probe.py
+test_read_freshness_probe.py
+base_branch_amend_guard.py
+test_base_branch_amend_guard.py
+scripts/land_squash.sh
+scripts/test_land_squash.py

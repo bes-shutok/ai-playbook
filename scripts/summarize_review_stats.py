@@ -1120,9 +1120,18 @@ _USAGE_TOTAL_KEYS = (
     "computed_total_tokens",
 )
 
-# Token cost stays labeled supplementary until observed-token coverage over
-# post-cutover sidecars reaches this fraction; at/above it the label drops.
+# Token cost stays labeled supplementary until ATTRIBUTABLE coverage over
+# post-attribution-cutover sidecars reaches this fraction; at/above it the
+# label drops.
 USAGE_COVERAGE_DECISION_THRESHOLD = 0.70
+
+# Attribution cutover: only sidecars dated on/after this day can carry an
+# attributable usage record (the review-run identity mint shipped with the
+# review-token-round-attribution plan, landed 2026-10-03). Historical
+# post-usage-cutover sidecars can never gain attribution (immutable
+# inputs), so the decision threshold binds to THIS denominator; the
+# presence-based coverage stays published for context.
+ATTRIBUTION_CUTOVER_DATE = "2026-10-03"
 
 
 def _usage_totals_from_payload(payload: dict) -> dict | None:
@@ -1151,6 +1160,127 @@ def _is_post_cutover(payload: dict) -> bool:
     if not isinstance(date, str):
         return True
     return date >= USAGE_CUTOVER_DATE
+
+
+def _is_post_attribution_cutover(payload: dict) -> bool:
+    """Classify a sidecar as post-attribution-cutover (decision threshold).
+
+    Same conservative shape as ``_is_post_cutover`` against
+    ``ATTRIBUTION_CUTOVER_DATE``: a missing or non-string ``date`` counts
+    as post-cutover (it can only suppress attributable coverage downward).
+    """
+    date = payload.get("date")
+    if not isinstance(date, str):
+        return True
+    return date >= ATTRIBUTION_CUTOVER_DATE
+
+
+def _usage_class_of(payload: dict) -> str:
+    """Classify a sidecar's usage record: attributable/ambiguous/absent.
+
+    Only a record whose provenance carries ``attribution ==
+    "interval-identity"`` is attributable; the absence of the attribution
+    field is NEVER attributable (telemetry-era and window-legacy records
+    are ambiguous; the interval-ambiguous and interval-fallback marks are
+    ambiguous by definition). A usage key that is not a dict, or whose
+    ``totals`` are malformed, keeps the absent treatment.
+    """
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return "absent"
+    if _usage_totals_from_payload(payload) is None:
+        return "absent"
+    provenance = usage.get("provenance")
+    attribution = (
+        provenance.get("attribution")
+        if isinstance(provenance, dict)
+        else None
+    )
+    if attribution == "interval-identity":
+        return "attributable"
+    return "ambiguous"
+
+
+def _usage_provenance_of(payload: dict) -> dict:
+    """The usage record's provenance dict, or an empty dict."""
+    usage = payload.get("usage")
+    if isinstance(usage, dict) and isinstance(usage.get("provenance"), dict):
+        return usage["provenance"]
+    return {}
+
+
+def _attributable_usage_info(payload: dict) -> dict | None:
+    """Attributable usage info for one metrics round record, or None.
+
+    Only attributable records contribute token usage to the analysis;
+    carries the run identity, capture timestamp, and observed totals so
+    the corpus-wide per-run round collapse can pick the surviving capture.
+    """
+    if _usage_class_of(payload) != "attributable":
+        return None
+    provenance = _usage_provenance_of(payload)
+    captured = provenance.get("captured_at_ms")
+    return {
+        "run_id": provenance.get("review_run_id"),
+        "captured_at_ms": captured if isinstance(captured, int) else 0,
+        "totals": _usage_totals_from_payload(payload),
+    }
+
+
+def _collapse_attributable_usage(
+    payloads: list[dict],
+) -> tuple[list[dict], list[dict], int, int]:
+    """Round-collapse the corpus's attributable usage records.
+
+    Returns ``(survivors, superseded_payloads, superseded_count,
+    duplicate_run_ids)``. Among the attributable records sharing one
+    ``review_run_id`` (the workers of one round write one sidecar each,
+    against nested intervals with the same start), only the record with
+    the maximum ``captured_at_ms`` survives into decision-grade sums; its
+    interval already spans mint-to-last-capture. Earlier records of the
+    same run count as usage present but are excluded from sums.
+    Records without a usable ``review_run_id`` never collapse (each stands
+    alone). ``duplicate_run_ids`` counts run ids whose attributable
+    records carry more than one distinct ``review_started_at_ms`` (a
+    corpus-hygiene signal: the same identity reused across distinct
+    rounds).
+    """
+    best: dict[str, dict] = {}
+    no_run_id: list[dict] = []
+    starts: dict[str, set] = {}
+    order: dict[str, int] = {}
+    for payload in payloads:
+        if _usage_class_of(payload) != "attributable":
+            continue
+        provenance = _usage_provenance_of(payload)
+        run_id = provenance.get("review_run_id")
+        if not isinstance(run_id, str) or not run_id:
+            no_run_id.append(payload)
+            continue
+        captured = provenance.get("captured_at_ms")
+        captured = captured if isinstance(captured, int) else 0
+        start = provenance.get("review_started_at_ms")
+        starts.setdefault(run_id, set()).add(start)
+        if run_id not in order:
+            order[run_id] = len(order)
+        prev = best.get(run_id)
+        if prev is None:
+            best[run_id] = payload
+            prev_captured = captured
+        else:
+            prev_captured = _usage_provenance_of(prev).get("captured_at_ms")
+            prev_captured = (
+                prev_captured if isinstance(prev_captured, int) else 0
+            )
+            if captured >= prev_captured:
+                best[run_id] = payload
+    survivors = list(best.values()) + no_run_id
+    attributable_all = [
+        p for p in payloads if _usage_class_of(p) == "attributable"
+    ]
+    superseded_payloads = [p for p in attributable_all if p not in survivors]
+    duplicates = sum(1 for s in starts.values() if len(s) > 1)
+    return survivors, superseded_payloads, len(superseded_payloads), duplicates
 
 
 def aggregate_current(payload: dict) -> dict:
@@ -1824,45 +1954,110 @@ def build_effectiveness_report(
         ),
     }
 
-    # Observed token usage aggregation (never estimated): sum the observed
-    # ``totals`` blocks of POST-CUTOVER sidecars carrying a well-formed usage
-    # record, and compute coverage as the fraction of post-cutover sidecars
-    # carrying one. Pre-cutover sidecars are excluded from BOTH the numerator
-    # and the denominator (their token data is never read); a post-cutover
-    # sidecar without usage stays in the denominator (the denominator is NOT
-    # "sidecars with usage").
+    # Observed token usage aggregation (never estimated), attributable-only
+    # basis: decision-grade totals sum ONE surviving attributable record per
+    # review-run (the max-``captured_at_ms`` sidecar of the round's workers;
+    # its interval already spans mint-to-last-capture, so nested intervals
+    # within one round never multiply-count). Usage records are classified:
+    # attributable (``attribution == "interval-identity"``), ambiguous
+    # (everything else carrying a well-formed record; the absence of the
+    # attribution field is NEVER attributable), or absent. Ambiguous and
+    # legacy unions are published separately and stay non-decision-grade.
+    # Pre-usage-cutover sidecars are excluded from every count (their token
+    # data is never read); a post-cutover sidecar without usage stays in the
+    # presence denominator (which is NOT "sidecars with usage"). The
+    # DECISION threshold binds to attributable coverage over
+    # post-attribution-cutover sidecars only (historical post-usage-cutover
+    # sidecars can never gain attribution; binding to them would freeze the
+    # ratio near zero forever).
     observed_token_totals = {key: 0 for key in _USAGE_TOTAL_KEYS}
+    ambiguous_token_totals = {key: 0 for key in _USAGE_TOTAL_KEYS}
     sidecars_with_usage = 0
+    sidecars_attributable = 0
+    sidecars_ambiguous = 0
+    sidecars_missing = 0
     post_cutover_sidecars = 0
+    post_attribution_sidecars = 0
+    post_cutover_payloads: list[dict] = []
     for _period, payload in clean:
         if not _is_post_cutover(payload):
             continue
         post_cutover_sidecars += 1
-        observed = _usage_totals_from_payload(payload)
-        if observed is None:
+        if _is_post_attribution_cutover(payload):
+            post_attribution_sidecars += 1
+        post_cutover_payloads.append(payload)
+        usage_class = _usage_class_of(payload)
+        if usage_class == "absent":
+            sidecars_missing += 1
             continue
         sidecars_with_usage += 1
+        if usage_class == "attributable":
+            # Class-based count: superseded captures of the same run stay
+            # attributable records (usage present); they are excluded from
+            # the decision-grade sums by the round collapse below.
+            sidecars_attributable += 1
+        if usage_class == "ambiguous":
+            sidecars_ambiguous += 1
+            observed = _usage_totals_from_payload(payload)
+            for key in _USAGE_TOTAL_KEYS:
+                ambiguous_token_totals[key] += observed[key]
+    survivors, _superseded, superseded_count, duplicate_run_ids = (
+        _collapse_attributable_usage(post_cutover_payloads)
+    )
+    for payload in survivors:
+        observed = _usage_totals_from_payload(payload)
         for key in _USAGE_TOTAL_KEYS:
             observed_token_totals[key] += observed[key]
-    coverage = (
+    # The decision numerator counts post-attribution-cutover SURVIVORS only:
+    # a pre-attribution-cutover payload marked attributable is an anomalous
+    # record (immutable inputs predate the mint), excluded from the ratio.
+    # The decision numerator is the plan Term's ratio: attributable
+    # SIDECARS (class-based, so the workers of one round each count) over
+    # post-attribution-cutover sidecars. Pre-attribution-cutover payloads
+    # marked attributable are anomalous records (immutable inputs predate
+    # the mint) and stay out of the ratio; the decision-grade SUMS remain
+    # survivor-based (one record per review-run), so a round's nested
+    # worker captures never multiply-count while its coverage still reads
+    # as fully attributable.
+    decision_attributable = sum(
+        1
+        for p in post_cutover_payloads
+        if _is_post_attribution_cutover(p)
+        and _usage_class_of(p) == "attributable"
+    )
+    presence_coverage = (
         sidecars_with_usage / post_cutover_sidecars
         if post_cutover_sidecars
+        else None
+    )
+    attributable_coverage = (
+        decision_attributable / post_attribution_sidecars
+        if post_attribution_sidecars
         else None
     )
     usage_coverage = {
         "sidecars_with_usage": sidecars_with_usage,
         "post_cutover_sidecars": post_cutover_sidecars,
-        "coverage": coverage,
-        # Supplementary until observed-token coverage over post-cutover
-        # sidecars reaches the threshold (unknown coverage stays
-        # supplementary); no branch reads pre-cutover token data.
-        "token_cost_supplementary": coverage is None
-        or coverage < USAGE_COVERAGE_DECISION_THRESHOLD,
+        "coverage": presence_coverage,
+        "sidecars_attributable": sidecars_attributable,
+        "sidecars_ambiguous": sidecars_ambiguous,
+        "sidecars_missing": sidecars_missing,
+        "sidecars_superseded_captures": superseded_count,
+        "post_attribution_cutover_sidecars": post_attribution_sidecars,
+        "attributable_coverage": attributable_coverage,
+        "duplicate_review_run_ids": duplicate_run_ids,
+        # Supplementary until ATTRIBUTABLE coverage over
+        # post-attribution-cutover sidecars reaches the threshold (unknown
+        # coverage stays supplementary); no branch reads pre-cutover token
+        # data.
+        "token_cost_supplementary": attributable_coverage is None
+        or attributable_coverage < USAGE_COVERAGE_DECISION_THRESHOLD,
     }
     return {
         "overall_verdict": overall_verdict(verdicts),
         "availability": availability_counts,
         "observed_token_totals": observed_token_totals,
+        "ambiguous_observed_token_totals": ambiguous_token_totals,
         "usage_coverage": usage_coverage,
         "cohorts": per_cohort,
     }
@@ -1904,34 +2099,59 @@ def serialize_effectiveness_markdown(report: dict) -> bytes:
             f"{avail['non_canonical_records']}"
         )
     lines.append("")
-    # Observed token usage (never estimated): totals are sums of observed
-    # usage records on post-cutover sidecars; coverage is the fraction of
-    # post-cutover sidecars carrying one. KNOWN LIMITATION: capture windows
-    # overlap across a round's sidecars, so the same sessions' records are
-    # summed repeatedly — this is NOT unique spend. Token cost stays labeled
-    # supplementary until coverage reaches the decision threshold.
+    # Observed token usage (never estimated), attributable-only basis:
+    # decision-grade totals sum ONE surviving attributable record per
+    # review-run (the overlapping-window limitation is retired for
+    # attributable records). Ambiguous and legacy unions stay published
+    # separately and non-decision-grade: their capture windows overlap
+    # across a round's sidecars, so the same sessions' records are summed
+    # repeatedly, so that is NOT unique spend. Token cost stays labeled
+    # supplementary until attributable coverage reaches the threshold.
     tok = report["observed_token_totals"]
     lines.append(
-        "Observed token totals (sum of sidecar usage records over "
-        "overlapping capture windows; not unique spend): "
+        "Observed token totals (decision-grade; one surviving attributable "
+        "record per review-run): "
         f"input={tok['input_tokens']}, output={tok['output_tokens']}, "
         f"reasoning={tok['reasoning_tokens']}, "
         f"cache_creation={tok['cache_creation_input_tokens']}, "
         f"cache_read={tok['cache_read_input_tokens']}, "
         f"computed_total={tok['computed_total_tokens']}"
     )
+    amb = report["ambiguous_observed_token_totals"]
+    if any(amb[key] for key in _USAGE_TOTAL_KEYS):
+        lines.append(
+            "Ambiguous observed token totals (NON-decision-grade union of "
+            "ambiguous/legacy records; overlapping capture windows, not "
+            "unique spend): "
+            f"input={amb['input_tokens']}, output={amb['output_tokens']}, "
+            f"reasoning={amb['reasoning_tokens']}, "
+            f"cache_creation={amb['cache_creation_input_tokens']}, "
+            f"cache_read={amb['cache_read_input_tokens']}, "
+            f"computed_total={amb['computed_total_tokens']}"
+        )
     cov = report["usage_coverage"]
-    if cov["post_cutover_sidecars"] == 0:
+    if cov["post_attribution_cutover_sidecars"] == 0:
         coverage_text = (
-            "Usage coverage: no post-cutover sidecars yet "
+            "Usage coverage: no post-attribution-cutover sidecars yet "
             "(coverage unknown); token cost: supplementary"
         )
     else:
         coverage_text = (
-            f"Usage coverage: {cov['sidecars_with_usage']}/"
-            f"{cov['post_cutover_sidecars']} post-cutover sidecars carry usage "
-            f"({cov['coverage']:.0%})"
+            f"Usage coverage: {cov['sidecars_attributable']}/"
+            f"{cov['post_attribution_cutover_sidecars']} "
+            "post-attribution-cutover sidecars carry attributable usage "
+            f"({cov['attributable_coverage']:.0%})"
         )
+        if cov["post_cutover_sidecars"]:
+            coverage_text += (
+                f"; presence coverage {cov['sidecars_with_usage']}/"
+                f"{cov['post_cutover_sidecars']} "
+                f"({cov['coverage']:.0%})"
+            )
+        if cov["sidecars_superseded_captures"]:
+            coverage_text += (
+                f"; superseded captures: {cov['sidecars_superseded_captures']}"
+            )
         if cov["token_cost_supplementary"]:
             coverage_text += "; token cost: supplementary"
     lines.append(coverage_text)
@@ -2843,12 +3063,23 @@ def _metrics_round_record(payload: dict) -> dict | None:
         verdict = None
     extensions = payload.get("extensions")
     cap = isinstance(extensions, dict) and "cap_closure" in extensions
+    panel_mode = payload.get("panel_mode")
     return {
         "round": rnd,
         "verdict": verdict,
         "staged": staged,
         "blocking": blocking,
         "cap_closure": cap,
+        # Task 4 (review-token-round-attribution): accepted unique findings
+        # per round via the effectiveness-pass seam, the sidecar's panel
+        # mode for the new analysis axis, and the round's attributable
+        # usage info (None for ambiguous/legacy/absent records; the
+        # corpus-wide per-run collapse blanks superseded captures later).
+        "accepted": accepted_unique_count(payload),
+        "panel_mode": panel_mode
+        if panel_mode in ("full", "focused")
+        else "unknown",
+        "usage": _attributable_usage_info(payload),
     }
 
 
@@ -2989,12 +3220,179 @@ def build_metrics_report(
             for loops in band_loops.get(band, [])
         ]
     )
+    # Task 4 usage analysis: corpus-wide per-run round collapse first (in
+    # place), then the initial-vs-follow-up cells. The pass-local
+    # attributable coverage is the collapsed attributable round-record
+    # fraction over ALL round records (the effectiveness pass's date-bound
+    # denominator is not re-derived here; the analysis marks cells
+    # inconclusive from this fraction and the per-cell floor either way).
+    superseded = _collapse_loop_usage(band_loops)
+    round_records = list(_iter_round_records(band_loops))
+    attributable_records = sum(
+        1 for rec in round_records if rec.get("usage")
+    )
+    attributable_coverage = (
+        attributable_records / len(round_records) if round_records else None
+    )
+    usage_analysis = build_usage_analysis(band_loops, attributable_coverage)
+    usage_analysis["superseded_captures"] = superseded
     return {
         "schema": METRICS_SCHEMA,
         "loops": overall["loops"],
         "sidecars_legacy_bucket": legacy_count,
         "bands": bands,
         "overall": overall,
+        "usage_analysis": usage_analysis,
+    }
+
+
+# ---- Task 4 (review-token-round-attribution): initial-vs-follow-up token
+# analysis over collapsed attributable usage records, segmented by the
+# complexity band and a NEW panel_mode axis. Aggregate-only output; every
+# token-based conclusion in a thin cell is marked inconclusive (the marker
+# is data-derived, never decorative). ----
+
+# A cell needs at least this many collapsed attributable rounds before its
+# token-based conclusions carry weight.
+USAGE_ANALYSIS_MIN_ROUNDS = 3
+
+# The new segmentation axis: the sidecar's ``panel_mode``; legacy sidecars
+# lacking the field land in the ``unknown`` cell.
+PANEL_MODES = ("full", "focused", "unknown")
+
+# Token keys the analysis publishes per cell (subset of _USAGE_TOTAL_KEYS).
+_TOKEN_ANALYSIS_KEYS = ("input_tokens", "computed_total_tokens")
+
+
+def _iter_round_records(band_loops: dict) -> Iterator[dict]:
+    for loops in band_loops.values():
+        for loop in loops:
+            for rec in loop:
+                yield rec
+
+
+def _collapse_loop_usage(band_loops: dict) -> int:
+    """Corpus-wide per-run round collapse over the loop records (in place).
+
+    Among the attributable round records sharing one ``review_run_id``,
+    only the record with the maximum ``captured_at_ms`` keeps its usage
+    info; the others' usage is blanked (nested intervals within one round
+    never multiply-count). Returns the superseded-capture count.
+    """
+    best: dict[str, tuple[int, dict]] = {}
+    for rec in _iter_round_records(band_loops):
+        usage = rec.get("usage")
+        if not usage:
+            continue
+        run_id = usage.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue  # records without a usable run id never collapse
+        captured = usage.get("captured_at_ms") or 0
+        prev = best.get(run_id)
+        if prev is None or captured >= prev[0]:
+            best[run_id] = (captured, rec)
+    superseded = 0
+    for rec in _iter_round_records(band_loops):
+        usage = rec.get("usage")
+        if not usage:
+            continue
+        run_id = usage.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        if best[run_id][1] is not rec:
+            rec["usage"] = None
+            superseded += 1
+    return superseded
+
+
+def _empty_usage_side() -> dict:
+    return {
+        "rounds": 0,
+        "tokens": {key: 0 for key in _TOKEN_ANALYSIS_KEYS},
+        "accepted_unique_findings": 0,
+        "staged_findings": 0,
+        "blocking_findings": 0,
+        "ready_rounds": 0,
+    }
+
+
+def _usage_cell(records: list[dict]) -> dict:
+    """One (band, mode) analysis cell from collapsed attributable records.
+
+    r1 is the initial round; r2+ are follow-ups. Token totals, accepted
+    unique findings, staged/blocking findings, and ready counts are summed
+    per side, each cell equal to exactly its own records' totals.
+    """
+    initial = [r for r in records if r["round"] == 1]
+    followup = [r for r in records if r["round"] > 1]
+
+    def agg(recs: list[dict]) -> dict:
+        side = _empty_usage_side()
+        side["rounds"] = len(recs)
+        for rec in recs:
+            usage = rec["usage"]
+            for key in _TOKEN_ANALYSIS_KEYS:
+                side["tokens"][key] += _coerce_int(usage["totals"].get(key))
+            side["accepted_unique_findings"] += _coerce_int(
+                rec.get("accepted")
+            )
+            side["staged_findings"] += _coerce_int(rec.get("staged"))
+            side["blocking_findings"] += _coerce_int(rec.get("blocking"))
+            if rec.get("verdict") == "yes":
+                side["ready_rounds"] += 1
+        return side
+
+    cell = {"initial": agg(initial), "followup": agg(followup)}
+    cell["inconclusive"] = (
+        len(initial) + len(followup) < USAGE_ANALYSIS_MIN_ROUNDS
+    )
+    return cell
+
+
+def build_usage_analysis(
+    band_loops: dict, attributable_coverage: float | None
+) -> dict:
+    """Build the initial-vs-follow-up usage analysis section.
+
+    ``band_loops`` must already carry collapsed usage (``_collapse_loop_usage``
+    ran). ``attributable_coverage`` is the pass's attributable-sidecar
+    fraction; below the decision threshold every cell is marked inconclusive
+    (token-based conclusions are not decision-grade on a thin corpus).
+    Output holds aggregates only: no slugs, no paths, no per-file rows.
+    """
+    bands: dict = {}
+    for band in list(COMPLEXITY_BANDS) + ["overall"]:
+        loops = (
+            band_loops.get(band, [])
+            if band != "overall"
+            else [
+                loop
+                for b in COMPLEXITY_BANDS
+                for loop in band_loops.get(b, [])
+            ]
+        )
+        cells = {}
+        for mode in PANEL_MODES:
+            records = [
+                rec
+                for loop in loops
+                for rec in loop
+                if rec.get("usage") and rec.get("panel_mode") == mode
+            ]
+            cells[mode] = _usage_cell(records)
+        bands[band] = cells
+    corpus_thin = (
+        attributable_coverage is None
+        or attributable_coverage < USAGE_COVERAGE_DECISION_THRESHOLD
+    )
+    if corpus_thin:
+        for cells in bands.values():
+            for cell in cells.values():
+                cell["inconclusive"] = True
+    return {
+        "min_rounds": USAGE_ANALYSIS_MIN_ROUNDS,
+        "attributable_coverage": attributable_coverage,
+        "bands": bands,
     }
 
 
@@ -3090,6 +3488,43 @@ def serialize_metrics_markdown(report: dict) -> bytes:
         "a counts block but no findings list): their findings totals count "
         "in the tables, their blocking columns never do."
     )
+    # Task 4 usage analysis (initial vs follow-up rounds): aggregate-only,
+    # collapsed attributable records only; token-based conclusions carry an
+    # inconclusive marker in thin cells (marker is data-derived).
+    analysis = report.get("usage_analysis")
+    if analysis is not None:
+        lines.append("")
+        lines.append("## Usage by round (initial vs follow-up)")
+        lines.append("")
+        lines.append(
+            f"Token-based conclusions are marked inconclusive where a cell "
+            f"holds fewer than {analysis['min_rounds']} collapsed "
+            "attributable rounds or attributable coverage is below the "
+            "decision threshold. Aggregate-only: no slugs, no paths."
+        )
+        lines.append("")
+        lines.append(
+            "| band | mode | side | rounds | input tokens "
+            "| computed total tokens | accepted unique findings "
+            "| staged findings | blocking findings | ready rounds |"
+        )
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        for band in list(COMPLEXITY_BANDS) + ["overall"]:
+            for mode in PANEL_MODES:
+                cell = analysis["bands"][band][mode]
+                marker = " (inconclusive)" if cell["inconclusive"] else ""
+                for side_label in ("initial", "followup"):
+                    side = cell[side_label]
+                    lines.append(
+                        f"| {band} | {mode} | {side_label}{marker} "
+                        f"| {side['rounds']} "
+                        f"| {side['tokens']['input_tokens']} "
+                        f"| {side['tokens']['computed_total_tokens']} "
+                        f"| {side['accepted_unique_findings']} "
+                        f"| {side['staged_findings']} "
+                        f"| {side['blocking_findings']} "
+                        f"| {side['ready_rounds']} |"
+                    )
     lines.append("")
     return "\n".join(lines).encode("utf-8")
 
@@ -5284,8 +5719,14 @@ def _t_current_adapter_malformed_usage_treated_absent(check) -> None:
         )
 
 
-def _usage_sidecar(date: str, totals: dict | None) -> dict:
-    """Minimal cohort-valid sidecar fixture with an optional usage record."""
+def _usage_sidecar(
+    date: str, totals: dict | None, usage_record: dict | None = None
+) -> dict:
+    """Minimal cohort-valid sidecar with an optional usage record.
+
+    ``usage_record`` overrides the default window-legacy-shaped record
+    (used by the attribution fixtures to carry provenance exactly).
+    """
     payload = {
         "review_type": "branch review",
         "round": "r1",
@@ -5296,7 +5737,9 @@ def _usage_sidecar(date: str, totals: dict | None) -> dict:
         "agents_launched": 4,
         "findings": [{"id": 1, "severity": "Low", "triage": "fixed"}] * 4,
     }
-    if totals is not None:
+    if usage_record is not None:
+        payload["usage"] = usage_record
+    elif totals is not None:
         payload["usage"] = {
             "adapter": "zcode-sqlite",
             "provenance": {"session_ids": ["sess_89a0cb7"], "estimated": False},
@@ -5304,6 +5747,45 @@ def _usage_sidecar(date: str, totals: dict | None) -> dict:
             "by_agent_kind": {},
         }
     return payload
+
+
+def _attributable_usage_record(
+    totals: dict,
+    run_id: str = "a" * 32,
+    start_ms: int = 1_000,
+    captured_ms: int = 2_000,
+) -> dict:
+    """Attributable usage record fixture (interval-identity provenance)."""
+    return {
+        "adapter": "zcode-sqlite",
+        "provenance": {
+            "session_ids": ["sess_89a0cb7"],
+            "estimated": False,
+            "attribution": "interval-identity",
+            "attributable": True,
+            "review_run_id": run_id,
+            "review_started_at_ms": start_ms,
+            "captured_at_ms": captured_ms,
+            "source_grain": "turn",
+            "by_session": {"sess_89a0cb7": dict(totals)},
+        },
+        "totals": totals,
+        "by_agent_kind": {},
+    }
+
+
+def _ambiguous_usage_record(totals: dict) -> dict:
+    """Ambiguous usage record fixture (window-legacy provenance)."""
+    return {
+        "adapter": "zcode-sqlite",
+        "provenance": {
+            "session_ids": ["sess_89a0cb7"],
+            "estimated": False,
+            "ambiguous": True,
+        },
+        "totals": totals,
+        "by_agent_kind": {},
+    }
 
 
 _USAGE_TOTALS_A = {
@@ -5331,11 +5813,16 @@ def _t_coverage_post_cutover_denominator(check) -> None:
     pre-cutover sidecar is excluded from the denominator by the
     ``date >= USAGE_CUTOVER_DATE`` classification, and a post-cutover sidecar
     without ``usage`` is in the denominator but not the numerator (the
-    denominator is NOT "sidecars with usage")."""
+    denominator is NOT "sidecars with usage"). Re-pinned to the attributable
+    contract: the decision-grade totals sum attributable records only; the
+    published ``coverage`` fraction key keeps its presence-based meaning."""
     corpus = [
-        ("growth", _usage_sidecar("2026-09-07", _USAGE_TOTALS_A)),
+        ("growth", _usage_sidecar(
+            "2026-10-04", None,
+            _attributable_usage_record(_USAGE_TOTALS_A),
+        )),
         ("baseline", _usage_sidecar("2026-01-01", None)),  # pre-cutover, no usage
-        ("growth", _usage_sidecar("2026-09-06", None)),  # post-cutover, no usage
+        ("growth", _usage_sidecar("2026-10-04", None)),  # post-cutover, no usage
     ]
     report = build_effectiveness_report(corpus)
     cov = report.get("usage_coverage") or {}
@@ -5350,13 +5837,20 @@ def _t_coverage_post_cutover_denominator(check) -> None:
         str(cov),
     )
     check(
-        "coverage_post_cutover_denominator: coverage is 1 of 2",
+        "coverage_post_cutover_denominator: coverage is 1 of 2 (presence-based)",
         cov.get("coverage") == 0.5,
+        str(cov),
+    )
+    check(
+        "coverage_post_cutover_denominator: four counts published",
+        cov.get("sidecars_attributable") == 1
+        and cov.get("sidecars_ambiguous") == 0
+        and cov.get("sidecars_missing") == 1,
         str(cov),
     )
     totals = report.get("observed_token_totals") or {}
     check(
-        "coverage_post_cutover_denominator: observed totals sum observed records",
+        "coverage_post_cutover_denominator: attributable totals only",
         totals.get("input_tokens") == 100 and totals.get("computed_total_tokens") == 110,
         str(totals),
     )
@@ -5377,28 +5871,81 @@ def _t_coverage_post_cutover_denominator(check) -> None:
         "coverage_post_cutover_denominator: missing date counts as post-cutover",
         _is_post_cutover({}),
     )
+    check(
+        "coverage_post_cutover_denominator: attribution cutover constant",
+        ATTRIBUTION_CUTOVER_DATE == "2026-10-03",
+    )
+    # Ambiguous-only variant: the excluded (non-attributable) totals land in
+    # the separate non-decision-grade block, never in the decision-grade sum.
+    amb_report = build_effectiveness_report(
+        [("growth", _usage_sidecar(
+            "2026-10-04", None, _ambiguous_usage_record(_USAGE_TOTALS_B),
+        ))]
+    )
+    amb_totals = amb_report.get("observed_token_totals") or {}
+    amb_block = amb_report.get("ambiguous_observed_token_totals") or {}
+    amb_cov = amb_report.get("usage_coverage") or {}
+    check(
+        "coverage_post_cutover_denominator: ambiguous record is present, not attributable",
+        amb_cov.get("sidecars_with_usage") == 1
+        and amb_cov.get("sidecars_ambiguous") == 1
+        and amb_cov.get("sidecars_attributable") == 0,
+        str(amb_cov),
+    )
+    check(
+        "coverage_post_cutover_denominator: ambiguous totals excluded from sums",
+        amb_totals.get("input_tokens") == 0,
+        str(amb_totals),
+    )
+    check(
+        "coverage_post_cutover_denominator: ambiguous totals published separately",
+        amb_block.get("input_tokens") == 50
+        and amb_block.get("computed_total_tokens") == 55,
+        str(amb_block),
+    )
 
 
 # ---- decision_rule_supplementary ----
 @_test("summarize_review_stats#decision_rule_supplementary")
 def _t_decision_rule_supplementary(check) -> None:
-    """Token cost stays labeled supplementary while observed-token coverage
-    over post-cutover sidecars is below 70 percent; at or above 70 percent the
-    supplementary label is dropped. No branch of the rule reads or requires
-    pre-cutover token data (a pre-cutover sidecar carrying usage is ignored)."""
-    # Low coverage: 1 of 2 post-cutover sidecars carry usage (50% < 70%), and
-    # a pre-cutover sidecar WITH usage must not lift the numerator or totals.
+    """Token cost stays labeled supplementary while ATTRIBUTABLE coverage
+    over post-attribution-cutover sidecars is below 70 percent; at or above
+    70 percent the supplementary label is dropped. No branch of the rule
+    reads or requires pre-cutover token data, and pre-attribution-cutover
+    records are absent from the attributable-coverage denominator."""
+    # Low attributable coverage: presence coverage at/above 70 percent (8 of
+    # 10 post-attr sidecars carry usage) but only 1 attributable (10%), so
+    # the supplementary label is KEPT; the pre-attribution-cutover sidecar
+    # carrying an attributable record is absent from the denominator.
     low = build_effectiveness_report(
-        [
-            ("growth", _usage_sidecar("2026-09-07", _USAGE_TOTALS_A)),
-            ("growth", _usage_sidecar("2026-09-08", None)),
-            ("baseline", _usage_sidecar("2026-01-01", _USAGE_TOTALS_B)),
-        ]
+        [("growth", _usage_sidecar(
+            "2026-10-04", None,
+            _attributable_usage_record(_USAGE_TOTALS_A, run_id=f"{i:032x}"),
+         )) if i == 0 else
+         ("growth", _usage_sidecar(
+            "2026-10-04", None, _ambiguous_usage_record(_USAGE_TOTALS_B),
+         )) if i < 8 else
+         ("growth", _usage_sidecar("2026-10-04", None))
+         for i in range(10)]
+        + [("baseline", _usage_sidecar(
+            "2026-10-02", None, _ambiguous_usage_record(_USAGE_TOTALS_A),
+         ))]
     )
     cov_low = low.get("usage_coverage") or {}
     check(
-        "decision_rule_supplementary: pre-cutover usage not counted in numerator",
-        cov_low.get("sidecars_with_usage") == 1,
+        "decision_rule_supplementary: presence coverage at/above threshold",
+        cov_low.get("coverage") is not None
+        and cov_low.get("coverage") > USAGE_COVERAGE_DECISION_THRESHOLD,
+        str(cov_low),
+    )
+    check(
+        "decision_rule_supplementary: attributable coverage below threshold",
+        cov_low.get("attributable_coverage") == 0.1,
+        str(cov_low),
+    )
+    check(
+        "decision_rule_supplementary: pre-attribution record absent from denominator",
+        cov_low.get("post_attribution_cutover_sidecars") == 10,
         str(cov_low),
     )
     check(
@@ -5414,22 +5961,28 @@ def _t_decision_rule_supplementary(check) -> None:
     )
     totals_low = low.get("observed_token_totals") or {}
     check(
-        "decision_rule_supplementary: pre-cutover tokens not read into totals",
+        "decision_rule_supplementary: totals carry the attributable record only",
         totals_low.get("input_tokens") == 100,
         str(totals_low),
     )
 
-    # High coverage: 2 of 2 post-cutover sidecars carry usage (100% >= 70%).
+    # High coverage: 1 of 1 post-attribution-cutover sidecars attributable.
     high = build_effectiveness_report(
         [
-            ("growth", _usage_sidecar("2026-09-07", _USAGE_TOTALS_A)),
-            ("growth", _usage_sidecar("2026-09-08", _USAGE_TOTALS_B)),
+            ("growth", _usage_sidecar(
+                "2026-10-04", None,
+                _attributable_usage_record(_USAGE_TOTALS_A),
+            )),
+            ("growth", _usage_sidecar(
+                "2026-10-05", None,
+                _attributable_usage_record(_USAGE_TOTALS_B, run_id="b" * 32),
+            )),
         ]
     )
     cov_high = high.get("usage_coverage") or {}
     check(
-        "decision_rule_supplementary: coverage at/above 70 percent",
-        cov_high.get("coverage") == 1.0,
+        "decision_rule_supplementary: attributable coverage at/above 70 percent",
+        cov_high.get("attributable_coverage") == 1.0,
         str(cov_high),
     )
     check(
@@ -5444,17 +5997,21 @@ def _t_decision_rule_supplementary(check) -> None:
         md_high,
     )
 
-    # N7 boundary witness: coverage of EXACTLY 0.70 (7 of 10 post-cutover
-    # sidecars carry usage) drops the supplementary label (< vs <= pinned).
+    # N7 boundary witness: attributable coverage of EXACTLY 0.70 (7 of 10
+    # post-attribution-cutover sidecars attributable) drops the label
+    # (< vs <= pinned).
     exact = build_effectiveness_report(
-        [("growth", _usage_sidecar(f"2026-09-{10 + i:02d}",
-                                   _USAGE_TOTALS_A if i < 7 else None))
+        [("growth", _usage_sidecar(
+            "2026-10-04", None,
+            _attributable_usage_record(_USAGE_TOTALS_A, run_id=f"{i:032x}"),
+         )) if i < 7 else
+         ("growth", _usage_sidecar("2026-10-04", None))
          for i in range(10)]
     )
     cov_exact = exact.get("usage_coverage") or {}
     check(
-        "decision_rule_supplementary: exact 0.70 coverage",
-        cov_exact.get("coverage") == 0.70,
+        "decision_rule_supplementary: exact 0.70 attributable coverage",
+        cov_exact.get("attributable_coverage") == 0.70,
         str(cov_exact),
     )
     check(
@@ -5464,10 +6021,267 @@ def _t_decision_rule_supplementary(check) -> None:
     )
     totals_high = high.get("observed_token_totals") or {}
     check(
-        "decision_rule_supplementary: totals sum both post-cutover records",
+        "decision_rule_supplementary: totals sum both attributable records",
         totals_high.get("input_tokens") == 150
         and totals_high.get("computed_total_tokens") == 165,
         str(totals_high),
+    )
+
+
+# ---- current_adapter_usage_attribution_classes ----
+@_test("summarize_review_stats#current_adapter_usage_attribution_classes")
+def _t_usage_attribution_classes(check) -> None:
+    """The classification helper maps (a) an identity record to attributable,
+    (b) a legacy ambiguous record and (c) a telemetry-era non-ambiguous
+    record to ambiguous, and (d) a missing usage key to absent. Absence of
+    the attribution field is NEVER attributable."""
+    identity = {"usage": _attributable_usage_record(_USAGE_TOTALS_A)}
+    legacy_ambiguous = {"usage": _ambiguous_usage_record(_USAGE_TOTALS_B)}
+    telemetry_era = {"usage": {
+        "adapter": "zcode-sqlite",
+        "provenance": {"session_ids": ["sess_89a0cb7"], "estimated": False,
+                       "ambiguous": False},
+        "totals": _USAGE_TOTALS_A,
+        "by_agent_kind": {},
+    }}
+    check(
+        "usage_attribution_classes: identity record is attributable",
+        _usage_class_of(identity) == "attributable",
+        _usage_class_of(identity),
+    )
+    check(
+        "usage_attribution_classes: legacy ambiguous record is ambiguous",
+        _usage_class_of(legacy_ambiguous) == "ambiguous",
+        _usage_class_of(legacy_ambiguous),
+    )
+    check(
+        "usage_attribution_classes: telemetry-era record is ambiguous",
+        _usage_class_of(telemetry_era) == "ambiguous",
+        _usage_class_of(telemetry_era),
+    )
+    check(
+        "usage_attribution_classes: no usage key is absent",
+        _usage_class_of({}) == "absent",
+        _usage_class_of({}),
+    )
+    check(
+        "usage_attribution_classes: mistyped totals stay absent",
+        _usage_class_of({"usage": {"totals": "nope"}}) == "absent",
+    )
+    check(
+        "usage_attribution_classes: interval-ambiguous is not attributable",
+        _usage_class_of({"usage": {
+            "totals": _USAGE_TOTALS_A,
+            "provenance": {"attribution": "interval-ambiguous"},
+        }}) == "ambiguous",
+    )
+    check(
+        "usage_attribution_classes: interval-fallback is not attributable",
+        _usage_class_of({"usage": {
+            "totals": _USAGE_TOTALS_A,
+            "provenance": {"attribution": "interval-fallback"},
+        }}) == "ambiguous",
+    )
+
+
+# ---- coverage_four_counts ----
+@_test("summarize_review_stats#coverage_four_counts")
+def _t_coverage_four_counts(check) -> None:
+    """The usage coverage block publishes four counts (present, attributable,
+    ambiguous, missing) over post-cutover sidecars, with the pre-cutover
+    exclusion unchanged and the ``coverage`` fraction key keeping its
+    presence-based meaning."""
+    corpus = [
+        ("growth", _usage_sidecar("2026-10-04", None,
+                                  _attributable_usage_record(_USAGE_TOTALS_A))),
+        ("growth", _usage_sidecar("2026-10-04", None,
+                                  _ambiguous_usage_record(_USAGE_TOTALS_B))),
+        ("growth", _usage_sidecar("2026-10-04", None)),  # missing
+        ("baseline", _usage_sidecar("2026-01-01", None,
+                                    _ambiguous_usage_record(_USAGE_TOTALS_A))),
+    ]
+    report = build_effectiveness_report(corpus)
+    cov = report.get("usage_coverage") or {}
+    check(
+        "coverage_four_counts: present counts attributable + ambiguous",
+        cov.get("sidecars_with_usage") == 2,
+        str(cov),
+    )
+    check(
+        "coverage_four_counts: attributable count",
+        cov.get("sidecars_attributable") == 1,
+        str(cov),
+    )
+    check(
+        "coverage_four_counts: ambiguous count (pre-cutover excluded)",
+        cov.get("sidecars_ambiguous") == 1,
+        str(cov),
+    )
+    check(
+        "coverage_four_counts: missing count (post-cutover without usage)",
+        cov.get("sidecars_missing") == 1,
+        str(cov),
+    )
+    check(
+        "coverage_four_counts: coverage fraction stays presence-based",
+        cov.get("coverage") == 2 / 3,
+        str(cov),
+    )
+    check(
+        "coverage_four_counts: superseded captures published",
+        cov.get("sidecars_superseded_captures") == 0,
+        str(cov),
+    )
+
+
+# ---- round_collapse_superseded_captures ----
+@_test("summarize_review_stats#round_collapse_superseded_captures")
+def _t_round_collapse_superseded_captures(check) -> None:
+    """Two attributable sidecar records sharing one review_run_id (the
+    workers of one round write one sidecar each, nested intervals): the
+    decision-grade total equals the LATER record's totals, not the sum; the
+    earlier record counts as present, is excluded from sums, and lands in
+    ``sidecars_superseded_captures``."""
+    later = _attributable_usage_record(
+        _USAGE_TOTALS_A, run_id="c" * 32, captured_ms=9_000
+    )
+    earlier = _attributable_usage_record(
+        _USAGE_TOTALS_B, run_id="c" * 32, captured_ms=1_000
+    )
+    corpus = [
+        ("growth", _usage_sidecar("2026-10-04", None, earlier)),
+        ("growth", _usage_sidecar("2026-10-04", None, later)),
+    ]
+    report = build_effectiveness_report(corpus)
+    cov = report.get("usage_coverage") or {}
+    check(
+        "round_collapse: both records count as usage present",
+        cov.get("sidecars_with_usage") == 2
+        and cov.get("sidecars_attributable") == 2,
+        str(cov),
+    )
+    check(
+        "round_collapse: earlier record published as superseded capture",
+        cov.get("sidecars_superseded_captures") == 1,
+        str(cov),
+    )
+    totals = report.get("observed_token_totals") or {}
+    check(
+        "round_collapse: totals equal the LATER record only, not the sum",
+        totals.get("input_tokens") == 100
+        and totals.get("computed_total_tokens") == 110,
+        str(totals),
+    )
+    check(
+        "round_collapse: nothing leaked into the ambiguous block",
+        (report.get("ambiguous_observed_token_totals") or {}).get(
+            "input_tokens") == 0,
+    )
+
+
+# ---- observed_totals_attributable_only ----
+@_test("summarize_review_stats#observed_totals_attributable_only")
+def _t_observed_totals_attributable_only(check) -> None:
+    """Given one attributable and one ambiguous record (distinct run ids),
+    ``observed_token_totals`` equals the attributable record's totals ONLY,
+    and ``ambiguous_observed_token_totals`` carries the ambiguous union
+    labeled non-decision-grade (visible, never merged, never assigned)."""
+    report = build_effectiveness_report(
+        [
+            ("growth", _usage_sidecar(
+                "2026-10-04", None,
+                _attributable_usage_record(_USAGE_TOTALS_A, run_id="d" * 32),
+            )),
+            ("growth", _usage_sidecar(
+                "2026-10-04", None,
+                _ambiguous_usage_record(_USAGE_TOTALS_B),
+            )),
+        ]
+    )
+    totals = report.get("observed_token_totals") or {}
+    amb = report.get("ambiguous_observed_token_totals") or {}
+    check(
+        "observed_totals: decision-grade equals the attributable record only",
+        totals.get("input_tokens") == 100
+        and totals.get("computed_total_tokens") == 110,
+        str(totals),
+    )
+    check(
+        "observed_totals: ambiguous union published separately",
+        amb.get("input_tokens") == 50
+        and amb.get("computed_total_tokens") == 55,
+        str(amb),
+    )
+    md = serialize_effectiveness_markdown(report).decode("utf-8")
+    check(
+        "observed_totals: markdown labels the ambiguous union non-decision-grade",
+        "NON-decision-grade" in md and "input=50" in md,
+        md,
+    )
+    check(
+        "observed_totals: markdown states the attributable-only basis",
+        "one surviving attributable record per review-run" in md,
+        md,
+    )
+
+
+# ---- decision_rule_binds_attributable_coverage ----
+@_test("summarize_review_stats#decision_rule_binds_attributable_coverage")
+def _t_decision_rule_binds_attributable_coverage(check) -> None:
+    """Tolerant reading: a corpus whose attributable records carry the five
+    new provenance keys parses; a legacy record without them stays
+    parseable and ambiguous; duplicate review_run_id occurrences across
+    distinct rounds surface as a corpus-hygiene count."""
+    tolerant = build_effectiveness_report(
+        [("growth", _usage_sidecar(
+            "2026-10-04", None,
+            _attributable_usage_record(_USAGE_TOTALS_A,
+                                       start_ms=5, captured_ms=6),
+         ))]
+    )
+    cov = tolerant.get("usage_coverage") or {}
+    check(
+        "decision_rule_binds: new provenance keys read tolerantly",
+        cov.get("sidecars_attributable") == 1
+        and (tolerant.get("observed_token_totals") or {}).get(
+            "input_tokens") == 100,
+        str(cov),
+    )
+    legacy_parse = build_effectiveness_report(
+        [("growth", _usage_sidecar("2026-10-04", None,
+                                   _ambiguous_usage_record(_USAGE_TOTALS_B)))]
+    )
+    check(
+        "decision_rule_binds: legacy record without new keys stays parseable",
+        legacy_parse is not None
+        and (legacy_parse.get("usage_coverage") or {}).get(
+            "sidecars_ambiguous") == 1,
+    )
+    # Duplicate run id across distinct rounds: same review_run_id carried by
+    # records with DIFFERENT review_started_at_ms -> corpus-hygiene count.
+    dup = build_effectiveness_report(
+        [("growth", _usage_sidecar(
+            "2026-10-04", None,
+            _attributable_usage_record(_USAGE_TOTALS_A, run_id="e" * 32,
+                                       start_ms=1, captured_ms=2),
+         )),
+         ("growth", _usage_sidecar(
+            "2026-10-05", None,
+            _attributable_usage_record(_USAGE_TOTALS_B, run_id="e" * 32,
+                                       start_ms=9_999, captured_ms=10_000),
+         ))]
+    )
+    cov_dup = dup.get("usage_coverage") or {}
+    check(
+        "decision_rule_binds: duplicate run ids counted as corpus hygiene",
+        cov_dup.get("duplicate_review_run_ids") == 1,
+        str(cov_dup),
+    )
+    check(
+        "decision_rule_binds: duplicate-run records still collapse by max capture",
+        cov_dup.get("sidecars_superseded_captures") == 1
+        and (dup.get("observed_token_totals") or {}).get("input_tokens") == 50,
+        str(cov_dup),
     )
 
 
@@ -7061,6 +7875,245 @@ def _t_metrics_legacy_tolerance(check) -> None:
 
 
 # ---- helpers used by selftests ----
+# ---- usage_by_round_initial_vs_followup ----
+@_test("summarize_review_stats#usage_by_round_initial_vs_followup")
+def _t_usage_by_round_initial_vs_followup(check) -> None:
+    """Token usage is readable only from collapsed attributable records;
+    per-round token totals join accepted unique findings AND the existing
+    staged/blocking/ready counts, with r1 the initial round and r2+ the
+    follow-ups."""
+    totals_r1 = {"input_tokens": 100, "computed_total_tokens": 120}
+    totals_r2 = {"input_tokens": 30, "computed_total_tokens": 40}
+
+    def rec(round_idx, totals, run_id, accepted, staged, blocking, verdict):
+        usage = None
+        if totals is not None:
+            usage = {
+                "run_id": run_id,
+                "captured_at_ms": 1 + round_idx,
+                "totals": totals,
+            }
+        return {
+            "round": round_idx,
+            "verdict": verdict,
+            "staged": staged,
+            "blocking": blocking,
+            "cap_closure": False,
+            "accepted": accepted,
+            "panel_mode": "full",
+            "usage": usage,
+        }
+
+    band_loops = {
+        "medium": [
+            [
+                rec(1, totals_r1, "a" * 32, 3, 5, 1, "no"),
+                rec(2, totals_r2, "b" * 32, 2, 2, 0, "yes"),
+                rec(3, None, "c" * 32, 1, 1, 0, "yes"),
+            ]
+        ]
+    }
+    _collapse_loop_usage(band_loops)
+    analysis = build_usage_analysis(band_loops, 1.0)
+    cell = analysis["bands"]["medium"]["full"]
+    check(
+        "usage_by_round: initial side equals r1 records only",
+        cell["initial"]["tokens"]["input_tokens"] == 100
+        and cell["initial"]["rounds"] == 1,
+        str(cell),
+    )
+    check(
+        "usage_by_round: followup side equals r2+ records",
+        cell["followup"]["tokens"]["input_tokens"] == 30
+        and cell["followup"]["rounds"] == 1,
+        str(cell),
+    )
+    check(
+        "usage_by_round: accepted unique findings joined",
+        cell["initial"]["accepted_unique_findings"] == 3
+        and cell["followup"]["accepted_unique_findings"] == 2,
+        str(cell),
+    )
+    check(
+        "usage_by_round: staged/blocking/ready counts joined",
+        cell["initial"]["staged_findings"] == 5
+        and cell["initial"]["blocking_findings"] == 1
+        and cell["followup"]["ready_rounds"] == 1,
+        str(cell),
+    )
+    check(
+        "usage_by_round: non-attributable round carries no tokens",
+        cell["followup"]["tokens"]["computed_total_tokens"] == 40,
+        str(cell),
+    )
+    check(
+        "usage_by_round: r1 is initial, r2+ are follow-ups in the report shape",
+        set(cell.keys()) >= {"initial", "followup", "inconclusive"},
+        str(sorted(cell)),
+    )
+
+
+# ---- usage_by_band_and_mode ----
+@_test("summarize_review_stats#usage_by_band_and_mode")
+def _t_usage_by_band_and_mode(check) -> None:
+    """Multi-band, multi-mode corpora segment by the complexity bands AND
+    the new panel_mode axis; each cell equals exactly its own records'
+    totals, sibling cells stay zero, and the output is aggregate-only."""
+    def rec(round_idx, totals, run_id, mode):
+        return {
+            "round": round_idx,
+            "verdict": "yes",
+            "staged": 1,
+            "blocking": 0,
+            "cap_closure": False,
+            "accepted": 1,
+            "panel_mode": mode,
+            "usage": {
+                "run_id": run_id,
+                "captured_at_ms": 10 + round_idx,
+                "totals": totals,
+            },
+        }
+
+    empty_stats = _empty_band_stats()
+    band_loops = {
+        "small": [[rec(1, {"input_tokens": 11, "computed_total_tokens": 12},
+                       "d" * 32, "focused")]],
+        "large": [
+            [rec(1, {"input_tokens": 21, "computed_total_tokens": 22},
+                 "e" * 32, "full")],
+            [rec(2, {"input_tokens": 31, "computed_total_tokens": 32},
+                 "f" * 32, "focused")],
+        ],
+    }
+    _collapse_loop_usage(band_loops)
+    analysis = build_usage_analysis(band_loops, 1.0)
+    check(
+        "usage_by_band_mode: small/focused cell equals its own records",
+        analysis["bands"]["small"]["focused"]["initial"]["tokens"][
+            "input_tokens"] == 11,
+        str(analysis["bands"]["small"]),
+    )
+    check(
+        "usage_by_band_mode: small/full sibling cell stays zero",
+        analysis["bands"]["small"]["full"]["initial"]["tokens"][
+            "input_tokens"] == 0,
+    )
+    check(
+        "usage_by_band_mode: large/followup focused cell holds its own record",
+        analysis["bands"]["large"]["focused"]["followup"]["tokens"][
+            "input_tokens"] == 31,
+        str(analysis["bands"]["large"]),
+    )
+    check(
+        "usage_by_band_mode: legacy sidecars without panel_mode land in unknown",
+        "unknown" in analysis["bands"]["large"],
+    )
+    overall_initial = analysis["bands"]["overall"]["full"]["initial"]
+    check(
+        "usage_by_band_mode: overall axis aggregates across bands",
+        overall_initial["tokens"]["input_tokens"] == 21,
+        str(overall_initial),
+    )
+    serialized = serialize_metrics_json({
+        "schema": METRICS_SCHEMA, "loops": 0,
+        "sidecars_legacy_bucket": 0,
+        "bands": {b: dict(empty_stats) for b in COMPLEXITY_BANDS},
+        "overall": dict(empty_stats), "usage_analysis": analysis,
+    }).decode("utf-8")
+    check(
+        "usage_by_band_mode: aggregate-only output (no slugs, no paths)",
+        "artifact_slug" not in serialized
+        and "docs/history" not in serialized,
+    )
+
+
+# ---- token_conclusions_inconclusive_on_thin_samples ----
+@_test("summarize_review_stats#token_conclusions_inconclusive_on_thin_samples")
+def _t_token_conclusions_inconclusive_on_thin_samples(check) -> None:
+    """With USAGE_ANALYSIS_MIN_ROUNDS = 3: cells below the floor, or a
+    corpus below the attributable-coverage threshold, mark every
+    token-based conclusion inconclusive; a contrast cell at or above the
+    floor with adequate coverage carries NO marker."""
+    check(
+        "token_conclusions: min rounds constant named in source",
+        USAGE_ANALYSIS_MIN_ROUNDS == 3,
+    )
+
+    def rec(round_idx, run_id):
+        return {
+            "round": round_idx,
+            "verdict": "yes",
+            "staged": 1,
+            "blocking": 0,
+            "cap_closure": False,
+            "accepted": 1,
+            "panel_mode": "full",
+            "usage": {
+                "run_id": run_id,
+                "captured_at_ms": 100 + round_idx,
+                "totals": {"input_tokens": 1, "computed_total_tokens": 1},
+            },
+        }
+
+    thin_loops = {
+        "small": [
+            [rec(1, "g" * 32)],
+            [rec(1, "h" * 32)],
+        ]
+    }
+    _collapse_loop_usage(thin_loops)
+    thin = build_usage_analysis(thin_loops, 1.0)
+    check(
+        "token_conclusions: thin cell marked inconclusive",
+        thin["bands"]["small"]["full"]["inconclusive"] is True,
+    )
+    contrast_loops = {
+        "small": [
+            [rec(1, "i" * 32)],
+            [rec(1, "j" * 32)],
+            [rec(1, "k" * 32)],
+        ]
+    }
+    _collapse_loop_usage(contrast_loops)
+    contrast = build_usage_analysis(contrast_loops, 0.9)
+    check(
+        "token_conclusions: contrast cell at floor with adequate coverage has no marker",
+        contrast["bands"]["small"]["full"]["inconclusive"] is False,
+    )
+    low_cov = build_usage_analysis(contrast_loops, 0.3)
+    check(
+        "token_conclusions: corpus below attributable threshold marks every cell",
+        all(
+            cell["inconclusive"]
+            for cells in low_cov["bands"].values()
+            for cell in cells.values()
+        ),
+    )
+    empty_stats = _empty_band_stats()
+    md = serialize_metrics_markdown({
+        "schema": METRICS_SCHEMA, "loops": 0, "sidecars_legacy_bucket": 0,
+        "bands": {b: dict(empty_stats) for b in COMPLEXITY_BANDS},
+        "overall": dict(empty_stats), "usage_analysis": thin,
+    }).decode("utf-8")
+    check(
+        "token_conclusions: markdown carries the inconclusive marker",
+        "(inconclusive)" in md,
+        md,
+    )
+    md_contrast = serialize_metrics_markdown({
+        "schema": METRICS_SCHEMA, "loops": 0, "sidecars_legacy_bucket": 0,
+        "bands": {b: dict(empty_stats) for b in COMPLEXITY_BANDS},
+        "overall": dict(empty_stats), "usage_analysis": contrast,
+    }).decode("utf-8")
+    check(
+        "token_conclusions: markdown marker is data-derived, never decorative",
+        "| small | full | initial (inconclusive)" not in md_contrast
+        and "| small | full | initial " in md_contrast,
+        md_contrast,
+    )
+
+
 def _file_mode(path: Path) -> int | None:
     try:
         return stat.S_IMODE(os.lstat(str(path)).st_mode)

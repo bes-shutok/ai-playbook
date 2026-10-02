@@ -7668,3 +7668,45 @@ See also #462 for adjudicating who else may hold claims on the same machinery.
 **Shape:** never treat "the claim file's session id is malformed/absent/future-dated" as evidence the claim is abandoned; treat it as evidence the file's self-report is unreliable, and escalate to mutation-observed evidence (a commit or file change you did not cause) before touching the claimed surface.
 
 See also #461 for the lock-lifetime half of the same one-shot-shell machinery.
+
+## 463. Audit Existing Machinery's Contract Coverage Before Filing a Missing-Machinery Row
+
+**Principle:** Family H (Verify the real thing, not the abstraction)
+
+**Trigger:** a user or a self-review asks why a recurring duty is not automated, or a triage concludes "this has no owner, file a row for new machinery."
+
+**Rule:** before filing a new-machinery row, audit the existing X-shaped machinery for contract coverage, not existence: read the owning skill's arm/lane list and the lane's state record, then classify the gap as missing-machinery (nothing runs), partial-ownership (a lane exists and runs but its contract covers a strict subset of the duty), or stale-spec (it runs against an outdated contract). The fix shapes differ (new arm, extend the arm, re-spec or redeploy), and "we don't have this" is usually the second.
+
+**Why:** a workspace already carried a 30-day deferred-corpus re-triage lane when its operator asked why deferred triage was not a monthly task. The lane had run once and owned only the reject half of the deferral contract, so seven recorded revival triggers fired with no revival action while the reject sweep sat correctly idle. An existence-level check ("is there a lane? yes") would have closed the question with the wrong answer; the coverage-level audit found the real defect and produced the right rows.
+
+**Shape:** the giveaway of partial ownership is machinery that runs green while the complained-about subject keeps recurring; the classification probe is two reads (the skill's arm list, the lane's last-run record), never a new design.
+
+**See also:** #182 (distinguishes the sibling shapes: gate overridden, gates skipped, producer never had a gate, gate enforces a stale spec; partial contract ownership is the fifth), #455 (a fail-closed resolution rule needs a named source holding the value).
+
+## 464. An Extracted Script Region That Exits 0 After Defining Nothing Is a Silent No-Op
+
+**Principle:** Family H (Verify the real thing, not the abstraction)
+
+**Trigger:** executing a skill's embedded script by extracting a fenced region from its documentation, when the region consumes variables or helpers defined in a different region.
+
+**Rule:** before trusting a rc-0 run of a documentation-extracted script, confirm the region actually did its unit of work (a commit landed, a file changed, an output line printed) — an exit-0 early return on empty inputs is indistinguishable from success. When assembling multi-fence scripts, concatenate every fence the executable references, and prefer a run that ends in a verifiable effect witness over one that ends in quiet inaction.
+
+**Why:** a closeout ran a repo-sync script extracted from the owning skill's largest fence alone; its candidate list was defined in a different fence, so the script expanded empty inputs, hit its legitimate empty-case early return, and exited 0 with no output. Two invocations "succeeded" while the shadow branch drifted a week behind — archived plans, review records, and completed items existed only on the live disk, not the safety-net branch. Re-running with both fences assembled landed a 142-file catch-up commit.
+
+**Shape:** the giveaway is a tool whose success and no-op share one exit code and zero output; the two-read probe is `git log -1 <branch>` (or the work unit's equivalent) against the expected effect, plus a grep that the consumed identifiers are defined inside the executed region.
+
+**See also:** #186 (a validation signal that cannot discriminate success from no-op is a false green; require the witness per surface, not an any-match exit code).
+
+## 465. Route Blocked Searches Through User-Assisted Result-Page Capture
+
+**Principle:** Family H (Verify the real thing, not the abstraction)
+
+**Trigger:** a research task whose search layer is dead (provider quota exhausted, bot captchas, geo-blocks) while the target corpus's document pages themselves remain directly fetchable.
+
+**Rule:** test document-page fetchability separately from search-page fetchability before declaring the source unusable; if documents fetch, convert the user's browser into the search layer: have them save result pages into an intake folder and parse them locally. Calibrate the query format against actual document text first (one saved probe page beats N guessed queries) - identifiers inside documents follow the documents' own conventions (initials, not full names), and a bare surname matches court clerks and namesakes as readily as the target person.
+
+**Why:** a candidate-vetting run lost its search layer to a quota reset and captchas, but the decision pages of the target court database still fetched; saved result pages from the user's browser unlocked the full pipeline (name extraction, repeat counts, registry checks) that the blocked search layer could not reach. A full-name query family returned zero results everywhere because decision texts abbreviate names to initials; a bare-surname probe looked productive while matching only a same-surname court clerk.
+
+**Shape:** the probe is two fetches - one search page, one document page - plus one grep for the target identifier inside the fetched document; treat a hit-less search as a query-format failure before treating it as absence of evidence.
+
+**See also:** #464 (an exit-0 no-op masquerades as success; same discipline: verify the fetched artifact actually contains the unit of work).

@@ -46,14 +46,21 @@ it).
 
 Stdlib only; no network.
 
-Exit codes: 0 when every dirty/deleted path is accounted for; 1 for the two
-baseline violation classes above; exit 2 (usage errors via argparse; bad
-base ref, non-repo, and git failures additionally print
-``cleanup-scope: internal error``). ``--selftest`` builds eleven fixture
-repos in a temp dir and asserts every arm's positive and negative checker
-outcomes across eleven fixture repos, including negative arms that pin
-byte-exact allow-list matching (each fixture repo sets a local
-git identity so identity-less machines stay green).
+Outcome contract (scripts/OUTCOME_CONTRACT.md): every non-metadata run ends
+with exactly one final ``OUTCOME:`` line on stdout (``--help`` and the
+``--selftest`` diagnostic run are metadata modes and emit none). Exit codes
+follow the four-outcome vocabulary: 0 when every dirty/deleted path is
+accounted for (``OUTCOME: pass``); 1 for the two baseline violation classes
+above, whose lines stay on stderr (``OUTCOME: fail``); 2 indeterminate, a
+git plumbing failure over already-resolved inputs, reported with the
+observed/could-not-determine evidence on stderr (``OUTCOME: indeterminate``);
+3 tool error: usage (argparse overridden), an unresolvable base ref, or a
+non-repo root (``OUTCOME: tool_error``; the legacy ``cleanup-scope:
+internal error`` prefix is retired into these split arms). ``--selftest``
+builds twelve fixture repos in a temp dir and asserts every arm's positive
+and negative checker outcomes across twelve fixture repos, including
+negative arms that pin byte-exact allow-list matching (each fixture repo
+sets a local git identity so identity-less machines stay green).
 """
 
 from __future__ import annotations
@@ -66,7 +73,20 @@ from pathlib import Path
 
 ERR_DIRTY = "cleanup-scope: unaccounted dirty path"
 ERR_DELETION = "cleanup-scope: unauthorized deletion"
-ERR_INTERNAL = "cleanup-scope: internal error"
+OUTCOME_LABELS = ("pass", "fail", "indeterminate", "tool_error")
+
+
+class OutcomeArgumentParser(argparse.ArgumentParser):
+    """argparse override per the outcome contract's usage rule: a usage
+    violation is a tool error, so ``error()`` prints the usage message plus
+    a final ``OUTCOME: tool_error`` row on stderr and exits 3; ``--help``
+    stays a metadata exit (usage text only, no OUTCOME row)."""
+
+    def error(self, message: str):  # type: ignore[override]
+        self.print_usage(sys.stderr)
+        print(f"{self.prog}: error: {message}", file=sys.stderr)
+        print("OUTCOME: tool_error", file=sys.stderr)
+        raise SystemExit(3)
 
 
 def _git(repo_root: Path, *args: str) -> str:
@@ -184,6 +204,21 @@ def _run_checker(repo: Path, base: str, allow: list[str]) -> tuple[int, str, str
 
 def run_selftest() -> int:
     failures: list[str] = []
+    outcome_labels = ("pass", "fail", "indeterminate", "tool_error")
+
+    def final_outcome(out: str) -> str:
+        """The single final ``OUTCOME:`` label on a checker run's stdout, or
+        the empty string when the shape is wrong (missing, duplicated, not
+        the last non-empty row, or outside the four-outcome vocabulary)."""
+        rows = [row for row in out.splitlines() if row.strip()]
+        outcome_rows = [row for row in rows if row.startswith("OUTCOME: ")]
+        if len(outcome_rows) != 1 or not rows or not rows[-1].startswith(
+            "OUTCOME: "
+        ):
+            return ""
+        label = rows[-1][len("OUTCOME: "):].strip()
+        return label if label in outcome_labels else ""
+
     with tempfile.TemporaryDirectory(prefix="cleanup-scope-selftest-") as tmp:
         root = Path(tmp)
 
@@ -200,10 +235,15 @@ def run_selftest() -> int:
 
         # Arm 1: unaccounted_dirty_fails
         repo = make_dirty_tree("unaccounted-dirty")
-        code, _, err = _run_checker(repo, "HEAD", ["owned.txt"])
+        code, out, err = _run_checker(repo, "HEAD", ["owned.txt"])
         if code != 1:
             failures.append(
                 f"unaccounted_dirty_fails: want exit 1, got {code}; stderr={err!r}"
+            )
+        if final_outcome(out) != "fail":
+            failures.append(
+                f"unaccounted_dirty_fails: stdout must end with exactly one final "
+                f"OUTCOME: fail row, got {out!r}"
             )
         for span, path in [
             (ERR_DIRTY, "tracked-extra.txt"),
@@ -223,12 +263,17 @@ def run_selftest() -> int:
 
         # Arm 2: allowed_dirty_passes (same tree, both paths allow-listed)
         repo = make_dirty_tree("allowed-dirty")
-        code, _, err = _run_checker(
+        code, out, err = _run_checker(
             repo, "HEAD", ["owned.txt", "tracked-extra.txt", "untracked-extra.txt"]
         )
         if code != 0:
             failures.append(
                 f"allowed_dirty_passes: want exit 0, got {code}; stderr={err!r}"
+            )
+        if final_outcome(out) != "pass":
+            failures.append(
+                f"allowed_dirty_passes: stdout must end with exactly one final "
+                f"OUTCOME: pass row, got {out!r}"
             )
 
         # Arm 3: unauthorized_deletion_fails (base file deleted, not allowed;
@@ -238,10 +283,15 @@ def run_selftest() -> int:
         repo = _make_fixture_repo(root, "unauthorized-deletion")
         (repo / "base.txt").unlink()
         (repo / "untracked-extra.txt").write_text("untracked\n")
-        code, _, err = _run_checker(repo, "HEAD", ["owned.txt"])
+        code, out, err = _run_checker(repo, "HEAD", ["owned.txt"])
         if code != 1:
             failures.append(
                 f"unauthorized_deletion_fails: want exit 1, got {code}; stderr={err!r}"
+            )
+        if final_outcome(out) != "fail":
+            failures.append(
+                f"unauthorized_deletion_fails: stdout must end with exactly one final "
+                f"OUTCOME: fail row, got {out!r}"
             )
         expected_lines = sorted(
             [f"{ERR_DIRTY} untracked-extra.txt", f"{ERR_DELETION} base.txt"]
@@ -259,10 +309,15 @@ def run_selftest() -> int:
         # Arm 4: clean_tree_passes (only the allow-listed task-owned file is dirty)
         repo = _make_fixture_repo(root, "clean-tree")
         (repo / "owned.txt").write_text("task-owned v2\n")
-        code, _, err = _run_checker(repo, "HEAD", ["owned.txt"])
+        code, out, err = _run_checker(repo, "HEAD", ["owned.txt"])
         if code != 0:
             failures.append(
                 f"clean_tree_passes: want exit 0, got {code}; stderr={err!r}"
+            )
+        if final_outcome(out) != "pass":
+            failures.append(
+                f"clean_tree_passes: stdout must end with exactly one final "
+                f"OUTCOME: pass row, got {out!r}"
             )
 
         # Arm 5: staged_modification_fails (staged but uncommitted change,
@@ -270,10 +325,15 @@ def run_selftest() -> int:
         repo = _make_fixture_repo(root, "staged-modification")
         (repo / "owned.txt").write_text("task-owned staged\n")
         _git(repo, "add", "owned.txt")
-        code, _, err = _run_checker(repo, "HEAD", ["other.txt"])
+        code, out, err = _run_checker(repo, "HEAD", ["other.txt"])
         if code != 1:
             failures.append(
                 f"staged_modification_fails: want exit 1, got {code}; stderr={err!r}"
+            )
+        if final_outcome(out) != "fail":
+            failures.append(
+                f"staged_modification_fails: stdout must end with exactly one final "
+                f"OUTCOME: fail row, got {out!r}"
             )
         if f"{ERR_DIRTY} owned.txt" not in err:
             failures.append(
@@ -283,10 +343,15 @@ def run_selftest() -> int:
         # Arm 6: allowed_deletion_passes (ledger authorizes the deletion)
         repo = _make_fixture_repo(root, "allowed-deletion")
         (repo / "base.txt").unlink()
-        code, _, err = _run_checker(repo, "HEAD", ["owned.txt", "base.txt"])
+        code, out, err = _run_checker(repo, "HEAD", ["owned.txt", "base.txt"])
         if code != 0:
             failures.append(
                 f"allowed_deletion_passes: want exit 0, got {code}; stderr={err!r}"
+            )
+        if final_outcome(out) != "pass":
+            failures.append(
+                f"allowed_deletion_passes: stdout must end with exactly one final "
+                f"OUTCOME: pass row, got {out!r}"
             )
 
         # Arm 7: untracked_dir_file_allows (untracked file inside a wholly
@@ -295,7 +360,7 @@ def run_selftest() -> int:
         nested = repo / "nested" / "deep"
         nested.mkdir(parents=True)
         (nested / "scratch-notes.md").write_text("peer session scratch\n")
-        code, _, err = _run_checker(
+        code, out, err = _run_checker(
             repo, "HEAD", ["owned.txt", "nested/deep/scratch-notes.md"]
         )
         if code != 0:
@@ -307,10 +372,15 @@ def run_selftest() -> int:
         # matching is byte-exact with no directory-prefix semantics, so the
         # run fails exit 1 with the full nested filename verbatim on stderr.
         # Pins against a regression to prefix matching.
-        code, _, err = _run_checker(repo, "HEAD", ["nested/"])
+        code, out, err = _run_checker(repo, "HEAD", ["nested/"])
         if code != 1:
             failures.append(
                 f"untracked_dir_prefix_not_allowed: want exit 1, got {code}; stderr={err!r}"
+            )
+        if final_outcome(out) != "fail":
+            failures.append(
+                f"untracked_dir_prefix_not_allowed: stdout must end with exactly "
+                f"one final OUTCOME: fail row, got {out!r}"
             )
         if f"{ERR_DIRTY} nested/deep/scratch-notes.md" not in err:
             failures.append(
@@ -322,13 +392,18 @@ def run_selftest() -> int:
         # with no ``./`` normalization, so the run fails exit 1 with the
         # path named as unaccounted dirty. Pins the no-``./``-normalization
         # claim in the module docstring.
-        code, _, err = _run_checker(
+        code, out, err = _run_checker(
             repo, "HEAD", ["./nested/deep/scratch-notes.md"]
         )
         if code != 1:
             failures.append(
                 f"untracked_dir_dot_prefix_not_normalized: want exit 1, "
                 f"got {code}; stderr={err!r}"
+            )
+        if final_outcome(out) != "fail":
+            failures.append(
+                f"untracked_dir_dot_prefix_not_normalized: stdout must end with "
+                f"exactly one final OUTCOME: fail row, got {out!r}"
             )
         if f"{ERR_DIRTY} nested/deep/scratch-notes.md" not in err:
             failures.append(
@@ -341,17 +416,27 @@ def run_selftest() -> int:
         repo = _make_fixture_repo(root, "unicode-dirty")
         unicode_name = "notes-café-ünïcode.md"
         (repo / unicode_name).write_text("unicode scratch\n")
-        code, _, err = _run_checker(repo, "HEAD", ["owned.txt", unicode_name])
+        code, out, err = _run_checker(repo, "HEAD", ["owned.txt", unicode_name])
         if code != 0:
             failures.append(
                 f"unicode_dirty_allow_passes: want exit 0, got {code}; stderr={err!r}"
             )
+        if final_outcome(out) != "pass":
+            failures.append(
+                f"unicode_dirty_allow_passes: stdout must end with exactly one final "
+                f"OUTCOME: pass row, got {out!r}"
+            )
         # Fail side: same fixture with the unicode path NOT allow-listed; the
         # error line must carry the real name verbatim (no C-quoting).
-        code, _, err = _run_checker(repo, "HEAD", ["owned.txt"])
+        code, out, err = _run_checker(repo, "HEAD", ["owned.txt"])
         if code != 1:
             failures.append(
                 f"unicode_dirty_allow_fails: want exit 1, got {code}; stderr={err!r}"
+            )
+        if final_outcome(out) != "fail":
+            failures.append(
+                f"unicode_dirty_allow_fails: stdout must end with exactly one final "
+                f"OUTCOME: fail row, got {out!r}"
             )
         if f"{ERR_DIRTY} {unicode_name}" not in err:
             failures.append(
@@ -366,10 +451,15 @@ def run_selftest() -> int:
         _git(repo, "add", "a.txt")
         _git(repo, "commit", "-q", "-m", "add a.txt")
         _git(repo, "mv", "a.txt", "z.txt")
-        code, _, err = _run_checker(repo, "HEAD", ["owned.txt", "z.txt"])
+        code, out, err = _run_checker(repo, "HEAD", ["owned.txt", "z.txt"])
         if code != 1:
             failures.append(
                 f"rename_deletion_source_requires_allow: want exit 1, got {code}; stderr={err!r}"
+            )
+        if final_outcome(out) != "fail":
+            failures.append(
+                f"rename_deletion_source_requires_allow: stdout must end with exactly one final "
+                f"OUTCOME: fail row, got {out!r}"
             )
         if f"{ERR_DELETION} a.txt" not in err:
             failures.append(
@@ -380,20 +470,35 @@ def run_selftest() -> int:
                 f"rename_deletion_source_requires_allow: rename source misclassified as dirty: {err!r}"
             )
 
-        # Arm 10: internal_error_exit_2 (nonexistent base ref; exit 2 with
-        # the internal-error class on stderr)
+        # Arm 10: unresolvable_inputs_tool_error (renewed from the legacy
+        # internal-error exit-2 shape per the answer-vocabulary criterion: an
+        # input that never resolved is a tool error, exit 3). Three legs:
+        # (a) a nonexistent base ref, (b) a missing --base operand (usage,
+        # argparse override), (c) a --repo-root outside any repository. Each
+        # leg pins exit 3 with exactly one final `OUTCOME: tool_error` row on
+        # stdout and the retired ``cleanup-scope: internal error`` prefix
+        # absent from stderr.
         repo = _make_fixture_repo(root, "internal-error")
-        code, _, err = _run_checker(repo, "refs/heads/nonexistent", ["owned.txt"])
-        if code != 2:
+        code, out, err = _run_checker(repo, "refs/heads/nonexistent", ["owned.txt"])
+        if code != 3:
             failures.append(
-                f"internal_error_exit_2: want exit 2, got {code}; stderr={err!r}"
+                f"unresolvable_inputs_tool_error: nonexistent base ref: want "
+                f"exit 3, got {code}; stderr={err!r}"
             )
-        if ERR_INTERNAL not in err:
+        if final_outcome(out) != "tool_error":
             failures.append(
-                f"internal_error_exit_2: stderr missing internal error line: {err!r}"
+                f"unresolvable_inputs_tool_error: nonexistent base ref: stdout "
+                f"must end with exactly one final OUTCOME: tool_error row, "
+                f"got {out!r}"
+            )
+        if "cleanup-scope: internal error" in err:
+            failures.append(
+                f"unresolvable_inputs_tool_error: nonexistent base ref: "
+                f"retired internal-error prefix still on stderr: {err!r}"
             )
         # T4(a): without --selftest and without --base, argparse must refuse
-        # with exit 2 in a fixture repo (usage error, same exit class).
+        # with exit 3 (the usage override; a usage violation is a tool error,
+        # never the legacy argparse exit 2).
         proc = subprocess.run(
             [
                 sys.executable,
@@ -404,13 +509,18 @@ def run_selftest() -> int:
             capture_output=True,
             text=True,
         )
-        if proc.returncode != 2:
+        if proc.returncode != 3:
             failures.append(
-                f"internal_error_exit_2: missing --base: want exit 2, "
+                f"unresolvable_inputs_tool_error: missing --base: want exit 3, "
                 f"got {proc.returncode}; stderr={proc.stderr!r}"
             )
-        # T4(b): --repo-root at an empty non-repo temp dir -> exit 2 with the
-        # internal-error class on stderr.
+        if "OUTCOME: tool_error" not in proc.stderr:
+            failures.append(
+                f"unresolvable_inputs_tool_error: missing --base: stderr "
+                f"missing OUTCOME: tool_error row: {proc.stderr!r}"
+            )
+        # T4(b): --repo-root at an empty non-repo temp dir -> exit 3 (tool
+        # error) with the retired internal-error prefix absent.
         non_repo = root / "non-repo"
         non_repo.mkdir()
         proc = subprocess.run(
@@ -425,15 +535,21 @@ def run_selftest() -> int:
             capture_output=True,
             text=True,
         )
-        if proc.returncode != 2:
+        if proc.returncode != 3:
             failures.append(
-                f"internal_error_exit_2: non-repo root: want exit 2, "
+                f"unresolvable_inputs_tool_error: non-repo root: want exit 3, "
                 f"got {proc.returncode}; stderr={proc.stderr!r}"
             )
-        if ERR_INTERNAL not in proc.stderr:
+        if final_outcome(proc.stdout) != "tool_error":
             failures.append(
-                f"internal_error_exit_2: non-repo root: stderr missing "
-                f"internal error line: {proc.stderr!r}"
+                f"unresolvable_inputs_tool_error: non-repo root: stdout must "
+                f"end with exactly one final OUTCOME: tool_error row, "
+                f"got {proc.stdout!r}"
+            )
+        if "cleanup-scope: internal error" in proc.stderr:
+            failures.append(
+                f"unresolvable_inputs_tool_error: non-repo root: retired "
+                f"internal-error prefix still on stderr: {proc.stderr!r}"
             )
 
         # Arm 11: gitignored_dirty_invisible (documents the known limitation
@@ -444,55 +560,136 @@ def run_selftest() -> int:
         _git(repo, "add", ".gitignore")
         _git(repo, "commit", "-q", "-m", "add gitignore")
         (repo / "ignored-dirty.txt").write_text("ignored dirty content\n")
-        code, _, err = _run_checker(repo, "HEAD", ["owned.txt"])
+        code, out, err = _run_checker(repo, "HEAD", ["owned.txt"])
         if code != 0:
             failures.append(
                 f"gitignored_dirty_invisible: want exit 0, got {code}; stderr={err!r}"
+            )
+        if final_outcome(out) != "pass":
+            failures.append(
+                f"gitignored_dirty_invisible: stdout must end with exactly one final "
+                f"OUTCOME: pass row, got {out!r}"
             )
         if "ignored-dirty.txt" in err:
             failures.append(
                 f"gitignored_dirty_invisible: ignored path leaked to stderr: {err!r}"
             )
 
+        # Arm 12: plumbing_failure_indeterminate (a corrupted loose tree
+        # object makes the checker's git plumbing fail over already-resolved
+        # inputs: the base ref resolves and the root is a repository, so the
+        # answer-vocabulary criterion places the failure at indeterminate,
+        # exit 2, naming what could not be determined; the legacy shape
+        # lumped this with usage and unresolvable inputs at the internal-
+        # error exit 2).
+        repo = _make_fixture_repo(root, "plumbing-failure")
+        tree_sha = _git(repo, "rev-parse", "HEAD^{tree}").strip()
+        tree_obj = repo / ".git" / "objects" / tree_sha[:2] / tree_sha[2:]
+        tree_obj.chmod(0o644)  # git writes loose objects read-only
+        tree_obj.write_bytes(b"corrupted loose object")
+        code, out, err = _run_checker(repo, "HEAD", ["owned.txt"])
+        if code != 2:
+            failures.append(
+                f"plumbing_failure_indeterminate: want exit 2, got {code}; "
+                f"stderr={err!r}"
+            )
+        if final_outcome(out) != "indeterminate":
+            failures.append(
+                f"plumbing_failure_indeterminate: stdout must end with exactly "
+                f"one final OUTCOME: indeterminate row, got {out!r}"
+            )
+        if "could not determine" not in err:
+            failures.append(
+                f"plumbing_failure_indeterminate: stderr missing the "
+                f"could-not-determine evidence: {err!r}"
+            )
+
     if failures:
         for failure in failures:
             print(f"SELFTEST FAILED: {failure}", file=sys.stderr)
         return 1
-    print("SELFTEST OK: 11/11 arms passed")
+    print("SELFTEST OK: 12/12 arms passed")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = OutcomeArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo-root", default=".", help="repository root (default: .)")
     parser.add_argument("--base", help="base ref for the deletion diff")
     parser.add_argument("--allow", action="append", default=[], help=(
         "repo-root-relative allow-listed path (repeatable)"
     ))
     parser.add_argument("--selftest", action="store_true", help=(
-        "run the built-in eleven-arm selftest"
+        "run the built-in twelve-arm selftest"
     ))
     args = parser.parse_args(argv)
 
     # --base is required for classification but not for --selftest, which
-    # must run standalone; parser.error is the argparse-native guard (usage
-    # message, exit 2, same channel as the ERR_INTERNAL usage class).
+    # must run standalone; the override parser turns the refusal into a tool
+    # error (usage row plus final `OUTCOME: tool_error` on stderr, exit 3).
     if not args.selftest and not args.base:
         parser.error("--base is required unless --selftest is given")
 
     if args.selftest:
         return run_selftest()
 
+    repo_root = Path(args.repo_root).resolve()
+
+    # Resolution arms: an input that never resolved is a tool error (the
+    # answer-vocabulary criterion), never indeterminacy about a verdict.
+    probe = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "--git-dir"],
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode != 0:
+        print(
+            f"cleanup-scope: tool error: {repo_root} is not inside a git "
+            f"repository",
+            file=sys.stderr,
+        )
+        print("OUTCOME: tool_error")
+        return 3
+    verify = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            f"{args.base}^{{commit}}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if verify.returncode != 0:
+        print(
+            f"cleanup-scope: tool error: base ref {args.base!r} does not "
+            f"resolve to a commit in {repo_root}",
+            file=sys.stderr,
+        )
+        print("OUTCOME: tool_error")
+        return 3
+
     try:
-        errors = check(Path(args.repo_root).resolve(), args.base, args.allow)
-    except Exception as exc:  # bad base ref, non-repo, git failure
-        print(f"{ERR_INTERNAL}: {exc}", file=sys.stderr)
+        errors = check(repo_root, args.base, args.allow)
+    except Exception as exc:  # git plumbing failure over resolved inputs
+        print(f"cleanup-scope: observed: {exc}", file=sys.stderr)
+        print(
+            "cleanup-scope: could not determine the dirty/deleted path "
+            "classification",
+            file=sys.stderr,
+        )
+        print("OUTCOME: indeterminate")
         return 2
     for error in errors:
         print(error, file=sys.stderr)
     if errors:
+        print("OUTCOME: fail")
         return 1
     print("cleanup-scope: baseline OK")
+    print("OUTCOME: pass")
     return 0
 
 

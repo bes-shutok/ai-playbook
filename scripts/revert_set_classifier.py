@@ -10,19 +10,63 @@ reachable from HEAD). A dirty state equal to an ancestor vintage is reversal
 damage; anything else is foreign. Read-only by contract: it classifies and
 prints, and never stages, restores, or writes.
 
-Exit codes: 0 when no path classified reversal, 1 when any path did (the
-summary line distinguishes pure from partial), 2 tool failure with a
-``revert-set-classifier tool failure:`` stderr prefix.
+Exit codes (scripts/OUTCOME_CONTRACT.md, the answer-vocabulary criterion):
+0 pass when no path classified reversal, 1 fail when any path did (the
+summary line distinguishes pure from partial), 2 indeterminate when a git
+plumbing call answered outside its 0/1 vocabulary over already-resolved
+inputs, 3 tool error when an input never resolved (a bad ``--repo``, an
+unresolvable ``--head`` ref) or the invocation violates usage (argparse
+overridden to exit 3). Every non-metadata run ends with exactly one final
+``OUTCOME:`` line on stdout after the row evidence; ``--help`` is a
+metadata exit with no ``OUTCOME:`` line. The legacy
+``revert-set-classifier tool failure:`` stderr prefix retires with the
+vocabulary migration.
 """
 
 import argparse
 import subprocess
 import sys
 
+# Outcome contract (scripts/OUTCOME_CONTRACT.md): the four outcomes and the
+# argparse override. A usage violation exits 3 with a final `OUTCOME:
+# tool_error` line on stderr before exit (the usage text and the error
+# message share that stream); every other run's final line is on stdout
+# after the row evidence.
+OUTCOME_LABELS = {0: "pass", 1: "fail", 2: "indeterminate", 3: "tool_error"}
 
-def tool_failure(message):
-    sys.stderr.write("revert-set-classifier tool failure: %s\n" % message)
+
+class OutcomeArgumentParser(argparse.ArgumentParser):
+    """Argument parser whose usage errors exit 3 (tool error) with a final
+    `OUTCOME: tool_error` line on stderr before exit, overriding argparse's
+    default exit 2; `--help` stays a metadata exit without an `OUTCOME:`
+    line."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        sys.stderr.write("%s: error: %s\n" % (self.prog, message))
+        sys.stderr.write("OUTCOME: %s\n" % OUTCOME_LABELS[3])
+        raise SystemExit(3)
+
+
+def emit_outcome(code):
+    print("OUTCOME: %s" % OUTCOME_LABELS[code])
+
+
+def indeterminate(message):
+    """A git plumbing failure over already-resolved inputs: the call
+    answered outside its 0/1 vocabulary, so what happened to the tree
+    cannot be determined (exit 2, never a reversal finding)."""
+    sys.stderr.write("revert-set-classifier: %s\n" % message)
+    emit_outcome(2)
     return 2
+
+
+def tool_error(message):
+    """An input that never resolved (repo, ref): the classifier cannot
+    even address the question (exit 3, tool error)."""
+    sys.stderr.write("revert-set-classifier: %s\n" % message)
+    emit_outcome(3)
+    return 3
 
 
 def git(repo, *args, check=True):
@@ -159,7 +203,7 @@ def vintage_match(repo, path, blob):
 def classify(repo, head, restrict=None):
     parsed = parse_porcelain(repo)
     if parsed is None:
-        return tool_failure("status porcelain unresolvable")
+        return indeterminate("status porcelain unresolvable")
     paths, untracked = parsed
     dirty = set(paths)
     if restrict:
@@ -174,7 +218,7 @@ def classify(repo, head, restrict=None):
         if path not in dirty:
             h = head_state(repo, path)
             if h is None:
-                return tool_failure("ls-tree failed for %s" % path)
+                return indeterminate("ls-tree failed for %s" % path)
             if h[0] is False:
                 # A restricted named path absent from both HEAD and disk:
                 # the queried deletion matches no reachable addition.
@@ -186,10 +230,10 @@ def classify(repo, head, restrict=None):
             continue
         h = head_state(repo, path)
         if h is None:
-            return tool_failure("ls-tree failed for %s" % path)
+            return indeterminate("ls-tree failed for %s" % path)
         e = effective_state(repo, path)
         if e is None:
-            return tool_failure("effective state failed for %s" % path)
+            return indeterminate("effective state failed for %s" % path)
         present, blob, _ = e
         if present == h[0] and blob == h[1]:
             rows.append("clean: %s" % path)
@@ -197,7 +241,7 @@ def classify(repo, head, restrict=None):
         if not present:
             add = addition_commit(repo, path)
             if add is None:
-                return tool_failure("addition lookup failed for %s" % path)
+                return indeterminate("addition lookup failed for %s" % path)
             if add:
                 rows.append("reversal: %s deletion reverts the addition at %s"
                             % (path, add))
@@ -215,14 +259,14 @@ def classify(repo, head, restrict=None):
                 continue
             v = vintage_match(repo, path, blob)
             if v is None:
-                return tool_failure("vintage walk failed for %s" % path)
+                return indeterminate("vintage walk failed for %s" % path)
             rows.append("foreign: %s dirty state matches no ancestor vintage"
                         % path)
             foreign += 1
             continue
         v = vintage_match(repo, path, blob)
         if v is None:
-            return tool_failure("vintage walk failed for %s" % path)
+            return indeterminate("vintage walk failed for %s" % path)
         if v:
             rows.append("reversal: %s dirty state equals ancestor %s vintage "
                         "(HEAD: %s)" % (path, v, head))
@@ -246,7 +290,7 @@ def classify(repo, head, restrict=None):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(prog="revert_set_classifier.py")
+    parser = OutcomeArgumentParser(prog="revert_set_classifier.py")
     sub = parser.add_subparsers(dest="command")
     cl = sub.add_parser("classify")
     cl.add_argument("--repo", required=True)
@@ -257,8 +301,14 @@ def main(argv):
         parser.error("the classify sub-command is the only one")
     head = resolve_head(args.repo, args.head)
     if head is None:
-        return tool_failure("head unresolvable: %s" % args.head)
-    return classify(args.repo, head, set(args.path) or None)
+        return tool_error("head unresolvable: %s" % args.head)
+    rc = classify(args.repo, head, set(args.path) or None)
+    if rc in (0, 1):
+        # The verdict arms: the final OUTCOME line follows the row evidence
+        # on stdout; the indeterminate and tool-error arms emit their own
+        # line at their raise site.
+        emit_outcome(rc)
+    return rc
 
 
 if __name__ == "__main__":

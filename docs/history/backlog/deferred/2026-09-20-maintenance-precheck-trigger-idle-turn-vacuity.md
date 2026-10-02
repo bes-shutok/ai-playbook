@@ -1,7 +1,7 @@
 # Backlog: Step 5 precheck precondition is phrased via the clocked-only quota leg, so it never literally triggers on idle-only turns
 
-Status: open
-Priority: deferred (formal-hardening triage 2026-09-21, user directive: on this personal/pet repo formal fixes are not a priority — no witnessed failure; gates, naming/wording pins, vacuity audits and hypothetical-input hardening auditing other gates defer by default. Revive only on a witnessed scanner/gate mis-fire or a project-priority-profile change. Per-project profiles: see 2026-09-21-project-priority-profiles backlog.)
+Status: closed (2026-10-01 triage, operator adjudication "follow row contracts"; completed by other work, completion receipt below)
+Priority: deferred (formal-hardening triage 2026-09-21, user directive: on this personal/pet repo formal fixes are not a priority: no witnessed failure; gates, naming/wording pins, vacuity audits and hypothetical-input hardening auditing other gates defer by default. Revive only on a witnessed scanner/gate mis-fire or a project-priority-profile change. Per-project profiles: see 2026-09-21-project-priority-profiles backlog.)
 Workflow: backlog
 Class: contract-phrasing precision (wording-only; the overlay's lane-scoped precheck already covers the idle lane)
 Discovered: 2026-09-20, review r1 of `docs/plans/2026-09-19-scheduler-ops-contract-fix.md` (five-lens panel, contract lens, deferred as Low)
@@ -21,3 +21,7 @@ Rephrase the anchor to be dispatch-class-neutral, for example: "Ladder precheck:
 ## Trigger
 
 Next edit of the SKILL.md Step 5 precondition sentence (any maintenance plan touching Step 5, or the next review that re-prices Step 5 wording), folded together with the pins-suite update the rewording requires (see the companion pin-vacuity backlog item).
+
+## Completion receipt (2026-10-01)
+
+The prescribed dispatch-class-neutral anchor landed: agents/skills/maintenance/SKILL.md line 161 reads "Ladder precheck: after the quota leg (for a clocked dispatch) or the dispatch decision (for an idle-time dispatch), and before any ladder step, run the runtime overlay's ladder precheck for the lane", matching this item's fix shape verbatim; it landed with the P64 execution-lane liveness plan (Revisions ledger entry 2026-09-26, commit 21693b5f). The precondition is no longer vacuous on idle-only turns.

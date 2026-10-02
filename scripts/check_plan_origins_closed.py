@@ -31,6 +31,14 @@ machine-specific absolute path is hardcoded. Origins are the backtick
 quoted backlog paths inside the origins paragraph (the header line
 through its first blank line); a plan may also open its scope with a single `Backlog origin:` line, which this gate parses the same way. Review, guideline, and script paths quoted
 in the same paragraph are ignored. Stdlib only; no network.
+
+Exit codes (outcome contract): 0 pass, 1 fail (modeled stragglers or
+coverage conflicts), 2 indeterminate (an origin unreadable at
+classification time, or unreadable evidence observed during the corpus
+scan), 3 tool error (an unreadable plan file or plans directory, or a
+usage error). Every non-metadata run ends with exactly one final
+`OUTCOME:` line after the human-readable evidence; `--help` and usage
+metadata exits emit no `OUTCOME:` line.
 """
 
 from __future__ import annotations
@@ -48,6 +56,21 @@ try:
     import facts_paths
 except ImportError:  # pragma: no cover
     facts_paths = None  # type: ignore
+
+OUTCOME_LABELS = {0: "pass", 1: "fail", 2: "indeterminate", 3: "tool_error"}
+
+
+class OutcomeArgumentParser(argparse.ArgumentParser):
+    """Argument parser whose usage errors exit 3 (tool error) with a final
+    `OUTCOME: tool_error` line on stdout, overriding argparse's default
+    exit 2; `--help` stays a metadata exit without an `OUTCOME:` line."""
+
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        sys.stderr.write(f"{self.prog}: error: {message}\n")
+        print(f"OUTCOME: {OUTCOME_LABELS[3]}")
+        raise SystemExit(3)
+
 
 DEFAULT_BACKLOG_DIR = "docs/history/backlog"
 DEFAULT_COMPLETED_DIR = "docs/history/backlog/completed"
@@ -419,7 +442,10 @@ def classify_origin(
     archive: an explicit decision against the work, closed like any
     other disposition),
     ``closed`` (top-level item header carries Status: closed/done),
-    ``open`` (top-level item without a closure declaration), and
+    ``open`` (top-level item without a closure declaration),
+    ``unreadable`` (top-level item exists but cannot be read at
+    classification time: evidence is insufficient, so the consuming run
+    reports indeterminate and names the origin), and
     ``missing`` (neither archived nor present at the top level; something
     other than the documented dispositions happened to it, so it fails
     closed like an open straggler)."""
@@ -445,7 +471,7 @@ def classify_origin(
                 encoding="utf-8", errors="replace"
             ).splitlines()[:STATUS_HEADER_LINES]
         except OSError as exc:
-            return "open", f"unreadable at the backlog top level: {exc}"
+            return "unreadable", f"unreadable at the backlog top level: {exc}"
         for line in lines:
             match = STATUS_LINE_RE.match(line)
             if match:
@@ -488,12 +514,14 @@ def run_plan_mode(
     warn_only: bool,
 ) -> int:
     """Archive gate: only THIS plan's origins can block, and only without
-    ``--warn``. No origins block passes trivially."""
+    ``--warn``. No origins block passes trivially. An origin unreadable at
+    classification time makes the run indeterminate (exit 2) naming the
+    origin, dominant over any stragglers, which are still named."""
     try:
         text = plan_path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         print(f"error: cannot read plan {plan_path}: {exc}", file=sys.stderr)
-        return 2
+        return 3
     basenames = extract_origin_basenames(text, backlog_dir, completed_dir)
     if not basenames:
         print("check_plan_origins_closed: no origins block; nothing to verify")
@@ -510,8 +538,12 @@ def run_plan_mode(
             f"check the origins block for a parser undercount"
         )
     stragglers: list[tuple[str, str]] = []
+    unreadable: list[tuple[str, str]] = []
     for name in basenames:
         state, detail = classify_origin(name, backlog_dir, completed_dir)
+        if state == "unreadable":
+            unreadable.append((name, detail))
+            continue
         if state in PASS_STATES:
             continue
         if state == "missing" and _disposition_consult(text, name):
@@ -540,7 +572,7 @@ def run_plan_mode(
                 stragglers.append((name, COVERED_FOLD_REMEDY))
             continue
         stragglers.append((name, detail))
-    if not stragglers:
+    if not stragglers and not unreadable:
         print(
             f"check_plan_origins_closed: ok "
             f"({len(basenames)}/{len(basenames)} origins closed)"
@@ -554,6 +586,16 @@ def run_plan_mode(
             )
         else:
             print(f"straggler: {name} ({detail})")
+    for name, detail in unreadable:
+        print(f"indeterminate: origin {name} ({detail})")
+    if unreadable:
+        print(
+            "check_plan_origins_closed: "
+            f"{len(unreadable)} origin(s) unreadable at classification "
+            "time; classification incomplete; re-derive from disk",
+            file=sys.stderr,
+        )
+        return 2
     if warn_only:
         print(
             "check_plan_origins_closed: warn arm: "
@@ -576,11 +618,21 @@ def run_corpus_mode(
     active_plans_dir: Path | None = None,
 ) -> int:
     """Corpus warn arm: scan every archived plan, warn per unresolved
-    origin, always exit 0 (the maintenance survey owns this surface)."""
+    origin, exit 0 (the maintenance survey owns this surface) only for
+    fully-resolved runs; observed unreadable evidence flips the run to
+    indeterminate (exit 2)."""
     if not plans_dir.is_dir():
         _warn(f"plans directory not found: {plans_dir}")
         print("check_plan_origins_closed: corpus scan: no archived plans; exit 0")
         return 0
+    try:
+        os.listdir(plans_dir)
+    except OSError as exc:
+        print(
+            f"error: plans directory unreadable: {plans_dir}: {exc}",
+            file=sys.stderr,
+        )
+        return 3
     plans = sorted(plans_dir.rglob("*.md"))
     registry: Path | None = None
     if repo_root is not None:
@@ -588,14 +640,18 @@ def run_corpus_mode(
             None, repo_root, "doc_registry_rel", DEFAULT_DOC_REGISTRY_REL
         )
     unresolved = 0
+    unreadable_evidence = False
     for plan in plans:
         try:
             text = plan.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             _warn(f"cannot read archived plan {plan.name}: {exc}")
+            unreadable_evidence = True
             continue
         for name in extract_origin_basenames(text, backlog_dir, completed_dir):
             state, detail = classify_origin(name, backlog_dir, completed_dir)
+            if state == "unreadable":
+                unreadable_evidence = True
             if state == "covered":
                 # Covered items classify as covered, never closed; the
                 # corpus warn fires only when the covering plan is no
@@ -633,8 +689,15 @@ def run_corpus_mode(
             unresolved += 1
     print(
         f"check_plan_origins_closed: corpus scan: {len(plans)} archived "
-        f"plan(s), {unresolved} unresolved origin(s) (warn arm; exit 0)"
+        f"plan(s), {unresolved} unresolved origin(s) (warn arm)"
     )
+    if unreadable_evidence:
+        print(
+            "check_plan_origins_closed: corpus scan observed unreadable "
+            "evidence; classification incomplete; re-derive from disk",
+            file=sys.stderr,
+        )
+        return 2
     return 0
 
 
@@ -691,12 +754,12 @@ def run_check_coverage_mode(
     completed_plans_dir: Path,
 ) -> int:
     """Duplicate-origin coverage gate: exit 0 clean, 1 conflict naming the
-    covering plan and the state-specific remedy, 2 tool error."""
+    covering plan and the state-specific remedy, 3 tool error."""
     try:
         text = plan_path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         print(f"error: cannot read plan {plan_path}: {exc}", file=sys.stderr)
-        return 2
+        return 3
     names = extract_coverage_origin_basenames(text, backlog_dir, completed_dir)
     if not names:
         print("check_plan_origins_closed: no origins; coverage gate trivially clean")
@@ -756,12 +819,13 @@ def run_mark_covered_mode(
     """Landing-closeout covered flip: each named open top-level origin's
     header Status becomes ``covered (<repo-relative plan path>)``. Exit 0
     on success/no-op-with-skips, 1 on a different-plan-witness conflict
-    (bytes unchanged), 2 on tool error."""
+    (bytes unchanged), 2 indeterminate when an origin is unreadable at
+    classification time, 3 on tool error."""
     try:
         text = plan_path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         print(f"error: cannot read plan {plan_path}: {exc}", file=sys.stderr)
-        return 2
+        return 3
     names = extract_coverage_origin_basenames(text, backlog_dir, completed_dir)
     if not names:
         print("check_plan_origins_closed: no origins; nothing to mark covered")
@@ -771,8 +835,13 @@ def run_mark_covered_mode(
     except ValueError:
         witness = plan_path.as_posix()
     flipped = 0
+    indeterminate = False
     for name in names:
         state, detail = classify_origin(name, backlog_dir, completed_dir)
+        if state == "unreadable":
+            print(f"indeterminate: origin {name} ({detail})")
+            indeterminate = True
+            continue
         if state == "covered":
             covering = detail[len("covered by "):].strip()
             if covering == witness:
@@ -800,11 +869,19 @@ def run_mark_covered_mode(
         else:
             print(f"skip: {name}: {state} ({detail})")
     print(f"check_plan_origins_closed: marked {flipped} origin(s) covered")
+    if indeterminate:
+        print(
+            "check_plan_origins_closed: origins unreadable at "
+            "classification time; classification incomplete; "
+            "re-derive from disk",
+            file=sys.stderr,
+        )
+        return 2
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
+    parser = OutcomeArgumentParser(
         description=(
             "Verify plan backlog origins left the top level: archive gate "
             "on one plan's own origins, corpus-wide warn arm otherwise"
@@ -882,24 +959,24 @@ def main(argv: list[str] | None = None) -> int:
         if not plan_path.is_file():
             parser.error(f"plan file not found: {plan_path}")
         if args.mark_covered:
-            return run_mark_covered_mode(
+            code = run_mark_covered_mode(
                 plan_path, backlog_dir, completed_dir, repo_root
             )
-        active_plans_dir = resolve_dir(
-            args.active_plans_dir, repo_root, "plans_dir", DEFAULT_ACTIVE_PLANS_DIR
-        )
-        completed_plans_dir = resolve_dir(
-            args.plans_dir, repo_root, "plans_completed_dir", DEFAULT_PLANS_DIR
-        )
-        return run_check_coverage_mode(
-            plan_path,
-            backlog_dir,
-            completed_dir,
-            active_plans_dir,
-            completed_plans_dir,
-        )
-
-    if args.plan:
+        else:
+            active_plans_dir = resolve_dir(
+                args.active_plans_dir, repo_root, "plans_dir", DEFAULT_ACTIVE_PLANS_DIR
+            )
+            completed_plans_dir = resolve_dir(
+                args.plans_dir, repo_root, "plans_completed_dir", DEFAULT_PLANS_DIR
+            )
+            code = run_check_coverage_mode(
+                plan_path,
+                backlog_dir,
+                completed_dir,
+                active_plans_dir,
+                completed_plans_dir,
+            )
+    elif args.plan:
         plan_path = Path(args.plan).expanduser()
         if not plan_path.is_absolute():
             plan_path = repo_root / plan_path
@@ -911,7 +988,7 @@ def main(argv: list[str] | None = None) -> int:
         completed_plans_dir = resolve_dir(
             args.plans_dir, repo_root, "plans_completed_dir", DEFAULT_PLANS_DIR
         )
-        return run_plan_mode(
+        code = run_plan_mode(
             plan_path,
             backlog_dir,
             completed_dir,
@@ -919,16 +996,18 @@ def main(argv: list[str] | None = None) -> int:
             completed_plans_dir,
             args.warn,
         )
-
-    plans_dir = resolve_dir(
-        args.plans_dir, repo_root, "plans_completed_dir", DEFAULT_PLANS_DIR
-    )
-    active_plans_dir = resolve_dir(
-        args.active_plans_dir, repo_root, "plans_dir", DEFAULT_ACTIVE_PLANS_DIR
-    )
-    return run_corpus_mode(
-        plans_dir, backlog_dir, completed_dir, repo_root, active_plans_dir
-    )
+    else:
+        plans_dir = resolve_dir(
+            args.plans_dir, repo_root, "plans_completed_dir", DEFAULT_PLANS_DIR
+        )
+        active_plans_dir = resolve_dir(
+            args.active_plans_dir, repo_root, "plans_dir", DEFAULT_ACTIVE_PLANS_DIR
+        )
+        code = run_corpus_mode(
+            plans_dir, backlog_dir, completed_dir, repo_root, active_plans_dir
+        )
+    print(f"OUTCOME: {OUTCOME_LABELS[code]}")
+    return code
 
 
 if __name__ == "__main__":

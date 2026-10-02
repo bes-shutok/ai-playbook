@@ -303,11 +303,17 @@ def test_no_state_file_skipped_reason(tmp_path):
     assert verdict["skipped"] is True
     assert verdict["bookkeeping"] is None
     assert not missing.exists(), "the check created the state file it did not find"
+    # The skip is a classified verdict: the exit channel still passes and
+    # the run ends with the final OUTCOME line.
+    outcome_lines = [l for l in proc.stdout.splitlines() if l.startswith("OUTCOME:")]
+    assert outcome_lines == ["OUTCOME: pass"]
 
 
 def test_malformed_state_file_fails_loud(tmp_path):
-    """[class: REPOSITORY_TEST] Unparseable JSON: rc 2 and a loud error, never
-    a silent pass."""
+    """[class: REPOSITORY_TEST] Unparseable JSON: tool error (exit 3, the
+    malformed-state arm's contract home) and a loud error, never a silent
+    pass; the verdict JSON stays the parseable payload with the final
+    OUTCOME line following it."""
     root = str(tmp_path)
     state = write_state(tmp_path)
     state.write_text("{ this is not json", encoding="utf-8")
@@ -315,12 +321,73 @@ def test_malformed_state_file_fails_loud(tmp_path):
 
     proc = run_check(root)
 
-    assert proc.returncode == 2
+    assert proc.returncode == 3
     verdict = parse_verdict(proc)
     assert verdict["class"] == "malformed"
     assert proc.stderr.strip(), "malformed state must fail loud on stderr"
     assert "not parseable JSON" in proc.stderr
     assert state.read_text(encoding="utf-8") == raw_before, "state file was edited"
+    outcome_lines = [l for l in proc.stdout.splitlines() if l.startswith("OUTCOME:")]
+    assert outcome_lines == ["OUTCOME: tool_error"]
+    assert proc.stdout.splitlines()[-1] == "OUTCOME: tool_error"
+
+
+# --------------------------------------------------------------------------- #
+# Outcome-contract arms (scripts/OUTCOME_CONTRACT.md): every classified
+# verdict passes on the exit channel with a final OUTCOME line; the
+# malformed-state and unexpected-exception arms are tool error (exit 3);
+# argparse usage violations override to exit 3.
+# --------------------------------------------------------------------------- #
+def test_classified_verdict_outcome_pass(tmp_path):
+    """[class: REPOSITORY_TEST] A classified verdict (parent-ok): rc 0 with
+    the verdict JSON as the machine-readable payload and exactly one final
+    `OUTCOME: pass` line after the human summary."""
+    root = str(tmp_path)
+    write_state(tmp_path, parent_automation_id="parent-live-1",
+                parent_absent_since=None)
+
+    proc = run_check(root)
+
+    assert proc.returncode == 0
+    verdict = parse_verdict(proc)
+    assert verdict["class"] == "parent-ok"
+    lines = [l for l in proc.stdout.splitlines() if l.strip()]
+    assert lines[-1] == "OUTCOME: pass"
+    assert sum(1 for l in lines if l.startswith("OUTCOME:")) == 1
+    assert json.loads(lines[0])["check"] == "rearm-on-touch"
+
+
+def test_unexpected_exception_is_tool_error(tmp_path):
+    """[class: REPOSITORY_TEST] An unexpected internal failure (the state
+    path resolves to a directory, so the read raises outside the malformed
+    class): tool error exit 3 with the loud error and the final
+    `OUTCOME: tool_error` line after the verdict JSON, never a silent
+    pass and never rc 2."""
+    root = str(tmp_path)
+    state_dir = tmp_path / "state-is-a-directory"
+    state_dir.mkdir()
+
+    proc = run_check(root, state_path=state_dir)
+
+    assert proc.returncode == 3
+    verdict = parse_verdict(proc)
+    assert verdict["class"] == "malformed"
+    assert "unexpected" in proc.stderr
+    lines = [l for l in proc.stdout.splitlines() if l.strip()]
+    assert lines[-1] == "OUTCOME: tool_error"
+
+
+def test_unknown_flag_usage_violation_is_tool_error():
+    """[class: REPOSITORY_TEST] An unknown flag is a usage violation:
+    tool error exit 3 (argparse's default exit 2 overridden), with the
+    OUTCOME line on stderr beside the usage text. Bare invocation is the
+    modeled skipped verdict at exit 0, not a usage shape."""
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--no-such-flag"],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 3
+    assert "OUTCOME: tool_error" in proc.stderr
 
 
 def test_listing_input_armed_again_bookkeeping(tmp_path):

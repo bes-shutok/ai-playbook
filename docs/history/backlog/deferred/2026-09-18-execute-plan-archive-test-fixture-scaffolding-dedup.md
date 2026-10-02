@@ -1,6 +1,6 @@
 # Backlog: archive test fixture scaffolding duplicated across four test classes
 
-Status: open
+Status: closed (2026-10-01 triage, operator adjudication "follow row contracts"; completed by other work, completion receipt below)
 Priority: deferred (formal-hardening triage 2026-09-22 full sweep per the project-priority-profiles directive: on this personal/pet repo formal fixes defer, no witnessed failure; test-fixture dedup (code-quality polish, no witnessed failure). Revive on the touched test files are next edited under a live plan, or a project-priority-profile change.)
 Workflow: backlog
 Date: 2026-09-18
@@ -39,3 +39,7 @@ round 1, finding D-4.
 
 Pure test-structure refactor with regression risk across four green classes;
 deferred by the round 1 address-pass disposition.
+
+## Completion receipt (2026-10-01)
+
+The item's own proposed fix shape exists on the current tree: scripts/test_execute_plan_runtime.py defines ArchiveGateFixtureBase and all four classes named here inherit it (ArchiveGatePreArchiveTest at line 13493, TerminalFinalStageTest at line 14312, ArchiveLocationTest at line 14550, TerminalResumeTest at line 14595). The scaffolding duplication this row recorded is gone.

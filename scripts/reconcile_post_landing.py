@@ -47,7 +47,13 @@ checkouts auto-restore freely.
 Output one line per row: ``restored <checkout> <path>``,
 ``removed <checkout> <path>``,
 ``block <checkout> <path> <witness>``, ``wholesale <checkout>``,
-``synced <checkout> <path>``.
+``synced <checkout> <path>``. A stale-witness restore row (the stale,
+deleted, and wholesale-residue verdicts) additionally carries the
+containment note ``containment-delta: checkout merge base <merge-base>
+versus landed parent <pre-tip>`` whenever the checkout branch's merge base
+with the landed post-tip differs from the landed parent, so a containment
+miss is diagnosable in one step; report text only, never an exit-code
+change.
 
 Exit codes: 0 when every live checkout is verified complete, 1 when block
 rows exist (the caller records them as named blocks), 2 on tool failure. A
@@ -137,6 +143,20 @@ def commit_time(repo, sha):
 def is_ancestor(repo, maybe_ancestor, descendant):
     proc = git(repo, "merge-base", "--is-ancestor", maybe_ancestor, descendant, ok=(0, 1))
     return proc.returncode == 0
+
+
+def containment_merge_base(inv, block):
+    """The checkout branch's merge base with the landed post-tip (the HEAD
+    commit for a detached checkout); None when git finds no common ancestor.
+    The stale-witness containment note names it against the landed parent
+    whenever the two differ."""
+    rev = block["branch"] or block["head"]
+    if not rev:
+        return None
+    proc = git(inv.repo, "merge-base", rev, inv.post_tip, ok=(0, 1))
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
 
 
 def parse_worktrees(repo):
@@ -337,6 +357,7 @@ def classify_checkout(inv, block, primary, paths, pre_time):
         proc = git(wt, "diff", "--cached", "--quiet", inv.pre_tip, ok=(0, 1))
         if proc.returncode == 0:
             checkout["wholesale"] = True
+    checkout["containment_merge_base"] = containment_merge_base(inv, block)
     for path in paths:
         pre_blob = blob_at(inv.repo, inv.pre_tip, path)
         post_blob = blob_at(inv.repo, inv.post_tip, path)
@@ -414,11 +435,14 @@ def restore_path(inv, wt, path, worktree_only):
         )
 
 
-def apply_entry(inv, wt, entry, primary, pre_time):
+def apply_entry(inv, wt, entry, primary, pre_time, containment_base=None):
     """Re-read both byte states immediately before the restore so a mid-window
     change re-classifies; then execute the single verdict. A re-classified
     verdict re-derives the primary fresh-mtime bound from the fresh verdict
-    instead of reusing the plan-time bound."""
+    instead of reusing the plan-time bound. ``containment_base`` is the
+    checkout branch's merge base with the landed post-tip; stale-witness
+    restore rows carry the containment note against the landed parent when
+    the two differ."""
     idx_blob = index_blob(wt, entry["path"])
     wt_blob = worktree_blob(wt, entry["path"])
     action = entry["action"]
@@ -452,17 +476,28 @@ def apply_entry(inv, wt, entry, primary, pre_time):
             os.remove(os.path.join(wt, entry["path"]))
         except OSError:
             return "block %s %s restore-refused" % (wt, entry["path"])
-        return "removed %s %s" % (wt, entry["path"])
-    try:
-        restore_path(inv, wt, entry["path"], action == RESTORE_WORKTREE)
-    except ToolFailure:
-        # The witnessed untracked-debris refusal shape: one path the
-        # restore cannot take degrades to its block row (the recorded,
-        # resumable outcome) instead of aborting the run as a tool
-        # failure; classification and other tool failures inside the
-        # entry keep their exit-2 ToolFailure semantics.
-        return "block %s %s restore-refused" % (wt, entry["path"])
-    return "restored %s %s" % (wt, entry["path"])
+        row = "removed %s %s" % (wt, entry["path"])
+    else:
+        try:
+            restore_path(inv, wt, entry["path"], action == RESTORE_WORKTREE)
+        except ToolFailure:
+            # The witnessed untracked-debris refusal shape: one path the
+            # restore cannot take degrades to its block row (the recorded,
+            # resumable outcome) instead of aborting the run as a tool
+            # failure; classification and other tool failures inside the
+            # entry keep their exit-2 ToolFailure semantics.
+            return "block %s %s restore-refused" % (wt, entry["path"])
+        row = "restored %s %s" % (wt, entry["path"])
+    # The stale-witness restore verdicts (the stale, deleted, and
+    # wholesale-residue rows) name the containment delta whenever the
+    # checkout branch's merge base with the landed post-tip differs from
+    # the landed parent: report text only, never an exit-code change.
+    if witness in FRESH_MTIME_WITNESSES and containment_base not in (None, inv.pre_tip):
+        row += (
+            " containment-delta: checkout merge base %s versus landed parent %s"
+            % (containment_base, inv.pre_tip)
+        )
+    return row
 
 
 def status_paths(wt):
@@ -532,8 +567,9 @@ def apply_plan(plan, inv):
                 continue
         if checkout["wholesale"]:
             rows.append("wholesale %s" % wt)
+        containment_base = checkout.get("containment_merge_base")
         for entry in checkout["entries"]:
-            row = apply_entry(inv, wt, entry, primary, pre_time)
+            row = apply_entry(inv, wt, entry, primary, pre_time, containment_base)
             rows.append(row)
             if row.startswith("block "):
                 failed = True

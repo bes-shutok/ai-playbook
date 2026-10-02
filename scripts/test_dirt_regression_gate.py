@@ -92,6 +92,7 @@ class DirtRegressionGateTest(unittest.TestCase):
         self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
         self.assertIn("app.txt", stdout)
         self.assertIn("dirt REGRESSION", stdout)
+        self.assertIn("OUTCOME: fail", stdout)
 
     def test_forward_dirt_passes(self):
         base_sha = self._seed_head_gained_lines()
@@ -180,7 +181,7 @@ class DirtRegressionGateTest(unittest.TestCase):
             "--base", self._git("rev-parse", "HEAD").strip(), str(outside)
         )
         proc = subprocess.CompletedProcess([], proc_rc, proc_stdout, proc_stderr)
-        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(proc.returncode, 3)
         self.assertIn("not inside repository", proc.stderr)
 
     def test_missing_path_fails_closed(self) -> None:
@@ -190,7 +191,7 @@ class DirtRegressionGateTest(unittest.TestCase):
             "--base", self._git("rev-parse", "HEAD").strip(), str(ghost)
         )
         proc = subprocess.CompletedProcess([], proc_rc, proc_stdout, proc_stderr)
-        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(proc.returncode, 3)
         self.assertIn("does not exist", proc.stderr)
 
     def test_regressive_whole_file_deletion_is_regression(self) -> None:
@@ -255,6 +256,117 @@ class DirtRegressionGateTest(unittest.TestCase):
         self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
         self.assertIn("app.txt", stdout)
         self.assertIn(stamped_sha, stdout)
+
+
+    def test_binary_dirt_is_indeterminate(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        # Dirt replaces the text file with binary bytes: the diff carries the
+        # Binary files line and no hunks, the witnessed unmodeled shape.
+        (self.repo / "app.txt").write_bytes(b"\x00\x01\x02binary\n")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 2, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt INDETERMINATE", stdout)
+        self.assertIn("could not", stdout)
+        self.assertIn("OUTCOME: indeterminate", stdout)
+
+    def test_binary_dirt_with_mode_flip_is_indeterminate(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        # Binary dirt riding a mode flip: the diff carries old/new mode lines
+        # AND the Binary files line; the payload is still unclassifiable.
+        target = self.repo / "app.txt"
+        target.write_bytes(b"\x00\x01\x02binary\n")
+        import os as _os
+        _os.chmod(target, 0o755)
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 2, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("OUTCOME: indeterminate", stdout)
+
+    def test_mode_change_dirt_stays_clean(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        # A pure mode flip with no content change is a modeled hunk-less
+        # shape and stays clean (the preserved known case).
+        import os as _os
+        _os.chmod(self.repo / "app.txt", 0o755)
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("OUTCOME: pass", stdout)
+
+    def test_mixed_regression_and_indeterminate_reports_indeterminate(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        self._commit("bin.dat", "text\n", "tracked binary candidate")
+        # Mixed batch: one true regression plus one binary-restored TRACKED
+        # path (an untracked path is invisible to git diff HEAD and is not a
+        # gate input). Uncertainty dominates the verdict (exit 2) and both
+        # evidence lines are still printed for the caller.
+        self._set_dirt("app.txt", BASE_TEXT)
+        (self.repo / "bin.dat").write_bytes(b"\x00\x01binary\n")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt", "bin.dat")
+        self.assertEqual(code, 2, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION: app.txt", stdout)
+        self.assertIn("dirt INDETERMINATE: bin.dat", stdout)
+        self.assertIn("OUTCOME: indeterminate", stdout)
+
+    def test_nonutf8_blob_is_tool_error(self) -> None:
+        # A tracked blob git cannot decode as text is unsupported data: the
+        # gate reports tool error, never a domain verdict (contract Terms).
+        self._commit("seed.txt", "seed\n", "seed")
+        blob = self.repo / "bin.dat"
+        blob.write_bytes(b"\xff\xfe\x00binary\xff\n")
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", "binary blob")
+        blob.write_bytes(b"\xff\xfe\x00binary\xff\nmore\n")
+        code, stdout, stderr = self._run_gate("--base", "HEAD", "bin.dat")
+        self.assertEqual(code, 3, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("unsupported data", stderr)
+        self.assertIn("OUTCOME: tool_error", stdout)
+
+    def test_nonutf8_worktree_dirt_is_tool_error(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        # NUL-free non-UTF-8 dirt: git diffs it as text, the gate cannot
+        # decode the diff output, and the contract routes it to tool error.
+        (self.repo / "app.txt").write_bytes(
+            HEAD_TEXT.encode("utf-8") + b"caf\xe9-latin1\n"
+        )
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 3, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("unsupported data", stderr)
+        self.assertIn("OUTCOME: tool_error", stdout)
+
+    def test_usage_error_is_tool_error(self) -> None:
+        self._commit("seed.txt", "seed\n", "seed")
+        code, stdout, stderr = self._run_gate("--no-such-flag", "seed.txt")
+        self.assertEqual(code, 3, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("OUTCOME: tool_error", stdout)
+
+    def test_missing_head_is_tool_error(self) -> None:
+        empty = self.tmp / "empty-repo"
+        empty.mkdir()
+        self._git("init", "-q", "-b", "main", cwd=empty)
+        (empty / "x.txt").write_text("x\n", encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--base", "main", "x.txt"],
+            capture_output=True,
+            text=True,
+            cwd=str(empty),
+            env=self._git_env(),
+        )
+        self.assertEqual(proc.returncode, 3, f"stderr: {proc.stderr}")
+        self.assertIn("OUTCOME: tool_error", proc.stdout)
+
+    def test_unresolvable_base_is_tool_error(self) -> None:
+        self._commit("seed.txt", "seed\n", "seed")
+        code, stdout, stderr = self._run_gate(
+            "--base", "0" * 40, "seed.txt"
+        )
+        self.assertEqual(code, 3, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("OUTCOME: tool_error", stdout)
+
+    def test_outcome_final_line_pass(self) -> None:
+        base_sha = self._seed_head_gained_lines()
+        self._set_dirt("app.txt", HEAD_TEXT + "forward-note\n")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("OUTCOME: pass", stdout)
 
 
 if __name__ == "__main__":

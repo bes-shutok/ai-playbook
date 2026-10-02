@@ -701,6 +701,76 @@ class ReconcilePostLandingTest(unittest.TestCase):
         self.assertEqual(r.index_blob("gone.md"), staged_blob)
         self.assertEqual(r.status(), status_before)
 
+    # -- 22 ---------------------------------------------------------------
+
+    def test_stale_row_names_containment_delta(self):
+        """[class: REPOSITORY_TEST] Given the stale-checkout fixture (a checkout
+        stale against a landed commit), the stale restore row carries the
+        containment note naming the checkout branch's merge base with the
+        landed post-tip and the landed parent; a fully-synced checkout (clean
+        reconcile) carries no note, and neither does the fast-forwarded row of
+        a detached checkout at the pre-landing tip (the ff moves its bytes to
+        the landed tip, so its row is synced: the note is a stale-witness
+        restore-only field, never noise on clean reconciles)."""
+        # The stale-checkout fixture: the primary stale against the landed
+        # commit on one path, synced on the other.
+        r = self.repo
+        r.write("skill.md", "landed v1\n")
+        r.write("other.md", "other v1\n")
+        r.commit_all("v1")
+        pre, post = r.ref_landing({"skill.md": "landed v2\n", "other.md": "other v2\n"})
+        pre_time = r.commit_time(pre)
+        r.write("skill.md", "landed v1\n")
+        r.backdate("skill.md", pre_time - 100000)
+        r.write("other.md", "other v2\n")
+        r.git("add", "other.md")
+        rc, out, _ = self.run_script(pre, post)
+        self.assertEqual(rc, 0, out)
+        stale_row = [
+            line for line in out.splitlines()
+            if line.startswith("restored %s skill.md" % r.root)
+        ][0]
+        self.assertIn("containment-delta", stale_row)
+        self.assertIn("checkout merge base %s" % post, stale_row)
+        self.assertIn("versus landed parent %s" % pre, stale_row)
+        synced_row = [
+            line for line in out.splitlines()
+            if line.startswith("synced %s other.md" % r.root)
+        ][0]
+        self.assertNotIn("containment-delta", synced_row)
+
+        # Fully-synced checkout: every row synced, no containment note.
+        synced = FixtureRepo()
+        self.addCleanup(synced.close)
+        synced.write("skill.md", "v1\n")
+        synced.commit_all("v1")
+        pre_synced, post_synced = synced.ref_landing({"skill.md": "v2\n"})
+        synced.write("skill.md", "v2\n")
+        synced.git("add", "skill.md")
+        rc, out, _ = self.run_script(pre_synced, post_synced, repo=synced.root)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("containment-delta", out)
+
+        # A detached checkout at the pre-landing tip fast-forwards: its bytes
+        # reach the landed tip, so its row is synced and carries no note.
+        detached = FixtureRepo()
+        self.addCleanup(detached.close)
+        detached.write("skill.md", "v1\n")
+        detached.commit_all("v1")
+        pre_detached = detached.head()
+        peer = detached.add_detached_worktree("peer", pre_detached)
+        pre_detached, post_detached = detached.ref_landing({"skill.md": "v2\n"})
+        detached.backdate(
+            "skill.md", detached.commit_time(pre_detached) - 100000
+        )
+        rc, out, _ = self.run_script(pre_detached, post_detached, repo=detached.root)
+        self.assertEqual(rc, 0, out)
+        peer_row = [
+            line for line in out.splitlines()
+            if line.startswith("synced %s skill.md" % peer)
+        ][0]
+        self.assertNotIn("containment-delta", peer_row)
+
 
 if __name__ == "__main__":
     unittest.main()

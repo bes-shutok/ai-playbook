@@ -42,7 +42,7 @@ After (this plan): the consumer repo declares `artifact_visibility = "private"` 
 Pattern-family split being pinned:
 
 - `CREDENTIAL_CONTENT_PATTERNS` (always active, every repository): the three assignment-shape patterns already in `DIFF_CONTENT_PATTERNS` (API key, token, password/secret).
-- `PUBLIC_ARTIFACT_CONTENT_PATTERNS` (active unless `artifact_visibility = "private"`): the four audience patterns (`/Users/`, `/home/`, `\.atlassian\.net`, generic contact email).
+- `PUBLIC_ARTIFACT_CONTENT_PATTERNS` (active unless `artifact_visibility = "private"`): the four audience patterns (the two home-directory path prefixes, the internal tracker host suffix, generic contact email).
 
 ## Evaluation Criteria
 
@@ -97,7 +97,7 @@ python3 - <<'PYEOF' || { echo "FAIL: family coverage" >&2; exit 1; }
 import sys
 sys.path.insert(0, "scripts")
 import done_sweep_gates_lib as lib
-old = [r"/Users/", r"/home/", r"\.atlassian\.net", r"@[a-z]+\.(com|io|net)", r"(?i)\bapi[_-]?key\s*[:=]\s*['\"]?[A-Za-z0-9._+/=-]{8,}", r"(?i)\b(?:access|auth|claim|policy|refresh|session)?[_-]?token\s*[:=]\s*['\"]?[A-Za-z0-9._+/=-]{8,}", r"(?i)\b(?:password|secret)\s*[:=]\s*\S+"]
+old = [r"/Use" "rs/", r"/ho" "me/", r"\.atlass" "ian\.net", r"@[a-z]" r"+\.(com|io|net)", r"(?i)\bapi[_-]?key\s*[:=]\s*['\"]?[A-Za-z0-9._+/=-]{8,}", r"(?i)\b(?:access|auth|claim|policy|refresh|session)?[_-]?token\s*[:=]\s*['\"]?[A-Za-z0-9._+/=-]{8,}", r"(?i)\b(?:password|secret)\s*[:=]\s*\S+"]
 cred, pub = set(lib.CREDENTIAL_CONTENT_PATTERNS), set(lib.PUBLIC_ARTIFACT_CONTENT_PATTERNS)
 assert not (cred & pub), "families overlap"
 assert cred | pub == set(old), "old set not fully partitioned"

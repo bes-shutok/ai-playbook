@@ -1,7 +1,22 @@
 #!/usr/bin/env python3
 """Validate review staging markdown per review-staging skill.
 
-Exit 0 when valid (soft mode may print warnings). Exit 1 when invalid in --hard mode.
+Outcome contract (scripts/OUTCOME_CONTRACT.md): exit 0 pass (soft mode may
+print warnings inside the pass), exit 1 fail (an invalid record in --hard
+mode), exit 2 indeterminate (not modeled here: the inputs are staging
+markdown bytes that are readable or not, and a schema-violating record is
+the modeled violation this validator exists to report), exit 3 tool error
+(argparse usage violations overridden from argparse's exit 2, an unreadable
+or missing input file, or an empty source-flag value). Every non-metadata
+run ends with exactly one final `OUTCOME:` line on stdout after the
+human-readable evidence; `--help` and `--selftest` are metadata exits with
+no `OUTCOME:` line. Declared placement deviation: a `--json` run carries the
+outcome as the JSON `outcome` field and emits no stdout `OUTCOME:` line.
+Library surfaces sit outside this CLI contract and keep their function-level
+behavior: `validate_staging_file`, the `is_staging_review_path` scope helper
+consumed by the done-sweep lib, and the module imports in
+scripts/summarize_review_stats.py, scripts/plan_readiness.py, and
+scripts/review_record_selection.py.
 """
 
 from __future__ import annotations
@@ -24,6 +39,27 @@ try:
     import facts_paths
 except ImportError:  # pragma: no cover
     facts_paths = None  # type: ignore
+
+# Outcome contract (scripts/OUTCOME_CONTRACT.md): the four outcomes and the
+# argparse override. A usage violation exits 3 with a final `OUTCOME:
+# tool_error` line on stderr before exit (the usage text and the error
+# message share that stream); every non-metadata run's final line is on
+# stdout after the human-readable evidence, except a --json run (the
+# outcome rides the JSON `outcome` field, the declared placement deviation).
+OUTCOME_LABELS = {0: "pass", 1: "fail", 2: "indeterminate", 3: "tool_error"}
+
+
+class OutcomeArgumentParser(argparse.ArgumentParser):
+    """Argument parser whose usage errors exit 3 (tool error) with a final
+    `OUTCOME: tool_error` line on stderr before exit, overriding argparse's
+    default exit 2; `--help` stays a metadata exit without an `OUTCOME:`
+    line."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        sys.stderr.write("%s: error: %s\n" % (self.prog, message))
+        sys.stderr.write("OUTCOME: %s\n" % OUTCOME_LABELS[3])
+        raise SystemExit(3)
 
 STAGING_NAME_RE = re.compile(
     r"^(?:\d{4}-\d{2}-\d{2}-)?"
@@ -145,6 +181,13 @@ PANEL_PROFILE_MAX_DATE = "2026-09-19"
 # constant with the same rationale-comment style and re-pin the V4 grep
 # literal in the same commit.
 COVERAGE_SIDECAR_MIN_DATE = "2026-09-16"
+
+# The soften-watchlist Markdown/sidecar parity arm (soften-watchlist
+# source-of-truth plan, Task 4) is date-fenced on the same idiom: records
+# whose sidecar date precedes this constant are grandfathered, matching the
+# coverage fence's pre-constant treatment of the witnessed parity-violating
+# records.
+SOFTEN_WATCHLIST_PARITY_MIN_DATE = "2026-10-03"
 # Record kind fence (review records contract plan, Task 1). A version-1
 # record whose ``date`` is on or after RECORD_KIND_SIDECAR_MIN_DATE must
 # declare ``record_kind`` (top-level sidecar field, mirrored as the Markdown
@@ -705,6 +748,7 @@ def classify_fence_lines(
     lines: list[str],
     *,
     is_reset_heading=None,
+    fence_line_re: re.Pattern = FENCE_LINE_RE,
 ) -> tuple[list[tuple[str, object]], int | None]:
     """Fence-aware line classifier shared by every Markdown scanner here.
 
@@ -745,6 +789,13 @@ def classify_fence_lines(
     closed, or None when every fence closed (consumers use it to apply the
     partial fallback: keep pre-opener first-pass results, re-classify only
     from the opener onward).
+
+    ``fence_line_re`` is the declared seam for an intentional opener
+    divergence (vrs-fence-seam-parameter): a consumer whose opener regex is
+    deliberately narrower passes its own compiled pattern and every other
+    grammar byte (close rule, event vocabulary, reset policy) stays the
+    shared machine. The default keeps every existing consumer and selftest
+    arm unchanged.
     """
     events: list[tuple[str, object]] = []
     in_fence = False
@@ -752,7 +803,7 @@ def classify_fence_lines(
     fence_char = ""
     opener_index: int | None = None
     for i, line in enumerate(lines):
-        fence_match = FENCE_LINE_RE.match(line)
+        fence_match = fence_line_re.match(line)
         if fence_match:
             if in_fence:
                 stripped = line.strip()
@@ -1465,21 +1516,20 @@ DATE_KEYED_FRESHNESS_META_LINES = (
 )
 
 
-def _freshness_fence(
-    staging_name: str | None, sidecar_date: object
+def _date_fence(
+    staging_name: str | None, sidecar_date: object, min_date: str
 ) -> dict[str, str | None]:
-    """Single owner of every EXTENDED_SIDECAR_MIN_DATE fence computation
-    (vrs-freshness-fence-single-helper).
+    """Single owner of the two-surface date-fence classification.
 
     Parses the staging filename's leading ``YYYY-MM-DD`` date and the
     sidecar ``date`` value, and classifies each surface against
-    ``EXTENDED_SIDECAR_MIN_DATE``: ``undated`` (no parseable leading date
-    on the filename surface; a missing or non-string sidecar date
-    classifies as undated, never silently pre-fence; a malformed string
-    date classifies lexically and is already rejected by its own
-    date-format gate), ``pre-fence`` (grandfathered), or ``post-fence``
-    (full freshness obligations). Consumers must re-derive no fence
-    comparison inline; they branch only on the returned classifications.
+    ``min_date``: ``undated`` (no parseable leading date on the filename
+    surface; a missing or non-string sidecar date classifies as undated,
+    never silently pre-fence; a malformed string date classifies lexically
+    and is already rejected by its own date-format gate), ``pre-fence``
+    (grandfathered), or ``post-fence`` (the surface owes its post-fence
+    obligations). Consumers branch only on the returned classifications;
+    they re-derive no fence comparison inline.
     """
     name_match = (
         re.match(r"(\d{4}-\d{2}-\d{2})", staging_name) if staging_name else None
@@ -1488,12 +1538,12 @@ def _freshness_fence(
     name_class = "undated"
     sidecar_class = "undated"
     if name_date is not None:
-        if name_date < EXTENDED_SIDECAR_MIN_DATE:
+        if name_date < min_date:
             name_class = "pre-fence"
         else:
             name_class = "post-fence"
     if isinstance(sidecar_date, str):
-        if sidecar_date < EXTENDED_SIDECAR_MIN_DATE:
+        if sidecar_date < min_date:
             sidecar_class = "pre-fence"
         else:
             sidecar_class = "post-fence"
@@ -1502,6 +1552,16 @@ def _freshness_fence(
         "name_class": name_class,
         "sidecar_class": sidecar_class,
     }
+
+
+def _freshness_fence(
+    staging_name: str | None, sidecar_date: object
+) -> dict[str, str | None]:
+    """Thin wrapper: the EXTENDED_SIDECAR_MIN_DATE fence classification
+    (vrs-freshness-fence-single-helper), delegating to the shared
+    ``_date_fence`` owner with the freshness minimum date.
+    """
+    return _date_fence(staging_name, sidecar_date, EXTENDED_SIDECAR_MIN_DATE)
 
 
 def validate_date_keyed_freshness_lines(
@@ -1566,44 +1626,27 @@ def validate_date_keyed_freshness_lines(
 def _record_kind_fence(
     staging_name: str | None, sidecar_date: object
 ) -> dict[str, str | None]:
-    """Single owner of every RECORD_KIND_SIDECAR_MIN_DATE fence
-    classification (mirrors ``_freshness_fence``).
-
-    Parses the staging filename's leading ``YYYY-MM-DD`` date and the
-    sidecar ``date`` value, and classifies each surface against
-    ``RECORD_KIND_SIDECAR_MIN_DATE``: ``undated`` (no parseable leading
-    date on the filename surface; a missing or non-string sidecar date
-    classifies as undated, never silently pre-fence), ``pre-fence``
-    (grandfathered), or ``post-fence`` (the record must declare
-    ``record_kind`` on that surface). Consumers branch only on the returned
-    classifications; they re-derive no fence comparison inline.
+    """Thin wrapper: the RECORD_KIND_SIDECAR_MIN_DATE fence classification,
+    delegating to the shared ``_date_fence`` owner with the record-kind
+    minimum date.
     """
-    name_match = (
-        re.match(r"(\d{4}-\d{2}-\d{2})", staging_name) if staging_name else None
-    )
-    name_date = name_match.group(1) if name_match else None
-    name_class = "undated"
-    sidecar_class = "undated"
-    if name_date is not None:
-        if name_date < RECORD_KIND_SIDECAR_MIN_DATE:
-            name_class = "pre-fence"
-        else:
-            name_class = "post-fence"
-    if isinstance(sidecar_date, str):
-        if sidecar_date < RECORD_KIND_SIDECAR_MIN_DATE:
-            sidecar_class = "pre-fence"
-        else:
-            sidecar_class = "post-fence"
-    return {
-        "name_date": name_date,
-        "name_class": name_class,
-        "sidecar_class": sidecar_class,
-    }
+    return _date_fence(staging_name, sidecar_date, RECORD_KIND_SIDECAR_MIN_DATE)
 
 
 # Public alias (r2 overflow D5): ``summarize_review_stats`` is a production
 # consumer of the fence classifier and must not import a private symbol.
 record_kind_fence = _record_kind_fence
+
+def _declared_noncanonical_kind(record_kind: object) -> bool:
+    """Single owner of the declared non-canonical record-kind predicate:
+    PRESENT, enum-valid in RECORD_KIND_VALUES, and different from the
+    canonical kind. The five consuming gates re-derive no clause inline.
+    """
+    return (
+        record_kind is not None
+        and record_kind in RECORD_KIND_VALUES
+        and record_kind != "canonical"
+    )
 
 
 def _producer_note_for(source_kind: object) -> str:
@@ -3714,6 +3757,123 @@ def _coverage_fence_exempt(
     return exempt
 
 
+
+def validate_soften_watchlist_agreement(
+    content: str,
+    payload: dict,
+    result: ValidationResult,
+    *,
+    soften_exempt: bool,
+) -> None:
+    """Markdown/sidecar soften-watchlist parity (soften-watchlist
+    source-of-truth plan, Task 4): the ``### Soften watchlist`` section's
+    data-row count equals ``len(payload["soften_watchlist"])``. Mirrors the
+    attempt-ledger parity's structure with the soften arm's own literals
+    (end-of-document-safe extraction, the ``Round`` header skip). A
+    deliberate count-mirror: it does not adjudicate same-count content
+    drift."""
+    if soften_exempt:
+        return
+    rows = payload.get("soften_watchlist")
+    if not isinstance(rows, list):
+        return
+    rows_count = len(rows)
+    section = re.search(
+        r"^### Soften watchlist\s*$\n(.*?)(?=^### |^## |\Z)",
+        content,
+        re.MULTILINE | re.DOTALL,
+    )
+    if section is None:
+        if rows_count:
+            result.add_error(
+                "soften disagreement: sidecar soften_watchlist carries "
+                f"{rows_count} row(s) but the Markdown record has no "
+                "### Soften watchlist section (the soften record pair is "
+                "the source of truth; render the same rows)"
+            )
+        return
+    data_rows = 0
+    for row_line in re.findall(
+        r"^\|(.+)\|\s*$",
+        section.group(1),
+        re.MULTILINE,
+    ):
+        cell = row_line.strip().split("|")[0].strip()
+        if cell == "" or set(cell) <= set("-: "):
+            continue
+        if cell.lower() == "round":
+            continue
+        data_rows += 1
+    if data_rows != rows_count:
+        result.add_error(
+            "soften disagreement: Soften watchlist rows "
+            f"{data_rows!r} != sidecar soften_watchlist {rows_count!r} "
+            "(the soften record pair is the source of truth; render the "
+            "same rows)"
+        )
+
+
+def _soften_parity_fence_exempt(
+    date_value: object, staging_name: str | None, result: ValidationResult
+) -> bool:
+    """Single home of the soften-parity fence exemption: a record is
+    soften-exempt only when its sidecar ``date`` parses and is earlier than
+    SOFTEN_WATCHLIST_PARITY_MIN_DATE. Grandfathering trust checks mirror
+    the coverage fence (anti-backdating and straddling, fail-closed), so
+    the exemption cannot be claimed by a backdated sidecar date or a
+    straddling record pair."""
+    exempt = not (
+        isinstance(date_value, str)
+        and bool(V1_DATE_RE.match(date_value))
+        and date_value >= SOFTEN_WATCHLIST_PARITY_MIN_DATE
+    )
+    soften_name_date = (
+        staging_name[:10]
+        if staging_name and V1_DATE_RE.match(staging_name[:10] or "")
+        else None
+    )
+    if (
+        exempt
+        and soften_name_date is not None
+        and soften_name_date >= SOFTEN_WATCHLIST_PARITY_MIN_DATE
+    ):
+        if isinstance(date_value, str) and date_value.strip():
+            result.add_error(
+                f"version-1 sidecar dated {date_value!r} is earlier than "
+                f"SOFTEN_WATCHLIST_PARITY_MIN_DATE "
+                f"{SOFTEN_WATCHLIST_PARITY_MIN_DATE} while the staging "
+                f"filename is dated {soften_name_date} (on or after "
+                "SOFTEN_WATCHLIST_PARITY_MIN_DATE); the grandfathering "
+                "exemption cannot be claimed by a backdated sidecar date"
+            )
+        else:
+            result.add_error(
+                f"version-1 sidecar date is missing or malformed while the "
+                f"staging filename is dated {soften_name_date} (on or "
+                f"after SOFTEN_WATCHLIST_PARITY_MIN_DATE "
+                f"{SOFTEN_WATCHLIST_PARITY_MIN_DATE}); the soften parity "
+                "exemption cannot be claimed without a parseable sidecar "
+                "date"
+            )
+        exempt = False
+    if (
+        soften_name_date is not None
+        and soften_name_date < SOFTEN_WATCHLIST_PARITY_MIN_DATE
+        and isinstance(date_value, str)
+        and bool(V1_DATE_RE.match(date_value))
+        and date_value >= SOFTEN_WATCHLIST_PARITY_MIN_DATE
+    ):
+        result.add_error(
+            f"date disagreement: staging filename dated "
+            f"{soften_name_date} is earlier than "
+            f"SOFTEN_WATCHLIST_PARITY_MIN_DATE "
+            f"{SOFTEN_WATCHLIST_PARITY_MIN_DATE} while the sidecar date "
+            f"{date_value!r} is on or after it; the record cannot be "
+            "grandfathered on one surface and post-constant on the other"
+        )
+    return exempt
+
+
 def validate_version1_payload(
     payload: dict,
     content: str,
@@ -3960,11 +4120,7 @@ def validate_version1_payload(
     coverage_exempt = _coverage_fence_exempt(
         date_value, staging_name, result
     )
-    if (
-        declared_record_kind is not None
-        and declared_record_kind in RECORD_KIND_VALUES
-        and declared_record_kind != "canonical"
-    ):
+    if _declared_noncanonical_kind(declared_record_kind):
         coverage_exempt = True
     validate_coverage_contract(
         payload, result, coverage_exempt=coverage_exempt
@@ -4279,14 +4435,20 @@ def _validate_stats_sidecar_gates(
         if isinstance(payload, dict)
         else None
     )
-    if (
-        md_record_kind is not None
-        and md_record_kind in RECORD_KIND_VALUES
-        and md_record_kind != "canonical"
-    ):
+    if _declared_noncanonical_kind(md_record_kind):
         md_exempt = True
     validate_coverage_markdown_agreement(
         content, payload, result, coverage_exempt=md_exempt
+    )
+    # Soften-watchlist parity is canonical-only and fenced by its own
+    # sibling constant (soften-watchlist source-of-truth plan, Task 4).
+    soften_exempt = _soften_parity_fence_exempt(
+        payload.get("date"), staging_path.name, result
+    )
+    if _declared_noncanonical_kind(md_record_kind):
+        soften_exempt = True
+    validate_soften_watchlist_agreement(
+        content, payload, result, soften_exempt=soften_exempt
     )
     discarded = _require_array(
         payload, "discarded", result, schema_class
@@ -4444,7 +4606,7 @@ def validate_record_kind_matrix(
     if kind not in RECORD_KIND_VALUES:
         return
     note = _producer_note_for(payload.get("source_kind"))
-    if kind != "canonical" and (
+    if _declared_noncanonical_kind(kind) and (
         payload.get("verdict") == "yes" or is_clean_verdict(content)
     ):
         result.add_error(
@@ -4510,11 +4672,7 @@ def validate_current_payload(
     # skips the canonical finding-hierarchy gates below and is never
     # eligible for a clean verdict (validate_record_kind_matrix).
     record_kind = payload.get("record_kind")
-    kind_noncanonical = (
-        record_kind is not None
-        and record_kind in RECORD_KIND_VALUES
-        and record_kind != "canonical"
-    )
+    kind_noncanonical = _declared_noncanonical_kind(record_kind)
     # The schema label is computed ONCE per validation run, in
     # ``validate_stats_sidecar``, and threaded in via ``schema_label``; the
     # internal classification below (r4 F10) exists only for direct callers
@@ -5343,11 +5501,7 @@ def validate_staging_file(
         if isinstance(sidecar_read.payload, dict)
         else None
     )
-    md_kind_noncanonical = (
-        sidecar_record_kind is not None
-        and sidecar_record_kind in RECORD_KIND_VALUES
-        and sidecar_record_kind != "canonical"
-    )
+    md_kind_noncanonical = _declared_noncanonical_kind(sidecar_record_kind)
 
     # Canonical finding-hierarchy gates (review records contract plan,
     # Task 1): a declared non-canonical record (reconciliation,
@@ -7190,9 +7344,10 @@ def _check_empty_flag_loud_exit(
 ) -> None:
     """Shared boilerplate for the r5 F9 empty-flag loud-exit fixtures: run
     main() with an empty source-flag value under the io.StringIO stderr
-    swap, capture the argparse SystemExit, and assert exit code 2 plus the
-    must-not-be-empty message on stderr (an empty value must never silently
-    skip the digest gate)."""
+    swap, capture the argparse SystemExit, and assert the tool-error exit
+    code 3 (the argparse override; pre-migration this was argparse's exit 2)
+    plus the must-not-be-empty message on stderr (an empty value must never
+    silently skip the digest gate)."""
     with _stderr_captured() as buf:
         try:
             main(["--hard", str(staging_path), flag, ""])
@@ -7201,7 +7356,7 @@ def _check_empty_flag_loud_exit(
             empty_rc = exc.code
     check(
         label,
-        empty_rc == 2 and "must not be empty" in buf.getvalue(),
+        empty_rc == 3 and "must not be empty" in buf.getvalue(),
     )
 
 
@@ -7377,11 +7532,12 @@ def _selftest_source_cli(root: Path, check) -> None:
             flag_name in stale_text and str(src_path) in stale_text,
         )
 
-        # Case C: missing source file -> exit 1.
+        # Case C: missing source file -> exit 3 (tool error: the input cannot
+        # be opened; pre-migration this straggled at the findings exit 1).
         rc_missing = main(
             ["--hard", str(staging), flag_name, str(root / "nope.md")]
         )
-        check(f"{flag_name} missing file exits 1", rc_missing == 1)
+        check(f"{flag_name} missing file exits 3 (tool error)", rc_missing == 3)
 
         # Case D: source_kind mismatch — the sidecar declares a DIFFERENT kind
         # than the flag -> exit 1 with a mismatch error. Pins that the flag
@@ -7421,13 +7577,15 @@ def _selftest_source_cli(root: Path, check) -> None:
                         other_flag, str(src_path),
                     ]
                 )
-                # argparse SystemExit(2) is raised before main returns; a
-                # non-raising regression leaves rc_both None and fails below.
+                # The argparse-override SystemExit(3) is raised before main
+                # returns; a non-raising regression leaves rc_both None and
+                # fails below.
             except SystemExit as exc:
                 rc_both = int(exc.code)
         # r1 F3: the older weaker rc-plus-substring check was deleted; the
         # table-derived check below pins the full message text (which
-        # contains "mutually exclusive") and rc 2, strictly subsuming it.
+        # contains "mutually exclusive") and rc 3 (the argparse override;
+        # pre-migration rc 2), strictly subsuming it.
         _flags = [f for f, _d, _k in _SOURCE_FLAG_TABLE]
         _expected_text = (
             ", ".join(_flags[:-1]) + ", and " + _flags[-1]
@@ -7435,7 +7593,7 @@ def _selftest_source_cli(root: Path, check) -> None:
         )
         check(
             "mutual-exclusivity message keeps the terminal and, table-derived",
-            rc_both == 2 and _expected_text in buf3.getvalue(),
+            rc_both == 3 and _expected_text in buf3.getvalue(),
         )
 
         # Case F (r5 F9): an empty flag value must fail LOUDLY (argparse
@@ -13220,6 +13378,233 @@ def _selftest_record_kind_contract(root: Path, check) -> None:
     )
 
 
+def _selftest_soften_parity(root: Path, check) -> None:
+    """Family: the soften-watchlist Markdown/sidecar parity arm
+    (soften-watchlist source-of-truth plan, Task 4). RED-first: the
+    mismatch fixture fails until ``validate_soften_watchlist_agreement``
+    exists and is wired with its date-fenced, canonical-scoped extraction."""
+    import datetime as _datetime
+    import json as _json
+
+    fence = SOFTEN_WATCHLIST_PARITY_MIN_DATE
+    pre_fence = (
+        _datetime.date.fromisoformat(fence) - _datetime.timedelta(days=1)
+    ).isoformat()
+
+    freshness_meta = (
+        "- Review mode: targeted",
+        "- Changed-risk signals: none",
+        "- Prior findings supplied as filter: no",
+        "- Last fix commit: none",
+        "- Witness ledger: N/A (no public mutators)",
+    )
+
+    def focused_row() -> dict:
+        return {
+            "worker": "correctness-completeness",
+            "lenses": ["quality"],
+            "parent_worker": None,
+            "descendant_launches": [],
+            "status": "complete",
+            "raw": 0,
+            "solo": 0,
+            "echo": 0,
+            "relaunch": False,
+        }
+
+    def soften_row(rid: str) -> dict:
+        return {
+            "round": "r1",
+            "pattern": "testing#" + rid,
+            "anchor": "path/file.py",
+            "prior_fix": "one-line prior fix",
+            "soften_reason": "one-line soften reason",
+            "status": "open",
+        }
+
+    def parity_payload(
+        soften_rows, *, date=None, verdict="yes", record_kind="canonical"
+    ) -> dict:
+        payload = _json.loads(_json.dumps(_version1_payload()))
+        payload["date"] = date if date is not None else fence
+        payload["source_kind"] = "plan"
+        payload["review_mode"] = "targeted"
+        payload["risk_signals"] = []
+        payload["prior_findings_filter"] = False
+        payload["last_fix_commit"] = None
+        payload["panel_mode"] = "focused"
+        payload["selection_reason"] = "single-worker supplemental pass"
+        payload["panel"] = [focused_row()]
+        payload["counts"] = {"workers_launched": 1, "staged_findings": 0}
+        payload["findings"] = []
+        payload["overflow"] = []
+        payload["deduplication_groups"] = []
+        payload["discarded"] = []
+        payload["severity_calibration"] = []
+        payload["triage_outcomes"] = []
+        payload["soften_watchlist"] = soften_rows
+        payload["record_kind"] = record_kind
+        payload["verdict"] = verdict
+        lens_set = sorted(
+            {
+                lens
+                for lenses in REQUIRED_PANEL_LENSES.values()
+                for lens in lenses
+            }
+        )
+        payload["coverage"] = {
+            "outcome": "clean",
+            "material_lens_set": lens_set,
+            "completed": lens_set,
+            "missing": [],
+            "attempts": [
+                {
+                    "attempt_id": "r1-V1",
+                    "worker": "correctness-completeness",
+                    "lenses": ["quality"],
+                    "started_at": fence + "T00:00:00+00:00",
+                    "deadline": fence + "T00:30:00+00:00",
+                    "elapsed": 1.0,
+                    "outcome": "complete",
+                    "failure_class": None,
+                    "attempt_number": 1,
+                    "contributed_coverage": ["quality"],
+                }
+            ],
+            "retry_budget": {
+                "per_attempt_timeout_minutes": 30,
+                "per_worker_max": 2,
+            },
+        }
+        return payload
+
+    def parity_md(soften_table_rows, *, trailing=False, section=True) -> str:
+        sec_lines = ["### Soften watchlist"]
+        if soften_table_rows is None:
+            sec_lines.append("None.")
+        else:
+            sec_lines.append("| Round | Pattern / finding | Anchor | Prior fix | Soften reason | Status |")
+            sec_lines.append("|-------|-------------------|--------|-----------|---------------|--------|")
+            sec_lines.extend(soften_table_rows)
+        body = [
+            "# Plan Review: soften-parity-fixture",
+            "## Metadata",
+            "- Panel mode: focused",
+            "- Selection reason: single-worker supplemental pass",
+            "- Record kind: canonical",
+            "- Coverage: clean",
+            "- Witness ledger: N/A (no public mutators)",
+            *freshness_meta,
+            "## Review Statistics",
+            "### Panel",
+            "| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |",
+            "|--------|--------|---------------|--------|-----|------|------|----------|",
+            "| correctness-completeness | quality | none | complete | 0 | 0 | 0 | no |",
+            "### Counts",
+            "- Workers launched: 1",
+            "- Staged findings: 0",
+            "### Attempt ledger",
+            "| attempt | worker | outcome | contributed_coverage |",
+            "|---|---|---|---|",
+            "| r1-V1 | correctness-completeness | complete | quality |",
+            "### Triage outcomes",
+            "Pending triage.",
+        ]
+        tail = body + sec_lines if section else body
+        if trailing or not section:
+            return "\n".join(tail) + "\n"
+        return "\n".join(tail + ["## Release-gate ledger", "none", ""]) + "\n"
+
+    def stage(name, payload, md, filename_date=None) -> Path:
+        fname_date = filename_date or payload["date"]
+        return _write_staging(
+            root,
+            f"{fname_date}-branch-review-soften-{name}-r1.md",
+            md,
+            payload,
+        )
+
+    row_table = "| r1 | testing#weak-assertion | path/file.py | one-line prior fix | one-line soften reason | open |"
+
+    # Mismatch: two Markdown data rows vs one sidecar row.
+    mismatch_rows = [row_table, row_table.replace("weak-assertion", "second-slip")]
+    mismatch = stage(
+        "mismatch",
+        parity_payload([soften_row("weak-assertion")]),
+        parity_md(mismatch_rows),
+    )
+    res = validate_staging_file(mismatch, hard=True)
+    check(
+        "soften parity: a two-row section beside a one-row array fails, naming both counts and the declaration",
+        not res.ok
+        and any(
+            "soften disagreement" in e and "2" in e and "1" in e
+            and "source of truth" in e
+            for e in res.errors
+        ),
+    )
+
+    # Agreement twin: one row each side passes.
+    agree = stage(
+        "agree",
+        parity_payload([soften_row("weak-assertion")]),
+        parity_md([row_table]),
+    )
+    res = validate_staging_file(agree, hard=True)
+    check(
+        "soften parity: a matching one-row pair passes",
+        not any("soften disagreement" in e for e in res.errors),
+    )
+
+    # Trailing-section pair: the section is the document's last heading and
+    # the extraction still finds it.
+    trailing = stage(
+        "trailing",
+        parity_payload([soften_row("weak-assertion")]),
+        parity_md(mismatch_rows, trailing=True),
+    )
+    res = validate_staging_file(trailing, hard=True)
+    check(
+        "soften parity: a trailing last-heading section is still extracted and flags the mismatch",
+        not res.ok
+        and any("soften disagreement" in e for e in res.errors),
+    )
+
+    # Empty agreement: an empty array beside a None.-style rendering agrees at zero.
+    empty = stage("empty", parity_payload([]), parity_md(None))
+    res = validate_staging_file(empty, hard=True)
+    check(
+        "soften parity: an empty array beside a None. rendering agrees at zero",
+        not any("soften disagreement" in e for e in res.errors),
+    )
+
+    # Fail-closed: a non-empty array with no section at all refuses.
+    no_section = stage(
+        "nosection",
+        parity_payload([soften_row("weak-assertion")]),
+        parity_md(None, section=False),
+    )
+    res = validate_staging_file(no_section, hard=True)
+    check(
+        "soften parity: a non-empty array with no section refuses fail-closed",
+        not res.ok
+        and any("no ### Soften watchlist section" in e for e in res.errors),
+    )
+
+    # Fence: a pre-constant mismatch is grandfathered (exempt, no parity error).
+    pre = stage(
+        "prefence",
+        parity_payload([soften_row("weak-assertion")], date=pre_fence),
+        parity_md(mismatch_rows),
+        filename_date=pre_fence,
+    )
+    res = validate_staging_file(pre, hard=True)
+    check(
+        "soften parity: a pre-constant record is grandfathered (arm vacated)",
+        not any("soften disagreement" in e for e in res.errors),
+    )
+
+
 def _selftest_supersession_links(root: Path, check) -> None:
     """Family: the Supersedes / Superseded by link integrity gate (review
     records contract plan, Task 3). RED-first: the checks below fail until
@@ -14336,6 +14721,223 @@ def _selftest_panel_profile(root: Path, check) -> None:
     )
 
 
+
+
+def _selftest_date_fence_shared_owner(root: Path, check) -> None:
+    """Characterization: the two date-fence classifiers are thin wrappers
+    over one shared owner, so their returned shapes are identical and the
+    classes differ exactly inside the declared band (dates on or after
+    EXTENDED_SIDECAR_MIN_DATE and earlier than RECORD_KIND_SIDECAR_MIN_DATE;
+    both fences compare with a strict less-than, so the band is inclusive of
+    the lower constant and exclusive of the upper).
+    """
+    vocab = ("undated", "pre-fence", "post-fence")
+    dates = [
+        "2026-09-01",
+        "2026-09-09",
+        "2026-09-15",
+        "2026-09-19",
+        "2026-09-20",
+        "2026-09-21",
+        None,
+        42,
+    ]
+    names = ["2026-09-15-panel-x-r1.md", "2026-09-25-panel-x-r1.md", None, "panel-undated-r1.md"]
+    ok = True
+    for name in names:
+        for d in dates:
+            fresh = _freshness_fence(name, d)
+            kind = _record_kind_fence(name, d)
+            if list(fresh.keys()) != list(kind.keys()):
+                ok = False
+            for key in ("name_class", "sidecar_class"):
+                if fresh[key] not in vocab or kind[key] not in vocab:
+                    ok = False
+                    continue
+                in_band = fresh[key] == "post-fence" and kind[key] == "pre-fence"
+                if (fresh[key] != kind[key]) != in_band:
+                    ok = False
+    check("date-fence shared owner characterization", ok)
+
+def _selftest_outcome_contract(root: Path, check) -> None:
+    """Outcome-contract arms (scripts/OUTCOME_CONTRACT.md; outcome-contract
+    migration batch 2, Task 1).
+
+    The CLI answers in the four-outcome vocabulary with exactly one final
+    stdout `OUTCOME:` line per non-metadata run: a `--hard` invalid record
+    keeps exit 1 with a final `OUTCOME: fail` line after the human-readable
+    finding lines; a valid record keeps exit 0 with `OUTCOME: pass` (a
+    soft-mode warning run still exits 0, the warning line inside the
+    evidence, and the OUTCOME line still last); a usage violation (a missing
+    positional operand, a flag-combination violation) exits 3 with
+    `OUTCOME: tool_error` (the argparse override; today argparse exits 2)
+    while `--help` stays metadata-exempt with no OUTCOME line; an unreadable
+    input file (a path that cannot be opened) exits 3 with
+    `OUTCOME: tool_error` naming the path (today it straggles at exit 1);
+    and a `--json` run emits no stdout OUTCOME line and carries the outcome
+    as the JSON `outcome` field (the declared placement deviation)."""
+    @contextlib.contextmanager
+    def _captured():
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+            yield out_buf, err_buf
+
+    def outcome_rows(text: str) -> list[str]:
+        return [
+            row.strip()
+            for row in text.splitlines()
+            if row.strip().startswith("OUTCOME:")
+        ]
+
+    def call(argv: list[str]):
+        """Run main(argv) under both-stream capture; SystemExit is the
+        argparse errors' channel, so its code is the return value."""
+        with _captured() as (out_buf, err_buf):
+            try:
+                code = main(argv)
+            except SystemExit as exc:
+                code = exc.code
+        return code, out_buf.getvalue(), err_buf.getvalue()
+
+    valid_path = _write_staging(
+        root,
+        "2026-09-22-outcome-valid-r1.md",
+        _post_window_fixture_markdown("plan"),
+        _post_window_fixture_payload("plan"),
+    )
+    invalid_path = root / "2026-09-22-outcome-invalid-r1.md"
+    invalid_path.write_text("not a staging record\n", encoding="utf-8")
+    missing_path = root / "no-such-staging-record.md"
+
+    # Arm 1: a --hard invalid record keeps exit 1 with a final OUTCOME: fail.
+    rc, out, err = call(["--hard", str(invalid_path)])
+    check("hard invalid record exits 1", rc == 1)
+    check(
+        "hard invalid record ends stdout with exactly one OUTCOME: fail",
+        outcome_rows(out) == ["OUTCOME: fail"]
+        and out.rstrip().endswith("OUTCOME: fail"),
+    )
+    check(
+        "hard invalid record keeps the human-readable finding lines",
+        "ERROR:" in err,
+    )
+
+    # Arm 2: a valid record exits 0 with OUTCOME: pass last.
+    rc, out, err = call(["--hard", str(valid_path)])
+    check("hard valid record exits 0", rc == 0)
+    check(
+        "hard valid record ends stdout with exactly one OUTCOME: pass",
+        outcome_rows(out) == ["OUTCOME: pass"]
+        and out.rstrip().endswith("OUTCOME: pass"),
+    )
+
+    # Arm 3: a soft-mode warning run stays a pass (warning inside the
+    # evidence, OUTCOME line last).
+    rc, out, err = call([str(invalid_path)])
+    check("soft-mode run over an invalid record exits 0", rc == 0)
+    check("soft-mode run carries WARN lines in the evidence", "WARN:" in err)
+    check(
+        "soft-mode run ends stdout with exactly one OUTCOME: pass",
+        outcome_rows(out) == ["OUTCOME: pass"]
+        and out.rstrip().endswith("OUTCOME: pass"),
+    )
+
+    # Arm 4: usage violations are tool error (the argparse override), the
+    # OUTCOME line on stderr, never on stdout.
+    rc, out, err = call([])
+    check("missing positional operand exits 3 (argparse override)", rc == 3)
+    check(
+        "missing operand reports OUTCOME: tool_error on stderr",
+        "OUTCOME: tool_error" in err,
+    )
+    check(
+        "missing operand emits no stdout OUTCOME line",
+        outcome_rows(out) == [],
+    )
+    rc, out, err = call(
+        [
+            "--hard", str(valid_path),
+            "--source-plan", str(valid_path),
+            "--source-rfc", str(valid_path),
+        ]
+    )
+    check("flag-combination violation exits 3 (argparse override)", rc == 3)
+    check(
+        "flag-combination violation reports OUTCOME: tool_error on stderr",
+        "OUTCOME: tool_error" in err,
+    )
+
+    # Arm 5: --help stays metadata-exempt with no OUTCOME line.
+    rc, out, err = call(["--help"])
+    check("--help exits 0", rc == 0)
+    check(
+        "--help emits no OUTCOME line on either stream",
+        outcome_rows(out) == [] and outcome_rows(err) == [],
+    )
+
+    # Arm 6: an unreadable input file (a path that cannot be opened) is tool
+    # error naming the path.
+    rc, out, err = call(["--hard", str(missing_path)])
+    check("unreadable (missing) input exits 3", rc == 3)
+    check(
+        "unreadable input ends stdout with exactly one OUTCOME: tool_error",
+        outcome_rows(out) == ["OUTCOME: tool_error"]
+        and out.rstrip().endswith("OUTCOME: tool_error"),
+    )
+    check("unreadable input names the path", str(missing_path) in err)
+    rc, out, err = call(["--hard", str(root)])
+    check("a directory input (cannot be opened) exits 3", rc == 3)
+
+    # Arm 7: --json runs carry the outcome as the JSON field, no stdout line.
+    rc, out, err = call(["--json", "--hard", str(valid_path)])
+    payload = json.loads(out)
+    check(
+        "json valid run outcome field is pass",
+        rc == 0 and payload.get("outcome") == "pass",
+    )
+    check("json valid run emits no stdout OUTCOME line", outcome_rows(out) == [])
+    rc, out, err = call(["--json", "--hard", str(invalid_path)])
+    payload = json.loads(out)
+    check(
+        "json invalid hard run outcome field is fail",
+        rc == 1 and payload.get("outcome") == "fail",
+    )
+    check(
+        "json invalid hard run emits no stdout OUTCOME line",
+        outcome_rows(out) == [],
+    )
+    rc, out, err = call(["--json", str(missing_path)])
+    payload = json.loads(out)
+    check(
+        "json unreadable run outcome field is tool_error",
+        rc == 3 and payload.get("outcome") == "tool_error",
+    )
+
+    # Arm 8: the --newest-for-branch skip is a modeled pass on both channels.
+    rc, out, err = call(
+        [
+            "--json", "--newest-for-branch", "no-such-branch-slug",
+            "--cwd", str(root),
+        ]
+    )
+    payload = json.loads(out)
+    check(
+        "json newest-for-branch skip outcome field is pass",
+        rc == 0
+        and payload.get("outcome") == "pass"
+        and payload.get("skipped") is True,
+    )
+    rc, out, err = call(
+        ["--newest-for-branch", "no-such-branch-slug", "--cwd", str(root)]
+    )
+    check(
+        "non-json newest-for-branch skip ends stdout with OUTCOME: pass",
+        rc == 0
+        and outcome_rows(out) == ["OUTCOME: pass"]
+        and out.rstrip().endswith("OUTCOME: pass"),
+    )
+
+
 def run_selftest() -> int:
     import tempfile
 
@@ -14380,6 +14982,7 @@ def run_selftest() -> int:
                 "record_kind_contract",
                 _selftest_record_kind_contract,
             ),
+            ("soften_parity", _selftest_soften_parity),
             (
                 "supersession_links",
                 _selftest_supersession_links,
@@ -14397,6 +15000,14 @@ def run_selftest() -> int:
                 _selftest_prompt_scope_accounting,
             ),
             ("panel_profile", _selftest_panel_profile),
+            (
+                "date_fence_shared_owner",
+                _selftest_date_fence_shared_owner,
+            ),
+            (
+                "outcome_contract",
+                _selftest_outcome_contract,
+            ),
         ):
             fn(root, check)
 
@@ -14411,7 +15022,7 @@ def run_selftest() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Validate review staging markdown")
+    parser = OutcomeArgumentParser(description="Validate review staging markdown")
     parser.add_argument("path", nargs="?", help="Staging markdown file")
     parser.add_argument(
         "--hard",
@@ -14490,13 +15101,19 @@ def main(argv: list[str] | None = None) -> int:
         repo_root = Path(args.cwd).expanduser().resolve()
         target = newest_staging_for_branch(repo_root, args.newest_for_branch)
         if target is None:
+            # The modeled skip (nothing to validate) is a pass naming its
+            # reason; the outcome rides the JSON field in --json mode (the
+            # declared placement deviation).
             payload = {
                 "ok": True,
                 "skipped": True,
                 "reason": "no staging doc found for branch",
+                "outcome": OUTCOME_LABELS[0],
             }
             if args.json:
                 print(json.dumps(payload))
+            else:
+                print("OUTCOME: %s" % OUTCOME_LABELS[0])
             return 0
     else:
         parser.error("path or --newest-for-branch is required")
@@ -14532,17 +15149,31 @@ def main(argv: list[str] | None = None) -> int:
 
     if source_kind is not None:
         if not source_path.is_file():
-            payload = {"ok": False, "errors": [f"source file not found: {source_path}"]}
+            payload = {
+                "ok": False,
+                "errors": [f"source file not found: {source_path}"],
+                "outcome": OUTCOME_LABELS[3],
+            }
             if args.json:
                 print(json.dumps(payload))
             else:
                 print(f"ERROR: source file not found: {source_path}", file=sys.stderr)
-            return 1
+                print("OUTCOME: %s" % OUTCOME_LABELS[3])
+            return 3
         try:
             source_bytes = source_path.read_bytes()
         except OSError as exc:
-            print(f"ERROR: cannot read source file: {exc}", file=sys.stderr)
-            return 1
+            payload = {
+                "ok": False,
+                "errors": [f"cannot read source file: {exc}"],
+                "outcome": OUTCOME_LABELS[3],
+            }
+            if args.json:
+                print(json.dumps(payload))
+            else:
+                print(f"ERROR: cannot read source file: {exc}", file=sys.stderr)
+                print("OUTCOME: %s" % OUTCOME_LABELS[3])
+            return 3
         expected_digest = compute_source_digest(source_kind, source_bytes)
         # Stash the path so the stale-digest error can name it (F7: an agent
         # that points the source flag at the wrong file gets an actionable hint
@@ -14550,6 +15181,31 @@ def main(argv: list[str] | None = None) -> int:
         _SOURCE_PATH_FOR_ERROR = str(source_path)
     else:
         _SOURCE_PATH_FOR_ERROR = None
+
+    # Outcome contract: the CLI's own input must be openable. A missing or
+    # unreadable staging path is tool error (exit 3) naming the path, never
+    # a findings-class failure; the importable validate_staging_file keeps
+    # its function-level error reporting for direct library callers.
+    try:
+        with open(target, "rb"):
+            pass
+    except OSError as exc:
+        payload = {
+            "ok": False,
+            "path": str(target),
+            "errors": [f"cannot read staging file: {exc}"],
+            "warnings": [],
+            "outcome": OUTCOME_LABELS[3],
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print(
+                f"ERROR: cannot read staging file: {target}: {exc}",
+                file=sys.stderr,
+            )
+            print("OUTCOME: %s" % OUTCOME_LABELS[3])
+        return 3
 
     result = validate_staging_file(
         target,
@@ -14593,8 +15249,16 @@ def main(argv: list[str] | None = None) -> int:
                 result,
                 source_hint=profile_source_hint,
             )
+    # Outcome contract: the exit code and the final OUTCOME label carry the
+    # outcome together. A --hard invalid record stays fail (exit 1); a valid
+    # record and every soft-mode run stay pass (exit 0, warnings inside the
+    # pass). A --json run rides the JSON `outcome` field with no stdout
+    # OUTCOME line (the declared placement deviation).
+    exit_code = 1 if (args.hard and not result.ok) else 0
     if args.json:
-        print(json.dumps(result.to_dict(), indent=2))
+        payload = result.to_dict()
+        payload["outcome"] = OUTCOME_LABELS[exit_code]
+        print(json.dumps(payload, indent=2))
     else:
         for warning in result.warnings:
             print(f"WARN: {warning}", file=sys.stderr)
@@ -14616,10 +15280,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"OK: {target}")
         else:
             print(f"FAIL: {target}", file=sys.stderr)
-
-    if args.hard and not result.ok:
-        return 1
-    return 0
+        print("OUTCOME: %s" % OUTCOME_LABELS[exit_code])
+    return exit_code
 
 
 if __name__ == "__main__":

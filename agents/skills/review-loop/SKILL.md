@@ -99,11 +99,11 @@ Cursor hooks also warn via `postToolUse` after staging writes, block review-loop
 
 ## Soften / regression watchlist (cross-round)
 
-Maintain a **soften watchlist** for the active loop run (session tmp or the latest staging doc section `### Soften watchlist`).
+Maintain a **soften watchlist** for the active loop run: the active-run watchlist is a derived working copy initialized from the latest round's record pair (the sidecar `soften_watchlist` array and its rendered `### Soften watchlist` section) and written back into each new round's record; session tmp is a cache, never the origin of record.
 
 Add an entry when **any** of these happen after a finding was staged as `fixed` / `done`:
 
-- A later commit **reverts** the fix (or restores the prior behavior) with rationale such as "soften", "keep X", "intentional", or partner pushback
+- A later commit **reverts** the fix (or restores the prior behavior) with rationale such as "soften", "keep X", "intentional", or partner pushback; the trigger reads commit messages as the detection input that schedules a watchlist re-check, and commit messages never hold row state
 - Triage marks the finding `dropped` / `deferred` **after** a fix commit already landed
 - The partner explicitly declines a fix that was already implemented
 

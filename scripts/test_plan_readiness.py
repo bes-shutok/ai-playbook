@@ -435,7 +435,9 @@ class ReviewNameCheckTest(unittest.TestCase):
         round_path = self.reviews / CANONICAL_ROUND_NAME
         with self.assertRaises(SystemExit) as caught:
             self._run_main(["--check-review-name", str(round_path)])
-        self.assertEqual(caught.exception.code, 2)
+        # Renewed legacy arm: the argparse usage override exits 3 (tool
+        # error), never argparse's default exit 2.
+        self.assertEqual(caught.exception.code, 3)
 
     def test_mode_combination_is_usage_error(self):
         round_path = self.reviews / CANONICAL_ROUND_NAME
@@ -450,7 +452,8 @@ class ReviewNameCheckTest(unittest.TestCase):
                             str(round_path),
                         ]
                     )
-                self.assertEqual(caught.exception.code, 2)
+                # Renewed legacy arm: the argparse usage override exits 3.
+                self.assertEqual(caught.exception.code, 3)
 
 
 # --------------------------------------------------------------------------- #
@@ -1303,6 +1306,133 @@ class CapClosureReadinessTest(unittest.TestCase):
         ok, reason = self._evaluate(plan)
         self.assertFalse(ok, reason is None and "unexpected pass")
         self.assertIn("cannot read plan bytes", reason)
+
+
+# --------------------------------------------------------------------------- #
+# Outcome-contract fixtures (outcome-contract migration batch 2, Task 2):
+# the four-outcome exit vocabulary and the final `OUTCOME:` line on stdout
+# for every non-metadata run; `--help` stays metadata-exempt.
+# --------------------------------------------------------------------------- #
+
+
+def _outcome_rows(text: str) -> list:
+    return [ln for ln in text.splitlines() if ln.startswith("OUTCOME:")]
+
+
+class OutcomeContractTest(unittest.TestCase):
+    """The migrated CLI vocabulary: readiness verdicts keep 0 pass and 1
+    fail with a final stdout `OUTCOME:` line; usage and mutual-exclusion
+    violations exit 3 (the argparse override) with `OUTCOME: tool_error` on
+    stderr; a sibling-compatibility mismatch is tool error (exit 3), never
+    a readiness fail; `--sweep` keeps its modeled verdicts and gains the
+    same final-line and usage rules."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="outcome-contract-fixture-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        (self.root / ".ai-playbook").mkdir()
+        (self.root / ".ai-playbook" / "facts.md").write_text(
+            FACTS_BODY, encoding="utf-8"
+        )
+        (self.root / "plans").mkdir()
+        (self.root / "reviews").mkdir()
+
+    def _run_main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        prev = os.getcwd()
+        os.chdir(self.root)
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                try:
+                    rc = plan_readiness.main(argv)
+                except SystemExit as exc:
+                    rc = exc.code
+        finally:
+            os.chdir(prev)
+        return rc, out.getvalue(), err.getvalue()
+
+    def _write_state(self, **kwargs):
+        return plan_readiness._write_clean_state(
+            self.root / "plans", self.root / "reviews", **kwargs
+        )
+
+    def test_ready_plan_emits_outcome_pass(self):
+        plan, _ = self._write_state()
+        rc, out, err = self._run_main([str(plan)])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: pass"])
+        self.assertTrue(out.rstrip().endswith("OUTCOME: pass"), out)
+        self.assertIn("readiness OK", out)
+
+    def test_failed_condition_emits_outcome_fail(self):
+        plan, _ = self._write_state(verdict="no")
+        rc, out, err = self._run_main([str(plan)])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: fail"])
+        self.assertTrue(out.rstrip().endswith("OUTCOME: fail"), out)
+        # The named first-failed condition stays on stderr.
+        self.assertIn("readiness FAILED:", err)
+        self.assertIn("does not report a ready=yes verdict line", err)
+
+    def test_usage_violation_exits_3_tool_error(self):
+        # A missing plan operand is a parse-time usage violation: argparse's
+        # exit 2 is overridden to tool error (exit 3), the OUTCOME line
+        # riding the stderr usage text.
+        rc, out, err = self._run_main([])
+        self.assertEqual(rc, 3, (out, err))
+        self.assertEqual(_outcome_rows(out), [])
+        self.assertIn("OUTCOME: tool_error", err)
+        # A forbidden mode combination (--pre-round with --selftest) is the
+        # same parse-time tool error.
+        rc, out, err = self._run_main(
+            ["--pre-round", "plans/2026-09-01-x.md", "--selftest"]
+        )
+        self.assertEqual(rc, 3, (out, err))
+        self.assertEqual(_outcome_rows(out), [])
+        self.assertIn("OUTCOME: tool_error", err)
+        self.assertIn("--pre-round must not be combined with --selftest", err)
+
+    def test_help_stays_metadata_exempt(self):
+        rc, out, err = self._run_main(["--help"])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_outcome_rows(out), [])
+        self.assertEqual(_outcome_rows(err), [])
+
+    def test_sibling_compat_failure_is_tool_error(self):
+        # The compat seam monkeypatches the sibling compatibility constant
+        # the way plan_readiness.py's own selftest fixtures do (set
+        # vrs.COMPAT_VERSION, restore in finally).
+        plan, _ = self._write_state()
+        saved = vrs.COMPAT_VERSION
+        vrs.COMPAT_VERSION = 999
+        try:
+            rc, out, err = self._run_main([str(plan)])
+        finally:
+            vrs.COMPAT_VERSION = saved
+        self.assertEqual(rc, 3, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: tool_error"])
+        self.assertTrue(out.rstrip().endswith("OUTCOME: tool_error"), out)
+        self.assertIn("compatibility FAILED", err)
+        self.assertIn("999", err)
+
+    def test_sweep_keeps_modeled_verdicts_and_gains_the_line(self):
+        plan, review = self._write_state()
+        rc, out, err = self._run_main(["--sweep"])
+        self.assertEqual(rc, 0, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: pass"])
+        self.assertTrue(out.rstrip().endswith("OUTCOME: pass"), out)
+        # The drift verdict keeps its modeled fail: a Summary whose ready=
+        # mention yields no verdict token is an anomaly at exit 1, and the
+        # OUTCOME line stays the final stdout row.
+        review.write_text(
+            "# Plan Review\n\n## Summary\n\n- ready=\nyes\n",
+            encoding="utf-8",
+        )
+        rc, out, err = self._run_main(["--sweep"])
+        self.assertEqual(rc, 1, (out, err))
+        self.assertEqual(_outcome_rows(out), ["OUTCOME: fail"])
+        self.assertTrue(out.rstrip().endswith("OUTCOME: fail"), out)
+        self.assertIn("sweep FAILED", out)
 
 
 if __name__ == "__main__":

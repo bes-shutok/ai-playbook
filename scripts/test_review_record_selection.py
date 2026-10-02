@@ -1096,5 +1096,57 @@ class SelectionHelperTest(unittest.TestCase):
         self.assertNotIn("orphaned record half", err)
 
 
+class FenceMaskSeamTest(unittest.TestCase):
+    """The helper fence mask consumes the validator's shared fence classifier
+    through the declared fence_line_re seam (scanner-validator single-sourcing
+    plan, Task 4): the mask equals the classifier's in_fence_content events
+    under the helper's own opener regex, and the form-feed-prefixed opener
+    pins the seam wiring (that line is an opener under the classifier's
+    default regex but not under the helper's narrower one, so leaving the
+    parameter unwired flips the leg)."""
+
+    def test_mask_matches_classifier_events(self) -> None:
+        if helper is None or vrs is None:
+            self.fail(
+                "module import failed: "
+                f"helper={_IMPORT_ERROR} vrs={_VRS_IMPORT_ERROR}"
+            )
+        cases = {
+            "bare run": ["```", "content", "```"],
+            "close run equal length": ["````", "content", "```"],
+            "close run longer than opener": ["```", "content", "````"],
+            "other-delimiter run never closes": ["```", "~~~~~~", "content", "```"],
+            "info-string suffix stays content": ["```py", "x", "```"],
+            "tilde delimiters": ["~~~", "x", "~~~"],
+            "heading inside an open fence is masked": ["```", "## Heading", "```"],
+            "heading outside any fence is unmasked": ["## Heading"],
+            "form-feed-prefixed opener": ["\x0c```", "x", "```"],
+            "unclosed fence": ["```", "x"],
+        }
+        for name, lines in cases.items():
+            mask, unclosed = helper._fence_mask(lines)
+            events, cls_unclosed = vrs.classify_fence_lines(
+                lines, fence_line_re=helper._FENCE_LINE_RE
+            )
+            self.assertEqual(
+                mask,
+                [event == "in_fence_content" for event, _payload in events],
+                name,
+            )
+            self.assertEqual(unclosed, cls_unclosed, name)
+        # Targeted seam legs: under the helper's narrower opener regex the
+        # form-feed line is ordinary (never an opener), so the trailing run
+        # opens an unclosed fence at index 2; under the classifier's default
+        # regex the form-feed line WOULD be the opener, which is exactly the
+        # divergence the declared parameter carries.
+        mask, unclosed = helper._fence_mask(["\x0c```", "x", "```"])
+        self.assertEqual(mask, [False, False, False])
+        self.assertEqual(unclosed, 2)
+        # Unclosed index leg: the helper surfaces the classifier's opener
+        # index unchanged.
+        _mask, unclosed = helper._fence_mask(["```", "x"])
+        self.assertEqual(unclosed, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

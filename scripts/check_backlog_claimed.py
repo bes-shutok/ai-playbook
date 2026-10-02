@@ -19,9 +19,16 @@ Task 1; origin docs/history/backlog/2026-09-22-deferral-sweeps-must-cross-check-
   (normalized to filename stems).
 - ``--plans-dir`` override; without it the directory resolves from the
   repo facts file (``.ai-playbook/facts.md``, TOML ``plans_dir`` key)
-  with conventional default ``docs/history/plans/``. Relative values anchor at
-  the repo root, never the process CWD, and no machine-specific
-  absolute path is hardcoded.
+  with conventional default ``docs/history/plans/``. Relative values
+  anchor at the resolved repo root (see ``--repo-root``), never an
+  unanchored process CWD, and no machine-specific absolute path is
+  hardcoded.
+- ``--repo-root`` override naming the anchoring tree; without it the
+  repo root resolves by first match: the nearest ancestor
+  ``.ai-playbook/facts.md`` discovered from the process CWD, bounded to
+  the CWD's git repository toplevel (facts above the toplevel never
+  resolve; outside any git repository the discovery rung is
+  unavailable), then this script's own location as the last fallback.
 - Hyphen-bounded matching: an occurrence counts when the characters
   immediately before and after it (when present) are not alphanumeric:
   a path separator, a dot, a backtick, a space, or a hyphen bounds the
@@ -39,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,6 +60,9 @@ except ImportError:  # pragma: no cover
 DEFAULT_PLANS_DIR = "docs/history/plans/"
 FACTS_PLANS_DIR_KEY = "plans_dir"
 
+# The repo facts file, relative to the anchoring repo root.
+FACTS_FILE_RELPATH = Path(".ai-playbook") / "facts.md"
+
 # A stem's second match form: the leading calendar-date prefix, stripped.
 DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
 
@@ -60,14 +71,55 @@ DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
 SEGMENT_RE = r"(?<![A-Za-z0-9]){needle}(?![A-Za-z0-9])"
 
 
-def repo_root() -> Path:
+def repo_root(explicit: str | Path | None = None) -> Path:
     """The repo root anchoring facts-key and default-dir resolution.
 
-    Derived from this script's own location (``scripts/`` parent), so a
-    subdirectory or cross-tree invocation resolves the same tree without
-    any machine-specific path.
+    Three-rung chain, first match wins: the explicit ``--repo-root``
+    argument when given; else the nearest ancestor ``.ai-playbook/facts.md``
+    discovered from the process CWD, bounded to the CWD's git repository
+    toplevel (``git rev-parse --show-toplevel``); else this script's own
+    location (``scripts/`` parent), so a subdirectory or cross-tree
+    invocation without facts resolves the same tree without any
+    machine-specific path.
     """
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    discovered = _discover_facts_repo_root()
+    if discovered is not None:
+        return discovered
     return Path(__file__).resolve().parent.parent
+
+
+def _discover_facts_repo_root() -> Path | None:
+    """Nearest-ancestor ``.ai-playbook/facts.md`` discovery from the process
+    CWD, bounded to the CWD's git repository toplevel.
+
+    Walks the CWD's ancestor chain and returns the first directory owning
+    the facts file. The walk never passes the git toplevel, so a facts file
+    above the repository never resolves (an unrelated ancestor corpus
+    cannot be swept by a facts-less repo); outside any git repository the
+    discovery rung is unavailable and ``None`` drops the chain through to
+    the script-location rung.
+    """
+    try:
+        probe = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if probe.returncode != 0:
+        return None
+    toplevel = Path(probe.stdout.strip()).resolve()
+    cwd = Path.cwd()
+    for candidate in (cwd, *cwd.parents):
+        if (candidate / FACTS_FILE_RELPATH).is_file():
+            return candidate
+        if candidate.resolve() == toplevel:
+            return None
+    return None
 
 
 def normalize_slug(raw: str) -> str | None:
@@ -104,18 +156,22 @@ def line_hits(line: str, forms: list[str]) -> bool:
     return False
 
 
-def resolve_plans_dir(explicit: str | None) -> Path:
+def resolve_plans_dir(explicit: str | None, explicit_repo_root: str | None = None) -> Path:
     """Resolve the plans directory: the explicit ``--plans-dir`` argument,
     then the repo facts file's ``plans_dir`` TOML key, then the
-    conventional default. Relative values anchor at the repo root, never
-    the process CWD, so a subdirectory invocation resolves the same
+    conventional default. The anchoring repo root follows the
+    ``repo_root()`` chain (the ``--repo-root`` flag, then the
+    nearest-ancestor facts discovery bounded to the process CWD's git
+    toplevel, then this script's location), and relative values anchor at
+    that resolved root, so a subdirectory invocation resolves the same
     tree. A missing facts key warns on stderr (exit code unaffected)."""
+    root = repo_root(explicit_repo_root)
     if explicit:
         raw = explicit
     else:
         raw = None
         if facts_paths is not None:
-            raw = facts_paths.resolve_toml_key_raw(repo_root(), FACTS_PLANS_DIR_KEY)
+            raw = facts_paths.resolve_toml_key_raw(root, FACTS_PLANS_DIR_KEY)
         else:  # pragma: no cover
             print(
                 "warning: facts parser unavailable; using conventional default",
@@ -131,7 +187,7 @@ def resolve_plans_dir(explicit: str | None) -> Path:
             raw = DEFAULT_PLANS_DIR
     path = Path(raw).expanduser()
     if not path.is_absolute():
-        path = repo_root() / path
+        path = root / path
     return path
 
 
@@ -189,6 +245,15 @@ def main(argv: list[str] | None = None) -> int:
         help="plans directory override (default: the repo facts file's "
         f"{FACTS_PLANS_DIR_KEY} key, else {DEFAULT_PLANS_DIR})",
     )
+    parser.add_argument(
+        "--repo-root",
+        default=None,
+        metavar="PATH",
+        help="repo root override anchoring the facts file and relative "
+        "plans-dir values; precedence: this flag, then nearest-ancestor "
+        ".ai-playbook/facts.md discovery bounded to the process CWD's git "
+        "toplevel, then this script's own location",
+    )
     args = parser.parse_args(argv)
 
     slugs: list[str] = []
@@ -198,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--slug has no filename stem: {raw!r}")
         slugs.append(slug)
 
-    plans_dir = resolve_plans_dir(args.plans_dir)
+    plans_dir = resolve_plans_dir(args.plans_dir, args.repo_root)
     if not plans_dir.is_dir():
         print(f"error: plans directory not found: {plans_dir}", file=sys.stderr)
         return 2

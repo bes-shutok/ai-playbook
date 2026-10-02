@@ -16,7 +16,16 @@ in the Worktree-first standard: walk `git log --format=%H -- <path>`, skip
 commits where the path does not exist, and never treat a plumbing miss as a
 tool failure.
 
-Exit codes: 0 pass, 1 refuse, 2 tool failure (guard-family contract).
+Exit codes (outcome contract): 0 pass, 1 fail (a modeled refusal), 2
+indeterminate (the git plumbing answered outside its 0/1 answer vocabulary
+over resolved inputs, or a candidate path's HEAD tree mode type disagrees
+with its disk lstat type, so freshness could not be determined; when one
+multi-path run observes both regressed and indeterminate paths,
+indeterminate dominates and every regressed path is still named), 3 tool
+error (an unresolvable head, an unreadable fresh list, a usage error, or an
+unheld environment assumption). Every non-metadata run ends with exactly one
+final `OUTCOME:` line after the human-readable evidence; `--help` and usage
+metadata exits emit no `OUTCOME:` line.
 """
 
 import argparse
@@ -24,9 +33,24 @@ import os
 import subprocess
 import sys
 
+OUTCOME_LABELS = {0: "pass", 1: "fail", 2: "indeterminate", 3: "tool_error"}
 
-class ToolFailure(Exception):
-    """A git plumbing failure outside the expected absent-object cases."""
+
+class OutcomeArgumentParser(argparse.ArgumentParser):
+    """Argument parser whose usage errors exit 3 (tool error) with a final
+    `OUTCOME: tool_error` line on stdout, overriding argparse's default
+    exit 2; `--help` stays a metadata exit without an `OUTCOME:` line."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        sys.stderr.write("%s: error: %s\n" % (self.prog, message))
+        print("OUTCOME: %s" % OUTCOME_LABELS[3])
+        raise SystemExit(3)
+
+
+class PlumbingFailure(Exception):
+    """A git plumbing failure over resolved inputs (the indeterminate
+    class, never a modeled refusal)."""
 
 
 def _git(repo, *args):
@@ -37,8 +61,13 @@ def _git(repo, *args):
     )
 
 
-def _tool_failure(message):
-    sys.stderr.write("prestage-freshness-gate tool failure: %s\n" % message)
+def _tool_error(message):
+    sys.stderr.write("prestage-freshness-gate tool error: %s\n" % message)
+    return 3
+
+
+def _indeterminate(message):
+    sys.stderr.write("prestage-freshness-gate indeterminate: %s\n" % message)
     return 2
 
 
@@ -75,7 +104,7 @@ def _disk_blob(repo, rel):
         return None
     proc = _git(repo, "hash-object", "--", rel)
     if proc.returncode != 0:
-        raise ToolFailure("hash-object failed for %s" % rel)
+        raise PlumbingFailure("hash-object failed for %s" % rel)
     return proc.stdout.strip()
 
 
@@ -88,13 +117,26 @@ def _blob_at(repo, sha, rel):
     return proc.stdout.strip()
 
 
+def _head_tree_mode(repo, head_sha, rel):
+    """Tree mode of REL inside commit SHA; None when the path is absent
+    there. Raises PlumbingFailure when ls-tree fails over the resolved
+    head."""
+    proc = _git(repo, "ls-tree", head_sha, "--", rel)
+    if proc.returncode != 0:
+        raise PlumbingFailure("ls-tree failed for %s" % rel)
+    line = proc.stdout.strip()
+    if not line:
+        return None
+    return line.split()[0]
+
+
 def _ancestor_match(repo, rel, disk_blob):
     """First commit walking `git log --format=%H -- REL` whose blob equals
     DISK_BLOB, skipping commits where the path does not exist; None when no
     ancestor blob matches."""
     proc = _git(repo, "log", "--format=%H", "--", rel)
     if proc.returncode != 0:
-        raise ToolFailure("git log failed for %s" % rel)
+        raise PlumbingFailure("git log failed for %s" % rel)
     for line in proc.stdout.splitlines():
         sha = line.strip()
         if not sha:
@@ -105,22 +147,55 @@ def _ancestor_match(repo, rel, disk_blob):
     return None
 
 
+def _type_change_detail(rel, head_mode, disk_is_symlink):
+    """Observed/could-not-determine evidence for a HEAD-versus-disk type
+    disagreement (the explicit type check ahead of the byte comparison)."""
+    disk_type = "symlink" if disk_is_symlink else "regular file"
+    return (
+        "type change for %s: HEAD tree mode %s disagrees with the disk "
+        "lstat type (%s); observed: the tracked entry and the disk entry "
+        "are different filesystem types; freshness could not be determined"
+        % (rel, head_mode, disk_type))
+
+
 def cmd_check(args):
     repo = args.repo
     head_sha = _resolve_head(repo, args.head)
     if head_sha is None:
-        return _tool_failure("head unresolvable: %s" % args.head)
+        return _tool_error("head unresolvable: %s" % args.head)
     fresh = _load_fresh_list(args.fresh_list)
     if fresh is None:
-        return _tool_failure("fresh list unreadable: %s" % args.fresh_list)
+        return _tool_error("fresh list unreadable: %s" % args.fresh_list)
     refused = False
+    # Collected indeterminate details (typechange disagreements and
+    # plumbing failures): the loop always finishes so every remaining
+    # path still yields its evidence; indeterminate (exit 2) then
+    # dominates a stale refuse (exit 1) per the outcome contract's
+    # dominance rule (a multi-input run reports indeterminate AND still
+    # names every regressed path, never argument-order-dependent
+    # evidence).
+    indeterminate_details = []
     for rel in args.paths:
         try:
             if rel in fresh:
                 print("ok: %s" % rel)
                 continue
-            disk = _disk_blob(repo, rel)
             head_blob = _blob_at(repo, head_sha, rel)
+            disk_path = os.path.join(str(repo), rel)
+            if head_blob is not None and os.path.lexists(disk_path):
+                # NEW explicit type check ahead of the byte comparison: a
+                # HEAD tree mode type (file versus symlink) that disagrees
+                # with the disk lstat type (including a dangling symlink)
+                # is indeterminate, never a stale refuse or a bogus
+                # byte-equality pass through a symlink's target bytes.
+                head_mode = _head_tree_mode(repo, head_sha, rel)
+                disk_is_symlink = os.path.islink(disk_path)
+                if head_mode is not None and (
+                        head_mode.startswith("120") != disk_is_symlink):
+                    indeterminate_details.append(_type_change_detail(
+                        rel, head_mode, disk_is_symlink))
+                    continue
+            disk = _disk_blob(repo, rel)
             if disk is not None and head_blob is not None and disk == head_blob:
                 print("ok: %s" % rel)
                 continue
@@ -134,8 +209,15 @@ def cmd_check(args):
             else:
                 print("refuse: %s disk bytes match neither HEAD nor the "
                       "session-owned fresh list" % rel)
-        except ToolFailure as exc:
-            return _tool_failure(str(exc))
+        except PlumbingFailure as exc:
+            indeterminate_details.append(
+                "%s over resolved head %s; observed: the plumbing answered "
+                "outside the 0/1 answer vocabulary; freshness could not be "
+                "determined" % (exc, head_sha))
+    for detail in indeterminate_details:
+        _indeterminate(detail)
+    if indeterminate_details:
+        return 2
     if refused:
         return 1
     print("ok: all candidate paths fresh against HEAD")
@@ -143,7 +225,7 @@ def cmd_check(args):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = OutcomeArgumentParser(
         prog="prestage_freshness_gate.py",
         description=("Refuse staging candidate paths whose disk bytes match "
                      "neither HEAD nor the session-owned fresh list."),
@@ -158,7 +240,9 @@ def main(argv):
     check.set_defaults(func=cmd_check)
 
     args = parser.parse_args(argv)
-    return args.func(args)
+    code = args.func(args)
+    print("OUTCOME: %s" % OUTCOME_LABELS[code])
+    return code
 
 
 if __name__ == "__main__":

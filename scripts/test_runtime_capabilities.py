@@ -349,6 +349,13 @@ class RuntimeCapabilitiesTest(unittest.TestCase):
             def observe_inventory(self):
                 return {"version": 1, "observation_kind": "inventory", "state": "available", "observed_at": time.monotonic(), "freshness_window": 30, "capacity_slot_effect": "retain", "inventory": []}
 
+            # The claim-boundary Codex model guard refuses before membership
+            # evaluation when the adapter cannot probe the policy, so the
+            # witness's adapter carries the ok-stub the guard's own fixtures
+            # use: this witness races the capacity reservation, not the guard.
+            def model_guard_check(self):
+                return {"status": "ok"}
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             git_env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")

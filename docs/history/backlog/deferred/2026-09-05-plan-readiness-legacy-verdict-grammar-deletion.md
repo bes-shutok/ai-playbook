@@ -1,7 +1,7 @@
 # Backlog: delete legacy Summary verdict grammar from plan_readiness
 
 Status: open
-Priority: deferred (2026-09-18, Andrey decision: corpus convergence is not organic and the pre-migration review rounds will be removed by a dedicated archive sweep in roughly Oct-Nov 2026; until that sweep lands, the plan's Task 1 eligibility stand-down makes execution impossible. The certified plan is parked byte-identical at docs/plans/deferred/2026-09-15-plan-readiness-legacy-verdict-grammar-deletion.md, do not edit it, its review digest db071188 must stay valid; revival protocol is in docs/plans/deferred/README.md. Parked INCOMPLETE: the coverage gaps below must fold into the plan at revival, before its mandatory fresh review round.)
+Priority: deferred (2026-09-18, Andrey decision: corpus convergence is not organic and the pre-migration review rounds will be removed by a dedicated archive sweep in roughly Oct-Nov 2026; until that sweep lands, the plan's Task 1 eligibility stand-down makes execution impossible. The certified plan is parked byte-identical at docs/history/plans/deferred/2026-09-15-plan-readiness-legacy-verdict-grammar-deletion.md, do not edit it, its review digest db071188 must stay valid; revival protocol is in docs/history/plans/deferred/README.md. Parked INCOMPLETE: the coverage gaps below must fold into the plan at revival, before its mandatory fresh review round.)
 Workflow: backlog
 Source: 2026-09-04-plan-readiness-sidecar-verdict-field acceptance criterion 3 (legacy grammar deletion lands only after the corpus sweep confirms no remaining pre-adoption artifacts), spun off by the 2026-09-05 plan-readiness-migration plan
 Severity: Low (time-gated)

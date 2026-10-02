@@ -58,6 +58,21 @@ UNCLAIMED_PLAN_BODY = (
     "- do another thing\n"
 )
 
+# Repo-aware resolution fixture (plan
+# docs/history/plans/2026-10-02-check-backlog-claimed-repo-aware.md, Task 1):
+# a scratch consumer repo claiming its own local item. The stem is absent
+# from the canonical corpus (both match forms), so a finding can only come
+# from the consumer's own plans directory.
+CONSUMER_SLUG = "2026-01-01-consumer-item"
+CONSUMER_PLAN_NAME = "2026-01-02-consumer-plan.md"
+CONSUMER_PLAN_BODY = (
+    "# Plan: consumer claim\n"
+    "\n"
+    "Backlog origins (scope of record):\n"
+    f"- `docs/history/backlog/{CONSUMER_SLUG}.md`\n"
+)
+ABSENT_STEM = "2026-99-99-absent-item"
+
 
 class CheckBacklogClaimedTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -248,6 +263,131 @@ class CheckBacklogClaimedTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("error", result.stderr.lower())
+        self.assertEqual(result.stdout, "")
+
+
+class TestRepoAwareResolution(unittest.TestCase):
+    """Repo-aware anchoring of the checker's repo root (plan
+    docs/history/plans/2026-10-02-check-backlog-claimed-repo-aware.md, Task 1).
+
+    Each case builds a scratch consumer repository owning its facts and
+    plans corpus and drives the canonical checker as an external process,
+    so the resolution chain (the ``--repo-root`` flag, then nearest-ancestor
+    facts discovery bounded to the process CWD's git toplevel, then the
+    script location) is exercised exactly as an invocation sees it.
+    """
+
+    def setUp(self) -> None:
+        # Resolved: git and the checker report physical paths, so the
+        # assertions must compare against the physical fixture root too.
+        self.tmp = Path(tempfile.mkdtemp(prefix="repo-aware-fixture-")).resolve()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    # ---- fixture helpers -------------------------------------------------
+
+    def make_consumer_repo(self, name: str, with_facts: bool = True) -> Path:
+        """A git repository claiming CONSUMER_SLUG from its top-level plans;
+        optionally carrying its own facts file."""
+        repo = self.tmp / name
+        plans = repo / "docs" / "history" / "plans"
+        plans.mkdir(parents=True)
+        (plans / CONSUMER_PLAN_NAME).write_text(CONSUMER_PLAN_BODY, encoding="utf-8")
+        if with_facts:
+            facts = repo / ".ai-playbook"
+            facts.mkdir()
+            (facts / "facts.md").write_text(
+                '```toml\nplans_dir = "docs/history/plans/"\n```\n',
+                encoding="utf-8",
+            )
+        subprocess.run(
+            ["git", "init", "-q"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return repo
+
+    def run_in(self, cwd: Path, script: Path, *argv: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(script), *argv],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+
+    def consumer_finding_line(self, repo: Path) -> str:
+        """The exact finding line the consumer repo's own corpus produces."""
+        body_lines = CONSUMER_PLAN_BODY.splitlines()
+        lineno = next(
+            i for i, line in enumerate(body_lines, start=1) if CONSUMER_SLUG in line
+        )
+        plan_path = repo / "docs" / "history" / "plans" / CONSUMER_PLAN_NAME
+        return f"CLAIMED {CONSUMER_SLUG} -> {plan_path}:{lineno}"
+
+    # ---- cases -----------------------------------------------------------
+
+    def test_symlink_invocation_answers_for_calling_repo(self) -> None:
+        """The checker reached through a symlink into a facts-bearing
+        consumer repo answers for the calling repo's corpus: the consumer
+        claim is found (exit 1), not the script-location corpus.
+        Discriminating: a checker deriving the repo root from the script
+        file's own resolved location sweeps the wrong corpus and exits 0
+        (the wrong-corpus defect)."""
+        consumer = self.make_consumer_repo("consumer")
+        link = consumer / "checker-link.py"
+        link.symlink_to(SCRIPT)
+        result = self.run_in(consumer, link, "--slug", CONSUMER_SLUG)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(self.consumer_finding_line(consumer), result.stdout)
+
+    def test_explicit_repo_root_overrides(self) -> None:
+        """An explicit ``--repo-root`` pins the anchoring tree over the CWD's
+        nearest-ancestor facts discovery: invoked from the consumer repo
+        (whose own facts would serve), the flag's tree answers instead."""
+        consumer = self.make_consumer_repo("consumer")
+        pinned = self.make_consumer_repo("pinned")
+        result = self.run_in(
+            consumer, SCRIPT, "--repo-root", str(pinned), "--slug", CONSUMER_SLUG
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(self.consumer_finding_line(pinned), result.stdout)
+        self.assertNotIn(self.consumer_finding_line(consumer), result.stdout)
+
+    def test_cwd_discovery_falls_back_to_script_location(self) -> None:
+        """From a facts-less CWD the discovery rung finds nothing and the
+        chain falls back to the script location: a corpus parked at the
+        CWD repo's conventional default location is never consulted
+        (exit 0), while ``--repo-root`` pinning that same tree makes the
+        claim answer through the flag rung (exit 1)."""
+        factsless = self.make_consumer_repo("factsless", with_facts=False)
+        fallback = self.run_in(factsless, SCRIPT, "--slug", CONSUMER_SLUG)
+        self.assertEqual(fallback.returncode, 0, fallback.stderr)
+        self.assertEqual(fallback.stdout, "")
+        pinned = self.run_in(
+            factsless, SCRIPT, "--repo-root", str(factsless), "--slug", CONSUMER_SLUG
+        )
+        self.assertEqual(pinned.returncode, 1, pinned.stderr)
+        self.assertIn(self.consumer_finding_line(factsless), pinned.stdout)
+
+    def test_facts_less_repo_under_facts_parent_uses_script_rung(self) -> None:
+        """The toplevel bound: a facts-less repo nested under a facts-bearing
+        parent directory never resolves the parent corpus. Discovery stops
+        at the repo's own git toplevel and the script rung serves (exit 0
+        for an absent slug; an unbounded walk would resolve the parent's
+        nonexistent plans_dir and exit 2). GREEN-only pin: pre-fix the
+        checker has no discovery rung, so no behavioral RED exists."""
+        parent = self.tmp / "parent"
+        (parent / ".ai-playbook").mkdir(parents=True)
+        (parent / ".ai-playbook" / "facts.md").write_text(
+            '```toml\nplans_dir = "docs/history/elsewhere/"\n```\n',
+            encoding="utf-8",
+        )
+        orphan = self.make_consumer_repo("parent/orphan", with_facts=False)
+        result = self.run_in(orphan, SCRIPT, "--slug", ABSENT_STEM)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
 
 

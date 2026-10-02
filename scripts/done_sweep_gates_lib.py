@@ -13,10 +13,18 @@ them stay in the skill):
   review-staging, vim-swap-sweep, docs-tmp-sweep.
 - ``pre-commit`` (done Step 2.7 mechanical half, 2.76, 2.8):
   sensitive-data-scan, em-dash-scan, instruction-size, description-length,
-  foreign-staging, archive-ceremony, execute-plan-closeout,
-  plans-archive-twin.
+  foreign-staging, post-landing-staging, archive-ceremony,
+  execute-plan-closeout, plans-archive-twin.
 
 Contract:
+- outcome contract (scripts/OUTCOME_CONTRACT.md): every phase run ends with
+  exactly one final stdout ``OUTCOME:`` line (``pass``, ``fail``,
+  ``indeterminate``, ``tool_error``) matching the aggregate exit code
+  (``phase_exit``: indeterminate dominates fail, tool error dominates the
+  run); a gate helper that raises is captured as an indeterminate gate result
+  naming the failed gate, never a traceback abort; usage errors of the phase
+  entry are tool errors (exit 3) while ``--help`` and ``list-gates`` stay
+  metadata exits with no ``OUTCOME:`` line;
 - gate registry == the absorbed steps at gate and named sub-check
   granularity (Design Invariant: gate preservation); report order is registry
   order, every gate reports even after an earlier failure, and the
@@ -89,6 +97,16 @@ import validate_review_staging as vrs
 GIT_TIMEOUT_S = 60
 SCRIPT_TIMEOUT_S = 300
 
+# Outcome contract (scripts/OUTCOME_CONTRACT.md): a phase run's aggregate
+# gate-result rcs are the contract's exit vocabulary (0 pass, 1 fail,
+# 2 indeterminate, 3 tool error) and every phase run ends stdout with exactly
+# one final `OUTCOME:` line carrying the same outcome. Indeterminate dominates
+# fail for the same run (the contract's multi-input rule); a gate helper that
+# raises is captured as an indeterminate gate result, never a traceback abort.
+OUTCOME_LABELS = {0: "pass", 1: "fail", 2: "indeterminate", 3: "tool_error"}
+OUTCOME_VOCABULARY = frozenset(OUTCOME_LABELS.values())
+OUTCOME_LINE_PREFIX = "OUTCOME:"
+
 # Registry: phase slices in done SKILL.md order.
 PRE_DOCS_GATES = [
     "plan-readiness",
@@ -106,6 +124,7 @@ PRE_COMMIT_GATES = [
     "instruction-size",
     "description-length",
     "foreign-staging",
+    "post-landing-staging",
     "archive-ceremony",
     "execute-plan-closeout",
     "plans-archive-twin",
@@ -1214,6 +1233,28 @@ def _prune_deliverables(ctx: GateContext, remove: set[str]) -> None:
 
 
 def gate_plan_readiness(ctx: GateContext) -> GateResult:
+    """Pre-docs gate: validate the run's gated plan candidates through the
+    migrated readiness validator as a CLI subprocess child.
+
+    The child arm branches on the migrated validator's four-outcome contract
+    (scripts/OUTCOME_CONTRACT.md) instead of routing every child exit above 1
+    into an indeterminate bucket: a child exit 0 passes; exit 1 (a modeled
+    readiness fail, `OUTCOME: fail`) lands in the failed bucket with the
+    child's first-failure line; exit 2 (which the migrated child never
+    models; a crash or legacy shape, `OUTCOME: indeterminate`) keeps an
+    indeterminate bucket naming the child; exit 3 (`OUTCOME: tool_error`,
+    the sibling-compat mismatch and the argparse usage override included)
+    lands in a tool-error bucket reported as the gate's tool-error evidence,
+    since a child that could not run reliably is never a readiness fail; and
+    a child run with no final OUTCOME line classifies tool error per the
+    contract's no-line rule winning over the exit code. A label/exit
+    contradiction is an indeterminate gate result naming the child. The
+    aggregate exit carries the dominant bucket (tool error dominates
+    indeterminate dominates fail, matching ``phase_exit``) while the message
+    names every non-passing bucket (the contract's multi-input rule). The
+    candidate derivation, the exemption arms, and the missing-validator
+    deployment-gap refuse keep their pre-migration shape.
+    """
     gate = "plan-readiness"
     derivation = derive_plan_readiness_candidates(ctx)
     remove: set[str] = {str(p) for p in derivation.exempted}
@@ -1247,31 +1288,62 @@ def gate_plan_readiness(ctx: GateContext) -> GateResult:
 
     passed: list[str] = []
     failed: list[tuple[str, str]] = []
+    indeterminate: list[str] = []
+    tool_errors: list[str] = []
     for plan_rel in derivation.candidates:
         proc = ctx.run(
             [sys.executable, str(validator), str(ctx.repo_root / plan_rel)],
             cwd=ctx.repo_root,
         )
-        if proc.returncode == 0:
-            passed.append(str(plan_rel))
+        stdout_rows = [
+            row.strip()
+            for row in (proc.stdout or "").splitlines()
+            if row.strip() and not row.strip().startswith(OUTCOME_LINE_PREFIX)
+        ]
+        stderr_rows = [
+            row.strip()
+            for row in (proc.stderr or "").splitlines()
+            if row.strip()
+        ]
+        traceback_header = bool(stdout_rows) and stdout_rows[0].startswith(
+            "Traceback (most recent call last):"
+        )
+        if stdout_rows and not traceback_header:
+            first_failure = stdout_rows[0]
+        elif stderr_rows:
+            # A crashed validator prints its traceback on stdout and its
+            # message on stderr: report the message, never the bare
+            # traceback header.
+            first_failure = stderr_rows[0]
+        elif stdout_rows:
+            first_failure = stdout_rows[-1]
         else:
-            stdout_rows = (proc.stdout or "").strip().splitlines()
-            stderr_rows = (proc.stderr or "").strip().splitlines()
-            traceback_header = bool(stdout_rows) and stdout_rows[0].startswith(
-                "Traceback (most recent call last):"
+            first_failure = "no output"
+        label = _child_final_outcome(proc)
+        if label is None:
+            # The contract's no-line rule wins over the exit code: a child
+            # run with no final OUTCOME line (a crash or a legacy shape) is
+            # never a silent pass.
+            tool_errors.append(
+                f"{plan_rel} (no final OUTCOME line, child exit "
+                f"{proc.returncode}; evidence: {first_failure})"
             )
-            if stdout_rows and not traceback_header:
-                first_failure = stdout_rows[0]
-            elif stderr_rows:
-                # A crashed validator prints its traceback on stdout and its
-                # message on stderr: report the message, never the bare
-                # traceback header.
-                first_failure = stderr_rows[0]
-            elif stdout_rows:
-                first_failure = stdout_rows[-1]
-            else:
-                first_failure = "no output"
+        elif label == "pass" and proc.returncode == 0:
+            passed.append(str(plan_rel))
+        elif label == "fail" and proc.returncode == 1:
             failed.append((str(plan_rel), first_failure))
+        elif label == "indeterminate" and proc.returncode == 2:
+            indeterminate.append(
+                f"{plan_rel} (child exit {proc.returncode}; evidence: "
+                f"{first_failure})"
+            )
+        elif label == "tool_error" and proc.returncode == 3:
+            tool_errors.append(f"{plan_rel} (evidence: {first_failure})")
+        else:
+            indeterminate.append(
+                f"{plan_rel} (child exit {proc.returncode} contradicts its "
+                f"OUTCOME: {label} line)"
+            )
 
     remove.update(passed)
     _prune_deliverables(ctx, remove)
@@ -1281,12 +1353,27 @@ def gate_plan_readiness(ctx: GateContext) -> GateResult:
         f"exempted={len(derivation.exempted)}",
         f"archived={len(derivation.archived)}",
         f"failed={len(failed)}",
+        f"indeterminate={len(indeterminate)}",
+        f"tool_error={len(tool_errors)}",
     ]
     message = "plan readiness: " + ", ".join(parts)
     if failed:
         message += "; first failures: " + "; ".join(
             f"{plan}: {reason}" for plan, reason in failed[:3]
         )
+    if indeterminate:
+        message += "; indeterminate: " + "; ".join(indeterminate[:3])
+    if tool_errors:
+        message += "; tool error: " + "; ".join(tool_errors[:3])
+    if tool_errors:
+        # Tool error dominates indeterminate dominates fail for the same
+        # run (the contract's multi-input rule); every bucket stays named
+        # in the message either way. A child that could not run reliably
+        # is never a readiness fail.
+        return GateResult(gate, 3, message, warnings=[])
+    if indeterminate:
+        return GateResult(gate, 2, message, warnings=[])
+    if failed:
         return GateResult(gate, 1, message, warnings=[])
     return GateResult(gate, 0, message, warnings=[])
 
@@ -1888,6 +1975,24 @@ def derive_review_staging_candidates(ctx: GateContext) -> list[Path]:
 
 
 def gate_review_staging(ctx: GateContext) -> GateResult:
+    """Pre-docs gate: validate the run's owned staging docs through the
+    migrated review-staging validator as a CLI subprocess child.
+
+    The child arm branches on the migrated validator's four-outcome contract
+    (scripts/OUTCOME_CONTRACT.md) instead of collapsing every nonzero child
+    exit into the failed bucket: a child exit 0 passes; exit 1 (a modeled
+    invalid record, `OUTCOME: fail`) lands in the failed bucket with the
+    validator's finding tail; exit 2 (`OUTCOME: indeterminate`) lands in an
+    indeterminate bucket naming the target; exit 3 (`OUTCOME: tool_error`)
+    lands in a tool-error bucket naming the target; and a child run with no
+    final OUTCOME line classifies tool error per the contract's no-line rule
+    winning over the exit code (a legacy or crashed child is never a silent
+    pass). A label/exit contradiction is an indeterminate gate result naming
+    the target. The aggregate exit carries the dominant bucket (tool error
+    dominates indeterminate dominates fail, matching ``phase_exit``) while
+    the message names every non-passing bucket (the contract's multi-input
+    rule). The sidecar twin routing and the missing-twin fail-closed arm
+    keep their pre-migration shape."""
     gate = "review-staging"
     scope = derive_review_staging_scope(ctx)
     candidates = scope.candidates
@@ -1923,6 +2028,9 @@ def gate_review_staging(ctx: GateContext) -> GateResult:
             warnings=warnings,
         )
     failed: list[str] = []
+    finding_tails: list[str] = []
+    indeterminate: list[str] = []
+    tool_errors: list[str] = []
     for candidate in candidates:
         target = candidate
         if candidate.name.endswith(".stats.json"):
@@ -1942,15 +2050,56 @@ def gate_review_staging(ctx: GateContext) -> GateResult:
             [sys.executable, str(validator), "--hard", str(target)],
             cwd=ctx.repo_root,
         )
-        if proc.returncode != 0:
+        evidence = [
+            row.strip()
+            for row in ((proc.stdout or "") + "\n" + (proc.stderr or "")).splitlines()
+            if row.strip() and not row.strip().startswith(OUTCOME_LINE_PREFIX)
+        ]
+        tail = evidence[-1] if evidence else "no evidence rows"
+        label = _child_final_outcome(proc)
+        if label is None:
+            tool_errors.append(
+                f"{target} (no final OUTCOME line, child exit "
+                f"{proc.returncode}; the contract's no-line rule classifies "
+                "tool error, never a pass)"
+            )
+        elif label == "pass" and proc.returncode == 0:
+            pass
+        elif label == "fail" and proc.returncode == 1:
             failed.append(str(target))
-    if failed:
-        return GateResult(
-            gate,
-            1,
-            "review-staging validation failed for: " + ", ".join(failed),
-            warnings=warnings,
-        )
+            finding_tails.append(f"{target.name}: {tail}")
+        elif label == "indeterminate" and proc.returncode == 2:
+            indeterminate.append(str(target))
+        elif label == "tool_error" and proc.returncode == 3:
+            tool_errors.append(str(target))
+        else:
+            indeterminate.append(
+                f"{target} (child exit {proc.returncode} contradicts its "
+                f"OUTCOME: {label} line)"
+            )
+    if failed or indeterminate or tool_errors:
+        rc = 3 if tool_errors else (2 if indeterminate else 1)
+        if rc == 1:
+            message = "review-staging validation failed for: " + ", ".join(failed)
+            if finding_tails:
+                message += "; validator finding tail: " + " | ".join(finding_tails)
+        elif rc == 2:
+            message = (
+                "review-staging validation indeterminate for: "
+                + ", ".join(indeterminate)
+            )
+        else:
+            message = (
+                "review-staging validation tool error for: "
+                + ", ".join(tool_errors)
+            )
+        if rc != 1 and failed:
+            message += "; also failed: " + ", ".join(failed)
+        if rc != 2 and indeterminate:
+            message += "; also indeterminate: " + ", ".join(indeterminate)
+        if rc != 3 and tool_errors:
+            message += "; also tool error: " + ", ".join(tool_errors)
+        return GateResult(gate, rc, message, warnings=warnings)
     if scope.manifest_scoped:
         message = (
             f"review-staging validation passed for {len(candidates)} "
@@ -2390,6 +2539,18 @@ def gate_sensitive_data_scan(ctx: GateContext) -> GateResult:
     # Arm 4: the public-hygiene scan when this repo IS the skills repo. Its
     # deny-patterns file carries the employer-brand patterns, so it absorbs
     # the skills-tree employer-brand grep (LICENSE.txt excluded).
+    #
+    # Outcome-contract migration batch 2, Task 5: the arm branches on the
+    # migrated scan child's four outcomes (scripts/OUTCOME_CONTRACT.md)
+    # instead of collapsing every nonzero exit into a finding: a child exit
+    # 1 (`OUTCOME: fail`) keeps landing in findings with the child's tail
+    # rows; a child exit 2 (`OUTCOME: indeterminate`) is an indeterminate
+    # gate result naming the child; a child exit 3 (`OUTCOME: tool_error`)
+    # is a tool-error gate result naming the child; and a child run with no
+    # final OUTCOME line classifies tool error per the contract's no-line
+    # rule winning over the exit code (a scan that cannot report its outcome
+    # is never a silent pass). A label/exit contradiction is an
+    # indeterminate gate result naming the child.
     skills_repo_raw = ctx.read_user_facts_table_key("skills_repo_path")
     if skills_repo_raw:
         try:
@@ -2409,14 +2570,63 @@ def gate_sensitive_data_scan(ctx: GateContext) -> GateResult:
                 )
             else:
                 proc = ctx.run(["bash", str(scan)], cwd=ctx.repo_root)
-                if proc.returncode != 0:
+                evidence_rows = [
+                    row.strip()
+                    for row in (proc.stdout or "").splitlines()
+                    if row.strip()
+                    and not row.strip().startswith(OUTCOME_LINE_PREFIX)
+                ] + [
+                    row.strip()
+                    for row in (proc.stderr or "").splitlines()
+                    if row.strip()
+                ]
+                evidence = evidence_rows[-1] if evidence_rows else "no output"
+                label = _child_final_outcome(proc)
+                if label is None:
+                    # The contract's no-line rule wins over the exit code.
+                    return GateResult(
+                        gate,
+                        3,
+                        f"public-hygiene scan child tool error: {scan.name} "
+                        f"emitted no final OUTCOME line (child exit "
+                        f"{proc.returncode}; evidence: {evidence})",
+                        warnings=warnings,
+                    )
+                if label == "fail" and proc.returncode == 1:
                     tail_rows = [
                         row
                         for row in (proc.stdout or "").strip().splitlines()
                         if row.strip()
+                        and not row.strip().startswith(OUTCOME_LINE_PREFIX)
                     ][-10:]
                     findings.append(
                         "public-hygiene scan failed: " + " | ".join(tail_rows)
+                    )
+                elif label == "indeterminate" and proc.returncode == 2:
+                    return GateResult(
+                        gate,
+                        2,
+                        f"public-hygiene scan child indeterminate: {scan.name} "
+                        f"could not complete its scan (child exit 2; evidence: "
+                        f"{evidence})",
+                        warnings=warnings,
+                    )
+                elif label == "tool_error" and proc.returncode == 3:
+                    return GateResult(
+                        gate,
+                        3,
+                        f"public-hygiene scan child tool error: {scan.name} "
+                        f"could not run reliably (child exit 3; evidence: "
+                        f"{evidence})",
+                        warnings=warnings,
+                    )
+                elif label != "pass" or proc.returncode != 0:
+                    return GateResult(
+                        gate,
+                        2,
+                        f"public-hygiene scan child exit {proc.returncode} "
+                        f"contradicts its OUTCOME: {label} line ({scan.name})",
+                        warnings=warnings,
                     )
 
     if findings:
@@ -2708,6 +2918,237 @@ def gate_foreign_staging(ctx: GateContext) -> GateResult:
         warnings.append(
             "foreign-staging exempted owned path(s) named for audit: "
             + ", ".join(exempted)
+        )
+    return GateResult(gate, 0, message, warnings=warnings)
+
+
+# --------------------------------------------------------------------------- #
+# Gate: post-landing-staging (done sweep pre-commit phase).
+# --------------------------------------------------------------------------- #
+# Record-only allowlist (plan Terms, "Record-only allowlist"): the standing
+# peer edit to the development lessons document is the dirty-path class that
+# must never be committed or reverted by any landing or closeout step (the
+# witnessed survivor of the selective 2026-10-03 recovery). Owned HERE once,
+# with this provenance comment; scripts/land_squash.sh deliberately carries no
+# copy - its dirty-intersection pre-refusal is allowlist-agnostic and is the
+# record-only protection on the landing side.
+RECORD_ONLY_ALLOWLIST = frozenset({
+    "projects/.ai-playbook/development_lessons.md",
+})
+
+
+def _resolve_primary_checkout(ctx: GateContext) -> tuple[Optional[Path], str]:
+    """The first ``git worktree list --porcelain`` worktree entry (the
+    execute-plan worktree bootstrap recipe's PRIMARY resolution): execution
+    lanes run closeouts in linked worktrees whose own index is not the
+    primary index. Returns (path, error); error is empty on success."""
+    proc = ctx.git("worktree", "list", "--porcelain")
+    if proc.returncode != 0:
+        return None, (
+            "git worktree list --porcelain failed: "
+            + (proc.stderr or "").strip()
+        )
+    for line in proc.stdout.splitlines():
+        if line.startswith("worktree "):
+            return Path(line[len("worktree "):]).expanduser(), ""
+    return None, "git worktree list --porcelain printed no worktree entry"
+
+
+def _classify_primary_status(rows: list[str]) -> tuple[set, set, set]:
+    """Split primary-checkout porcelain rows into (staged, unstaged_dirty,
+    untracked) path sets: the index column (X) drives the staged set, the
+    worktree column (Y) the unstaged tracked set (an ``MM`` row feeds both),
+    ``??`` rows the untracked set. Rename rows keep only their new side,
+    C-quoted rows are unquoted, mirroring ``_porcelain_paths``."""
+    staged: set = set()
+    unstaged: set = set()
+    untracked: set = set()
+    for row in rows:
+        if len(row) < 4:
+            continue
+        xy = row[:2]
+        rest = row[3:]
+        if " -> " in rest:
+            rest = rest.split(" -> ", 1)[1]
+        rest = _unquote_porcelain_path(rest)
+        if xy == "??":
+            untracked.add(rest)
+            continue
+        if xy[0] != " ":
+            staged.add(rest)
+        if xy[1] != " ":
+            unstaged.add(rest)
+    return staged, unstaged, untracked
+
+
+def _merge_lock_held(ctx: GateContext) -> tuple[Optional[bool], str]:
+    """``done-lock.sh merge-status`` re-consult, read-only. Returns
+    (held, evidence): held is True (a holder is reported), False (free), or
+    None (the consult itself could not run or could not be parsed - the
+    residue attribution then stays undecided, never a residue refusal)."""
+    script = ctx.resolve_script("DONE_LOCK_SCRIPT", "done-lock.sh")
+    if script is None:
+        return None, (
+            "done-lock.sh not resolvable (env override, repo-local scripts/, "
+            "runtime home scripts/ copy)"
+        )
+    proc = ctx.run(["bash", str(script), "merge-status"], cwd=ctx.repo_root)
+    text = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not text:
+        return None, (
+            f"merge-status run failed (exit {proc.returncode}); "
+            f"evidence: {((proc.stderr or '') or text).strip()[:200]}"
+        )
+    lines = text.splitlines()
+    first = lines[0]
+    if ": held" in first:
+        label = ""
+        for line in lines[1:]:
+            stripped = line.strip()
+            if stripped.startswith("label:"):
+                label = stripped.split(":", 1)[1].strip()
+                break
+        evidence = first.strip()
+        if label:
+            evidence += f" (holder label: {label})"
+        return True, evidence
+    if ": free" in first:
+        return False, first.strip()
+    return None, f"unparseable merge-status output: {first.strip()[:200]}"
+
+
+def gate_post_landing_staging(ctx: GateContext) -> GateResult:
+    """Pre-commit gate: the post-landing staging invariant over the primary
+    checkout (plan: squash-landing-failure-path-guard, Task 3).
+
+    The primary checkout's index must match HEAD except for staged paths
+    owned by the resolvable current-session manifest (the foreign-staging
+    ownership pattern: the union of ``owned_paths``, ``owned_plan_paths``,
+    ``owned_review_paths``, named as owned); unstaged tracked modifications
+    are permitted only for the record-only allowlist. Residue is inspected
+    FIRST and only then is ``done-lock.sh merge-status`` re-consulted, so
+    residue observed while the lock is now held reports indeterminate (a
+    landing is in flight, never a violation) instead of a refusal - closing
+    the consult-then-inspect race. Any other residue fails the closeout
+    naming the residue paths, the sanctioned cleanup recipe (the helper's
+    probe-then-reland path), and the operator escape for dead residue;
+    record-only allowlist paths are never escapable. Untracked paths are
+    reported-not-failing (warning lines): the witnessed hazard is index and
+    tracked-modification residue. The gate inspects the primary checkout
+    read-only (``git -C <primary>``); an unresolvable worktree list or an
+    unreadable primary checkout is a tool error.
+    """
+    gate = "post-landing-staging"
+    primary, error = _resolve_primary_checkout(ctx)
+    if primary is None:
+        return GateResult(
+            gate,
+            3,
+            "post-landing-staging gate could not resolve the primary "
+            f"checkout: {error}",
+            warnings=[],
+        )
+    status = ctx.run(
+        ["git", "-C", str(primary), "status", "--porcelain=v1", "-uall"],
+        cwd=ctx.repo_root,
+    )
+    if status.returncode != 0:
+        return GateResult(
+            gate,
+            3,
+            "post-landing-staging gate could not read the primary checkout "
+            f"at {primary}: {(status.stderr or '').strip()[:200]}",
+            warnings=[],
+        )
+    staged, unstaged, untracked = _classify_primary_status(
+        status.stdout.splitlines()
+    )
+    window = derive_session_window(ctx.done_session_dir, ctx.repo_root)
+    manifest = load_run_manifest(ctx.done_session_dir, ctx.repo_root, window)
+    warnings: list[str] = []
+    owned: Optional[set] = None
+    if manifest is None:
+        # The ownership narrowing is skipped, never the check: the strict
+        # staged-empty comparison stays, with the unresolvable record named.
+        warnings.append(
+            "post-landing-staging: no resolvable run manifest for the "
+            "current session window (Step 0 record absent, foreign-rooted, "
+            "or schema-invalid); the ownership narrowing is skipped and the "
+            "strict staged-empty check kept"
+        )
+    else:
+        owned = {
+            _manifest_review_rel(ctx, recorded)
+            for recorded in (
+                list(manifest.owned_paths)
+                + list(manifest.owned_plan_paths)
+                + list(manifest.owned_review_paths)
+            )
+        }
+    staged_residue = sorted(staged - owned) if owned is not None else sorted(staged)
+    owned_staged = sorted(staged & owned) if owned is not None else []
+    dirty_residue = sorted(unstaged - RECORD_ONLY_ALLOWLIST)
+    allowed_dirty = sorted(unstaged & RECORD_ONLY_ALLOWLIST)
+    residue = staged_residue + dirty_residue
+    if residue:
+        held, evidence = _merge_lock_held(ctx)
+        residue_render = (
+            "staged path(s): " + (", ".join(staged_residue) or "none")
+            + "; unstaged path(s): " + (", ".join(dirty_residue) or "none")
+            + ("; record-only allowlist path(s) present and permitted: "
+               + ", ".join(allowed_dirty) if allowed_dirty else "")
+        )
+        if held is None:
+            return GateResult(
+                gate,
+                2,
+                "post-landing-staging gate reported indeterminate: primary "
+                f"checkout residue observed ({residue_render}) but the merge "
+                "lock state could not be consulted; evidence: "
+                + evidence,
+                warnings=warnings,
+            )
+        if held:
+            return GateResult(
+                gate,
+                2,
+                "post-landing-staging gate reported indeterminate: primary "
+                f"checkout residue observed ({residue_render}) while the "
+                "merge lock is held (a landing is in flight, not a "
+                f"violation); holder: {evidence}",
+                warnings=warnings,
+            )
+        return GateResult(
+            gate,
+            1,
+            "post-landing-staging gate failed: primary checkout residue "
+            f"after landing ({residue_render}); sanctioned cleanup: the "
+            "land_squash.sh probe-then-reland path (run scripts/land_squash.sh "
+            "probe, resolve or compose, then scripts/land_squash.sh land "
+            "under the merge lock); operator escape for dead residue only "
+            "(done-lock.sh merge-status free AND the path is not peer-live "
+            "dirt): git restore --staged --worktree -- <path> per residue "
+            "path; record-only allowlist path(s) are never escapable",
+            warnings=warnings,
+        )
+    message = (
+        "post-landing-staging gate passed: primary index matches HEAD (no "
+        "unowned staging, no unallowlisted tracked modification)"
+    )
+    if allowed_dirty:
+        message += (
+            "; record-only allowlist path(s) permitted: "
+            + ", ".join(allowed_dirty)
+        )
+    if owned_staged:
+        message += (
+            "; staged path(s) owned by the current session manifest: "
+            + ", ".join(owned_staged)
+        )
+    if untracked:
+        warnings.append(
+            "post-landing-staging: untracked path(s) in the primary checkout "
+            "(reported, not failing): " + ", ".join(sorted(untracked))
         )
     return GateResult(gate, 0, message, warnings=warnings)
 
@@ -3187,21 +3628,48 @@ def _closeout_session_states(ctx: GateContext) -> list[Path]:
     return sorted(ctx.execute_plan_dir.glob(f"*/{EXECUTE_PLAN_STATE_FILENAME}"))
 
 
+def _child_final_outcome(proc) -> Optional[str]:
+    """A migrated child run's final ``OUTCOME:`` label per the outcome
+    contract (scripts/OUTCOME_CONTRACT.md), or None when the run emitted no
+    final OUTCOME line: the line counts only when it is the single
+    ``OUTCOME:``-prefixed stdout row, is the final non-empty stdout row, and
+    carries a label from the four-outcome vocabulary. Callers treat None as
+    tool error (the contract's no-line rule: a run with no final OUTCOME line
+    is not a pass)."""
+    rows = [
+        line.strip()
+        for line in (proc.stdout or "").splitlines()
+        if line.strip()
+    ]
+    outcome_rows = [
+        line for line in rows if line.startswith(OUTCOME_LINE_PREFIX)
+    ]
+    if len(outcome_rows) != 1 or not rows or rows[-1] != outcome_rows[0]:
+        return None
+    label = outcome_rows[0][len(OUTCOME_LINE_PREFIX):].strip()
+    return label if label in OUTCOME_VOCABULARY else None
+
+
 def _closeout_verify_landed_complete(
     ctx: GateContext, slug: str, payload: dict, receipt: dict
-) -> Optional[str]:
+) -> Optional[tuple[int, str]]:
     """The landed-complete verification arm over one ``terminal_receipt``:
-    the FIRST unmet condition as a named failure line, None when (a) the
-    archived bytes re-hash to the receipt digest, (b) the active plan path
-    (the ``archive_gate.plan_path`` record when present, else
-    ``plans_dir/<plan_slug>.md``) is absent from the index and the working
-    tree, (c) the archived plan's promoted origins are closed per the
+    the FIRST unmet condition as a named ``(rc, message)`` pair whose rc is
+    the outcome-contract code (1 refuse, 2 indeterminate, 3 tool error),
+    None when (a) the archived bytes re-hash to the receipt digest, (b) the
+    active plan path (the ``archive_gate.plan_path`` record when present,
+    else ``plans_dir/<plan_slug>.md``) is absent from the index and the
+    working tree, (c) the archived plan's promoted origins are closed per the
     origins checker invoked with ``--plan`` (no second origins parser), and
-    (d) the ownership registry names the archived path. Review-receipt
-    existence is deliberately NOT a condition here: the receipt path is not
-    persisted in the manifest, and the run-side Phase 5 exec-review receipt
-    check owns that condition fail-closed before this boundary (defense in
-    depth)."""
+    (d) the ownership registry names the archived path. Arm (c) branches on
+    the migrated child's four-outcome contract: a modeled straggler failure
+    (exit 1) is a refuse; an indeterminate child (exit 2) is an indeterminate
+    gate result, never a refuse; a tool-error child (exit 3), an exit its
+    OUTCOME line contradicts, or a run with no final OUTCOME line (the
+    contract's no-line rule) is a tool error. Review-receipt existence is
+    deliberately NOT a condition here: the receipt path is not persisted in
+    the manifest, and the run-side Phase 5 exec-review receipt check owns
+    that condition fail-closed before this boundary (defense in depth)."""
     def refuse(condition: str) -> str:
         return (
             "execute-plan-closeout gate failed: execute-plan session "
@@ -3216,9 +3684,12 @@ def _closeout_verify_landed_complete(
         or not isinstance(digest, str)
         or not re.fullmatch(r"[0-9a-f]{64}", digest)
     ):
-        return refuse(
-            "the terminal receipt is malformed (a non-empty "
-            "archived_plan_path and a 64-hex plan_digest are required)"
+        return (
+            1,
+            refuse(
+                "the terminal receipt is malformed (a non-empty "
+                "archived_plan_path and a 64-hex plan_digest are required)"
+            ),
         )
     archived_path = Path(archived_raw)
     if not archived_path.is_absolute():
@@ -3226,16 +3697,22 @@ def _closeout_verify_landed_complete(
     try:
         archived_bytes = archived_path.read_bytes()
     except OSError:
-        return refuse(
-            "the terminal receipt's archived plan is unreadable at "
-            f"{archived_raw}"
+        return (
+            1,
+            refuse(
+                "the terminal receipt's archived plan is unreadable at "
+                f"{archived_raw}"
+            ),
         )
     computed = hashlib.sha256(archived_bytes).hexdigest()
     if computed != digest:
-        return refuse(
-            "terminal receipt digest mismatch: archived plan bytes at "
-            f"{archived_raw} re-hash to {computed} but the receipt "
-            f"records {digest}"
+        return (
+            1,
+            refuse(
+                "terminal receipt digest mismatch: archived plan bytes at "
+                f"{archived_raw} re-hash to {computed} but the receipt "
+                f"records {digest}"
+            ),
         )
     # (b) The active plan path must be gone from the index and the working
     # tree: the archive is a move, never an add-plus-keep (the witnessed
@@ -3260,18 +3737,24 @@ def _closeout_verify_landed_complete(
         active_path = ctx.plans_dir / f"{slug}.md"
         active_display = str(active_path)
     if active_path.exists():
-        return refuse(
-            f"the active plan path {active_display} still survives the "
-            "landed-complete run (present in the working tree); the "
-            "archive is a move, never an add-plus-keep"
+        return (
+            1,
+            refuse(
+                f"the active plan path {active_display} still survives the "
+                "landed-complete run (present in the working tree); the "
+                "archive is a move, never an add-plus-keep"
+            ),
         )
     active_rel = _repo_relative(str(active_path), ctx.repo_root)
     indexed = ctx.git("ls-files", "--", active_rel)
     if indexed.returncode == 0 and indexed.stdout.strip():
-        return refuse(
-            f"the active plan path {active_rel} still survives the "
-            "landed-complete run (tracked in the index); the archive is "
-            "a move, never an add-plus-keep"
+        return (
+            1,
+            refuse(
+                f"the active plan path {active_rel} still survives the "
+                "landed-complete run (tracked in the index); the archive is "
+                "a move, never an add-plus-keep"
+            ),
         )
     # (c) Promoted-origin closure through the origins checker itself (no
     # second origins parser in the lib, per the plan).
@@ -3280,42 +3763,89 @@ def _closeout_verify_landed_complete(
     )
     if validator is None:
         return (
+            1,
             "execute-plan-closeout gate failed: execute-plan session "
             f"{slug}: deployment gap: check_plan_origins_closed.py absent "
             "at every resolved path (env override, repo-local scripts/, "
             "runtime home copy), so the promoted-origin closure could not "
             "be checked; remedy: deploy the script to the runtime home "
             "scripts/ directory and re-run; never use the recorded-stop "
-            "exception for a deployment gap"
+            "exception for a deployment gap",
         )
     proc = ctx.run(
         [sys.executable, str(validator), "--plan", str(archived_path)],
         cwd=ctx.repo_root,
     )
-    if proc.returncode != 0:
-        stragglers = [
-            row.strip()
-            for row in (proc.stdout or "").splitlines()
-            if row.strip().startswith("straggler:")
-        ]
-        fallback_rows = [
-            row.strip()
-            for row in (proc.stdout or proc.stderr or "").splitlines()
-            if row.strip()
-        ]
-        detail = "; ".join(stragglers[:4]) or (
-            fallback_rows[-1] if fallback_rows else "origins check failed"
+    stragglers = [
+        row.strip()
+        for row in (proc.stdout or "").splitlines()
+        if row.strip().startswith("straggler:")
+    ]
+    evidence_rows = [
+        row.strip()
+        for row in (proc.stdout or proc.stderr or "").splitlines()
+        if row.strip() and not row.strip().startswith(OUTCOME_LINE_PREFIX)
+    ]
+    detail = "; ".join(stragglers[:4]) or (
+        evidence_rows[-1] if evidence_rows else "origins check failed"
+    )
+
+    def origins_indeterminate(condition: str) -> tuple[int, str]:
+        return (
+            2,
+            "execute-plan-closeout gate indeterminate: execute-plan session "
+            f"{slug}: {condition}; the promoted-origin closure of the "
+            f"archived plan {archived_raw} could not be determined; "
+            f"{CLOSEOUT_RESUME_REMEDY}",
         )
-        return refuse(
-            "promoted-origin closure failed for the archived plan "
-            f"{archived_raw}: {detail}"
+
+    def origins_tool_error(condition: str) -> tuple[int, str]:
+        return (
+            3,
+            "execute-plan-closeout gate tool error: execute-plan session "
+            f"{slug}: {condition}; the promoted-origin closure check could "
+            f"not run reliably for the archived plan {archived_raw}",
+        )
+
+    label = _child_final_outcome(proc)
+    if label is None:
+        return origins_tool_error(
+            "the origins checker emitted no final OUTCOME line (exit "
+            f"{proc.returncode}); per the outcome contract's no-line rule "
+            f"this is tool error, never a pass; observed: {detail}"
+        )
+    if label == "fail" and proc.returncode == 1:
+        return (
+            1,
+            refuse(
+                "promoted-origin closure failed for the archived plan "
+                f"{archived_raw}: {detail}"
+            ),
+        )
+    if label == "pass" and proc.returncode == 0:
+        pass  # origins verified; fall through to the registry arm (d)
+    elif label == "indeterminate" and proc.returncode == 2:
+        return origins_indeterminate(
+            f"the origins checker reported indeterminate (exit 2): {detail}"
+        )
+    elif label == "tool_error" and proc.returncode == 3:
+        return origins_tool_error(
+            f"the origins checker reported tool error (exit 3): {detail}"
+        )
+    else:
+        return origins_indeterminate(
+            f"the origins checker's exit {proc.returncode} contradicts its "
+            f"OUTCOME: {label} line; observed: {detail}"
         )
     # (d) The ownership registry names the archived path.
     if not _closeout_registry_names(ctx, archived_raw):
-        return refuse(
-            "the ownership registry does not name the archived plan "
-            f"{Path(archived_raw).name} (no row of "
-            f"{_closeout_registry_path(ctx)} boundary-anchors it)"
+        return (
+            1,
+            refuse(
+                "the ownership registry does not name the archived plan "
+                f"{Path(archived_raw).name} (no row of "
+                f"{_closeout_registry_path(ctx)} boundary-anchors it)"
+            ),
         )
     return None
 
@@ -3342,7 +3872,11 @@ def gate_execute_plan_closeout(ctx: GateContext) -> GateResult:
 
     - landed-complete verification (``terminal_receipt`` present):
       ``_closeout_verify_landed_complete``; the first unmet condition fails
-      the gate with that condition and the resume remedy.
+      the gate with that condition and the resume remedy, and the promoted-
+      origins arm maps the migrated origins checker's outcome contract
+      (refuse on its modeled failure, indeterminate and tool error carried
+      through as the gate's own outcome, a missing final OUTCOME line as
+      tool error).
     - landed-without-evidence refusal (the witnessed shape): no
       ``terminal_receipt`` while every task is done under the runtime's own
       done predicate refuses unconditionally, wherever the plan bytes sit
@@ -3449,7 +3983,8 @@ def gate_execute_plan_closeout(ctx: GateContext) -> GateResult:
                 ctx, slug, payload, receipt
             )
             if finding is not None:
-                return GateResult(gate, 1, finding, warnings=[])
+                finding_rc, finding_message = finding
+                return GateResult(gate, finding_rc, finding_message, warnings=[])
             passes.append(
                 f"{slug} landed complete; receipt digest, active-path "
                 "absence, promoted-origin closure, and registry row "
@@ -3499,6 +4034,7 @@ GATES: dict[str, Callable[[GateContext], GateResult]] = {
     "instruction-size": gate_instruction_size,
     "description-length": gate_description_length,
     "foreign-staging": gate_foreign_staging,
+    "post-landing-staging": gate_post_landing_staging,
     "archive-ceremony": gate_archive_ceremony,
     "execute-plan-closeout": gate_execute_plan_closeout,
     "plans-archive-twin": gate_plans_archive_twin,
@@ -3513,10 +4049,29 @@ def run_gate(gate_id: str, ctx: GateContext) -> GateResult:
 
 def run_phase(phase: str, ctx: GateContext) -> list[GateResult]:
     """Run one phase's gates strictly sequentially in registry order (see the
-    module docstring's execution contract)."""
+    module docstring's execution contract). A gate helper that raises is
+    captured as an indeterminate gate result naming the failed gate (outcome
+    contract exit 2: the gate could not answer, so its evidence is neither a
+    pass nor a modeled violation); the run continues so every gate still
+    reports."""
     if phase not in PHASES:
         raise ValueError(f"unknown phase: {phase}")
-    return [run_gate(gate_id, ctx) for gate_id in PHASES[phase]]
+    results: list[GateResult] = []
+    for gate_id in PHASES[phase]:
+        try:
+            results.append(run_gate(gate_id, ctx))
+        except Exception as exc:
+            results.append(
+                GateResult(
+                    gate_id,
+                    2,
+                    f"gate helper raised {type(exc).__name__}: {exc}; the "
+                    "gate could not complete its check, so its result is "
+                    "indeterminate",
+                    warnings=[],
+                )
+            )
+    return results
 
 
 def render_report(results: list[GateResult]) -> str:
@@ -3532,6 +4087,9 @@ def render_report(results: list[GateResult]) -> str:
 
 
 def phase_exit(results: list[GateResult]) -> int:
+    """The run's contract exit: the dominant gate outcome, where tool error
+    (3) dominates the run, indeterminate (2) dominates fail (1) (the
+    contract's multi-input rule), and a clean run is 0."""
     return max((result.rc for result in results), default=0)
 
 
@@ -3564,7 +4122,13 @@ def _usage() -> str:
         "reprints its record with a zero exit)\n"
         "list-interrupted-manifests prints one line per interrupted run "
         "manifest (root=<live|dead>, dispositioned, adopted, created); "
-        "read-only, never mutates"
+        "read-only, never mutates\n"
+        "phase runs report the outcome contract "
+        "(scripts/OUTCOME_CONTRACT.md): exit 0 pass, 1 fail, 2 "
+        "indeterminate, 3 tool error, ending stdout with exactly one final "
+        "`OUTCOME:` line; a raising gate helper is an indeterminate gate "
+        "result, and a usage error is tool error while --help and "
+        "list-gates are metadata exits with no OUTCOME line"
     )
 
 
@@ -4429,8 +4993,13 @@ def _cmd_list_interrupted_manifests(argv: list[str]) -> int:
 def main(argv: Optional[list[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in ("-h", "--help"):
+        # --help is a metadata exit (no OUTCOME line); a bare invocation is
+        # a usage error, which the outcome contract classifies tool error.
         print(_usage(), file=sys.stderr)
-        return 0 if args else 2
+        if args:
+            return 0
+        print(f"{OUTCOME_LINE_PREFIX} {OUTCOME_LABELS[3]}")
+        return 3
     command = args[0]
     if command == "list-gates":
         # Each gate id printed once, deduped at its first phase (the twin
@@ -4451,9 +5020,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         ctx = GateContext.discover(Path(root) if root else None)
         results = run_phase(command, ctx)
         print(render_report(results))
-        return phase_exit(results)
+        code = phase_exit(results)
+        print(f"{OUTCOME_LINE_PREFIX} {OUTCOME_LABELS.get(code, 'indeterminate')}")
+        return code
     print(_usage(), file=sys.stderr)
-    return 2
+    print(f"{OUTCOME_LINE_PREFIX} {OUTCOME_LABELS[3]}")
+    return 3
 
 
 if __name__ == "__main__":

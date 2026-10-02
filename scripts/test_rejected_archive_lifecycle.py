@@ -152,7 +152,9 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
         ]
 
     def _write_stub_validator(self) -> Path:
-        """Stub readiness validator: exit 0 only for plan paths with 'good'."""
+        """Stub readiness validator answering in the migrated four-outcome
+        shape: exit 0 with `OUTCOME: pass` only for plan paths with 'good',
+        else exit 1 with the rejection line and `OUTCOME: fail`."""
         scripts = self.root / "scripts"
         scripts.mkdir(parents=True, exist_ok=True)
         stub = scripts / "plan_readiness.py"
@@ -162,8 +164,10 @@ class RejectedArchiveLifecycleTest(unittest.TestCase):
             "plan = sys.argv[1] if len(sys.argv) > 1 else ''\n"
             "if 'good' in plan:\n"
             "    print('ready=yes')\n"
+            "    print('OUTCOME: pass')\n"
             "    sys.exit(0)\n"
             "print('readiness FAILED: stub rejection')\n"
+            "print('OUTCOME: fail')\n"
             "sys.exit(1)\n",
             encoding="utf-8",
         )

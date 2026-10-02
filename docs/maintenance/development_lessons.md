@@ -178,6 +178,8 @@ landing it would have silently reverted every peer change.
 
 Checkout-side sibling: this lesson owns peer safety at the ref move; live-checkout freshness after the move is owned by the post-landing reconciliation implementation and the stale-checkout discriminator in the Worktree-first standard section of agents/skills/execute-plan/SKILL.md.
 
+Amend-side sibling: **base-branch immutability** - once a commit is reachable from the base branch it is never amended; corrections land as additive follow-up commits; amend is legal only inside a session's own unlanded branch before the landing critical section (origin docs/history/backlog/2026-10-02-base-branch-commit-immutability.md; witness: the 2026-10-02 18:09 amend of a peer's landed tip, folded in four minutes after another session landed it). The same expectation covers every record citing a landed sha: a cited sha is expected to stay reachable and immutable, so an amend of the cited commit surfaces as a cross-check mismatch in each record holding the old sha; the guard (`scripts/base_branch_amend_guard.py`: `check-head` refuses an amend with HEAD on the base branch, `reflog-scan` reports foreign `commit (amend)` entries) stops the commit path or names the rewrite instead of letting it pass silently.
+
 ## 7. Re-Derive a Plan's Edit Inventory From Live Bytes at Execution Start
 
 **Principle:** Family H (verify the real thing, not the abstraction: a plan's edit inventory
@@ -275,3 +277,27 @@ stale.
 
 **See also:** Lesson 7 (re-derive the live inventory from disk at execution start);
 Lesson 10 (prove the landing base and the completion marks).
+
+## 12. A Ref-Level Landing Is Not Done Until the Post-Landing Reconciliation Runs
+
+**Principle:** Family D (recover and land through the owning machinery against current
+state; a ref advance moves the branch without refreshing any other checkout).
+
+**Trigger:** landing by a ref-level move (compare-and-swap `update-ref`, push, or any
+tail that does not merge inside each live checkout) while any checkout holds the base
+branch, then reporting done without a reconciliation pass.
+
+**Rule:** After the ref move, run the post-landing reconciliation over every live
+checkout of the base branch before reporting done (`python3 scripts/reconcile_post_landing.py
+--base <branch> --pre-tip <old> --post-tip <new>`); its exit-1 block rows are named work,
+never a silent pass. A skip re-flares the stale-index class in that checkout: the stale
+index materializes a staged reversal of exactly the landed paths.
+
+**Why:** witnessed 2026-10-02 (playbook repo): two compare-and-swap landings advanced
+the default branch while the primary checkout sat on it, each leaving staged deletions of
+the just-landed files until the reconciliation restored them; an earlier peer landing's
+skip left the same flare for a later session to adjudicate.
+
+**See also:** Lesson 6 (land from a tree merged with the current tip - the pre-move half
+of the same fence); Lesson 10 (prove the base and the completion marks); the
+`check-landing` refusal mode of `scripts/reverse_squash_guard.py` (the stale-base half).

@@ -263,6 +263,10 @@ cp "$groups_file" "$hygiene_root/release-groups.txt"
 # stdout is discarded (its FAIL blocks echo file content), stderr is captured
 # and only skip-note lines re-emitted; any non-zero exit aborts with a
 # sentinel line carrying the scanner exit code and the offending PATHS ONLY.
+# The caller discards scanner stdout, so the scanner's final `OUTCOME:` line
+# (scripts/OUTCOME_CONTRACT.md) is not consumed here; the branch keys on the
+# scanner's own-error class (tool error, exit 3) and the findings fall-through
+# keeps its mapping.
 invoke_scanner() {
   scan_rc=0
   scan_err="$run_tmp/scanner-stderr.txt"
@@ -279,9 +283,9 @@ invoke_scanner() {
   if [ "$scan_rc" -ne 0 ]; then
     printf 'PRIVACY GATE FAILED (scanner exit %s): offending paths: %s\n' \
       "$scan_rc" "${scan_call_paths[*]}" >&2
-    if [ "$scan_rc" -eq 2 ]; then
-      # Exit 2 of this script is reserved for REGROUP REQUIRED; a scanner
-      # environment failure (no scan verdict) gets its own exit code.
+    if [ "$scan_rc" -eq 3 ]; then
+      # The scanner's own-error class (tool error under the outcome
+      # contract, exit 3) aborts the release on the scanner's own code.
       exit 3
     fi
     exit "$scan_rc"

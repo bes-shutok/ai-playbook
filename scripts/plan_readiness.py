@@ -15,6 +15,21 @@ rules are IMPORTED from ``validate_review_staging.py`` (same directory); the
 digest recipe is never re-implemented here. ``{plans_dir}`` and ``{reviews_dir}``
 resolve from the ``.ai-playbook/facts.md`` TOML block via ``facts_paths.py``.
 
+Outcome contract (scripts/OUTCOME_CONTRACT.md): exit 0 pass (every readiness
+condition holds), exit 1 fail (the FIRST failed condition is named on
+stderr), exit 2 indeterminate (not modeled: a readiness run over readable
+inputs always reaches a verdict), exit 3 tool error (argparse usage and
+mutual-exclusion violations overridden from argparse's exit 2, and a
+sibling-compatibility mismatch: compatibility evidence is about the
+environment pairing, never a readiness fail). Every non-metadata run ends
+with exactly one final ``OUTCOME:`` line on stdout after the human-readable
+evidence; ``--help`` is a metadata exit with no ``OUTCOME:`` line. The
+``--sweep`` drift mode rides the same vocabulary. The importable probe
+functions (``evaluate_readiness``, the structural probes behind
+``run_pre_round``, ``check_review_name``, ``run_sweep``'s helpers) are
+library surfaces outside this CLI contract and keep their function-level
+behavior.
+
 Condition ordering inside ``evaluate_readiness`` is deliberate: local
 readability checks (plan path, review artifact, sidecar file, sidecar JSON,
 review UTF-8, plan bytes) run first so each gets its own named reason, then
@@ -52,6 +67,26 @@ import validate_review_staging as vrs
 # rejection lives in the new vrs wiring, so the shared-rule semantics are
 # pair-coupled.
 EXPECTED_SIBLING_COMPAT_VERSION = 3
+
+# Outcome contract (scripts/OUTCOME_CONTRACT.md): the four outcomes and the
+# argparse override. A usage violation exits 3 with a final `OUTCOME:
+# tool_error` line on stderr before exit (the usage text and the error
+# message share that stream); every non-metadata run's final line is on
+# stdout after the human-readable evidence.
+OUTCOME_LABELS = {0: "pass", 1: "fail", 2: "indeterminate", 3: "tool_error"}
+
+
+class OutcomeArgumentParser(argparse.ArgumentParser):
+    """Argument parser whose usage errors exit 3 (tool error) with a final
+    `OUTCOME: tool_error` line on stderr before exit, overriding argparse's
+    default exit 2; `--help` stays a metadata exit without an `OUTCOME:`
+    line."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        sys.stderr.write("%s: error: %s\n" % (self.prog, message))
+        sys.stderr.write("OUTCOME: %s\n" % OUTCOME_LABELS[3])
+        raise SystemExit(3)
 
 # Round suffix of a review artifact filename: ``-r<N>.md`` (N >= 1).
 # Case-sensitive on purpose: the discovery glob below is lowercase-only, so
@@ -1604,6 +1639,7 @@ def run_sweep(reviews_dir: Path) -> int:
             f"{reviews_dir}",
             file=sys.stderr,
         )
+        print("OUTCOME: %s" % OUTCOME_LABELS[1])
         return 1
     anomalies: list[str] = []
     total = 0
@@ -1646,12 +1682,14 @@ def run_sweep(reviews_dir: Path) -> int:
         for line in anomalies:
             print(f"  - {line}")
         print(coverage_line)
+        print("OUTCOME: %s" % OUTCOME_LABELS[1])
         return 1
     print(coverage_line)
     print(
         f"sweep OK: no verdict anomalies across plan-review artifacts under "
         f"{reviews_dir}"
     )
+    print("OUTCOME: %s" % OUTCOME_LABELS[0])
     return 0
 
 
@@ -1874,7 +1912,7 @@ def _check_sibling_compat() -> str | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
+    parser = OutcomeArgumentParser(
         description="Fail-closed reviewed-plan readiness gate"
     )
     parser.add_argument("plan_path", nargs="?", help="Path to the plan file")
@@ -1908,7 +1946,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # Parse-time mutual exclusion (plans rule 29): --pre-round composes
     # with neither --selftest nor --sweep; the combination is a usage
-    # error (exit 2) decided before any mode runs.
+    # error (exit 3, the outcome contract's tool error) decided before
+    # any mode runs.
     if args.pre_round and args.selftest:
         parser.error("--pre-round must not be combined with --selftest")
     if args.pre_round and args.sweep:
@@ -1916,8 +1955,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # Parse-time mutual exclusion (--check-review-name probe): the probe
     # composes with neither --selftest, --sweep, nor --pre-round, and its
-    # plan operand is required; every violation is a usage error (exit 2)
-    # decided before any mode runs.
+    # plan operand is required; every violation is a usage error (exit 3,
+    # the outcome contract's tool error) decided before any mode runs.
     if args.check_review_name and args.selftest:
         parser.error(
             "--check-review-name must not be combined with --selftest"
@@ -1934,7 +1973,11 @@ def main(argv: list[str] | None = None) -> int:
     compat_error = _check_sibling_compat()
     if compat_error is not None:
         print(f"compatibility FAILED: {compat_error}", file=sys.stderr)
-        return 1
+        # Compatibility evidence is about the environment pairing, not the
+        # plan: the contract classifies it tool error, never a readiness
+        # fail (the final OUTCOME line rides stdout per the convention).
+        print("OUTCOME: %s" % OUTCOME_LABELS[3])
+        return 3
 
     if args.selftest:
         return run_selftest()
@@ -1974,6 +2017,7 @@ def main(argv: list[str] | None = None) -> int:
                 "TOML block",
                 file=sys.stderr,
             )
+            print("OUTCOME: %s" % OUTCOME_LABELS[1])
             return 1
         return run_sweep(reviews_dir)
 
@@ -1986,13 +2030,18 @@ def main(argv: list[str] | None = None) -> int:
             "facts TOML block",
             file=sys.stderr,
         )
+        print("OUTCOME: %s" % OUTCOME_LABELS[1])
         return 1
 
     if args.pre_round:
         # Structural-only pre-round gate (plans rule 29): probes over the
         # plan bytes only; the review record is never consulted. The full
-        # gate below is untouched (additive branch only).
-        return run_pre_round(anchor_at_root(args.plan_path), plans_dir)
+        # gate below is untouched (additive branch only). The final OUTCOME
+        # line follows the human-readable evidence per the outcome
+        # contract.
+        rc = run_pre_round(anchor_at_root(args.plan_path), plans_dir)
+        print("OUTCOME: %s" % OUTCOME_LABELS[rc])
+        return rc
 
     if args.check_review_name:
         # Name-shape probe: the written round pair must bind to the gate's
@@ -2014,6 +2063,7 @@ def main(argv: list[str] | None = None) -> int:
         ok, reason = check_review_name(plan, round_path, reviews_dir)
         if not ok:
             print(f"review name check FAILED: {reason}", file=sys.stderr)
+            print("OUTCOME: %s" % OUTCOME_LABELS[1])
             return 1
         slug = feature_slug(plan)
         round_no = (
@@ -2023,6 +2073,7 @@ def main(argv: list[str] | None = None) -> int:
             f"review name check OK: {round_path.name} binds plan slug "
             f"{slug} (r{round_no})"
         )
+        print("OUTCOME: %s" % OUTCOME_LABELS[0])
         return 0
 
     # The plan-path argument anchors like relative facts values: CWD
@@ -2035,8 +2086,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     if ok:
         print("readiness OK: latest review of these plan bytes is ready")
+        print("OUTCOME: %s" % OUTCOME_LABELS[0])
         return 0
     print(f"readiness FAILED: {reason}", file=sys.stderr)
+    print("OUTCOME: %s" % OUTCOME_LABELS[1])
     return 1
 
 
@@ -5261,17 +5314,18 @@ def _selftest_pre_round(
 
         # mutual_exclusion: --pre-round composes with neither --selftest
         # nor --sweep; both combinations are parse-time usage errors
-        # (exit 2 naming the invalid combination).
+        # (exit 3, the outcome contract's tool error, naming the invalid
+        # combination).
         rc, out, err = run_main(["--pre-round", str(plan), "--selftest"])
         selftest_mix = (rc, err)
         rc, out, err = run_main(["--pre-round", str(plan), "--sweep"])
         sweep_mix = (rc, err)
         check(
             "selftest#pre_round/mutual_exclusion",
-            selftest_mix[0] == 2
+            selftest_mix[0] == 3
             and "--pre-round must not be combined with --selftest"
             in selftest_mix[1]
-            and sweep_mix[0] == 2
+            and sweep_mix[0] == 3
             and "--pre-round must not be combined with --sweep"
             in sweep_mix[1],
             f"selftest_mix={selftest_mix!r} sweep_mix={sweep_mix!r}",
@@ -5553,7 +5607,7 @@ def _selftest_cli(
             rc, out, err = _selftest_run_main(["--sweep"])
             check(
                 "selftest#sibling_compat/mismatch_fails_loud",
-                rc == 1
+                rc == 3
                 and "compatibility FAILED" in err
                 and "999" in err
                 and "sweep" not in out,
@@ -5565,7 +5619,7 @@ def _selftest_cli(
             rc, out, err = _selftest_run_cli(plan)
             check(
                 "selftest#sibling_compat/mismatch_fails_loud/gate_mode",
-                rc == 1
+                rc == 3
                 and "compatibility FAILED" in err
                 and "readiness" not in out,
                 f"rc={rc} out={out!r} err={err!r}",
@@ -5578,7 +5632,7 @@ def _selftest_cli(
             check(
                 "selftest#sibling_compat/mismatch_fails_loud/"
                 "selftest_mode",
-                rc == 1
+                rc == 3
                 and "compatibility FAILED" in err
                 and "ALL PASS" not in out
                 and "PASS:" not in out,
@@ -5587,7 +5641,7 @@ def _selftest_cli(
             delattr(vrs, "COMPAT_VERSION")
             rc, out, err = _selftest_run_main(["--sweep"])
             _ok = (
-                rc == 1
+                rc == 3
                 and "compatibility FAILED" in err
                 and "does not declare COMPAT_VERSION" in err
                 and "sweep" not in out
@@ -5855,7 +5909,7 @@ def _selftest_sweep(
                 usage_rc = 0
         check(
             "selftest#sweep/plan_path_rejected",
-            usage_rc == 2 and "must not be combined" in err.getvalue(),
+            usage_rc == 3 and "must not be combined" in err.getvalue(),
             f"usage_rc={usage_rc} err={err.getvalue()!r}",
         )
         # (f) Task 4: coverage counter over a mixed corpus — one clean
@@ -5981,8 +6035,10 @@ def run_selftest() -> int:
     print()
     if failures:
         print(f"SOME FAIL ({failures})")
+        print("OUTCOME: %s" % OUTCOME_LABELS[1])
         return 1
     print("ALL PASS")
+    print("OUTCOME: %s" % OUTCOME_LABELS[0])
     return 0
 
 

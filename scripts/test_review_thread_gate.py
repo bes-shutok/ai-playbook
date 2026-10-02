@@ -10,6 +10,7 @@ and tears it down via addCleanup.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -179,6 +180,165 @@ class ReviewThreadGateTest(unittest.TestCase):
         self.assertIn("nothing to check", out)
         self.assertEqual(err, "")
 
+    # ------------------------------------------------------------------
+    # Outcome-contract arms (scripts/OUTCOME_CONTRACT.md): the four-outcome
+    # vocabulary and exactly one final `OUTCOME:` line per non-metadata run.
+    # ------------------------------------------------------------------
+    def assert_single_final_outcome(self, out, label):
+        lines = [line for line in out.splitlines() if line.strip()]
+        self.assertTrue(lines, "no stdout lines to carry the OUTCOME line")
+        self.assertEqual(
+            lines[-1], "OUTCOME: %s" % label,
+            "final stdout line must be the OUTCOME line, stdout: %s" % out,
+        )
+        self.assertEqual(
+            sum(1 for line in lines if line.startswith("OUTCOME:")), 1,
+            "exactly one OUTCOME line expected, stdout: %s" % out,
+        )
+
+    def test_closure_outcome_pass(self):
+        t1 = review_thread(
+            "PRRT_1", "IC_1", BOT_AUTHOR, "Flag: unused import.",
+            replies=[agent_reply("IC_2", REPLY_BODY)],
+        )
+        marker = self.write_marker([
+            {"id": "PRRT_1", "parent_id": "IC_1", "reply_body": REPLY_BODY},
+        ])
+        inventory = self.write_inventory([t1])
+        code, out, err = self.run_gate(marker, inventory)
+        self.assertEqual(code, 0, f"expected exit 0, stderr: {err}")
+        self.assertIn("all 1 tracked thread(s) closed", out)
+        self.assert_single_final_outcome(out, "pass")
+
+    def test_unclosed_outcome_fail_lists_threads(self):
+        t1 = review_thread(
+            "PRRT_1", "IC_1", BOT_AUTHOR, "Flag: unbounded retry loop.",
+            is_resolved=True,
+        )
+        marker = self.write_marker([{"id": "PRRT_1", "parent_id": "IC_1"}])
+        inventory = self.write_inventory([t1])
+        code, out, err = self.run_gate(marker, inventory)
+        self.assertEqual(code, 1, f"expected exit 1, stdout: {out}")
+        self.assertIn("PRRT_1", out)
+        self.assert_single_final_outcome(out, "fail")
+
+    def test_missing_marker_skip_outcome_pass(self):
+        t1 = review_thread(
+            "PRRT_1", "IC_1", BOT_AUTHOR, "Flag: unused import.",
+        )
+        inventory = self.write_inventory([t1])
+        marker = self.tmp / "absent" / "marker.json"
+        code, out, err = self.run_gate(marker, inventory)
+        self.assertEqual(code, 0, f"expected exit 0, stderr: {err}")
+        self.assertIn("nothing to check", out)
+        self.assert_single_final_outcome(out, "pass")
+
+    def test_unreadable_marker_file_is_tool_error(self):
+        t1 = review_thread(
+            "PRRT_1", "IC_1", BOT_AUTHOR, "Flag: unused import.",
+        )
+        inventory = self.write_inventory([t1])
+        marker = self.write_marker([
+            {"id": "PRRT_1", "parent_id": "IC_1"},
+        ])
+        marker.chmod(0o000)
+        self.addCleanup(marker.chmod, 0o644)
+        code, out, err = self.run_gate(marker, inventory)
+        self.assertEqual(code, 3, f"expected exit 3, stdout: {out}")
+        self.assertIn("cannot read review-thread marker", err)
+        self.assert_single_final_outcome(out, "tool_error")
+
+    def test_marker_not_an_object_is_tool_error(self):
+        t1 = review_thread(
+            "PRRT_1", "IC_1", BOT_AUTHOR, "Flag: unused import.",
+        )
+        inventory = self.write_inventory([t1])
+        marker = self.tmp / "marker.json"
+        marker.write_text("[]\n", encoding="utf-8")
+        code, out, err = self.run_gate(marker, inventory)
+        self.assertEqual(code, 3, f"expected exit 3, stdout: {out}")
+        self.assertIn("is not an object", err)
+        self.assert_single_final_outcome(out, "tool_error")
+
+    def test_marker_without_thread_list_is_tool_error(self):
+        t1 = review_thread(
+            "PRRT_1", "IC_1", BOT_AUTHOR, "Flag: unused import.",
+        )
+        inventory = self.write_inventory([t1])
+        marker = self.tmp / "marker.json"
+        marker.write_text(
+            json.dumps({"pr": "octo/hello#7", "branch_head": "abc1234"}),
+            encoding="utf-8",
+        )
+        code, out, err = self.run_gate(marker, inventory)
+        self.assertEqual(code, 3, f"expected exit 3, stdout: {out}")
+        self.assertIn("carries no thread list", err)
+        self.assert_single_final_outcome(out, "tool_error")
+
+    def test_unreadable_inventory_file_is_tool_error(self):
+        t1 = review_thread(
+            "PRRT_1", "IC_1", BOT_AUTHOR, "Flag: unused import.",
+        )
+        inventory = self.write_inventory([t1])
+        inventory.chmod(0o000)
+        self.addCleanup(inventory.chmod, 0o644)
+        marker = self.write_marker([
+            {"id": "PRRT_1", "parent_id": "IC_1"},
+        ])
+        code, out, err = self.run_gate(marker, inventory)
+        self.assertEqual(code, 3, f"expected exit 3, stdout: {out}")
+        self.assertIn("cannot read inventory", err)
+        self.assert_single_final_outcome(out, "tool_error")
+
+    def test_malformed_inventory_json_is_tool_error(self):
+        marker = self.write_marker([
+            {"id": "PRRT_1", "parent_id": "IC_1"},
+        ])
+        inventory = self.tmp / "inventory.json"
+        inventory.write_text("{ not json at all\n", encoding="utf-8")
+        code, out, err = self.run_gate(marker, inventory)
+        self.assertEqual(code, 3, f"expected exit 3, stdout: {out}")
+        self.assertIn("cannot parse inventory", err)
+        self.assert_single_final_outcome(out, "tool_error")
+
+    def test_failed_gh_inventory_fetch_is_tool_error(self):
+        marker = self.write_marker([])
+        shim = self.tmp / "bin"
+        shim.mkdir()
+        gh = shim / "gh"
+        gh.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        gh.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = str(shim) + os.pathsep + env.get("PATH", "")
+        proc = subprocess.run(
+            [
+                sys.executable, str(SCRIPT_PATH),
+                "--marker", str(marker),
+                "--live",
+            ],
+            capture_output=True, text=True, env=env,
+        )
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertIn("gh inventory fetch failed", proc.stderr)
+        self.assert_single_final_outcome(proc.stdout, "tool_error")
+
+    def test_usage_violation_is_tool_error(self):
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertIn("OUTCOME: tool_error", proc.stderr)
+
+    def test_help_is_metadata_exempt(self):
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--help"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("OUTCOME:", proc.stdout)
+        self.assertNotIn("OUTCOME:", proc.stderr)
+
 
 class ResolveLiveTargetTest(unittest.TestCase):
     """Unit coverage for the pure live-target resolver (no network)."""
@@ -247,11 +407,18 @@ class LiveGateErrorPathTest(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertEqual(proc.returncode, 1)
+        # The unresolvable-marker PR target is a tool-shaped failure: tool
+        # error exit 3 with the final OUTCOME line (the legacy exit 1
+        # masqueraded as an unclosed-threads finding).
+        self.assertEqual(proc.returncode, 3)
         self.assertIn(
             "error: marker pr '63' is not resolvable to owner/repo#N; "
             "cannot fetch live",
             proc.stderr,
+        )
+        self.assertEqual(
+            [line for line in proc.stdout.splitlines() if line.strip()][-1],
+            "OUTCOME: tool_error",
         )
 
 

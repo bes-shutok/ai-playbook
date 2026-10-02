@@ -18,37 +18,56 @@ set -euo pipefail
 ROOT="${PUBLIC_HYGIENE_REPO_ROOT:-.}"
 PATTERNS_FILE="${PUBLIC_HYGIENE_PATTERNS_FILE:-${HOME}/.ai-playbook/public-hygiene.patterns}"
 
+# Outcome contract (scripts/OUTCOME_CONTRACT.md): every non-metadata run ends
+# with exactly one final `OUTCOME:` row on stdout; --help and the --selftest
+# diagnostic run are metadata modes and emit none.
+emit_outcome() {
+  printf 'OUTCOME: %s\n' "$1"
+}
+
 SCAN_STRICT=(agents/skills projects)
 # Pattern-quoting sources (2026-09-27): detector implementations whose bytes
 # carry the deny patterns themselves, their detection fixtures, and archived
 # plans or backlog records that quote sweep commands or placeholder home
 # paths. These files cannot be reworded without destroying what they record,
 # so they are out of scan scope; real identifiers elsewhere are masked, not
-# excluded. Keep _path_is_excluded below in sync.
-GLOB_EXCLUDES=(
-  --glob '!**/LICENSE.txt'
-  --glob '!docs/facts.md.example'
-  --glob '!docs/reviews/**'
-  --glob '!docs/tmp/**'
-  --glob '!agents/skills/done/SKILL.md'
-  --glob '!agents/skills/how-to-write-skills/**'
-  --glob '!docs/AGENTS.md'
-  --glob '!AGENTS.md'
-  --glob '!CLAUDE.md'
-  --glob '!scripts/scan-public-hygiene.sh'
-  --glob '!scripts/done_sweep_gates_lib.py'
-  --glob '!scripts/test_done_sweep_gates_lib.py'
-  --glob '!scripts/check_review_agent_portability.py'
-  --glob '!scripts/test_check_review_agent_portability.py'
-  --glob '!docs/history/plans/completed/2026-08-19-confluence-split-and-create-documentation-removal.md'
-  --glob '!docs/history/plans/completed/2026-09-03-docs-branch-temp-file-hygiene.md'
-  --glob '!docs/history/plans/completed/2026-09-04-sot-unification-living-docs-and-grill-escalation.md'
-  --glob '!docs/history/plans/completed/2026-09-05-docs-branch-trap-before-restore-region.md'
-  --glob '!docs/history/plans/completed/2026-09-08-run-start-marker-content-hash.md'
-  --glob '!docs/history/plans/rejected/2026-09-07-straggler-wording-pins.md'
-  --glob '!docs/history/backlog/rejected/2026-09-07-token-telemetry-r5-residuals.md'
-  --glob '!docs/history/backlog/completed/2026-09-07-run-start-marker-content-docs-branch-leak.md'
+# excluded.
+# Declared owner of the allowlist glob surface (single-sourcing): GLOB_BODIES
+# below is the one list a maintainer edits. GLOB_EXCLUDES is the rg-argument
+# view derived from it at this same site, and _path_is_excluded plus the
+# changed-from filter consume GLOB_BODIES through the shared matcher
+# _path_matches_glob, so all three scan modes follow one list mechanically.
+GLOB_BODIES=(
+  '**/LICENSE.txt'
+  'docs/facts.md.example'
+  'docs/reviews/**'
+  'docs/tmp/**'
+  'agents/skills/done/SKILL.md'
+  'agents/skills/how-to-write-skills/**'
+  'docs/AGENTS.md'
+  'AGENTS.md'
+  'CLAUDE.md'
+  'scripts/scan-public-hygiene.sh'
+  'scripts/done_sweep_gates_lib.py'
+  'scripts/test_done_sweep_gates_lib.py'
+  'scripts/check_review_agent_portability.py'
+  'scripts/test_check_review_agent_portability.py'
+  'docs/history/plans/completed/2026-08-19-confluence-split-and-create-documentation-removal.md'
+  'docs/history/plans/completed/2026-09-03-docs-branch-temp-file-hygiene.md'
+  'docs/history/plans/completed/2026-09-04-sot-unification-living-docs-and-grill-escalation.md'
+  'docs/history/plans/completed/2026-09-05-docs-branch-trap-before-restore-region.md'
+  'docs/history/plans/completed/2026-09-08-run-start-marker-content-hash.md'
+  'docs/history/plans/rejected/2026-09-07-straggler-wording-pins.md'
+  'docs/history/backlog/rejected/2026-09-07-token-telemetry-r5-residuals.md'
+  'docs/history/backlog/completed/2026-09-07-run-start-marker-content-docs-branch-leak.md'
 )
+# Derived rg-argument view of GLOB_BODIES; the frozen rg invocations consume
+# this view unchanged.
+GLOB_EXCLUDES=()
+for _glob_body in "${GLOB_BODIES[@]}"; do
+  GLOB_EXCLUDES+=("--glob" "!${_glob_body}")
+done
+unset _glob_body
 
 # Usage message.
 print_usage() {
@@ -63,9 +82,15 @@ Modes:
   --files <path>...       Scan exactly the named files (tracked or untracked, relative to
                           the repo root), with the same built-in patterns, the same shared
                           patterns file, and the standard allowlist globs applied. Exit 1
-                          on any hit, exit 2 on its own errors.
+                          on any hit; the script's own errors are tool errors (exit 3).
   --selftest              Run hermetic built-in self-tests (temp git repo, no live-repo mutation).
   --help                  Show this help.
+
+Outcome contract (scripts/OUTCOME_CONTRACT.md): every non-metadata run ends
+  with exactly one final stdout row: `OUTCOME: pass` (clean), `OUTCOME: fail`
+  (findings), or `OUTCOME: tool_error` (the script's own error, exit 3).
+  --help and the --selftest diagnostic run are metadata modes and emit no
+  OUTCOME row.
 
 Environment:
   PUBLIC_HYGIENE_REPO_ROOT        Repo root to scan (default: current dir).
@@ -112,7 +137,8 @@ run_scan() {
     done < "$PATTERNS_FILE"
   else
     echo "FATAL: missing $PATTERNS_FILE (copy from docs/scan-public-hygiene.patterns.example in instructions repo)" >&2
-    exit 2
+    emit_outcome tool_error
+    exit 3
   fi
 }
 
@@ -128,13 +154,15 @@ report_hits_for_paths() {
     # allowlist globs stay option positions, then "--" closes option
     # parsing before the named paths, so a crafted filename can never be
     # parsed as an rg option; and an rg failure with exit > 1 (for example
-    # an invalid regex line in the shared patterns file) is fatal (exit 2),
-    # never a silent pass. The frozen full-tree and changed modes keep
-    # their argv and swallow-to-pass behavior untouched.
+    # an invalid regex line in the shared patterns file) is fatal (a tool
+    # error, exit 3 under the outcome contract), never a silent pass. The
+    # frozen full-tree and changed modes keep their argv and swallow-to-pass
+    # behavior untouched.
     hits="$(rg -n --hidden "$pattern" "${GLOB_EXCLUDES[@]}" -- "$@" 2>/dev/null)" || rg_rc=$?
     if [ "$rg_rc" -gt 1 ]; then
       echo "FATAL: rg failed (exit $rg_rc) in files mode; check the patterns file" >&2
-      exit 2
+      emit_outcome tool_error
+      exit 3
     fi
   else
     hits="$(rg -n --hidden "$pattern" "$@" "${GLOB_EXCLUDES[@]}" 2>/dev/null)" || rg_rc=$?
@@ -151,9 +179,11 @@ report_hits_for_paths() {
 emit_verdict() {
   if [ "$FAILS" -gt 0 ]; then
     echo "=== $FAILS public-hygiene failure(s) ==="
+    emit_outcome fail
     exit 1
   fi
   echo "=== PASS (public hygiene) ==="
+  emit_outcome pass
   exit 0
 }
 
@@ -194,21 +224,13 @@ changed_files_in_scope() {
       agents/skills/*|projects/*) ;;
       *) continue ;;
     esac
-    # Apply the same GLOB_EXCLUDES the full-tree scan uses, by matching each
-    # exclude glob against the path.
+    # Apply the declared allowlist (GLOB_BODIES) through the shared matcher,
+    # the same list the full-tree and explicit-paths modes consume. The
+    # SCAN_STRICT root filter above stays ahead of the matcher, so globs
+    # outside the roots stay inert here.
     local excluded=0
     local g
-    for g in \
-      '**/LICENSE.txt' \
-      'docs/facts.md.example' \
-      'docs/reviews/**' \
-      'docs/tmp/**' \
-      'agents/skills/done/SKILL.md' \
-      'agents/skills/how-to-write-skills/**' \
-      'docs/AGENTS.md' \
-      'AGENTS.md' \
-      'CLAUDE.md'
-    do
+    for g in "${GLOB_BODIES[@]}"; do
       if _path_matches_glob "$p" "$g"; then
         excluded=1
         break
@@ -222,53 +244,48 @@ changed_files_in_scope() {
   return 0
 }
 
-# True when a path matches one of the standard exclude globs (the LICENSE
-# allowlist plus the scope excludes), applied by the explicit-paths mode.
-# Written with direct case globs (case patterns cross "/"), not
-# _path_matches_glob, so each glob means what it says: docs/tmp/** excludes
-# only docs/tmp/ content, letting a named file such as
-# docs/history/backlog/draft.md be scanned when named explicitly. The
-# changed-from mode keeps its own matching via _path_matches_glob unchanged.
+# True when a path matches one of the declared allowlist globs (GLOB_BODIES),
+# consumed by the explicit-paths mode and the changed-from filter. The shared
+# matcher carries rg doublestar semantics, so a bare root LICENSE.txt is
+# excluded in every mode (the declared r3 F5 alignment: all modes agree).
 #   $1 = path
 _path_is_excluded() {
   local p="$1"
-  case "$p" in
-    */LICENSE.txt|docs/facts.md.example|docs/AGENTS.md|AGENTS.md|CLAUDE.md|agents/skills/done/SKILL.md)
+  local g
+  for g in "${GLOB_BODIES[@]}"; do
+    if _path_matches_glob "$p" "$g"; then
       return 0
-      ;;
-    docs/reviews/*|docs/tmp/*|agents/skills/how-to-write-skills/*)
-      return 0
-      ;;
-    scripts/scan-public-hygiene.sh|scripts/done_sweep_gates_lib.py|scripts/test_done_sweep_gates_lib.py|scripts/check_review_agent_portability.py|scripts/test_check_review_agent_portability.py|docs/history/plans/completed/2026-08-19-confluence-split-and-create-documentation-removal.md|docs/history/plans/completed/2026-09-03-docs-branch-temp-file-hygiene.md|docs/history/plans/completed/2026-09-04-sot-unification-living-docs-and-grill-escalation.md|docs/history/plans/completed/2026-09-05-docs-branch-trap-before-restore-region.md|docs/history/plans/completed/2026-09-08-run-start-marker-content-hash.md|docs/history/plans/rejected/2026-09-07-straggler-wording-pins.md|docs/history/backlog/rejected/2026-09-07-token-telemetry-r5-residuals.md|docs/history/backlog/completed/2026-09-07-run-start-marker-content-docs-branch-leak.md)
-      # Pattern-quoting sources; see the GLOB_EXCLUDES comment above.
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+    fi
+  done
+  return 1
 }
 
-# Match a path against a glob that may use ** (doublestar). Bash extglob handles
-# the single-star and trailing-/** cases; we approximate ** as a greedy match.
+# Shared glob matcher with rg doublestar semantics over the declared
+# GLOB_BODIES list: a leading **/ matches zero or more directories (so a
+# bare root LICENSE.txt matches '**/LICENSE.txt'), a trailing /** stays
+# inside its prefix (docs/tmp/** must not match
+# docs/history/backlog/draft.md), and plain entries match literally. This is
+# the only copy of the matching logic; _path_is_excluded and the
+# changed-from filter both consume it.
 #   $1 = path, $2 = glob
 _path_matches_glob() {
   local path="$1"
   local glob="$2"
-  # Translate the glob to an extglob pattern bash [[ ]] understands.
-  # **/  → */ (zero or more dirs) — use a custom check via pattern matching.
-  case "$glob" in
-    '**/LICENSE.txt')
-      [[ "$path" == */LICENSE.txt ]] ;;
-    'docs/reviews/**'|'docs/tmp/**')
-      local prefix="${glob%%/**}"
-      [[ "$path" == "$prefix"/* ]] ;;
-    'agents/skills/how-to-write-skills/**')
-      [[ "$path" == agents/skills/how-to-write-skills/* ]] ;;
-    *)
-      # Literal or simple glob: use bash pattern match.
-      [[ "$path" == $glob ]] ;;
-  esac
+  local rest prefix
+  if [[ "$glob" == '**/'* ]]; then
+    rest="${glob#'**/'}"
+    if [[ "$rest" == *'/**' ]]; then
+      prefix="${rest%'/**'}"
+      [[ "$path" == "$prefix"/* ]]
+    else
+      [[ "$path" == "$rest" || "$path" == */"$rest" ]]
+    fi
+  elif [[ "$glob" == *'/**' ]]; then
+    prefix="${glob%'/**'}"
+    [[ "$path" == "$prefix"/* ]]
+  else
+    [[ "$path" == "$glob" ]]
+  fi
 }
 
 cmd_full_tree() {
@@ -287,10 +304,12 @@ cmd_changed_from() {
   FAILS=0
   local files
   if ! files="$(changed_files_in_scope "$ref")"; then
-    exit 2
+    emit_outcome tool_error
+    exit 3
   fi
   if [ -z "$files" ]; then
     echo "=== PASS (public hygiene, no changed files vs $ref) ==="
+    emit_outcome pass
     exit 0
   fi
   run_scan "changed (vs $ref)" "$files"
@@ -362,25 +381,30 @@ cmd_files() {
     # r1 F3: input validation for the named paths. A path that is empty,
     # starts with a dash, or embeds a newline can smuggle itself past the
     # scan (as an rg option, or by not round-tripping the newline-joined
-    # file list); fail closed (exit 2) instead of silently passing an
-    # unscanned file.
+    # file list); fail closed on the script's own-error class (a tool
+    # error, exit 3 under the outcome contract) instead of silently passing
+    # an unscanned file.
     case "$p" in
       "")
         echo "FATAL: empty path argument" >&2
-        exit 2
+        emit_outcome tool_error
+        exit 3
         ;;
       -*)
         echo "FATAL: path must not start with '-': $p" >&2
-        exit 2
+        emit_outcome tool_error
+        exit 3
         ;;
       *$'\n'*)
         echo "FATAL: path must not contain a newline" >&2
-        exit 2
+        emit_outcome tool_error
+        exit 3
         ;;
     esac
     if [ ! -f "$p" ]; then
       echo "FATAL: no such file: $p" >&2
-      exit 2
+      emit_outcome tool_error
+      exit 3
     fi
     # Standard allowlist globs apply in explicit mode too: an excluded path
     # named on the command line is skipped, never scanned. r2 overflow: the
@@ -399,6 +423,7 @@ cmd_files() {
 
   if [ "${#kept[@]}" -eq 0 ]; then
     echo "=== PASS (public hygiene, all named files excluded) ==="
+    emit_outcome pass
     exit 0
   fi
 
@@ -411,14 +436,16 @@ cmd_files() {
 _require_rg() {
   if ! command -v rg >/dev/null 2>&1; then
     echo "FATAL: rg (ripgrep) required" >&2
-    exit 2
+    emit_outcome tool_error
+    exit 3
   fi
 }
 
 _require_git() {
   if ! command -v git >/dev/null 2>&1; then
     echo "FATAL: git required for --changed-from" >&2
-    exit 2
+    emit_outcome tool_error
+    exit 3
   fi
 }
 
@@ -463,22 +490,28 @@ EOF
   # Generalized selftest harness with strict verdict assertions: a pass
   # needs exit 0 plus the PASS marker; a fail needs exit 1 (a pattern hit)
   # plus a FAIL block; an rc=<N> expectation asserts the exact exit code,
-  # so an exit 2 (mode or environment error) is distinguishable from a
-  # pattern hit and from a pass (r1 F10; r2 overflow D4 folded the former
-  # selftest_check_files_rc third harness copy in here; r3 F7 folded the
-  # last remaining copy, the changed-mode selftest_check, in here too, so
-  # both modes run through this one harness). An optional --contains needle
-  # pins output text, so a case cannot satisfy a rc/message expectation via
-  # the wrong arm (r2 overflow T4). Arguments after -- are passed to the
-  # scanner verbatim.
+  # so an own-error exit (3 under the outcome contract) is distinguishable
+  # from a pattern hit and from a pass (r1 F10; r2 overflow D4 folded the
+  # former selftest_check_files_rc third harness copy in here; r3 F7 folded
+  # the last remaining copy, the changed-mode selftest_check, in here too,
+  # so both modes run through this one harness). An optional --contains
+  # needle pins output text, so a case cannot satisfy a rc/message
+  # expectation via the wrong arm (r2 overflow T4). An optional --outcome
+  # label (batch 2 Task 5, scripts/OUTCOME_CONTRACT.md) pins exactly one
+  # final `OUTCOME: <label>` row on the run's output. Arguments after --
+  # are passed to the scanner verbatim.
   selftest_check_files() {
     local name="$1"
     local expect="$2"   # pass | fail | rc=<N>
     shift 2
     local needle=""
-    while [ "$1" = "--contains" ]; do
-      needle="$2"
-      shift 2
+    local want_outcome=""
+    while :; do
+      case "$1" in
+        --contains) needle="$2"; shift 2 ;;
+        --outcome) want_outcome="$2"; shift 2 ;;
+        *) break ;;
+      esac
     done
     if [ "$1" = "--" ]; then
       shift
@@ -521,13 +554,24 @@ EOF
       SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
       return
     fi
+    if [ -n "$want_outcome" ]; then
+      local outcome_rows final_row
+      outcome_rows="$(printf '%s\n' "$actual_out" | grep -c '^OUTCOME: ' || true)"
+      final_row="$(printf '%s\n' "$actual_out" | grep '^OUTCOME: ' | tail -n 1 || true)"
+      if [ "$outcome_rows" -ne 1 ] || [ "$final_row" != "OUTCOME: $want_outcome" ]; then
+        echo "selftest FAIL: $name (expected exactly one final 'OUTCOME: $want_outcome' row, got $outcome_rows row(s), last: '$final_row')" >&2
+        echo "$actual_out" >&2
+        SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+        return
+      fi
+    fi
     echo "selftest OK: $name"
   }
 
   # Changed-mode sub-tests 1 through 7 (r3 F7) run through the same
   # generalized harness as the files-mode sub-tests below: a fail case
-  # asserts exit 1 plus the FAIL block, so an environment error (exit 2)
-  # can never satisfy a fail expectation.
+  # asserts exit 1 plus the FAIL block, so an own-error run (a tool error,
+  # exit 3) can never satisfy a fail expectation.
 
   # Sub-test 1: clean changed file → PASS.
   printf '# clean changed content\n' > "$repo/agents/skills/clean/SKILL.md"
@@ -598,35 +642,55 @@ EOF
   selftest_check_files "files-outside-scan-roots-scanned" fail -- \
     --files "docs/history/backlog/draft.md"
 
-  # r1 F10: the files mode's own error paths must exit 2, never pass or
-  # fail-as-hit. r2 overflow T4: each rc-2 case also pins its arm-specific
-  # message, so a case cannot stay green via a different arm's exit code.
+  # r1 F10: the files mode's own error paths must fail closed on their own
+  # error class, never pass or fail-as-hit. Batch 2 Task 5 remaps that class
+  # to the outcome contract's tool error: exit 3 with exactly one final
+  # `OUTCOME: tool_error` row (the legacy own-error exit 2 is retired).
+  # r2 overflow T4: each case also pins its arm-specific message, so a case
+  # cannot stay green via a different arm's exit code.
 
-  # Sub-test 12: a named file that does not exist → exit 2.
-  selftest_check_files "files-missing-file-exits-2" rc=2 \
-    --contains "no such file" -- \
+  # Sub-test 12: a named file that does not exist -> own error, exit 3.
+  selftest_check_files "files-missing-file-own-error-exits-3" rc=3 \
+    --outcome tool_error --contains "no such file" -- \
     --files "agents/skills/clean/does-not-exist.md"
 
-  # Sub-test 13: a named path starting with a dash → exit 2 (r1 F3 input
+  # Sub-test 13: a named path starting with a dash -> exit 3 (r1 F3 input
   # validation; it must never reach rg as an option). The dash-specific
   # message is asserted so the case cannot pass via the missing-file arm.
-  selftest_check_files "files-dash-leading-path-exits-2" rc=2 \
-    --contains "must not start with '-'" -- \
+  selftest_check_files "files-dash-leading-path-own-error-exits-3" rc=3 \
+    --outcome tool_error --contains "must not start with '-'" -- \
     --files "-weird.md"
 
-  # Sub-test 14: --files combined with --changed-from → exit 2.
-  selftest_check_files "files-changed-from-conflict-exits-2" rc=2 \
-    --contains "cannot be combined" -- \
+  # Sub-test 14: --files combined with --changed-from -> exit 3 (a usage
+  # violation is a tool error, not the legacy exit 2).
+  selftest_check_files "files-changed-from-conflict-own-error-exits-3" rc=3 \
+    --outcome tool_error --contains "cannot be combined" -- \
     --changed-from "$head_sha" --files "agents/skills/clean/notes.md"
 
   # r2 overflow T5: the empty-path and newline-embedded-path arms of
-  # cmd_files are pinned with their own rc-2 cases.
-  selftest_check_files "files-empty-path-exits-2" rc=2 \
-    --contains "empty path" -- \
+  # cmd_files are pinned with their own own-error cases.
+  selftest_check_files "files-empty-path-own-error-exits-3" rc=3 \
+    --outcome tool_error --contains "empty path" -- \
     --files ""
-  selftest_check_files "files-newline-path-exits-2" rc=2 \
-    --contains "must not contain a newline" -- \
+  selftest_check_files "files-newline-path-own-error-exits-3" rc=3 \
+    --outcome tool_error --contains "must not contain a newline" -- \
     --files "$(printf 'a\nb.md')"
+
+  # Batch 2 Task 5 outcome-emission arms (scripts/OUTCOME_CONTRACT.md): a
+  # clean run ends with exactly one final `OUTCOME: pass` row on stdout, a
+  # findings run ends with `OUTCOME: fail` after the hit rows, and an
+  # own-error run exits 3 with `OUTCOME: tool_error`.
+  printf '# clean outcome emission\n' > "$repo/agents/skills/clean/notes.md"
+  selftest_check_files "files-clean-run-outcome-pass" pass --outcome pass -- \
+    --files "agents/skills/clean/notes.md"
+
+  printf 'outcome probe: /Users/leaked/outcome\n' > "$repo/agents/skills/clean/notes.md"
+  selftest_check_files "files-findings-run-outcome-fail" fail --outcome fail -- \
+    --files "agents/skills/clean/notes.md"
+
+  selftest_check_files "files-own-error-outcome-tool-error" rc=3 \
+    --outcome tool_error --contains "no such file" -- \
+    --files "agents/skills/clean/absent-outcome-probe.md"
 
   # r2 overflow (literal-path-exclusion-bypass): the exclusion test runs on
   # the NORMALIZED path. A ..-path that escapes an excluded prefix is
@@ -643,6 +707,64 @@ EOF
     --contains "skipped excluded path" -- \
     --files "docs/./reviews/hit.md"
 
+  # Single-sourcing agreement arms: the scan modes must return the same
+  # verdict for each allowlisted fixture shape (every fixture carries a deny
+  # hit, so an exclusion shows up as a skip, never as clean content passing).
+  mkdir -p "$repo/agents/skills/x" "$repo/docs/tmp" "$repo/docs/reviews"
+  printf 'nested license: /Users/leaked/nested-license\n' > "$repo/agents/skills/x/LICENSE.txt"
+  printf 'tmp child: /Users/leaked/tmp-child\n' > "$repo/docs/tmp/child.txt"
+  printf 'review: /Users/leaked/review\n' > "$repo/docs/reviews/r.md"
+  printf 'Copyright (c) 2026 Selftest Author <author@example.invalid>\n' > "$repo/LICENSE.txt"
+  printf 'agree: /Users/leaked/clean-agree\n' > "$repo/agents/skills/clean/SKILL.md"
+
+  # Direct arm on the explicit-paths predicate: the nested and prefix shapes
+  # are excluded, and the root LICENSE.txt leg is pinned per the declared r3
+  # F5 alignment direction (see the GLOB_BODIES declared-owner comment).
+  if _path_is_excluded "agents/skills/x/LICENSE.txt" \
+     && _path_is_excluded "docs/tmp/child.txt" \
+     && _path_is_excluded "docs/reviews/r.md" \
+     && _path_is_excluded "LICENSE.txt" \
+     && ! _path_is_excluded "docs/history/backlog/draft.md" \
+     && ! _path_is_excluded "agents/skills/clean/SKILL.md"; then
+    echo "selftest OK: files-predicate-allowlist-shapes"
+  else
+    echo "selftest FAIL: files-predicate-allowlist-shapes" >&2
+    SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+  fi
+
+  # Cross-mode agreement arm: full-tree and explicit-paths verdicts must
+  # agree per fixture (the fixture shows up in the full-tree output iff the
+  # files mode reports a FAIL block for it).
+  selftest_mode_agree() {
+    local p="$1"
+    local ft_out files_out ft_hit files_hit
+    ft_hit=0
+    files_hit=0
+    set +e
+    ft_out="$(PUBLIC_HYGIENE_REPO_ROOT="$repo" PUBLIC_HYGIENE_PATTERNS_FILE="$patterns" bash "$0" 2>&1)"
+    set -e
+    if printf '%s\n' "$ft_out" | grep -qF "$p"; then
+      ft_hit=1
+    fi
+    set +e
+    files_out="$(PUBLIC_HYGIENE_REPO_ROOT="$repo" PUBLIC_HYGIENE_PATTERNS_FILE="$patterns" bash "$0" --files "$p" 2>&1)"
+    set -e
+    if printf '%s\n' "$files_out" | grep -q "FAIL:"; then
+      files_hit=1
+    fi
+    if [ "$ft_hit" -eq "$files_hit" ]; then
+      echo "selftest OK: mode-agreement ($p)"
+    else
+      echo "selftest FAIL: mode-agreement ($p) full-tree-hit=$ft_hit files-hit=$files_hit" >&2
+      SELFTEST_FAILS=$((SELFTEST_FAILS + 1))
+    fi
+  }
+  selftest_mode_agree "agents/skills/x/LICENSE.txt"
+  selftest_mode_agree "docs/tmp/child.txt"
+  selftest_mode_agree "docs/reviews/r.md"
+  selftest_mode_agree "LICENSE.txt"
+  selftest_mode_agree "agents/skills/clean/SKILL.md"
+
   if [ "$SELFTEST_FAILS" -gt 0 ]; then
     echo "scan-public-hygiene: --selftest FAILED ($SELFTEST_FAILS)" >&2
     return 1
@@ -658,6 +780,18 @@ main() {
   local changed_ref=""
   local file_paths=()
 
+  # Usage violations are the script's own-error class: a tool error under
+  # the outcome contract (exit 3, final `OUTCOME: tool_error` row on
+  # stdout after the usage text on stderr).
+  usage_error() {
+    echo "FATAL: $1" >&2
+    if [ "${2:-}" = "usage" ]; then
+      print_usage >&2
+    fi
+    emit_outcome tool_error
+    exit 3
+  }
+
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --help|-h)
@@ -666,16 +800,14 @@ main() {
         ;;
       --selftest)
         if [ "$#" -gt 1 ]; then
-          echo "FATAL: --selftest takes no argument" >&2
-          exit 2
+          usage_error "--selftest takes no argument"
         fi
         cmd_selftest
         exit $?
         ;;
       --files)
         if [ "$mode" != "full-tree" ]; then
-          echo "FATAL: --files cannot be combined with --changed-from" >&2
-          exit 2
+          usage_error "--files cannot be combined with --changed-from"
         fi
         mode="files"
         shift
@@ -683,8 +815,7 @@ main() {
         ;;
       --changed-from)
         if [ "$#" -lt 2 ]; then
-          echo "FATAL: --changed-from requires a <ref> argument" >&2
-          exit 2
+          usage_error "--changed-from requires a <ref> argument" usage
         fi
         mode="changed"
         changed_ref="$2"
@@ -700,29 +831,21 @@ main() {
         break
         ;;
       -*)
-        echo "FATAL: unknown option: $1" >&2
-        print_usage >&2
-        exit 2
+        usage_error "unknown option: $1" usage
         ;;
       *)
-        echo "FATAL: unexpected argument: $1" >&2
-        print_usage >&2
-        exit 2
+        usage_error "unexpected argument: $1" usage
         ;;
     esac
   done
 
   if [ "$mode" = "files" ]; then
     if [ "$#" -eq 0 ]; then
-      echo "FATAL: --files requires at least one <path>" >&2
-      print_usage >&2
-      exit 2
+      usage_error "--files requires at least one <path>" usage
     fi
     file_paths=("$@")
   elif [ "$#" -gt 0 ]; then
-    echo "FATAL: unexpected positional arguments: $*" >&2
-    print_usage >&2
-    exit 2
+    usage_error "unexpected positional arguments: $*" usage
   fi
 
   case "$mode" in

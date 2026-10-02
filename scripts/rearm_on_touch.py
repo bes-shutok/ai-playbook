@@ -19,7 +19,8 @@ Decision flow (state-first, per the maintenance Step 0 bullet and the State
 file semantics):
 1. no state file            -> skipped verdict `no-scheduler-state-file`,
                                rc 0, inert (the loop does not run here);
-2. unparseable state JSON   -> class `malformed`, rc 2, loud error;
+2. unparseable state JSON   -> class `malformed`, tool error exit 3,
+                               loud error;
 3. state file whose own last write (mtime) is older than one cadence period
    -> class `stale-state-listing-required` without a listing (the staleness
    escape: only the listing decides); with a listing provided, the listing
@@ -46,10 +47,14 @@ the recipe title, whose prompt begins with the scheduler prompt template's
 opening line, and whose prompt contains the resolved repository root.
 
 Output: one JSON verdict line plus a one-line human summary on stdout.
-Exit codes: 0 for every normal verdict (including skipped and
-listing-required classes); 2 for malformed-or-failed (unparseable state or
-listing JSON, a refused structural edit, a twice-drifted write, or any
-unexpected internal error). Cadence period: 2 hours. Live-child horizon:
+Outcome contract (scripts/OUTCOME_CONTRACT.md): every classified verdict
+(including skipped and listing-required classes) keeps exit 0 and ends
+with exactly one final ``OUTCOME: pass`` line on stdout after the verdict
+JSON (the verdict JSON stays the machine-readable payload); the
+malformed-state arm and the unexpected-exception arm are tool error
+(exit 3, ``OUTCOME: tool_error`` after the verdict JSON); a usage
+violation overrides argparse to exit 3; ``--help`` is a metadata exit
+with no ``OUTCOME:`` line. Cadence period: 2 hours. Live-child horizon:
 6 hours.
 """
 
@@ -63,6 +68,28 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# Outcome contract (scripts/OUTCOME_CONTRACT.md): the four outcomes and the
+# argparse override. A usage violation exits 3 with a final `OUTCOME:
+# tool_error` line on stderr before exit (the usage text and the error
+# message share that stream); every classified verdict run's final line is
+# `OUTCOME: pass` on stdout after the verdict JSON, and the malformed-state
+# and unexpected-exception arms end with `OUTCOME: tool_error` on stdout
+# after the verdict JSON.
+OUTCOME_LABELS = {0: "pass", 1: "fail", 2: "indeterminate", 3: "tool_error"}
+
+
+class OutcomeArgumentParser(argparse.ArgumentParser):
+    """Argument parser whose usage errors exit 3 (tool error) with a final
+    `OUTCOME: tool_error` line on stderr before exit, overriding argparse's
+    default exit 2; `--help` stays a metadata exit without an `OUTCOME:`
+    line."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        sys.stderr.write("%s: error: %s\n" % (self.prog, message))
+        sys.stderr.write("OUTCOME: %s\n" % OUTCOME_LABELS[3])
+        raise SystemExit(3)
 
 # Cadence period and live-child horizon (maintenance SKILL.md State file
 # semantics: darkness at one cadence period; a pending child explains an
@@ -92,7 +119,8 @@ BOOKKEEPING_FIELDS = ("parent_automation_id", "parent_absent_since", "rearm_note
 
 
 class RearmError(Exception):
-    """Loud failure: malformed input or a refused bookkeeping edit (rc 2)."""
+    """Loud failure: malformed input or a refused bookkeeping edit (tool
+    error, exit 3)."""
 
 
 # --------------------------------------------------------------------------- #
@@ -410,7 +438,7 @@ def run_check(args, repo_root, state_path, now):
 
 
 def parse_args(argv):
-    parser = argparse.ArgumentParser(
+    parser = OutcomeArgumentParser(
         description="Rearm-on-touch mechanical check (maintenance Step 0). "
                     "Classifies the scheduler state file state-first, applies "
                     "listing-gated bookkeeping, and prints a JSON verdict plus "
@@ -435,16 +463,22 @@ def main(argv=None):
         repo_root = resolve_repo_root(args.repo_root)
         state_path = (Path(args.state_path) if args.state_path
                       else Path(repo_root) / STATE_REL_PATH)
-        return run_check(args, repo_root, state_path, now)
+        rc = run_check(args, repo_root, state_path, now)
     except RearmError as exc:
         emit(build_verdict(CLASS_MALFORMED, reason=str(exc)))
         print("rearm-on-touch: FAILED: %s" % exc, file=sys.stderr)
-        return 2
+        print("OUTCOME: %s" % OUTCOME_LABELS[3])
+        return 3
     except Exception as exc:  # unexpected: loud fail, never a silent pass
         message = "unexpected %s: %s" % (type(exc).__name__, exc)
         emit(build_verdict(CLASS_MALFORMED, reason=message))
         print("rearm-on-touch: FAILED: %s" % message, file=sys.stderr)
-        return 2
+        print("OUTCOME: %s" % OUTCOME_LABELS[3])
+        return 3
+    # A classified verdict (any class, a skip included) passes on the exit
+    # channel; the final OUTCOME line follows the verdict JSON on stdout.
+    print("OUTCOME: %s" % OUTCOME_LABELS[0])
+    return rc
 
 
 if __name__ == "__main__":

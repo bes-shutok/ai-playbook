@@ -21,3 +21,4 @@ __pycache__/
 
 # Host-app skill-sync drop zone (externally managed, re-synced on demand; never vendor per Vendored Asset Sync Rules)
 /agents/skills/synced/
+/docs/history/reviews/

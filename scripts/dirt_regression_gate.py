@@ -17,10 +17,24 @@ because they do not by themselves show a behavior reversion:
   removals of lines already present at the base pass. A removal-only hunk of
   HEAD-gained lines is a regression (the added-line condition holds vacuously).
 
-Exit codes: 0 when no restored path regresses; 1 when at least one path
-regresses (one ``dirt REGRESSION`` line per regressed file on stdout); 2 on
-usage or git-environment errors (unresolvable ``--base``, missing HEAD, path
-outside the repository).
+Outcome contract (scripts/OUTCOME_CONTRACT.md): the gate reports exactly one
+of four outcomes as the final ``OUTCOME:`` line on stdout and its exit code.
+Exit codes: 0 pass (no restored path regresses); 1 fail (at least one path
+regresses; one ``dirt REGRESSION`` line per regressed file on stdout);
+2 indeterminate (an observed diff shape the classifier does not model; the
+observed and could-not-determine lines precede the OUTCOME line); 3 tool
+error (usage or git-environment errors: unresolvable ``--base``, missing
+HEAD, a path outside the repository, an absent path HEAD never tracked, any
+git failure, or an argparse usage error). Operating-context assumptions this gate's result
+depends on, declared per the contract: the invocation runs inside the
+repository (checkout context); ``--base`` resolves to a commit and HEAD
+exists (branch state); the listed paths exist in the worktree, are HEAD-
+tracked, or are staged deletions (input presence); ``git diff`` output is
+well-formed and blob content decodable as the pinned utf-8 strict codec.
+An unheld assumption surfaces as tool error (exit 3), never as a domain
+pass or fail; a diff shape outside the modeled cases surfaces as
+indeterminate (exit 2), never as pass. Operating-context assumptions are
+declared in scripts/OUTCOME_CONTRACT.md (the authoritative surface).
 
 With ``--stamp``, the gate cites an adjacent ``.source-commit`` stamp file
 (written beside the deployed copy at deployment time) as
@@ -41,9 +55,23 @@ STAMP_FILENAME = ".source-commit"
 
 
 def _git(*args: str, cwd: Path) -> str:
-    proc = subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True
-    )
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="strict",
+        )
+    except UnicodeDecodeError:
+        # Unsupported data per the outcome contract: output git produced but
+        # the gate cannot decode (a non-UTF-8 tracked blob or diff text) is
+        # tool error, never a domain pass or fail.
+        raise RuntimeError(
+            f"git {' '.join(args)} failed: unsupported data: output not "
+            "decodable as utf-8 text"
+        )
     if proc.returncode != 0:
         raise RuntimeError(
             f"git {' '.join(args)} failed: {proc.stderr.strip()}"
@@ -52,9 +80,22 @@ def _git(*args: str, cwd: Path) -> str:
 
 
 def _git_ok(*args: str, cwd: Path) -> bool:
-    proc = subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True
-    )
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="strict",
+        )
+    except UnicodeDecodeError:
+        # The gate's other decode boundary; both are guarded so a decode
+        # failure is tool error everywhere.
+        raise RuntimeError(
+            f"git {' '.join(args)} failed: unsupported data: output not "
+            "decodable as utf-8 text"
+        )
     return proc.returncode == 0
 
 
@@ -127,8 +168,13 @@ def _hunk_is_regression(
     return all(line in base_set for line in added)
 
 
-def classify_path(path: str, base: str, cwd: Path) -> tuple[bool, str]:
-    """Classify one restored path. Returns (is_regression, detail)."""
+def classify_path(path: str, base: str, cwd: Path) -> tuple[str, str]:
+    """Classify one restored path. Returns (status, detail).
+
+    status is "regression", "clean", or "indeterminate" per the outcome
+    contract (scripts/OUTCOME_CONTRACT.md); "indeterminate" marks a diff
+    shape the classifier does not model, never a pass or a fail.
+    """
     repo_root = Path(_git("rev-parse", "--show-toplevel", cwd=cwd).strip())
     resolved = Path(path).resolve()
     try:
@@ -156,6 +202,30 @@ def classify_path(path: str, base: str, cwd: Path) -> tuple[bool, str]:
     gained = set(head_lines) - base_set
     diff_text = _git("diff", "HEAD", "--unified=0", "--", path, cwd=cwd)
     hunks = _hunks(diff_text)
+    if diff_text.strip() and not hunks:
+        # Unmodeled diff shape: content the classifier cannot see (a binary
+        # restored file is the witnessed class, and a binary payload riding a
+        # mode flip or a rename header is the same class). Modeled hunk-less
+        # shapes are PURE rename ("similarity index"/"rename from"/"rename
+        # to") or PURE mode change ("old mode"/"new mode") with no binary
+        # payload line. Uncertainty is indeterminate, never a silent pass.
+        modeled = (
+            "Binary files" not in diff_text
+            and "GIT binary patch" not in diff_text
+            and (
+                "similarity index" in diff_text
+                or "old mode" in diff_text
+                or "new mode" in diff_text
+            )
+        )
+        if not modeled:
+            return (
+                "indeterminate",
+                "diff carries no classifiable hunks (binary or unrecognized "
+                "shape); observed "
+                f"{len(diff_text.splitlines())} diff lines, could not "
+                "determine restored-content polarity",
+            )
     removed_counts = Counter(line for removed, _ in hunks for line in removed)
     added_counts = Counter(line for _, added in hunks for line in added)
     moved_counts = removed_counts & added_counts
@@ -167,8 +237,8 @@ def classify_path(path: str, base: str, cwd: Path) -> tuple[bool, str]:
             else:
                 unmatched_removed.append(line)
         if _hunk_is_regression(unmatched_removed, added, gained, base_set):
-            return True, "restores base-era text over lines HEAD gained"
-    return False, ""
+            return "regression", "restores base-era text over lines HEAD gained"
+    return "clean", ""
 
 
 def _stamp_path_for(path: str) -> Path:
@@ -201,7 +271,15 @@ def _report_stamp(path: str, stdout, stderr) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
+    class _GateParser(argparse.ArgumentParser):
+        # Usage errors are tool error (exit 3) per the outcome contract;
+        # argparse's documented extension point is the error() override.
+        def error(self, message: str) -> None:
+            print(f"dirt gate: {message}", file=sys.stderr)
+            print("OUTCOME: tool_error")
+            raise SystemExit(3)
+
+    parser = _GateParser(
         description=(
             "Fail on restored dirt hunks that restore merge-base-era text over "
             "content HEAD gained since the given merge base."
@@ -235,29 +313,44 @@ def main(argv: list[str] | None = None) -> int:
             f"dirt gate: --base does not resolve to a commit: {args.base}",
             file=sys.stderr,
         )
-        return 2
+        print("OUTCOME: tool_error")
+        return 3
     try:
         _git("rev-parse", "--verify", "--quiet", "HEAD^{commit}", cwd=cwd)
     except RuntimeError:
         print("dirt gate: repository has no HEAD commit", file=sys.stderr)
-        return 2
+        print("OUTCOME: tool_error")
+        return 3
 
     regressed: list[str] = []
+    indeterminate: list[str] = []
     for path in args.paths:
         try:
-            is_regression, detail = classify_path(path, args.base, cwd)
+            status, detail = classify_path(path, args.base, cwd)
         except RuntimeError as exc:
             print(f"dirt gate: {exc}", file=sys.stderr)
-            return 2
+            print("OUTCOME: tool_error")
+            return 3
         if args.stamp:
             _report_stamp(path, sys.stdout, sys.stderr)
-        if is_regression:
+        if status == "regression":
             regressed.append(path)
             print(f"dirt REGRESSION: {path} ({detail} since {args.base[:12]})")
+        elif status == "indeterminate":
+            indeterminate.append(path)
+            print(f"dirt INDETERMINATE: {path} ({detail})")
 
+    if indeterminate:
+        # Uncertainty dominates a mixed run (the contract's precedence rule):
+        # every regressed path is still named in the evidence lines above, and
+        # the caller stops and re-derives instead of acting on the subset.
+        print("OUTCOME: indeterminate")
+        return 2
     if regressed:
+        print("OUTCOME: fail")
         return 1
     print(f"dirt gate: PASS ({len(args.paths)} file(s) checked)")
+    print("OUTCOME: pass")
     return 0
 
 

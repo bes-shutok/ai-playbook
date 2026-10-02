@@ -1,6 +1,6 @@
 # Backlog: selection-helper prose and message precision (small polish batch)
 
-Status: open
+Status: closed (2026-10-01 triage, operator adjudication "follow row contracts"; completed by other work, completion receipts below)
 Priority: deferred (formal-hardening triage 2026-09-22 full sweep per the project-priority-profiles directive: on this personal/pet repo formal fixes defer, no witnessed failure; docstring/message/exit-taxonomy precision. Revive on a witnessed operator misdirection by one of the messages, or a project-priority-profile change.)
 Severity: Low
 Origin: r4 code-review round of the review-records-contract execution (2026-09-19), staged finding F5 and overflow items (design-simplicity, risk); staging doc `docs/reviews/2026-09-16-review-records-contract-code-review-r4.md` (gitignored); capture hygiene: scan-public-hygiene --files pass (2026-09-19)
@@ -16,3 +16,7 @@ Broaden the docstring; drop the parenthetical in the F9 note; raise the empty-di
 ## Trigger
 
 The next edit to the helper's error paths or the allowlist backlog item's consumption.
+
+## Completion receipts (2026-10-01)
+
+All four sub-items are landed by other work, verified on the current tree: (a) the SelectionUsageError docstring now reads "An invalid invocation, or an unusable target/state that is the caller's to repair (exit 2)" and enumerates the environmental raise sites (scripts/review_record_selection.py around lines 95-110); (b) the F9 backlog note's overstated absolute-spelling parenthetical is gone, the note states the corrected bare root-level shape; (c) an empty --source-digest raises SelectionUsageError (exit 2) with the overwrite-guard rationale comment (scripts/review_record_selection.py around line 311); (d) the slug message now says "no path separators" (line 283; landed in the ee85cebc wave per git log -S).

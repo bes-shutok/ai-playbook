@@ -939,3 +939,10 @@ A test helper that wraps a CLI entry point in `contextlib.redirect_stdout`/`redi
 - Assert on the captured code AND the redirected stderr text; the code alone cannot distinguish "argparse refused the arguments" from "the command ran and failed".
 
 Witness: a selftest arm drove `main(["--pre-round", plan])` through a redirect-only capture helper; today's argparse rejected the unknown option by raising `SystemExit(2)` through the helper, so the planned RED expectation ("four cleanly failing arm checks") was unreachable and a literal implementation would have crashed the selftest; the fold prescribed the SystemExit-capturing wrapper before the mode existed.
+
+## 38. A `load_tests` Hook Must Build Its Suite Explicitly, Not Re-Enter the Loader
+
+- **Trigger:** a module-level `load_tests(loader, tests, pattern)` hook in a unittest file that wants different selections for discovery (pattern set) versus the default run (pattern unset).
+- **Rule:** in each branch, load the wanted test cases explicitly (`loader.loadTestsFromTestCase(X)` composed into a `unittest.TestSuite`) or derive from the `tests` argument as given. Never call `loader.loadTestsFromModule(sys.modules[__name__])` inside the hook: `loadTestsFromModule` re-invokes the module's `load_tests` hook, and the re-entrant call runs with `pattern` unset, so a pattern-aware branch silently collapses to the default selection (the exact flip the hook exists to prevent) or recurses.
+- **Why:** the hook is invoked BY the loader for the module; re-entering the loader for the same module re-runs the hook rather than enumerating test cases directly, so the branch's own condition is what changes, not the test set.
+- **Witness:** a two-arm suite (a fixture arm plus a real-tree arm) needed "discovery loads both arms, default run loads fixture only." The first implementation's pattern branch called `loadTestsFromModule`, and discovery reported 14 (the fixture arm) instead of 15: the re-entrant call re-ran the hook with `pattern=None`, returning the fixture-only suite. Rewriting both branches as explicit per-case loads fixed it in one pass.

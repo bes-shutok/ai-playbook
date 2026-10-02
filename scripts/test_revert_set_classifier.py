@@ -6,6 +6,7 @@ checkouts, untracked paths, --path restriction, non-ASCII paths, unresolvable
 head)."""
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,17 @@ SCRIPT = Path(__file__).resolve().parent / "revert_set_classifier.py"
 
 def run(args):
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    return subprocess.run(
+        [sys.executable, str(SCRIPT)] + args,
+        capture_output=True, text=True, check=False, env=env,
+    )
+
+
+def run_with_shim(args, shim_dir):
+    """run() with a directory prepended to PATH (a git plumbing-failure
+    shim: the classifier's git calls resolve through it)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
     return subprocess.run(
         [sys.executable, str(SCRIPT)] + args,
         capture_output=True, text=True, check=False, env=env,
@@ -194,13 +206,82 @@ class RevertSetClassifierTest(unittest.TestCase):
         self.assertIn("revert-set: partial", proc.stdout)
         self.assertNotIn("revert-set: pure", proc.stdout)
 
-    def test_unresolvable_head_is_tool_failure_exit_2(self):
+    # ------------------------------------------------------------------
+    # Outcome-contract arms (scripts/OUTCOME_CONTRACT.md): the four-outcome
+    # vocabulary under the answer-vocabulary criterion, exactly one final
+    # `OUTCOME:` line per non-metadata run, the retired tool-failure prefix.
+    # ------------------------------------------------------------------
+    def assert_single_final_outcome(self, proc, label):
+        lines = [line for line in proc.stdout.splitlines() if line.strip()]
+        self.assertTrue(lines, "no stdout lines: %r" % proc.stderr)
+        self.assertEqual(
+            lines[-1], "OUTCOME: %s" % label,
+            "final stdout line must be the OUTCOME line, stdout: %s"
+            % proc.stdout)
+        self.assertEqual(
+            sum(1 for line in lines if line.startswith("OUTCOME:")), 1,
+            "exactly one OUTCOME line expected, stdout: %s" % proc.stdout)
+
+    def test_clean_checkout_outcome_pass(self):
+        proc = run(["classify", "--repo", str(self.root)])
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("revert-set: none", proc.stdout)
+        self.assert_single_final_outcome(proc, "pass")
+
+    def test_pure_reversal_outcome_fail_with_summary(self):
+        (self.root / "a.txt").write_text("v1\n")
+        proc = run(["classify", "--repo", str(self.root)])
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("reversal: a.txt", proc.stdout)
+        self.assertIn("revert-set: pure", proc.stdout)
+        self.assert_single_final_outcome(proc, "fail")
+
+    def test_bad_repo_is_tool_error(self):
+        proc = run(["classify", "--repo",
+                    str(Path(self._tmp.name) / "no-such-repo")])
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertIn("head unresolvable", proc.stderr)
+        self.assertNotIn("revert-set-classifier tool failure:", proc.stderr)
+        self.assert_single_final_outcome(proc, "tool_error")
+
+    def test_unresolvable_head_ref_is_tool_error(self):
         proc = run(["classify", "--repo", str(self.root), "--head",
                     "nosuchref"])
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertIn("head unresolvable: nosuchref", proc.stderr)
+        self.assertNotIn("revert-set-classifier tool failure:", proc.stderr)
+        self.assert_single_final_outcome(proc, "tool_error")
+
+    def test_usage_violation_is_tool_error(self):
+        proc = run([])
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertIn("OUTCOME: tool_error", proc.stderr)
+
+    def test_plumbing_failure_over_resolved_inputs_is_indeterminate(self):
+        # Repo and HEAD resolve through the shimmed git; the addition lookup
+        # (git log --diff-filter=A) answers outside its 0/1 vocabulary
+        # mid-walk: the answer-vocabulary criterion classifies that as
+        # indeterminate (exit 2), never as a reversal finding and never as
+        # the retired tool-failure shape.
+        git(self.root, "rm", "-q", "b.txt")
+        real_git = shutil.which("git")
+        shim = Path(self._tmp.name) / "git-shim"
+        shim.mkdir()
+        script = shim / "git"
+        script.write_text(
+            "#!/bin/sh\n"
+            'for a in "$@"; do\n'
+            '  if [ "$a" = "--diff-filter=A" ]; then exit 1; fi\n'
+            "done\n"
+            'exec "%s" "$@"\n' % real_git,
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+        proc = run_with_shim(["classify", "--repo", str(self.root)], shim)
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-        self.assertIn(
-            "revert-set-classifier tool failure: head unresolvable: nosuchref",
-            proc.stderr)
+        self.assertIn("addition lookup failed for b.txt", proc.stderr)
+        self.assertNotIn("tool failure", proc.stderr)
+        self.assert_single_final_outcome(proc, "indeterminate")
 
 
 if __name__ == "__main__":

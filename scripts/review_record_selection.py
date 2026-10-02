@@ -105,8 +105,12 @@ class SelectionUsageError(Exception):
 
     The exit taxonomy, stated once: usage errors (this class) exit 2;
     environmental refusals (``SelectionRefused``) exit 1, covering a
-    missing or damaged record target, an orphaned half, and a differing
-    digest without a decision.
+    missing or damaged record target, an orphaned half, a differing
+    digest without a decision, and the mark-superseded-side refusals
+    on the supersession marking path (a prior record already marked
+    with a different recorded successor, a prior record carrying
+    duplicate supersession markers, or a prior record with no Metadata
+    section to host the marker line).
     """
 
 
@@ -173,13 +177,17 @@ def _pair_pattern(slug: str) -> re.Pattern[str]:
     reading would need a doubled ``review-review-`` slug nobody passes).
 
     Accepted residual alias, documented and tested but not guarded: a
-    slug that itself begins with an offered infix string (form
-    ``<infix>Y``, e.g. ``plan-review-Y`` or ``branch-review-Y``)
-    enumerates the same legacy-shaped ``<date>-<infix>Y-r<N>`` records
-    as the bare ``Y`` slug, because the infix alternative and the slug
-    spelling reach the same names; bare ``Y`` additionally owns the
-    bare-shaped ``<date>-Y-r<N>`` records the infixed spelling never
-    matches. Symmetrically, the bare ``Y`` slug enumerates that
+    slug that itself begins with one of the four literal review-kind infixes
+    (form ``<infix>Y``, e.g. ``plan-review-Y`` or
+    ``branch-review-Y``) enumerates the same legacy-shaped
+    ``<date>-<infix>Y-r<N>`` records as the bare ``Y`` slug, because
+    the infix alternative and the slug spelling reach the same names;
+    the guarded bare ``review-`` kind is the carve-out: it is offered
+    only to slugs that already begin with it, and a ``review-``-prefixed
+    full slug's inner spelling never enumerates its bare-shaped records
+    (pinned by ``test_pair_pattern_review_shape_stays_bare_owned``);
+    bare ``Y`` additionally owns the bare-shaped ``<date>-Y-r<N>``
+    records the infixed spelling never matches. Symmetrically, the bare ``Y`` slug enumerates that
     family's records (so ``plan`` reuses ``branch-review-plan``
     rounds). Every such overlap is shared ownership of the same files,
     never a silent loss.
@@ -397,18 +405,29 @@ def _recorded_supersession_value(prior: Path, successor: Path) -> str:
 
 _FENCE_LINE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 
+try:
+    from validate_review_staging import (
+        classify_fence_lines as _classify_fence_lines,
+    )
+except ImportError:  # direct-script invocation where scripts/ is not sys.path[0]
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from validate_review_staging import (
+        classify_fence_lines as _classify_fence_lines,
+    )
+
 
 def _fence_mask(lines: list[str]) -> tuple[list[bool], int | None]:
     """True per line that is fenced content (r2 F5).
 
-    The close rule mirrors the validator's shared fence classifier: a
-    fence closes ONLY on a bare, equal-or-longer run of the same delimiter
-    character as the opener, so a fenced template copy can never
-    contribute a marker line or a Metadata heading. The opener spelling is
-    this helper's own byte-scan regex and is NOT claimed to mirror the
-    classifier; single-sourcing the remaining grammar belongs to the
-    deferred parameterization refactor (see docs/history/backlog/
-    2026-09-19-validator-fence-classifier-parameterization.md).
+    Adapter over the validator's shared fence classifier (the single fence
+    state machine): the mask marks exactly the lines whose classifier event
+    is ``in_fence_content``, and the unclosed index is the classifier's.
+    The helper's own opener regex travels through the classifier's declared
+    ``fence_line_re`` seam parameter; it is deliberately narrower than the
+    classifier's default (no form-feed-prefixed openers), and that
+    divergence is carried as the named parameter, not as a copied grammar.
+    A fenced template copy can therefore never contribute a marker line or
+    a Metadata heading.
 
     Returns ``(mask, unclosed_opener_index)`` where the second element is
     the index of a fence opener that never closed, or None when every
@@ -416,36 +435,11 @@ def _fence_mask(lines: list[str]) -> tuple[list[bool], int | None]:
     caller refuses the operation instead of scanning a truncated record
     (r3 F1).
     """
-    mask = [False] * len(lines)
-    in_fence = False
-    fence_len = 0
-    fence_char = ""
-    opener_index: int | None = None
-    for index, line in enumerate(lines):
-        fence_match = _FENCE_LINE_RE.match(line)
-        if fence_match:
-            if in_fence:
-                stripped = line.strip()
-                if (
-                    stripped == fence_char * len(stripped)
-                    and len(stripped) >= fence_len
-                ):
-                    in_fence = False
-                    fence_len = 0
-                    fence_char = ""
-                    opener_index = None
-                    mask[index] = False
-                else:
-                    mask[index] = True
-            else:
-                in_fence = True
-                fence_len = len(fence_match.group(1))
-                fence_char = fence_match.group(1)[0]
-                opener_index = index
-                mask[index] = False
-            continue
-        mask[index] = in_fence
-    return mask, (opener_index if in_fence else None)
+    events, unclosed_opener_index = _classify_fence_lines(
+        lines, fence_line_re=_FENCE_LINE_RE
+    )
+    mask = [event == "in_fence_content" for event, _payload in events]
+    return mask, unclosed_opener_index
 
 
 def mark_superseded(prior_path: Path, successor_path: Path) -> tuple[str, str]:

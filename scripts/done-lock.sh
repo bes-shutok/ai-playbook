@@ -44,6 +44,22 @@ DIR_VAR="${ENV_PREFIX}_DIR"
 TOKEN_VAR="${ENV_PREFIX}_TOKEN"
 META_FILE="meta.env"
 
+# The outcome contract (scripts/OUTCOME_CONTRACT.md): every non-metadata run
+# ends with exactly one final `OUTCOME: <pass|fail|indeterminate|tool_error>`
+# line matching the exit code. Declared placement deviation: the acquire
+# subcommands emit the line on STDERR so their eval-consumed stdout stays
+# export-only; every other subcommand emits it on stdout. --help and usage
+# text are metadata-exempt (no OUTCOME line).
+IS_ACQUIRE_CMD=0
+emit_outcome() {
+  local outcome="$1"
+  if [[ "$IS_ACQUIRE_CMD" -eq 1 ]]; then
+    echo "OUTCOME: ${outcome}" >&2
+  else
+    echo "OUTCOME: ${outcome}"
+  fi
+}
+
 usage() {
   cat <<'EOF'
 Usage: done-lock.sh <command> [args...]
@@ -58,7 +74,7 @@ Commands:
   stale-clean                Remove stale/abandoned/incomplete lock for current repo.
                              Also removes a session-fenced lock when age >= DONE_LOCK_STALE_SECS
                              (operator escape; auto-acquire still protects live or ambiguous holders).
-  selftest                   Run built-in race/fence fixtures (exit 0 on pass).
+  selftest                   Run built-in race/fence fixtures (pass/fail outcome).
 
 Merge landing lock (merge-* commands; same semantics and exit codes as the
 done commands above, over a separate namespace: default root
@@ -103,17 +119,41 @@ Environment:
   MERGE_LOCK_DIR / MERGE_LOCK_TOKEN
                              Required in env for merge-release / merge-release-repo.
 
-Exit codes:
-  0 success
-  1 usage / release mismatch / not a git repo
-  2 acquire: held by another active holder (not stealable)
+Outcome contract (scripts/OUTCOME_CONTRACT.md):
+  Every non-metadata run ends with exactly one final line
+  `OUTCOME: <pass|fail|indeterminate|tool_error>` matching the exit code:
+  0 pass; 1 fail (modeled violation; the offending evidence precedes the
+  line); 2 indeterminate (evidence insufficient or ambiguous; the caller
+  decides); 3 tool error (usage, environment, or unsupported lock data).
+  A run with no final OUTCOME line is tool error: stop and re-derive from
+  disk. Placement deviation: the acquire subcommands (acquire, wait-acquire,
+  merge-acquire, merge-wait-acquire) print the OUTCOME line on STDERR so
+  their eval-consumed stdout stays export-only; every other subcommand
+  prints it on stdout. --help and this usage text are metadata-exempt (no
+  OUTCOME line).
+  Per-subcommand mapping:
+    acquire / wait-acquire / merge-acquire / merge-wait-acquire
+      success pass; held or max-wait exhaustion fail with the holder
+      evidence; ambiguous holder (meta-less lock past the incomplete age,
+      or unverifiable holder identity) indeterminate; usage and
+      not-a-git-repo tool error.
+    status      pass with the reported state in the evidence lines.
+    stale-clean free pass; incomplete-too-new indeterminate (safety cannot
+                be adjudicated); lock-changed-under-us or still-active fail
+                with the race/holder evidence; unreadable lock metadata
+                tool error.
+    release / release-repo
+                success pass; token mismatch and lock-changed-under-us
+                fail; missing-env and missing-metadata refusals tool error.
+    selftest    pass or fail by harness result.
 EOF
 }
 
 require_git_repo() {
   if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
     echo "${PROG}: not inside a git repository" >&2
-    exit 1
+    emit_outcome tool_error
+    exit 3
   fi
   if [[ "$LOCK_MODE" == "merge" ]]; then
     # Merge mode keys the lock per-REPOSITORY, not per-worktree: every linked
@@ -135,11 +175,13 @@ require_git_repo() {
     local common_dir
     if ! common_dir="$(git rev-parse --git-common-dir 2>/dev/null)"; then
       echo "${PROG}: not inside a git repository" >&2
-      exit 1
+      emit_outcome tool_error
+      exit 3
     fi
     common_dir="$(cd "$common_dir" 2>/dev/null && pwd -P)" || {
       echo "${PROG}: cannot resolve the git common dir: ${common_dir}" >&2
-      exit 1
+      emit_outcome tool_error
+      exit 3
     }
     case "$common_dir" in
       */.git) repo_root="${common_dir%/.git}" ;;
@@ -264,6 +306,41 @@ is_stealable_lock() {
   # All other states, including session-fenced live or ambiguous holders, are
   # protected; stale-clean remains the explicit escape hatch.
   return 1
+}
+
+classify_held_outcome() {
+  # Outcome classifier for an acquire refusal (scripts/OUTCOME_CONTRACT.md):
+  # "held" means the refusal is definitively evidenced (verified-live holder,
+  # a dead holder still inside its dead-recovery grace window, or an
+  # in-flight meta-less peer younger than the incomplete age); "ambiguous"
+  # means the hold cannot be adjudicated (meta-less lock past the incomplete
+  # age, an unverifiable holder identity, or evidence that vanished
+  # mid-race). The acquire subcommands map held to fail and ambiguous to
+  # indeterminate.
+  if [[ ! -d "$lock_dir" ]]; then
+    echo ambiguous
+    return 0
+  fi
+  if [[ ! -f "${lock_dir}/${META_FILE}" ]]; then
+    local mtime now age
+    mtime="$(stat -f %m "$lock_dir" 2>/dev/null || stat -c %Y "$lock_dir" 2>/dev/null || echo 0)"
+    now="$(now_epoch)"
+    age=$(( now - mtime ))
+    if [[ "$age" -ge "$INCOMPLETE_SECS" ]]; then
+      echo ambiguous
+    else
+      echo held
+    fi
+    return 0
+  fi
+  if ! load_lock_meta; then
+    echo ambiguous
+    return 0
+  fi
+  case "$(holder_state)" in
+    alive|dead) echo held ;;
+    *) echo ambiguous ;;
+  esac
 }
 
 resolve_holder_pid() {
@@ -505,7 +582,8 @@ try_acquire() {
 require_label_value() {
   if [[ $# -eq 0 || -z "${1:-}" ]]; then
     echo "${PROG}: --label requires a value" >&2
-    exit 1
+    emit_outcome tool_error
+    exit 3
   fi
 }
 
@@ -521,17 +599,28 @@ cmd_acquire() {
         ;;
       *)
         echo "${PROG}: unknown argument: $1" >&2
-        exit 1
+        emit_outcome tool_error
+        exit 3
         ;;
     esac
   done
   require_git_repo
   if try_acquire "$label"; then
+    emit_outcome pass
     exit 0
   fi
+  local held_class
+  held_class="$(classify_held_outcome)"
+  if [[ "$held_class" == "ambiguous" ]]; then
+    echo "${PROG}: blocked by a lock for ${repo_root}; holder state ambiguous (cannot adjudicate)" >&2
+    status_report >&2
+    emit_outcome indeterminate
+    exit 2
+  fi
   echo "${PROG}: held by another ${WORKFLOW_NOUN} for ${repo_root}" >&2
-  cmd_status >&2
-  exit 2
+  status_report >&2
+  emit_outcome fail
+  exit 1
 }
 
 cmd_wait_acquire() {
@@ -552,7 +641,8 @@ cmd_wait_acquire() {
         ;;
       *)
         echo "${PROG}: unknown argument: $1" >&2
-        exit 1
+        emit_outcome tool_error
+        exit 3
         ;;
     esac
   done
@@ -560,15 +650,25 @@ cmd_wait_acquire() {
   local deadline=$(( $(now_epoch) + max_wait ))
   while true; do
     if try_acquire "$label"; then
+      emit_outcome pass
       exit 0
     fi
     if [[ "$(now_epoch)" -ge "$deadline" ]]; then
+      local held_class
+      held_class="$(classify_held_outcome)"
+      if [[ "$held_class" == "ambiguous" ]]; then
+        echo "${PROG}: timed out after ${max_wait}s waiting for lock on ${repo_root}; holder state ambiguous (cannot adjudicate)" >&2
+        status_report >&2
+        emit_outcome indeterminate
+        exit 2
+      fi
       echo "${PROG}: timed out after ${max_wait}s waiting for lock on ${repo_root}" >&2
-      cmd_status >&2
-      exit 2
+      status_report >&2
+      emit_outcome fail
+      exit 1
     fi
     echo "${PROG}: waiting for lock on ${repo_root} (poll ${POLL_SECS}s)..." >&2
-    cmd_status >&2
+    status_report >&2
     sleep "$POLL_SECS"
   done
 }
@@ -580,23 +680,27 @@ cmd_release() {
   if [[ -z "$dir" || -z "$token" ]]; then
     echo "${PROG}: release requires ${DIR_VAR} and ${TOKEN_VAR} in env" >&2
     echo "${PROG}: re-export them from your acquire Step 0 output; refusing shared session load" >&2
-    exit 1
+    emit_outcome tool_error
+    exit 3
   fi
   local meta="${dir}/${META_FILE}"
   if [[ ! -d "$dir" ]]; then
     echo "${PROG}: lock already released (${dir})" >&2
     require_git_repo 2>/dev/null && clear_lock_session_if_token "$token" || true
+    emit_outcome pass
     exit 0
   fi
   if [[ ! -f "$meta" ]]; then
     echo "${PROG}: lock directory missing metadata; refusing unsafe release" >&2
-    exit 1
+    emit_outcome tool_error
+    exit 3
   fi
   local meta_token meta_epoch released_for
   meta_token="$(meta_field "$meta" lock_token)"
   meta_epoch="$(meta_field "$meta" started_epoch)"
   if [[ "$token" != "$meta_token" ]]; then
     echo "${PROG}: token mismatch; not releasing ${dir}" >&2
+    emit_outcome fail
     exit 1
   fi
   released_for="$(meta_field "$meta" repo_root)"
@@ -605,10 +709,12 @@ cmd_release() {
   lock_dir="$dir"
   if ! steal_remove_if_unchanged "$meta_token" "$meta_epoch" "released"; then
     echo "${PROG}: lock changed under us; not releasing ${dir}" >&2
+    emit_outcome fail
     exit 1
   fi
   require_git_repo 2>/dev/null && clear_lock_session_if_token "$token" || true
   echo "${PROG}: released lock for ${released_for}"
+  emit_outcome pass
 }
 
 cmd_release_repo() {
@@ -623,12 +729,16 @@ cmd_release_repo() {
     if [[ -f "$(lock_session_file)" ]]; then
       echo "${PROG}: hint: session file exists for status/fence only; not used for release-repo" >&2
     fi
-    exit 1
+    emit_outcome tool_error
+    exit 3
   fi
   cmd_release
 }
 
-cmd_status() {
+status_report() {
+  # The status evidence body, without the outcome line: the acquire and
+  # stale-clean refusal paths reuse it as holder evidence, and only the
+  # status subcommand appends the contract's final OUTCOME line.
   require_git_repo
   if [[ ! -d "$lock_dir" ]]; then
     echo "${PROG}: free (${repo_root})"
@@ -680,15 +790,22 @@ cmd_status() {
   fi
 }
 
+cmd_status() {
+  status_report
+  emit_outcome pass
+}
+
 cmd_stale_clean() {
   require_git_repo
   if [[ -d "$lock_dir" ]] && [[ ! -f "${lock_dir}/${META_FILE}" ]]; then
     if ! remove_incomplete_lock_dir; then
       echo "${PROG}: incomplete lock is too new; refusing unsafe cleanup" >&2
+      emit_outcome indeterminate
       exit 2
     fi
     clear_lock_session_if_token "${lock_meta_token:-}" || true
     echo "${PROG}: free (${repo_root})"
+    emit_outcome pass
     return 0
   fi
   # Operator escape: allow removing a fenced lock only when it is also stale.
@@ -703,7 +820,7 @@ cmd_stale_clean() {
   if [[ -d "$lock_dir" ]] && { is_stealable_lock || [[ "$allow_fenced_stale" -eq 1 ]] || [[ "$allow_operator_stale" -eq 1 ]]; }; then
     local reason="stale"
     local expected_token expected_epoch
-    load_lock_meta || exit 1
+    load_lock_meta || { echo "${PROG}: lock metadata unreadable; refusing cleanup (${lock_dir})" >&2; emit_outcome tool_error; exit 3; }
     expected_token="${lock_meta_token}"
     expected_epoch="${lock_meta_started_epoch}"
     if [[ "$allow_fenced_stale" -eq 1 ]]; then
@@ -724,17 +841,21 @@ cmd_stale_clean() {
     fi
     if ! steal_remove_if_unchanged "$expected_token" "$expected_epoch" "$reason"; then
       echo "${PROG}: lock changed under us; still active (${repo_root})" >&2
-      cmd_status
-      exit 2
+      status_report
+      emit_outcome fail
+      exit 1
     fi
     clear_lock_session_if_token "$expected_token" || true
     echo "${PROG}: free (${repo_root})"
+    emit_outcome pass
   elif [[ -d "$lock_dir" ]]; then
     echo "${PROG}: still active (${repo_root})"
-    cmd_status
-    exit 2
+    status_report
+    emit_outcome fail
+    exit 1
   else
     echo "${PROG}: free (${repo_root})"
+    emit_outcome pass
   fi
 }
 
@@ -756,6 +877,7 @@ cmd_selftest() {
 
   run() {
     DONE_LOCK_ROOT="$lock_root" \
+      DONE_LOCK_POLL_SECS="${DONE_LOCK_POLL_SECS:-30}" \
       DONE_LOCK_STALE_SECS="${DONE_LOCK_STALE_SECS:-1800}" \
       DONE_LOCK_DEAD_HOLDER_GRACE_SECS="${DONE_LOCK_DEAD_HOLDER_GRACE_SECS:-5}" \
       DONE_LOCK_HOLDER_PID="${DONE_LOCK_HOLDER_PID-}" \
@@ -769,6 +891,7 @@ cmd_selftest() {
 
   mrun() {
     MERGE_LOCK_ROOT="$mlock_root" \
+      MERGE_LOCK_POLL_SECS="${MERGE_LOCK_POLL_SECS:-30}" \
       MERGE_LOCK_STALE_SECS="${MERGE_LOCK_STALE_SECS:-600}" \
       MERGE_LOCK_DEAD_HOLDER_GRACE_SECS="${MERGE_LOCK_DEAD_HOLDER_GRACE_SECS:-5}" \
       MERGE_LOCK_HOLDER_PID="${MERGE_LOCK_HOLDER_PID-}" \
@@ -1067,7 +1190,7 @@ cmd_selftest() {
     if [[ "$err" != *"--label requires a value"* ]]; then
       echo "selftest FAIL: ${cmd} missing --label value error not specific: ${err}" >&2
       fail=1
-    elif [[ "$err" != *"done-lock: --label requires a value" ]]; then
+    elif [[ "$err" != *"done-lock: --label requires a value"* ]]; then
       echo "selftest FAIL: ${cmd} missing --label value error mismatch" >&2
       fail=1
     fi
@@ -1151,10 +1274,10 @@ cmd_selftest() {
     fi
     second_rc=0
     # Zero the dead-holder grace for this probe: a dead holder would be
-    # stolen (rc 0), so rc=2 here can only mean the pinned holder verified alive.
+    # stolen (rc 0), so rc=1 here can only mean the pinned holder verified alive.
     DONE_LOCK_DEAD_HOLDER_GRACE_SECS=0 run acquire --label one-shot-second >/dev/null 2>&1 || second_rc=$?
-    if [[ "$second_rc" -ne 2 ]]; then
-      echo "selftest FAIL: lock did not survive the exiting one-shot subshell (rc=${second_rc}, want 2)" >&2
+    if [[ "$second_rc" -ne 1 ]]; then
+      echo "selftest FAIL: lock did not survive the exiting one-shot subshell (rc=${second_rc}, want 1)" >&2
       exit 1
     fi
     if ! DONE_LOCK_DIR="$(cat "$handoff_dir_file")" DONE_LOCK_TOKEN="$(cat "$handoff_token_file")" run release-repo >/dev/null 2>&1; then
@@ -1193,7 +1316,8 @@ cmd_selftest() {
   fi
 
   # M2) merge_second_acquire_held: a second merge-acquire against a lock held
-  # by another live holder exits 2 and leaves the first holder's lock intact.
+  # by another live holder exits 1 with the fail outcome and leaves the first
+  # holder's lock intact.
   if ! (
     cd "$root"
     sleep 120 &
@@ -1204,11 +1328,12 @@ cmd_selftest() {
     first_dir="$MERGE_LOCK_DIR"
     first_token="$MERGE_LOCK_TOKEN"
     second_rc=0
-    mrun merge-acquire --label merge-second-holder 2>/dev/null || second_rc=$?
-    if [[ "$second_rc" -ne 2 ]]; then
-      echo "selftest FAIL: second merge-acquire rc=${second_rc}, want 2" >&2
+    mrun merge-acquire --label merge-second-holder 2>"${tmp}/m2-err" || second_rc=$?
+    if [[ "$second_rc" -ne 1 ]]; then
+      echo "selftest FAIL: second merge-acquire rc=${second_rc}, want 1" >&2
       exit 1
     fi
+    [[ "$(tail -n1 "${tmp}/m2-err")" == "OUTCOME: fail" ]] || { echo "selftest FAIL: second merge-acquire stderr does not end with OUTCOME: fail" >&2; exit 1; }
     [[ -d "$first_dir" ]] || { echo "selftest FAIL: first holder merge lock removed" >&2; exit 1; }
     first_meta_token="$(grep -E '^lock_token=' "${first_dir}/meta.env" | head -n1 | cut -d= -f2-)"
     [[ "$first_meta_token" == "$first_token" ]] || { echo "selftest FAIL: first holder merge token changed" >&2; exit 1; }
@@ -1322,7 +1447,8 @@ cmd_selftest() {
   # M6) cross_worktree_mutual_exclusion (r1 F1; r2 F13/CF1): a linked worktree
   # of the fixture repo and the primary checkout key the SAME merge lock (the
   # key derives from the resolved git common dir, not --show-toplevel): a hold
-  # from the worktree blocks merge-acquire from the primary (exit 2),
+  # from the worktree blocks merge-acquire from the primary (exit 1, the fail
+  # outcome),
   # merge-status from the primary sees the worktree holder label, and the
   # session fence lands in the shared primary checkout. The mirror direction
   # (hold from the primary, blocked from the worktree) holds too, and a
@@ -1350,8 +1476,9 @@ cmd_selftest() {
       [[ -n "${MERGE_LOCK_DIR:-}" && -n "${MERGE_LOCK_TOKEN:-}" ]] || { echo "selftest FAIL: worktree merge-acquire produced no exports" >&2; exit 1; }
       [[ "$MERGE_LOCK_DIR" == "${mlock_root}/${root_merge_id}" ]] || { echo "selftest FAIL: worktree merge lock not keyed by the shared repo root (${MERGE_LOCK_DIR})" >&2; exit 1; }
       primary_rc=0
-      (cd "$root" && MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-acquire --label primary-blocked 2>/dev/null) || primary_rc=$?
-      [[ "$primary_rc" -eq 2 ]] || { echo "selftest FAIL: primary merge-acquire rc=${primary_rc} over a worktree hold, want 2" >&2; exit 1; }
+      (cd "$root" && MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-acquire --label primary-blocked 2>"${tmp}/m6-primary-err") || primary_rc=$?
+      [[ "$primary_rc" -eq 1 ]] || { echo "selftest FAIL: primary merge-acquire rc=${primary_rc} over a worktree hold, want 1" >&2; exit 1; }
+      [[ "$(tail -n1 "${tmp}/m6-primary-err")" == "OUTCOME: fail" ]] || { echo "selftest FAIL: primary merge-acquire stderr does not end with OUTCOME: fail" >&2; exit 1; }
       primary_status="$(cd "$root" && mrun merge-status)"
       [[ "$primary_status" == *"label: wt-holder"* ]] || { echo "selftest FAIL: primary merge-status does not see the worktree holder: ${primary_status}" >&2; exit 1; }
       [[ -f "$root/.ai-playbook/merge-lock.session" ]] || { echo "selftest FAIL: merge fence did not land in the shared primary checkout" >&2; exit 1; }
@@ -1364,8 +1491,9 @@ cmd_selftest() {
       trap 'kill "$p_holder" 2>/dev/null || true' EXIT
       eval "$(MERGE_LOCK_HOLDER_PID="$p_holder" mrun merge-acquire --label primary-holder)"
       wt_rc=0
-      (cd "$wt" && MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-acquire --label wt-blocked 2>/dev/null) || wt_rc=$?
-      [[ "$wt_rc" -eq 2 ]] || { echo "selftest FAIL: worktree merge-acquire rc=${wt_rc} over a primary hold, want 2" >&2; exit 1; }
+      (cd "$wt" && MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-acquire --label wt-blocked 2>"${tmp}/m6-wt-err") || wt_rc=$?
+      [[ "$wt_rc" -eq 1 ]] || { echo "selftest FAIL: worktree merge-acquire rc=${wt_rc} over a primary hold, want 1" >&2; exit 1; }
+      [[ "$(tail -n1 "${tmp}/m6-wt-err")" == "OUTCOME: fail" ]] || { echo "selftest FAIL: worktree merge-acquire stderr does not end with OUTCOME: fail" >&2; exit 1; }
       mrun merge-release-repo >/dev/null
     ) || exit 1
     (
@@ -1457,24 +1585,25 @@ cmd_selftest() {
   fi
 
   # M9) merge_wait_acquire_zero_wait_times_out (r1 F7): --max-wait 0 against
-  # a held lock exits 2 immediately and prints no exports on stdout.
+  # a held lock exits 1 immediately with the fail outcome and prints no
+  # exports on stdout.
   if ! (
     cd "$root"
     sleep 120 &
     m0_holder=$!
     trap 'kill "$m0_holder" 2>/dev/null || true' EXIT
     eval "$(MERGE_LOCK_HOLDER_PID="$m0_holder" mrun merge-acquire --label m0-blocker)"
-    m0_out="$(MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-wait-acquire --label m0-waiter --max-wait 0 2>/dev/null)" && {
-      echo "selftest FAIL: merge-wait-acquire --max-wait 0 acquired a held lock" >&2
-      exit 1
-    }
+    m0_rc=0
+    m0_out="$(MERGE_LOCK_DIR= MERGE_LOCK_TOKEN= mrun merge-wait-acquire --label m0-waiter --max-wait 0 2>"${tmp}/m0-err")" || m0_rc=$?
+    [[ "$m0_rc" -eq 1 ]] || { echo "selftest FAIL: merge-wait-acquire --max-wait 0 rc=${m0_rc}, want 1" >&2; exit 1; }
+    [[ "$(tail -n1 "${tmp}/m0-err")" == "OUTCOME: fail" ]] || { echo "selftest FAIL: max-wait-0 exhaustion stderr does not end with OUTCOME: fail" >&2; exit 1; }
     [[ -z "$m0_out" ]] || { echo "selftest FAIL: merge-wait-acquire printed exports on timeout" >&2; exit 1; }
     mrun merge-release-repo >/dev/null
   ); then
     echo "selftest FAIL: merge_wait_acquire_zero_wait_times_out" >&2
     fail=1
   else
-    echo "selftest OK: merge-wait-acquire --max-wait 0 times out with exit 2"
+    echo "selftest OK: merge-wait-acquire --max-wait 0 times out with OUTCOME: fail"
   fi
 
   # M10) merge_session_carries_only_merge_lock_keys (origin 6): a fresh
@@ -1503,17 +1632,129 @@ cmd_selftest() {
     echo "selftest OK: merge session carries only merge lock keys"
   fi
 
+  # ---- Outcome-contract arms (scripts/OUTCOME_CONTRACT.md) ----
+
+  # O1) outcome_acquire_pass: an acquired acquire exits 0, ends its STDERR
+  # with `OUTCOME: pass`, and keeps the two exports as the only STDOUT lines
+  # (the eval-consumed stdout stays export-only).
+  if ! (
+    cd "$root"
+    o1_rc=0
+    run acquire --label outcome-pass >"${tmp}/o1-out" 2>"${tmp}/o1-err" || o1_rc=$?
+    [[ "$o1_rc" -eq 0 ]] || { echo "selftest FAIL: outcome acquire rc=${o1_rc}, want 0" >&2; exit 1; }
+    [[ "$(tail -n1 "${tmp}/o1-err")" == "OUTCOME: pass" ]] || { echo "selftest FAIL: acquired acquire stderr does not end with OUTCOME: pass (got: $(tail -n1 "${tmp}/o1-err"))" >&2; exit 1; }
+    [[ "$(grep -c '^export ' "${tmp}/o1-out" || true)" -eq 2 ]] || { echo "selftest FAIL: acquired acquire stdout is not exactly two export lines" >&2; exit 1; }
+    eval "$(cat "${tmp}/o1-out")"
+    run release-repo >/dev/null
+  ); then
+    echo "selftest FAIL: outcome acquire pass placement" >&2
+    fail=1
+  else
+    echo "selftest OK: acquired acquire emits OUTCOME: pass on stderr; stdout export-only"
+  fi
+
+  # O2) outcome_wait_acquire_fail: a max-wait exhaustion against a live
+  # holder exits 1 and ends its STDERR with `OUTCOME: fail` naming the
+  # holder evidence; DONE_LOCK_POLL_SECS=1 keeps the exhaustion in seconds.
+  if ! (
+    cd "$root"
+    sleep 120 &
+    o2_holder=$!
+    trap 'kill "$o2_holder" 2>/dev/null || true' EXIT
+    eval "$(DONE_LOCK_HOLDER_PID="$o2_holder" run acquire --label outcome-holder)"
+    o2_rc=0
+    DONE_LOCK_POLL_SECS=1 run wait-acquire --label outcome-waiter --max-wait 2 \
+      >"${tmp}/o2-out" 2>"${tmp}/o2-err" || o2_rc=$?
+    [[ "$o2_rc" -eq 1 ]] || { echo "selftest FAIL: wait-acquire exhaustion rc=${o2_rc}, want 1" >&2; exit 1; }
+    [[ "$(tail -n1 "${tmp}/o2-err")" == "OUTCOME: fail" ]] || { echo "selftest FAIL: wait-acquire exhaustion stderr does not end with OUTCOME: fail (got: $(tail -n1 "${tmp}/o2-err"))" >&2; exit 1; }
+    grep -q 'label: outcome-holder' "${tmp}/o2-err" || { echo "selftest FAIL: exhaustion evidence does not name the holder label" >&2; exit 1; }
+    [[ ! -s "${tmp}/o2-out" ]] || { echo "selftest FAIL: exhausted wait-acquire printed exports" >&2; exit 1; }
+    run release-repo >/dev/null
+  ); then
+    echo "selftest FAIL: outcome wait-acquire fail" >&2
+    fail=1
+  else
+    echo "selftest OK: wait-acquire exhaustion emits OUTCOME: fail with holder evidence"
+  fi
+
+  # O3) outcome_acquire_ambiguous: a meta-less lock dir past the incomplete
+  # age cannot be adjudicated: acquire exits 2 and ends its STDERR with
+  # `OUTCOME: indeterminate`.
+  if ! (
+    cd "$root"
+    repo_id="$(printf '%s' "$(git rev-parse --show-toplevel)" | shasum -a 256 | cut -c1-16)"
+    rm -rf "${lock_root}/${repo_id}"
+    mkdir -p "${lock_root}/${repo_id}"
+    touch -t 202001010000 "${lock_root}/${repo_id}" 2>/dev/null || \
+      touch -d '2020-01-01' "${lock_root}/${repo_id}" 2>/dev/null || true
+    o3_rc=0
+    run acquire --label outcome-ambiguous >"${tmp}/o3-out" 2>"${tmp}/o3-err" || o3_rc=$?
+    [[ "$o3_rc" -eq 2 ]] || { echo "selftest FAIL: ambiguous-holder acquire rc=${o3_rc}, want 2" >&2; exit 1; }
+    [[ "$(tail -n1 "${tmp}/o3-err")" == "OUTCOME: indeterminate" ]] || { echo "selftest FAIL: ambiguous-holder acquire stderr does not end with OUTCOME: indeterminate (got: $(tail -n1 "${tmp}/o3-err"))" >&2; exit 1; }
+    DONE_LOCK_STALE_SECS=0 run stale-clean >/dev/null 2>&1 || true
+    rm -rf "${lock_root}/${repo_id}"
+  ); then
+    echo "selftest FAIL: outcome acquire ambiguous indeterminate" >&2
+    fail=1
+  else
+    echo "selftest OK: ambiguous holder emits OUTCOME: indeterminate"
+  fi
+
+  # O4) outcome_usage_tool_error: a usage error exits 3 and ends its STDERR
+  # with `OUTCOME: tool_error` (acquire-family placement).
+  if ! (
+    cd "$root"
+    o4_rc=0
+    run acquire --definitely-not-a-flag >"${tmp}/o4-out" 2>"${tmp}/o4-err" || o4_rc=$?
+    [[ "$o4_rc" -eq 3 ]] || { echo "selftest FAIL: usage-error acquire rc=${o4_rc}, want 3" >&2; exit 1; }
+    [[ "$(tail -n1 "${tmp}/o4-err")" == "OUTCOME: tool_error" ]] || { echo "selftest FAIL: usage-error stderr does not end with OUTCOME: tool_error (got: $(tail -n1 "${tmp}/o4-err"))" >&2; exit 1; }
+  ); then
+    echo "selftest FAIL: outcome usage tool error" >&2
+    fail=1
+  else
+    echo "selftest OK: usage error emits OUTCOME: tool_error"
+  fi
+
+  # O5) outcome_stale_clean_indeterminate: a meta-less lock dir younger than
+  # the incomplete age cannot be safely adjudicated: stale-clean exits 2 and
+  # ends its STDOUT with `OUTCOME: indeterminate` (non-acquire placement).
+  if ! (
+    cd "$root"
+    repo_id="$(printf '%s' "$(git rev-parse --show-toplevel)" | shasum -a 256 | cut -c1-16)"
+    rm -rf "${lock_root}/${repo_id}"
+    mkdir -p "${lock_root}/${repo_id}"
+    o5_rc=0
+    run stale-clean >"${tmp}/o5-out" 2>"${tmp}/o5-err" || o5_rc=$?
+    [[ "$o5_rc" -eq 2 ]] || { echo "selftest FAIL: too-new incomplete stale-clean rc=${o5_rc}, want 2" >&2; exit 1; }
+    [[ "$(tail -n1 "${tmp}/o5-out")" == "OUTCOME: indeterminate" ]] || { echo "selftest FAIL: too-new incomplete stale-clean stdout does not end with OUTCOME: indeterminate (got: $(tail -n1 "${tmp}/o5-out"))" >&2; exit 1; }
+    [[ -d "${lock_root}/${repo_id}" ]] || { echo "selftest FAIL: too-new incomplete lock dir was removed" >&2; exit 1; }
+    touch -t 202001010000 "${lock_root}/${repo_id}" 2>/dev/null || \
+      touch -d '2020-01-01' "${lock_root}/${repo_id}" 2>/dev/null || true
+    run stale-clean >/dev/null 2>&1
+    [[ ! -d "${lock_root}/${repo_id}" ]] || rm -rf "${lock_root}/${repo_id}"
+  ); then
+    echo "selftest FAIL: outcome stale-clean indeterminate" >&2
+    fail=1
+  else
+    echo "selftest OK: too-new incomplete lock: stale-clean emits OUTCOME: indeterminate on stdout"
+  fi
+
   rm -rf "$tmp"
   if [[ "$fail" -ne 0 ]]; then
     echo "${PROG}: selftest FAILED" >&2
+    emit_outcome fail
     exit 1
   fi
   echo "${PROG}: selftest passed"
+  emit_outcome pass
 }
 
 main() {
   local cmd="${1:-}"
   shift || true
+  case "$cmd" in
+    acquire|wait-acquire|merge-acquire|merge-wait-acquire) IS_ACQUIRE_CMD=1 ;;
+  esac
   case "$cmd" in
     acquire) cmd_acquire "$@" ;;
     wait-acquire) cmd_wait_acquire "$@" ;;
@@ -1532,7 +1773,8 @@ main() {
     *)
       echo "${PROG}: unknown command: ${cmd}" >&2
       usage >&2
-      exit 1
+      emit_outcome tool_error
+      exit 3
       ;;
   esac
 }

@@ -51,7 +51,7 @@ from done_sweep_gates_lib import (
 )
 
 # The absorbed gate ids, in done SKILL.md step order (plan Terms + G2);
-# order-neutral name since the count is now fifteen.
+# order-neutral name since the count is now sixteen.
 EXPECTED_GATE_ORDER = [
     "plan-readiness",
     "confluence-hygiene",
@@ -66,6 +66,7 @@ EXPECTED_GATE_ORDER = [
     "instruction-size",
     "description-length",
     "foreign-staging",
+    "post-landing-staging",
     "archive-ceremony",
     "execute-plan-closeout",
 ]
@@ -173,7 +174,9 @@ def read_deliverables(root: Path) -> list[str]:
 
 
 def write_stub_readiness_validator(root: Path) -> Path:
-    """Repo-local stub validator: exit 0 for plan names containing 'good', else 1."""
+    """Repo-local stub validator answering in the migrated four-outcome
+    shape: 'good' plans pass (exit 0, `OUTCOME: pass`), others fail
+    (exit 1 with the rejection line and `OUTCOME: fail`)."""
     scripts = root / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
     stub = scripts / "plan_readiness.py"
@@ -183,10 +186,24 @@ def write_stub_readiness_validator(root: Path) -> Path:
         "plan = sys.argv[1] if len(sys.argv) > 1 else ''\n"
         "if 'good' in plan:\n"
         "    print('ready=yes')\n"
+        "    print('OUTCOME: pass')\n"
         "    sys.exit(0)\n"
         "print('readiness FAILED: stub rejection')\n"
+        "print('OUTCOME: fail')\n"
         "sys.exit(1)\n",
         encoding="utf-8",
+    )
+    return stub
+
+
+def write_stub_readiness_validator_body(root: Path, body: str) -> Path:
+    """Repo-local stub readiness validator with a custom exit body (the
+    subprocess seam for the child-outcome fixtures)."""
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    stub = scripts / "plan_readiness.py"
+    stub.write_text(
+        "#!/usr/bin/env python3\nimport sys\n" + body, encoding="utf-8"
     )
     return stub
 
@@ -314,18 +331,19 @@ def mktemp_repo(tmp_path):
 # [class: REPOSITORY_TEST]
 # --------------------------------------------------------------------------- #
 def test_gate_registry_matches_absorbed_steps(capsys):
-    """[class: REPOSITORY_TEST] Given the lib gate registry, expects exactly fifteen
+    """[class: REPOSITORY_TEST] Given the lib gate registry, expects exactly sixteen
     gate ids in the two phase slices, in done SKILL.md order, matching
     plan-readiness, confluence-hygiene, doc-registry, backlog-inbox,
     review-staging, vim-swap-sweep, docs-tmp-sweep, sensitive-data-scan,
-    em-dash-scan, instruction-size, description-length, archive-ceremony,
-    execute-plan-closeout."""
+    em-dash-scan, instruction-size, description-length, foreign-staging,
+    post-landing-staging, archive-ceremony, execute-plan-closeout."""
     assert PRE_DOCS_GATES == EXPECTED_GATE_ORDER[:8]
     assert PRE_COMMIT_GATES[:4] == EXPECTED_GATE_ORDER[8:12]
     assert PRE_COMMIT_GATES[4] == "foreign-staging"
-    assert PRE_COMMIT_GATES[5] == "archive-ceremony"
-    assert PRE_COMMIT_GATES[6] == "execute-plan-closeout"
-    assert PRE_COMMIT_GATES[7] == "plans-archive-twin"
+    assert PRE_COMMIT_GATES[5] == "post-landing-staging"
+    assert PRE_COMMIT_GATES[6] == "archive-ceremony"
+    assert PRE_COMMIT_GATES[7] == "execute-plan-closeout"
+    assert PRE_COMMIT_GATES[8] == "plans-archive-twin"
     assert lib.PHASES["pre-docs"] == PRE_DOCS_GATES
     assert lib.PHASES["pre-commit"] == PRE_COMMIT_GATES
     assert list(lib.PHASES.keys()) == ["pre-docs", "pre-commit"]
@@ -337,8 +355,8 @@ def test_gate_registry_matches_absorbed_steps(capsys):
     # runs in both phases; printed once at pre-docs).
     assert lib.main(["list-gates"]) == 0
     assert capsys.readouterr().out.splitlines() == EXPECTED_GATE_ORDER
-    assert len(EXPECTED_GATE_ORDER) == 15
-    assert len(set(EXPECTED_GATE_ORDER)) == 15
+    assert len(EXPECTED_GATE_ORDER) == 16
+    assert len(set(EXPECTED_GATE_ORDER)) == 16
 
 
 # --------------------------------------------------------------------------- #
@@ -573,13 +591,31 @@ def test_absent_scripts_fail_closed_as_deployment_gaps(tmp_path, sweep_env):
 
 
 # --------------------------------------------------------------------------- #
-# Phase 3 panel fix: a crashed readiness validator reports its stderr line,
+# Outcome-contract child arms (plan docs/history/plans/2026-10-03-outcome-
+# contract-migration-batch-2.md, Task 2): the plan-readiness child arm
+# branches on the migrated validator's four outcomes and the no-line rule
+# instead of routing every child exit above 1 into an indeterminate bucket.
+# A crashed readiness validator (traceback on stdout, message on stderr, no
+# final OUTCOME line) reports its stderr line as the tool-error evidence,
 # never the bare "Traceback (most recent call last):" header.
 # --------------------------------------------------------------------------- #
+def _gate_one_deliverable_plan(root: Path, plan_rel: str) -> object:
+    """Marker pair plus one deliverable plan: the minimal gated candidate."""
+    now = time.time()
+    make_marker(root, now - 3600, os.getpid())
+    make_marker(root, now, os.getpid())
+    (root / "docs" / "history" / "plans").mkdir(parents=True, exist_ok=True)
+    (root / plan_rel).write_text("plan bytes\n", encoding="utf-8")
+    write_deliverables(root, [plan_rel])
+    return run_gate("plan-readiness", ctx_for(root))
+
+
 def test_plan_readiness_reports_stderr_on_validator_crash(tmp_path, sweep_env):
     """[class: REPOSITORY_TEST] A readiness validator that crashes (traceback
-    on stdout, message on stderr) fails the gate with the stderr message as
-    the failure reason; the traceback header never reaches the report."""
+    on stdout, message on stderr, no final OUTCOME line) classifies tool
+    error per the contract's no-line rule winning over the exit code: the
+    gate exits 3 with the stderr message as the tool-error evidence, and the
+    traceback header never reaches the report."""
     root = make_repo(tmp_path, "crash", gitignore_docs=True)
     write_facts(root)
     scripts = root / "scripts"
@@ -596,19 +632,91 @@ def test_plan_readiness_reports_stderr_on_validator_crash(tmp_path, sweep_env):
         "sys.exit(1)\n",
         encoding="utf-8",
     )
-    now = time.time()
-    make_marker(root, now - 3600, os.getpid())
-    make_marker(root, now, os.getpid())
-    plan = "docs/history/plans/2026-09-20-crashing-plan.md"
-    (root / "docs" / "history" / "plans").mkdir(parents=True)
-    (root / plan).write_text("p\n", encoding="utf-8")
-    write_deliverables(root, [plan])
 
-    result = run_gate("plan-readiness", ctx_for(root))
+    result = _gate_one_deliverable_plan(
+        root, "docs/history/plans/2026-09-20-crashing-plan.md"
+    )
 
-    assert result.rc == 1
+    assert result.rc == 3, result.message
     assert "Traceback (most recent call last)" not in result.message
     assert "readiness error: plan_readiness.py cannot import facts" in result.message
+
+
+def test_plan_readiness_child_indeterminate_lands_indeterminate(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] A readiness child reporting indeterminate
+    (exit 2 with a final `OUTCOME: indeterminate` line; a legacy shape the
+    migrated validator never models) lands the gate in the indeterminate
+    bucket naming the child: the gate exits 2 and never collapses the
+    child's uncertainty into a fail."""
+    root = mktemp_repo("readiness-child-indeterminate")
+    write_facts(root)
+    write_stub_readiness_validator_body(
+        root,
+        "print('validator could not read the review record (stub)')\n"
+        "print('OUTCOME: indeterminate')\n"
+        "sys.exit(2)\n",
+    )
+
+    result = _gate_one_deliverable_plan(
+        root, "docs/history/plans/2026-09-20-indeterminate-plan.md"
+    )
+
+    assert result.rc == 2, result.message
+    assert "2026-09-20-indeterminate-plan.md" in result.message
+    assert "indeterminate" in result.message
+
+
+def test_plan_readiness_child_tool_error_lands_tool_error(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] A readiness child reporting tool error
+    (exit 3 with a final `OUTCOME: tool_error` line, the sibling-compat and
+    usage arms included) lands the gate in the tool-error bucket reported as
+    the gate's tool-error evidence: a child that could not run reliably is
+    never a readiness fail."""
+    root = mktemp_repo("readiness-child-tool-error")
+    write_facts(root)
+    write_stub_readiness_validator_body(
+        root,
+        "print('compatibility FAILED: stub sibling drifted (stub)')\n"
+        "print('OUTCOME: tool_error')\n"
+        "sys.exit(3)\n",
+    )
+
+    result = _gate_one_deliverable_plan(
+        root, "docs/history/plans/2026-09-20-tool-error-plan.md"
+    )
+
+    assert result.rc == 3, result.message
+    assert "2026-09-20-tool-error-plan.md" in result.message
+    assert "tool error" in result.message
+    assert "compatibility FAILED: stub sibling drifted (stub)" in result.message
+
+
+def test_plan_readiness_child_without_outcome_line_is_tool_error(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] A legacy readiness child that exits 0
+    emitting no final `OUTCOME:` line classifies tool error per the
+    contract's no-line rule winning over the exit code: the gate exits 3
+    naming the child, never a silent pass."""
+    root = mktemp_repo("readiness-child-no-line")
+    write_facts(root)
+    write_stub_readiness_validator_body(
+        root,
+        "print('ready=yes (legacy validator without outcome reporting)')\n"
+        "sys.exit(0)\n",
+    )
+
+    result = _gate_one_deliverable_plan(
+        root, "docs/history/plans/2026-09-20-no-line-plan.md"
+    )
+
+    assert result.rc == 3, result.message
+    assert "2026-09-20-no-line-plan.md" in result.message
+    assert "no final OUTCOME line" in result.message
 
 
 # --------------------------------------------------------------------------- #
@@ -879,6 +987,157 @@ def test_sensitive_data_pattern_hits(tmp_path, sweep_env):
     result5 = run_gate("sensitive-data-scan", ctx_for(root5))
     assert result5.rc == 1
     assert "credential.md" in result5.message
+
+
+# --------------------------------------------------------------------------- #
+# Outcome-contract migration batch 2, Task 5: the skills-repo hygiene arm
+# branches on the migrated scan child's four outcomes (scripts/
+# OUTCOME_CONTRACT.md) instead of collapsing every nonzero exit into a
+# finding, and the contract's no-line rule wins over the exit code.
+# --------------------------------------------------------------------------- #
+def write_stub_hygiene_scanner(root: Path, mode: str) -> Path:
+    """Repo-local stub scan-public-hygiene.sh (subprocess seam) answering in
+    the migrated child outcome contract per its baked-in mode: pass (exit 0
+    `OUTCOME: pass`), fail (exit 1 with hit rows plus `OUTCOME: fail`),
+    indeterminate (exit 2), tool-error (exit 3), or no-line (a legacy shape
+    that exits 0 emitting no OUTCOME row)."""
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    stub = scripts / "scan-public-hygiene.sh"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f"mode='{mode}'\n"
+        "case \"$mode\" in\n"
+        "  pass)\n"
+        "    echo '=== PASS (public hygiene) ==='\n"
+        "    echo 'OUTCOME: pass'\n"
+        "    exit 0\n"
+        "    ;;\n"
+        "  fail)\n"
+        "    echo 'FAIL: stub-hit'\n"
+        "    echo 'leak-row: line-two-of-stub'\n"
+        "    echo '=== 1 public-hygiene failure(s) ==='\n"
+        "    echo 'OUTCOME: fail'\n"
+        "    exit 1\n"
+        "    ;;\n"
+        "  indeterminate)\n"
+        "    echo 'stub scan could not complete (no verdict)'\n"
+        "    echo 'OUTCOME: indeterminate'\n"
+        "    exit 2\n"
+        "    ;;\n"
+        "  tool-error)\n"
+        "    echo 'FATAL: stub scanner cannot read its patterns file' >&2\n"
+        "    echo 'OUTCOME: tool_error'\n"
+        "    exit 3\n"
+        "    ;;\n"
+        "  no-line)\n"
+        "    echo 'legacy scanner without outcome reporting'\n"
+        "    exit 0\n"
+        "    ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    return stub
+
+
+def _seed_skills_repo_user_facts(tmp_path, monkeypatch, root: Path) -> None:
+    """Point the user facts' skills_repo_path row at the fixture repo so the
+    sensitive-data gate's skills-repo hygiene arm triggers for it."""
+    facts = tmp_path / "user-facts-skills-repo.md"
+    facts.write_text(f"| `skills_repo_path` | `{root}` |\n", encoding="utf-8")
+    monkeypatch.setenv("DONE_SWEEP_USER_FACTS", str(facts))
+
+
+def test_hygiene_child_pass_keeps_gate_green(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] A scan child reporting pass (exit 0 with a
+    final `OUTCOME: pass` row) keeps the gate green."""
+    root = mktemp_repo("hygiene-pass")
+    write_facts(root)
+    write_stub_hygiene_scanner(root, "pass")
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 0, result.message
+
+
+def test_hygiene_child_findings_lands_finding(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] A scan child reporting findings (exit 1 with
+    a final `OUTCOME: fail` row) keeps landing in the findings bucket with
+    the child's tail rows, and the OUTCOME row itself never leaks into the
+    finding text."""
+    root = mktemp_repo("hygiene-findings")
+    write_facts(root)
+    write_stub_hygiene_scanner(root, "fail")
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert "public-hygiene scan failed" in result.message
+    assert "FAIL: stub-hit" in result.message
+    assert "OUTCOME:" not in result.message
+
+
+def test_hygiene_child_indeterminate_lands_indeterminate(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] A scan child reporting indeterminate (exit 2
+    with a final `OUTCOME: indeterminate` row) lands the gate in the
+    indeterminate bucket naming the child: the gate exits 2 and never
+    collapses the child's uncertainty into a finding."""
+    root = mktemp_repo("hygiene-indeterminate")
+    write_facts(root)
+    write_stub_hygiene_scanner(root, "indeterminate")
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 2, result.message
+    assert "scan-public-hygiene.sh" in result.message
+    assert "indeterminate" in result.message
+
+
+def test_hygiene_child_tool_error_lands_tool_error(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] A scan child reporting tool error (exit 3
+    with a final `OUTCOME: tool_error` row) lands the gate in the tool-error
+    bucket naming the child: a scan that could not run reliably is never a
+    finding."""
+    root = mktemp_repo("hygiene-tool-error")
+    write_facts(root)
+    write_stub_hygiene_scanner(root, "tool-error")
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 3, result.message
+    assert "scan-public-hygiene.sh" in result.message
+    assert "tool error" in result.message
+
+
+def test_hygiene_child_without_outcome_line_is_tool_error(
+    tmp_path, sweep_env, mktemp_repo, monkeypatch
+):
+    """[class: REPOSITORY_TEST] A legacy scan child that exits 0 emitting no
+    final `OUTCOME:` row classifies tool error per the contract's no-line
+    rule winning over the exit code: the gate exits 3 naming the child,
+    never a silent pass."""
+    root = mktemp_repo("hygiene-no-line")
+    write_facts(root)
+    write_stub_hygiene_scanner(root, "no-line")
+    _seed_skills_repo_user_facts(tmp_path, monkeypatch, root)
+
+    result = run_gate("sensitive-data-scan", ctx_for(root))
+
+    assert result.rc == 3, result.message
+    assert "scan-public-hygiene.sh" in result.message
+    assert "no final OUTCOME line" in result.message
 
 
 # --------------------------------------------------------------------------- #
@@ -1928,13 +2187,27 @@ def test_doc_registry_no_manifest_keeps_legacy_behavior(
 # Plan: docs/history/plans/2026-09-22-done-session-isolation-shared-checkout-ownership.md
 # Task 4: review-staging and ignored-path ownership scoping.
 # --------------------------------------------------------------------------- #
-def write_stub_review_staging_validator(root: Path) -> Path:
+def write_stub_review_staging_validator(root: Path, stub_body: str | None = None) -> Path:
     """Repo-local stub review-staging validator (subprocess seam).
 
     Appends each validated target to ``REVIEW_STAGING_STUB_LOG`` (one path per
-    line, invocation record) then exits 1 with a named finding when the
-    target's basename contains ``invalid``, else 0.
+    line, invocation record) then answers in the migrated child outcome
+    contract: a target whose basename contains ``invalid`` gets a named
+    finding plus a final ``OUTCOME: fail`` row and exit 1; every other target
+    gets ``OUTCOME: pass`` and exit 0. A custom ``stub_body`` replaces only
+    the verdict logic (the outcome-arm fixtures use it to model the
+    indeterminate and tool-error children and the no-line legacy shape); the
+    invocation-log prologue stays wired either way.
     """
+    if stub_body is None:
+        stub_body = (
+            "if 'invalid' in os.path.basename(target):\n"
+            "    print('HARD: staging metadata invalid (stub finding): ' + target)\n"
+            "    print('OUTCOME: fail')\n"
+            "    sys.exit(1)\n"
+            "print('OUTCOME: pass')\n"
+            "sys.exit(0)\n"
+        )
     scripts = root / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
     stub = scripts / "validate_review_staging.py"
@@ -1947,10 +2220,7 @@ def write_stub_review_staging_validator(root: Path) -> Path:
         "if log:\n"
         "    with open(log, 'a', encoding='utf-8') as fh:\n"
         "        fh.write(target + '\\n')\n"
-        "if 'invalid' in os.path.basename(target):\n"
-        "    print('HARD: staging metadata invalid (stub finding): ' + target)\n"
-        "    sys.exit(1)\n"
-        "sys.exit(0)\n",
+        + stub_body,
         encoding="utf-8",
     )
     return stub
@@ -2115,6 +2385,97 @@ def test_review_staging_fail_closed_for_claimed_invalid_review(
     assert result.rc == 1
     assert claimed_rel in result.message
     assert "failed" in result.message
+
+
+# --------------------------------------------------------------------------- #
+# Outcome-contract migration batch 2, Task 1: the review-staging child arm
+# branches on the migrated validator child's four outcomes (scripts/
+# OUTCOME_CONTRACT.md) instead of collapsing every nonzero exit into the
+# failed bucket, and the contract's no-line rule wins over the exit code.
+# --------------------------------------------------------------------------- #
+def _seed_single_owned_review(root: Path, owned_rel: str, run_name: str) -> None:
+    """One manifest-owned staging review in the session window (the minimal
+    fixture behind the child-outcome arms)."""
+    now = time.time()
+    make_marker(root, now - 3600, os.getpid())
+    current = make_marker(root, now, os.getpid())
+    (root / "docs/reviews").mkdir(parents=True)
+    (root / owned_rel).write_text("own staging review\n", encoding="utf-8")
+    _seed_run_manifest(
+        root, run_name, current.name, str(root), now,
+        owned_review_paths=[owned_rel],
+    )
+
+
+def test_review_staging_child_indeterminate_lands_indeterminate(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] A validator child reporting indeterminate
+    (exit 2 with a final `OUTCOME: indeterminate` line) lands the gate in the
+    indeterminate bucket naming the target: the gate exits 2 and never
+    collapses the child's uncertainty into a fail."""
+    root = mktemp_repo("child-indeterminate")
+    write_stub_review_staging_validator(
+        root,
+        "print('validator could not determine the verdict (stub)')\n"
+        "print('OUTCOME: indeterminate')\n"
+        "sys.exit(2)\n",
+    )
+    owned_rel = "docs/reviews/2026-09-18-own-review-r1.md"
+    _seed_single_owned_review(root, owned_rel, "run-child-indet")
+
+    result = run_gate("review-staging", ctx_for(root))
+
+    assert result.rc == 2, result.message
+    assert owned_rel in result.message
+    assert "indeterminate" in result.message
+
+
+def test_review_staging_child_tool_error_lands_tool_error(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] A validator child reporting tool error
+    (exit 3 with a final `OUTCOME: tool_error` line) lands the gate in the
+    tool-error bucket naming the target: a child that could not run reliably
+    is never a staging fail."""
+    root = mktemp_repo("child-tool-error")
+    write_stub_review_staging_validator(
+        root,
+        "print('validator cannot open the input (stub)')\n"
+        "print('OUTCOME: tool_error')\n"
+        "sys.exit(3)\n",
+    )
+    owned_rel = "docs/reviews/2026-09-18-own-review-r1.md"
+    _seed_single_owned_review(root, owned_rel, "run-child-tool-error")
+
+    result = run_gate("review-staging", ctx_for(root))
+
+    assert result.rc == 3, result.message
+    assert owned_rel in result.message
+    assert "tool error" in result.message
+
+
+def test_review_staging_child_without_outcome_line_is_tool_error(
+    tmp_path, sweep_env, mktemp_repo
+):
+    """[class: REPOSITORY_TEST] A legacy child that exits 0 emitting no final
+    `OUTCOME:` line classifies tool error per the contract's no-line rule
+    winning over the exit code: the gate exits 3 naming the target, never a
+    silent pass."""
+    root = mktemp_repo("child-no-line")
+    write_stub_review_staging_validator(
+        root,
+        "print('legacy validator without outcome reporting')\n"
+        "sys.exit(0)\n",
+    )
+    owned_rel = "docs/reviews/2026-09-18-own-review-r1.md"
+    _seed_single_owned_review(root, owned_rel, "run-child-no-line")
+
+    result = run_gate("review-staging", ctx_for(root))
+
+    assert result.rc == 3, result.message
+    assert owned_rel in result.message
+    assert "no final OUTCOME line" in result.message
 
 
 def test_session_ignored_paths_stay_window_anchored_under_manifest(
@@ -6058,3 +6419,311 @@ def test_closeout_gate_warning_skips_unanchored_window(
     assert result.rc == 0, result.message
     assert "warning skip" in result.message
     assert "anchor" in result.message
+
+
+# --------------------------------------------------------------------------- #
+# Outcome-contract fixtures for the execute-plan-closeout origins consumer
+# (plan docs/history/plans/2026-10-03-outcome-contract-migration-batch-1.md,
+# Task 3). The migrated origins checker (scripts/check_plan_origins_closed.py)
+# reports the four-outcome contract; the consumer branches on every outcome
+# and on the missing-OUTCOME-line rule instead of collapsing any non-zero
+# child exit into a refuse.
+# --------------------------------------------------------------------------- #
+class DoneSweepGatesLibOutcomeTest(unittest.TestCase):
+    """Outcome-contract fixtures (plan Task 3): a child origins run reporting
+    indeterminate (exit 2) yields an indeterminate gate result, never a
+    refuse; a tool-error child (exit 3) yields a tool-error result; and a
+    migrated child with no final `OUTCOME:` line yields tool error per the
+    contract's no-line rule. The child seam is the documented
+    ``CHECK_PLAN_ORIGINS_CLOSED_SCRIPT`` env override, stubbed per case."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        runtime_home = self.tmp / "runtime-home"
+        runtime_home.mkdir()
+        user_facts = self.tmp / "user-facts.md"
+        user_facts.write_text("# fixture user facts\n", encoding="utf-8")
+        self._saved_env = {}
+        for var, value in (
+            ("DONE_SWEEP_RUNTIME_HOME", str(runtime_home)),
+            ("DONE_SWEEP_USER_FACTS", str(user_facts)),
+        ):
+            self._saved_env[var] = os.environ.get(var)
+            os.environ[var] = value
+        self.addCleanup(self._restore_env)
+
+    def _restore_env(self):
+        for var, old in self._saved_env.items():
+            if old is None:
+                os.environ.pop(var, None)
+            else:
+                os.environ[var] = old
+
+    def _run_case(self, name: str, stub_body: str):
+        stub = self.tmp / f"origins-child-{name}.py"
+        stub.write_text(stub_body, encoding="utf-8")
+        saved = os.environ.get("CHECK_PLAN_ORIGINS_CLOSED_SCRIPT")
+        os.environ["CHECK_PLAN_ORIGINS_CLOSED_SCRIPT"] = str(stub)
+        try:
+            root = _closeout_repo(self.tmp, f"closeout-origins-{name}")
+            _write_closeout_state(root, CLOSEOUT_SLUG, _closeout_state_payload(root))
+            _closeout_done_run(root)
+            return run_gate("execute-plan-closeout", ctx_for(root))
+        finally:
+            if saved is None:
+                os.environ.pop("CHECK_PLAN_ORIGINS_CLOSED_SCRIPT", None)
+            else:
+                os.environ["CHECK_PLAN_ORIGINS_CLOSED_SCRIPT"] = saved
+
+    def test_origins_consumer_branches_on_outcomes(self):
+        stub_bodies = {
+            "indeterminate": (
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "print('observed: origin unreadable at classification "
+                "time: docs/history/backlog/2026-10-01-closeout-origin.md; "
+                "could not determine: the origin disposition state')\n"
+                "print('OUTCOME: indeterminate')\n"
+                "sys.exit(2)\n"
+            ),
+            "tool_error": (
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "print('error: the plans directory is unreadable')\n"
+                "print('OUTCOME: tool_error')\n"
+                "sys.exit(3)\n"
+            ),
+            "no-line": (
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "print('origins all closed')\n"
+                "sys.exit(0)\n"
+            ),
+        }
+        expectations = {
+            "indeterminate": (2, ["indeterminate", "unreadable"], ["gate failed"]),
+            "tool_error": (3, ["tool error"], ["gate failed"]),
+            "no-line": (3, ["OUTCOME", "tool error"], ["gate failed"]),
+        }
+        for name, body in stub_bodies.items():
+            with self.subTest(case=name):
+                want_rc, want_terms, refuse_terms = expectations[name]
+                result = self._run_case(name, body)
+                self.assertEqual(
+                    result.rc, want_rc, f"{name}: {result.message}"
+                )
+                for term in want_terms:
+                    self.assertIn(term, result.message)
+                for term in refuse_terms:
+                    # The indeterminate and tool-error arms are never a
+                    # refuse: the refuse wording is reserved for the
+                    # modeled-violation arm.
+                    self.assertNotIn(term, result.message)
+
+
+# --------------------------------------------------------------------------- #
+# Plan: docs/history/plans/2026-10-03-squash-landing-failure-path-guard.md,
+# Task 3. The post-landing staging invariant gate: the primary checkout's
+# index must match HEAD except for staged paths owned by the resolvable
+# current-session manifest, unstaged tracked modifications are permitted only
+# for the record-only allowlist, residue under a held merge lock reports
+# indeterminate, and untracked paths are reported-not-failing.
+# --------------------------------------------------------------------------- #
+POST_LANDING_DONE_LOCK = SCRIPTS_DIR / "done-lock.sh"
+
+
+def post_landing_allowlist_file(root: Path) -> Path:
+    """Create and commit the record-only allowlist path as a tracked file."""
+    lessons = root / "projects" / ".ai-playbook" / "development_lessons.md"
+    lessons.parent.mkdir(parents=True, exist_ok=True)
+    lessons.write_text("development lessons\n", encoding="utf-8")
+    git(root, "add", "projects")
+    git(root, "commit", "-m", "lessons", "-q")
+    return lessons
+
+
+def acquire_merge_lock_for_gate(repo: Path, lock_root: Path):
+    """Acquire a live merge lock on repo via done-lock.sh; returns (dir, token)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["MERGE_LOCK_ROOT"] = str(lock_root)
+    env["MERGE_LOCK_HOLDER_PID"] = str(os.getpid())
+    proc = subprocess.run(
+        ["bash", str(POST_LANDING_DONE_LOCK), "merge-acquire", "--label", "fixture"],
+        capture_output=True, text=True, check=False, cwd=str(repo), env=env,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    values = {}
+    for line in proc.stdout.splitlines():
+        if line.startswith("export "):
+            key, _, value = line[len("export "):].partition("=")
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            values[key] = value
+    # The session fence is done-lock's status witness, not fixture state under
+    # test: remove it so the primary checkout's porcelain carries only the
+    # residue the fixture itself created.
+    session = Path(repo) / ".ai-playbook" / "merge-lock.session"
+    try:
+        session.unlink()
+        session.parent.rmdir()
+    except OSError:
+        pass
+    return values["MERGE_LOCK_DIR"], values["MERGE_LOCK_TOKEN"]
+
+
+def write_run_manifest_record(root: Path, marker, owned_paths=()) -> Path:
+    """Write a Step 0 run manifest record bound to the given marker."""
+    done_session = root / "docs" / "tmp" / "done-session"
+    done_session.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": 1,
+        "run_id": "post-landing-fixture",
+        "marker": marker.name,
+        "created_epoch": time.time(),
+        "repo_root": root_digest(root),
+        "pid": os.getpid(),
+        "start_commit": git(root, "rev-parse", "HEAD").stdout.strip(),
+        "start_porcelain": [],
+        "owned_paths": list(owned_paths),
+        "owned_plan_paths": [],
+        "owned_review_paths": [],
+        "foreign_review_paths": [],
+        "adopted_from": None,
+        "complete": False,
+    }
+    path = done_session / "run-manifest-post-landing-fixture.json"
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def test_post_landing_staging_clean_pass(tmp_path, sweep_env, monkeypatch, mktemp_repo):
+    """[class: REPOSITORY_TEST] Given a primary checkout whose index matches
+    HEAD and whose only unstaged tracked modification is the record-only
+    allowlist path, expects the gate to pass (rc 0) and name the allowlisted
+    path as permitted."""
+    root = mktemp_repo("post-landing-clean")
+    monkeypatch.setenv("DONE_LOCK_SCRIPT", str(POST_LANDING_DONE_LOCK))
+    lessons = post_landing_allowlist_file(root)
+    lessons.write_text("development lessons + peer edit\n", encoding="utf-8")
+    result = run_gate("post-landing-staging", ctx_for(root))
+    assert result.rc == 0, result.message
+    assert "development_lessons.md" in result.message
+    assert "permitted" in result.message
+
+
+def test_post_landing_staging_staged_refusal(tmp_path, sweep_env, monkeypatch, mktemp_repo):
+    """[class: REPOSITORY_TEST] Given one staged path in the primary index
+    outside the session's owned set, expects the gate to fail (rc 1) naming
+    the residue path, the sanctioned cleanup recipe (the helper's
+    probe-then-reland path), and the operator escape (per-path restore after
+    merge-status free); given a staged path INSIDE the resolvable session's
+    owned set, expects the gate to pass naming it as owned (the own-staged
+    exemption)."""
+    root = mktemp_repo("post-landing-staged")
+    monkeypatch.setenv("DONE_LOCK_SCRIPT", str(POST_LANDING_DONE_LOCK))
+    (root / "foreign.txt").write_text("foreign residue\n", encoding="utf-8")
+    git(root, "add", "foreign.txt")
+    result = run_gate("post-landing-staging", ctx_for(root))
+    assert result.rc == 1, result.message
+    assert "foreign.txt" in result.message
+    assert "land_squash.sh" in result.message
+    assert "probe-then-reland" in result.message
+    assert "restore --staged --worktree" in result.message
+    assert "merge-status" in result.message
+
+    owned_root = mktemp_repo("post-landing-owned")
+    marker = make_marker(owned_root, time.time(), os.getpid())
+    (owned_root / "closeout.md").write_text("closeout work\n", encoding="utf-8")
+    git(owned_root, "add", "closeout.md")
+    write_run_manifest_record(owned_root, marker, owned_paths=["closeout.md"])
+    owned_result = run_gate("post-landing-staging", ctx_for(owned_root))
+    assert owned_result.rc == 0, owned_result.message
+    assert "closeout.md" in owned_result.message
+    assert "owned" in owned_result.message
+
+
+def test_post_landing_staging_dirty_refusal(tmp_path, sweep_env, monkeypatch, mktemp_repo):
+    """[class: REPOSITORY_TEST] Given an unstaged tracked modification outside
+    the allowlist, expects the gate to fail naming the path; given a SECOND
+    modification inside the allowlist alongside it, expects both to be named
+    (the allowlisted one as permitted, the other as the refusal)."""
+    root = mktemp_repo("post-landing-dirty")
+    monkeypatch.setenv("DONE_LOCK_SCRIPT", str(POST_LANDING_DONE_LOCK))
+    lessons = post_landing_allowlist_file(root)
+    (root / "README.md").write_text("dirty residue\n", encoding="utf-8")
+    result = run_gate("post-landing-staging", ctx_for(root))
+    assert result.rc == 1, result.message
+    assert "README.md" in result.message
+    lessons.write_text("development lessons + peer edit\n", encoding="utf-8")
+    both = run_gate("post-landing-staging", ctx_for(root))
+    assert both.rc == 1, both.message
+    assert "README.md" in both.message
+    assert "development_lessons.md" in both.message
+    assert "permitted" in both.message
+
+
+def test_post_landing_staging_untracked_warning(tmp_path, sweep_env, monkeypatch, mktemp_repo):
+    """[class: REPOSITORY_TEST] Given untracked paths in the primary checkout,
+    expects the gate to pass with warning lines naming them
+    (reported-not-failing per the recorded narrowing)."""
+    root = mktemp_repo("post-landing-untracked")
+    monkeypatch.setenv("DONE_LOCK_SCRIPT", str(POST_LANDING_DONE_LOCK))
+    (root / "scratch.txt").write_text("untracked scratch\n", encoding="utf-8")
+    result = run_gate("post-landing-staging", ctx_for(root))
+    assert result.rc == 0, result.message
+    assert any("scratch.txt" in warning for warning in result.warnings)
+
+
+def test_post_landing_staging_primary_resolution(tmp_path, sweep_env, monkeypatch, mktemp_repo):
+    """[class: REPOSITORY_TEST] The gate inspects the FIRST
+    ``git worktree list --porcelain`` worktree entry, not the cwd checkout:
+    the fixture runs the gate from a linked worktree while staging residue in
+    the primary checkout and expects the refusal to still fire."""
+    root = mktemp_repo("post-landing-primary")
+    monkeypatch.setenv("DONE_LOCK_SCRIPT", str(POST_LANDING_DONE_LOCK))
+    linked = tmp_path / "post-landing-linked-wt"
+    git(root, "worktree", "add", str(linked), "-b", "post-landing-lane")
+    (root / "README.md").write_text("staged residue in primary\n", encoding="utf-8")
+    git(root, "add", "README.md")
+    result = run_gate("post-landing-staging", ctx_for(linked))
+    assert result.rc == 1, result.message
+    assert "README.md" in result.message
+
+
+def test_post_landing_staging_unresolvable_manifest_strict(tmp_path, sweep_env, monkeypatch, mktemp_repo):
+    """[class: REPOSITORY_TEST] With no resolvable run manifest and one staged
+    foreign path in the primary index, expects the gate to fail rc 1 naming
+    the residue AND to carry the unresolvable-manifest warning line (the
+    ownership narrowing is skipped, never the check)."""
+    root = mktemp_repo("post-landing-strict")
+    monkeypatch.setenv("DONE_LOCK_SCRIPT", str(POST_LANDING_DONE_LOCK))
+    (root / "foreign.txt").write_text("foreign residue\n", encoding="utf-8")
+    git(root, "add", "foreign.txt")
+    result = run_gate("post-landing-staging", ctx_for(root))
+    assert result.rc == 1, result.message
+    assert "foreign.txt" in result.message
+    assert any("no resolvable run manifest" in warning for warning in result.warnings)
+
+
+def test_post_landing_staging_lock_held_indeterminate(tmp_path, sweep_env, monkeypatch, mktemp_repo):
+    """[class: REPOSITORY_TEST] Given residue observed and a held merge lock
+    (``done-lock.sh merge-status`` reports a holder on re-consult), expects
+    the gate to report indeterminate (rc 2) naming the holder, never a
+    residue refusal."""
+    root = mktemp_repo("post-landing-lock")
+    monkeypatch.setenv("DONE_LOCK_SCRIPT", str(POST_LANDING_DONE_LOCK))
+    (root / "README.md").write_text("dirty residue\n", encoding="utf-8")
+    lock_root = tmp_path / "post-landing-merge-locks"
+    lock_dir, lock_token = acquire_merge_lock_for_gate(root, lock_root)
+    assert lock_dir and lock_token
+    monkeypatch.setenv("MERGE_LOCK_ROOT", str(lock_root))
+    result = run_gate("post-landing-staging", ctx_for(root))
+    assert result.rc == 2, result.message
+    assert "held" in result.message
+    assert "fixture" in result.message
+    assert "probe-then-reland" not in result.message

@@ -444,6 +444,22 @@
   },
   {
    "disposition": "keep",
+   "id": "script:land_squash.sh",
+   "kind": "script",
+   "note": "red test in the suite fails when this script breaks; registering the lock-bound squash-landing helper delivered by the squash-landing failure-path guard plan (born-conformant under the script outcome contract)",
+   "paths": [
+    "scripts/land_squash.sh"
+   ],
+   "tests": [
+    "scripts/test_land_squash.py"
+   ],
+   "witness": {
+    "class": "red-test",
+    "ref": "scripts/test_land_squash.py"
+   }
+  },
+  {
+   "disposition": "keep",
    "id": "script:landing_parentage_gate.py",
    "kind": "script",
    "note": "superseded by kept-set row landing-parentage-gate (same file, citation lives there)",

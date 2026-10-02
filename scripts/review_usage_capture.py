@@ -13,8 +13,21 @@ never estimates values. Capture requires a git work tree: the repo
 	anchor is resolved from ``git rev-parse --show-toplevel`` from the
 	caller's cwd, and a non-git cwd yields no record.
 
-Window and grain semantics (accepted limitations): rows/files are counted
-when they complete (sqlite) or were last touched (rollout mtime) inside a
+Window and grain semantics: interval attribution is PRIMARY when the
+review-run identity is passed (``mint`` mints it at round start; the
+identity invocation joins usage rows whose ``completed_at`` falls in
+``(review_started_at_ms, captured_at_ms]`` for the repo anchor's root
+sessions, over turn-grain ``turn_usage`` rows preferred with a
+missing-table-only fallback to ``model_usage`` attempt grain). A record
+is attributable only when exactly one root session contributed; the
+model-attempt fallback is never attributable (its grain double-counts
+``attempt_index`` retries). The 6-hour look-back window survives as the
+mint's candidate-discovery bound and as the legacy fallback for the bare
+``--json`` invocation and the codex-rollout adapter (whose cumulative
+per-file counters cannot be sliced into intervals without estimation,
+which the contract prohibits). Legacy accepted limitations of the
+window path: rows/files are counted
+when they complete (sqlite) or were last touched (rollout mtime) inside the
 6-hour look-back window ending at capture time, but cumulative counters
 are SESSION- or FILE-lifetime totals, so long-lived sessions over-attribute
 tokens accrued before the window (zcode session-grain over-attribution).
@@ -35,11 +48,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
 import time
 import urllib.parse
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -63,6 +78,11 @@ _KIND_BY_QUERY_SOURCE = {
     "main_turn": "main",
     "subagent": "subagent",
 }
+
+# Review-run identity: minted by the ``mint`` subcommand (uuid4 hex),
+# validated on the identity invocation; an invalid value is treated as
+# absent (the window-legacy path) with a stderr diagnostic.
+_RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 _SCHEMA_SESSIONS = """
 CREATE TABLE session (
@@ -88,6 +108,25 @@ CREATE TABLE model_usage (
     status TEXT,
     started_at INTEGER,
     completed_at INTEGER
+)
+"""
+
+# Probed live shape 2026-10-03: turn grain, same six token fields, NO
+# query_source and NO agent column (so turn-grain records bucket all rows
+# under "other").
+_SCHEMA_TURN_USAGE = """
+CREATE TABLE turn_usage (
+    session_id TEXT,
+    turn_id TEXT,
+    status TEXT,
+    started_at INTEGER,
+    completed_at INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    reasoning_tokens INTEGER,
+    cache_creation_input_tokens INTEGER,
+    cache_read_input_tokens INTEGER,
+    computed_total_tokens INTEGER
 )
 """
 
@@ -330,6 +369,301 @@ def _capture_zcode_sqlite(
 
 
 # --------------------------------------------------------------------------- #
+# Identity minting and validation.
+# --------------------------------------------------------------------------- #
+
+
+def mint_identity(
+    home: str | Path | None = None,
+    cwd: str | Path | None = None,
+    now_ms: int | None = None,
+    allow_cwd_fallback: bool = False,
+) -> dict:
+    """Mint a review-run identity (never raises, never reads token counts).
+
+    ALWAYS prints (returns) ``{"review_run_id", "minted_at_ms",
+    "candidate_root_session_ids"}``. The identity itself needs no store;
+    the candidate list is best-effort discovery reusing the window-plus-
+    directory match and the root collapse walk over completed sessions in
+    the 6-hour look-back window, truncated to ``SESSION_ID_PREFIX_LEN``,
+    and may be empty.
+    """
+    home_path = Path(home) if home is not None else Path.home()
+    cwd_path = Path(cwd) if cwd is not None else Path.cwd()
+    now = now_ms if now_ms is not None else int(time.time() * 1000)
+    candidates: list[str] = []
+    try:
+        anchor = _resolve_repo_anchor(cwd_path, allow_cwd_fallback)
+        db_path = home_path / ".zcode" / "cli" / "db" / "db.sqlite"
+        if anchor is not None and db_path.is_file():
+            conn = sqlite3.connect(
+                f"file:{urllib.parse.quote(str(db_path))}?mode=ro",
+                uri=True,
+                timeout=BUSY_TIMEOUT_MS / 1000.0,
+            )
+            try:
+                conn.row_factory = sqlite3.Row
+                session_rows = conn.execute(
+                    "SELECT id, directory, parent_id FROM session"
+                ).fetchall()
+                parents = {
+                    row["id"]: row["parent_id"]
+                    for row in session_rows
+                    if row["parent_id"]
+                }
+                directories = {
+                    row["id"]: row["directory"] for row in session_rows
+                }
+                # Candidate discovery only: distinct session ids, no
+                # token counts are read.
+                active = conn.execute(
+                    "SELECT DISTINCT session_id FROM model_usage "
+                    "WHERE status = 'completed' AND completed_at IS NOT NULL "
+                    "AND completed_at >= ? AND completed_at <= ?",
+                    (now - USAGE_WINDOW_MS, now),
+                ).fetchall()
+            finally:
+                conn.close()
+            roots: set[str] = set()
+            cache: dict[str, Path] = {}
+            for row in active:
+                sid = row["session_id"]
+                directory = directories.get(sid)
+                if directory is None or not _directory_matches(
+                    directory, anchor, cache
+                ):
+                    continue
+                roots.add(_root_session_id(sid, parents))
+            candidates = sorted(roots)
+    except Exception:  # noqa: BLE001  best-effort discovery, never raises
+        candidates = []
+    return {
+        "review_run_id": uuid.uuid4().hex,
+        "minted_at_ms": now,
+        "candidate_root_session_ids": [
+            c[:SESSION_ID_PREFIX_LEN] for c in candidates
+        ],
+    }
+
+
+def _validated_identity(
+    review_run_id: str | None,
+    review_started_at_ms: int | None,
+    home_path: Path,
+) -> tuple[str, int] | None:
+    """Validate the identity pair; ``None`` means treat as absent.
+
+    A ``review_run_id`` not matching ``^[0-9a-f]{32}$`` or a non-positive
+    start is treated as absent (the window-legacy path) with a
+    tilde-abbreviated stderr diagnostic. Arity (both-or-neither) is the
+    caller's argparse duty.
+    """
+    if review_run_id is None and review_started_at_ms is None:
+        return None
+    ok = (
+        isinstance(review_run_id, str)
+        and _RUN_ID_RE.fullmatch(review_run_id) is not None
+        and isinstance(review_started_at_ms, int)
+        and not isinstance(review_started_at_ms, bool)
+        and review_started_at_ms > 0
+    )
+    if not ok:
+        try:
+            diag = _abbreviate_home_str(
+                "review_usage_capture: invalid review-run identity "
+                f"(run_id={review_run_id!r}, "
+                f"review_started_at_ms={review_started_at_ms!r}); "
+                "treating as absent (window-legacy, non-attributable)\n",
+                home_path,
+            )
+            sys.stderr.write(diag[:300])
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+    return (review_run_id, review_started_at_ms)
+
+
+# --------------------------------------------------------------------------- #
+# Interval capture (zcode-sqlite adapter, identity invocation).
+# --------------------------------------------------------------------------- #
+
+
+def _capture_zcode_interval(
+    home_path: Path,
+    anchor: Path,
+    review_run_id: str,
+    review_started_at_ms: int,
+    now: int,
+    busy_timeout_ms: int,
+) -> dict | None:
+    """Attribute usage by INTERVAL over turn-grain rows (fail-open).
+
+    Prefers ``turn_usage`` (turn grain, ``source_grain: "turn"``, all
+    rows bucketed under "other" because the table carries no
+    ``query_source``); falls back to ``model_usage`` (attempt grain,
+    ``source_grain: "model-attempt"``, query_source bucketing kept) ONLY
+    on the missing-table condition (sqlite_master probe, plus the "no
+    such table" error-substring arm); any other OperationalError (locked,
+    no such column, disk I/O) takes the fail-open None path. A present-
+    but-empty result for the anchor is an honest empty (returns None),
+    never a fallback trigger. Attributable only when exactly one root
+    session contributed and no truncated-id collision occurred.
+    """
+    try:
+        db_path = home_path / ".zcode" / "cli" / "db" / "db.sqlite"
+        if not db_path.is_file():
+            return None
+
+        conn = sqlite3.connect(
+            f"file:{urllib.parse.quote(str(db_path))}?mode=ro",
+            uri=True,
+            timeout=busy_timeout_ms / 1000.0,
+        )
+        try:
+            conn.row_factory = sqlite3.Row
+            session_rows = conn.execute(
+                "SELECT id, directory, parent_id FROM session"
+            ).fetchall()
+            parents = {
+                row["id"]: row["parent_id"]
+                for row in session_rows
+                if row["parent_id"]
+            }
+            directories = {
+                row["id"]: row["directory"] for row in session_rows
+            }
+            interval = (
+                review_started_at_ms,
+                now,
+            )
+            has_turn = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'turn_usage'"
+            ).fetchone() is not None
+            if has_turn:
+                rows = conn.execute(
+                    "SELECT * FROM turn_usage "
+                    "WHERE status = 'completed' AND completed_at IS NOT NULL "
+                    "AND completed_at > ? AND completed_at <= ?",
+                    interval,
+                ).fetchall()
+                grain = "turn"
+            else:
+                try:
+                    rows = conn.execute(
+                        "SELECT * FROM model_usage "
+                        "WHERE status = 'completed' "
+                        "AND completed_at IS NOT NULL "
+                        "AND completed_at > ? AND completed_at <= ?",
+                        interval,
+                    ).fetchall()
+                except sqlite3.OperationalError as exc:
+                    if "no such table" in str(exc).lower():
+                        return None  # no usable table at all
+                    raise
+                grain = "model-attempt"
+        finally:
+            conn.close()
+
+        # Per-contributor (root session) subtotals over the interval.
+        per_root: dict[str, dict[str, int]] = {}
+        per_root_kind: dict[str, dict[str, dict[str, int]]] = {}
+        cache: dict[str, Path] = {}
+        for row in rows:
+            session_id = row["session_id"]
+            directory = directories.get(session_id)
+            if directory is None or not _directory_matches(
+                directory, anchor, cache
+            ):
+                continue
+            root = _root_session_id(session_id, parents)
+            bucket = per_root.setdefault(root, _empty_bucket())
+            _add_row(bucket, dict(row))
+            if grain == "turn":
+                kind_bucket = per_root_kind.setdefault(
+                    root, {}
+                ).setdefault("other", _empty_bucket())
+                _add_row(kind_bucket, dict(row))
+            else:
+                kind = _KIND_BY_QUERY_SOURCE.get(
+                    row["query_source"] or "", "other"
+                )
+                kind_bucket = per_root_kind.setdefault(
+                    root, {}
+                ).setdefault(kind, _empty_bucket())
+                _add_row(kind_bucket, dict(row))
+
+        if not per_root:
+            return None  # honest empty, never a fallback trigger
+
+        # by_session: truncated keys; a 12-char prefix collision keeps the
+        # record non-attributable and is flagged.
+        by_session: dict[str, dict[str, int]] = {}
+        roots = sorted(per_root.keys())
+        collided = False
+        seen_prefixes: set[str] = set()
+        for root in roots:
+            prefix = root[:SESSION_ID_PREFIX_LEN]
+            if prefix in seen_prefixes:
+                collided = True
+            seen_prefixes.add(prefix)
+            by_session[prefix] = dict(per_root[root])
+
+        totals = _empty_bucket()
+        by_kind: dict[str, dict[str, int]] = {}
+        for root in roots:
+            for field in TOKEN_FIELDS:
+                totals[field] += per_root[root][field]
+            for kind, bucket in per_root_kind.get(root, {}).items():
+                target = by_kind.setdefault(kind, _empty_bucket())
+                for field in TOKEN_FIELDS:
+                    target[field] += bucket[field]
+
+        if grain == "turn" and len(roots) == 1 and not collided:
+            attribution = "interval-identity"
+            attributable = True
+        elif grain == "turn":
+            attribution = "interval-ambiguous"
+            attributable = False
+        else:
+            attribution = "interval-fallback"
+            attributable = False
+
+        provenance = {
+            "db": _abbreviate_home_str(str(db_path), home_path),
+            "session_ids": [r[:SESSION_ID_PREFIX_LEN] for r in roots],
+            "ambiguous": len(roots) > 1,
+            "window_started_at_ms": review_started_at_ms,
+            "window_ended_at_ms": now,
+            "captured_at_ms": now,
+            "estimated": False,
+            "attribution": attribution,
+            "attributable": attributable,
+            "review_run_id": review_run_id,
+            "review_started_at_ms": review_started_at_ms,
+            "source_grain": grain,
+            "by_session": by_session,
+        }
+        if collided:
+            provenance["by_session_collided"] = True
+        return {
+            "adapter": ADAPTER_NAME,
+            "provenance": provenance,
+            "totals": totals,
+            "by_agent_kind": by_kind,
+        }
+    except Exception as exc:  # noqa: BLE001  fail-open, never raise
+        try:
+            sys.stderr.write(
+                f"review_usage_capture: {ADAPTER_NAME} interval capture "
+                f"failed: {_sanitize_exc(exc, home_path)}\n"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+
+# --------------------------------------------------------------------------- #
 # Capture (codex-rollout adapter).
 # --------------------------------------------------------------------------- #
 
@@ -355,6 +689,7 @@ def _capture_codex_rollout(
     anchor: Path,
     now: int,
     window_start: int,
+    include_by_session: bool = False,
 ) -> dict | None:
     """Usage from ``~/.codex/sessions/**/rollout-*.jsonl`` (fail-open).
 
@@ -486,9 +821,7 @@ def _capture_codex_rollout(
                 totals[field] += bucket[field]
 
         session_ids = sorted(groups.keys())
-        # Rollout events carry no query_source: all totals land under
-        # "other" to keep the record shape symmetric with zcode-sqlite.
-        return _build_record(
+        record = _build_record(
             CODEX_ADAPTER_NAME,
             _abbreviate_home_str(str(sessions_dir), home_path),
             session_ids,
@@ -497,6 +830,27 @@ def _capture_codex_rollout(
             totals,
             {"other": dict(totals)},
         )
+        if include_by_session:
+            # Identity invocation: per-session subtotals (truncated keys),
+            # keeping the six additive provenance fields symmetric with the
+            # zcode identity record. A 12-char prefix collision merges the
+            # subtotals under one key; mirror the zcode doctrine and flag
+            # it so the map is never read as per-session truth.
+            by_session: dict[str, dict[str, int]] = {}
+            collided = False
+            seen: set[str] = set()
+            for sid, bucket in groups.items():
+                prefix = sid[:SESSION_ID_PREFIX_LEN]
+                if prefix in seen:
+                    collided = True
+                seen.add(prefix)
+                merged = by_session.setdefault(prefix, _empty_bucket())
+                for field in TOKEN_FIELDS:
+                    merged[field] += bucket[field]
+            record["provenance"]["by_session"] = by_session
+            if collided:
+                record["provenance"]["by_session_collided"] = True
+        return record
     except Exception as exc:  # noqa: BLE001  fail-open: never raise to the caller
         # N2: mirror the zcode adapter — one stderr diagnostic on the
         # adapter error path; stdout contract stays "JSON record or
@@ -517,15 +871,22 @@ def capture_usage(
     now_ms: int | None = None,
     busy_timeout_ms: int = BUSY_TIMEOUT_MS,
     allow_cwd_fallback: bool = False,
+    review_run_id: str | None = None,
+    review_started_at_ms: int | None = None,
 ) -> dict | None:
     """Capture the usage record for the current repo, or ``None``.
 
-    Adapter fallback order: ``zcode-sqlite`` first, then ``codex-rollout``.
-    ``home``/``cwd`` are injectable so selftests can point capture at a
-    fixture home/repo dir instead of the real ``~``. ``allow_cwd_fallback``
-    gates the non-git cwd anchor fallback (N3): default is
-    production-strict (git failure -> ``None``); hermetic selftests that
-    point at non-git fixture dirs pass ``True`` explicitly.
+    With a validated review-run identity (both ``review_run_id`` and
+    ``review_started_at_ms`` passed and shape-valid), attribution runs by
+    INTERVAL over turn-grain rows (the identity invocation); the codex
+    adapter on that path stays window-legacy (cumulative counters cannot
+    be interval-sliced). Without an identity, the 6-hour window join runs
+    unchanged (byte-compatible record shape). ``home``/``cwd`` are
+    injectable so selftests can point capture at a fixture home/repo dir
+    instead of the real ``~``. ``allow_cwd_fallback`` gates the non-git
+    cwd anchor fallback (N3): default is production-strict (git failure
+    -> ``None``); hermetic selftests that point at non-git fixture dirs
+    pass ``True`` explicitly.
     """
     try:
         home_path = Path(home) if home is not None else Path.home()
@@ -535,6 +896,34 @@ def capture_usage(
 
         anchor = _resolve_repo_anchor(cwd_path, allow_cwd_fallback)
         if anchor is None:
+            return None
+
+        identity = _validated_identity(
+            review_run_id, review_started_at_ms, home_path
+        )
+        if identity is not None:
+            run_id, review_start = identity
+            record = _capture_zcode_interval(
+                home_path, anchor, run_id, review_start, now,
+                busy_timeout_ms,
+            )
+            if record is not None:
+                return record
+            # Codex rollout counters are cumulative per file: interval
+            # slicing would be estimation, which the contract prohibits.
+            # The window-legacy record still carries the identity for
+            # forensics but is never attributable.
+            record = _capture_codex_rollout(
+                home_path, anchor, now, window_start,
+                include_by_session=True,
+            )
+            if record is not None:
+                record["provenance"]["attribution"] = "window-legacy"
+                record["provenance"]["attributable"] = False
+                record["provenance"]["review_run_id"] = run_id
+                record["provenance"]["review_started_at_ms"] = review_start
+                record["provenance"]["source_grain"] = "rollout"
+                return record
             return None
 
         record = _capture_zcode_sqlite(
@@ -584,6 +973,8 @@ class _Fixture:
         self.now = 1_788_707_239_036  # measured live ms scale (2026-09-06)
         self._sessions: list[tuple[str, str, str | None]] = []
         self._rows: list[dict] = []
+        self._turn_rows: list[dict] = []
+        self._turn_table_forced = False
 
     def session(self, sid: str, *, parent: str | None = None,
                 directory: Path | None = None) -> None:
@@ -616,11 +1007,51 @@ class _Fixture:
             }
         )
 
+    def turn_row(self, session_id: str, *, turn_id: str = "t1",
+                 completed_at: int | None = None,
+                 started_at: int | None = None,
+                 status: str = "completed", **tokens: int) -> None:
+        base = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "computed_total_tokens": 0,
+        }
+        base.update(tokens)
+        self._turn_rows.append(
+            {
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "status": status,
+                "started_at": started_at if started_at is not None
+                else self.now - 1000,
+                "completed_at": completed_at if completed_at is not None
+                else self.now - 500,
+                **base,
+            }
+        )
+
+    def force_turn_table(self) -> None:
+        """Create the ``turn_usage`` table even with no turn rows."""
+        self._turn_table_forced = True
+
+    def drop_turn_table(self) -> None:
+        conn = sqlite3.connect(self.db)
+        try:
+            conn.execute("DROP TABLE turn_usage")
+            conn.commit()
+        finally:
+            conn.close()
+
     def build(self) -> None:
         conn = sqlite3.connect(self.db)
         try:
             conn.execute(_SCHEMA_SESSIONS)
             conn.execute(_SCHEMA_MODEL_USAGE)
+            if self._turn_rows or self._turn_table_forced:
+                conn.execute(_SCHEMA_TURN_USAGE)
             conn.executemany(
                 "INSERT INTO session (id, directory, parent_id) "
                 "VALUES (?, ?, ?)",
@@ -638,9 +1069,36 @@ class _Fixture:
                 ":started_at, :completed_at)",
                 self._rows,
             )
+            if self._turn_rows:
+                conn.executemany(
+                    "INSERT INTO turn_usage (session_id, turn_id, status, "
+                    "started_at, completed_at, input_tokens, output_tokens, "
+                    "reasoning_tokens, cache_creation_input_tokens, "
+                    "cache_read_input_tokens, computed_total_tokens) "
+                    "VALUES (:session_id, :turn_id, :status, :started_at, "
+                    ":completed_at, :input_tokens, :output_tokens, "
+                    ":reasoning_tokens, :cache_creation_input_tokens, "
+                    ":cache_read_input_tokens, :computed_total_tokens)",
+                    self._turn_rows,
+                )
             conn.commit()
         finally:
             conn.close()
+
+    def capture_identity(
+        self,
+        run_id: str,
+        started_at: int,
+        now: int | None = None,
+    ) -> dict | None:
+        """Identity-invocation capture with explicit window/identity args."""
+        return capture_usage(
+            home=self.home, cwd=self.repo,
+            now_ms=self.now if now is None else now,
+            allow_cwd_fallback=True,
+            review_run_id=run_id,
+            review_started_at_ms=started_at,
+        )
 
     def capture(self) -> dict | None:
         # allow_cwd_fallback=True: fixture repos are not git work trees
@@ -1274,6 +1732,408 @@ def _selftest_adapter_fallback_order(check: Callable) -> None:
               f"got {rec2['adapter']}")
 
 
+@_test("review_usage_capture#selftest_mint_prints_identity")
+def _selftest_mint_prints_identity(check: Callable) -> None:
+    tmp = _tmp_dir()
+    fx = _Fixture(tmp)
+    fx.session("sess_root_mint123")
+    fx.row("sess_root_mint123", input_tokens=10, computed_total_tokens=10)
+    fx.build()
+    ident = mint_identity(home=fx.home, cwd=fx.repo, now_ms=fx.now,
+                          allow_cwd_fallback=True)
+    check("run id 32 lowercase hex",
+          re.fullmatch(r"[0-9a-f]{32}", ident["review_run_id"]) is not None,
+          f"got {ident['review_run_id']!r}")
+    check("minted_at_ms equals injected now",
+          ident["minted_at_ms"] == fx.now)
+    check("candidate root truncated",
+          ident["candidate_root_session_ids"] == ["sess_root_mi"],
+          f"got {ident['candidate_root_session_ids']}")
+    check("identity keys exactly three",
+          set(ident.keys()) == {
+              "review_run_id", "minted_at_ms",
+              "candidate_root_session_ids"})
+
+    # No store: mint still prints the identity fields, empty candidates,
+    # and never raises.
+    tmp2 = _tmp_dir()
+    home2 = tmp2 / "home"
+    home2.mkdir()
+    ident2 = mint_identity(home=home2, cwd=tmp2 / "repo", now_ms=fx.now)
+    check("no store: identity still minted",
+          re.fullmatch(r"[0-9a-f]{32}", ident2["review_run_id"]) is not None)
+    check("no store: minted_at_ms injected",
+          ident2["minted_at_ms"] == fx.now)
+    check("no store: empty candidates",
+          ident2["candidate_root_session_ids"] == [])
+
+
+@_test("review_usage_capture#selftest_interval_single_contributor_attributable")
+def _selftest_interval_single_contributor_attributable(check: Callable) -> None:
+    tmp = _tmp_dir()
+    fx = _Fixture(tmp)
+    fx.session("sess_root_int001")
+    start = fx.now - 10_000_000
+    fx.turn_row("sess_root_int001", completed_at=start + 1_000,
+                input_tokens=100, computed_total_tokens=100)
+    fx.turn_row("sess_root_int001", completed_at=fx.now - 500,
+                input_tokens=50, computed_total_tokens=50)
+    fx.build()
+    run_id = "abcdef01" * 4
+    rec = fx.capture_identity(run_id, start)
+    check("record produced", rec is not None)
+    if rec is None:
+        return
+    p = rec["provenance"]
+    check("attribution interval-identity",
+          p["attribution"] == "interval-identity", f"got {p['attribution']}")
+    check("attributable true", p["attributable"] is True)
+    check("review_run_id carried verbatim", p["review_run_id"] == run_id)
+    check("review_started_at_ms carried verbatim",
+          p["review_started_at_ms"] == start)
+    check("source_grain turn", p["source_grain"] == "turn")
+    check("turn grain buckets all under other",
+          set(rec["by_agent_kind"].keys()) == {"other"},
+          f"got {rec['by_agent_kind'].keys()}")
+    check("totals equal only in-interval rows",
+          rec["totals"]["input_tokens"] == 150,
+          f"got {rec['totals']['input_tokens']}")
+    check("captured_at_ms is now", p["captured_at_ms"] == fx.now)
+
+
+@_test("review_usage_capture#selftest_interval_excludes_pre_review_rows")
+def _selftest_interval_excludes_pre_review_rows(check: Callable) -> None:
+    tmp = _tmp_dir()
+    fx = _Fixture(tmp)
+    fx.session("sess_root_int002")
+    start = fx.now - 10_000_000
+    fx.turn_row("sess_root_int002", completed_at=start - 5_000,
+                input_tokens=9_000, computed_total_tokens=9_000)
+    fx.turn_row("sess_root_int002", completed_at=start + 2_000,
+                input_tokens=111, computed_total_tokens=111)
+    fx.build()
+    rec = fx.capture_identity("f" * 32, start)
+    check("record produced", rec is not None)
+    if rec is None:
+        return
+    check("pre-review implementation rows excluded",
+          rec["totals"]["input_tokens"] == 111,
+          f"got {rec['totals']['input_tokens']}")
+
+
+@_test("review_usage_capture#selftest_interval_two_contributors_ambiguous")
+def _selftest_interval_two_contributors_ambiguous(check: Callable) -> None:
+    tmp = _tmp_dir()
+    fx = _Fixture(tmp)
+    start = fx.now - 10_000_000
+    fx.session("sess_twoaa000001")
+    fx.session("sess_twobb000002")
+    fx.turn_row("sess_twoaa000001", completed_at=start + 1_000,
+                input_tokens=100, computed_total_tokens=100)
+    fx.turn_row("sess_twobb000002", completed_at=start + 2_000,
+                input_tokens=200, computed_total_tokens=200)
+    fx.build()
+    rec = fx.capture_identity("e" * 32, start)
+    check("union record produced", rec is not None)
+    if rec is None:
+        return
+    p = rec["provenance"]
+    check("attribution interval-ambiguous",
+          p["attribution"] == "interval-ambiguous",
+          f"got {p['attribution']}")
+    check("attributable false", p["attributable"] is False)
+    check("session_ids both contributors (truncated, ambiguous)",
+          p["session_ids"] == ["sess_twoaa00", "sess_twobb00"]
+          and p["ambiguous"] is True,
+          f"got {p['session_ids']}")
+    by_session = p["by_session"]
+    check("by_session two keys",
+          len(by_session) == 2, f"got {list(by_session)}")
+    check("by_session keys at most 12 chars",
+          all(len(k) <= 12 for k in by_session))
+    check("by_session keys match session_ids",
+          set(by_session.keys()) == set(p["session_ids"]))
+    check("by_session carries per-contributor subtotals",
+          sorted(v["input_tokens"] for v in by_session.values()) == [100, 200],
+          f"got {by_session}")
+    check("totals equal the union (never assigned to one session)",
+          rec["totals"]["input_tokens"] == 300,
+          f"got {rec['totals']['input_tokens']}")
+
+
+@_test("review_usage_capture#selftest_adjacent_rounds_disjoint")
+def _selftest_adjacent_rounds_disjoint(check: Callable) -> None:
+    tmp = _tmp_dir()
+    fx = _Fixture(tmp)
+    fx.session("sess_adj_root001")
+    m1 = fx.now - 10_000_000
+    m2 = fx.now - 5_000_000
+    # Row completing exactly at M1: counts in NEITHER round (open start).
+    fx.turn_row("sess_adj_root001", completed_at=m1,
+                input_tokens=1, computed_total_tokens=1)
+    # Row completing exactly at M2: counts in round 1 ONLY (closed end).
+    fx.turn_row("sess_adj_root001", completed_at=m2,
+                input_tokens=10, computed_total_tokens=10)
+    fx.turn_row("sess_adj_root001", completed_at=m1 + 1_000,
+                input_tokens=100, computed_total_tokens=100)
+    fx.turn_row("sess_adj_root001", completed_at=m2 + 1_000,
+                input_tokens=200, computed_total_tokens=200)
+    fx.turn_row("sess_adj_root001", completed_at=m1 - 1_000,
+                input_tokens=5, computed_total_tokens=5)
+    fx.build()
+    r1 = fx.capture_identity("a" * 32, m1, now=m2)
+    r2 = fx.capture_identity("b" * 32, m2, now=fx.now)
+    check("round 1 attributable", r1 is not None
+          and r1["provenance"]["attributable"] is True)
+    check("round 2 attributable", r2 is not None
+          and r2["provenance"]["attributable"] is True)
+    if r1 is None or r2 is None:
+        return
+    check("round 1 totals: M1+1000 and exactly-M2 rows only",
+          r1["totals"]["input_tokens"] == 110,
+          f"got {r1['totals']['input_tokens']}")
+    check("round 2 totals: M2+1000 row only",
+          r2["totals"]["input_tokens"] == 200,
+          f"got {r2['totals']['input_tokens']}")
+    check("exactly-M1 row counted in neither round",
+          r1["totals"]["input_tokens"] != 111
+          and r2["totals"]["input_tokens"] != 1)
+    check("rounds disjoint and additive",
+          r1["totals"]["input_tokens"] + r2["totals"]["input_tokens"] == 310)
+
+
+@_test("review_usage_capture#selftest_interval_turn_usage_preferred_with_fallback")
+def _selftest_interval_turn_usage_preferred_with_fallback(
+    check: Callable,
+) -> None:
+    run_id = "c" * 32
+    start = None  # set per fixture
+    # (a) turn grain preferred: two model_usage attempt rows of 100 and
+    # one turn_usage row of 100 -> totals 100 (double-count avoided).
+    tmp = _tmp_dir()
+    fx = _Fixture(tmp)
+    start = fx.now - 10_000_000
+    fx.session("sess_turn_pref001")
+    fx.row("sess_turn_pref001", completed_at=start + 1_000,
+           input_tokens=100, computed_total_tokens=100)
+    fx.row("sess_turn_pref001", completed_at=start + 2_000,
+           input_tokens=100, computed_total_tokens=100)
+    fx.turn_row("sess_turn_pref001", completed_at=start + 3_000,
+                input_tokens=100, computed_total_tokens=100)
+    fx.build()
+    rec = fx.capture_identity(run_id, start)
+    check("turn-grain preferred: totals 100, not 200/300", rec is not None
+          and rec["totals"]["input_tokens"] == 100,
+          f"got {rec['totals'] if rec else None}")
+    if rec is not None:
+        check("preferred record is turn grain",
+              rec["provenance"]["source_grain"] == "turn")
+
+    # (b) turn_usage table DROPPED -> missing-table-only fallback to
+    # model_usage attempt grain, never attributable.
+    tmp2 = _tmp_dir()
+    fx2 = _Fixture(tmp2)
+    start2 = fx2.now - 10_000_000
+    fx2.session("sess_turn_fb00001")
+    fx2.row("sess_turn_fb00001", completed_at=start2 + 1_000,
+            input_tokens=100, computed_total_tokens=100)
+    fx2.row("sess_turn_fb00001", completed_at=start2 + 2_000,
+            input_tokens=100, computed_total_tokens=100)
+    fx2.turn_row("sess_turn_fb00001", completed_at=start2 + 3_000,
+                 input_tokens=100, computed_total_tokens=100)
+    fx2.build()
+    fx2.drop_turn_table()
+    rec2 = fx2.capture_identity(run_id, start2)
+    check("fallback record produced", rec2 is not None)
+    if rec2 is not None:
+        p2 = rec2["provenance"]
+        check("fallback attribution interval-fallback",
+              p2["attribution"] == "interval-fallback",
+              f"got {p2['attribution']}")
+        check("fallback never attributable", p2["attributable"] is False)
+        check("fallback source_grain model-attempt",
+              p2["source_grain"] == "model-attempt",
+              f"got {p2['source_grain']}")
+        check("fallback totals from attempt rows (200)",
+              rec2["totals"]["input_tokens"] == 200,
+              f"got {rec2['totals']['input_tokens']}")
+
+    # (c) turn_usage present but EMPTY for the anchor while model_usage
+    # carries in-interval rows -> honest empty (None), never a fallback
+    # record (a fallback would produce a record and fail).
+    tmp3 = _tmp_dir()
+    fx3 = _Fixture(tmp3)
+    start3 = fx3.now - 10_000_000
+    other = tmp3 / "other-repo"
+    other.mkdir()
+    fx3.session("sess_turn_anchor1")
+    fx3.session("sess_turn_foreig", directory=other)
+    fx3.row("sess_turn_anchor1", completed_at=start3 + 1_000,
+            input_tokens=100, computed_total_tokens=100)
+    fx3.turn_row("sess_turn_foreig", completed_at=start3 + 1_000,
+                 input_tokens=999, computed_total_tokens=999)
+    fx3.build()
+    rec3 = fx3.capture_identity(run_id, start3)
+    check("present-but-empty turn rows for anchor -> honest None",
+          rec3 is None, f"got {rec3}")
+
+
+@_test("review_usage_capture#selftest_fallback_discriminator_and_locks")
+def _selftest_fallback_discriminator_and_locks(check: Callable) -> None:
+    import time as _time
+
+    tmp = _tmp_dir()
+    fx = _Fixture(tmp)
+    start = fx.now - 10_000_000
+    fx.session("sess_turn_lock001")
+    fx.turn_row("sess_turn_lock001", completed_at=start + 1_000,
+                input_tokens=100, computed_total_tokens=100)
+    fx.row("sess_turn_lock001", completed_at=start + 1_000,
+           input_tokens=100, computed_total_tokens=100)
+    fx.build()
+    writer = sqlite3.connect(fx.db, isolation_level=None)
+    try:
+        writer.execute("BEGIN EXCLUSIVE")
+        started = _time.monotonic()
+        rec = fx.capture_identity("d" * 32, start)
+        waited = _time.monotonic() - started
+        check("locked turn_usage -> None, never a fallback record",
+              rec is None, f"got {rec}")
+        check("bounded wait", waited < 10.0, f"waited {waited:.2f}s")
+    except Exception as exc:  # noqa: BLE001
+        check("locked db -> None, no exception", False,
+              f"raised {type(exc).__name__}: {exc}")
+    finally:
+        writer.close()
+
+
+@_test("review_usage_capture#selftest_identity_no_usable_runtime_data")
+def _selftest_identity_no_usable_runtime_data(check: Callable) -> None:
+    # No db at all: identity invocation yields None (never a codex
+    # fallback when no codex store exists either).
+    tmp = _tmp_dir()
+    fx = _Fixture(tmp)
+    fx.session("sess_root_nodata1")
+    start = fx.now - 10_000_000
+    check("no db + identity -> None",
+          fx.capture_identity("1" * 32, start) is None)
+
+    # Rows all completing before the interval start: None (never an
+    # empty-totals attributable record).
+    tmp2 = _tmp_dir()
+    fx2 = _Fixture(tmp2)
+    fx2.session("sess_root_early01")
+    fx2.turn_row("sess_root_early01", completed_at=start - 1_000,
+                 input_tokens=500, computed_total_tokens=500)
+    fx2.build()
+    check("rows all pre-interval + identity -> None",
+          fx2.capture_identity("2" * 32, start) is None)
+
+
+@_test("review_usage_capture#selftest_codex_identity_stays_legacy")
+def _selftest_codex_identity_stays_legacy(check: Callable) -> None:
+    tmp = _tmp_dir()
+    fx = _Fixture(tmp)
+    sid = "9f1c2d3e-aaaa-bbbb-cccc-dddddddddddd"
+    fx.codex_rollout(
+        sid,
+        token_usages=(
+            {"input_tokens": 100, "total_tokens": 185},
+            # Cumulative: LAST token_count event wins.
+            {"input_tokens": 200, "total_tokens": 365},
+        ),
+    )
+    start = fx.now - 10_000_000
+    rec = fx.capture_identity("3" * 32, start)
+    check("codex record produced with identity", rec is not None)
+    if rec is None:
+        return
+    p = rec["provenance"]
+    check("attribution window-legacy",
+          p["attribution"] == "window-legacy",
+          f"got {p.get('attribution')}")
+    check("attributable false", p["attributable"] is False)
+    check("review_run_id carried for forensics",
+          p["review_run_id"] == "3" * 32)
+    check("totals from unchanged cumulative parsing",
+          rec["totals"]["input_tokens"] == 200,
+          f"got {rec['totals']['input_tokens']}")
+
+
+@_test("review_usage_capture#selftest_bare_invocation_byte_compat")
+def _selftest_bare_invocation_byte_compat(check: Callable) -> None:
+    new_keys = (
+        "attribution", "attributable", "review_run_id",
+        "review_started_at_ms", "source_grain", "by_session",
+    )
+    # zcode adapter, bare invocation: today's exact shape, no new keys.
+    tmp = _tmp_dir()
+    fx = _Fixture(tmp)
+    fx.session("sess_root_bare001")
+    fx.row("sess_root_bare001", input_tokens=100, computed_total_tokens=100)
+    fx.build()
+    rec = fx.capture()
+    check("zcode bare record produced", rec is not None)
+    if rec is not None:
+        check("zcode bare: no attribution key",
+              "attribution" not in rec["provenance"]
+              and "attribution" not in rec)
+        check("zcode bare: no new provenance keys",
+              not [k for k in new_keys if k in rec["provenance"]],
+              f"got {[k for k in new_keys if k in rec['provenance']]}")
+        check("zcode bare: no new top-level keys",
+              not [k for k in new_keys if k in rec])
+
+    # codex adapter, bare invocation: same shape contract.
+    tmp2 = _tmp_dir()
+    fx2 = _Fixture(tmp2)
+    fx2.codex_rollout(
+        "bbbb2222-0000-0000-0000-000000000000",
+        token_usages=({"input_tokens": 100, "total_tokens": 100},),
+    )
+    rec2 = fx2.capture()
+    check("codex bare record produced", rec2 is not None)
+    if rec2 is not None:
+        check("codex bare: no new keys anywhere",
+              not [k for k in new_keys
+                   if k in rec2 or k in rec2["provenance"]])
+
+
+@_test("review_usage_capture#selftest_identity_invocation_arity_and_shape")
+def _selftest_identity_invocation_arity_and_shape(check: Callable) -> None:
+    # Arity: either argument alone is an argparse error (exit 2) before
+    # any store read; main() is driven with injected argv only.
+    for argv in (
+        ["--json", "--review-run-id", "a" * 32],
+        ["--json", "--review-started-at-ms", "1700000000000"],
+    ):
+        try:
+            main(argv)
+            check(f"arity error for {argv[1]}", False, "no SystemExit")
+        except SystemExit as exc:
+            check(f"arity error exits 2 for {argv[1]}", exc.code == 2,
+                  f"got {exc.code}")
+
+    # Shape rules via the injected seam (no store access): invalid run id
+    # or non-positive start is treated as absent (window-legacy path).
+    tmp = _tmp_dir()
+    home = tmp / "home"
+    home.mkdir()
+    check("short run id treated as absent",
+          _validated_identity("abc123", 1700000000000, home) is None)
+    check("uppercase run id treated as absent",
+          _validated_identity("A" * 32, 1700000000000, home) is None)
+    check("non-positive start treated as absent",
+          _validated_identity("a" * 32, 0, home) is None)
+    check("negative start treated as absent",
+          _validated_identity("a" * 32, -5, home) is None)
+    check("valid identity passes through",
+          _validated_identity("a" * 32, 1700000000000, home)
+          == ("a" * 32, 1700000000000))
+    check("both absent -> None (bare path)",
+          _validated_identity(None, None, home) is None)
+
+
 def run_selftest() -> int:
     all_ok = True
 
@@ -1310,14 +2170,41 @@ def main(argv: list[str] | None = None) -> int:
         "--selftest", action="store_true", help="run built-in selftests"
     )
     parser.add_argument(
+        "subcommand", nargs="?", choices=("mint",),
+        help="mint: print a fresh review-run identity as JSON",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="print the usage record as JSON for merging into a sidecar",
+    )
+    parser.add_argument(
+        "--review-run-id",
+        default=None,
+        help="review-run identity from the mint output (32-char hex)",
+    )
+    parser.add_argument(
+        "--review-started-at-ms",
+        type=int,
+        default=None,
+        help="review round start (minted_at_ms from the mint output)",
     )
     args = parser.parse_args(argv)
 
     if args.selftest:
         return run_selftest()
+
+    if args.subcommand == "mint":
+        print(json.dumps(mint_identity(), indent=2))
+        return 0
+
+    # Identity arity: both arguments or neither; either alone is an
+    # argparse error (exit 2) before any store read.
+    if (args.review_run_id is None) != (args.review_started_at_ms is None):
+        parser.error(
+            "--review-run-id and --review-started-at-ms must be passed "
+            "together (mint them with the mint subcommand)"
+        )
 
     if not args.json:
         # N10: bare invocation never captures (capture only under --json);
@@ -1329,8 +2216,19 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    record = capture_usage()
+    record = capture_usage(
+        review_run_id=args.review_run_id,
+        review_started_at_ms=args.review_started_at_ms,
+    )
     if record is not None:
+        if args.review_run_id is None:
+            # Bare invocation: stdout stays byte-identical; the notice is
+            # stderr-only.
+            sys.stderr.write(
+                "review_usage_capture: record is non-attributable "
+                "(bare invocation; run mint and pass --review-run-id with "
+                "--review-started-at-ms for interval attribution)\n"
+            )
         print(json.dumps(record, indent=2))
     # No store data: print nothing; the caller writes the sidecar
     # without a usage field (missing stays missing).
