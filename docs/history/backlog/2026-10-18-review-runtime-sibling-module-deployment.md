@@ -1,4 +1,4 @@
-Status: open
+Status: covered (docs/history/plans/2026-10-18-review-runtime-sibling-module-deployment.md)
 
 Priority: high
 

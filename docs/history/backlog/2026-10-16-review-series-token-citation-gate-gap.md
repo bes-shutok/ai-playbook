@@ -1,7 +1,7 @@
 # Backlog: the worktree-removal gate's series parser cannot match the canonical tokened round names
 
 - **Filed:** 2026-10-16 (witnessed during the prompt-log-collateral-served-prune authoring teardown)
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-18-closeout-gate-series-token-infix.md)
 - **Workflow:** backlog
 - **Priority:** normal
 - **Origin class:** witnessed defect (machinery contract disagreement)
@@ -27,3 +27,7 @@ Expected: the gate's series parser implements the plans template's full citation
 ## Fix shape
 
 Add the optional `-p<8-hex>` infix to the series fragment grammar (one regex alternation beside the date-normalization arms), with fixtures for the tokened and tokenless citation forms; the sibling date-form gap already fixed upstream by closeout-gate-review-series-expansion is the precedent shape. Until landed, a refusal keeps the worktree standing per the gate's own duty (this run's sanctioned park).
+
+## Admission alternatives (extends Fix shape)
+
+The `Fix shape` section prescribes the parser repair; it does not evaluate admission alternatives, so this section records the fix-class no-exit basis for binding tokened members to the source plan. (1) Add a sanctioned exit: `--claims` is already additive, not a replacement for series selection; the receiving-review-bind witness above shows its verified paths do not discharge the zero-member refusal, and the existing safe outcome for a missing own series is to keep the worktree open. (2) Remove the false refusal without adding identity binding: accepting any `-p<8-hex>` member after a tokenless prefix lets a same-slug foreign series satisfy the citation; requiring every citation to carry a token breaks existing tokenless citations that the template explicitly supports. (3) Simplify the flow: a slug-wide token wildcard has the same cross-plan acceptance, while deriving the path token and checking legacy Metadata identity are the smallest ways to distinguish the source plan. Further alternatives recorded here: `--claims` substitution fails for the additive reason above; a per-run symlink only masks one refusal and repeats manual closeout work, as the fourth witness demonstrates; an authoring-time required-token gate breaks existing citations and adds a separate refusal condition. The review-plan r5 same-slug collision finding records the concrete false-acceptance shape that the identity binding prevents.

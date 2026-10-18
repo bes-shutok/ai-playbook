@@ -2027,3 +2027,162 @@ first.
 
 **See also:** #83 (the inverse chaining failure: an early probe exit censors
 the remaining probes), #82 (re-derive the guard's own constants from disk).
+
+## 85. Release Claims Match the Direction of Change
+
+**Principle:** Family H (verify the real effect, not an inferred label: a summary follows the source changes' direction, not the repository's reputation).
+
+**Trigger:** writing a release summary from grouped commits, especially when controls or workflows are removed or simplified.
+
+**Rule:** Check the overall claim and every bullet against the source diff. Describe additions, removals, and simplifications accurately; call a release "hardening" only when changes add or strengthen controls. Do not infer direction from the project's purpose or safety vocabulary.
+
+**Why:** During a release, the initial summary called broad workflow changes "hardening" even though the published commits removed guardrails and blockers. The operator corrected the label; the source diff supported a neutral description of clearer workflows and less repeated work.
+
+**See also:** #25 (verify the real effect, not the abstraction: the grouped source diff is evidence for a release claim).
+
+## 86. List the Live Carriers Before Arming a Scheduled One-Shot
+
+**Principle:** Family D (state-first: the automation listing at arming time is the only evidence about coverage already standing; the ask's own wording is a stale read the moment an earlier ask armed).
+
+**Trigger:** any scheduling ask on a repository that already runs scheduled carriers, especially a resume ask following an operator pause, which may itself have armed one.
+
+**Rule:** Before creating a scheduled carrier, list the existing automations. A live one-shot (enabled, unfired) already covering the ask's window and mandate is patched or reported, never stacked: aligned carriers fire together, and every copy but the claim winner becomes a redundant session racing the same lane.
+
+**Why:** witnessed 2026-10-18 (playbook repo): three one-shot carriers covering the same wall-clock window fired together, and two sessions executed the same authoring resume in parallel. The collision resolved cleanly because the coordination surfaces held: the second reader adopted the stale claim through its own takeover rules, detected the winner's staged record diverging from its own panel returns at the staging surface, and stood down before any mutating write (#13's discipline at the staging boundary). Both sessions had still spent full review panels, and the redundant session's findings survived only in its conversation. The duplicate-parent tripwire covers the recurring loop carrier; nothing gated stacking ad-hoc one-shots.
+
+**See also:** #13 (the run-side stand-down when a peer lands the same unit mid-run), #66 (the write-time destination re-survey while a peer closeout is in flight).
+
+## 87. A Stand-Down Routes Its Uniquely-Held Evidence Before Ending
+
+**Principle:** Family D (state-first: once the winning session owns the lane, its records are the only capture surface; evidence held only in the stood-down session's conversation has no disk existence after that session ends).
+
+**Trigger:** standing down on a collision (a peer took the claim, landed the unit, or owns the staging surface) while holding review-panel returns, measurements, or witness notes the winner's records do not carry.
+
+**Rule:** Before ending, route every uniquely-held item of evidence durably: name it in the stand-down report with its full substance (measurement, anchor, concrete fix), or file it beside the winner's record once the lane settles. A report is durable; a conversation transcript is not.
+
+**Why:** witnessed 2026-10-18 (playbook repo): a redundant session's two-worker review panel returned three measured residuals the winning session's certified record and residuals row do not carry; they survived only because the stand-down report named each with its measurement and concrete fix, which is what let the follow-up pass route them beside the winner's row. The #86 rule prevents the collision; this one contains its cost when a collision happens anyway.
+
+**See also:** #86 (the prevention side of the same collision), #13 (the stand-down discipline whose report carries the evidence), #66 (fold into the winner's record instead of writing a duplicate).
+
+## 88. Re-Derive Prepared Edit Spans After a Branch Switch
+
+**Principle:** Family A (precision-critical values are re-derived from the state that will be edited, at edit time; a span prepared from one tree's bytes is a quoted value the moment that tree changes).
+
+**Trigger:** a multi-step turn that switches branches or checkouts between reading a file's structure and editing it: a line-range edit prepared on one branch's bytes, executed after a later switch lands different bytes.
+
+**Rule:** Line numbers and spans prepared for a targeted edit are valid only for the bytes they were read from. After any branch switch, checkout, or landing reconcile changes the working tree, re-derive the span from the current tree before the cut. The same re-derivation covers audit-gated lines written in the same pass: a receipt whose target token is prose fails the audit: the token must resolve to a commit digest or a path present in the edited tree.
+
+**Why:** witnessed 2026-10-18 (playbook repo): a rolling-log entry prune prepared by line numbers on an authoring branch (whose bytes carried a branch-only freeze line) was executed after switching to a fresh branch off the base; the shifted lines deleted the neighboring entry's heading, and the prune audit flagged the removal without witness. The redo cost an extra commit cycle; the audit caught it, not the editor.
+
+**See also:** #82 (ceremony-cited values re-derived from disk), #7 (re-derive an edit inventory from live bytes at execution start).
+
+## 89. Re-Run the Origin's Own Probe Before Authoring Its Fix
+
+**Principle:** Family H (verify the real thing, not the record of it: an evidence section records when its witness was taken, not whether the defect still holds).
+
+**Trigger:** authoring a plan, or scoping any fix, from a backlog row or log entry whose Evidence section describes a reproduced blocker.
+
+**Rule:** Before drafting, re-run the origin's own probe against the current tip: the scan, command, or check that produced the witnessed failure. A green or empty result is a scope-changing discovery: the disposition becomes close-as-covered, naming the commit that landed the fix, not a plan. The entry's keep-open condition (a chosen contract and a discriminating witness landed) may already be satisfied, and the cheaper catch matters: a full authoring cycle plus review panel spent on a stale premise is the wasted cost.
+
+**Why:** witnessed 2026-10-18 (playbook repo): a release-privacy cleanup was authored from an entry whose blocker evidence was three hours old; the covering redaction had landed in between, and the affected set re-derived empty only at the r1 five-worker review: four workers independently measured the scan green on the current tip. The round folded into a closure landing instead of a plan.
+
+**See also:** #58 (reproduce the live failure shape before re-keying a spec), #85 (claims follow the source changes' direction).
+
+## 90. Gate Scripts With Subcommands Refuse Bare-Path Invocations Loudly, Not Silently
+
+**Principle:** Family A (verify the tool contract before reading an exit code: a usage message with exit 0 is not a clean scan).
+
+**Trigger:** invoking a repository check script with a bare file path when its CLI requires a subcommand (for example `check-no-em-dash.sh <path>` instead of `check-no-em-dash.sh file <path>`).
+
+**Rule:** Before treating a check script's exit 0 as a pass, confirm the invocation matches the script's usage header; a subcommand-taking script called with a bare path prints its usage and exits 0 without scanning anything. Call the documented subcommand form, and when composing gate chains, let the script's own usage text resolve the form rather than assuming a positional contract.
+
+**Why:** During an authoring run, an em-dash gate was invoked as `check-no-em-dash.sh <plan.md>`, which printed the usage text and exited 0; the run recorded "em-dash clean" from a scan that never ran. The correct `file` subcommand form was recovered from the usage header only after a later gate failed for an unrelated reason.
+
+**See also:** #68 (verify the executing context's primitives before dispatch: the same verify-the-contract discipline at the CLI boundary).
+
+## 91. Ceiling a Computed Schedule Time to the Whole Minute the Chain Arms
+
+**Principle:** Family A (verify the tool contract before invoking: a schedule surface arms whole-minute fire times, so a computed sub-minute time is a refusal, and flooring it would silently shrink the margin the schedule exists to preserve).
+
+**Trigger:** deriving a clocked-order (or any wall-clock carrier) fire time from a probe reading or reset timestamp plus a margin.
+
+**Rule:** After computing fire = anchor + margin, ceiling to the next whole minute before invoking the schedule surface; never truncate. Rounding down can land the fire inside the walled window the margin was measured to avoid.
+
+**Why:** witnessed 2026-10-18 (playbook repo): a re-arm computed reset 11:53:21 plus a 10-minute margin as 12:03:21; the clocked-order chain refused the sub-minute request, and the retry at 12:04:00 armed cleanly. The chain's own helpers round reset times up to the whole minute; a caller-computed time must do the same.
+
+**See also:** #86 (list the live carriers before arming a scheduled one-shot).
+
+## 92. The Cap-Closure Certification Record Rides the Series' Highest Round
+
+**Principle:** Family A (precision-critical values are re-derived at validation time: the landing sweep hard-validates the series' highest round against the current plan bytes, so a closure record numbered below a pre-fold round leaves stale bytes as the validation target).
+
+**Trigger:** closing a plan loop at its round cap with the cap-closure terminal shape, where the folding round produced the final plan bytes but an earlier-numbered record carries the closure extension.
+
+**Rule:** After folding the cap round's findings, make the closure certification record the series' highest round and re-bind its sidecar `source_digest` to the folded bytes; the extension's `round` value moves with the renumber. A highest round whose digest predates the fold refuses the landing sweep on a stale digest.
+
+**Why:** witnessed 2026-10-18 (playbook repo): a series carried the cap-closure certification at a round number below a pre-fold record that remained the highest; the landing sweep refused on that highest round's stale digest. Renumbering the certification record above it, with the digest re-bound to the folded plan bytes, let the same sweep pass without touching the validator.
+
+**See also:** the review-staging skill's cap-closure extension keys (the sidecar contract this numbering duty completes).
+
+## 93. Resolve a Landing Conflict by Union of Intents
+
+A merge or rebase inside a landing critical section resolves each conflict
+block by union of the two sides' intents, never by taking one side of the
+hunk: a side-pick silently drops the other side's intent. A branch-side pick
+reverts a peer's landed lines; a base-side pick resurrects hunks the branch
+removed, so the landing carries a removal it claims but did not perform.
+
+Rule: keep each side's stated intent (a branch removal stays removed, a base
+addition stays added; overlapping edits merge line-by-line keeping foreign
+lines). Then re-verify every destructive intent on the post-merge tree before
+the landing build and again before the lock releases: re-grep each pruned
+heading or removed span absent, and re-run the landing's receipt audits
+against the post-merge bytes.
+
+**Principle:** Family H (verify the real tree after a conflict resolution,
+not the resolution's intended shape; the merged bytes are the record).
+
+**Why:** witnessed 2026-10-18 (playbook repo): a stale-base re-land merged
+main under the held merge lock, the conflict juxtaposed the branch's pruned
+dispatch entry against main's new entry in the same region, the resolution
+took main's side, and the pruned entry returned with its Frozen line; the
+landing carried only the +1 prune receipt and the removal completed as a
+post-landing repair commit. A post-merge re-grep of the pruned heading would
+have caught it inside the lock for one command.
+
+Mirror witness 2026-10-09 (playbook repo): a branch-side pick inside a kept
+shared file reverted a peer's landed line, caught only by a manual
+post-rebase diff; the landing-text fix routes through
+docs/history/backlog/2026-10-09-rebase-conflict-side-selection-no-delta-verification.md.
+
+**See also:** #6 (the merge-and-re-land flow whose "resolve conflicts
+faithfully" clause this lesson pins down); #44 (the receipt surface the
+repair had to satisfy).
+
+## 94. Script a Structural Move From and Against Current Bytes
+
+**Principle:** Family H (verify the real thing: a scripted restructure's document model is an abstraction; both its regions and its result must be derived from and checked against the current bytes).
+
+**Trigger:** a review fold or correction that restructures a structured document (moving a section, reordering checklist items, folding one block into another) via a scripted splice whose source and destination regions were worked out from an earlier read or from a summary of the file.
+
+**Rule:** derive the move's source and destination from a fresh read of the current bytes immediately before scripting, and pin every region with an exact-match assertion. After the mutation, assert the membership invariants an anchor check cannot see: per-section item counts match the pre-mutation inventory, each per-section anchor (a task's `Files:` list, a section heading) occurs exactly as many times as intended, and the origin region holds what the move intends it to hold. Anchor uniqueness and output-size signature (#51) pass on well-formed misplacement; only membership checks catch content that landed in the wrong section.
+
+**Why:** witnessed 2026-10-18 (playbook repo): during one plan's certification folds, three scripted restructures ran with valid anchors and plausible sizes while wrong. A reorder dropped 10 checklist items; a splice nested one task's body inside a sibling task (duplicate `Files:` block); a relocation authored against a misread premise left a drifted task copy inside the plan's review-scope section. The plan's own structural gates caught the first two; the next review round caught the third. Each recovery was a full-file rewrite from a fresh read plus a re-run script carrying exact-match assertions.
+
+**See also:** #51 (anchor uniqueness and size signature), #88 (re-derive prepared spans after a branch switch), #64 (never probe pin mutations with sed).
+
+## 95. Report Workflow State as Gates Passed, Not Artifact Existence
+
+**Principle:** Family H (verify the real thing: what a staged workflow reports is the state of its stage contract, of which the artifact is only one input).
+
+**Trigger:** a status report or completion claim for a multi-stage skill run (authoring, review, execution) where the artifact exists but later stages (validation, review, certification) have not run, or an operator question asking whether a workflow was followed or finished.
+
+**Rule:** when reporting a staged workflow's status, name each stage of the owning skill's contract and mark it executed or pending; never let "the artifact is written" stand in for "the workflow is done". Treat an operator's "is it finished / did you follow the skill" as an audit prompt: re-derive the stage state from the gates actually run (readiness output, certification records, commits), answer stage by stage, and if a mandatory stage was skipped, say so before anything else.
+
+**Why:** witnessed 2026-10-18 (playbook repo): a plan was reported ready for handoff after drafting while the plans skill's review-and-certification phases had not run. The operator had to ask twice ("did you follow the plans skill and did the review?") before the skipped review surfaced, and the plan only then reached its certified state through five review rounds.
+
+**See also:** #77 (a claim file is not evidence of a live session), #78 (prove landedness from witnesses, not metrics).
+
+## 96. Scope Worktree Reviews Transfer-In To The Consumed Series
+
+A fresh execution worktree's wholesale reviews transfer-in (the Worktree-first standard's step 2 copy) seats thousands of foreign staging docs in the worktree, and the done setup's write-manifest claim-or-foreign gate then refuses them all as "neither owned nor foreign" (witnessed 2026-10-18, done-setup-task-owned-start-dirt-claims execution). The gate's own bulk answers are the remedy: pass `--claim-none` when the run owns no staging doc in the reviews home, and scope the transferred copy to the review series the run actually consumes so the readiness gate still resolves. The primary checkout's staging docs are never touched by the trim; they are copies.

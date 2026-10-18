@@ -85,10 +85,9 @@ These rules are judgment work the running agent performs; no script writes the p
   format `YYYY-MM-DD`). Under the heading write one sentence on what the release improves
   overall, then one `### <area>` subheading per reader-visible area (for example:
   planning and reviews, scripts, docs), and one bullet per improvement.
-- Every bullet says what changed for the reader, never how it was implemented. Name the
-  visible effect, not the mechanism.
-- Write in the plain-language house style: short sentences, common words, active voice,
-  no unexplained jargon.
+- Match claims to the grouped source diff, including removals and simplifications; call
+  changes hardening only when controls were added or strengthened.
+- Write plainly: short sentences, common words, active voice, no jargon.
 - No em dash anywhere in the section: the authoring gate aborts the run before
   `CHANGELOG.md` is touched.
 - If a `## <today>` section already exists, placement is automatic: the authoring step

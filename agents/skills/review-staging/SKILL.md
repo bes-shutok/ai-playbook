@@ -326,6 +326,8 @@ When the operator explicitly authorizes closure at a plan loop's configured roun
 
 The plan section's contract is the cap-round disposition ledger: every staged finding of the cap round is listed with its disposition (`folded` or `accepted`). This is a `version-1-only` extension, fail-closed at the version boundary: versionless legacy sidecars carrying `cap_closure` are rejected. The validator's section-literal constant is the shape's single owner and holds the bare heading (the declaration value carries the `## ` prefix).
 
+After folding, the closure certification record occupies the series' highest round number with its sidecar `source_digest` re-bound to the folded plan bytes (the `round` key moves with the renumber), because the landing sweep validates the highest round hard against current bytes; a highest round whose digest predates the fold refuses the sweep on a stale digest.
+
 ### Corrections sidecar extension (declared-when-present)
 
 A current-v1 sidecar may declare `extensions.corrections`, the array of certification-correction rows that re-bind the round's `source_digest` through graded, script-produced hops instead of a fresh round (the graded-review-certification contract; `scripts/corrections_record.py` is the shape owner and both validators consume its schema and verifier legs, so never spell the row shape by hand here). Declared-when-present rules the validator enforces:

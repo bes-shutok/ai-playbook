@@ -7,6 +7,7 @@
 - **Origin class:** certification-residual overflow (two non-blocking Low findings routed to overflow with durable capture per the certification-residual routing)
 - **Class:** fix-class
 - **Cluster:** docs/history/plans/2026-10-17-rearm-dispatch-ladder-incident-guards.md (the certified plan; its landing serves the parent rows)
+- **Cluster:** docs/history/backlog/2026-10-18-clocked-order-discharged-order-silent-strand.md (the same ladder surface: a discharged order whose payload session never recorded itself or re-armed; recovery rode a live session's liveness duty)
 
 ## Residuals
 

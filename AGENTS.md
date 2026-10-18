@@ -69,6 +69,7 @@ These rules bind every session editing skill text, guidelines, or plans in this 
 - Verify package availability in the selected package manager before proposing an install path.
 - If a command is interrupted or aborted, verify partial side effects first, report the current state, then continue.
 - A value quoted from conversation context is not evidence: before any precision-critical step (commit, landing, lock handling, digest verification), re-derive every digest, path, flag, or identifier from disk, and stop on a cross-check mismatch until it is resolved.
+- When a public site's search requires an interactive challenge and the user offers to solve it, open the supplied link in the live browser and resume the lookup afterward (see `projects/.ai-playbook/development_lessons.md` #465).
 - Run the done boundary setup as the first worktree action before editing any owned file; registry-row shape and ceremony-record digest requirements are pinned in docs/maintenance/development_lessons.md #80-#82.
 - Shell tool calls reset cwd to the primary checkout between calls: in ad-hoc-worktree phases re-enter the worktree in every command and verify toplevel before writes or commits (see docs/maintenance/development_lessons.md #43).
 
@@ -77,7 +78,7 @@ These rules bind every session editing skill text, guidelines, or plans in this 
 - Any addition that can block a lane names the incident it prevents (with a link), expected catch frequency, false-positive cost, and sunset or review date. No incident, no blocking gate.
 - New machinery lands warning-only or read-only. Promote it only after a true catch and with a pre-registered registry-removal row naming its sunset and promotion criteria.
 - Default to fewer blockers: every machinery plan names what it removes or simplifies, and a promoted blocker retires or demotes an existing blocker in the same change. Otherwise keep it non-blocking unless the operator explicitly approves net growth after a true catch.
-- Bounded repair: when a gate blocks a lane, the allowed responses are a bounded retry, skip-with-report, or park-for-operator. Editing a gate or validator mid-lane to unblock oneself is forbidden without a plan.
+- Bounded repair: when a gate blocks a lane, the allowed responses are a bounded retry, skip-with-report, or park-for-operator. Editing a gate or validator mid-lane to unblock oneself is forbidden without a plan. Additionally, an explicit operator direction to investigate and recover the blocked lane, issued in the blocked lane's session while the block stands, authorizes diagnosing the refusal, applying a safe workaround within existing authority, rerunning the refused gate, and continuing the interrupted work up to the lane's existing completion boundary; it never authorizes editing or bypassing the refused gate or validator, new machinery, or work beyond that boundary, and a block that remains unresolved falls back to the allowed responses above.
 
 ## Vendored Asset Sync Rules
 - When syncing vendored agent assets (`agents/skills/`), apply full bidirectional sync: add new items, update changed items, and remove items that no longer exist in the source. Use `rsync --delete` semantics.
@@ -93,10 +94,10 @@ These rules bind every session editing skill text, guidelines, or plans in this 
 
 ## Workflow verb routing
 
-An operator verb that names a workflow (investigate, author, execute, review, triage, release) resolves to its owning skill under `agents/skills/` before any improvised pass: consult the skill's own `SKILL.md` for the verb, and run its stages, gates, and artifact contract as written; a verb with no single owning skill proceeds by ordinary context gathering; the resolution check is one file read.
+Workflow verbs resolve to their owning skill under `agents/skills/` before improvised work: read its `SKILL.md` and follow its stages, gates, and artifact contract. Verbs without an owner use ordinary context gathering. Release-summary claims follow lesson #85 in `docs/maintenance/development_lessons.md`.
 
 ## Scheduling asks (verb contract)
-- A "schedule at ..." ask schedules: create or patch the automation, then report the automation id and its next fire time; it never executes the payload in the same turn.
+- A "schedule at ..." ask schedules: list existing automations first, then create or patch one carrier (a live carrier already covering the ask's window and mandate is patched or reported, never stacked; see docs/maintenance/development_lessons.md #86), then report the automation id and its next fire time; it never executes the payload in the same turn.
 - Satisfaction is session-owned: an ask is satisfied only by an automation record the asking session itself created, or its own record that it patched, whose id and next fire time the report carries; an automation record from another session (or any other carrier, such as a launchd job) is deconfliction context, never satisfaction.
 - Deconfliction rides the created payload (re-derive from disk; skip-if-done, and report, when a parallel carrier already did the work; when the payload's work is not re-derivable from disk, the report names the overlapping carrier and the shared fire time), never a create refusal, and a session that cannot create after exhausting the scheduling fallback its runtime overlay sanctions reports the ask as unscheduled, never satisfied by reference.
 - In a cap-refused bound session, the ask's fallback requires the delete-own-spawner leg exhausted first, per the operator-ordered schedule surface paragraph in agents/skills/maintenance/zcode.md, which owns this clause's ordering; a fallback armed without that leg's recorded deletion attempt or a proven-absent deletion primitive is an unscheduled ask, never satisfaction. (This clause supersedes, for exactly this clause, this section's standing sibling-span fence against delete-own-spawner and cap-refusal vocabulary; the fence still governs the section's other text.)

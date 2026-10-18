@@ -1744,10 +1744,10 @@ pin "repo AGENTS.md scheduling verb contract anchored" grep -qF 'Scheduling asks
 # Count pin over the re-arm surface's landed delete-first ordering sentence
 # (the span the operator-ordered schedule surface paragraph names as a
 # boundary and must not restate); presence pins over the schedule ask
-# contract's whole original bullet, its never-executes-inline literal, and
-# the bound clause's owner-naming literal.
+# contract's opening scheduling requirement, its never-executes-inline
+# literal, and the bound clause's owner-naming literal.
 [ "$(grep -oF 'the FIRST automation primitive of the decided re-arm is the delete of that record by the state-recorded id' "$Z" | wc -l | tr -d ' ')" -eq 1 ] || { recorded_red_check "re-arm delete-first count" "PIN FAIL: re-arm delete-first count" || fail=1; }
-pin "schedule ask bullet 1 whole" grep -qF 'A "schedule at ..." ask schedules: create or patch the automation, then report the automation id and its next fire time' "$A"
+pin "schedule ask bullet 1 opening requirement" grep -qF 'list existing automations first' "$A"
 pin "schedule ask never-executes-inline" grep -qF 'it never executes the payload in the same turn' "$A"
 pin "schedule ask bound clause owner naming" grep -qF 'the operator-ordered schedule surface paragraph in agents/skills/maintenance/zcode.md' "$A"
 pin "zcode.md interactive dispatch template anchored" grep -qF 'Interactive dispatch template' "$Z"

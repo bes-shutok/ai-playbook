@@ -229,3 +229,38 @@ Rejected alternatives:
 - Remove the first-table contract and row-count cross-check: rejected because the cross-check caught the misplacement at all; without it the unparsed row would land silently (`docs/history/backlog/2026-10-17-doc-registry-row-outside-parsed-table-refusal.md`)
 - Add a pre-write lint or hook for row placement: rejected as machinery without admission - no witnessed incident beyond the two refusal cycles the diagnostic itself removes, and the row shape is already pinned as a lesson (`docs/maintenance/development_lessons.md`, #80)
 - Teach the shape in skill text instead: rejected because the witnessed repeat shows session-carried notes do not bind under landing pressure, and the anti-growth rules price operative text growth over a bounded validator message (`agents/skills/maintenance/zcode.md`)
+
+## acrem-witness-suite-redundant-panel-residuals
+
+Added: 2026-10-18, investigate pass over the 2026-10-18 acrem certification double-delivery's uncaptured panel findings
+
+Work-type verdict: ad-hoc-able because the action is one bounded append to an existing durable row (the certification-residual routing's capture shape, `agents/skills/review-staging/SKILL.md`, certification-residual routing note), with no design choice, no gate, and no tracked surface beyond the row file.
+
+Origins:
+- docs/history/backlog/2026-10-18-acrem-certification-residuals.md
+
+Urgency: low - the cost lands when the landed plan is executed (the executor builds the mis-sized degenerate fixture and ships the unwitnessed index branch), and the origin row's own priority is low.
+
+Scope arms:
+- Append the three redundant-panel residuals below to the landed row as items 3 through 5 of its Residuals list, keeping its per-residual shape, and adjust the row's count-bearing header wording (the Driving force line names "two Low residuals") to match the appended set; leave its two existing residuals and closing routing sentence unchanged.
+- Fold the residuals into the landed plan text instead, re-opening certification.
+
+The three residuals, measured by the redundant session's r11 panel (both panels independently converged on the row's existing screening-length residual, which strengthens it):
+
+1. Degenerate-rename fixture sizing (testing#needle-unreachable-from-prescribed-text, Medium): the Task 1 recipe "the plan bytes amended between the boundary and the archive add by a small edit above the rename-detection threshold" is not self-executing and reads inverted (similarity must stay above the threshold, so the edit must be small). Measured in scratch repositories at the test suite's house fixture scale: two-line plan bodies emit D+A for any amendment; pairing holds from about four content lines up (R081 at 4 lines, R086 at 6, R089 at 8, R074 at 10 with one edited line). Fix: pin a sizing rule (the fixture plan carries at least four checked task lines; the amendment appends or edits one short line so the pair stays above git's rename-detection threshold) and the base-blob-distinct property the refuse arm needs.
+2. CRLF fixture git-attributes hermeticity (testing#hermeticity-gap, Medium): the Task 3 pin "core.autocrlf=false with no text or eol attributes" covers only repo-local configuration; a global core.attributesFile declaring text normalization for the fixture's file kind normalizes the committed blob to LF and the expected-GREEN arms refuse (measured end-to-end; this host's global core.autocrlf=input is defeated by the repo pin, so the attributes path is the gap). Fix: pin the mechanism - repo-local core.attributesFile set to an empty fixture file, or GIT_CONFIG_GLOBAL/GIT_ATTR_NOSYSTEM in the sweep env.
+3. Staged-addition witness arm (testing#missing-test, Medium): Task 1 threads the staged-addition shape but no witness covers it: the Task 3 else-form witness pins only untracked and committed additions, and the existing staged fixture is a rename (git mv), so the index branch ships unwitnessed. Fix: extend the else-form witness (or Task 4) with a staged-addition arm: a staged-addition archive whose record carries the archive-state identity with the staged bytes' digest and a yes verdict expects the pass.
+
+Orientation: the plan landed r11-certified (landing 6570005ad; certified plan digest fb1f3efcd258cd7f19e2e6bf696228a08508a62e1868a6380364fc75d28383fd, re-derived from the tip at investigation time). The winning session's panel captured the row's two residuals while a redundant parallel session - spawned by stacked same-window carriers, the development-lessons #86 incident - stood down before any staging write, and its panel's three residuals survived only in its stand-down report (development-lessons #87). This entry is that report's durable routing: the append turns conversation-held evidence into the row's capture. The certification-residual routing forbids re-rounds for non-blocking residuals, so the row, not the plan bytes, is the capture surface of record.
+
+Prompt: Read docs/history/backlog/2026-10-18-acrem-certification-residuals.md first. Append the three residuals above as items 3 through 5 of its Residuals list, preserving the row's per-residual shape (worker, pattern id, severity, the stated fix), adjusting the count-bearing header wording to match the appended set, and leaving the two existing residuals and the closing routing sentence unchanged. Keep every addition free of em dashes and absolute paths; run the em-dash scan over the row (exit 0 required) and commit the row edit by explicit path.
+
+Rejected alternatives:
+- Fold the three residuals into the landed plan text and re-certify: rejected because the certification-residual routing forbids re-rounds for non-blocking residuals and any plan-byte change stales the certified sidecar digest against the readiness gates (`agents/skills/review-staging/SKILL.md` certification-residual routing note; `agents/skills/review-plan/SKILL.md` readiness-gate integration paragraph)
+- File a second row for the redundant panel's findings: rejected because one plan's residuals belong in one durable home and the winner's row already exists (`docs/history/backlog/2026-10-18-acrem-certification-residuals.md`; the fold-not-write discipline, `docs/maintenance/development_lessons.md` #66)
+- Add a mechanical gate requiring stand-down sessions to file their findings: rejected as machinery without admission - one witnessed collision and low expected catch frequency against a blocking gate on every stand-down, with the behavioral rule just landed (`docs/maintenance/development_lessons.md` #86, #87)
+- Drop the three findings as non-blocking noise: rejected because two are Medium measurements that bite the executor directly (the mis-sized fixture, the hermeticity gap) and the third is a coverage gap in the planned witness suite (`docs/history/plans/2026-10-17-archive-ceremony-review-evidence-mismatch.md`, Tasks 1 and 3 witness prescriptions)
+
+Standing pre-authorization: ordinary backlog capture under the certification-residual routing; no operator rescope required.
+
+Machinery admission: not required - the recommendation is one row append and adds no gate, validator, lock, ledger, or ceremony.

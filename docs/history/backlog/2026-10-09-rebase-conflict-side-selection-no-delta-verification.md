@@ -1,7 +1,7 @@
 # Backlog: sanctioned rebase has no conflict side-selection rule and no post-rebase delta verification
 
 - **Filed:** 2026-10-09, during an authoring carrier turn's landing rebase
-- **Status:** open
+- **Status:** covered (docs/history/plans/2026-10-18-landing-conflict-intent-union.md)
 - **Workflow:** backlog
 - **Priority:** medium
 - **Cluster:** docs/history/plans/completed/2026-10-03-squash-landing-failure-path-guard.md (the landing-gate lineage; the line-level twin of the witnessed 2026-10-02 stale-base file-level clobber)

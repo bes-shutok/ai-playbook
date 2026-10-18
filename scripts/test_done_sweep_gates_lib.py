@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -327,10 +328,16 @@ def sweep_env(tmp_path, monkeypatch):
     """Redirect the runtime home and user facts into tmp_path (hermeticity)."""
     runtime_home = tmp_path / "runtime-home"
     runtime_home.mkdir()
+    git_home = tmp_path / "git-home"
+    git_home.mkdir()
+    xdg_config_home = tmp_path / "xdg-config-home"
+    xdg_config_home.mkdir()
     user_facts = tmp_path / "user-facts.md"
     user_facts.write_text("# fixture user facts\n", encoding="utf-8")
     monkeypatch.setenv("DONE_SWEEP_RUNTIME_HOME", str(runtime_home))
     monkeypatch.setenv("DONE_SWEEP_USER_FACTS", str(user_facts))
+    monkeypatch.setenv("HOME", str(git_home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_config_home))
     for var in (
         "PLAN_READINESS_VALIDATOR",
         "CONFLUENCE_MIRROR_HYGIENE_SCRIPT",
@@ -346,7 +353,17 @@ def sweep_env(tmp_path, monkeypatch):
     for var in tuple(os.environ):
         if var.startswith("GIT_"):
             monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     return runtime_home
+
+
+def test_sweep_env_keeps_system_git_config_disabled(sweep_env):
+    """The shared fixture environment leaves the system-config opt-out set
+    after clearing inherited Git variables, so child Git processes stay isolated."""
+    assert os.environ.get("GIT_CONFIG_NOSYSTEM") == "1"
+    assert Path.home().name == "git-home"
+    assert Path(os.environ["XDG_CONFIG_HOME"]).name == "xdg-config-home"
+    assert not (Path(os.environ["XDG_CONFIG_HOME"]) / "git" / "config").exists()
 
 
 def ctx_for(root: Path) -> GateContext:
@@ -8932,6 +8949,53 @@ def _committed_plan_archive(root: Path, plan_name: str, body: str) -> str:
     return archive_rel
 
 
+def test_archive_ceremony_fails_closed_on_staged_non_utf8_archive(
+    tmp_path, sweep_env
+):
+    """Invalid UTF-8 in a staged archive returns a gate refusal, not an exception."""
+    root = make_repo(tmp_path, "ceremony-staged-non-utf8", gitignore_docs=True)
+    write_facts(root)
+    archive_rel = _staged_plan_archive(
+        root, "2026-10-18-staged-non-utf8.md", "# Plan\n\n- [x] done\n"
+    )
+    archive = root / archive_rel
+    archive.write_bytes(b"# Plan\n\n- [x] done\n\xff")
+    assert git(root, "add", "-f", archive_rel).returncode == 0
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert "not UTF-8" in result.message
+    assert "archive-ceremony gate failed" in result.message
+
+
+def test_archive_ceremony_fails_closed_on_committed_non_utf8_archive(
+    tmp_path, sweep_env
+):
+    """Invalid UTF-8 in a committed archive returns a gate refusal, not an exception."""
+    root = make_repo(tmp_path, "ceremony-committed-non-utf8", gitignore_docs=True)
+    write_facts(root)
+    source_rel = "docs/history/plans/2026-10-18-committed-non-utf8.md"
+    source = root / source_rel
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# Plan\n\n- [x] done\n", encoding="utf-8")
+    assert git(root, "add", "-f", source_rel).returncode == 0
+    assert git(root, "commit", "-m", "create plan", "-q").returncode == 0
+    _seed_archive_boundary(root, "ceremony-committed-non-utf8")
+    archive_rel = "docs/history/plans/completed/2026-10-18-committed-non-utf8.md"
+    (root / archive_rel).parent.mkdir(parents=True, exist_ok=True)
+    assert git(root, "mv", source_rel, archive_rel).returncode == 0
+    (root / archive_rel).write_bytes(b"# Plan\n\n- [x] done\n\xff")
+    assert git(root, "add", "-f", archive_rel).returncode == 0
+    assert git(root, "commit", "-m", "archive non-utf8 plan", "-q").returncode == 0
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert "not UTF-8" in result.message
+    assert "archive-ceremony gate failed" in result.message
+
+
 def _write_exec_review_record(root: Path, plan_name: str) -> Path:
     """A minimal exec-review staging doc for a fixture plan, named per the
     slug convention the archive-ceremony coverage arm requires (the plan's
@@ -8947,6 +9011,1342 @@ def _write_exec_review_record(root: Path, plan_name: str) -> Path:
         encoding="utf-8",
     )
     return record
+
+
+def _write_bound_plan_review_candidate(
+    root: Path,
+    *,
+    name: str,
+    markdown_artifact: str,
+    source_digest: str,
+    identity: str | None,
+    verdict: str | None = "yes",
+    include_markdown: bool = True,
+    include_sidecar: bool = True,
+) -> tuple[Path, Path]:
+    """Write a review pair with independently selectable binding fields."""
+    reviews = root / ".ai-playbook" / "reviews"
+    reviews.mkdir(parents=True, exist_ok=True)
+    markdown = reviews / name
+    sidecar = markdown.with_suffix(".stats.json")
+    if include_markdown:
+        markdown.write_text(
+            f"# Plan review candidate\n\nURL or Artifact: {markdown_artifact}\n",
+            encoding="utf-8",
+        )
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "record_kind": "canonical",
+        "source_kind": "plan",
+        "source_digest": source_digest,
+    }
+    if verdict is not None:
+        payload["verdict"] = verdict
+    extensions: dict[str, object] = {}
+    if identity is not None:
+        extensions["plan_identity"] = identity
+    payload["extensions"] = extensions
+    if include_sidecar:
+        sidecar.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return markdown, sidecar
+
+
+def _checked_staged_archive_fixture(
+    tmp_path: Path, fixture_name: str, plan_name: str
+) -> tuple[Path, str, str, bytes]:
+    root = make_repo(tmp_path, fixture_name, gitignore_docs=True)
+    write_facts(root)
+    source_rel = f"docs/history/plans/{plan_name}"
+    body = f"# Plan: {plan_name}\n\n- [x] done\n".encode("utf-8")
+    archive_rel = _staged_plan_archive(root, plan_name, body.decode("utf-8"))
+    return root, source_rel, archive_rel, body
+
+
+def _assert_missing_exec_review_refusal(result, archive_rel: str) -> None:
+    assert result.rc == 1, result.message
+    assert archive_rel in result.message
+    assert "no exec-review record" in result.message
+    assert "produce the exec-review record" in result.message
+    assert "marked reconstruction" in result.message
+
+
+def _assert_bound_receipt_acceptance(
+    result, archive_rel: str, record: Path, digest: str, digest_form: str
+) -> None:
+    """Pin the future counted acceptance warning to its record and digest."""
+    assert result.rc == 0, result.message
+    assert archive_rel in result.message
+    warnings = "\n".join(result.warnings)
+    acceptance = "\n".join(
+        row for row in warnings.splitlines()
+        if "bound" in row.lower() and "receipt" in row.lower()
+    )
+    assert acceptance
+    counted_clause = r"bound-receipt acceptance\s*[:=]\s*1\b"
+    assert re.search(counted_clause, result.message, re.IGNORECASE), result.message
+    assert re.search(counted_clause, acceptance, re.IGNORECASE), acceptance
+    assert record.name in acceptance
+    assert digest in acceptance
+    assert digest_form in acceptance.lower()
+
+
+def _seed_archive_boundary(root: Path, run_id: str) -> str:
+    boundary = git(root, "rev-parse", "HEAD").stdout.strip()
+    now = time.time()
+    marker = make_marker(root, now, os.getpid())
+    _seed_run_manifest(root, run_id, marker.name, str(root), now,
+                       start_commit=boundary)
+    return boundary
+
+
+def _write_committed_archive_addition(
+    root: Path, plan_name: str, body: bytes, run_id: str
+) -> str:
+    _seed_archive_boundary(root, run_id)
+    archive_rel = f"docs/history/plans/completed/{plan_name}"
+    archive = root / archive_rel
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_bytes(body)
+    assert git(root, "add", "-f", archive_rel).returncode == 0
+    assert git(root, "commit", "-m", "add archived plan", "-q").returncode == 0
+    return archive_rel
+
+
+def test_archive_ceremony_accepts_prearchive_identity_bound_to_reviewed_blob(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A staged rename binds its reviewed source."""
+    root, source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-binding-prearchive", "2026-10-18-prearchive.md"
+    )
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-prearchive-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=lib.vrs.compute_source_digest("plan", body),
+        identity=source_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_bound_receipt_acceptance(
+        result, archive_rel, record, hashlib.sha256(body).hexdigest(),
+        "reviewed-revision",
+    )
+
+
+def test_archive_ceremony_accepts_crlf_committed_addition_raw_bytes(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Committed additions bind certified raw bytes."""
+    root = make_repo(tmp_path, "ceremony-crlf-committed-addition", gitignore_docs=False)
+    git(root, "config", "core.autocrlf", "false")
+    write_facts(root)
+    plan_name = "2026-10-18-crlf-addition.md"
+    archive_rel = f"docs/history/plans/completed/{plan_name}"
+    body = b"# CRLF plan\r\n\r\n- [x] raw bytes\r\n"
+    _write_committed_archive_addition(root, plan_name, body, "ceremony-crlf-add")
+    archive = root / archive_rel
+    assert archive.read_bytes() == body
+    assert git(root, "config", "--get", "core.autocrlf").stdout.strip() == "false"
+    attr = git(root, "check-attr", "text", "eol", "--", archive_rel)
+    assert attr.returncode == 0
+    assert "text: unspecified" in attr.stdout
+    assert "eol: unspecified" in attr.stdout
+    assert not (root / ".gitattributes").exists()
+    digest = lib.vrs.compute_source_digest("plan", body)
+    assert digest == hashlib.sha256(body).hexdigest()
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+    assert not blockers, blockers
+    row = next(row for row in rows if row[0] == archive_rel)
+    assert row[2] == body
+    assert row[3] is None
+    assert row[4] == body
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-crlf-addition-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=digest,
+        identity=archive_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_bound_receipt_acceptance(
+        result, archive_rel, record, digest, "archived-bytes"
+    )
+
+
+def test_archive_ceremony_committed_addition_uses_head_blob_after_worktree_drift(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A committed addition ignores drifted worktree bytes."""
+    root = make_repo(tmp_path, "ceremony-addition-worktree-drift", gitignore_docs=False)
+    write_facts(root)
+    plan_name = "2026-10-18-addition-drift.md"
+    archive_rel = f"docs/history/plans/completed/{plan_name}"
+    body = b"# Addition\n\n- [x] committed bytes\n"
+    _write_committed_archive_addition(root, plan_name, body, "ceremony-add-drift")
+    (root / archive_rel).write_bytes(body + b"worktree-only drift\n")
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+    assert not blockers, blockers
+    row = next(row for row in rows if row[0] == archive_rel)
+    assert row[2] == body
+    assert row[4] == body
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-addition-drift-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=lib.vrs.compute_source_digest("plan", body),
+        identity=archive_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_bound_receipt_acceptance(
+        result, archive_rel, record, hashlib.sha256(body).hexdigest(),
+        "archived-bytes",
+    )
+
+
+def test_archive_ceremony_accepts_binding_latest_review_round(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A stale prior round does not shadow the binding round."""
+    root = make_repo(tmp_path, "ceremony-binding-latest-round", gitignore_docs=False)
+    write_facts(root)
+    plan_name = "2026-10-18-latest-round.md"
+    source_rel = f"docs/history/plans/{plan_name}"
+    archive_rel = f"docs/history/plans/completed/{plan_name}"
+    initial = b"# Plan: latest round\n\n- [x] done\n"
+    (root / source_rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / source_rel).write_bytes(initial)
+    assert git(root, "add", "-f", source_rel).returncode == 0
+    assert git(root, "commit", "-m", "initial reviewed plan", "-q").returncode == 0
+    amended = initial + b"post-review amendment\n"
+    (root / source_rel).write_bytes(amended)
+    assert git(root, "add", "-f", source_rel).returncode == 0
+    assert git(root, "commit", "-m", "amend reviewed plan", "-q").returncode == 0
+    (root / archive_rel).parent.mkdir(parents=True, exist_ok=True)
+    assert git(root, "mv", source_rel, archive_rel).returncode == 0
+    stale, _ = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-latest-round-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(initial).hexdigest(),
+        identity=source_rel,
+    )
+    binding, _ = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-latest-round-r2.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(amended).hexdigest(),
+        identity=source_rel,
+    )
+    assert stale.name < binding.name
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_bound_receipt_acceptance(
+        result, archive_rel, binding, hashlib.sha256(amended).hexdigest(),
+        "reviewed-revision",
+    )
+
+
+def test_archive_ceremony_accepts_binding_round_after_malformed_candidate(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A malformed candidate does not shadow a later binding record."""
+    root, source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-binding-malformed-neighbor", "2026-10-18-malformed-neighbor.md"
+    )
+    malformed, malformed_sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-malformed-neighbor-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest="not-a-digest",
+        identity=None,
+    )
+    malformed_sidecar.write_text("{ malformed json", encoding="utf-8")
+    binding, _ = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-malformed-neighbor-r2.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=source_rel,
+    )
+    assert malformed.name < binding.name
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_bound_receipt_acceptance(
+        result, archive_rel, binding, hashlib.sha256(body).hexdigest(),
+        "reviewed-revision",
+    )
+
+
+def test_stale_deliverables_twin_accepts_deliverables_identity_archived_digest(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Stale twins bind deliverables identity and archive bytes."""
+    root = make_repo(tmp_path, "ceremony-stale-deliverables-binding", gitignore_docs=False)
+    write_facts(root)
+    plan_name = "2026-10-18-stale-deliverables.md"
+    source_rel = f"docs/history/plans/{plan_name}"
+    body = b"# Stale twin\n\n- [x] archived\n"
+    archive_rel = _committed_plan_archive(root, plan_name, body.decode())
+    _seed_archive_boundary(root, "ceremony-stale-twin")
+    write_deliverables(root, [source_rel])
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-stale-deliverables-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=source_rel,
+    )
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+    assert not blockers, blockers
+    row = next(row for row in rows if row[0] == archive_rel)
+    assert row[3] == source_rel
+    assert row[4] is None
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_bound_receipt_acceptance(
+        result, archive_rel, record, hashlib.sha256(body).hexdigest(),
+        "archived-bytes",
+    )
+
+
+def _committed_rename_binding_fixture(
+    root: Path, plan_name: str, initial: bytes, run_id: str
+) -> tuple[str, str, bytes, bytes]:
+    write_facts(root)
+    source_rel = f"docs/history/plans/{plan_name}"
+    archive_rel = f"docs/history/plans/completed/{plan_name}"
+    (root / source_rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / archive_rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / source_rel).write_bytes(initial)
+    assert git(root, "add", "-f", source_rel).returncode == 0
+    assert git(root, "commit", "-m", "add reviewed plan", "-q").returncode == 0
+    _seed_archive_boundary(root, run_id)
+    return source_rel, archive_rel, initial, initial
+
+
+def test_committed_rename_base_blob_digest_refuses_wrong_revision(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A base blob cannot approximate the rename parent."""
+    root = make_repo(tmp_path, "ceremony-wrong-revision", gitignore_docs=False)
+    plan_name = "2026-10-18-wrong-revision.md"
+    initial = (b"# Wrong revision\n\n- [x] reviewed\n" + b"stable line\n" * 50)
+    source_rel, archive_rel, base_bytes, _ = _committed_rename_binding_fixture(
+        root, plan_name, initial, "ceremony-wrong-revision"
+    )
+    amended = initial.replace(b"reviewed", b"amended", 1)
+    (root / source_rel).write_bytes(amended)
+    assert git(root, "add", "-f", source_rel).returncode == 0
+    assert git(root, "commit", "-m", "post-review amendment", "-q").returncode == 0
+    assert git(root, "mv", source_rel, archive_rel).returncode == 0
+    assert git(root, "commit", "-m", "archive amended plan", "-q").returncode == 0
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-wrong-revision-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(base_bytes).hexdigest(),
+        identity=source_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+def test_committed_rename_archive_digest_with_prearchive_identity_refuses(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Matching archive bytes cannot replace reviewed bytes."""
+    root = make_repo(tmp_path, "ceremony-form-quantifier", gitignore_docs=False)
+    plan_name = "2026-10-18-form-quantifier.md"
+    initial = (b"# Form quantifier\n\n- [x] reviewed\n" + b"stable line\n" * 50)
+    source_rel, archive_rel, reviewed, _ = _committed_rename_binding_fixture(
+        root, plan_name, initial, "ceremony-form-quantifier"
+    )
+    assert git(root, "mv", source_rel, archive_rel).returncode == 0
+    archived = initial.replace(b"reviewed", b"archive edit", 1)
+    (root / archive_rel).write_bytes(archived)
+    assert git(root, "add", "-f", archive_rel).returncode == 0
+    assert git(root, "commit", "-m", "archive with edit", "-q").returncode == 0
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-form-quantifier-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(archived).hexdigest(),
+        identity=source_rel,
+    )
+    assert hashlib.sha256(reviewed).hexdigest() != hashlib.sha256(archived).hexdigest()
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+def test_untracked_addition_former_plans_identity_refuses(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] An addition has no recovered old-path identity."""
+    root = make_repo(tmp_path, "ceremony-addition-former-identity", gitignore_docs=False)
+    write_facts(root)
+    plan_name = "2026-10-18-former-plans-identity.md"
+    archive_rel = f"docs/history/plans/completed/{plan_name}"
+    source_rel = f"docs/history/plans/{plan_name}"
+    body = b"# Addition\n\n- [x] no old path\n"
+    archive = root / archive_rel
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_bytes(body)
+    _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-former-identity-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=source_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+def test_committed_rename_archive_identity_refuses_even_matching_digest(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A rename requires its recovered source identity."""
+    root = make_repo(tmp_path, "ceremony-rename-archive-identity", gitignore_docs=False)
+    plan_name = "2026-10-18-rename-archive-identity.md"
+    body = b"# Rename identity\n\n- [x] checked\n"
+    source_rel, archive_rel, _, _ = _committed_rename_binding_fixture(
+        root, plan_name, body, "ceremony-rename-archive-identity"
+    )
+    assert git(root, "mv", source_rel, archive_rel).returncode == 0
+    assert git(root, "commit", "-m", "archive plan", "-q").returncode == 0
+    _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-rename-archive-identity-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=archive_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+def test_untracked_addition_archive_identity_accepts(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Untracked additions bind the archive-state identity."""
+    root = make_repo(tmp_path, "ceremony-untracked-addition-binding", gitignore_docs=False)
+    write_facts(root)
+    plan_name = "2026-10-18-untracked-addition.md"
+    archive_rel = f"docs/history/plans/completed/{plan_name}"
+    body = b"# Untracked addition\n\n- [x] checked\n"
+    archive = root / archive_rel
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_bytes(body)
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-untracked-addition-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=archive_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_bound_receipt_acceptance(
+        result, archive_rel, record, hashlib.sha256(body).hexdigest(),
+        "archived-bytes",
+    )
+
+
+def test_archive_ceremony_refuses_bound_sidecar_without_markdown_record(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A sidecar alone is not a live review record."""
+    root, source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-bound-sidecar-only", "2026-10-18-sidecar-only.md"
+    )
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-sidecar-only-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=source_rel,
+    )
+    record.unlink()
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+@pytest.mark.parametrize("retired_infix", [".backup-20261018T120000", ".orphan-20261018T120000"])
+def test_archive_ceremony_refuses_retired_review_pair(
+    tmp_path, sweep_env, retired_infix
+):
+    """[class: REPOSITORY_TEST] Backup and orphan pairs are retired evidence."""
+    root, source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, f"ceremony-retired-{retired_infix.split('-')[0]}",
+        "2026-10-18-retired-pair.md",
+    )
+    _write_bound_plan_review_candidate(
+        root,
+        name=f"2026-10-18-plan-review-retired-pair-exec-r1{retired_infix}.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=source_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+def test_archive_ceremony_refuses_bound_record_with_wrong_digest(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Matching identity cannot rescue a bad digest."""
+    root, source_rel, archive_rel, _body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-bound-wrong-digest", "2026-10-18-wrong-digest.md"
+    )
+    _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-wrong-digest-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest="0" * 64,
+        identity=source_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+    assert "bound-receipt acceptance" in result.message
+
+
+def test_archive_ceremony_refuses_matching_digest_with_foreign_identity(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A reviewed digest cannot bind another plan."""
+    root, _source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-bound-foreign-identity", "2026-10-18-foreign-id.md"
+    )
+    _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-foreign-id-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity="docs/history/plans/2026-10-18-some-other-plan.md",
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+def test_archive_ceremony_refuses_missing_sidecar_identity(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Markdown artifact text cannot supply identity."""
+    root, _source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-bound-no-identity", "2026-10-18-no-identity.md"
+    )
+    _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-no-identity-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=None,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+def test_archive_ceremony_refuses_basename_only_sidecar_identity(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A basename does not bind the archived plan."""
+    plan_name = "2026-10-18-basename-only.md"
+    root, source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-bound-basename", plan_name
+    )
+    _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-basename-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=Path(source_rel).name,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+def test_archive_ceremony_refuses_live_review_without_stats_sidecar(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A markdown candidate without its sidecar declines."""
+    root, _source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-bound-no-sidecar", "2026-10-18-no-sidecar.md"
+    )
+    _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-no-sidecar-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=None,
+        include_sidecar=False,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+def test_archive_ceremony_refuses_rejected_twin_sidecar_identity(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Same basename in rejected is a foreign plan."""
+    plan_name = "2026-10-18-rejected-twin.md"
+    root, _source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-bound-rejected-twin", plan_name
+    )
+    _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-rejected-twin-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=f"docs/history/plans/rejected/{plan_name}",
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+@pytest.mark.parametrize("verdict", ["no", None])
+def test_archive_ceremony_refuses_nonpassing_sidecar_verdict(
+    tmp_path, sweep_env, verdict
+):
+    """[class: REPOSITORY_TEST] Only an explicit yes verdict can bind."""
+    root, source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, f"ceremony-bound-verdict-{verdict or 'absent'}",
+        "2026-10-18-nonpassing-verdict.md",
+    )
+    _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-nonpassing-verdict-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=source_rel,
+        verdict=verdict,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+def test_archive_ceremony_declines_unreadable_candidate_sidecar(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] An unreadable sidecar declines, then refuses."""
+    root, _source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-bound-unreadable-sidecar", "2026-10-18-unreadable.md"
+    )
+    _record, sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-unreadable-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity="docs/history/plans/2026-10-18-unreadable.md",
+    )
+    sidecar.write_text("{ malformed json", encoding="utf-8")
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+def test_archive_ceremony_filename_receipt_tolerates_malformed_neighbor(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] A malformed candidate cannot block a valid receipt."""
+    root2, _source2, archive2, _body2 = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-filename-review-bad-neighbor",
+        "2026-10-18-filename-review.md",
+    )
+    _write_exec_review_record(root2, "2026-10-18-filename-review.md")
+    _record2, malformed_sidecar = _write_bound_plan_review_candidate(
+        root2,
+        name="2026-10-18-plan-review-filename-review-r2.md",
+        markdown_artifact=archive2,
+        source_digest="invalid",
+        identity=None,
+    )
+    malformed_sidecar.write_text("{ malformed json", encoding="utf-8")
+
+    result2 = run_gate("archive-ceremony", ctx_for(root2))
+
+    assert result2.rc == 0, result2.message
+    assert archive2 in result2.message
+
+
+def test_archive_ceremony_keeps_filename_receipt_unchanged(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Existing filename receipt acceptance is unchanged."""
+    root, _source_rel, archive_rel, _body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-filename-receipt-unchanged",
+        "2026-10-18-filename-receipt.md",
+    )
+    _write_exec_review_record(root, "2026-10-18-filename-receipt.md")
+    result = run_gate("archive-ceremony", ctx_for(root))
+    assert result.rc == 0, result.message
+    assert archive_rel in result.message
+
+
+def test_archive_ceremony_keeps_rejected_state_exemption_unchanged(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Rejected-state archives remain exempt."""
+    rejected_root = make_repo(tmp_path, "ceremony-rejected-exemption-unchanged", gitignore_docs=True)
+    write_facts(rejected_root)
+    plan_name = "2026-10-18-rejected-exempt.md"
+    plan_rel = f"docs/history/plans/{plan_name}"
+    rejected_rel = f"docs/history/plans/rejected/{plan_name}"
+    (rejected_root / plan_rel).parent.mkdir(parents=True, exist_ok=True)
+    (rejected_root / plan_rel).write_text(
+        "# Plan: rejected\n\n- [ ] intentionally declined\n", encoding="utf-8"
+    )
+    git(rejected_root, "add", "-f", plan_rel)
+    git(rejected_root, "commit", "-m", "add rejected plan", "-q")
+    (rejected_root / rejected_rel).parent.mkdir(parents=True, exist_ok=True)
+    assert git(rejected_root, "mv", plan_rel, rejected_rel).returncode == 0
+    result2 = run_gate("archive-ceremony", ctx_for(rejected_root))
+    assert result2.rc == 0, result2.message
+    assert rejected_rel in result2.message
+    assert any("rejected-state archive exempt" in row for row in result2.warnings)
+
+
+def test_task4_committed_rename_drift_accepts_parent_blob_with_divergence(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Parent-blob evidence names exact archive drift."""
+    root = make_repo(tmp_path, "ceremony-task4-committed-drift", gitignore_docs=False)
+    plan_name = "2026-10-18-committed-drift.md"
+    original = b"# Committed drift\n\n- [x] reviewed bytes\n" + b"stable\n" * 60
+    source_rel, archive_rel, _base, _ = _committed_rename_binding_fixture(
+        root, plan_name, original, "ceremony-task4-committed-drift"
+    )
+    archived = original.replace(b"reviewed bytes", b"amended bytes", 1)
+    assert git(root, "mv", source_rel, archive_rel).returncode == 0
+    (root / archive_rel).write_bytes(archived)
+    assert git(root, "add", "-f", archive_rel).returncode == 0
+    assert git(root, "commit", "-m", "archive with amendment", "-q").returncode == 0
+    parent_digest = hashlib.sha256(original).hexdigest()
+    archived_digest = hashlib.sha256(archived).hexdigest()
+    assert parent_digest != archived_digest
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-committed-drift-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=parent_digest,
+        identity=source_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_bound_receipt_acceptance(
+        result, archive_rel, record, parent_digest, "reviewed-revision"
+    )
+    assert any(
+        parent_digest in warning
+        and archived_digest in warning
+        and "unreviewed" in warning.lower()
+        for warning in result.warnings
+    )
+
+
+def _task4_degenerate_rename_fixture(root: Path, suffix: str):
+    write_facts(root)
+    old_rel = f"docs/history/plans/2026-10-18-degenerate-{suffix}.md"
+    archive_rel = f"docs/history/plans/completed/2026-10-18-degenerate-{suffix}.md"
+    base = b"# Degenerate\n\n" + b"stable line\n" * 80 + b"- [x] done\n"
+    (root / old_rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / old_rel).write_bytes(base)
+    assert git(root, "add", "-f", old_rel).returncode == 0
+    assert git(root, "commit", "-m", "reviewed plan", "-q").returncode == 0
+    _seed_archive_boundary(root, f"ceremony-task4-degenerate-{suffix}")
+    intermediate = base.replace(b"stable line\n", b"amended line\n", 1)
+    (root / old_rel).write_bytes(intermediate)
+    assert git(root, "add", "-f", old_rel).returncode == 0
+    assert git(root, "commit", "-m", "intermediate edit", "-q").returncode == 0
+    assert git(root, "rm", old_rel, "-q").returncode == 0
+    assert git(root, "commit", "-m", "delete before archive", "-q").returncode == 0
+    archived = intermediate.replace(b"done", b"finished", 1)
+    (root / archive_rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / archive_rel).write_bytes(archived)
+    assert git(root, "add", "-f", archive_rel).returncode == 0
+    assert git(root, "commit", "-m", "add archived plan", "-q").returncode == 0
+    return old_rel, archive_rel, base, archived
+
+
+def test_task4_degenerate_rename_accepts_archived_bytes_digest(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A degenerate rename binds its archived bytes."""
+    root = make_repo(tmp_path, "ceremony-task4-degenerate-archive-bytes", gitignore_docs=False)
+    old_rel, archive_rel, _base, archived = _task4_degenerate_rename_fixture(
+        root, "accepted"
+    )
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+    assert not blockers, blockers
+    row = next(row for row in rows if row[0] == archive_rel)
+    assert row[3] == old_rel and row[4] is None
+    digest = hashlib.sha256(archived).hexdigest()
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-degenerate-archive-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=digest,
+        identity=old_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_bound_receipt_acceptance(result, archive_rel, record, digest, "archived-bytes")
+
+
+def test_task4_degenerate_rename_refuses_base_blob_digest(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A degenerate rename cannot approximate a base blob."""
+    root = make_repo(tmp_path, "ceremony-task4-degenerate-base-bytes", gitignore_docs=False)
+    old_rel, archive_rel, base, _archived = _task4_degenerate_rename_fixture(root, "base")
+    _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-degenerate-base-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(base).hexdigest(),
+        identity=old_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, archive_rel)
+
+
+def test_task4_bound_receipt_does_not_preempt_unchecked_box_refusal(
+    tmp_path, sweep_env, monkeypatch
+):
+    """[class: REPOSITORY_TEST] Checkbox refusal precedes receipt evaluation."""
+    root = make_repo(tmp_path, "ceremony-task4-precedence", gitignore_docs=True)
+    plan_name = "2026-10-18-precedence.md"
+    body = b"# Plan\n\n- [ ] unchecked\n"
+    archive_rel = _staged_plan_archive(root, plan_name, body.decode())
+    source_rel = f"docs/history/plans/{plan_name}"
+    _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-precedence-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=source_rel,
+    )
+    calls = []
+    helper = lib._find_bound_review_receipt
+
+    def recording_helper(*args, **kwargs):
+        calls.append((args, kwargs))
+        return helper(*args, **kwargs)
+
+    monkeypatch.setattr(lib, "_find_bound_review_receipt", recording_helper)
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    assert result.rc == 1, result.message
+    assert "1 unchecked task box(es)" in result.message
+    assert archive_rel in result.message
+    assert "no exec-review record" not in result.message
+    assert calls == []
+
+
+def test_task4_staged_rename_drift_names_both_raw_digests(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Staged drift reports both exact raw digests."""
+    root = make_repo(tmp_path, "ceremony-task4-staged-drift", gitignore_docs=True)
+    plan_name = "2026-10-18-staged-drift.md"
+    original = b"# Staged drift\n\n- [x] reviewed\n" + b"stable\n" * 20
+    archive_rel = _staged_plan_archive(root, plan_name, original.decode())
+    source_rel = f"docs/history/plans/{plan_name}"
+    archived = original.replace(b"reviewed", b"amended", 1)
+    (root / archive_rel).write_bytes(archived)
+    assert git(root, "add", "-f", archive_rel).returncode == 0
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-staged-drift-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(original).hexdigest(),
+        identity=source_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    original_digest = hashlib.sha256(original).hexdigest()
+    archived_digest = hashlib.sha256(archived).hexdigest()
+    _assert_bound_receipt_acceptance(
+        result, archive_rel, record, original_digest, "reviewed-revision"
+    )
+    assert any(
+        original_digest in warning
+        and archived_digest in warning
+        and "unreviewed" in warning.lower()
+        for warning in result.warnings
+    )
+
+
+def test_task4_staged_rename_without_drift_has_no_divergence_clause(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Equal staged and reviewed bytes need no divergence."""
+    original = b"# Staged drift\n\n- [x] reviewed\n" + b"stable\n" * 20
+    original_digest = hashlib.sha256(original).hexdigest()
+    clean_root = make_repo(tmp_path, "ceremony-task4-staged-no-drift", gitignore_docs=True)
+    clean_archive_rel = _staged_plan_archive(
+        clean_root, "2026-10-18-staged-no-drift.md", original.decode()
+    )
+    clean_source_rel = "docs/history/plans/2026-10-18-staged-no-drift.md"
+    clean_record, _ = _write_bound_plan_review_candidate(
+        clean_root,
+        name="2026-10-18-plan-review-staged-no-drift-binding-r1.md",
+        markdown_artifact=clean_archive_rel,
+        source_digest=original_digest,
+        identity=clean_source_rel,
+    )
+    clean = run_gate("archive-ceremony", ctx_for(clean_root))
+    _assert_bound_receipt_acceptance(
+        clean, clean_archive_rel, clean_record, original_digest, "reviewed-revision"
+    )
+    assert "divergence" not in "\n".join(clean.warnings).lower()
+    assert "unreviewed" not in "\n".join(clean.warnings).lower()
+
+
+def test_task4_screens_full_long_control_character_basename(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Receipt warnings screen without truncating names."""
+    root, source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-task4-screening", "2026-10-18-screening.md"
+    )
+    basename = "2026-10-18-plan-review-" + ("long-name-" * 9) + "\x01-r1.md"
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name=basename,
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=source_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    screened = record.name.replace("\x01", "")
+    assert len(screened) > 64
+    assert result.rc == 0, result.message
+    assert archive_rel in result.message
+    warnings = "\n".join(result.warnings)
+    acceptance = "\n".join(
+        row for row in warnings.splitlines()
+        if "bound" in row.lower() and "receipt" in row.lower()
+    )
+    assert acceptance
+    counted_clause = r"bound-receipt acceptance\s*[:=]\s*1\b"
+    assert re.search(counted_clause, result.message, re.IGNORECASE), result.message
+    assert re.search(counted_clause, acceptance, re.IGNORECASE), acceptance
+    assert screened in acceptance
+    assert "\x01" not in acceptance
+    digest = hashlib.sha256(body).hexdigest()
+    assert digest in acceptance
+    assert "reviewed-revision" in acceptance.lower()
+
+
+def test_task4_nested_reviews_home_record_is_accepted(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Candidate search recurses through reviews home."""
+    nested_root, source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-task4-nested-reviews", "2026-10-18-nested-reviews.md"
+    )
+    nested_record, nested_sidecar = _write_bound_plan_review_candidate(
+        nested_root,
+        name="2026-10-18-plan-review-nested-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=source_rel,
+    )
+    nested_dir = nested_record.parent / "archive" / "nested"
+    nested_dir.mkdir(parents=True)
+    nested_record.rename(nested_dir / nested_record.name)
+    nested_sidecar.rename(nested_dir / nested_sidecar.name)
+    nested_record = nested_dir / nested_record.name
+    nested = run_gate("archive-ceremony", ctx_for(nested_root))
+    _assert_bound_receipt_acceptance(
+        nested, archive_rel, nested_record, hashlib.sha256(body).hexdigest(),
+        "reviewed-revision",
+    )
+
+
+def test_task4_deferred_archive_with_bound_record_is_accepted(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Deferred state accepts its fully bound record."""
+    deferred_root = make_repo(tmp_path, "ceremony-task4-deferred-archive", gitignore_docs=False)
+    write_facts(deferred_root)
+    plan_name = "2026-10-18-deferred-archive.md"
+    deferred_source = f"docs/history/plans/{plan_name}"
+    deferred_rel = f"docs/history/plans/deferred/{plan_name}"
+    deferred_body = b"# Deferred\n\n- [x] complete\n"
+    (deferred_root / deferred_source).parent.mkdir(parents=True, exist_ok=True)
+    (deferred_root / deferred_source).write_bytes(deferred_body)
+    assert git(deferred_root, "add", "-f", deferred_source).returncode == 0
+    assert git(deferred_root, "commit", "-m", "add deferred plan", "-q").returncode == 0
+    _seed_archive_boundary(deferred_root, "ceremony-task4-deferred")
+    (deferred_root / deferred_rel).parent.mkdir(parents=True, exist_ok=True)
+    assert git(deferred_root, "mv", deferred_source, deferred_rel).returncode == 0
+    assert git(deferred_root, "commit", "-m", "defer plan", "-q").returncode == 0
+    deferred_record, _ = _write_bound_plan_review_candidate(
+        deferred_root,
+        name="2026-10-18-plan-review-deferred-binding-r1.md",
+        markdown_artifact=deferred_rel,
+        source_digest=hashlib.sha256(deferred_body).hexdigest(),
+        identity=deferred_source,
+    )
+    deferred = run_gate("archive-ceremony", ctx_for(deferred_root))
+    _assert_bound_receipt_acceptance(
+        deferred, deferred_rel, deferred_record,
+        hashlib.sha256(deferred_body).hexdigest(), "reviewed-revision",
+    )
+
+
+def test_task4_normalizes_posix_equivalent_prearchive_identity(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Posix-equivalent identity paths bind equally."""
+    root, source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-task4-normalized-identity", "2026-10-18-normalized-identity.md"
+    )
+    identity = source_rel.replace("docs/history/plans/", "docs/history/plans/./", 1)
+    assert identity != source_rel
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-normalized-identity-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=identity,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_bound_receipt_acceptance(
+        result, archive_rel, record, hashlib.sha256(body).hexdigest(),
+        "reviewed-revision",
+    )
+
+
+def test_task5_bound_receipt_ignores_unconsumed_sidecar_fields(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] The arm reads only its three binding fields."""
+    root, source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-task5-minimal-sidecar", "2026-10-18-minimal-sidecar.md"
+    )
+    digest = hashlib.sha256(body).hexdigest()
+    record, sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-minimal-sidecar-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=digest,
+        identity=source_rel,
+    )
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    payload["schema_version"] = "not revalidated by the archive arm"
+    payload["record_kind"] = None
+    payload["source_kind"] = {"unexpected": "shape"}
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_bound_receipt_acceptance(
+        result, archive_rel, record, digest, "reviewed-revision"
+    )
+
+
+def test_task5_single_file_named_plan_md_accepts_bound_receipt(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A bare PLAN.md archive remains a single file."""
+    root, source_rel, archive_rel, body = _checked_staged_archive_fixture(
+        tmp_path, "ceremony-task5-bare-plan-md", "PLAN.md"
+    )
+    digest = hashlib.sha256(body).hexdigest()
+    record, _sidecar = _write_bound_plan_review_candidate(
+        root,
+        name="2026-10-18-plan-review-bare-charter-name-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=digest,
+        identity=source_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_bound_receipt_acceptance(
+        result, archive_rel, record, digest, "reviewed-revision"
+    )
+
+
+def test_archive_ceremony_refuses_bound_directory_charter_candidate(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Directory archives stay outside bound receipts."""
+    root = make_repo(tmp_path, "ceremony-bound-directory-charter", gitignore_docs=True)
+    write_facts(root)
+    slug = "2026-10-18-bound-directory"
+    source_dir = root / "docs/history/plans" / slug
+    (source_dir / "tasks").mkdir(parents=True)
+    source_rel = f"docs/history/plans/{slug}/PLAN.md"
+    archive_rel = f"docs/history/plans/completed/{slug}/PLAN.md"
+    body = b"# Plan: directory\n\n- [x] charter done\n"
+    (source_dir / "PLAN.md").write_bytes(body)
+    (source_dir / "tasks/01-task.md").write_text(
+        "### Task 1\n\n- [x] task done\n", encoding="utf-8"
+    )
+    git(root, "add", "-f", f"docs/history/plans/{slug}/PLAN.md",
+        f"docs/history/plans/{slug}/tasks/01-task.md")
+    git(root, "commit", "-m", "add directory plan", "-q")
+    archive_dir = root / "docs/history/plans/completed" / slug
+    archive_dir.parent.mkdir(parents=True, exist_ok=True)
+    git(root, "mv", f"docs/history/plans/{slug}",
+        f"docs/history/plans/completed/{slug}")
+    _write_bound_plan_review_candidate(
+        root,
+        name=f"2026-10-18-plan-review-{slug}-binding-r1.md",
+        markdown_artifact=archive_rel,
+        source_digest=hashlib.sha256(body).hexdigest(),
+        identity=source_rel,
+    )
+
+    result = run_gate("archive-ceremony", ctx_for(root))
+
+    _assert_missing_exec_review_refusal(result, f"docs/history/plans/completed/{slug}")
+
+
+def test_archive_derivation_carries_staged_source_and_archive_bytes(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Staged rename and untracked addition rows
+    retain exact byte evidence and identify whether a source revision exists."""
+    root = make_repo(tmp_path, "archive-byte-derivation-staged", gitignore_docs=False)
+    git(root, "config", "core.autocrlf", "false")
+    write_facts(root)
+    plan_name = "2026-10-03-staged-evidence.md"
+    body = b"# Plan\r\n\r\n- [x] staged\r\n"
+    archive_rel = _staged_plan_archive(root, plan_name, body.decode())
+    source_rel = f"docs/history/plans/{plan_name}"
+
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+
+    assert not blockers, blockers
+    row = next(row for row in rows if row[0] == archive_rel)
+    assert row[1] == body.decode()
+    assert row[2] == body
+    assert row[3] == source_rel
+    assert row[4] == body
+
+    addition_rel = "docs/history/plans/completed/2026-10-04-untracked.md"
+    addition = b"# Addition\r\n\r\n- [x] untracked\r\n"
+    (root / addition_rel).write_bytes(addition)
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+    assert not blockers, blockers
+    addition_row = next(row for row in rows if row[0] == addition_rel)
+    assert addition_row[2] == addition
+    assert addition_row[3] is None
+    assert addition_row[4] == addition
+
+    git(root, "add", "-f", addition_rel)
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+    assert not blockers, blockers
+    staged_row = next(row for row in rows if row[0] == addition_rel)
+    assert staged_row[2] == addition
+    assert staged_row[3] is None
+    assert staged_row[4] == addition
+    drifted = addition + b"worktree-only"
+    (root / addition_rel).write_bytes(drifted)
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+    assert any("staged archive differs from worktree bytes" in blocker
+               for blocker in blockers)
+    staged_drift_row = next(row for row in rows if row[0] == addition_rel)
+    assert staged_drift_row[2] == drifted
+    assert staged_drift_row[4] == drifted
+    (root / addition_rel).write_bytes(addition)
+
+    boundary = git(root, "rev-parse", "HEAD").stdout.strip()
+    now = time.time()
+    marker = make_marker(root, now, os.getpid())
+    _seed_run_manifest(root, "archive-addition", marker.name, str(root), now,
+                       start_commit=boundary)
+    committed_rel = "docs/history/plans/completed/2026-10-08-committed-add.md"
+    committed_bytes = b"# Committed addition\r\n\r\n- [x] exact\r\n"
+    (root / committed_rel).write_bytes(committed_bytes)
+    git(root, "add", "-f", committed_rel)
+    git(root, "commit", "-m", "add archived plan", "-q")
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+    assert not blockers, blockers
+    committed_row = next(row for row in rows if row[0] == committed_rel)
+    assert committed_row[2] == committed_bytes
+    assert committed_row[3] is None
+    assert committed_row[4] == committed_bytes
+
+
+def test_archive_derivation_uses_committed_rename_parent_blob(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] A committed rename recovers its immediate
+    parent blob even when a post-boundary commit changed the plan first."""
+    root = make_repo(tmp_path, "archive-byte-derivation-committed", gitignore_docs=False)
+    git(root, "config", "core.autocrlf", "false")
+    write_facts(root)
+    plan_name = "2026-10-05-committed-evidence.md"
+    source_rel = f"docs/history/plans/{plan_name}"
+    initial = b"# Plan\r\n\r\n- [x] reviewed\r\n" + b"stable content\r\n" * 30
+    (root / source_rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / source_rel).write_bytes(initial)
+    git(root, "add", "-f", source_rel)
+    git(root, "commit", "-m", "add reviewed plan", "-q")
+    boundary = git(root, "rev-parse", "HEAD").stdout.strip()
+    now = time.time()
+    marker = make_marker(root, now, os.getpid())
+    _seed_run_manifest(root, "archive-parent", marker.name, str(root), now,
+                       start_commit=boundary)
+    parent_bytes = initial.replace(b"reviewed", b"parented")
+    (root / source_rel).write_bytes(parent_bytes)
+    git(root, "add", "-f", source_rel)
+    git(root, "commit", "-m", "post-review amendment", "-q")
+    archive_rel = f"docs/history/plans/completed/{plan_name}"
+    (root / archive_rel).parent.mkdir(parents=True, exist_ok=True)
+    git(root, "mv", source_rel, archive_rel)
+    git(root, "commit", "-m", "archive plan", "-q")
+
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+
+    assert not blockers, blockers
+    row = next(row for row in rows if row[0] == archive_rel)
+    assert row[2] == parent_bytes
+    assert row[3] == source_rel
+    assert row[4] == parent_bytes
+    assert row[4] != initial
+
+    ctx = ctx_for(root)
+    real_git_bytes = ctx.git_bytes
+    rename_parent = git(root, "rev-parse", "HEAD^").stdout.strip()
+
+    def fail_reviewed_blob(*args):
+        if args == ("show", f"{rename_parent}:{source_rel}"):
+            return subprocess.CompletedProcess(
+                list(args), 1, stdout=b"", stderr=b"simulated reviewed blob failure"
+            )
+        return real_git_bytes(*args)
+
+    ctx.git_bytes = fail_reviewed_blob
+    _rows, _, failed_blockers = lib._derive_archived_plans(ctx)
+    assert any("simulated reviewed blob failure" in item for item in failed_blockers)
+
+    real_git = ctx.git
+
+    def fail_parent_lookup(*args, **kwargs):
+        if (args and args[0] == "rev-parse" and args[-1].endswith("^{commit}^")):
+            return subprocess.CompletedProcess(
+                list(args), 1, stdout="", stderr="simulated parent lookup failure"
+            )
+        return real_git(*args, **kwargs)
+
+    ctx.git = fail_parent_lookup
+    _rows, _, failed_blockers = lib._derive_archived_plans(ctx)
+    assert any("simulated parent lookup failure" in item for item in failed_blockers)
+
+
+def test_archive_derivation_uses_latest_matching_rename_parent(tmp_path, sweep_env):
+    """[class: REPOSITORY_TEST] Repeated archive cycles recover the parent
+    of the final matching rename, not an earlier archive cycle."""
+    root = make_repo(tmp_path, "archive-byte-derivation-repeated", gitignore_docs=False)
+    write_facts(root)
+    plan_name = "2026-10-09-repeated-evidence.md"
+    source_rel = f"docs/history/plans/{plan_name}"
+    archive_rel = f"docs/history/plans/completed/{plan_name}"
+    initial = ("# Repeated\n\n" + "stable\n" * 30 + "- [x] done\n").encode()
+    (root / source_rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / source_rel).write_bytes(initial)
+    git(root, "add", "-f", source_rel)
+    git(root, "commit", "-m", "reviewed plan", "-q")
+    boundary = git(root, "rev-parse", "HEAD").stdout.strip()
+    now = time.time()
+    marker = make_marker(root, now, os.getpid())
+    _seed_run_manifest(root, "archive-repeated", marker.name, str(root), now,
+                       start_commit=boundary)
+
+    (root / archive_rel).parent.mkdir(parents=True, exist_ok=True)
+    git(root, "mv", source_rel, archive_rel)
+    git(root, "commit", "-m", "first archive", "-q")
+    (root / source_rel).parent.mkdir(parents=True, exist_ok=True)
+    git(root, "mv", archive_rel, source_rel)
+    git(root, "commit", "-m", "restore source", "-q")
+    latest_parent = initial.replace(b"stable\n", b"stable!\n", 1)
+    (root / source_rel).write_bytes(latest_parent)
+    git(root, "add", "-f", source_rel)
+    git(root, "commit", "-m", "amend before final archive", "-q")
+    (root / archive_rel).parent.mkdir(parents=True, exist_ok=True)
+    git(root, "mv", source_rel, archive_rel)
+    git(root, "commit", "-m", "final archive", "-q")
+
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+
+    assert not blockers, blockers
+    row = next(row for row in rows if row[0] == archive_rel)
+    assert row[3] == source_rel
+    assert row[4] == latest_parent
+    assert row[4] != initial
+
+
+def test_archive_derivation_marks_stale_and_degenerate_rename_evidence(
+    tmp_path, sweep_env
+):
+    """[class: REPOSITORY_TEST] Stale twins use their deliverables path
+    without a reviewed blob; delete/add histories never guess a base blob."""
+    root = make_repo(tmp_path, "archive-byte-derivation-stale", gitignore_docs=False)
+    write_facts(root)
+    plan_name = "2026-10-06-stale-evidence.md"
+    source_rel = f"docs/history/plans/{plan_name}"
+    body = "# Stale\n\n- [x] archived\n"
+    archive_rel = _committed_plan_archive(root, plan_name, body)
+    now = time.time()
+    marker = make_marker(root, now, os.getpid())
+    _seed_run_manifest(root, "archive-stale", marker.name, str(root), now)
+    write_deliverables(root, [source_rel])
+
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(root))
+    assert not blockers, blockers
+    row = next(row for row in rows if row[0] == archive_rel)
+    assert row[2] == body.encode()
+    assert row[3] == source_rel
+    assert row[4] is None
+
+    # A delete and a later add can appear as a rename in the aggregate
+    # boundary diff. There is no rename commit from which to recover a parent
+    # blob, so the base revision must not be substituted.
+    degenerate = make_repo(tmp_path, "archive-byte-derivation-degenerate", gitignore_docs=False)
+    write_facts(degenerate)
+    old_rel = "docs/history/plans/2026-10-07-degenerate-evidence.md"
+    archive_rel = f"docs/history/plans/completed/2026-10-07-degenerate-evidence.md"
+    old = ("# Degenerate\n\n" + "line\n" * 80 + "- [x] done\n").encode()
+    (degenerate / old_rel).parent.mkdir(parents=True, exist_ok=True)
+    (degenerate / old_rel).write_bytes(old)
+    git(degenerate, "add", "-f", old_rel)
+    git(degenerate, "commit", "-m", "reviewed plan", "-q")
+    boundary = git(degenerate, "rev-parse", "HEAD").stdout.strip()
+    now = time.time()
+    marker = make_marker(degenerate, now, os.getpid())
+    _seed_run_manifest(degenerate, "archive-degenerate", marker.name,
+                       str(degenerate), now, start_commit=boundary)
+    intermediate = old.replace(b"line\n", b"line!\n", 1)
+    (degenerate / old_rel).write_bytes(intermediate)
+    git(degenerate, "add", "-f", old_rel)
+    git(degenerate, "commit", "-m", "intermediate edit", "-q")
+    git(degenerate, "rm", old_rel, "-q")
+    git(degenerate, "commit", "-m", "delete before archive", "-q")
+    archived = intermediate.replace(b"done", b"finished")
+    (degenerate / archive_rel).parent.mkdir(parents=True, exist_ok=True)
+    (degenerate / archive_rel).write_bytes(archived)
+    git(degenerate, "add", "-f", archive_rel)
+    git(degenerate, "commit", "-m", "add archived plan", "-q")
+
+    rows, _, blockers = lib._derive_archived_plans(ctx_for(degenerate))
+    assert not blockers, blockers
+    row = next(row for row in rows if row[0] == archive_rel)
+    assert row[2] == archived
+    assert row[3] == old_rel
+    assert row[4] is None
 
 
 def test_archive_checkbox_gate_refuses_unchecked_archive(tmp_path, sweep_env):
@@ -9845,6 +11245,7 @@ def test_archive_ceremony_fails_closed_on_staged_directory_read_error(
 
     ctx = ctx_for(root)
     real_git = ctx.git
+    real_git_bytes = ctx.git_bytes
 
     def fail_index_blob(*args, **kwargs):
         if args and args[0] == "show" and len(args) > 1 and str(args[1]).startswith(":"):
@@ -9854,6 +11255,14 @@ def test_archive_ceremony_fails_closed_on_staged_directory_read_error(
         return real_git(*args, **kwargs)
 
     monkeypatch.setattr(ctx, "git", fail_index_blob)
+    def fail_index_blob_bytes(*args):
+        if args and args[0] == "show" and len(args) > 1 and str(args[1]).startswith(":"):
+            return subprocess.CompletedProcess(
+                list(args), 1, stdout=b"", stderr=b"simulated staged blob read failure"
+            )
+        return real_git_bytes(*args)
+
+    monkeypatch.setattr(ctx, "git_bytes", fail_index_blob_bytes)
     result = run_gate("archive-ceremony", ctx)
 
     assert result.rc == 1, result.message
@@ -9897,6 +11306,7 @@ def test_archive_ceremony_fails_closed_on_committed_evidence_read_error(
     else:
         ctx = ctx_for(root)
         real_git = ctx.git
+        real_git_bytes = ctx.git_bytes
 
         def fail_archive_show(*args, input_text=None):
             if failure == "archive-twin" and args[0] == "ls-tree":
@@ -9910,6 +11320,17 @@ def test_archive_ceremony_fails_closed_on_committed_evidence_read_error(
             return real_git(*args, input_text=input_text)
 
         ctx.git = fail_archive_show
+        def fail_archive_show_bytes(*args):
+            if failure == "committed-archive" and (
+                args[0] == "show" and len(args) > 1
+                and args[1] == f"HEAD:{archive_rel}"
+            ):
+                return subprocess.CompletedProcess(
+                    list(args), 1, stdout=b"", stderr=b"simulated blob read failure"
+                )
+            return real_git_bytes(*args)
+
+        ctx.git_bytes = fail_archive_show_bytes
 
     result = run_gate("archive-ceremony", ctx)
 

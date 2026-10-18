@@ -24,7 +24,7 @@ Operator direction recorded 2026-10-16: a done run executing locally in an ad-ho
 
 Split the landing-sweep gate roster by boundary class. Per-task boundaries in a run worktree run the run-checkout-scoped gates (staged-scope guard, dirt regression, em-dash, hygiene, lesson-scope) plus learn, and defer repo-keyed gates to the final closeout. Any change to a refusal class goes through its own plan per the machinery admission protocol (the gate's liveness ledger, catch frequency, and false-positive cost re-recorded for the narrowed scope), and narrows rather than removes the invariant: the primary-checkout inspection still fires at the boundary that can actually contaminate a landing.
 
-Cluster: docs/history/backlog/2026-10-16-done-setup-after-task-edits-foreign-staging-trap.md, docs/history/backlog/2026-10-10-done-lock-live-owner-blocks-plan-closeout.md, docs/history/backlog/2026-10-13-done-landing-commit-lock-span.md, docs/history/backlog/2026-10-06-done-boundary-review-candidates.md, docs/history/backlog/2026-10-12-done-interrupted-manifest-state-classification-certification-residuals.md, docs/history/backlog/2026-10-14-done-dirt-gate-valid-doc-removal.md
+Cluster: docs/history/backlog/2026-10-16-done-setup-after-task-edits-foreign-staging-trap.md, docs/history/backlog/2026-10-10-done-lock-live-owner-blocks-plan-closeout.md, docs/history/backlog/2026-10-13-done-landing-commit-lock-span.md, docs/history/backlog/2026-10-06-done-boundary-review-candidates.md, docs/history/backlog/2026-10-12-done-interrupted-manifest-state-classification-certification-residuals.md
 
 ## Dedup probe
 

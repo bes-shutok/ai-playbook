@@ -1,7 +1,7 @@
 # Backlog: anonymize private details in release archives
 
 - **Filed:** 2026-10-18
-- **Status:** open
+- **Status:** covered — the witnessed affected records were redacted and published by cb6adcb6f (docs: update workflow records and release notes, 2026-10-18, ancestor of main and origin/main) before authoring intake; the exact explicit-files release scan over current main exits 0, re-derived independently by the r1 adjudication panel (.ai-playbook/reviews/2026-10-18-plan-review-release-archive-privacy-cleanup-p244ff8c9-r1.md, 5 workers, verdict ready=no on the stale premise, plan discarded without landing). Residual of record: redaction bounds the tip surface; pre-redaction bytes remain retrievable from published history and local release-backup refs, and remote-history rewrite stays out of scope by design.
 - **Workflow:** backlog
 - **Priority:** high
 - **Origin class:** witnessed release privacy-gate blocker

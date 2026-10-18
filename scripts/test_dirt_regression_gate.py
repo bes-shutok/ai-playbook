@@ -23,7 +23,20 @@ HEAD_TEXT = "alpha\nbeta-head-v2\ngamma\ndelta-head\nepsilon\nzeta-head\n"
 
 
 class DirtRegressionGateTest(unittest.TestCase):
+    HERMETIC_FIXTURES = {
+        "test_removal_only_cleanup_hunk_passes",
+        "test_removalonly_hunk_without_surviving_baseera_content_still_regression",
+        "test_removalonly_regression_keys_on_worktree_baseera_absence",
+        "test_pure_append_whole_reversion_still_regression",
+        "test_set_equal_list_unequal_worktree_passes",
+        "test_worktree_read_error_is_tool_error",
+        "test_no_candidate_hunk_does_not_read_worktree",
+        "test_worktree_decode_error_is_tool_error",
+    }
+
     def setUp(self) -> None:
+        if self._testMethodName in self.HERMETIC_FIXTURES:
+            self._clear_ambient_git_environment()
         tmp = Path(tempfile.mkdtemp(prefix="dirt-regression-gate-test-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         self.tmp = tmp
@@ -91,6 +104,156 @@ class DirtRegressionGateTest(unittest.TestCase):
             "new.txt", "one\ntwo\nthree\nfour\nfive\n", "head adds new file"
         )
         return base_sha
+
+    def _clear_ambient_git_environment(self) -> None:
+        names = (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_KEY_1",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_EXTERNAL_DIFF",
+        )
+        prior_values = {name: os.environ.get(name) for name in names}
+        self.addCleanup(self._restore_ambient_git_environment, prior_values)
+        for name in names:
+            os.environ.pop(name, None)
+
+    @staticmethod
+    def _restore_ambient_git_environment(
+        prior_values: dict[str, str | None],
+    ) -> None:
+        for name, value in prior_values.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def _run_main_with_worktree_read_error(self, read_error: Exception):
+        import contextlib
+        import io
+        from unittest.mock import patch
+
+        import scripts.dirt_regression_gate as gate
+
+        base_sha = self._seed_head_gained_lines()
+        self._set_dirt(
+            "app.txt",
+            "alpha\nbeta-head-v2\ngamma\ndelta-head\nepsilon\n",
+        )
+        target = self.repo / "app.txt"
+        read_text = Path.read_text
+        original_cwd = Path.cwd()
+        self.addCleanup(os.chdir, original_cwd)
+        os.chdir(self.repo)
+
+        def fail_worktree_read(path, *args, **kwargs):
+            if path.resolve() == target.resolve():
+                raise read_error
+            return read_text(path, *args, **kwargs)
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch.dict(os.environ, self._git_env()),
+            patch.object(Path, "read_text", fail_worktree_read),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            code = gate.main(["--base", base_sha, "app.txt"])
+
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_removal_only_cleanup_hunk_passes(self):
+        base_text = "alpha\nbeta\ngamma\n"
+        head_text = base_text + "gained-one\ngained-two\ngained-three\n"
+        self._commit("app.txt", base_text, "base")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit("app.txt", head_text, "head gains lines")
+
+        # Remove part of the branch-added block while base-era lines survive.
+        self._set_dirt("app.txt", base_text + "gained-one\ngained-three\n")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("PASS", stdout)
+
+    def test_removalonly_hunk_without_surviving_baseera_content_still_regression(self):
+        base_text = "base-one\nbase-two\n"
+        head_text = "gained-one\ngained-two\ngained-three\n"
+        self._commit("app.txt", base_text, "base")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit("app.txt", head_text, "head rewrites file")
+
+        self._set_dirt("app.txt", "gained-one\ngained-three\n")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION", stdout)
+
+    def test_removalonly_regression_keys_on_worktree_baseera_absence(self):
+        base_text = "base-one\nbase-two\n"
+        head_text = base_text + "gained-one\ngained-two\n"
+        self._commit("app.txt", base_text, "base")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit("app.txt", head_text, "head adds lines")
+
+        # The worktree retains one gained line and removes both base-era lines.
+        self._set_dirt("app.txt", "gained-one\n")
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION", stdout)
+
+    def test_pure_append_whole_reversion_still_regression(self):
+        base_text = "base-one\nbase-two\n"
+        head_text = base_text + "gained-one\ngained-two\n"
+        self._commit("app.txt", base_text, "base")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit("app.txt", head_text, "head appends lines")
+
+        # Removing exactly the appended block restores the base file.
+        self._set_dirt("app.txt", base_text)
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 1, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("dirt REGRESSION", stdout)
+
+    def test_set_equal_list_unequal_worktree_passes(self):
+        base_text = "p\nq\nr\ns\n"
+        head_text = base_text + "g\n"
+        self._commit("app.txt", base_text, "base")
+        base_sha = self._git("rev-parse", "HEAD").strip()
+        self._commit("app.txt", head_text, "head appends a line")
+
+        # Reorder base lines while deleting the gained append. The worktree's
+        # set and multiset equal base, but its ordered line list does not.
+        self._set_dirt("app.txt", "q\np\nr\ns\n")
+        diff = self._git("diff", "HEAD", "--unified=0", "--", "app.txt")
+        hunks: list[list[str]] = []
+        for line in diff.splitlines():
+            if line.startswith("@@"):
+                hunks.append([])
+            elif hunks and line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
+                hunks[-1].append(line)
+        # The equality witness must be isolated from a mixed-restoration hunk.
+        self.assertFalse(
+            any(
+                any(line.startswith("+") for line in hunk)
+                and any(line.startswith("-") for line in hunk)
+                for hunk in hunks
+            ),
+            diff,
+        )
+        self.assertTrue(
+            any(
+                "-g" in hunk and not any(line.startswith("+") for line in hunk)
+                for hunk in hunks
+            ),
+            diff,
+        )
+        code, stdout, stderr = self._run_gate("--base", base_sha, "app.txt")
+        self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
+        self.assertIn("PASS", stdout)
 
     def test_reverting_hunk_is_regression(self):
         base_sha = self._seed_head_gained_lines()
@@ -394,6 +557,40 @@ class DirtRegressionGateTest(unittest.TestCase):
         self.assertEqual(code, 0, f"stderr: {stderr}; stdout: {stdout}")
         self.assertIn("OUTCOME: pass", stdout)
 
+    def test_no_candidate_hunk_does_not_read_worktree(self) -> None:
+        import contextlib
+        import io
+        from unittest.mock import patch
+
+        import scripts.dirt_regression_gate as gate
+
+        base_sha = self._seed_head_gained_lines()
+        import os as _os
+        _os.chmod(self.repo / "app.txt", 0o755)
+        target = self.repo / "app.txt"
+        read_text = Path.read_text
+        original_cwd = Path.cwd()
+        self.addCleanup(os.chdir, original_cwd)
+        os.chdir(self.repo)
+
+        def fail_worktree_read(path, *args, **kwargs):
+            if path.resolve() == target.resolve():
+                raise OSError("unexpected worktree read without candidate hunk")
+            return read_text(path, *args, **kwargs)
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch.dict(os.environ, self._git_env()),
+            patch.object(Path, "read_text", fail_worktree_read),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            code = gate.main(["--base", base_sha, "app.txt"])
+
+        self.assertEqual(code, 0, stderr.getvalue())
+        self.assertIn("OUTCOME: pass", stdout.getvalue())
+
     def test_mixed_regression_and_indeterminate_reports_indeterminate(self) -> None:
         base_sha = self._seed_head_gained_lines()
         self._commit("bin.dat", "text\n", "tracked binary candidate")
@@ -434,6 +631,35 @@ class DirtRegressionGateTest(unittest.TestCase):
         self.assertEqual(code, 3, f"stderr: {stderr}; stdout: {stdout}")
         self.assertIn("unsupported data", stderr)
         self.assertIn("OUTCOME: tool_error", stdout)
+
+    def test_worktree_read_error_is_tool_error(self) -> None:
+        code, stdout, stderr = self._run_main_with_worktree_read_error(
+            OSError("injected worktree read failure")
+        )
+
+        self.assertEqual(code, 3, stderr)
+        self.assertIn("could not read worktree file", stderr)
+        self.assertIn("OUTCOME: tool_error", stdout)
+
+    def test_worktree_decode_error_is_tool_error(self) -> None:
+        code, stdout, stderr = self._run_main_with_worktree_read_error(
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        )
+
+        self.assertEqual(code, 3, stderr)
+        self.assertIn("could not read worktree file", stderr)
+        self.assertIn("OUTCOME: tool_error", stdout)
+
+    def test_worktree_reader_uses_strict_utf8(self) -> None:
+        import scripts.dirt_regression_gate as gate
+
+        invalid_utf8 = self.tmp / "invalid-utf8.txt"
+        invalid_utf8.write_bytes(b"valid prefix\n\xff\n")
+
+        with self.assertRaisesRegex(RuntimeError, "could not read worktree file") as raised:
+            gate._worktree_lines(invalid_utf8)
+
+        self.assertIsInstance(raised.exception.__cause__, UnicodeDecodeError)
 
     def test_usage_error_is_tool_error(self) -> None:
         self._commit("seed.txt", "seed\n", "seed")

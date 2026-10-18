@@ -4,7 +4,7 @@
 - **Status:** open
 - **Workflow:** backlog
 - **Priority:** low
-- **Cluster:** docs/history/backlog/2026-10-16-worktree-done-boundary-primary-gate-block.md, docs/history/backlog/2026-10-16-done-setup-after-task-edits-foreign-staging-trap.md, docs/history/backlog/2026-10-10-done-lock-live-owner-blocks-plan-closeout.md, docs/history/backlog/2026-10-13-done-landing-commit-lock-span.md, docs/history/backlog/2026-10-06-done-boundary-review-candidates.md, docs/history/backlog/2026-10-14-done-dirt-gate-valid-doc-removal.md
+- **Cluster:** docs/history/backlog/2026-10-16-worktree-done-boundary-primary-gate-block.md, docs/history/backlog/2026-10-16-done-setup-after-task-edits-foreign-staging-trap.md, docs/history/backlog/2026-10-10-done-lock-live-owner-blocks-plan-closeout.md, docs/history/backlog/2026-10-13-done-landing-commit-lock-span.md, docs/history/backlog/2026-10-06-done-boundary-review-candidates.md
 - **Origin class:** certification residual (plan family durable capture)
 - **Class:** fix-class
 - **Skill/step:** `docs/history/plans/2026-10-12-done-interrupted-manifest-state-classification.md` (Task 2 lock-column criteria; Assumptions bullet 2)

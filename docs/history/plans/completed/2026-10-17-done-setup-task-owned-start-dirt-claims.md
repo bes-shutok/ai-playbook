@@ -97,12 +97,12 @@ Files:
 Primary class anchors:
 - `done_run.sh` in `scripts/done_run.sh`
 
-- [ ] Step 0's setup guidance carries the direct-work claims duty: given a boundary opened after authorized direct edits, setup receives each task-verified changed path (modified, created, deleted, or renamed paths alike) as a repeated `--owned-path` claim derived from untracked-inclusive `git status` at boundary time, expects the commit stage's foreign-staging gate to resolve those paths as owned [class: IMPLEMENTATION_REQUIRED]
-- [ ] The duty forbids claiming the full dirty set: given peer dirt coexisting in the checkout, expects only explicitly claimed task paths staged, unclaimed paths left unstaged and refusing [class: IMPLEMENTATION_REQUIRED]
-- [ ] given the landed Step 0 duty text, expects a by-name reference to execute-plan Step 1.4's `Files:`-derived claims leg with no restatement of the derivation, so the one-contract read is greppable [class: IMPLEMENTATION_REQUIRED]
-- [ ] the direct-commit route paragraph's claim clause points at the Step 0 claims duty as the claim surface, so setup-time claims and commit-time staging read as one claim story [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run → expect GREEN: the pins suite over the inserted text region (the placement pins and the rearm-on-touch pointer still present; the insertion sits between pinned spans) and the diff over agents/skills/done/SKILL.md adds guidance text only, no new flag, ledger, or ceremony, the Step 0 insertion's growth paid by the same-edit rewording of the direct-commit route paragraph's claim clause (replacement bytes, not pure addition) [class: REPOSITORY_TEST]
-- [ ] Commit: `docs: require explicit owned-path claims at direct-work done boundaries` [class: IMPLEMENTATION_REQUIRED]
+- [x] Step 0's setup guidance carries the direct-work claims duty: given a boundary opened after authorized direct edits, setup receives each task-verified changed path (modified, created, deleted, or renamed paths alike) as a repeated `--owned-path` claim derived from untracked-inclusive `git status` at boundary time, expects the commit stage's foreign-staging gate to resolve those paths as owned [class: IMPLEMENTATION_REQUIRED]
+- [x] The duty forbids claiming the full dirty set: given peer dirt coexisting in the checkout, expects only explicitly claimed task paths staged, unclaimed paths left unstaged and refusing [class: IMPLEMENTATION_REQUIRED]
+- [x] given the landed Step 0 duty text, expects a by-name reference to execute-plan Step 1.4's `Files:`-derived claims leg with no restatement of the derivation, so the one-contract read is greppable [class: IMPLEMENTATION_REQUIRED]
+- [x] the direct-commit route paragraph's claim clause points at the Step 0 claims duty as the claim surface, so setup-time claims and commit-time staging read as one claim story [class: IMPLEMENTATION_REQUIRED]
+- [x] Run → expect GREEN: the pins suite over the inserted text region (the placement pins and the rearm-on-touch pointer still present; the insertion sits between pinned spans) and the diff over agents/skills/done/SKILL.md adds guidance text only, no new flag, ledger, or ceremony, the Step 0 insertion's growth paid by the same-edit rewording of the direct-commit route paragraph's claim clause (replacement bytes, not pure addition) [class: REPOSITORY_TEST]
+- [x] Commit: `docs: require explicit owned-path claims at direct-work done boundaries` [class: IMPLEMENTATION_REQUIRED]
 
 ### Task 2: Discriminating witness verification over the existing foreign-staging pins
 
@@ -115,7 +115,7 @@ Files:
 Primary class anchors:
 - `done_sweep_gates_lib.py` in `scripts/done_sweep_gates_lib.py`
 
-- [ ] Claimed arm witnessed: given the existing wrapper test that claims a start-dirty task file via `--owned-path` at setup, expects its run to stage and commit that file through the landing commit [class: REPOSITORY_TEST]
-- [ ] Unclaimed arm witnessed: given the existing wrapper test that stages the same start-dirty path with no claim, expects the commit stage's foreign-staging gate to refuse it as start-dirt but not owned with the commit count unchanged [class: REPOSITORY_TEST]
-- [ ] Run → expect GREEN: the venv pytest invocation over both suites runs the claimed and unclaimed pairs green; the gate behavior exists today and the plan changes guidance text, not gate behavior, so no RED leg exists, and this task records the discriminating witness the origin row's acceptance cites instead of duplicating existing coverage [class: REPOSITORY_TEST]
-- [ ] Record the witness: the test ids and outcomes from both suites land in the session run record, naming the claimed-passes/unclaimed-refuses pair the origin acceptance requires [class: REPOSITORY_TEST]
+- [x] Claimed arm witnessed: given the existing wrapper test that claims a start-dirty task file via `--owned-path` at setup, expects its run to stage and commit that file through the landing commit [class: REPOSITORY_TEST]
+- [x] Unclaimed arm witnessed: given the existing wrapper test that stages the same start-dirty path with no claim, expects the commit stage's foreign-staging gate to refuse it as start-dirt but not owned with the commit count unchanged [class: REPOSITORY_TEST]
+- [x] Run → expect GREEN: the venv pytest invocation over both suites runs the claimed and unclaimed pairs green; the gate behavior exists today and the plan changes guidance text, not gate behavior, so no RED leg exists, and this task records the discriminating witness the origin row's acceptance cites instead of duplicating existing coverage [class: REPOSITORY_TEST]
+- [x] Record the witness: the test ids and outcomes from both suites land in the session run record, naming the claimed-passes/unclaimed-refuses pair the origin acceptance requires [class: REPOSITORY_TEST]

@@ -111,6 +111,7 @@ import json
 import hashlib
 import hmac
 import os
+import posixpath
 import re
 import shutil
 import stat as stat_module
@@ -127,8 +128,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import facts_paths
 import plan_shape
+import plan_readiness
 import validate_review_staging as vrs
-from review_record_selection import BACKUP_INFIX
+from review_record_selection import BACKUP_INFIX, ORPHAN_INFIX
 
 GIT_TIMEOUT_S = 60
 SCRIPT_TIMEOUT_S = 300
@@ -323,6 +325,16 @@ class GateContext:
             text=True,
             timeout=GIT_TIMEOUT_S,
             input=input_text,
+        )
+
+    def git_bytes(self, *args: str):
+        """Run git without decoding blob output, preserving exact bytes."""
+        return subprocess.run(
+            ["git", "-c", "core.quotePath=false", *args],
+            cwd=str(self.repo_root),
+            capture_output=True,
+            text=False,
+            timeout=GIT_TIMEOUT_S,
         )
 
     def run(
@@ -921,12 +933,13 @@ def _read_manifest_by_run_id(
     return RunManifest.from_dict(payload)
 
 
-def _sanitize_manifest_error_value(raw: object) -> str:
-    """Render a raw manifest field for a finalize abort line: newlines and
-    other control characters stripped, truncated at 64 characters, so a
-    corrupt manifest cannot forge log lines into the finalize stderr."""
+def _sanitize_manifest_error_value(raw: object, *, truncate: bool = True) -> str:
+    """Render a raw field with controls stripped and, by default, capped at
+    64 characters so corrupt input cannot forge log lines. Review-record
+    basenames may exceed that cap, so their warning uses ``truncate=False``."""
     text = str(raw)
-    return "".join(ch for ch in text if ch.isprintable())[:64]
+    screened = "".join(ch for ch in text if ch.isprintable())
+    return screened[:64] if truncate else screened
 
 
 def _finalize_identity_mismatch(
@@ -4328,10 +4341,10 @@ def _worktree_index_mismatch(ctx: GateContext, rel: str) -> Optional[str]:
     return None
 
 
-def _archive_text_at_index_or_worktree(
+def _archive_bytes_at_index_or_worktree(
     ctx: GateContext, rel: str
-) -> tuple[Optional[str], Optional[str]]:
-    """Read the exact indexed blob when present, otherwise a worktree file."""
+) -> tuple[Optional[bytes], Optional[str]]:
+    """Read exact index or worktree bytes without text-mode conversions."""
     indexed = ctx.git("ls-files", "--error-unmatch", "--", rel)
     if indexed.returncode == 0:
         mode = ctx.git("ls-files", "--stage", "--", rel)
@@ -4343,7 +4356,7 @@ def _archive_text_at_index_or_worktree(
         entries = [line.split(None, 1)[0] for line in mode.stdout.splitlines() if line]
         if not entries or any(entry not in {"100644", "100755"} for entry in entries):
             return None, f"staged archive is not a regular file: {rel}"
-        show = ctx.git("show", f":{rel}")
+        show = ctx.git_bytes("show", f":{rel}")
         if show.returncode != 0:
             return None, (
                 f"staged archive unreadable from index: {rel}: "
@@ -4359,7 +4372,7 @@ def _archive_text_at_index_or_worktree(
     if path.is_symlink():
         return None, f"staged archive is not a regular file: {rel}"
     try:
-        text = path.read_text(encoding="utf-8")
+        data = path.read_bytes()
     except OSError:
         return None, f"staged archive unreadable from worktree: {rel}"
     # An untracked path may have been staged while its worktree bytes were
@@ -4375,7 +4388,7 @@ def _archive_text_at_index_or_worktree(
         entries = [line.split(None, 1)[0] for line in mode.stdout.splitlines() if line]
         if not entries or any(entry not in {"100644", "100755"} for entry in entries):
             return None, f"staged archive is not a regular file: {rel}"
-        show = ctx.git("show", f":{rel}")
+        show = ctx.git_bytes("show", f":{rel}")
         if show.returncode != 0:
             return None, (
                 f"staged archive unreadable from index: {rel}: "
@@ -4387,7 +4400,102 @@ def _archive_text_at_index_or_worktree(
             f"staged archive index lookup failed after worktree read: {rel}: "
             f"{indexed_after_read.stderr.strip() or 'git ls-files failed'}"
         )
+    return data, None
+
+
+def _archive_bytes_from_worktree(
+    ctx: GateContext, rel: str
+) -> tuple[Optional[bytes], Optional[str]]:
+    """Read the exact worktree representation for an addition shape."""
+    path = ctx.repo_root / rel
+    if path.is_symlink() or not path.is_file():
+        return None, f"staged archive is not a regular file: {rel}"
+    try:
+        return path.read_bytes(), None
+    except OSError:
+        return None, f"staged archive unreadable from worktree: {rel}"
+
+
+def _archive_text_from_bytes(
+    data: bytes, rel: str
+) -> tuple[Optional[str], Optional[str]]:
+    """Decode archive text without losing the raw-byte evidence source."""
+    try:
+        return data.decode("utf-8"), None
+    except UnicodeDecodeError:
+        return None, f"archive is not UTF-8 text: {rel}"
+
+
+def _archive_text_for_derivation(
+    data: bytes, rel: str, blockers: list[str]
+) -> str:
+    """Return text or record a bounded blocker and a safe placeholder."""
+    text, error = _archive_text_from_bytes(data, rel)
+    if error is not None or text is None:
+        blockers.append(f"archive-ceremony: {error or f'archive text unavailable: {rel}'}")
+        return "\n- [ ] archive evidence is not UTF-8\n"
+    return text
+
+
+def _archive_text_at_index_or_worktree(
+    ctx: GateContext, rel: str
+) -> tuple[Optional[str], Optional[str]]:
+    """Decode archive bytes for checkbox checks, retaining the bytes source."""
+    data, error = _archive_bytes_at_index_or_worktree(ctx, rel)
+    if error is not None or data is None:
+        return None, error
+    text, decode_error = _archive_text_from_bytes(data, rel)
+    if decode_error is not None:
+        return None, f"staged {decode_error}"
     return text, None
+
+
+def _git_blob_bytes(
+    ctx: GateContext, spec: str
+) -> tuple[Optional[bytes], Optional[str]]:
+    """Read a blob's exact bytes, distinguishing absence from Git failure."""
+    result = ctx.git_bytes("show", spec)
+    if result.returncode == 0:
+        return result.stdout, None
+    detail = result.stderr.decode("utf-8", errors="replace").strip()
+    return None, f"archive reviewed blob read failed for {spec}: {detail or 'git show failed'}"
+
+
+def _committed_rename_parent_bytes(
+    ctx: GateContext, base: str, old: str, new: str
+) -> tuple[Optional[bytes], Optional[str]]:
+    """Recover only an actual rename commit's parent blob, never a base guess."""
+    commits = ctx.git("rev-list", f"{base}..HEAD")
+    if commits.returncode != 0:
+        return None, (
+            "archive rename history lookup failed: "
+            f"{commits.stderr.strip() or 'git rev-list failed'}"
+        )
+    for commit in commits.stdout.splitlines():
+        parent = ctx.git("rev-parse", "-q", "--verify", f"{commit}^{{commit}}^")
+        if parent.returncode != 0:
+            return None, (
+                "archive rename parent lookup failed: "
+                f"{parent.stderr.strip() or 'git rev-parse failed'}"
+            )
+        changes = ctx.git(
+            "diff-tree", "--find-renames", "--name-status", "-r",
+            parent.stdout.strip(), commit, "--", _plans_pathspec(ctx),
+        )
+        if changes.returncode != 0:
+            return None, (
+                "archive rename commit lookup failed: "
+                f"{changes.stderr.strip() or 'git diff-tree failed'}"
+            )
+        for line in changes.stdout.splitlines():
+            fields = line.split("\t")
+            if len(fields) == 3 and fields[0].startswith("R"):
+                if (
+                    _unquote_porcelain_path(fields[1]) == old
+                    and _unquote_porcelain_path(fields[2]) == new
+                ):
+                    return _git_blob_bytes(ctx, f"{parent.stdout.strip()}:{old}")
+    return None, None
 
 
 def _directory_task_texts_on_disk(
@@ -4506,34 +4614,41 @@ def _directory_task_texts_at_head(
 
 def _derive_archived_plans(
     ctx: GateContext,
-) -> tuple[list[tuple[str, str]], list[str], list[str]]:
-    """archive-ceremony derivation: every plan archive this run's boundary
-    surfaces, as ``(repo-relative archive path, plan bytes)`` pairs, plus
-    non-failing note lines and blocking diagnostics. Unreadable evidence and
-    failed source queries are never silently treated as an empty archive set.
+) -> tuple[list[tuple[str, str, bytes, Optional[str], Optional[bytes]]], list[str], list[str]]:
+    """Surface archive rows plus non-failing notes and blocking diagnostics.
+
+    Each row is ``(archive path, decoded checkbox text, exact archive bytes,
+    recovered pre-archive path, preferred reviewed raw bytes)``. Unreadable
+    evidence and failed source queries are never silently treated as an empty
+    archive set.
 
     Three shapes, each with its own byte source:
 
     (a) staged/worktree renames and additions over the plans pathspec whose
         new path sits in an archive state directory, including untracked
-        additions; bytes read from the worktree after checking staged paths
-        against the index;
+        additions; staged renames read the index, while additions read the
+        worktree;
     (b) committed renames or additions into ``plans_completed_dir`` since this run's
         manifest boundary: a ``git diff --find-renames <base>..HEAD
         --name-status`` over the plans pathspec where ``<base>`` is the
         active run manifest's ``start_commit`` with the gate_doc_registry
         precedent's ``ORIG_HEAD`` fallback when absent; when neither
         resolves, this shape surfaces nothing this run and the skip is
-        noted; bytes from the HEAD blob at the archived path. This is the
-        lib's first rename-detecting name-status diff on purpose: every
+        noted; archive bytes come from the HEAD blob, with a rename's
+        preferred reviewed bytes recovered from the parent source blob. This
+        is the lib's first rename-detecting name-status diff on purpose: every
         existing name-status diff uses ``--no-renames`` because its
         consumers need per-side change-type rows, while this gate needs the
         rename pairing itself;
     (c) stale plan-deliverables lines whose recorded plan path no longer
-        exists because it now sits archived; bytes from the archive twin at
-        HEAD.
+        exists because it now sits archived; archive bytes come from the twin
+        at HEAD, with no separately recoverable reviewed source bytes.
     """
-    archives: list[tuple[str, str]] = []
+    # Each row is (archive path, decoded checkbox text, exact archive bytes,
+    # recovered pre-archive path, preferred raw digest bytes). The last field
+    # is the source blob for renames, the archive blob for additions, and None
+    # for stale deliverables twins that use the archive form.
+    archives: list[tuple[str, str, bytes, Optional[str], Optional[bytes]]] = []
     notes: list[str] = []
     blockers: list[str] = []
     seen: set[str] = set()
@@ -4581,10 +4696,13 @@ def _derive_archived_plans(
                 mismatch = _worktree_index_mismatch(ctx, new)
                 if mismatch is not None:
                     blockers.append(mismatch)
-            text, error = _archive_text_at_index_or_worktree(ctx, charter)
-            if error is not None or text is None:
+            archive_bytes, error = _archive_bytes_at_index_or_worktree(ctx, charter)
+            if error is not None or archive_bytes is None:
                 blockers.append(error or f"staged directory charter unreadable: {charter}")
                 text = "\n- [ ] staged charter evidence unreadable\n"
+                archive_bytes = text.encode("utf-8")
+            else:
+                text = _archive_text_for_derivation(archive_bytes, charter, blockers)
             if not is_untracked:
                 mismatch = _worktree_index_mismatch(ctx, charter)
                 if mismatch is not None:
@@ -4595,16 +4713,37 @@ def _derive_archived_plans(
             text += "".join(task_texts)
             if charter not in seen:
                 seen.add(charter)
-                archives.append((charter, text))
+                old_rel = _unquote_porcelain_path(rest.split(" -> ", 1)[0]) if is_rename else None
+                reviewed = archive_bytes
+                if old_rel:
+                    reviewed, error = _git_blob_bytes(ctx, f"HEAD:{old_rel}")
+                    if error is not None:
+                        blockers.append(error)
+                archives.append(
+                    (charter, text, archive_bytes, old_rel, reviewed)
+                )
             continue
         if not is_untracked:
             mismatch = _worktree_index_mismatch(ctx, new)
             if mismatch is not None:
                 blockers.append(mismatch)
-        text, error = _archive_text_at_index_or_worktree(ctx, new)
-        if error is not None or text is None:
+        archive_bytes, error = (
+            _archive_bytes_at_index_or_worktree(ctx, new)
+            if is_rename
+            else _archive_bytes_from_worktree(ctx, new)
+        )
+        if error is not None or archive_bytes is None:
             blockers.append(f"archive-ceremony: {error or f'staged archive unreadable: {new}'}")
             text = "\n- [ ] staged archive evidence unreadable\n"
+            archive_bytes = text.encode("utf-8")
+        else:
+            text = _archive_text_for_derivation(archive_bytes, new, blockers)
+        old_rel = _unquote_porcelain_path(rest.split(" -> ", 1)[0]) if is_rename else None
+        reviewed = archive_bytes
+        if old_rel:
+            reviewed, error = _git_blob_bytes(ctx, f"HEAD:{old_rel}")
+            if error is not None:
+                blockers.append(error)
         if kind == "charter":
             task_texts, task_notes, task_errors = _directory_task_texts_on_disk(ctx, new)
             notes.extend(task_notes)
@@ -4612,7 +4751,7 @@ def _derive_archived_plans(
             text = text + "".join(task_texts)
         if new not in seen:
             seen.add(new)
-            archives.append((new, text))
+            archives.append((new, text, archive_bytes, old_rel, reviewed))
 
     # Shape (b): committed renames into the completed archive since the run
     # manifest boundary (ORIG_HEAD fallback; neither resolves: skip, noted).
@@ -4693,6 +4832,11 @@ def _derive_archived_plans(
                     or (fields[0] == "A" and len(fields) == 2)
                 ):
                     continue
+                old = (
+                    _unquote_porcelain_path(fields[1])
+                    if fields[0].startswith("R") and len(fields) == 3
+                    else None
+                )
                 new = _unquote_porcelain_path(fields[-1])
                 archive_state = next(
                     (
@@ -4718,20 +4862,38 @@ def _derive_archived_plans(
                     if mode_error is not None:
                         blockers.append(mode_error)
                         continue
-                    show = ctx.git("show", f"HEAD:{charter}")
+                    show = ctx.git_bytes("show", f"HEAD:{charter}")
                     if show.returncode != 0:
                         blockers.append(
                             "added directory member charter unreadable at "
                             f"HEAD: {charter}"
                         )
-                        member = ctx.git("show", f"HEAD:{new}")
+                        member = ctx.git_bytes("show", f"HEAD:{new}")
                         if member.returncode == 0 and new not in seen:
                             seen.add(new)
-                            archives.append((new, member.stdout))
+                            text = _archive_text_for_derivation(member.stdout, new, blockers)
+                            reviewed, error = (
+                                _committed_rename_parent_bytes(ctx, base, old, new)
+                                if old
+                                else (member.stdout, None)
+                            )
+                            if error is not None:
+                                blockers.append(error)
+                            archives.append((new, text, member.stdout, old,
+                                             reviewed))
                         elif member.returncode != 0 and new not in seen:
                             seen.add(new)
+                            text = "\n- [ ] unreadable archive member evidence\n"
+                            reviewed, error = (
+                                _committed_rename_parent_bytes(ctx, base, old, new)
+                                if old
+                                else (text.encode("utf-8"), None)
+                            )
+                            if error is not None:
+                                blockers.append(error)
                             archives.append(
-                                (new, "\n- [ ] unreadable archive member evidence\n")
+                                (new, text, text.encode("utf-8"), old,
+                                 reviewed)
                             )
                         continue
                     task_texts, task_notes, task_errors = _directory_task_texts_at_head(
@@ -4739,23 +4901,33 @@ def _derive_archived_plans(
                     )
                     notes.extend(task_notes)
                     blockers.extend(task_errors)
-                    text = show.stdout + "".join(task_texts)
+                    archive_bytes = show.stdout
+                    text = _archive_text_for_derivation(archive_bytes, charter, blockers) + "".join(task_texts)
                     if charter not in seen:
                         seen.add(charter)
-                        archives.append((charter, text))
+                        reviewed, error = (
+                            _committed_rename_parent_bytes(ctx, base, old, new)
+                            if old
+                            else (archive_bytes, None)
+                        )
+                        if error is not None:
+                            blockers.append(error)
+                        archives.append((charter, text, archive_bytes, old,
+                                         reviewed))
                     continue
                 mode_error = _head_regular_archive_file(ctx, new)
                 if mode_error is not None:
                     blockers.append(mode_error)
                     continue
-                show = ctx.git("show", f"HEAD:{new}")
+                show = ctx.git_bytes("show", f"HEAD:{new}")
                 if show.returncode != 0:
                     blockers.append(
                         "committed archive unreadable at HEAD: "
                         f"{new}"
                     )
                     continue
-                text = show.stdout
+                archive_bytes = show.stdout
+                text = _archive_text_for_derivation(archive_bytes, new, blockers)
                 if kind == "charter":
                     task_texts, task_notes, task_errors = _directory_task_texts_at_head(
                         ctx, new
@@ -4765,7 +4937,15 @@ def _derive_archived_plans(
                     text = text + "".join(task_texts)
                 if new not in seen:
                     seen.add(new)
-                archives.append((new, text))
+                reviewed, error = (
+                    _committed_rename_parent_bytes(ctx, base, old, new)
+                    if old
+                    else (archive_bytes, None)
+                )
+                if error is not None:
+                    blockers.append(error)
+                archives.append((new, text, archive_bytes, old,
+                                 reviewed))
 
     # Shape (c): stale plan-deliverables lines whose recorded plan path no
     # longer exists because it now sits archived (twin bytes from HEAD).
@@ -4800,14 +4980,15 @@ def _derive_archived_plans(
             if mode_error is not None:
                 blockers.append(mode_error)
                 continue
-            show = ctx.git("show", f"HEAD:{twin_rel}")
+            show = ctx.git_bytes("show", f"HEAD:{twin_rel}")
             if show.returncode != 0:
                 blockers.append(
                     "archive twin unreadable at HEAD: "
                     f"{twin_rel}"
                 )
                 continue
-            text = show.stdout
+            archive_bytes = show.stdout
+            text = _archive_text_for_derivation(archive_bytes, twin_rel, blockers)
             if Path(twin_rel).name == plan_shape.CHARTER_FILENAME:
                 # A directory twin: the checkbox leg spans the task files
                 # archived beside the charter.
@@ -4819,7 +5000,7 @@ def _derive_archived_plans(
                 text = text + "".join(task_texts)
             if twin_rel not in seen:
                 seen.add(twin_rel)
-                archives.append((twin_rel, text))
+                archives.append((twin_rel, text, archive_bytes, rel, None))
 
     return archives, notes, blockers
 
@@ -4836,6 +5017,79 @@ def _plan_slug(archive_rel: str) -> str:
     return ARCHIVE_SLUG_DATE_PREFIX_RE.sub(
         "", stem, count=1
     )
+
+
+def _find_bound_review_receipt(
+    ctx: GateContext,
+    archive_rel: str,
+    archive_bytes: bytes,
+    pre_archive_rel: str | None,
+    reviewed_bytes: bytes | None,
+) -> tuple[Path, str, str] | None:
+    """Find a live plan-review pair bound to this single-file archive.
+
+    Return its markdown path, matching digest, and matched byte form. Sidecar
+    parsing is deliberately narrow: this archive arm consumes only the plan
+    identity, source digest, and sidecar verdict, and re-validates no other
+    version-1 fields. A missing or unreadable candidate declines so a later
+    matching pair can still authorize the archive.
+    """
+    archive_path = ctx.repo_root / archive_rel
+    archive_kind, _state_prefix = _archive_unit(ctx, archive_rel)
+    if archive_path.is_dir() or archive_kind == "charter":
+        return None
+    if not isinstance(archive_bytes, bytes):
+        return None
+    expected_identity = pre_archive_rel or archive_rel
+    expected_identity = posixpath.normpath(expected_identity)
+    if reviewed_bytes is None or pre_archive_rel is None:
+        expected_bytes = archive_bytes
+        digest_form = "archived-bytes"
+    elif isinstance(reviewed_bytes, bytes):
+        expected_bytes = reviewed_bytes
+        digest_form = "reviewed-revision"
+    else:
+        return None
+    expected_digest = vrs.compute_source_digest("plan", expected_bytes)
+
+    if not ctx.reviews_dir.is_dir():
+        return None
+    candidates = sorted(
+        ctx.reviews_dir.rglob("*.md"), key=lambda path: path.as_posix()
+    )
+    for record in candidates:
+        if not record.is_file():
+            continue
+        if "-plan-review-" not in record.name:
+            continue
+        if not vrs.is_staging_review_path(record):
+            continue
+        if BACKUP_INFIX in record.name or ORPHAN_INFIX in record.name:
+            continue
+        sidecar = vrs.stats_sidecar_path(record)
+        if not sidecar.is_file():
+            continue
+        if BACKUP_INFIX in sidecar.name or ORPHAN_INFIX in sidecar.name:
+            continue
+        try:
+            payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        extensions = payload.get("extensions")
+        identity = extensions.get("plan_identity") if isinstance(extensions, dict) else None
+        if not isinstance(identity, str):
+            continue
+        if posixpath.normpath(identity) != expected_identity:
+            continue
+        if payload.get("source_digest") != expected_digest:
+            continue
+        if plan_readiness.sidecar_verdict(payload) != "yes":
+            continue
+        return record, expected_digest, digest_form
+    return None
 
 
 def _has_exec_review_record(ctx: GateContext, slug: str) -> bool:
@@ -4864,10 +5118,11 @@ def gate_archive_ceremony(ctx: GateContext) -> GateResult:
     the gate checks checkbox completeness: plan bytes still carrying a
     ``- [ ]`` unchecked task box fail with the two sanctioned exits (check
     the boxes after verified work, or land a marked backfill completion
-    record per the plans skill's archive-correction exception). A derived
-    archive whose boxes are complete must further carry an exec-review
-    record (the ``archived-plan review-coverage`` check). A rejected-state
-    archive (the archive-state derivation's ``rejected`` state, the
+    record per the plans skill's archive-correction exception). A box-complete
+    archive must carry either an exec-review filename-series record or a live
+    plan-review receipt whose sidecar binds the plan identity, raw-byte digest,
+    and yes verdict (the ``archived-plan review-coverage`` check). A
+    rejected-state archive (the archive-state derivation's ``rejected`` state, the
     ``plans/rejected/`` placement of a plan the operator declined) is exempt
     from both demands: its unchecked boxes and absent execution evidence are
     the disposition, not defects, and the exemption lives in this executable
@@ -4889,7 +5144,8 @@ def gate_archive_ceremony(ctx: GateContext) -> GateResult:
         return GateResult(gate, 0, message, warnings=notes)
     findings: list[str] = []
     exempted: list[str] = []
-    for archive_rel, text in archives:
+    accepted_receipts: list[tuple[str, Path, str, str, str | None]] = []
+    for archive_rel, text, archive_bytes, pre_archive_rel, reviewed_bytes in archives:
         if _archive_state_of(ctx, archive_rel) == "rejected":
             exempted.append(archive_rel)
             continue
@@ -4905,19 +5161,40 @@ def gate_archive_ceremony(ctx: GateContext) -> GateResult:
             )
             continue
         # archived-plan review-coverage: a box-complete archive must still
-        # carry the execution run's review of record; its absence fails with
-        # the reconstruction remedy (the cited-review-receipt-integrity
+        # carry either the filename-series execution review or a digest-bound
+        # plan-review receipt; absence of both fails with the reconstruction
+        # remedy (the cited-review-receipt-integrity
         # precedent: a marked reconstruction is valid, a silent one is not).
         slug = _plan_slug(archive_rel)
-        if not _has_exec_review_record(ctx, slug):
-            findings.append(
-                f"archived plan {archive_rel} has no exec-review record "
-                f"(no *-plan-review-{slug}-exec-r<N> file under the reviews "
-                "home names the missing series); remedy: produce the "
-                "exec-review record for the plan's final bytes, or land a "
-                "marked reconstruction per the cited-review-receipt-"
-                "integrity precedent"
+        if _has_exec_review_record(ctx, slug):
+            continue
+        bound = _find_bound_review_receipt(
+            ctx,
+            archive_rel,
+            archive_bytes,
+            pre_archive_rel,
+            reviewed_bytes,
+        )
+        if bound is not None:
+            record, matched_digest, digest_form = bound
+            archive_digest = vrs.compute_source_digest("plan", archive_bytes)
+            divergence = None
+            if matched_digest != archive_digest:
+                divergence = archive_digest
+            accepted_receipts.append(
+                (archive_rel, record, matched_digest, digest_form, divergence)
             )
+            continue
+        findings.append(
+            f"archived plan {archive_rel} has no exec-review record "
+            f"(no *-plan-review-{slug}-exec-r<N> file under the reviews "
+            "home names the missing series); remedy: produce the "
+            "exec-review record for the plan's final bytes, use the "
+            "bound-receipt acceptance with a live identity-, raw-byte-"
+            "digest-, and verdict-bound plan-review record, or land a "
+            "marked reconstruction per the cited-review-receipt-"
+            "integrity precedent"
+        )
     if findings:
         return GateResult(
             gate,
@@ -4931,20 +5208,35 @@ def gate_archive_ceremony(ctx: GateContext) -> GateResult:
             "execution-evidence demands (the plan's rejected disposition "
             "stands; never certified as executed): " + exempt_rel
         ]
-    checked = [rel for rel, _text in archives if rel not in exempted]
-    message = "archive-ceremony gate passed: "
+    checked = [row[0] for row in archives if row[0] not in exempted]
+    message_parts: list[str] = []
     if checked:
-        message += (
+        message_parts.append(
             f"{len(checked)} plan archive(s) checked, boxes complete: "
             + ", ".join(checked)
         )
     if exempted:
-        if checked:
-            message += "; "
-        message += f"{len(exempted)} rejected-state archive(s) exempt: " + ", ".join(
-            exempted
+        message_parts.append(
+            f"{len(exempted)} rejected-state archive(s) exempt: "
+            + ", ".join(exempted)
         )
-    return GateResult(gate, 0, message, warnings=notes)
+    message_parts.append(f"bound-receipt acceptance: {len(accepted_receipts)}")
+    warnings = list(notes)
+    for archive_rel, record, digest, digest_form, archive_digest in accepted_receipts:
+        warning = (
+            f"bound-receipt acceptance: {len(accepted_receipts)}; "
+            f"{archive_rel} accepted by "
+            f"{_sanitize_manifest_error_value(record.name, truncate=False)}; "
+            f"matched {digest_form} digest {digest}"
+        )
+        if archive_digest is not None:
+            warning += (
+                f"; divergence: archive digest {archive_digest}, matched "
+                f"digest {digest}; amendment is unreviewed"
+            )
+        warnings.append(warning)
+    message = "archive-ceremony gate passed: " + "; ".join(message_parts)
+    return GateResult(gate, 0, message, warnings=warnings)
 
 
 # --------------------------------------------------------------------------- #

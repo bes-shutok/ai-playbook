@@ -30,6 +30,10 @@ A sanctioned route exists end to end for unclassified-but-mechanical hops: eithe
 
 One authoring cycle owning the machinery change with its admission fields: the concrete incident this row witnesses, the catch frequency (every post-certification mechanical relocation correction), the false-positive cost (a semantic change smuggled as a digest-shaped swap; mitigated by the strict hex-shape hunk requirement and bounded hunk count), and a sunset or review date. The classifier widening and the hook change are gate edits and must not land ad hoc mid-lane.
 
+## Current witness
+
+- On 2026-10-18, a cap-closure correction row carried a complete operator-direction receipt and a committed classifier-gap witness, but hard staging validation still refused the substantive plan hunks as unclassified. The plan readiness gate also refused because it did not receive the witness path. Reproduction is preserved in `docs/history/plans/2026-10-18-worktree-closeout-single-start-baseline.md`, its r6 staging record. This confirms the existing issue remains open; priority stays high.
+
 ## Evidence
 
 - Round-2 review probe (2026-10-16): acked row over a reference-substitution hop verifies without the gate hook and refuses with it, verbatim reasons quoted in the task review log of the placement-closing-doctrine-enforcement run.

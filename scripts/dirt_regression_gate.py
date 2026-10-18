@@ -1,29 +1,27 @@
 #!/usr/bin/env python3
 """Dirt regression gate: fail on restored dirt that reverts content HEAD gained.
 
-Classification is per hunk of each restored file's diff against HEAD, with the
+Classification examines each restored file's diff against HEAD, with the
 run's merge base (``--base <merge-base-sha>``) bound. Import declarations and
 exact lines moved between diff hunks are excluded from the removed-line signal
 because they do not by themselves show a behavior reversion:
 
-- A hunk marks a dirt REGRESSION when it removes at least one line HEAD gained
-  since the base (a line present in the HEAD version of the file and absent
-  from the merge-base version) AND every line it adds exists verbatim in the
-  merge-base version of the file. Such a hunk restores base-era text over
-  HEAD-gained content.
-- Hunks whose added lines are not all base text are forward-looking rewrites
-  and pass. So a modification of a HEAD-gained line (the removed line replaced
-  by new text not present at the base) passes, pure additions pass, and
-  removals of lines already present at the base pass. A removal-only hunk of
-  HEAD-gained lines of a base-present file is a regression (the added-line
-  condition holds vacuously).
+- A mixed-restoration hunk marks a dirt REGRESSION when it removes at least
+  one non-import line HEAD gained since the base and adds a non-empty set of
+  lines that all exist in the merge-base version. Hunks whose added lines are
+  not all base text are forward-looking rewrites and pass.
+- The whole-file reversion witness compares the worktree line list to the merge-base version in order and multiplicity.
+- A removal-only hunk in a base-present file with no surviving base-era content still fails.
+- A worktree-equals-base cleanup of a base-present file still fails and keeps the same-hunk replacement workaround as its route.
+- A partial pure-deletion reversion that restores no base-era text and leaves base-era content surviving in the worktree passes.
 - A file with no version at the merge base (the ``git cat-file -e
   <base>:<path>`` probe fails) is newly-introduced content: no base-era text
-  exists, so no hunk of its diff can restore any, removal-only hunks
-  included, and every classifiable hunk of such a file passes. Genuine
-  stale-checkout and revert detection stays scoped to files present at the
-  base; unmodeled diff shapes on base-absent files still report
-  indeterminate.
+  exists for its classifiable non-deletion hunks to restore, so those hunks
+  pass. A staged whole-file deletion remains a regression when its
+  removal-only hunk contains lines HEAD gained; the declared-deletion plan
+  owns that boundary. Genuine stale-checkout and revert detection stays
+  scoped to files present at the base; unmodeled diff shapes on base-absent
+  files still report indeterminate.
 
 Outcome contract (scripts/OUTCOME_CONTRACT.md): the gate reports exactly one
 of four outcomes as the final ``OUTCOME:`` line on stdout and its exit code.
@@ -122,6 +120,16 @@ def _blob_lines(rev: str, repo_rel: str, cwd: Path) -> list[str]:
     return _content_lines(_git("show", f"{rev}:{repo_rel}", cwd=cwd))
 
 
+def _worktree_lines(path: Path) -> list[str]:
+    """Read a present worktree file as strict UTF-8 lines."""
+    try:
+        return _content_lines(path.read_text(encoding="utf-8", errors="strict"))
+    except (UnicodeDecodeError, OSError) as exc:
+        raise RuntimeError(
+            f"could not read worktree file {path}: {exc}"
+        ) from exc
+
+
 def _hunks(diff_text: str) -> list[tuple[list[str], list[str]]]:
     """Parse a unified diff into (removed, added) line pairs, one per hunk."""
     hunks: list[tuple[list[str], list[str]]] = []
@@ -173,7 +181,7 @@ def _hunk_is_regression(
     ]
     if not any(line in gained for line in behavior_removed):
         return False
-    return all(line in base_set for line in added)
+    return bool(added) and all(line in base_set for line in added)
 
 
 def classify_path(path: str, base: str, cwd: Path) -> tuple[str, str]:
@@ -204,12 +212,13 @@ def classify_path(path: str, base: str, cwd: Path) -> tuple[str, str]:
             raise RuntimeError(f"path does not exist or is not a tracked file: {path}")
         # absent from the worktree: a whole-file deletion in the dirt; git
         # diff HEAD classifies it (removal-only hunk of HEAD-gained lines is
-        # a regression, the added-line condition holds vacuously)
+        # a regression). The declared-deletion plan owns this path surface.
 
     base_present = _git_ok(
         "cat-file", "-e", f"{base}:{repo_rel_posix}", cwd=cwd
     )
-    base_set = set(_blob_lines(base, repo_rel_posix, cwd))
+    base_lines = _blob_lines(base, repo_rel_posix, cwd)
+    base_set = set(base_lines)
     head_lines = _blob_lines("HEAD", repo_rel_posix, cwd)
     gained = set(head_lines) - base_set
     diff_text = _git("diff", "HEAD", "--unified=0", "--", path, cwd=cwd)
@@ -247,11 +256,12 @@ def classify_path(path: str, base: str, cwd: Path) -> tuple[str, str]:
         # A staged whole-file deletion is exempt from this early return:
         # every HEAD line of a base-absent path is gained by definition, so
         # its removal-only hunk classifies below as a regression - the
-        # shape the deletion branch above exists for.
+        # declared-deletion surface owned by the completed deletion plan.
         return "clean", ""
     removed_counts = Counter(line for removed, _ in hunks for line in removed)
     added_counts = Counter(line for _, added in hunks for line in added)
     moved_counts = removed_counts & added_counts
+    classified_hunks: list[tuple[list[str], list[str]]] = []
     for removed, added in hunks:
         unmatched_removed: list[str] = []
         for line in removed:
@@ -259,8 +269,43 @@ def classify_path(path: str, base: str, cwd: Path) -> tuple[str, str]:
                 moved_counts[line] -= 1
             else:
                 unmatched_removed.append(line)
-        if _hunk_is_regression(unmatched_removed, added, gained, base_set):
+        classified_hunks.append((unmatched_removed, added))
+
+    candidate_hunks = [
+        (removed, added)
+        for removed, added in classified_hunks
+        if any(
+            line in gained and not _is_import_declaration(line)
+            for line in removed
+        )
+    ]
+
+    # First witness: a hunk restores base-era lines over gained content.
+    for removed, added in candidate_hunks:
+        if base_present and _hunk_is_regression(
+            removed, added, gained, base_set
+        ):
             return "regression", "restores base-era text over lines HEAD gained"
+
+    removal_only_candidate = any(not added for _, added in candidate_hunks)
+    if deletion_shape and removal_only_candidate:
+        # Preserve the absent-path classification owned by the declared-
+        # deletion plan; this is separate from the present-file witnesses.
+        return "regression", "removes lines HEAD gained from a deleted file"
+
+    if base_present and not deletion_shape and candidate_hunks:
+        worktree_lines = _worktree_lines(resolved)
+        if worktree_lines == base_lines:
+            # Second witness: the worktree restores the complete base line list.
+            return "regression", "worktree restores the complete base line list"
+
+        if (
+            removal_only_candidate
+            and worktree_lines != base_lines
+            and not any(line in base_set for line in worktree_lines)
+        ):
+            # Third witness: a removal-only candidate leaves only non-base text.
+            return "regression", "no base-era line survives in the worktree"
     return "clean", ""
 
 
