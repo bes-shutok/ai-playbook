@@ -33,3 +33,8 @@ Additional review context for projects where no specific language overlay matche
 
 - **User-visible changes** require documentation updates.
 - **Internal architecture decisions** should be captured in project knowledge base.
+
+## Comments and Commit Messages
+
+- **Temporal commentary in code or config comments (coding_guidelines.md section 39):** a comment that narrates when something happened or what changed (dates, version notes, added/removed/changed phrasing, temporary or for-now notes, dated TODOs) is a finding. The fix states the invariant or why and, when deeper context is genuinely needed, points at the owning tracker ticket or document instead of narrating history. License headers, changelog-type documents, time values that are data, and condition-based revisit notes are not findings.
+- **What-only commit message (coding_guidelines.md section 40):** a subject that says what changed without the why, where the why is not carried in a body, is a finding. Required formats (story keys, change types, structural-versus-behavioral statements) are never findings; their absence or replacement by prose is.

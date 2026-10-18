@@ -24,14 +24,14 @@ This skill reads environment-specific values from the user's facts/profile docum
 | Key | Purpose | Example |
 |-----|---------|---------|
 | `atlassian_domain` | Default Atlassian cloud domain | `acme.atlassian.net` |
-| `docs_tmp_dir` | Legacy alias; prefer resolved `{reviews_dir}` for staging docs | `docs/reviews/` |
-| `reviews_dir` | Primary staging doc directory (see `review-staging`) | `docs/reviews/` |
+| `docs_tmp_dir` | Legacy alias; prefer resolved `{reviews_dir}` for staging docs | `.ai-playbook/reviews/` |
+| `reviews_dir` | Primary staging doc directory (see `review-staging`) | `.ai-playbook/reviews/` |
 
 If a key is missing from `.ai-playbook/facts.md`, follow `using-skills` Step 0 (bootstrap only when Terms triggers fire); ask the user only when resolution is ambiguous.
 
 ## Workflow
 
-### Step 0 – Pre-requisite: Verify Atlassian integration
+### Step 0 ,  Pre-requisite: Verify Atlassian integration
 
 1. Verify you can read Confluence pages via your environment's **Atlassian integration** (page fetch capability).
 2. If the integration is unavailable:
@@ -47,7 +47,7 @@ If a key is missing from `.ai-playbook/facts.md`, follow `using-skills` Step 0 (
 
 ---
 
-### Step 1 – Identify the Document
+### Step 1 ,  Identify the Document
 
 Accept input in any of these forms:
 - A Confluence page URL (e.g., `https://your-org.atlassian.net/wiki/spaces/~SPACE-KEY~/pages/123456/My+RFC`)
@@ -62,7 +62,7 @@ Extract:
 
 ---
 
-### Step 2 – Fetch the Document
+### Step 2 ,  Fetch the Document
 
 1. Fetch the page via your Atlassian integration (HTML or markdown content as supported).
 2. If the page has child pages that form part of the document (e.g., appendices, sub-sections), fetch those as well.
@@ -70,7 +70,7 @@ Extract:
 
 ---
 
-### Step 3 – Determine Document Type
+### Step 3 ,  Determine Document Type
 
 Classify the document as one of:
 - **RFC / Design Document**: architecture decisions, API contracts, system design
@@ -81,9 +81,9 @@ Use the page title, labels, and content structure to classify. If ambiguous, ask
 
 ---
 
-### Step 4 – Analyze and Generate Feedback
+### Step 4 ,  Analyze and Generate Feedback
 
-#### Step 4.0 – Select the review panel
+#### Step 4.0 ,  Select the review panel
 
 Use `review-panel-selection.md`. A normal RFC or TDD review uses the five-worker panel. A prose-only page may use a focused `contract-docs` panel, adding `correctness-completeness` when the prose specifies normative behavior.
 
@@ -152,7 +152,7 @@ Prefer concrete plain-language examples over abstract jargon. Do not use terms s
 
 ---
 
-### Step 4.5 – Risk Worker
+### Step 4.5 ,  Risk Worker
 
 The full panel's `risk` worker always loads security. Load premortem for RFC/Design and TDD risk analysis, using personas as internal reasoning sections without child launches.
 
@@ -165,7 +165,7 @@ Calibrate every risk finding with the shared consequence tiers and independent b
 
 ---
 
-### Step 4.6 – Code Review Pass (Conditional)
+### Step 4.6 ,  Code Review Pass (Conditional)
 
 If the document contains implementation logic (code snippets, pseudocode, algorithm descriptions, SQL migrations, API contract examples, or configuration samples), run a code review pass using the `doing-code-review` analysis approach.
 
@@ -182,7 +182,7 @@ Tag implementation findings `[Code]`. If no implementation logic is present, ski
 
 ---
 
-### Step 4.7 – Record Review Statistics (Mandatory)
+### Step 4.7 ,  Record Review Statistics (Mandatory)
 
 While merging Step 4, 4.5, and 4.6 returns, populate `## Review Statistics` per `review-staging` before writing the staging file:
 
@@ -196,7 +196,7 @@ Do not report results to the user until statistics are complete (including expli
 
 ---
 
-### Step 5 – Present Feedback
+### Step 5 ,  Present Feedback
 
 Output the feedback to a staging Markdown file per `review-staging`, and print a summary to the console.
 
@@ -341,7 +341,7 @@ Review written to: {reviews_dir}/2026-05-19-confluence-review-my-rfc-title.md
 
 ---
 
-### Step 6 – Offer to Post as Confluence Comment
+### Step 6 ,  Offer to Post as Confluence Comment
 
 After presenting feedback on console:
 

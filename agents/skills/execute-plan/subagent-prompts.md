@@ -4,47 +4,52 @@ Copy the relevant template, fill placeholders, and launch via your agent's sub-a
 
 ## Shared worker and result contract
 
-The runtime driver supplies the task scope, allowed paths, validation commands,
-evidence requirements, claim generation, and policy token. An execute-plan
-invocation already authorizes repository-scoped edits, tests, safe local
-recovery, and the per-task commit handoff. The worker must not ask
-conversational permission or call a user-question facility for those actions.
-Push, deploy, merge, external communication, access changes, and network
+The parent supplies the complete task body, canonical allowed paths, declared
+validation commands, acceptance criteria, and the log destination. The execute-plan
+invocation authorizes repository-scoped edits and relevant tests within that
+scope. Push, deploy, merge, external communication, access changes, and network
 operations remain gated.
 
-Use the driver's normalized result contract for every return: `success` needs
-evidence, `blocked` names a genuine hard gate and safe next action, `aborted`
-records an explicit stop, `error` records a runtime or tool failure, and
-`contract-violation` records the violated rule, recovery action, and evidence.
-Natural-language hesitation is not an approval state. Unknown or malformed
-results fail closed and must never be reported as degraded success.
+Return `success` only when implementation and required validation are complete
+and the execution log records fresh command identities, working directories,
+exit statuses, output identities, selected tests, changed paths, and coverage
+of each implement-owned criterion. Return `blocked` with the hard gate and
+safe next action, `aborted` for an explicit stop, `error` for a tool failure,
+or `contract-violation` with the violated rule and recovery evidence. A summary
+or log path alone does not establish success.
 
-A `success` return carries machine-verifiable evidence, per the
-machine-verifiable evidence obligation in
-`agents/skills/execute-plan/runtime-contract.md`: the identity of each
-validating command, the working directory it ran in, its exit status, the
-output identity of the captured result, the selected test identities, the
-changed paths measured against the launch baseline, and the plan-criterion
-coverage those changes satisfy. A narrative claim, a summary line, or a log
-path alone is not evidence, and the orchestrator never accepts one in place of
-the envelope.
+The worker implements only the supplied task. It does not select another task
+or continue execute-plan orchestration. Parent-owned checklist actions, including
+the exact planned `Commit:` obligation, remain with the parent. The done
+workflow owns the commit operation.
 
-The driver owns task selection, atomic claiming, checkpointing, reload, resume,
-and terminal-state transitions. The worker owns implementation and evidence;
-the done workflow owns the commit operation. Do not reproduce driver state
-transitions or host protocol details in a worker or done prompt.
+**Run briefing (cited by every worker prompt):** every implement, review, and
+fix worker prompt cites the run's briefing file `<BRIEFING_PATH>`
+(`{tmp_dir}/execute-plan/<PLAN_SLUG>/briefing.md`, created and maintained by the
+orchestrator per SKILL.md Step 0.4) as authoritative run context beside the
+plan: the current plan digest, the decisions and folds taken so far, the run
+conventions, and the current base tip. Read it whole; it is short. If the cited
+briefing file is absent, proceed from the plan alone, say so in the return, and
+never block on the briefing: it is advisory context, not a required read. The
+briefing never substitutes for the plan text, the task body, or the per-task
+logs, and citing it to a `done` worker does not widen the preceding-step-only
+log handoff: the briefing is run context, not a step log. Workers never edit
+the briefing.
 
-Each implement launch receives the driver's structured `single-task-worker`
-contract bound to the active task id, claim token and generation, complete task
-body, canonical allowed paths, declared validation commands and criteria,
-worker evidence owner, and worker-log destination. Treat those fields as
-authoritative even when caller notes contain conflicting prose. Do not select
-another task, resume execute-plan orchestration, or broaden scope. Parent-owned
-checklist actions are carried separately; in particular, the exact planned
-`Commit:` obligation stays with the parent's done receipt and is never worker
-evidence.
+**Capped returns:** the returned summary carries the verdict, the change
+identity (files, and the commit or patch identity where the contract carries
+one), and deviations only; command output, decision narrative, and detail
+belong in the execution log and the structured return sections, never in a
+long narrative summary.
 
-**Orchestrator:** after implement → verify → Step 1.2b intermediate review → mark checkboxes → `done` for a task, **launch the next task immediately**. The next-task launch rides the driver's atomic handoff (see the adapter profile contract in `agents/skills/execute-plan/runtime-contract.md`): it requires a fresh owner identity, claim token, generation, and launch receipt for every next task; a replayed handoff receipt is idempotent and returns the recorded outcome, and a handoff carrying the previous task's owner or token is refused before any launch. Do not ask the user for permission between tasks, between review rounds, or before Phase 3. See SKILL.md "Continuous execution" and Step 1.5.
+Each implement launch receives the task body, allowed paths, validation
+commands, acceptance criteria, and worker-log destination. Do not select another
+task or broaden scope.
+
+**Orchestrator:** after implement → verify → Step 1.2b intermediate review →
+mark checkboxes → `done` for a task, launch the next task immediately and
+sequentially. Do not ask the user for permission between tasks, review rounds,
+or before Phase 3. See SKILL.md “Continuous execution” and Step 1.5.
 
 Placeholders:
 
@@ -70,20 +75,10 @@ Placeholders:
 | `<REVIEW_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
 | `<ADDRESS_LOG_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review.log.md` |
 | `<MANIFEST_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` |
+| `<BRIEFING_PATH>` | `{tmp_dir}/execute-plan/<PLAN_SLUG>/briefing.md`; the orchestrator-maintained run briefing (SKILL.md Step 0.4) every worker prompt cites as run context beside the plan |
+| `<SCOPE_SUMMARY>` | The per-round scope summary the parent assembles from the plan's scope declarations, recorded user decisions, and cited backlog origins, records in `manifest.md` beside the round entry, and states once per round (SKILL.md Step 3.1): the must-fix versus out-of-scope list with the owning backlog reference per deferred capability; a round with no deferred content carries an empty summary rather than omitting the block; the worker reports a finding whose subject it marks out of scope as out-of-scope-adjudicated (owning backlog reference plus residual risk), never as blocking for this execution |
+| `<PRE_RESTART_RECORD>` | The pre-restart state lines the parent recorded in `manifest.md`'s free-text lines before this relaunch; a restart prompt after a recorded dispatch failure names the pre-restart state and the failure history so the restart verifies the orphaned state and the failure history from disk; empty on a first launch |
 | `<LOG_PASS_NUM>` | `1` on first launch for this log path; orchestrator increments on relaunch |
-| `<BATCH_GROUP_ID>` | Batch implement launch group id returned by the driver's batch opt-in claim (Step 1.2 batch contract) |
-| `<ANCHOR_SESSION_ID>` | Id of the one worker session every batch member resumes; never restart a session per member |
-| `<MEMBER_POLICY_TOKEN>` | Active member's scoped policy token; the orchestrator supplies a fresh token and moving baseline at each member boundary |
-| `<MEMBER_ORDINAL>` | Active member ordinal in the batch, 1-based, document order |
-| `<BATCH_SIZE>` | Total members in the batch (cap of four) |
-| `<ATTEMPT_ID>` | Driver attempt id for the active batch member's launch or resume (Step 1.2 batch contract; the address fan-out section uses `<FANOUT_ATTEMPT_ID>` for its own attempt id) |
-| `<FANOUT_ATTEMPT_ID>` | Address fan-out attempt id (`a1`, `a2`); the worker echoes it verbatim |
-| `<FINDING_ID_SUBSET>` | The worker's subset of review finding ids (Step 3.3 fan-out) |
-| `<WORKER_ALLOWED_FILES>` | The worker's canonical allowed-file list; its complete edit boundary (Step 3.3 fan-out) |
-| `<WORKER_SCOPE_TOKEN>` | Round- and attempt-bound worker scope token issued by the parent; an attempt-correlation nonce, not a scope credential (Step 3.3 fan-out) |
-| `<WORKER_WORKSPACE_PATH>` | The worker's isolated patch workspace under `{tmp_dir}/execute-plan/<PLAN_SLUG>/` (Step 3.3 fan-out) |
-| `<ADDRESS_WORKER_LOG_PATH>` | Per-worker address log path for one fan-out worker: `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review-w<W>.log.md` (Step 3.3 fan-out; see agent-logs.md) |
-| `<TASK_<K>_IMPLEMENT_LOG_PATH>` | Per-task implement log path for batch member K: `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<K>-implement.log.md` |
 | `<REVIEW_MODE_NOTES>` | Fresh-review framing + premortem-required note for Step 3.1 (see SKILL.md Verify-fix vs fresh review) |
 
 Log format and **create vs append** rules: see [agent-logs.md](agent-logs.md). If the log file already exists, **append** Pass `<LOG_PASS_NUM>` to the end; **never overwrite** prior passes. Each `done` reads **only logs from the immediately preceding worker step(s)**; not full session history.
@@ -101,27 +96,33 @@ Read and follow these skills before writing code:
 - Project guidelines from shared_docs_dir in ~/.ai-playbook/facts.md
 
 Plan file: <PLAN_PATH>
+Run briefing: <BRIEFING_PATH> (read whole; if absent, proceed from the plan alone and say so in the return; never edit it)
+Pre-restart record (relaunches only; omit on first launch): <PRE_RESTART_RECORD> (verify the recorded branch tip and expected in-flight paths against disk before implementing; report any mismatch in the return)
 Task: ### Task <TASK_NUM>: <TASK_TITLE>
 
 < TASK_BODY >
 
 ## Validation Commands (must all pass before you return)
 
+The prompt's command set includes the task's bound scope-intersecting plan validation commands explicitly, so the worker runs them as task evidence rather than inferring the task-local set.
+
 <VALIDATION_COMMANDS>
 
 ## Rules
 
 1. Implement ONLY this task's admissible clauses. Complete every `- [ ]` that is repository implementation, or a release-gate exception that already records a current bound receipt plus **why executable now** and a `completion evidence` criterion. Refuse and return `blocked` for external prerequisites or release-gate items missing that receipt shape; do not implement unauthorized work.
-2. Treat the policy token and task path list as the complete authorization boundary. Do not invoke raw unmediated commands, network actions, external communication, push, deploy, merge, or access changes.
+2. Treat the task path list as the complete edit boundary. Do not invoke raw unmediated commands, network actions, external communication, push, deploy, merge, or access changes.
 3. Follow RED → GREEN when the task specifies it; run tests and show fresh output.
 4. Touch only files listed under this task's `Files:` (plus imports/wiring required for compile).
 5. Fix ALL test failures before returning; including failures that seem unrelated.
-6. Do NOT commit; the orchestrator launches `done` after verification.
+6. Do NOT commit; the orchestrator runs the done boundary after verification.
 7. Do NOT edit the plan file; the orchestrator marks checkboxes.
 8. **Update execution log** at `<IMPLEMENT_LOG_PATH>` before returning (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md). Include commands run, decisions, errors, and full return payload.
 9. **No silent gate-satisfying rewrites of human-authored prose:** when a gate or validator fails on prose the user authored, do not rewrite the passage wholesale and do not silently substitute its wording, punctuation, or structure. Make only the narrowly-scoped edit the gate actually requires, only inside the lines this run's own change touches (the hunks this run edited, not merely the same file), and report the edit in the return or commit summary; when the failures reach untouched user prose, or no minimal edit exists, stop and surface the conflict for the user to adjudicate (returned-for-ask shape: name the gate, the failing lines, and the options). Whole-file rewording of user-authored text is out of scope for any worker, always. Restoring the user's original text outranks a green gate. Text you authored this run is yours to fix freely; this pin never applies to it and never excuses stopping for routine fixable failures.
 10. **Read-before-edit discipline:** read-before-edit is mandatory per file per session; Read a file in this session before its first edit, and re-Read it after any external-change signal (a peer commit, a plan fold, a formatter run, or a `modified since read` failure) before editing it again. A fresh subagent context inherits no read state from the parent, so never treat a parent-session Read as your own.
 11. **Door on a mutator in the diff implies:** helper grep for the banned path, same-change-set helper retarget, and owning integration class green in the task's evidence.
+12. **Capped return:** keep the returned narrative summary to the verdict, the change identity (changed paths), and deviations; command output, decision narrative, and full detail belong in the execution log (rule 8), not in the return.
+13. **Provisioned checkout only:** stay inside the provisioned checkout your launch context names; when that worktree or its branch is missing, return `blocked` naming the missing worktree or branch, and never create a worktree, branch, or checkout to recover.
 
 ## Return format
 
@@ -155,102 +156,7 @@ success | blocked
 - Path: <IMPLEMENT_LOG_PATH> (must exist on disk)
 ```
 
----
-
-## Implement Task Batch
-
-Use this template instead of **Implement Task** only for a batch implement launch under the Step 1.2 batch contract (up to four file-disjoint tasks, ONE implement sub-agent launch, one session; see SKILL.md **Batch option (disjoint tasks)**).
-
-```
-You are implementing an ordered batch of file-disjoint tasks from an implementation plan as ONE session: implement only the active member at a time, return a machine-readable member checkpoint at each task boundary, then advance to the next member in the same session.
-
-Read and follow these skills before writing code:
-- ~/.agents/skills/tdd-guide/SKILL.md
-- ~/.agents/skills/unit-test-runner/SKILL.md (for test execution only; you MAY modify code)
-- Project guidelines from shared_docs_dir in ~/.ai-playbook/facts.md
-
-Plan file: <PLAN_PATH>
-Batch group id: <BATCH_GROUP_ID>
-Anchor session id: <ANCHOR_SESSION_ID> (resume this session for every member; never start a new session per member)
-Member policy token: <MEMBER_POLICY_TOKEN> (active member only)
-Active member ordinal: <MEMBER_ORDINAL> of <BATCH_SIZE>
-Attempt id: <ATTEMPT_ID>
-
-Ordered members (implement ONLY the active member's section per pass):
-
-### Member 1: Task <TASK_NUM_1>: <TASK_TITLE_1>
-< TASK_1_BODY >
-Canonical `Files:` list: <TASK_1_FILES>
-Task-local validation command: <TASK_1_VALIDATION>
-Implement log path: <TASK_1_IMPLEMENT_LOG_PATH>
-
-### Member 2: Task <TASK_NUM_2>: <TASK_TITLE_2>
-< TASK_2_BODY >
-Canonical `Files:` list: <TASK_2_FILES>
-Task-local validation command: <TASK_2_VALIDATION>
-Implement log path: <TASK_2_IMPLEMENT_LOG_PATH>
-
-(continue for every member up to <BATCH_SIZE>; never more than four)
-
-## Rules
-
-1. Implement ONLY the active member's admissible clauses: complete every `- [ ]` that is repository implementation, or a release-gate exception that already records a current bound receipt plus **why executable now** and a `completion evidence` criterion. Refuse and return `blocked` for external prerequisites or release-gate items missing that receipt shape; do not implement unauthorized work.
-2. The member policy token plus the active member's canonical `Files:` list is the complete authorization boundary for this pass. NEVER edit a file that belongs to another member (no cross-task file edits), the plan file, or anything outside the active member's list (plus imports/wiring required for compile).
-3. Follow RED → GREEN when the active member's task specifies it and run THAT member's task-local validation command with fresh output; never substitute another member's command or the plan's full `## Validation Commands` block.
-4. Do NOT commit; the orchestrator launches `done` per task after each member checkpoint. Do NOT invoke raw unmediated commands, network actions, external communication, push, deploy, merge, or access changes.
-5. Before the session advances past a member, write that member's execution log into its own task-<N>-implement.log.md at that member's implement log path (Pass `<LOG_PASS_NUM>`; create if missing, else append; see agent-logs.md): commands run, decisions, errors, that task's RED/GREEN evidence, and the member checkpoint below.
-6. Return the machine-readable member checkpoint BEFORE the session advances; only after the checkpoint, resume the same session for the next member using the fresh member policy token and moving baseline the orchestrator supplies.
-7. Fix ALL test failures of the active member before checkpointing; a member you cannot complete returns `blocked` for that member and stops the batch advance.
-8. **No silent gate-satisfying rewrites of human-authored prose:** when a gate or validator fails on prose the user authored, do not rewrite the passage wholesale and do not silently substitute its wording, punctuation, or structure. Make only the narrowly-scoped edit the gate actually requires, only inside the lines this run's own change touches (the hunks this run edited, not merely the same file), and report the edit in the return or commit summary; when the failures reach untouched user prose, or no minimal edit exists, stop and surface the conflict for the user to adjudicate (returned-for-ask shape: name the gate, the failing lines, and the options). Whole-file rewording of user-authored text is out of scope for any worker, always. Restoring the user's original text outranks a green gate. Text you authored this run is yours to fix freely; this pin never applies to it and never excuses stopping for routine fixable failures.
-9. **Read-before-edit discipline in the single batch session:** read-before-edit is mandatory per file per session; Read a file in this session before its first edit. Member boundaries are external-change signals: re-Read the next member's files in this session before the first edit to them.
-
-## Member checkpoint (machine-readable; one per member, before the session advances)
-
-### Batch identity
-- Group id: <BATCH_GROUP_ID>
-- Anchor session id: <ANCHOR_SESSION_ID>
-- Attempt id: <ATTEMPT_ID>
-- Member ordinal completed: <MEMBER_ORDINAL> of <BATCH_SIZE>
-- Member policy token: <MEMBER_POLICY_TOKEN>
-
-### Member status
-success | blocked
-
-### Tests (active member's task-local validation command)
-- Command: ...
-- Result: pass | fail
-- Output summary: (key lines only)
-
-### Evidence envelope (active member; required when member status=success)
-- Command identity: the member's task-local validating command, verbatim
-- Working directory, exit status, output identity, selected test identities
-- Changed paths: every path changed against the moving baseline
-- Plan-criterion coverage: which task criteria each changed path satisfies; map every acceptance criterion the implement step owns, and an implement-owned criterion this return cannot satisfy routes the return to `status=blocked` with a Blockers entry naming the criterion, never a silent omission
-
-### Implemented clauses (active member)
-- (list each `- [ ]` item you completed)
-
-### Files changed (active member only)
-- path/to/file
-
-### Blockers (if member status=blocked)
-- What failed and what you tried
-
-### Execution log
-- Path: <TASK_<MEMBER_ORDINAL>_IMPLEMENT_LOG_PATH> (must exist on disk)
-
-## Final return format (after the last member or a blocked member)
-
-### Per-task status blocks
-- Member 1 (Task <TASK_NUM_1>): success | blocked; validation: pass | fail; log: <TASK_1_IMPLEMENT_LOG_PATH>
-- Member 2 (Task <TASK_NUM_2>): success | blocked; validation: pass | fail; log: <TASK_2_IMPLEMENT_LOG_PATH>
-- (one block per member attempted)
-
-### Session and attempt identity
-- Group id: <BATCH_GROUP_ID>; anchor session id: <ANCHOR_SESSION_ID>; attempt id: <ATTEMPT_ID>
-```
-
-**Parent gate on every member result:** the parent rejects any result whose member, member policy token, ordinal, or changed paths do not match the active group state (group id, active member ordinal, current token, canonical `Files:` set) recorded for the batch implement launch; a mismatched result is not merged and the member is re-driven. A result whose evidence envelope is missing, malformed, or narrative-only fails closed the same way per the machine-verifiable evidence obligation in `agents/skills/execute-plan/runtime-contract.md`; it is never merged as a degraded success.
+**Parent obligation:** verify the worker return against its execution log, the declared validation commands, the task scope, and every implement-owned acceptance criterion. Commit and closeout remain parent-owned.
 
 ---
 
@@ -263,6 +169,7 @@ You are one intermediate task review worker for an execute-plan Step 1.2b pass.
 
 Worker lens: <INTER_REVIEW_WORKER>
 Plan: <PLAN_PATH>
+Run briefing: <BRIEFING_PATH> (read for run context: decisions, folds, conventions; the Changed context section below remains the complete review scope)
 Task: ### Task <TASK_NUM>: <TASK_TITLE>
 
 < TASK_BODY >
@@ -270,7 +177,7 @@ Task: ### Task <TASK_NUM>: <TASK_TITLE>
 ## Changed context (the complete review scope)
 
 - Canonical `Files:` list: <TASK_FILES>
-- Changed-context diff: git diff HEAD -- <TASK_FILES> (the task's changes are uncommitted in the working tree at Step 1.2b time; the `-- <TASK_FILES>` restriction is what excludes earlier batch members' uncommitted changes, the member `Files:` sets being pairwise disjoint; plus every new untracked file among the task's `Files:` entries, read in full)
+- Changed-context diff: git diff HEAD -- <TASK_FILES> (the task's changes are uncommitted in the working tree at Step 1.2b time; include every new untracked file among the task's `Files:` entries, read in full)
 - Fresh validation output for this task's gates (from the Step 1.2 implement result):
 
 < TASK_VALIDATION_OUTPUT >
@@ -306,47 +213,6 @@ One self-contained entry per finding:
 
 ---
 
-## Done (per task)
-
-```
-You are finalizing one completed plan task.
-
-Read and follow: ~/.agents/skills/done/SKILL.md
-
-Context:
-- Plan: <PLAN_PATH>
-- Completed task: ### Task <TASK_NUM>: <TASK_TITLE>
-- Suggested commit subject: <COMMIT_HINT>
-- Manifest: <MANIFEST_PATH>
-- Captured backlog paths: the backlog paths recorded on the task's `inter_review` line (empty when Step 1.2b did not run or captured nothing); include those repository files in the commit scope
-
-The execute-plan invocation authorizes the repository-scoped commit for this
-task. Run the done workflow without asking conversational permission. Push,
-deploy, merge, external communication, and access changes remain gated and are
-outside this prompt.
-
-## Preceding-step log: read before learn (required)
-
-Step 1.4 follows Step 1.2 implement, plus Step 1.2b intermediate review when it ran for this task. Read in full before invoking `learn`:
-- <IMPLEMENT_LOG_PATH>
-- <TASK_REVIEW_LOG_PATH> (`task-<N>-review.log.md`): required only when Step 1.2b ran for the task
-
-Do not read logs from other tasks or review rounds. If <IMPLEMENT_LOG_PATH> is missing or empty, stop and return `blocked: missing implement log`; do not commit. If Step 1.2b ran and <TASK_REVIEW_LOG_PATH> is missing or empty, stop and return `blocked: missing <TASK_REVIEW_LOG_PATH>`; do not commit.
-
-## Scope
-
-Commit ONLY changes from this task; the commit scope additionally includes any Driving-force backlog items this task's Step 1.2b captured (repository-file captured items ride the task's done commit; an external or non-tracked destination records its exception on the task's `inter_review` line; a captured item left out of the commit defeats the durability guarantee). If `git status` shows unrelated uncommitted files from other work, do not stage them; ask is not available; leave them unstaged.
-
-Run the full done workflow: read preceding-step log → learn → docs-branch → sensitive-data scan → commit.
-
-Return (orchestrator blocks the next task without these):
-- Commit SHA (or explicit justified "nothing to commit")
-- Commit message used
-- Any files left unstaged intentionally
-```
-
----
-
 ## Done (per review iteration)
 
 ```
@@ -360,11 +226,13 @@ Context:
 - Review doc: <REVIEW_DOC_PATH>
 - Address-review ran: yes | no (no = Step 3.3 skipped; still run learn + commit if anything is uncommitted)
 - Manifest: <MANIFEST_PATH>
+- Run briefing: <BRIEFING_PATH> (read whole for run conventions and decisions context; it is run context, not a preceding-step log, and does not widen the preceding-step handoff below)
 
 The execute-plan invocation authorizes only the repository-scoped review-fix
 commit for this iteration. Do not ask conversational permission for that
 commit. Push, deploy, merge, external communication, and access changes remain
-gated.
+gated. This is a mid-run per-task boundary: pass `--boundary-class per-task` to the
+commit run (the done runner's usage header is the canonical roster split).
 
 ## Preceding-step logs: read before learn (required)
 
@@ -372,8 +240,6 @@ Step 3.4 follows Step 3.1 review and optionally Step 3.3 address. Read in full b
 
 - <REVIEW_LOG_PATH> (from Step 3.1; required)
 - <ADDRESS_LOG_PATH> (from Step 3.3; only if address-review ran; omit otherwise)
-- When the round fanned (Step 3.3 fan-out): <ADDRESS_LOG_PATH> is the parent-owned base log (heartbeat plus merge pass); read it plus every per-worker address log for the round (`review-r<R>-receiving-review-w<W>.log.md`), or the single address log (no fan-out) otherwise.
-- When the round fanned: before accepting the round, also read the parent merge and terminal-subset receipts from the base log merge pass; a missing base log, merge pass, or per-worker log is `blocked: missing <path>`.
 
 Do **not** read implement logs or logs from prior review rounds. If a required preceding-step log is missing or empty, stop and return `blocked: missing <path>`; do not commit.
 
@@ -409,6 +275,7 @@ Review round: <REVIEW_ROUND>
 Base branch: <BASE_BRANCH>
 Head: current branch
 Source digest: <SOURCE_DIGEST>
+Run briefing: <BRIEFING_PATH> (read whole; run conventions and decisions context; never edit it)
 
 ## Session handoff (required; do not invent)
 
@@ -518,13 +385,15 @@ Do NOT fix code. Do NOT commit. Review only. Loop exit uses unresolved `blocking
 
 ## Review lens worker
 
-Use from the execute-plan **parent** during Step 3.1 (default path). One launch per selected lens. Launch the panel in parallel.
+Use from the execute-plan **parent** during Step 3.1 (default path) or from the parent's Step 1.4b mechanism design review (one architecture-lens launch against the anchor task's mechanism). One launch per selected lens. Launch the panel in parallel. A lens launch refusal is a pre-start dispatch failure recorded per the dispatch-mode paragraph, never a lens verdict, and the worker slot it would have occupied stays reusable for the resumed launch.
 
 ```
 You are one review lens worker for an execute-plan Phase 3 pass.
 
 Lens: <LENS_NAME>
 Plan: <PLAN_PATH>
+Run briefing: <BRIEFING_PATH> (read for run context: decisions, folds, conventions; the Scope section remains the review scope)
+Scope summary: <SCOPE_SUMMARY> (the parent-assembled must-fix versus out-of-scope list for this round; each deferred capability names its owning backlog reference; report a finding whose subject the summary marks out of scope as out-of-scope-adjudicated, naming the owning backlog reference and the residual risk, rather than as blocking for this execution)
 Base: <BASE_BRANCH>
 Head: HEAD
 Diff: git diff <BASE_BRANCH>...HEAD
@@ -556,6 +425,7 @@ Read and follow: ~/.agents/skills/receiving-review/SKILL.md
 
 Plan: <PLAN_PATH>
 Review doc: <REVIEW_DOC_PATH>
+Run briefing: <BRIEFING_PATH> (read whole; run conventions and decisions context; never edit it)
 
 ## Review Scope (two tiers)
 
@@ -606,71 +476,3 @@ Fix findings on **explicit must-fix** paths when valid. For unlisted paths, fix 
 ```
 
 ---
-
-## Address Fan-out Worker
-
-Use only when the execute-plan **parent** fans Step 3.3 per the SKILL.md Step 3.3 fan-out contract (file-affinity grouping, up to three workers). One launch per worker subset. The parent owns the staging-doc merge, the base address log heartbeat and merge pass, and the single per-round commit; the worker owns only its isolated workspace and its per-worker log.
-
-```
-You are one address fan-out worker fixing a subset of code review findings for a completed plan.
-
-Read and follow: ~/.agents/skills/receiving-review/SKILL.md
-
-Plan: <PLAN_PATH>
-Review doc (read-only for you): <REVIEW_DOC_PATH>
-Review round: <REVIEW_ROUND>
-
-## Your assignment (fill from the parent)
-
-- Finding id subset: <FINDING_ID_SUBSET>
-- Allowed files (canonical; your complete edit boundary): <WORKER_ALLOWED_FILES>
-- Worker scope token: <WORKER_SCOPE_TOKEN> (an attempt-correlation nonce: it binds your return to this round and attempt only; scope enforcement is the parent's patch witness, so do not treat it as an authorization to touch anything)
-- Attempt id: <FANOUT_ATTEMPT_ID>
-- Isolated workspace path: <WORKER_WORKSPACE_PATH> (e.g. {tmp_dir}/execute-plan/<PLAN_SLUG>/address-r<R>-w<W>-a<A>/)
-- Per-worker log path: <ADDRESS_WORKER_LOG_PATH> (e.g. {tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review-w<W>.log.md; see agent-logs.md)
-
-Fix only your subset findings on your allowed files; do not touch findings outside your subset, do not edit the review doc (the orchestrator merges), and do not commit.
-
-## Instructions
-
-1. Read your subset findings in the review doc. Findings outside your subset are outside your contract; do not act on them even if you notice them.
-2. Keep receiving-review per-finding Fix/Triage semantics unchanged for your subset: fix valid findings on your allowed files, and triage each subset finding `done`, `drop`, or `pending` with a one-line reason.
-3. Scope-limited validation re-runs: after each root-cause fix, re-run only the validation commands that exercise your changed files; the parent re-runs the full Validation Commands block once after all workers return:
-
-<VALIDATION_COMMANDS>
-
-4. Do not create durable backlog items: the parent owns all durable backlog items for valid findings you do not fix. Leave every valid finding you are not fixing at `pending` with the reason the parent should capture.
-5. Write only inside your isolated workspace path and your per-worker log path (Pass <LOG_PASS_NUM>; create if missing, else append; see agent-logs.md). Never write the review doc, the base `review-r<R>-receiving-review.log.md`, the manifest, machine state, or git history.
-6. If the parent requests cancellation of your attempt, stop immediately and write nothing further: a timed-out or failed attempt does not authorize the worker to keep writing after the parent requests cancellation.
-
-## Return format
-
-### Status
-success | blocked
-
-### Token and attempt echo
-- Scope token: <WORKER_SCOPE_TOKEN> (echo verbatim)
-- Attempt id: <FANOUT_ATTEMPT_ID> (echo verbatim)
-
-### Binary patch
-- Workspace-relative path to the patch file under your isolated workspace (covers only your allowed files; must contain no commit objects)
-- Drop-only round (every subset finding triaged `drop`, no code change): write `none` instead of a path, leave the Changed-path receipt empty, and omit the Patch digest line; any other patch-less shape fails the bridge
-
-### Patch digest
-- <sha256 of the patch file>
-
-### Changed-path receipt
-- one line per changed path; every path must appear in your allowed files
-
-### Per-finding triage
-- <finding id>: done | drop | pending; one-line reason (pending entries are the valid findings the parent must backlog)
-
-### Files changed
-- path/within/allowed/files
-
-### Tests run
-- Command + result (scope-limited re-runs only)
-
-### Execution log
-- Path: <ADDRESS_WORKER_LOG_PATH> (must exist on disk)
-```

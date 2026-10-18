@@ -37,6 +37,7 @@ Structural clarity stays in this agent. Comment and doc **prose** (redundant inl
 2. Redundant words: if a word is in the package/interface name, do not repeat it in the class name
 3. Cognitive complexity: flag methods with deep nesting or multiple branching paths
 4. Single responsibility: one method doing too many things
+5. Method readability (`quality#method-readability`): for changed code, report callbacks or nested blocks with substantial cognitive load or any observable side effect, method-local types, and methods meeting the method-length signal defined in `projects/.ai-playbook/jvm_guidelines.md` section 28. This adds a shape-and-length signal beyond complexity and single-responsibility checks. The existing cognitive-complexity criterion remains responsible for deep nesting, with no second nesting threshold. Keep clear, pure one-line mappings and guards inline. This check is warning-only: every finding has `blocking: false` and cannot affect readiness. Promote only in a separate reviewed change after this check has a true catch.
 
 **Ownership (tiered):** runtime behavior and algorithm correctness only. Do not report missing wiring, config binding gaps, or layer placement (see `review-panel-selection.md`).
 

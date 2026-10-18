@@ -36,21 +36,30 @@ WHEN receiving code review feedback:
 
 Use this workflow when the user asks to process, triage, plan, address, or reply to existing PR review comments.
 
-1. Use the applicable source-specific workflow skill to resolve the feedback context and fetch all live comments or threads.
-2. Read all unresolved thread bodies before deciding what to implement.
-3. Spot-check resolved or outdated threads against current code before skipping them.
-4. Verify each live comment against the referenced file and line.
-5. Identify the feedback source and load its source-specific workflow skill before replying or mutating feedback. The source adapter owns comment or thread retrieval, reply mechanics, resolution, and cleanup.
-6. **Check branch scope**: before staging any fix, confirm the file belongs to this branch's scope. If a comment touches a file outside the branch's folder (e.g., `individual/<name>/` while on a team branch), plan that fix as a separate commit to the appropriate branch; do not include it in the PR's branch commit.
-7. Map each live comment's problem shape to the root-cause families and search the applicable project and user-level lesson corpora for relevant learnings. Apply repository-specific facts from those learnings when evaluating the feedback.
-8. Classify each live comment as correctness bug, test quality, cleanup, docs, false positive, or needs clarification.
+1. Feedback-source steps inherit the github-pr-workflow Project-scope and remote-operation gate: on personal and pet projects it stops before remote access, leaving remote operations to the operator.
+
+   Use the applicable source-specific workflow skill to resolve the feedback context and fetch the complete live comment or thread inventory.
+2. For each relevant thread, inspect the parent comment and every reply, including each author's identity, timestamp, and body, before deciding what remains open. Distinguish the original request, the agent's response, and any later reviewer or operator response. Do not infer that a parent question is still open from its text or the thread's unresolved flag alone. If the comment connection is paginated, fetch every page before classifying the thread.
+3. Determine the current disposition from the full reply sequence and verify it against the current code. Do not repeat a question or implement a superseded request when an earlier reply already settled it, unless a later comment reopens or changes the request. When timing is relevant to explaining the disposition, cite the parent and reply dates.
+4. Spot-check resolved or outdated threads against current code before skipping them.
+5. Verify each actionable request against the referenced file and line.
+6. Identify the feedback source and load its source-specific workflow skill before replying or mutating feedback. The source adapter owns comment or thread retrieval, reply mechanics, resolution, and cleanup.
+7. **Pre-edit reconciliation**: before any edit or staging, compare the PR head metadata the source adapter already resolved (lifecycle state, base branch name, head branch name, head commit SHA) with the local checkout binding (the current local branch name and its HEAD commit), reusing metadata the workflow already resolved; no new remote query is issued. All four resolved fields are required: a resolved context lacking state, `baseRefName`, `headRefName`, or `headRefOid` routes to the unreadable-metadata stop. Stop outcomes, each naming its safe follow-up path before any edit happens:
+   - **Merged or closed PR**: stop; the safe follow-up path is a new follow-up branch off the base, to be selected and verified before edits.
+   - **Branch-name mismatch** (the local branch differs from the PR head branch): stop; the safe follow-up path is operator selection or creation of the correct local branch.
+   - **Advanced head** (the head branch name matches but the local HEAD commit differs from the head commit SHA): stale stop; never pull, fetch, or switch automatically.
+   - **Unreadable metadata**: stop; never infer lifecycle state from the local branch name.
+   A matching state (open PR, same branch, same head commit) proceeds unambiguously. A local-only personal or pet project never queries the remote for this step: the comparison consumes the metadata the workflow already resolved, or the operator supplies the state. The live comparison is the source of truth at pre-edit time, and the review-thread marker's recorded branch head is refreshed after an operator rebind. Machinery admission: witnessed incident, a review fix begun after its PR had merged while the local checkout named a different feature branch (docs/history/backlog/2026-10-09-receiving-review-pr-checkout-preflight.md); expected catch frequency, rare but recurring (every session entering the workflow on a merged or rebound PR matches one stop class; one witnessed instance so far); false-positive cost, near zero (the only false positive is stopping on a truly matching checkout, a one-line verification the session then proceeds past); review date 2027-01-16; the step augments the existing branch-scope check (step 8), which stays in place for folder scope.
+8. **Check branch scope**: before staging any fix, confirm the file belongs to this branch's scope. If a comment touches a file outside the branch's folder (e.g., `individual/<name>/` while on a team branch), plan that fix as a separate commit to the appropriate branch; do not include it in the PR's branch commit.
+9. Map each live comment's problem shape to the root-cause families and search the applicable project and user-level lesson corpora for relevant learnings. Apply repository-specific facts from those learnings when evaluating the feedback.
+10. Classify each live comment as correctness bug, test quality, cleanup, docs, false positive, or needs clarification.
    - Architectural-question boundary: when a reviewer asks whether a new capability should exist, classify the thread as a design decision. If the current contract and authoritative guidelines do not settle it, stop and ask the human partner before posting any substantive accept/reject reply (same enforcement pattern as "Handling Unclear Feedback"). If the contract does settle it, reply with the contract evidence and no roadmap implication.
-9. When a bot cites a guideline to justify a flag, look up the guideline and confirm it applies to this specific file type before implementing. Standard license copyright headers, for example, are not subject to PII redaction rules even if the guideline covers the same keyword (see `coding_guidelines.md §12`).
-10. Deduplicate comments by root cause. Multiple threads about the same root cause become one task.
-11. If any item is unclear, stop and ask before implementing.
-12. Implement one root-cause task at a time and verify after each fix.
-13. Use the source adapter to reply to each comment after implementation or after deciding no code change is needed. Apply the target-thread verification gate on every reply: resolve the PR and fetch the complete thread inventory; select the target by stable thread ID; verify the parent comment author, file path, line, and a distinctive body fragment; post through the source adapter; re-fetch the thread and verify that the new reply is attached to the intended parent. If the pre-check mismatches or the post-check shows a mismatch, stop and report the state; do not attempt a second reply until the target is re-resolved from current API data.
-14. Follow the source adapter's rules for resolution. Never silently delete, resolve, or replace feedback or responses.
+11. When a bot cites a guideline to justify a flag, look up the guideline and confirm it applies to this specific file type before implementing. Standard license copyright headers, for example, are not subject to PII redaction rules even if the guideline covers the same keyword (see `coding_guidelines.md §12`).
+12. Deduplicate comments by root cause. Multiple threads about the same root cause become one task.
+13. If any item is unclear, stop and ask before implementing.
+14. Implement one root-cause task at a time and verify after each fix.
+15. Use the source adapter to reply to each comment after implementation or after deciding no code change is needed. Apply the target-thread verification gate on every reply: resolve the PR and fetch the complete thread inventory; select the target by stable thread ID; verify the parent comment author, file path, line, and a distinctive body fragment; post through the source adapter; re-fetch the thread and verify that the new reply is attached to the intended parent. If the pre-check mismatches or the post-check shows a mismatch, stop and report the state; do not attempt a second reply until the target is re-resolved from current API data.
+16. Follow the source adapter's rules for resolution. Never silently delete, resolve, or replace feedback or responses.
 
 Every CR comment thread must get a reply before it is resolved. For fixes, reference the commit SHA when available and describe what changed. For false positives, explain why no change was made.
 
@@ -60,7 +69,7 @@ When a plan is needed, save grouped tasks to `{plans_dir}/<BRANCH-KEY>-<short-ti
 
 When the session begins processing external PR feedback, write a review-thread marker at `docs/tmp/review-threads/<session-slug>.json` before posting any reply or resolution. The marker carries the PR identity, the branch head, the tracked thread IDs, the per-thread dispositions (updated in the same file as triage decisions land), and the writer's session identity. Session identity derivation, named once here: the slug is derived from the runtime session id at marker-write time and recorded in the marker; done matches the current session's identity against the recorded value, and a marker whose recorded identity does not match is reported as stale and skipped, never gating an unrelated session's done run. The `pr` field carries either the canonical `owner/repo#N` string, or the session shape: numeric digits plus `repo` (`owner/name`) or `url` (a GitHub pull-request URL); `review_thread_gate.py --live` accepts both.
 
-Replies post idempotently against the marker: before creating a reply, verify the exact existing response is not already present on the thread (an exact-body match marks the reply already posted; never re-post it), and verify attachment by stable thread ID plus parent metadata (the same target-thread verification gate as Feedback-source Workflow step 13).
+Replies post idempotently against the marker: before creating a reply, verify the exact existing response is not already present on the thread (an exact-body match marks the reply already posted; never re-post it), and verify attachment by stable thread ID plus parent metadata (the same target-thread verification gate in Feedback-source Workflow).
 
 ## Forbidden Responses
 
@@ -181,11 +190,17 @@ SKIP only when one of these conditions holds:
   - Finding was already confirmed as `done` by prior code inspection
 ```
 
-Ordinary (non-blocking) findings are recorded in the staging record or captured as backlog; a review loop never launches additional rounds to chase them to zero (advisory guidance; class resolution per `review-plan`, Project strictness classes).
+Ordinary (non-blocking) findings are recorded in the staging record or captured as backlog; a review loop never launches additional rounds to chase them to zero.
+
+At a configured round cap, reaching the cap alone does not ask for or authorize closure. Close through the cap-closure terminal shape only after an explicit operator choice; the shape is generic across project types, and unresolved blocking findings still prevent closure.
 
 Do **not** drop a finding that asks to strengthen `## Validation Commands` solely because the skill or implementation prose already states the obligation. Skill correctness and validation-gate coverage are separate surfaces (see `development_lessons.md` #186).
 
-"Optional" or "Low" severity signals lower priority for the reviewer, not permission to defer action. If the fix is large or opens a new subsystem, say so briefly in the report but proceed unless a push-back condition above triggers. The Triage Decision Rule below still gates design-decision findings (architectural moves, refactors) - those remain ask-first regardless of severity.
+"Optional" or "Low" severity signals lower priority for the reviewer, not permission to defer action. If the fix is large or opens a new subsystem, say so briefly in the report but proceed unless a push-back condition above triggers.
+
+The Triage Decision Rule below still gates design-decision findings (architectural moves, refactors), which remain ask-first regardless of severity. One exception permits a single, explicitly scoped simplification or refactor attempt when the execution plan expressly authorizes it or the user directly instructs it.
+
+The exception does not authorize scope expansion. After the changed alternative receives a fresh review, ask before another change or review if the same blockers remain.
 
 Findings excluded under a SKIP condition or deferred by the user remain valid work unless the exclusion reason is invalidity (YAGNI, technically incorrect, false positive); capture those as backlog items per **Backlog capture for valid findings not fixed in scope** below.
 
@@ -378,7 +393,7 @@ Resolve the finding's owning repository before destination 1: the owning reposit
 
 Resolve destination 1 before consulting any later destination; a failed resolution never falls through. A missing `{backlog_dir}` key or missing directory is a bootstrap trigger: run a `bootstrap-ai-playbook` recovery pass to resolve or create the backlog home, and if it still does not resolve, stop and ask the user before recording anywhere else. In a non-interactive run, return that ask to the orchestrator per **Fix-risk triage when fixes regenerate findings**; do not resolve it by choosing a later destination.
 
-The mechanical second line of defense is `scripts/check_backlog_inbox_location.py`, run by the done flow, which rejects files matching backlog-inbox filename shapes outside the backlog home, over both the tracked tree and untracked files inside the named hot dirs (the 2026-08-30 incident file was untracked).
+The mechanical second line of defense is `scripts/check_backlog_inbox_location.py`, run by this skill's backlog capture step (the demotion program moved the filing duty here; the done landing roster no longer carries the gate), which rejects files matching backlog-inbox filename shapes outside the backlog home, over both the tracked tree and untracked files inside the named hot dirs (the 2026-08-30 incident file was untracked).
 
 Destination, in order:
 
@@ -402,6 +417,7 @@ Each new or updated item still carries:
 - `Dedup probe:` the keyword search run over the open backlog corpus (item filenames plus Problem bodies), the nearest item(s) found, and either the distinction from each or an explicit merge recommendation
 - When the item fixes shared skills used by other repos: `Priority: critical` (or high) plus a `Consumer urgency:` line stating that consumer projects that run the skill need the fix, and that the skills-repo personal priority profile must not park or defer it as formal-hardening for the skills repo alone
 - Origin class: exactly one provenance value on every newly captured item, from the closed set: `Origin class: self-serving` (the failure or improvement was witnessed on the skills repo's own runtime; no consumer project is involved), `Origin class: consumer-feedback (company)` (witnessed in a company project that consumes these skills), or `Origin class: consumer-feedback (pet)` (witnessed in the owner's personal pet projects that consume these skills). Ordering semantics, next to the Consumer urgency rule above: at equal priority, consumer-feedback outranks self-serving, and the company/pet tag names which project family's priority profile (guidelines rule 68) applies when a shared-skill fix trades one consumer family against the other. A consumer-feedback item that also meets the Consumer urgency conditions carries both lines; the two lines compose (provenance plus never-profile-deferred), neither replaces the other.
+- Deferred findings whose subject is feature behavior (a code-only cleanup with no deferred behavior is not one): the item names the missing behavior in feature-oriented terms, not task-key-oriented, and states the recovery boundary with evidence: what current code or tests already recover, what remains unrecovered when the caller does not retry, who owns the retry or recovery, and the condition that makes the gap relevant; the same item records the SOT disposition: when a feature-level implementer SOT exists, the item is linked from that SOT; when none exists, the item records the no-SOT route explicitly and creates no backlink task.
 
 Capture sources: review-fix cycles and execute-plan Step 1.2b intermediate task reviews; both record the Driving force line on every captured item. learn Step 1.8 skill-usage captures in the skills repo follow the same Consumer urgency rule when the defect harms consumer runs.
 
@@ -502,8 +518,6 @@ The Backlog capture `Class:` line is consumed directly by learn Step 1.8 filing 
 ### With `execute-plan` skill
 Invoked as a sub-agent between review rounds. Input is the staging doc from `doing-code-review`. Triage is authoritative for exit: implement valid fixes, mark `drop` or `done`, and leave only validated unresolved issues at `pending`. The orchestrator counts unresolved findings with `blocking: true`, not severity alone. Accepted fixes identify every owning or affected worker for the targeted follow-up. Phase 3 Hard Gate 23 applies **Fix-risk triage when fixes regenerate findings** before further folding; the focused verification round's worker composition follows `review-panel-selection.md`.
 
-Under the Step 3.3 fan-out contract, the orchestrator may hand the pass a finding id subset with its canonical allowed files, an opaque worker scope token, and its own per-worker log path (up to three file-affinity workers per fanned round); the subset worker does not edit the staging doc and does not commit. The parent merges the returned per-finding triage into the staging doc and sidecar, re-runs the full Validation Commands block once after all workers return, and lands one address commit per round. Contract boundary: `extensions.address_fanout` is emitted and validated only for current-v1 sidecars; versionless legacy sidecars keep the existing single-worker path and are not upgraded by receiving-review; the parent, not any subset worker, writes the sidecar extension and runs the final `--hard` validation.
-
 The Step 1.2b intermediate task review is a second consumer; execute-plan Step 1.2b defines the pass (changed context, worker selection, and record). This skill contributes **Backlog capture** and the Driving force line for off-plan findings; repository-file captured items ride the task's done commit; an external or non-tracked destination records its exception on the task's `inter_review` line.
 
 ### With `done` skill
@@ -519,7 +533,7 @@ The maintenance survey resolves each open backlog item's profile and class per *
 Use reconciliation for recurring-root, contradictory-artifact, or evidence-ownership analysis. This skill retains fix-vs-backlog triage and does not treat reconciliation's artifact changes as independently reviewed; the original review orchestrator must run the next fresh round.
 
 ### With `github-pr-workflow` skill
-Source adapter for GitHub PR feedback: this skill's Feedback-source Workflow step 13 applies the target-thread verification gate through that skill's shared `verify_thread_attachment` operation, and its "Misplaced reply correction" protocol is the sanctioned deletion exception referenced by that skill's deletion rules. See `../github-pr-workflow/SKILL.md`.
+Source adapter for GitHub PR feedback: this skill's Feedback-source Workflow steps 1-3 rely on its complete thread and reply inventory, including author and timestamp metadata; step 15 applies the target-thread verification gate through its shared `verify_thread_attachment` operation. This skill's "Misplaced reply correction" protocol is the sanctioned deletion exception referenced by that skill's deletion rules. See `../github-pr-workflow/SKILL.md`.
 
 ### With `doing-code-review` / `review-agents`
 Accepted human findings that the panel missed feed Step 2.5 Guideline Pack awareness and optional catalog/overlay patches (see **Agent corpus feedback** above). Pattern IDs stay abstract; overlays and guidelines carry stack/project detail. Documentation and comment findings are evaluated with `review-agents/documentation.md` phase 2 gates, including the remove-or-freeze disposition for outdated docs (see **Documentation and Comment Findings** above).

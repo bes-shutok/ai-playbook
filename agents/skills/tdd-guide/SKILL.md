@@ -54,6 +54,7 @@ Only commit when **all** of the following are true:
 2. ALL compiler/linter warnings have been resolved
 3. The change represents a single logical unit of work
 4. Commit message clearly states whether it contains structural or behavioral changes
+5. The message leads with the why for the change (see coding_guidelines.md section 40)
 
 Use small, frequent commits rather than large, infrequent ones.
 

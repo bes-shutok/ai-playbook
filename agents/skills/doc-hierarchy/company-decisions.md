@@ -57,7 +57,8 @@ Per team agreement: a **high-level service overview**, not an in-depth feature c
 Gitignored or optional paths documented in the schema skill, not onboarding material:
 
 - `docs/tmp/`, LLM session scratch (gitignored)
-- `docs/history/reviews/`, LLM review/plan staging (gitignored)
+- `.ai-playbook/reviews/`, LLM review/plan staging (gitignored)
+- `.ai-playbook/metrics/`, execution metrics archive (gitignored; preserved add-only on the docs branch)
 
 ### Layer 3, Historical / AI context
 

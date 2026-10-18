@@ -125,8 +125,12 @@ the complete branch diff, not only to the highlighted line:
   the complete branch diff in production and test sources; keep fully
   qualified names only for the guideline's intentional exceptions
   (simple-name clashes, package/module metadata).
+- `jvm_guidelines.md` #27, "A repeated finite string vocabulary gets one
+  owning enum": repeated string arguments forming a closed semantic
+  vocabulary are the hint to check; the rule's candidate test is the
+  admission shape.
 
-These three `jvm_guidelines.md` rules are applied on every Java review,
+These four `jvm_guidelines.md` rules are applied on every Java review,
 not only after an incident.
 
 Assign findings to the normal owners: unused surface to simplification,

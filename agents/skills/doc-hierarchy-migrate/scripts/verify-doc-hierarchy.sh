@@ -77,8 +77,8 @@ gate_step2() {
     test -f docs/maintenance/company-guidelines.md || fail "docs/maintenance/company-guidelines.md missing (mirror classified)"
   fi
   test ! -e docs/reviews || fail "docs/reviews still at root"
-  test ! -d docs/history/reviews/reviews || fail "docs/history/reviews/reviews nested (bad mv)"
-  git check-ignore -q docs/history/reviews/ 2>/dev/null || fail "docs/history/reviews/ not gitignored"
+  test ! -d .ai-playbook/reviews/reviews || fail ".ai-playbook/reviews/reviews nested (bad mv)"
+  git check-ignore -q .ai-playbook/reviews/ 2>/dev/null || fail ".ai-playbook/reviews/ not gitignored"
   git check-ignore -q docs/tmp/ 2>/dev/null || fail "docs/tmp/ not gitignored"
   shopt -s nullglob
   for f in docs/api-for-*.md docs/*-sync*.md; do
@@ -175,6 +175,7 @@ validate_opening_toml_facts() {
     fi
     case "$dir" in
       docs/history/*/) [ -d docs/history ] || fail ".ai-playbook/facts.md stale or missing directory for $key: $dir" ;;
+      .ai-playbook/*/) [ -d .ai-playbook ] || fail ".ai-playbook/facts.md stale or missing directory for $key: $dir" ;;
       *) fail ".ai-playbook/facts.md stale or missing directory for $key: $dir" ;;
     esac
   done
@@ -209,7 +210,7 @@ gate_step6_finish() {
       "${canon_roots[@]}" 2>/dev/null && \
       fail "legacy root guideline paths still referenced in canonical docs"
     rg -q 'docs/reviews/' "${canon_roots[@]}" 2>/dev/null && \
-      fail "docs/reviews/ still referenced (use docs/history/reviews/)"
+      fail "docs/reviews/ still referenced (use .ai-playbook/reviews/)"
     rg -q 'docs/examples/|docs/history/examples/' "${canon_roots[@]}" docs/maintenance/project-guidelines.md 2>/dev/null && \
       fail "docs/examples/ or docs/history/examples/ still referenced"
     rg -q 'docs/dashboards/' "${canon_roots[@]}" docs/maintenance/project-guidelines.md 2>/dev/null && \
@@ -226,7 +227,7 @@ gate_step6_finish() {
       | rg -v 'feature-notes/(proposals|samples)/' | rg -q . && \
       fail "nested history/feature-notes path referenced in canonical docs"
     rg -q 'docs/(context|plans|proposals)/' --glob '*.java' --glob '*.kt' --glob '*.{yml,yaml,sh,md}' . \
-      --glob '!docs/history/**' --glob '!docs/tmp/**' --glob '!docs/history/reviews/**' 2>/dev/null && \
+      --glob '!docs/history/**' --glob '!docs/tmp/**' --glob '!.ai-playbook/reviews/**' 2>/dev/null && \
       fail "legacy docs/context, docs/plans, or docs/proposals referenced outside history/"
     if rg 'docs/[a-z][a-z0-9-]+/' --glob '*.java' --glob '*.kt' --glob '*.py' --glob '*.{yml,yaml,sh,md}' . 2>/dev/null \
       | rg -v 'docs/(architecture|maintenance|history|tmp)/' \
@@ -311,7 +312,7 @@ bootstrap_fixture_expected_mini() {
 - **Facts / guidelines:** `repo_facts_rel` → `.ai-playbook/facts.md` (gitignored repo agent runtime); `project_guidelines_rel` → `docs/maintenance/project-guidelines.md`.
 - **Shared knowledge:** `docs/architecture/`, `docs/maintenance/` (Layer 2) — update in the same PR/session when behavior, contracts, integrations, or ops change; see `docs/maintenance/project-guidelines.md` Documentation Hierarchy section.
 - **Historical context:** `docs/history/` (Layer 3) — reference only; active plans under `docs/history/plans/`, archives under `docs/history/plans/completed/`.
-- **LLM-only:** `docs/tmp/` at root; gitignored `docs/history/reviews/` — not canonical human Layer 2.
+- **LLM-only:** `docs/tmp/` at root; gitignored `.ai-playbook/reviews/`, not canonical human Layer 2.
 - **Wire catalogs (Layer 2):** `docs/maintenance/api-reference.md` when the service exposes HTTP APIs; other wire contracts under `docs/maintenance/` (BFF, sync, admin FE shapes). Do not recreate a separate examples tree or per-endpoint files under `maintenance/`; use `maintenance/api-reference.md` for caller samples.
 - **Doc path resolution:** Other skills resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{backlog_dir}`, `{proposals_dir}`, `{rfcs_dir}`, `{caller_catalog}` from `.ai-playbook/facts.md` TOML (via `using-skills` Step 0) and project guidelines, not from hardcoded skill defaults.
 - Use `doc-hierarchy-migrate` to relocate flat or module-split docs; use `doc-hierarchy-upkeep` for Layer 1/2 after migration; merge durable knowledge into topic-based `architecture/`, not `docs/<module>/` trees.
@@ -319,7 +320,7 @@ EOF
   cat > "$root/.ai-playbook/facts.md" <<'EOF'
 ```toml
 plans_dir = "docs/history/plans/"
-reviews_dir = "docs/history/reviews/"
+reviews_dir = ".ai-playbook/reviews/"
 tmp_dir = "docs/tmp/"
 backlog_dir = "docs/history/backlog/"
 backlog_completed_dir = "docs/history/backlog/completed/"
@@ -379,7 +380,7 @@ Follow the company service layout under `docs/`. Resolved paths for other skills
 | plans_completed_dir | docs/history/plans/completed/ |
 | backlog_dir | docs/history/backlog/ |
 | backlog_completed_dir | docs/history/backlog/completed/ |
-| reviews_dir | docs/history/reviews/ |
+| reviews_dir | .ai-playbook/reviews/ |
 | tmp_dir | docs/tmp/ |
 | proposals_dir | docs/history/feature-notes/proposals/ |
 | rfcs_dir | docs/history/feature-notes/ |
@@ -414,12 +415,11 @@ prepare_self_test_worktree() {
            "$dst/docs/history/investigations" \
            "$dst/docs/history/migrations" \
            "$dst/docs/history/feature-notes" \
-           "$dst/docs/history/reviews"
+           "$dst/.ai-playbook/reviews"
   cat > "$dst/.gitignore" <<'EOF'
 /.ai-playbook/
 /docs/facts.md
 /docs/maintenance/facts.md
-docs/history/reviews/
 docs/tmp/
 EOF
   git -C "$dst" init -q || { fail "could not init git repo in $(basename "$dst") worktree"; return 1; }
@@ -522,7 +522,7 @@ EOF
     || { fail "stale-bootstrap fixture missing stale plans_dir"; return 1; }
 
   expected_toml='plans_dir = "docs/history/plans/"
-reviews_dir = "docs/history/reviews/"
+reviews_dir = ".ai-playbook/reviews/"
 tmp_dir = "docs/tmp/"
 backlog_dir = "docs/history/backlog/"
 backlog_completed_dir = "docs/history/backlog/completed/"
@@ -626,7 +626,7 @@ gate_self_test() {
   rmdir "$optional_history_work/docs/history/context" \
         "$optional_history_work/docs/history/investigations" \
         "$optional_history_work/docs/history/migrations" \
-        "$optional_history_work/docs/history/reviews" \
+        "$optional_history_work/.ai-playbook/reviews" \
         "$optional_history_work/docs/history/plans" \
         "$optional_history_work/docs/history/feature-notes" \
         "$optional_history_work/docs/history/backlog/completed" \

@@ -91,10 +91,22 @@ For every changed normative example in the diff (request/response samples, confi
 - Either **validate** the example against the active schema, classifier, or mode rules it documents (run the validator, classifier, or rule check the example claims to satisfy), or build a structured **example inventory** recording the declared mode, required headers, protected fields, and expected result class.
 - An example that conflicts with its declared mode or field classification is a finding even when anchors and prose are correct. A syntactically valid example that would be rejected or classified differently under the rules it illustrates is a defect in the documentation.
 - Boundary: where full execution is impractical in the review context, the inventory satisfies the obligation. A successful documentation review must prove examples are not merely syntactically valid.
+- A changed example is **runnable** when it is presented with an invocation a reader is expected to execute (a fenced command, a shell-wrapped snippet, a documented CLI call). A runnable example is validated by replaying the complete displayed invocation context, outer shell or wrapper included, with representative fixtures, and the review evidence records the exact command and its result; checking only the inner language's syntax never satisfies the duty, because quoting, substitution, and heredoc boundaries fail at the wrapper before the inner program starts.
+- When replaying a runnable example is unsafe (including content from untrusted or unreviewed sources) or not meaningful in the review context, state that limitation in the review evidence and verify the wrapper's syntax or structure with a focused check; the validate-or-inventory obligation above stays for examples that are not runnable.
 
 Use pattern `documentation#missing-example-replay` when a changed example is neither validated nor inventoried, and `documentation#prose-example-conflict` when an example contradicts the rule it documents.
 
 A class-level comment whose only content is plan-slice identity (`P0.n`-style slice ids), a ticket key, or "this PR adds" narrative is a prose-delivery-slice-meta finding (Medium when it is the only class comment); require behavior-facing prose or deletion. See the Relocatable identifier inventory gate for the live gate. Pattern: `documentation#prose-delivery-slice-meta`.
+
+### Contract-impact closure (phase 1)
+
+When the diff changes a public contract invariant (a schema constraint, an API schema shape, a migration, or a canonical source reference), the replay duty above extends from changed examples to the invariant's directly dependent artifacts:
+
+- Enumerate the **directly dependent example and source-reference surfaces**: normative examples, schema summaries, and migration or executable-definition pointers in documents that name or depend on the changed invariant. The boundary-contract checklist's related documents and a reference search on the invariant's name are the discovery inputs; the read-set stays bounded to that dependency set. This is never a repository-wide documentation freshness scan.
+- **Replay** each dependent unchanged example against the changed invariant exactly as the changed-example replay prescribes (validate against the active rule, including version and variant constraints and equivalent format restrictions), and **reconcile** each dependent schema or executable-definition reference against the complete migration chain and generated schema contract.
+- A dependent example the changed invariant rejects, and a dependent reference the changed contract supersedes, are findings even though their documents are unchanged: use pattern `documentation#missing-contract-impact-replay`, state in the finding body that the artifact is out of the diff, and route per the orchestrator's contract-impact exception (`doing-code-review` section 4.9.2). Inline anchors are never attempted on unchanged documents.
+
+Scope boundary: only artifacts with a direct contract dependency enter the read-set; unrelated docs, broad freshness sweeps, and unrelated reviewer lenses stay out of scope.
 
 ### Plan / RFC prose (phase 1)
 
@@ -206,6 +218,17 @@ Also apply doc-type rules:
 | **Markdown docs in PR** | Plain language; no duplicate sections; link instead of pasting long excerpts |
 | **Plan / RFC prose** | Tasks self-explanatory via naming; no telegraphic bullets without subjects |
 
+#### 6. Plan-format readability gates (plans only)
+
+For plan documents, run after the decision-order gates:
+
+- **Terms first and always rendered:** the `## Terms` section is the plan dictionary; it is the first section after the header metadata block and renders even when empty. A plan whose Terms is missing, is not first, or is absent while the prose uses plan- or project-specific terms is a finding.
+- **Why section present and plain:** the `## Why` section follows Terms and carries the reason for the change in one to three plain sentences. A missing Why, or a Why that narrates history instead of the reason, is a finding.
+- **Dictionary coverage over the rule range:** from `## Why` through `## Evaluation Criteria` inclusive, prose stays human-readable with only required jargon, and every plan- or project-specific term used in that range has a `## Terms` entry. A range term without a Terms entry is a finding; this tightens gate 4 for this range, the reader's working surface.
+- **Counterparts:** the declaration audit (`review-plan` item 8) flags the section-order half; the plans skill template owns the format. Findings block like required elements.
+
+Suggest: reword to plain English, add the one-line Terms bullet, or (for a missing Terms or Why) add the section per the plans template.
+
 ### Living-doc gates: capability names, wire SOT, and consolidation
 
 Apply to prose in living Layer 1/2 documentation (overviews, architecture and maintenance topics) alongside the decision-order gates above; these checks stage findings, they do not reorder the gates.
@@ -214,6 +237,7 @@ Apply to prose in living Layer 1/2 documentation (overviews, architecture and ma
 - **Second wire SOT:** When a caller catalog restates OpenAPI schemas, enums, or status maps, stage `catalog is second wire SOT; thin-index to OpenAPI` (replace restated tables with a pointer plus audience-specific delta), not `update the catalog table to match`.
 - **Authority roles:** OpenAPI wire shape, workflow/domain Layer 2 rules, API examples, glossary entries, ADRs, and historical documents are separate authorities; duplicated normative prose within one authority consolidates to its owning document, while cross-authority references are pointers, not second SOTs. Do not flag legitimate audience-specific content as duplication.
 - **Consolidation finding shape:** When the same normative workflow rule appears in several living documents, classify each affected document's authority role and nominate no more than two current SOT owners before proposing any multi-document scope edit set; stage one consolidation finding naming the nominated owners instead of one finding per duplicated consumer, and record each affected consumer's disposition: pointer, audience-specific delta, historical context banner, or independent contract update; suggest a broad synchronized edit only when a consumer owns an independent contract that would otherwise go stale. Historical-path documents are not current SOT by default and can require an explicit context banner when stale content could mislead. Pattern: `documentation#prose-sot-consolidation`
+- **Local artifact homes:** In phase-2 prose review over durable project documentation (committed, human-facing project prose such as READMEs, guides, and runbooks; not generated artifacts, not historical records), when the prose states a configurable artifact home's concrete value or a temporary configuration detail (a review, certification, metrics, or scratch location that resolves from per-user or per-repository facts configuration and is owned by a shared workflow skill), stage a finding naming it duplication of workflow/configuration guidance: cite the owning facts source or skill, point at the single owner, replace the copy with a reference, and never invent a project-specific path. This gate stages despite decision-order gate 1 keeping user-facing README instructions: a concrete configurable artifact-home value is a duplicated configuration fact, not normative contract text. Rationale: durable docs state policy and stable concepts; configuration facts stay in facts sources. Do not flag legitimate audience-specific content or genuinely stable public URLs. Pattern: `documentation#prose-local-artifact-paths`
 
 Use pattern `documentation#prose-<slug>` for these findings (for example `documentation#prose-ticket-as-gate`, `documentation#prose-second-wire-sot`).
 

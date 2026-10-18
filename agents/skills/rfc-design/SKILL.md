@@ -26,7 +26,7 @@ description: >
 | User intent | Mode | Skill path |
 |-------------|------|------------|
 | Create or draft a new Design RFC | **Create** | Steps 0 → 0.1 → 1 → 2 → 3 |
-| Update an existing Markdown RFC file | **Edit** | **Read this skill + `references/rfc-sections.md` first**; skip Steps 0–0.1 unless scope changed; apply editing checklist (after the Edit mode writeability preflight below); run Step 2 (Light) when edit is substantial **or** after a formatting/readability cleanup pass (formatting alone misses contract gaps). Use targeted edits (`StrReplace`), not full-file overwrite, on large RFCs. Step 2.5 applies to edit-mode folds too. |
+| Update an existing Markdown RFC file | **Edit** | **Read this skill + `references/rfc-sections.md` first**; skip Steps 0, 0.1 unless scope changed; apply editing checklist (after the Edit mode writeability preflight below); run Step 2 (Light) when edit is substantial **or** after a formatting/readability cleanup pass (formatting alone misses contract gaps). Use targeted edits (`StrReplace`), not full-file overwrite, on large RFCs. Step 2.5 applies to edit-mode folds too. |
 | Review a local Markdown RFC only | **Review-local** | Step 2 on the provided draft; no regeneration |
 | Create a Technical Design Document (TDD) | **Redirect** | `tdd-design` (fixed sections 1-11 completeness gates) |
 | Review an RFC/TDD on Confluence | **Redirect** | `review-confluence-doc` (fetch page, review and comment only) |
@@ -41,15 +41,15 @@ description: >
 
 | Phase | Step | Hard gate? | Output |
 |-------|------|------------|--------|
-| Intake | Step 0 – Input collection | Yes | Input inventory only |
-| Intake | Step 0.1 – Assumptions and coverage | Yes | Coverage checklist for user confirm |
-| Draft | Step 1 – Generate RFC draft | No (after gates) | Full RFC sections 1–8 per structure below |
-| Review | Step 2 – Review pass (sub-agents) | Tiered (light default; full on request) | Staging review file under `{reviews_dir}/`; revised RFC |
-| Verify | Step 2.5 – Post-fold verification round | Yes, whenever blocking findings were folded | Fresh staging round `-r<N>` over the post-fold RFC bytes |
-| Deliver | Step 3 – Finalize | No | Markdown RFC only (findings folded in; no separate review artifact in chat) |
+| Intake | Step 0 ,  Input collection | Yes | Input inventory only |
+| Intake | Step 0.1 ,  Assumptions and coverage | Yes | Coverage checklist for user confirm |
+| Draft | Step 1 ,  Generate RFC draft | No (after gates) | Full RFC sections 1, 8 per structure below |
+| Review | Step 2 ,  Review pass (sub-agents) | Tiered (light default; full on request) | Staging review file under `{reviews_dir}/`; revised RFC |
+| Verify | Step 2.5 ,  Post-fold verification round | Yes, whenever blocking findings were folded | Fresh staging round `-r<N>` over the post-fold RFC bytes |
+| Deliver | Step 3 ,  Finalize | No | Markdown RFC only (findings folded in; no separate review artifact in chat) |
 | Handoff (optional) | After Step 3 | No | Offer `plans` when user wants implementation planning |
 
-**Section template:** Read `references/rfc-sections.md` when drafting §1–8, Technical Decision Notes, or editing an existing RFC. Read `references/contract-blueprint-example.md` before drafting or revising **§5 Contracts**.
+**Section template:** Read `references/rfc-sections.md` when drafting §1, 8, Technical Decision Notes, or editing an existing RFC. Read `references/contract-blueprint-example.md` before drafting or revising **§5 Contracts**.
 
 ## Documentation paths (doc-hierarchy aligned)
 
@@ -59,7 +59,7 @@ Read path keys from the opening TOML block in `.ai-playbook/facts.md` (see `usin
 |-----|------|----------------------------------|
 | `{rfcs_dir}` | Canonical **Design RFC** files (history, flat) | `docs/history/feature-notes/` |
 | `{proposals_dir}` | Pre-canonical RFC **drafts** only (optional) | `docs/history/feature-notes/proposals/` or legacy `docs/proposals/` |
-| `{reviews_dir}` | RFC review staging docs and `.stats.json` sidecars | `docs/reviews/` |
+| `{reviews_dir}` | RFC review staging docs and `.stats.json` sidecars | `.ai-playbook/reviews/` |
 | `{tmp_dir}` | Session scratch (not review staging) | `docs/tmp/` |
 
 **Save location rules:**
@@ -87,7 +87,7 @@ Do NOT include generation-time reasoning, meta commentary, or attribution.
 
 ## Terminology (Mandatory)
 
-Place **`# Terminology`** (or `# Dictionary`) at the **very beginning** of the document. It is the **only** block before **`### 1. Header`**. Numbered sections 1–8 and any **Addendum** sections follow Header.
+Place **`# Terminology`** (or `# Dictionary`) at the **very beginning** of the document. It is the **only** block before **`### 1. Header`**. Numbered sections 1, 8 and any **Addendum** sections follow Header.
 
 ### Reader-facing glossary (not writer instructions)
 
@@ -119,11 +119,11 @@ Must be explained if used: RBAC, SSO, IAM, PII; company/product abbreviations; c
 ### Format
 
 - Bullet list; **bold term** first; one short definition per bullet.
-- Sort entries **A–Z** by the bold term (ignore leading "The").
+- Sort entries **A, Z** by the bold term (ignore leading "The").
 - No repetition of full definitions elsewhere in the document; body may use the term once defined.
 - Do not bold cross-references or emphasis inside a definition; use plain words for other glossary terms already defined above.
 
-### Bold and emphasis (§1–8 and Addendum)
+### Bold and emphasis (§1, 8 and Addendum)
 
 - **Terminology only:** bold the term label at the start of each glossary bullet (`- **Term**:`). Nowhere else in the RFC.
 - **Body sections:** use `####` / `#####` headings to partition content. Do not bold glossary terms, operation names, or whole sentences for emphasis.
@@ -138,7 +138,7 @@ After **`### 8. Testing & Rollout`**, optional **`### Addendum A.`**, **`### Add
 - Naming rationale tables (e.g. `HAS_OCCURRED` vs `EXISTS`)
 - Accepted risks overflow when §8 is already dense
 
-Addenda use the same heading rules as §1–8 (see `references/rfc-sections.md`).
+Addenda use the same heading rules as §1, 8 (see `references/rfc-sections.md`).
 
 ---
 
@@ -149,7 +149,7 @@ Read `references/rfc-sections.md` for the full section template. Summary:
 | Level | Use for |
 |-------|---------|
 | `# Terminology` | Glossary only (before §1) |
-| `### N. Section title` | Numbered sections 1–8, Addendum |
+| `### N. Section title` | Numbered sections 1, 8, Addendum |
 | `#### Subsection title` | Problem statement, Goals, In-scope, Contract notes, Critical tests, … |
 | `#####` | Per-endpoint examples under §5.1, per-event under §5.2 |
 
@@ -165,7 +165,7 @@ Read `references/rfc-sections.md` for the full section template. Summary:
 
 ---
 
-## Step 0 – Input Collection Mode (Hard Gate)
+## Step 0 ,  Input Collection Mode (Hard Gate)
 
 Inputs may be provided via:
 1) CLI/context arguments supplied to the tool (preferred when present)
@@ -193,7 +193,7 @@ Proceed signal:
 
 ---
 
-## Step 0.1 – Assumptions & Coverage Confirmation (Hard Gate)
+## Step 0.1 ,  Assumptions & Coverage Confirmation (Hard Gate)
 
 After all inputs are provided (but before generating the RFC), produce an **Assumptions & Coverage** checklist for user confirmation.
 
@@ -261,7 +261,7 @@ Rules:
 
 ---
 
-## Step 1 – Generate RFC Draft
+## Step 1 ,  Generate RFC Draft
 
 After Step 0 and Step 0.1 gates pass, draft all RFC sections in one pass per `references/rfc-sections.md`. Do not run Step 2 until the draft is complete (all sections present or marked "Not applicable for MVP").
 
@@ -276,7 +276,7 @@ When a lesson changes RFC authoring workflow, section content requirements, or r
 
 ---
 
-## Step 2 – Review Pass (Sub-Agents, Tiered)
+## Step 2 ,  Review Pass (Sub-Agents, Tiered)
 
 After Step 1, read `review-panel-selection.md` and launch the selected workers in parallel.
 
@@ -352,7 +352,7 @@ Review the RFC draft for internal contradictions:
 2. §4 flows vs §5 contracts vs §6 rules
 3. §5.2 event consumers vs §5.4 downstream impact
 4. §8 tests vs §4 edge cases
-5. Terminology vs body usage (undefined terms, conflicting names; glossary must be flat A–Z with no writer meta; supplementary tables in Addendum not Terminology)
+5. Terminology vs body usage (undefined terms, conflicting names; glossary must be flat A, Z with no writer meta; supplementary tables in Addendum not Terminology)
 6. Subsection headings (`####` / `#####`) vs pseudo-headings (nested `- Label:` bullets, bold paragraphs, or `Edge case:` plain lines without `#####`)
 7. Bold usage (glossary term labels only in Terminology; body must not re-bold defined terms)
 8. Technical Decision Notes vs chosen approach elsewhere
@@ -496,7 +496,7 @@ Dedup before folding: when two agents describe the same root issue, keep the cle
 
 ---
 
-## Step 2.5 – Post-fold Verification Round
+## Step 2.5 ,  Post-fold Verification Round
 
 Run after every fold that revised a section for a `blocking: true` finding. Skip only when the fold touched nothing but Terminology ordering, heading shape, or other formatting with no normative content change.
 
@@ -543,7 +543,7 @@ Verification rounds use `-r<N>` in the staging filename (`...-<mode>-r2.md`, `-r
 
 ---
 
-## Step 3 – Finalize
+## Step 3 ,  Finalize
 
 **Precondition:** Step 2.5 reached its exit condition, or the fold was formatting-only, or the user explicitly stopped the loop. Never finalize on a pre-fold clean panel.
 
@@ -555,7 +555,7 @@ Verification rounds use `-r<N>` in the staging filename (`...-<mode>-r2.md`, `-r
 
 ---
 
-## Step 4 – Closure (Freeze Transition)
+## Step 4 ,  Closure (Freeze Transition)
 
 When the user declares an RFC **superseded** or **accepted**, prompt the freeze transition per `doc-hierarchy` "Document states":
 
@@ -570,7 +570,7 @@ Registry row columns and semantics: see the `doc-hierarchy` skill ownership regi
 ## Final Output Contract
 
 - Output Markdown only.
-- Follow the RFC structure exactly (Sections 1–8).
+- Follow the RFC structure exactly (Sections 1, 8).
 - Succinct, actionable, implementation-ready to the level achievable from inputs.
 - No filler, no generic best practices, no compliance assumptions unless explicitly in inputs.
 - Respect the hard gates:

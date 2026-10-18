@@ -56,6 +56,8 @@ User args (e.g., "check for secrets", "against branch X") provide context for th
 
 ## Step 1: Gather Context
 
+This step inherits the github-pr-workflow Project-scope and remote-operation gate: on personal and pet projects it stops before remote access, and the operator alone handles remote operations.
+
 ### Review artifact preflight and read-only boundary
 
 Before launching workers or creating a staging record:
@@ -280,6 +282,8 @@ The orchestrator **coordinates** sub-agents; it does **not** re-do their analysi
 
 After collecting all agent results and premortem findings, run these verification checks **using evidence already in sub-agent `body`**. Re-read source only for a targeted spot-check when a claim lacks cited evidence or a quick check contradicts the agent. Do not re-run full sub-agent analysis in the orchestrator context.
 
+When a reviewed path relates to a reachable deferred finding, recheck its recorded invariant against current bytes and apply the existing finding and blocking criteria before passing the round; the recheck alone does not make a finding blocking.
+
 ### 4.1 Verify Root Cause Location
 Is the comment pointing at the actual source of the issue or at a downstream artifact? Move upstream if needed.
 
@@ -432,6 +436,8 @@ Do not comment on it in the PR, even if you noticed an issue while reviewing. Th
 - If the doc is tracked and lives elsewhere in the repo, fix it in a separate PR or hand off to the doc owner; do not raise it on this PR.
 - If the doc is gitignored (a local instruction file, a personal review/scratch doc, a shadow-branch doc), fix it in place and commit to the orphan docs branch (or your local docs preservation workflow). Never reference gitignored docs in posted PR comments (see § 4.9.1).
 
+**Contract-impact exception (out-of-diff route):** when the contract-impact closure duty (`review-agents/documentation.md` phase 1) produces a finding on a document that is NOT in the diff, the finding is not silently dropped: stage each as a finding row anchored to the unchanged document's section heading (record the document path in File, the section heading in the Anchor field per `review-staging`, and omit the diff Line item for this class), and post one consolidated contract-impact finding in the PR review body (the same out-of-diff surface section 4.9.0 gives telemetry findings, and the Direct Mode posting exception list carries the matching exception), naming the unchanged document, the invalidated statement, and the changed invariant that supersedes it. Never post it as an inline comment, and route the tracked-document fix to a separate follow-up (or the document owner) per the unchanged-document rule above. The quick gate below keeps its inline-scope verdict, and its drop-or-move disposition does not apply to this class: an out-of-diff contract-impact finding goes to the review body, never dropped and never to an inline anchor.
+
 **Personal style preferences are never a PR comment, regardless of doc status.**
 Rules that exist only in your private instructions (em-dash bans, no-also-chain preferences, specific log-format styles) are not project conventions the PR author has agreed to. Drop those findings even when the doc is in the diff. If the rule should be enforced project-wide, propose it as a PR to the shared style doc first, then cite it in future reviews.
 
@@ -532,7 +538,7 @@ After dedup in §4.5, for every finding (all severities):
 
 **Self-check before marking staging doc complete:** For each finding with an actionable fix, ask: "Could the author apply this without a follow-up chat?" If no, the Comment is missing a §4.9.0 snippet or sufficient detail; relaunch or expand. For Medium+ findings, also confirm §4.12 section depth.
 
-**Mechanical gate:** run `python3 "${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}" --hard "<staging-path>"` before reporting findings to the user. Fix validation errors before the round is complete.
+**Mechanical gate:** run `python3 "${REVIEW_STAGING_VALIDATOR:-$HOME/.ai-playbook/scripts/validate_review_staging.py}" --hard "<staging-path>" --source-code-repo <repo-root> --source-code-plan "<sidecar-path>"` before reporting findings to the user; the code-source context is what lets the validator read the certification seal from disk, compare the sidecar's recorded certified range against it, regenerate the reviewed diff, and grade a declared corrections chain, so a round claiming a comment-only corrections re-bind is verifiable only when the invocation passes it (a missing or erroring classifier surfaced through the graded context takes the re-review default with the execute-plan copy remedy, and a hand-composed verdict never serves as evidence). The sidecar must carry `source_kind: "code"`: the code-source context type-checks the sidecar's declared source kind, and a sidecar without it hard-fails the gate as a tool error rather than degrading. Fix validation errors before the round is complete.
 
 **Contract section gate:** Before using **What the contract says**, name the normative source and confirm it is in the PR diff (for example `app/api/openapi.yaml` response text, a README section the PR edits, a schema or test the PR adds). If the normative source is company engineering guidelines, use **As per company guidelines** with a verified public company-playbook URL and rule number (see §4.9.1), not **What the contract or docs say**. If the rule cannot be verified at a public URL, use suggestion tone and common best practices instead of a guideline citation. If the only source is a gitignored instruction file or private guideline without a public mirror, drop the finding or reframe the opening section as **What this PR establishes** (in-PR design, tests, or persistence the change itself introduces). Do not suggest relaxing or rewriting that source as the fix when the cited "contract" was never PR-visible.
 
@@ -586,7 +592,7 @@ Cross-repo: same pattern when a repo maintains module high-level tasks docs (pat
 **File location** (create `{reviews_dir}/` if it doesn't exist):
 - For GitHub PR reviews: `{reviews_dir}/YYYY-MM-DD-PR-<number>-<title>.md`
 - For local branch reviews: `{reviews_dir}/YYYY-MM-DD-branch-review-<branch_name>.md` (add `-r<N>` when part of a review-loop)
-- For pre-implementation plan reviews (`review-plan`): `{reviews_dir}/YYYY-MM-DD-plan-review-<plan_name>-r<N>.md`
+- For pre-implementation plan reviews (`review-plan`): `{reviews_dir}/YYYY-MM-DD-plan-review-<plan_name>[-p<identity-token>]-r<N>.md`
 - For execute-plan Phase 3 post-implementation code reviews: `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` (not `-plan-review-r`)
 
 Branch names are sanitized: slashes replaced with dashes, max 30 chars. No prefix (REVIEW/PR) needed since the directory already indicates these are reviews.
@@ -654,6 +660,8 @@ When none: `None (agent severities matched staged severities).`
 
 Before triage: Pending = Staged for each agent; Fixed/Dropped/Deferred = 0. After `receiving-review`: recompute from finding **Triage** fields.
 
+For each deferred or downgraded finding, retain its durable consequence (including any applicable invariant consequence) and explicit reopen condition in **Analysis**; compare related findings against that record.
+
 ## Findings
 
 ### Critical
@@ -714,7 +722,7 @@ The `- Record kind: canonical` template value stays bare: copy it verbatim, beca
 
 **Staging record header Status transitions (posting):** the header value `STAGED (not yet posted)` moves to `POSTED` only through the posting step's landing verification, when every intended finding is live on the pull request. When findings remain unlanded after the recovery pass, the header moves to `INCOMPLETE (posting incomplete; unlanded findings remain pending)` and the unlanded findings keep Status `pending`; a later posting pass re-runs the verification and may move `INCOMPLETE` to `POSTED`. The submission call's own success response is never evidence of `POSTED`. After posting, landed findings carry the per-finding Status `posted`; the list's `post` value records pre-posting approval.
 
-After triage, update `## Review Statistics` → **Triage outcomes** and each finding's **Triage** per `review-staging`. Update the required `.stats.json` sidecar alongside the staging doc.
+After triage, update `## Review Statistics` → **Triage outcomes** and each finding's **Triage** per `review-staging`. For each deferred or downgraded finding, record its durable consequence (including any applicable invariant consequence) and reopen condition so related findings can be compared with that record. Update the required `.stats.json` sidecar alongside the staging doc.
 
 **Triage presentation freeze** (see `review-agents/severity-calibration.md` § Ordering): do not reshuffle Findings by blocking, blast radius, reachability, or confidence during triage. Keep ascending finding-ID order within each severity section. When a finding's severity changes, move only that block into the matching `###` section.
 
@@ -760,6 +768,8 @@ Each finding must be posted as an **inline comment** at its specific file and li
 
 **Exception; out-of-diff telemetry:** one PR review body comment for findings about code or metrics outside the diff (see §4.9.0 metrics inline placement). Keep all in-diff metrics recommendations inline.
 
+**Exception; out-of-diff contract-impact findings:** one consolidated PR review body comment for contract-impact findings on unchanged documents (see §4.9.2); the consolidated body finding is exempt from the per-line landing receipt (verify it by fetching the PR review body and counting the fragment present), the inline recovery pass never re-posts it, and the exempt finding row's Status stays `pending` (it is not part of the per-line receipt census) with the verified body-fragment count recorded in its Analysis section.
+
 **Exception; multi-key deploy checklists:** when several Low findings describe ordered BO/ops steps across different config keys (for example credentials key + routing key), we may post one PR thread comment with the full ordered checklist and delete the superseded inline comments. Keep code-specific inline comments (naming, missing beans) separate.
 
 If a posted comment is later found to be incorrect, delete it entirely via the GitHub API. Do not update it with a strikethrough retraction; retracted comments add noise to the PR thread.
@@ -794,7 +804,10 @@ Staging doc hierarchy and `## Review Statistics` are defined in `review-staging`
 Writes and refreshes `.ai-playbook/facts.md` when Terms triggers fire (`using-skills` Step 0). This skill reads `{reviews_dir}` and other doc paths from that file before writing staging docs under `{reviews_dir}/`.
 
 ### With `execute-plan` skill
-Phase 3: the execute-plan **parent** runs this skill as the review orchestrator and launches lens workers (default). Nested "Code Review" sub-agent only when the parent cannot fan out. Exits after one fresh review of the current digest has zero unresolved blocking findings. Post-fix reviews use blind correctness plus every distinct owning or affected worker.
+Phase 3: the execute-plan **parent** runs this skill as the review orchestrator and launches lens workers (default). Nested "Code Review" sub-agent only when the parent cannot fan out. Exits after one fresh review of the current digest has zero unresolved blocking findings, except a re-bind through verified comment-only corrections rows: `scripts/code_delta_classifier.py` proves the comment-only class over the certified range's committed before and after heads, the CLI-produced row on the review record re-binds the digest with zero rounds, and a missing or erroring classifier at that boundary takes the fresh-review default with the execute-plan copy remedy (the same exception as review-loop's exit criteria; the graded owner text is execute-plan's Phase 3 accepted-fix rule). Post-fix reviews use blind correctness plus every distinct owning or affected worker.
+
+### With `maintenance` skill
+The maintenance skill's ad-hoc backlog arm (the Ad-hoc backlog arm bullet in Step 3 of `agents/skills/maintenance/SKILL.md`) is the consumer: an ad-hoc run brings this skill's panel over its ad-hoc worktree branch's diff against its merge base, the staging record's canonical `Source digest` being the SHA-256 of those exact reviewed bytes (review-staging's owned field, recomputed at the final post-fold panel run). Blocking findings are folded on the worktree branch and the folding edits land before the final panel run, so the panel's last review covers the exact bytes the merge-locked squash landing commits; the landing's `Ad-hoc-panel-pass:` receipt names the review record path and that digest.
 
 ## Limitations
 

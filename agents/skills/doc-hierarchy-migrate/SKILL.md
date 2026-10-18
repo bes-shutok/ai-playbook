@@ -4,7 +4,7 @@ description: >-
   Execute company service documentation hierarchy migration (Steps 0→6):
   classify, git mv, merge architecture topics, scaffold greenfield repos, patch
   instructions, verify layout. Use when migrating, reorganizing, or scaffolding
-  service docs. Trigger phrases — "migrate docs", "reorganize docs", "run
+  service docs. Trigger phrases ,  "migrate docs", "reorganize docs", "run
   doc-hierarchy", "doc hierarchy migration", "scaffold service docs", "fix doc
   hierarchy". Schema reference:
   doc-hierarchy. Post-migration upkeep: doc-hierarchy-upkeep.
@@ -35,7 +35,7 @@ description: >-
 
 ```
 Migration progress:
-(Step 1 is intentionally omitted — Step 0 is audit/classify; relocation starts at Step 2.)
+(Step 1 is intentionally omitted ,  Step 0 is audit/classify; relocation starts at Step 2.)
 
 - [ ] Step 0: Audit and classify
 - [ ] Step 2: Git moves (+ 2b greenfield scaffold when needed)
@@ -55,10 +55,10 @@ Migration progress:
 
 1. Confirm [scope](../doc-hierarchy/SKILL.md#scope) and story branch.
 2. Inventory all paths under `docs/` (`find docs -print`); include gitignored `docs/reviews/`.
-3. Assign each path one outcome — [migration-map.md § Step 0](../doc-hierarchy/migration-map.md#step-0-classification-outcomes).
+3. Assign each path one outcome ,  [migration-map.md § Step 0](../doc-hierarchy/migration-map.md#step-0-classification-outcomes).
 4. Classification table in session notes before Step 2.
 5. Flags: `REQUIRE_CALLER_CATALOG=1` if OpenAPI/caller catalog; `CLASSIFIED_COMPANY_GUIDELINES=1` if moving mirror.
-6. Persist flags to `{tmp_dir}/doc-hierarchy-migrate/session-flags.env`. During Steps 0–4 (before Step 5b), when `.ai-playbook/facts.md` is missing or bootstrap is blocked by legacy committed facts, use on-disk probe `docs/tmp/` (create if needed) or read `{tmp_dir}` from TOML when bootstrap has already run. After Step 5b, read `{tmp_dir}` from `.ai-playbook/facts.md` TOML per `using-skills` Step 0:
+6. Persist flags to `{tmp_dir}/doc-hierarchy-migrate/session-flags.env`. During Steps 0, 4 (before Step 5b), when `.ai-playbook/facts.md` is missing or bootstrap is blocked by legacy committed facts, use on-disk probe `docs/tmp/` (create if needed) or read `{tmp_dir}` from TOML when bootstrap has already run. After Step 5b, read `{tmp_dir}` from `.ai-playbook/facts.md` TOML per `using-skills` Step 0:
 
    ```bash
    REQUIRE_CALLER_CATALOG=0|1
@@ -66,13 +66,13 @@ Migration progress:
    ```
 
    Before Step 2+ gates, `source` this file or re-read Step 0 notes. Multi-session migrations must restore flags from this artifact; export env vars in the same shell session as gate commands when not using the file.
-7. Reconcile [migration-map.md](../doc-hierarchy/migration-map.md) against [company-decisions.md Layer 2](../doc-hierarchy/company-decisions.md#layer-2--architecture-and-domain-knowledge-shared-human--ai) — operational exports (Grafana dashboards, runbook attachments) belong under `maintenance/`, not `docs/` root; repair stale KEEP-root rows before Step 2.
+7. Reconcile [migration-map.md](../doc-hierarchy/migration-map.md) against [company-decisions.md Layer 2](../doc-hierarchy/company-decisions.md#layer-2--architecture-and-domain-knowledge-shared-human--ai) ,  operational exports (Grafana dashboards, runbook attachments) belong under `maintenance/`, not `docs/` root; repair stale KEEP-root rows before Step 2.
 
 ## Step 2: Git moves
 
 Move tables and special cases: [migration-map.md](../doc-hierarchy/migration-map.md) (maintenance, history, Step 2 special cases).
 
-**Grafana dashboards:** if `docs/dashboards/` exists at repo root, `git mv docs/dashboards docs/maintenance/dashboards` (Layer 2 maintenance — index from `architecture/operational-guides.md`). Do **not** leave exports at `docs/` root.
+**Grafana dashboards:** if `docs/dashboards/` exists at repo root, `git mv docs/dashboards docs/maintenance/dashboards` (Layer 2 maintenance ,  index from `architecture/operational-guides.md`). Do **not** leave exports at `docs/` root.
 
 **Legacy RFCs:** if `docs/rfcs/` exists at repo root, `git mv docs/rfcs/*.md docs/history/feature-notes/` (flat) and remove the empty directory. Do **not** leave `docs/rfcs/` after migration.
 
@@ -92,9 +92,9 @@ Flat `history/feature-notes/` files plus optional `proposals/` and `samples/` as
 
 ## Step 5: Layer 1 and instructions
 
-1. `docs/README.md` — [README template](../doc-hierarchy/instruction-templates.md#layer-1-docsreadmemd-skeleton); Layer 1 rules in [company-decisions.md](../doc-hierarchy/company-decisions.md).
-2. `project-guidelines.md` — [project-guidelines template](../doc-hierarchy/instruction-templates.md#docsmaintenanceproject-guidelinesmd-section).
-3. Patch `AGENTS.md` — [AGENTS template](../doc-hierarchy/instruction-templates.md#agentsmd-documentation-hierarchy-subsection).
+1. `docs/README.md` ,  [README template](../doc-hierarchy/instruction-templates.md#layer-1-docsreadmemd-skeleton); Layer 1 rules in [company-decisions.md](../doc-hierarchy/company-decisions.md).
+2. `project-guidelines.md` ,  [project-guidelines template](../doc-hierarchy/instruction-templates.md#docsmaintenanceproject-guidelinesmd-section).
+3. Patch `AGENTS.md` ,  [AGENTS template](../doc-hierarchy/instruction-templates.md#agentsmd-documentation-hierarchy-subsection).
 4. Patch `user_facts_path` keys; scrub machine paths from repo agent facts.
 5. No `doc-migration.md` in `history/`.
 
@@ -114,24 +114,24 @@ Run **before** the Step 5 gate when legacy committed facts exist or Step 2 moved
 
 Fix legacy path strings repo-wide (classification table + `docs/context/`, `docs/plans/`, `docs/proposals/`, `docs/rfcs/`, rogue `docs/<module>/`).
 
-**Gate:** `REPO_ROOT=<service-repo> "$SKILL_INSTALL/scripts/verify-doc-hierarchy.sh" full` — exit 0 required.
+**Gate:** `REPO_ROOT=<service-repo> "$SKILL_INSTALL/scripts/verify-doc-hierarchy.sh" full` ,  exit 0 required.
 
 ## PR description (after migration)
 
-1. Copy the [PR checklist](../doc-hierarchy/company-decisions.md#pr-checklist-team-proposal-accepted) into the PR — check applicable Layer boxes.
-2. Follow [PR description rules](../doc-hierarchy/company-decisions.md#pr-description-rules) — no unchecked duplicate of session verify gates; never imply the verify script is vendored in the service repo.
+1. Copy the [PR checklist](../doc-hierarchy/company-decisions.md#pr-checklist-team-proposal-accepted) into the PR ,  check applicable Layer boxes.
+2. Follow [PR description rules](../doc-hierarchy/company-decisions.md#pr-description-rules) ,  no unchecked duplicate of session verify gates; never imply the verify script is vendored in the service repo.
 3. Paste gate output in the session/PR comment if useful; do not require reviewers to re-run gates already passed during implementation.
 
 ## Anti-patterns
 
 - Ad-hoc moves without this workflow
-- Legacy paths on disk or in canonical doc text — only `docs/architecture/`, `docs/maintenance/`, `docs/history/`, and `docs/tmp/` are valid top-level trees (step3 enforces on disk; step6 scans canonical docs and source for forbidden `docs/...` literals, including in "do not recreate" phrasing). Move targets: [migration-map.md](../doc-hierarchy/migration-map.md). If placement is unclear, ask the user before writing.
-- Copying or vendoring `verify-doc-hierarchy.sh` into the service repo (`scripts/verify-doc-hierarchy.sh`) — gates run from the skill install only
+- Legacy paths on disk or in canonical doc text ,  only `docs/architecture/`, `docs/maintenance/`, `docs/history/`, and `docs/tmp/` are valid top-level trees (step3 enforces on disk; step6 scans canonical docs and source for forbidden `docs/...` literals, including in "do not recreate" phrasing). Move targets: [migration-map.md](../doc-hierarchy/migration-map.md). If placement is unclear, ask the user before writing.
+- Copying or vendoring `verify-doc-hierarchy.sh` into the service repo (`scripts/verify-doc-hierarchy.sh`) ,  gates run from the skill install only
 - Relaxing verify gates in a repo-local copy (removed checks or legacy root whitelists)
 - Full `AGENTS.md` replace with templates
 - Editing ai-playbook `docs-branch` during service-repo migration
 - Reporting complete without `full` gate output
-- Step 3 staging cleanup via broad globs such as `architecture/*-*.md` — canonical filenames (`system-overview.md`, `domain-model.md`, `api-contracts.md`, …) match and get deleted; delete only explicit staging basenames (e.g. `event-flows-message-triggers.md`)
+- Step 3 staging cleanup via broad globs such as `architecture/*-*.md` ,  canonical filenames (`system-overview.md`, `domain-model.md`, `api-contracts.md`, …) match and get deleted; delete only explicit staging basenames (e.g. `event-flows-message-triggers.md`)
 
 ## Local verify
 
@@ -141,7 +141,7 @@ Run `scripts/verify-doc-hierarchy.sh stale-bootstrap-test` after changes to TOML
 
 GitHub Actions is optional; workflows belong in `.github/workflows/` only if the repo owner wants remote CI.
 
-**Environment:** `REPO_ROOT` (service repo root). `EXTERNAL_DOCS_DOMAIN` — optional hostname for third-party doc URLs that match the rogue `docs/<module>/` scan (for example `kubernetes.io` when code links to `https://kubernetes.io/docs/...`). Built-in exclusions also cover `https?://` URL contexts and `firebase.google.com/docs/`.
+**Environment:** `REPO_ROOT` (service repo root). `EXTERNAL_DOCS_DOMAIN` ,  optional hostname for third-party doc URLs that match the rogue `docs/<module>/` scan (for example `kubernetes.io` when code links to `https://kubernetes.io/docs/...`). Built-in exclusions also cover `https?://` URL contexts and `firebase.google.com/docs/`.
 
 ## Integration Points
 
@@ -150,7 +150,7 @@ GitHub Actions is optional; workflows belong in `.github/workflows/` only if the
 | `doc-hierarchy` | Schema reference; migration-complete signal definition |
 | `doc-hierarchy-upkeep` | Runs verify gates after Layer 1/2 edits on migration-complete repos |
 | `bootstrap-ai-playbook` | Default path map applies only after migration-complete signal; on a repo with no `docs/` tree, before any migration, greenfield bootstrap seeds the canonical map directly when the schema is confirmed, so a later migration finds the doc-key layout already canonical and no-ops on the doc keys (earlier steps still run) |
-| `plans`, `execute-plan`, `learn`, `done`, `docs-branch` | Receive canonical paths written during Steps 5–6 |
+| `plans`, `execute-plan`, `learn`, `done`, `docs-branch` | Receive canonical paths written during Steps 5, 6 |
 
 ## Related
 

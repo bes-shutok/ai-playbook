@@ -1,5 +1,9 @@
 # Review Panel Selection
 
+## Shared scope and complexity policy
+
+This document is the single source of truth for selecting focused or broader review panels. Use scope and complexity evidenced by the plan and changed work: affected components and contracts, interactions, behavioral and state-transition complexity, concurrency and safety boundaries, and reasoning effort. Task and file counts are useful signals, but plan size alone does not determine the panel. Project ownership, type, and visibility never change review strictness. Use the shared default five-worker panel when evidence does not justify an adjustment; use a focused panel when work is demonstrably narrow and the risk-signal floor below permits it. Scope and complexity can raise panel breadth; the risk-signal floor remains a minimum and overrides narrower selection.
+
 Single source for which review workers launch, which lenses they load, and when a focused or escalated panel is valid. All orchestrators (`doing-code-review`, `review-plan`, `rfc-design`, `review-confluence-doc`, and `execute-plan` for per-task intermediate selection) reference this file; do not duplicate panel policy inline.
 
 ## Recommended five-worker panel
@@ -11,10 +15,12 @@ Normal full code, plan, and RFC reviews launch exactly these workers:
 | `correctness-completeness` | `quality`, `implementation` | none | Runtime correctness, requirement coverage, wiring, compatibility |
 | `testing` | `testing` | none | Test strategy, discriminating assertions, failure paths, test hermeticity (ambient-input enumeration) |
 | `design-simplicity` | `architecture`, `simplification` | none | Dependency direction, maintainability, unnecessary structure |
-| `contract-docs` | `documentation` | `consistency` for plans and RFCs | Contracts, source-of-truth drift, prose, cross-section consistency |
+| `contract-docs` | `documentation` | `consistency` for plans and RFCs and when contract-impact closure triggers (duty: `documentation.md` phase 1) | Contracts, source-of-truth drift, prose, cross-section consistency |
 | `risk` | `security` | `concurrency`, `premortem` when signals below match | Security, ordering, rollout, and operational failure modes |
 
 Prepend `severity-calibration.md` to every worker prompt. Each worker records every loaded lens. Pattern IDs retain the originating lens prefix, with one exception: the conditional risk lenses `concurrency` and `premortem` are loaded lenses but NOT Pattern-ID owners: version-1 sidecars reject `concurrency#<slug>` and `premortem#<slug>`, so findings from those lenses are staged under the `risk` worker's base lens owner as `security#<slug>` (for example a race outcome becomes `security#race-condition`). Lens telemetry still counts `concurrency`/`premortem` via `panel[].lenses`. A plan prescribing verbatim multi-line bash where a script file under scripts/ would carry the mechanical logic is a design-simplicity finding candidate (the runnable-carrier preference).
+
+An execute-plan run record claiming backlog filings whose tree leaves them uncommitted and untracked is a blocking finding, never pass-with-notes; a recorded tracked landing path satisfies the check.
 
 ## Launch accounting
 
@@ -29,6 +35,8 @@ Prepend `severity-calibration.md` to every worker prompt. Each worker records ev
 ## Focused panels
 
 A narrow review may launch fewer than five workers when the artifact and user request do not need a full panel. Record `panel_mode: focused` and `selection_reason`.
+
+Before launching a focused code round, check for a changed-code readability signal: a changed callback or nested block with substantial cognitive load or an observable side effect, a method-local type, or a changed method meeting the method-length signal defined in `projects/.ai-playbook/jvm_guidelines.md` section 28. When a signal exists and the selected panel does not load the `quality` lens, issue a warning-only recommendation to include the existing `correctness-completeness` worker, which owns that lens. If there is no signal or the lens is already loaded, keep the selection unchanged. The recommendation adds no worker role or review round; omitting it never blocks launch or readiness.
 
 Common focused panels:
 
@@ -76,6 +84,8 @@ state and representation, fail-closed logging render surfaces,
 framework/dependency availability, migration/runner parity, packaged deployment artifact parity, and an enabled
 assertion-bearing safety-boundary test.
 
+A changed public contract invariant is a boundary-contract family: the checklist names the directly dependent example and source-reference surfaces (the contract-impact closure read-set, `documentation.md` phase 1), and an unnamed dependent surface degrades coverage like any other family.
+
 The worker may record `not applicable` only after scanning changed files and
 direct call paths. A representative happy-path test or source-level import is
 not evidence for the family. If an applicable family has no witness or explicit
@@ -90,9 +100,11 @@ For an execute-plan Step 1.2b intermediate task review, select workers by comple
 
 | Tier | Trigger | Workers |
 |------|---------|---------|
-| Tier L | docs/skill-only diff, or at most 2 files and no risk signals | one worker: `correctness-completeness`, or `contract-docs` for a docs-only diff |
-| Tier M | 3 or more files, or a behavior change, and no risk signals | `correctness-completeness` plus `testing` |
+| Tier L | demonstrably narrow scope and low interaction/behavioral complexity, with no risk signals; docs/skill-only work is a common signal | one worker: `correctness-completeness`, or `contract-docs` for a docs-only diff |
+| Tier M | moderate scope or interaction/behavioral complexity, with no risk signals; file count is supporting evidence | `correctness-completeness` plus `testing` |
 | Tier H | any risk signal, a concurrency or transactional mutator marker, or a public-contract change | the `### Risk-signal floor` worker set; the full five-worker panel at two or more risk signals |
+
+Exception at every tier: a diff carrying a changed normative documentation example and no code-mutation signal selects `contract-docs` plus `correctness-completeness` coverage in addition to the tier's own workers, never triggering the risk-signal floor's escalation; prose-only documentation without a changed normative example keeps the tier's own worker set.
 
 The plan's Review tier hint sets the starting tier; post-implement risk signals may raise it and never lower it, and so may the trigger table. When triggers overlap, the highest matching tier wins (a behavior change never resolves below Tier M).
 
@@ -189,6 +201,7 @@ Ownership boundaries affect which worker and lens lead a dedup group, not silent
 | Cross-service, security, concurrency, or rollout failure | `risk` | closest loaded risk lens |
 | Missing user-facing docs or prose issue | `contract-docs` | `documentation` |
 | Plan or RFC internal contradiction | `contract-docs` | `consistency` |
+| Cross-artifact contract drift after a changed public contract | `contract-docs` | `consistency` |
 
 **Hard rule:** When two agents report the **same root cause**, merge into one staged finding; pick the lead agent above.
 

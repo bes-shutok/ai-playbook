@@ -42,14 +42,15 @@ If a key is missing from `.ai-playbook/facts.md`, follow `using-skills` Step 0 (
 1. Publish the complete document body in one intentional update. Do not test connectivity by replacing a live page with a short stub.
 2. Preserve Mermaid diagrams as fenced `mermaid` source blocks when the target Confluence space natively renders Mermaid code blocks. Do not add a second Mermaid extension macro or image embed for the same source block: Confluence can render the fenced block and the extension independently, producing duplicate diagrams.
 3. If the target page already uses native Mermaid extension blocks, inspect the stored HTML before editing. Reuse that representation only when the source code block and extension are a known single-rendering pair. After publishing, verify the page has exactly one rendering representation per intended diagram: no duplicate extension/image derivative alongside a natively rendered Mermaid block.
-4. Verify the published page through stored HTML and the reader-facing view, not only the editor preview. Count Mermaid source blocks, Mermaid extension nodes, and image embeds. For a native fenced-block target, expected counts are: one Mermaid source block per diagram, zero Mermaid extension nodes, and zero generated image embeds. Then confirm that every diagram expected to render natively appears as a rendered diagram element or image in the reader view. A stored `language-mermaid` code block can be editable source without being visibly rendered. If source code is visible instead, switch to a supported single-rendering representation and repeat the full-body and duplicate checks. Also confirm that the page still contains the full body.
-5. Record the resulting Confluence `version.number`, last-modified timestamp, source revision, and sync status in the repository's existing sync manifest or ledger. Set `synced` only after the full-body update and HTML verification succeed.
+4. If Mermaid source is visible instead of rendered and no working Mermaid extension is available, render each Mermaid source block to PNG or SVG with a local Mermaid renderer and inspect the output for clipping and legibility at page width. Keep the Mermaid source in the repository document. Upload the rendered file as an attachment through the authenticated Confluence integration and embed it using the exact media identifier and collection returned by the upload, following the canonical media-embed format. Some integrations expose attachment upload through capability discovery or a prepared, short-lived upload command rather than a standalone upload action; check those supported capabilities before deciding upload is unavailable. Execute only the command returned for the current upload, promptly, without printing or saving its signed URL or token. Do not construct a separate authenticated REST request or ask the user to provide credentials. Use one rendering representation per diagram; do not pair an image with a natively rendered block or macro for the same diagram.
+5. Verify the published page through stored HTML and the reader-facing view, not only the editor preview. Count Mermaid source blocks, Mermaid extension nodes, and image embeds. For a native fenced-block target, expect one Mermaid source block per diagram and no extension nodes or generated images, then confirm that each intended diagram is visibly rendered. For image targets, expect one image embed per diagram and no second rendering representation; confirm each image renders at a useful width with legible labels. Verify the page still contains its full body, and inspect an exported reader view when available. A stored `language-mermaid` code block can be editable source without being visibly rendered. If capability discovery confirms there is no supported attachment-upload path, leave the page unchanged and record the sync as `pending` with the missing capability.
+6. Record the resulting Confluence `version.number`, last-modified timestamp, source revision, and sync status in the repository's existing sync manifest or ledger. Set `synced` only after the full-body update and HTML verification succeed.
 
 These checks apply after any full-body replacement because Confluence stores presentation derivatives (for example, Mermaid extension nodes) alongside source content and can retain or duplicate them when the body is reconstructed.
 
 ### Step 0 – Pre-requisite: Verify Atlassian integration
 
-1. Verify your environment's **Atlassian integration** provides BOTH capabilities this skill needs: page fetch (read existing page content and stored HTML) and page update (create and replace page content).
+1. Verify your environment's **Atlassian integration** provides page fetch (read existing page content and stored HTML) and page update (create and replace page content). If a diagram needs an image fallback, discover whether the integration can upload page attachments and return their media identifiers; do not infer that upload is unavailable only because no standalone upload action is initially visible.
 2. If the integration is unavailable, or it can fetch pages but cannot update them:
    ```
    ⚠️  Atlassian integration is not available.
@@ -59,7 +60,7 @@ These checks apply after any full-body replacement because Confluence stores pre
    ```
    STOP and wait for the user.
 3. If calls fail with OAuth refresh errors (`invalid_grant`, `Invalid refresh token`, `OAuth token refresh failed`), tell the user to re-authenticate the Atlassian integration, then retry.
-4. When the integration is authenticated with both capabilities, proceed to Step 1.
+4. When the integration is authenticated with the capabilities required by the chosen rendering path, proceed to Step 1.
 
 ### Step 1 – Resolve the target page and parent page
 
@@ -93,8 +94,9 @@ Verification is mandatory before any ledger entry may be marked `synced` (public
    - Mermaid extension nodes
    - Image embeds
 3. Expected counts: publication rule 4 for native fenced-block targets, rule 3 for known single-rendering-pair targets.
-4. Confirm the page still contains the full body: the section headings and non-diagram content of the source document are present.
-5. If any count or the body check fails, remediate and re-verify before proceeding; do not record the page as `synced`.
+4. For image targets, verify every referenced media ID belongs to an attachment uploaded to the target page, and confirm the reader-facing page displays the image.
+5. Confirm the page still contains the full body: the section headings and non-diagram content of the source document are present.
+6. If any count or the body check fails, remediate and re-verify before proceeding; do not record the page as `synced`.
 
 ### Step 4 – Update the sync manifest (ledger)
 
@@ -116,7 +118,7 @@ Publishing, page updates, and diagram-integrity checks are owned here; `review-c
 The sync manifest lives under `docs/maintenance/` and page mirrors under `docs/history/context/confluence/` per `doc-hierarchy`; `confluence-mirror-hygiene.sh validate` checks both. Fetch and HTML scratch files go under `{tmp_dir}` read from the facts TOML per `using-skills` Step 0.
 
 ### With `done` and `docs-branch` skills (session-end sync hygiene)
-the `done` pre-docs sweep gate run's confluence-hygiene gate validates the sync manifest and mirrors at session end; `docs-branch` prunes stale Confluence publish snapshots from the docs worktree via the same hygiene script; when their guidance says to republish or refresh a page, run that through this skill's publication rules and Step 3 verification before recording `synced`.
+the done landing sweep's confluence-hygiene gate validates the sync manifest and mirrors at session end; `docs-branch` prunes stale Confluence publish snapshots from the docs worktree via the same hygiene script; when their guidance says to republish or refresh a page, run that through this skill's publication rules and Step 3 verification before recording `synced`.
 
 ## Guidelines
 

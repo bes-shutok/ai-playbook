@@ -1,0 +1,27 @@
+## Completion Checklist
+Before finishing, verify:
+- lesson placement is complete and unambiguous
+- no temporary artifacts remain outside policy
+- no `docs/` references to `docs/tmp/`
+- no duplicate concept definitions inside changed documents
+- instruction-rule updates are grouped/deduplicated with no overlapping or contradictory bullets for the same intent
+- no instruction rule restates a convention already documented in full in company or project guidelines; full text lives in the canonical file for that tier (`company_guidelines_master`, `project_guidelines_rel`, or `shared_docs_dir` file per facts keys); instruction files hold only the incremental constraint or a reference
+- no project-level instruction rule duplicates a rule already present in user-level instructions (`~/.codex/AGENTS.md`); project-level copies are reduced to a cross-reference or removed
+- every new full-text rule added to instruction files is either (a) a cross-cutting reasoning guard with no suitable canonical doc home, or (b) already has its detailed content in the tier-appropriate canonical guideline file with only a `see … #N` reference in the instruction file
+- Step 6.5 instruction size gate passed: `"${HOME}/.ai-playbook/scripts/check-instruction-size.sh" check` exits 0 from the repo root after compaction
+- Step 6.6 passed: user-level `lessons.py index <user corpus>` exits 0 (or warn-only cold-start); project corpus gated by skill-gate learn marker refresh before each Write/Edit
+- Step 1.2 item 1c applied: every proper noun/identifier in the incident was interrogated for load-bearing status and generalized to a role/category where the rule held without it
+- Step 1.7 proper-noun justification review passed: the drafted lesson was re-read, every identifier ran the load-bearing test, employer fingerprints (service/company/ticket/customer-list/person/URL/count/date) were redacted to generic roles, and the deny-pattern backstop raised no hits; only public playbook artifacts and genuinely load-bearing details remain
+- Step 1.8 ran: skill-usage issues were captured as backlog items, duplicates were folded into existing open items, or none were needed
+- every Step 1.8 backlog item text passed the scrub review (the landing sweep's sensitive-data-scan gate discipline and Step 1.7 proper-noun review) before writing
+- learn-authored skills-repo artifacts were committed by explicit path (Step 1.8 commit rule), or the failure was reported with a one-line issue summary per the failure semantics
+- incident-repo == cwd-repo verified for every `UL#N` capture (Step 1.2 item 3b), OR a deferred capture was routed to the incident repo's project corpus; AND the fork-4 project-corpus existence check (Step 2 mechanical gate) ran for every project-specific candidate  -  no project-specific incident was written into the UL corpus on the grounds that the UL file was the only corpus available in the current cwd
+- company-portability gate (Step 1.2 item 4c) ran before every project-specific placement, and the sibling search of `company_guidelines_master` ran before every full project lesson wherever required by fork (2b), item 4c, or item 5c (not run outside the company root; under the root with config drift the grep may return empty without counting against company scope, per fork (2b)); a placement receipt (item 5c), stating the residual dependency for every fork (4) placement, was emitted for every placed lesson
+- Step 6.6 concision gate passed: every new/edited lesson sits near the corpus word-count median (≤1.5×), has at most one Distinguishing subsection, and the title is ≤~12 words
+- no hybrid bullets remain where canonical tier already holds the full rule text
+- no new facts keys added for portable policy constants that belong in a skill (see Step 2, Facts vs skill configuration)
+- exact class names appear only where operationally useful or intentionally canonical; normative instructions and canonical docs use role-based wording instead
+- if the learn workflow changed, `~/.agents/skills/learn/SKILL.md` is updated and committed in the skills repository (`skills_repo_path` in `~/.ai-playbook/facts.md`)
+- RFC-workflow lessons updated in skill/example files where applicable
+- changed API docs and OpenAPI artifacts remain synchronized
+- the learn counter file (`/tmp/learn-counter-${PPID}-<dir_hash>`) has been deleted so the nudge timer restarts

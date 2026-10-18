@@ -7,6 +7,215 @@ description: >
 
 # Review Staging (Gold Source)
 
+## Finding-construction recipe (copy before drafting)
+
+Draft every staging pair from the minimal-valid example pair below instead of from memory: copy it, fill the fill-order fields, and run the preflight while drafting, so the first hard-validator run grades substance instead of format. The sections that follow (**Inputs**, **Staged Markdown hierarchy**, **JSON sidecar**) are the schema of record; this recipe inlines one copyable example plus the three closed vocabularies the validator enumerates, and restates no other shape.
+
+<!-- canonical-example:staging-doc begin -->
+````markdown
+# Plan review: demo-telemetry-export (r1)
+
+## Metadata
+- Type: Plan Review
+- Record kind: canonical
+- Date: 2026-10-05
+- URL or Artifact: docs/plans/2026-10-05-demo-telemetry-export.md
+- Depth: full
+- Domains: telemetry
+- Round: r1
+- Review mode: fresh-adversarial
+- Changed-risk signals: none
+- Boundary-contract checklist: not applicable (no boundary families)
+- Prior findings supplied as filter: no
+- Last fix commit: none
+- Witness ledger: N/A (no public mutators)
+- Coverage: clean
+- Release-gate ledger: none
+- Panel mode: full
+- Source digest: 6efc6d44f8bb26085ae7d14c67f6dca615cfb65dcb31c127e0e2504f7316beee
+- Findings: 1
+- Status: STAGED
+
+## Review Statistics
+
+### Panel
+| Worker | Lenses | Parent worker | Status | Raw | Solo | Echo | Relaunch |
+|--------|--------|---------------|--------|-----|------|------|----------|
+| correctness-completeness | quality, implementation | none | complete | 1 | 1 | 0 | no |
+| testing | testing | none | complete | 0 | 0 | 0 | no |
+| design-simplicity | architecture, simplification | none | complete | 0 | 0 | 0 | no |
+| contract-docs | documentation | none | complete | 0 | 0 | 0 | no |
+| risk | security | none | complete | 0 | 0 | 0 | no |
+
+### Counts
+- Workers launched: 5
+- Workers skipped: 0
+- Raw findings (all workers): 1
+- Staged findings: 1
+- Discarded during synthesis: 0
+- Solo staged (unique agent origin): 1
+- Echo staged (multi-agent dedup): 0
+
+### Deduplication groups
+None (each staged finding had a single agent origin).
+
+### Discarded findings
+None.
+
+### Severity calibration
+None (agent severities matched staged severities).
+
+### Triage outcomes
+| Worker | Lens | Staged | Fixed | Dropped | Deferred | Pending |
+|--------|------|--------|-------|---------|----------|---------|
+| correctness-completeness | quality | 1 | 0 | 0 | 0 | 1 |
+
+## Findings
+
+### Critical
+
+None.
+
+### High
+
+None.
+
+### Medium
+
+#### F1. Digest re-bound without re-deriving the reviewed bytes
+- **Severity**: Medium
+- **Blocking**: true
+- **Consequence**: A folded plan ships under a digest that no longer matches its reviewed bytes, so the round certifies a stale tree and the follow-up executes unreviewed changes.
+- **Reachability**: common
+- **Blast radius**: single-service
+- **Confidence**: verified
+- **Pattern**: quality#stale-digest-rebind
+- **Workers**: correctness-completeness
+- **Triage**: pending
+- **Anchor**: Step 3.5, digest binding paragraph
+- **Source**: [Prose]
+
+#### Comment (posted as-is when approved)
+Recompute the source digest from the plan's current bytes after every fold before staging the round, so the recorded digest always matches the bytes this round actually reviewed.
+
+#### Analysis (not posted)
+Verified against the reviewed artifact at the cited anchor: the fold path rewrites the plan but reuses the pre-fold digest. Reachability is common because every fold triggers the path; severity is Medium because the follow-up catches the mismatch at its own gate.
+
+---
+
+### Low
+
+None.
+
+### Overflow manifest
+None.
+
+### Soften watchlist
+None.
+
+## Summary
+
+Verdict: ready=no (one blocking finding pending; the loop cannot close this round).
+````
+<!-- canonical-example:staging-doc end -->
+
+<!-- canonical-example:stats-sidecar begin -->
+```json
+{
+  "schema_version": 1,
+  "review_type": "Plan Review",
+  "date": "2026-10-05",
+  "artifact_slug": "demo-telemetry-export",
+  "round": "r1",
+  "depth": "full",
+  "domains": ["telemetry"],
+  "panel_mode": "full",
+  "selection_reason": null,
+  "source_kind": "plan",
+  "source_digest": "6efc6d44f8bb26085ae7d14c67f6dca615cfb65dcb31c127e0e2504f7316beee",
+  "escalation_reason": null,
+  "review_mode": "fresh-adversarial",
+  "risk_signals": [],
+  "prior_findings_filter": false,
+  "last_fix_commit": null,
+  "record_kind": "canonical",
+  "coverage": {
+    "outcome": "clean",
+    "material_lens_set": ["architecture", "documentation", "implementation", "quality", "security", "simplification", "testing"],
+    "completed": ["architecture", "documentation", "implementation", "quality", "security", "simplification", "testing"],
+    "missing": []
+  },
+  "counts": {
+    "workers_launched": 5,
+    "raw_findings": 1,
+    "staged_findings": 1,
+    "discarded": 0,
+    "solo_staged": 1,
+    "echo_staged": 0
+  },
+  "panel": [
+    {"worker": "correctness-completeness", "lenses": ["quality", "implementation"], "parent_worker": null, "descendant_launches": [], "status": "complete", "raw": 1, "solo": 1, "echo": 0, "relaunch": false},
+    {"worker": "testing", "lenses": ["testing"], "parent_worker": null, "descendant_launches": [], "status": "complete", "raw": 0, "solo": 0, "echo": 0, "relaunch": false},
+    {"worker": "design-simplicity", "lenses": ["architecture", "simplification"], "parent_worker": null, "descendant_launches": [], "status": "complete", "raw": 0, "solo": 0, "echo": 0, "relaunch": false},
+    {"worker": "contract-docs", "lenses": ["documentation"], "parent_worker": null, "descendant_launches": [], "status": "complete", "raw": 0, "solo": 0, "echo": 0, "relaunch": false},
+    {"worker": "risk", "lenses": ["security"], "parent_worker": null, "descendant_launches": [], "status": "complete", "raw": 0, "solo": 0, "echo": 0, "relaunch": false}
+  ],
+  "deduplication_groups": [],
+  "discarded": [],
+  "severity_calibration": [],
+  "triage_outcomes": [
+    {"worker": "correctness-completeness", "lens": "quality", "staged": 1, "fixed": 0, "dropped": 0, "deferred": 0, "pending": 1}
+  ],
+  "findings": [
+    {
+      "id": 1,
+      "severity": "Medium",
+      "blocking": true,
+      "consequence": "A folded plan ships under a digest that no longer matches its reviewed bytes, so the round certifies a stale tree and the follow-up executes unreviewed changes.",
+      "reachability": "common",
+      "blast_radius": "single-service",
+      "confidence": "verified",
+      "pattern": "quality#stale-digest-rebind",
+      "workers": ["correctness-completeness"],
+      "triage": "pending",
+      "theme": "Stale digest re-bind"
+    }
+  ],
+  "overflow": [],
+  "soften_watchlist": [],
+  "verdict": "no"
+}
+```
+<!-- canonical-example:stats-sidecar end -->
+
+- Closed enums: confidence: verified | strong-evidence | hypothesis; reachability: expected | common | plausible-edge | theoretical; blast radius: global | multi-service | single-service | local
+
+Fill order (one pass, top to bottom):
+
+1. Materialize plan-review pairs only at the selector-emitted path: legacy `YYYY-MM-DD-plan-review-<artifact-slug>-r<N>.md` or identity-qualified `YYYY-MM-DD-plan-review-<artifact-slug>-p<8-hex-token>-r<N>.md`, with the `.stats.json` sidecar beside it.
+2. Metadata block first: Type, Date (writing time), the freshness quartet (`Review mode`, `Changed-risk signals`, `Prior findings supplied as filter`, `Last fix commit`), `Record kind: canonical`, `Witness ledger`, `Coverage`, `Panel mode`, `Source digest` (a real SHA-256 of the exact reviewed bytes, recomputed for every round), `Findings`, `Status: STAGED`.
+3. Then findings: one `#### F<N>. <short title>` block per staged finding under its severity group, ascending numeric id within the group, each field bullet spelled from the closed enums above (worker attribution names the reporting worker ids; `Triage: pending` at review pass).
+4. Respect the budget while expanding: every Critical and every blocking finding per worker, plus up to five additional non-blocking High/Medium and up to two additional non-blocking Low findings per worker; every further credible candidate goes to the sidecar `overflow` list mirrored as the `### Overflow manifest` table instead of `## Findings` (recording rules 10 and 11), and never a Critical or blocking finding.
+5. Fill `## Review Statistics` while synthesizing (Panel with Solo/Echo, Counts, Deduplication groups, Discarded findings, Severity calibration, Triage outcomes), and mirror the pair in the sidecar skeleton: counts, panel rows, and a findings array carrying the same fields as the Markdown bullets.
+6. Preflight at drafting time, before the round's hard gate: `python3 ~/.ai-playbook/scripts/validate_review_staging.py --preflight <staging-path>` (the report-only mode reports every stage's findings together in one pass, the missing sidecar's required-field inventory included; it has no pass/fail exit posture). Fix every named finding and re-run until the report is clean; the round's `--hard` gate still grades substance and is never replaced.
+
+### Record validation levels
+
+The validator runs at two levels, partitioned by round class:
+
+- **Lint level:** the `--preflight` report-only pass whose findings the orchestrator resolves before the round is reported complete; this is the lint level for non-certification rounds.
+- **Full validation:** the `--hard` pass with the source context; the level for certification rounds, round-close, and the execution and finalization gates.
+
+**Soft plain-run reading rule:** the plain soft run (neither `--hard` nor `--preflight`) reports and never gates: its exit stays 0 even on a findings-bearing record, while its final `OUTCOME:` label and JSON `outcome` field carry the truthful verdict (`fail` on a findings-bearing record), so a caller that gates on a result must invoke the `--hard` form; preflight keeps its inventory posture where findings never move its exit or its label.
+
+**Round-class decision rule:** a round that could record the certifying clean verdict (any fresh-adversarial round with zero staged unresolved blocking findings, and any round in doubt) runs the full `--hard` source-context gate; lint is reserved for rounds whose staged record carries unresolved blocking findings and that cannot record the certifying verdict.
+
+**Series sweep (plan-review closes, warning-only):** at every non-certification plan-review round close, after the round's own validation pass (lint or full), sweep every earlier pair whose `extensions.plan_identity` or legacy `URL or Artifact` resolves to the same source-plan path; omit other plans sharing the slug. Revalidate each member with `--preflight --source-plan <the plan under review>`, excluding the round being closed; stale earlier digests surface as report-only findings. Echo each member path before its pass; group any non-clean result into one warning and echo its report; then report the count, including a named zero. Resolve findings through the existing record-side repair class, never a re-round. Certification closes run no sweep; full seal validation owns that boundary. Advisory only: the sweep never blocks, changes exit status or verdict; its admission and removal row is `scripts/machinery_registry.json` (`duty:review-staging-series-sweep`).
+
+**Protected certification catches and the code-family residual:** the ledger's review-staging-validator entry names the certification catches this partition protects; a code-family loop that terminates without certifying rests on a lint-only record, which is that family's recorded residual.
+
+**Fill-order subordination:** the fill-order step-6 `--hard` sentence above is subordinated to this partition: its full-strength gate applies at certification rounds, round-close, and the execution and finalization gates; non-certification rounds whose staged record carries unresolved blocking findings run the lint-level pass; a round in doubt or able to certify runs full. The peer half of the partition is named by reference: review-plan's standing Step 4 mechanical-gate sentence is subordinated by that skill's own owning checkbox in plan 2026-10-09-review-loop-round-budget (Task 2), not by this subsection.
+
 ## Inputs (provided by caller skill)
 
 Caller must provide:
@@ -52,7 +261,7 @@ Caller must provide:
 
 ## Documentation paths
 
-Read `{reviews_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0).
+Read `{reviews_dir}` from the opening TOML block in `.ai-playbook/facts.md` (see `using-skills` Step 0). Absent key or file ⇒ stop and surface the gap: the facts block is the single source for review paths; never guess a location.
 
 Do not use `docs/tmp/` for the primary review staging document. Use `{tmp_dir}` only for ephemeral scratch files when a caller explicitly needs it.
 
@@ -66,7 +275,7 @@ Primary staging doc path:
 
 Where:
 - `<review-kind>` is a short stable token chosen by the caller, for example `confluence-review`, `rfc-review`, `plan-review`, `branch-review`
-- `<artifact-slug>` is the caller-provided slug; when the reviewed source is a plan, it MUST be the plan's readiness-gate feature slug (the plan filename stem minus its leading `YYYY-MM-DD-` prefix) so the round stays discoverable through the readiness validator's `*-plan-review-<feature-slug>-r*.md` glob, which the plans skill's per-round name binding check enforces after every round
+- `<artifact-slug>` is the caller-provided slug; when the reviewed source is a plan, it MUST be the plan's canonical artifact slug (the readiness-gate feature slug lowercased; an uppercase story key stays in the plan filename and title, never in the artifact slug) so the round stays discoverable through the readiness validator's `*-plan-review-<artifact-slug>[-p<identity-token>]-r*.md` shape, which the plans skill's per-round name binding check enforces after every round
 - `<mode_or_round>` must be stable and specific enough to avoid collisions in the same day, for example `light`, `full`, `review-local`, `r1`
 
 Create `{reviews_dir}` if it does not exist.
@@ -77,7 +286,9 @@ There is one canonical Markdown record and one matching sidecar for each review 
 
 If more than one matching record already exists, select one canonical record, add `Supersedes` and `Superseded by` metadata links, and mark every non-canonical record `SUPERSEDED`. A superseded record is historical only and is never eligible for posting. The canonical path must be selected before review workers launch and must remain the only path used for synthesis, triage, and posting.
 
-Selection is mechanical: before workers launch, every orchestrator runs the record selection helper (`scripts/review_record_selection.py`, subcommand `select`) with the resolved reviews directory, the artifact slug, and the digest of the bytes about to be reviewed, and writes only the paths the helper emits (decisions `new-record`, `reuse`, or `new-round`). Pass `--kind plan-review` for plan reviews so the emitted path matches the plan-review discovery shape; omit `--kind` for record families whose slug already carries its kind. Slugs preserve their case. The helper refuses (exit 1) when the existing record's sidecar `source_digest` differs from the supplied digest and no decision is supplied; resolve the refusal only with `--explicit-new-round` or the explicit archival operation, never by rewriting the prior record. Before any permitted same-pass replacement (`new-round`), invoke the helper's `backup` subcommand so a timestamped byte-identical copy pair of the prior record exists under the reviews directory, and record the printed backup path in the new record's Metadata as `Backup of prior record: <path>`. After the successor record is staged, mark the prior record with the helper's `mark-superseded` subcommand; the validator rejects a `Supersedes` link that is dangling, missing its `Superseded by` back-reference, or mismatched.
+Selection is mechanical: before workers launch, every orchestrator runs `scripts/review_record_selection.py select` with the resolved reviews directory, artifact slug, and digest; plan reviews also pass `--kind plan-review --source-plan <path>`. Use only emitted paths and copy emitted `plan_identity` to `extensions.plan_identity` in the sidecar. New plan-review names carry `-p<identity-token>` derived from the repository-relative source-plan path; legacy pairs resolve identity from `URL or Artifact`. Plan readiness filters by that path and still uses `source_digest` only for freshness. Slugs preserve case only for non-plan review kinds; plan slugs use the canonical lowercased feature slug. A post-certification plan rename still refuses at the corrections anchor because it compares artifact paths exactly; revert the rename or re-certify. The helper refuses (exit 1) when the existing record's sidecar `source_digest` differs from the supplied digest and no decision is supplied; resolve the refusal only with `--explicit-new-round` or the explicit archival operation, never by rewriting the prior record. Before any permitted same-pass replacement (`new-round`), invoke `backup` and record the printed path as `Backup of prior record:`. After staging the successor, run `mark-superseded`; the validator rejects dangling or mismatched links. When copying a prior record, strip its `Superseded by:` line from the successor before validation.
+
+Orphan recovery: when the selection refusal names an orphaned record half (a canonical Markdown whose `.stats.json` sidecar is missing, for example after an interrupted synthesis), the block is fail-closed by design: never hand-write the missing sidecar and never let the partial record validate. Recover through the helper's `recover-orphan` subcommand with `--record` (the orphan path) plus the same `--slug` and optional `--kind` the `select` subcommand takes (the slug and kind are never inverse-parsed from the orphan's name); for `--kind plan-review`, also pass `--source-plan <path>` so the recovery stays within that plan series. The helper refuses before any mutation when the record has a sidecar twin (not an orphan), does not exist, or already carries the `.orphan-` infix (already preserved); the orphan must also carry its `Source digest:` Metadata line, which feeds the fresh pair's allocation. Otherwise it renames the orphan byte-identical to `<original stem>.orphan-<UTCtimestamp>.md` (a name no canonical discovery, selection, or validation shape matches) and allocates the fresh canonical pair for the same slug and kind through the same allocation logic as `select`. Stage the fresh record and add the receipt's `Orphan recovery: <path>` Metadata line verbatim (the path is repo-relative so the printed line passes the validator's orphan-recovery link format gate, which refuses a malformed link). Retention: the preserved orphan remains in the retention scan as an unpaired-retained unit that is reported every run and never auto-pruned, so it requires explicit handling at prune review, unlike backup copies which prune as pairs.
 
 Create a new suffixed record only for an explicitly requested new review round, or when the prior record is final or posted and the current review is genuinely a new round. A worker lens does not by itself justify a new primary record.
 
@@ -97,36 +308,16 @@ Every review orchestrator (plan, branch, PR, RFC, Confluence) **must** populate 
 10. **Budget:** fully expand every Critical, every blocking finding, up to five additional non-blocking High/Medium findings per worker, and up to two additional non-blocking Low findings per worker.
 11. **Overflow:** additional credible non-blocking candidates go under `### Overflow manifest` with Worker, Pattern, Anchor, Severity, Confidence, and one-line Consequence.
 12. **Soften watchlist:** when the review is part of a `review-loop` (or any multi-round branch review), include `### Soften watchlist` under `## Review Statistics`. The sidecar `soften_watchlist` array, together with the `### Soften watchlist` Markdown section rendered in the same round's record, is the source of truth for row state: the section renders the sidecar rows and carries them forward by rendering the carried rows, never holding parallel state. Update statuses after workers reaffirm or restage. Use `None.` when the run has no softened findings yet.
-13. **Fan-out findings:** A fan-out finding, per the fan-out policy in `review-panel-selection`, records the canonical home and the list of peer restatements in its Analysis; peers resolve by pointer conversion or one pointer-cleanup backlog item, not as independent contract bugs.
+13. **Delta-round record semantics:** a delta (focused post-fold) round's record fixes its source surface like any fresh round: its Source digest is the SHA-256 of the post-fold whole plan bytes (recording compatibly with `scripts/review_record_selection.py`'s differing-digest new-round path), the fold-diff scope is named in the Selection reason, and `panel_mode` stays focused.
+14. **Fan-out findings:** A fan-out finding, per the fan-out policy in `review-panel-selection`, records the canonical home and the list of peer restatements in its Analysis; peers resolve by pointer conversion or one pointer-cleanup backlog item, not as independent contract bugs.
 
-### Address fan-out accounting
+### Certification-residual routing
 
-When the orchestrator fans the address pass out (per the `execute-plan` Step 3.3 fan-out contract), fan-out address workers are not Panel rows and `never consume review-time budget or overflow`. Per-finding attribution is recorded by the parent as an `Address worker: <id>` line on the finding's Analysis section. The sidecar carries the attribution only for current-v1 records, in `extensions.address_fanout`, with shape:
-
-```json
-{"round": "<rN>", "finding_files": [{"id": 1, "files": ["repo/relative/path"]}], "workers": [{"id": "<wN>", "findings": [1], "files": ["repo/relative/path"], "attempts": [{"id": "<attempt>", "status": "success|blocked|cancelled", "reason_code": "completed|worker_error|worker_timeout|cancellation_unverified|ambiguous_patch|scope_violation|stale_attempt|parent_merge_conflict|superseded", "log": "<path>"}], "status": "complete|blocked", "fixed": N, "dropped": N, "deferred": N, "pending": N, "log": "<path>"}]}
-```
-
-The listed `reason_code` values are the closed address-fan-out enum (`completed`, `worker_error`, `worker_timeout`, `cancellation_unverified`, `ambiguous_patch`, `scope_violation`, `stale_attempt`, `parent_merge_conflict`, `superseded`). The definition site is the producer constants (`REASON_*` in `scripts/execute_plan_address_fanout.py`, r1 F21); the validator pins this subsection's list as membership only, and the producer-vs-validator set equality is asserted by the harness suite (`test_reason_code_enum_matches_validator_pins`), not by the validator at validation time (r2 F19: drift between the two sets fails the suite, not a `--hard` run). `completed` is required for a successful attempt, `worker_error` or `worker_timeout` for the corresponding worker failure, and the remaining codes are reserved for blocked or cancelled outcomes. This is a `version-1-only` extension. The validator enforces:
-
-- `round` equals the sidecar's `round` after string normalization.
-- every `finding_files` id exists exactly once in the sidecar findings.
-- every file is a non-empty repository-relative normalized path.
-- every worker's files equal the union of its finding file sets.
-- every assigned finding id occurs in exactly one worker.
-- every worker has one or two attempts and a final status.
-- each worker row's four counts sum to its findings length.
-- all assigned ids equal the exact fanned subset recorded by the parent.
-
-Synthesis-table immutability is deliberately NOT in that list (r1 F23): the validator gates one record's shape and conservation and never compares across rounds, so keeping synthesis tables (Panel, Discarded, Severity calibration) stable through a triage update is parent merge discipline per `receiving-review` (Staging doc triage outcomes; Triage presentation freeze), not a validator check.
-
-Versionless legacy sidecars reject `address_fanout` and remain on the single-worker path.
+Certification-round non-blocking findings are recorded in the terminal record's overflow section (the existing sidecar field) with durable backlog capture (a backlog row for every consequence-bearing residual), never force a re-round, and never enter the soften watchlist, whose fix-keyed shape and closure obligations stay untouched.
 
 ### Cap-closure sidecar extension
 
-`personal`-class projects never close a loop through this shape (the strict package escalates to simplify-or-rewrite at their cap of three); a sidecar declaring `extensions.cap_closure` for a plan whose project resolves `personal` is a certification defect (class resolution: `review-plan`, Project strictness classes).
-
-When a plan loop closes at its configured round cap without a clean round, the final round's sidecar records the operator-authorized cap-closure terminal shape in `extensions.cap_closure`, with required keys:
+When the operator explicitly authorizes closure at a plan loop's configured round cap without a clean round, the final round's sidecar records the cap-closure terminal shape in `extensions.cap_closure`. Reaching the cap alone does not prompt for or enact closure. This generic shape removes project-specific limits. Unresolved blocking findings remain a rejection condition. The extension has these required keys:
 
 - `plan_section` (exactly `## Residual findings (cap closure)`)
 - `round` (int or string, equal to the sidecar `round` after string normalization and normalizing to at least `CAP_CLOSURE_MIN_ROUND` = 3)
@@ -134,6 +325,18 @@ When a plan loop closes at its configured round cap without a clean round, the f
 - `pre_fold_digest` (lowercase hex64, written before folding, differing from the re-bound `source_digest`)
 
 The plan section's contract is the cap-round disposition ledger: every staged finding of the cap round is listed with its disposition (`folded` or `accepted`). This is a `version-1-only` extension, fail-closed at the version boundary: versionless legacy sidecars carrying `cap_closure` are rejected. The validator's section-literal constant is the shape's single owner and holds the bare heading (the declaration value carries the `## ` prefix).
+
+### Corrections sidecar extension (declared-when-present)
+
+A current-v1 sidecar may declare `extensions.corrections`, the array of certification-correction rows that re-bind the round's `source_digest` through graded, script-produced hops instead of a fresh round (the graded-review-certification contract; `scripts/corrections_record.py` is the shape owner and both validators consume its schema and verifier legs, so never spell the row shape by hand here). Declared-when-present rules the validator enforces:
+
+- Absent means absent; an explicit `null` is a schema error, never a silent absence; an empty array is a schema error (a declared record always carries at least one hop).
+- Rows are produced only by the classifier CLIs' `--emit-row` (`scripts/plan_delta_classifier.py` for plan bytes, `scripts/code_delta_classifier.py` for committed code fixes), never hand-authored by the editing session.
+- Two row kinds: `script-verified` (every hunk carries an exempt class: `checkbox-flip`, `whitespace`, or `typography` on plan bytes; `comment-only` on code diffs) and `operator-acked` (unclassified hunks covered by a complete operator ack receipt whose witness resolves out of band and whose classifier-gap row exists under this repository's `docs/history/backlog/`).
+- The code family mirrors its certified range in `extensions.certified_range` (`{"base": <commit>, "head": <commit>}`), which the validator requires to equal the range recorded in the certification seal `.ai-playbook/review-certs/<artifact-slug>.md`; both extensions are `version-1-only` and fail closed on versionless records.
+- The staging validator's stale-digest gate grades the declared chain: it re-derives every hop's bytes from git and re-runs the classifier itself, anchors the declared digest at the seal entry's round-start digest, and refuses with distinct routing-safe reasons (`corrections verification:` prefixed) a bare digest rewrite, a hop commit dated before the seal entry round-close commit, an unbound or vacuous hop, and a hunk the classifier cannot prove exempt.
+
+Consumers of the graded shapes beside this validator: the plans skill's graded rules (folds and post-certification deltas), the `execute-plan` Step 0.5 and Phase 3 digest gates, and the `review-plan` and `done` gates; each grades the same `extensions.corrections` rows through the same verifier, so a row recorded for one gate is evidence for all of them.
 
 ### Discard reason codes (use exactly one per discarded row)
 
@@ -197,7 +400,7 @@ The staging doc must follow this structure exactly, including required headings:
 - Findings: <staged count>
 - Status: STAGED
 - Supersedes: <prior record Markdown path, relative to this record> *(supersession rounds only; the validator resolves it against this record's directory)*
-- Superseded by: <successor record Markdown path, relative to the prior record> *(supersession rounds only; lives in the PRIOR record's Metadata and is written by the selection helper `mark-superseded`, not by hand)*
+- Superseded by: <successor record Markdown path, relative to the prior record> *(supersession rounds only; lives in the PRIOR record's Metadata and is written by the selection helper `mark-superseded`, not by hand; a round copy strips this line from the successor before validation)*
 - Backup of prior record: <backup Markdown path printed by the selection helper `backup`> *(supersession rounds only)*
 
 ## Review Statistics
@@ -412,7 +615,7 @@ Orchestrators **must** write a machine-readable sidecar next to every staging do
 
 Same basename as the `.md` file. Write the sidecar in the same pass as the `.md` file (do not defer). Skip only when the orchestrator cannot emit valid JSON without guessing; in that case record `Stats sidecar: skipped (<reason>)` under `## Metadata` and treat the review as incomplete for panel-tuning aggregation.
 
-**Usage capture (production write path):** at the START of staging a review round (before launching the round's workers), run `python3 ~/.ai-playbook/scripts/review_usage_capture.py mint` and carry the printed JSON through the round; record `review-run-id: <review_run_id>` and `review-started-at-ms: <minted_at_ms>` in the staging record's metadata block, the two values taken from the mint output VERBATIM, never re-derived (`review_usage_capture.py` is reached via `~/.ai-playbook/scripts/` (symlinked entries into this repo's `scripts/`), so the script is available once the repo commit lands). When writing a `.stats.json` sidecar, run `python3 ~/.ai-playbook/scripts/review_usage_capture.py --json --review-run-id <review_run_id> --review-started-at-ms <minted_at_ms>` and merge its output as the top-level `usage` field when it prints one. When it prints nothing (foreign runtime, unreadable store, not a git work tree), write the sidecar without `usage` and proceed unchanged; never estimate or hand-author a `usage` record. The bare `--json` form (without the identity arguments) remains the documented fallback for a round that lost its mint; its record stays non-attributable.
+**Usage capture (production write path):** at the START of staging a review round (before launching the round's workers), run `python3 ~/.ai-playbook/scripts/review_usage_capture.py mint` and carry the printed JSON through the round; record `review-run-id: <review_run_id>` and `review-started-at-ms: <minted_at_ms>` in the staging record's metadata block, the two values taken from the mint output VERBATIM, never re-derived (`review_usage_capture.py` is reached via `~/.ai-playbook/scripts/` (symlinked entries into this repo's `scripts/`), so the script is available once the repo commit lands). When writing a `.stats.json` sidecar, run `python3 ~/.ai-playbook/scripts/review_usage_capture.py --json --review-run-id <review_run_id> --review-started-at-ms <minted_at_ms>` and merge its output as the top-level `usage` field when it prints one. When it prints nothing (foreign runtime, unreadable store, not a git work tree), write the sidecar without `usage` and proceed unchanged; never estimate or hand-author a `usage` record. The bare `--json` form (without the identity arguments) is a pre-fence fallback for a round that lost its mint; its record stays non-attributable. A canonical record dated on or after the validator constant `USAGE_MINT_PAIR_MIN_DATE` (`2026-10-06`) validates only with this minted pair present or the `usage-attribution: bare-capture-fallback` Metadata marker, so a skipped mint must be recorded as the marker, never left silent. The marker is exclusive: it cannot coexist with either mint-pair field. On or after `SELF_HEAL_STATE_MIN_DATE`, a canonical record must also carry self-heal state bound to a minted `review-run-id`; the bare fallback therefore cannot complete a post-fence canonical record.
 
 Minimum schema:
 
@@ -482,7 +685,7 @@ Required top-level fields (all must be present; enum-typed fields use `null` whe
 | `schema_version` | integer `1` |
 | `review_type` | string |
 | `date` | string `YYYY-MM-DD` |
-| `artifact_slug` | string |
+| `artifact_slug` | string; lowercase kebab token (letters and digits joined by single hyphens), the certification seal filename stem |
 | `round` | round identifier: string (for example `"r1"`) or integer; producers pick one form per review and stay consistent |
 | `panel_mode` | `"full"` \| `"focused"` |
 | `selection_reason` | string or `null`; required non-null when `panel_mode` is `focused` |
@@ -506,6 +709,8 @@ Required top-level fields (all must be present; enum-typed fields use `null` whe
 
 Date-fenced top-level field: `coverage` (object; required for `source_kind` `plan` records dated on or after `COVERAGE_SIDECAR_MIN_DATE`, permitted and validated otherwise; schema in `### Coverage sidecar contract (COVERAGE_SIDECAR_MIN_DATE)` below). Optional top-level fields: `depth` (string), `domains` (list), `verdict` (string `yes` or `no`; the plan-review producer writes it alongside the `## Summary`), `extensions` (object), `usage` (shape owned by the capture module; the validator accepts the key only). Any other top-level field is rejected; future extensions belong inside the object-valued `extensions` (a non-object `extensions` value is rejected). On a `rejects unknown top-level field` validator error naming a field the current contract defines, use the validator-copy refresh recovery: refresh the installed validator copy from `scripts/validate_review_staging.py` and retry.
 
+Run-wide self-heal state: for canonical records whose filename and sidecar `date` are on or after `SELF_HEAL_STATE_MIN_DATE` (`2026-10-09`), require `extensions.convergence.self_heal_attempt`. Its `status` is `unused`, `consumed`, or `unknown`; `unknown` records missing or malformed prior-round evidence and cannot authorize self-heal. `run_id` is a 32-character lowercase hex ID stable across an artifact chain, normally initialized from r1's minted `review-run-id`; if prior state or identity evidence is missing or malformed, the recovery round records `unknown` with its own minted `review-run-id` as an explicit recovery exception, which does not start a new artifact chain, and later rounds carry that `unknown` state and ID unchanged. A consumed state also carries `round` (`rN`) and a lowercase SHA-256 `source_digest`. The consuming round must equal the current round and its digest must equal that sidecar's `source_digest`; later records carry the consumed state unchanged. An unnumbered canonical filename is a singleton r1 and must declare sidecar round 1; any continuation uses `-rN`. Resolve predecessor rounds by the stable filename stem without the date prefix, so a chain can continue across calendar dates. A post-fence canonical record without a minted `review-run-id`, including the documented bare-capture usage fallback, cannot establish self-heal state and fails closed. A prior record that combines the fallback marker with either mint-pair field is malformed identity evidence and requires the recovery round to record `unknown`; that unknown state is carried unchanged and never authorizes self-heal. A current post-fence record must have calendar-valid filename and sidecar dates or validation fails; malformed current dates cannot authorize either `unused` or `unknown`. For predecessor trust, a calendar-invalid filename date or sidecar date, or a missing/malformed sidecar `source_digest`, makes that predecessor unavailable/malformed evidence and requires `unknown`; this rule does not change the general version-1 date field's shape-only validation. Pre-fence historical records remain valid without this member. A missing, malformed, or legacy prior record on resume requires `status:"unknown"` with the current round's `review-run-id`; this recovery exception replaces the unavailable chain identity without creating a new artifact chain. An `unused` allowance is rejected and policy pauses before another automatic attempt.
+
 Extended-field grandfathering and cross-field rule: the four extended freshness fields (`review_mode`, `risk_signals`, `prior_findings_filter`, `last_fix_commit`) are required only on version-1 records whose `date` is on or after the validator constant `EXTENDED_SIDECAR_MIN_DATE` (`2026-09-09`, the day after this contract landed); a version-1 record dated earlier is accepted-legacy and exempt from them. The Markdown twin of this freshness fence keys on the staging filename's leading `YYYY-MM-DD` (the sidecar fence keys on the record's `date` field). The validator rejects either mixed-fence direction: a sidecar dated earlier than a post-fence staging filename cannot claim the exemption (the exemption is stripped), and a pre-fence filename with a post-fence sidecar date fails the date-disagreement error. Cross-field rule: a clean verdict with a non-null `last_fix_commit` requires `review_mode: fresh-adversarial` (a `targeted` label on a post-fix clean round bypasses the fresh-adversarial mandate), and `prior_findings_filter` must be `false` for a clean verdict; the Markdown Metadata mirrors the same freshness lines (`Review mode`, `Prior findings supplied as filter`), where a clean verdict contradicts `verification-only` mode or filter `yes`.
 
 Canonical Pattern IDs (version-1): findings, overflow items, and discarded rows that carry a pattern must use `<lens>#<kebab-slug>` with an owner from the declared set in **Pattern id format**. A version-1 finding must also carry the same canonical `pattern` in its Markdown `- **Pattern**:` bullet; a missing or differing Markdown Pattern is a conservation error.
@@ -514,7 +719,7 @@ Historical compatibility (schema classification): a sidecar without `schema_vers
 
 Panel profile for panel-era records (date-fenced reduced path): a staging record whose date (the staging filename's leading `YYYY-MM-DD`, falling back to the sidecar `date` field) is on or before the validator constant `PANEL_PROFILE_MAX_DATE` (`2026-09-19`, inclusive) validates under the documented reduced path instead of the full hard contract. The reduced path enforces the anti-stub core only: the Markdown and sidecar pair parses; a `## Metadata` section and a `## Findings` section exist (heading-text prefix match, so suffixed era headings such as `## Findings (zero blocking)` count); the sidecar carries a verdict; the sidecar's counts agree with its own findings array length when both are present; and whole-document finding conservation by document order over every recognized finding block in the Findings section plus round-append sections alike (for this leg the validator recognizes the panel header shapes `### N. <title> (Severity)` and `### R<N>-F<M>. <title> (Severity)`, with the severity taken from the parenthesized suffix). Report every other gate, present or future, as a warning that never contributes to the exit code; when the document parses into zero recognized blocks while the sidecar lists findings (the pipe-table era layout), report the unparsed conservation leg as a warning, never an error. The record date alone selects the path: do not route by schema shape and do not maintain a per-gate waiver list, because era-mismatched format conformance is exactly what the window exists to excuse. A record dated after the window, or undated, keeps the full contract unchanged.
 
-`source_kind` declares what `source_digest` hashes: `"code"` (the stored diff bytes), `"plan"` / `"rfc"` / `"document"` (the reviewed document's UTF-8 bytes). Producers SHOULD set it; `review-plan` (and other document reviewers) MUST set it. When `source_kind` is declared, `source_digest` must be a lowercase 64-char hex SHA-256 (placeholders like `"<sha256>"` fail the validator). The `--source-plan` flag on `validate_review_staging.py` recomputes the plan's digest and fails hard on a mismatch (the sibling `--source-rfc` and `--source-doc` flags do the same for RFC and generic document reviews, type-checking the sidecar's `source_kind`), so a digest recorded before a fold of the reviewed artifact is rejected as stale. In multi-round loops, re-derive the digest from the current round's reviewed artifact for every round; never copy a digest from a prior round's staging doc (the copy misattributes findings to a stale tree, and only a recompute flag can catch it).
+`source_kind` declares what `source_digest` hashes: `"code"` (the stored diff bytes), `"plan"` / `"rfc"` / `"document"` (the reviewed document's UTF-8 bytes). Producers SHOULD set it; `review-plan` (and other document reviewers) MUST set it. When `source_kind` is declared, `source_digest` must be a lowercase 64-char hex SHA-256 (placeholders like `"<sha256>"` fail the validator). The `--source-plan` flag on `validate_review_staging.py` recomputes the plan's digest and fails hard on a mismatch (the sibling `--source-rfc` and `--source-doc` flags do the same for RFC and generic document reviews, type-checking the sidecar's `source_kind`), so a digest recorded before a fold of the reviewed artifact is rejected as stale. The stale judgment is round-anchored, not exact-match alone: when the sidecar's round has an on-disk certification seal entry (`.ai-playbook/review-certs/<artifact-slug>.md`), the accepted stale shapes beside the exact-match rule are a declared digest equal to the seal entry's round-start digest with the current bytes matching that digest too (the honest clean shape: the reviewed bytes are the round's certified bytes) and a declared digest carried by a verified `extensions.corrections` chain (a verified re-bind passes beside a naming warning and never rewrites the declared digest), while a declared digest matching neither refuses as an unwitnessed sidecar digest mutation (the disk home detects digest mutation against the current seal file only, the committed-history witness being retired); when no seal entry resolves for the round (a certification predating the seal file, or the seal file absent from this worktree), the check stays today's exact-match rule with a named degradation warning. For code reviews the `--source-code-repo` and `--source-code-plan` flags grade the same way over the certified range's repository. In multi-round loops, re-derive the digest from the current round's reviewed artifact for every round; never copy a digest from a prior round's staging doc (the copy misattributes findings to a stale tree, and only a recompute flag can catch it).
 
 Legacy sidecars keep `agent`, `agents`, and caller-specific severity labels. New sidecars use worker rows and the four shared severities.
 
@@ -524,12 +729,13 @@ Provider skill for staged review hierarchy and statistics. Consumers **must** fo
 
 | Consumer skill | Staging path pattern | Notes |
 |----------------|---------------------|-------|
-| `review-plan` | `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>-r<N>.md` | Shared severities and blocking-aware plan actions; carries a stable-core summary of the sidecar schema (Step 3; the enforced contract is the validator and review-staging's authoritative copy) and runs `--hard` validator gate before reporting round complete; declares `record_kind` (sidecar field + Metadata `Record kind:` twin) on records dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` |
+| `review-plan` | selector-emitted `{reviews_dir}/YYYY-MM-DD-plan-review-<slug>[-p<identity-token>]-r<N>.md` | Shared severities and blocking-aware plan actions; carries a stable-core summary of the sidecar schema and runs the validator before reporting round complete; declares `record_kind` on current records |
+| `plans` (Plan Quality Gate) | selector-emitted plan-review path | Orchestrator-side consumer: re-runs the validator before folding; a staging-record defect is repaired in that round by its producer, never deferred to closeout |
 | `doing-code-review` | `{reviews_dir}/YYYY-MM-DD-PR-*`, `YYYY-MM-DD-branch-review-*`, or execute-plan `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Code severities; optional `Status` per finding for PR triage; declares `record_kind` (sidecar field + Metadata `Record kind:` twin) on records dated on or after `RECORD_KIND_SIDECAR_MIN_DATE`; its Step 1 review-artifact preflight (item 4) mandates `scripts/review_record_selection.py select` before workers launch |
 | `review-loop` | Same as `doing-code-review` branch / execute-plan patterns with `-r<N>` | Requires statistics every round, including clear rounds; runs the record selection helper (`scripts/review_record_selection.py select`) before workers launch |
-| `receiving-review` | Updates existing staging under `{reviews_dir}/` | Triage Status→Triage map, Triage outcomes table, matching `.stats.json` sidecar, and authorized Blocking re-evaluation (see Triage presentation freeze). A returned-for-ask record is NOT a Status or Triage value: record the literal marker `returned-for-ask` on the finding's Analysis section (with the question to relay); Status and Triage stay `pending` and the Blocking value is unchanged until the user decides. When an orchestrated run fans the address pass, fan-out attribution is parent-written: the parent (never the subset worker) writes the `Address worker: <id>` line on each fanned finding's Analysis section as parent merge discipline, not validator-checked, while the `extensions.address_fanout` sidecar extension is validator-checked, per Address fan-out accounting. |
+| `receiving-review` | Updates existing staging under `{reviews_dir}/` | Triage Status→Triage map, Triage outcomes table, matching `.stats.json` sidecar, and authorized Blocking re-evaluation (see Triage presentation freeze). A returned-for-ask record is NOT a Status or Triage value: record the literal marker `returned-for-ask` on the finding's Analysis section (with the question to relay); Status and Triage stay `pending` and the Blocking value is unchanged until the user decides. |
 | `review-reconciliation` | Supplements the affected canonical record under `{reviews_dir}/` or the caller's linked note | Adds recurrence and closure evidence; never replaces immutable round findings or certifies its own refactor; declares `record_kind` (sidecar field; Metadata twin via the universal review-staging template) on the supplemental record |
 | `rfc-design` | `{reviews_dir}/YYYY-MM-DD-rfc-review-<slug>-<mode>.md` | Shared severities; statistics section required; declares `record_kind` (sidecar field; Metadata twin via the universal review-staging template) on records dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` |
 | `review-confluence-doc` | `{reviews_dir}/YYYY-MM-DD-confluence-review-<slug>.md` | Tag `[Prose]` / `[Premortem]` / `[Code]` in Source field; declares `record_kind` (sidecar field; Metadata twin via the universal review-staging template) on records dated on or after `RECORD_KIND_SIDECAR_MIN_DATE` |
 | `execute-plan` Phase 3 | `{reviews_dir}/YYYY-MM-DD-<plan-slug>-code-review-r<N>.md` | Not `-plan-review-r`; review logs reference staging path with statistics |
-| `done` | Session-touched staging under `{reviews_dir}/` | the pre-docs sweep gate run's review-staging gate validates before docs-branch sync |
+| `done` | Session-touched staging under `{reviews_dir}/` | the landing sweep's review-staging gate validates before docs-branch sync |

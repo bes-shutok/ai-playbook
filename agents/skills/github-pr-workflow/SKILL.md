@@ -12,6 +12,16 @@ Rules for PR description/stats authoring, splitting a branch diff into appropria
 
 **Prerequisite:** GitHub CLI (`gh`) installed and authenticated. Commands below use `gh` syntax.
 
+## Project-scope and remote-operation gate
+
+Before running any command that reads or changes a remote (including `git fetch`/`pull`, `gh` queries, PR operations, pushes, merges, or remote-branch deletion), resolve the project scope from the applicable facts document.
+
+- **Personal or pet project:** stop before remote access. Agents must keep the work local; the operator handles remote operations. This remains true when the user asks the agent to push, open or merge a PR, or delete a remote branch. Continue with local inspection and changes when possible, then report the local state and the exact operator action needed.
+- **Company project:** follow that project's ownership and authorization rules before remote access.
+- **Unknown scope:** do not infer that remote access is allowed. Continue locally if possible and ask for the missing scope information before a remote operation.
+
+For a personal or pet project, use the checked-out local base branch when a base is needed. Do not fetch or replace it with `origin/<base>`. The user-level `AGENTS.md` project-scope rule is authoritative; this gate applies to all consumers of this shared PR workflow, including `doing-code-review` and `receiving-review`.
+
 ## Routing Boundary
 
 This skill owns **GitHub PR mechanics** and reusable GitHub API details.
@@ -97,6 +107,7 @@ Post with `event: "COMMENT"` unless `doing-code-review` marks a Critical or High
 
 ### Fetch review threads for passive review feedback
 Use this when `receiving-review` needs to triage existing Copilot or human reviewer threads:
+Fetch every page of the thread inventory and every page of each thread's comments before classifying feedback. Parent comments contain the original request; replies may contain an answer, a changed request, or a later disposition. Do not treat a parent as still open based only on its body or `isResolved` value. The example prints every comment on the first page, labels the parent and replies, and exposes pagination state. If `hasNextPage` is true, fetch that thread's remaining comment pages using its thread ID and `endCursor` before deciding what remains open.
 ```bash
 gh api graphql -f query='
 {
@@ -106,7 +117,7 @@ gh api graphql -f query='
         nodes {
           id
           isResolved
-          comments(first: 20) {
+          comments(first: 100) {
             nodes {
               id
               author { login }
@@ -116,8 +127,11 @@ gh api graphql -f query='
               outdated
               createdAt
             }
+            totalCount
+            pageInfo { hasNextPage endCursor }
           }
         }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
@@ -126,19 +140,35 @@ import json, sys
 data = json.load(sys.stdin)
 threads = data['data']['repository']['pullRequest']['reviewThreads']['nodes']
 for i, thread in enumerate(threads):
-    comments = thread['comments']['nodes']
+    connection = thread['comments']
+    comments = sorted(connection['nodes'], key=lambda comment: comment['createdAt'])
     if not comments:
         continue
-    first = comments[0]
-    print(f'=== Thread {i+1} | id={thread[\"id\"]} | resolved={thread[\"isResolved\"]} | outdated={first.get(\"outdated\")} ===')
-    print(f'Author: {first[\"author\"][\"login\"]} | Path: {first.get(\"path\")} | Line: {first.get(\"line\")}')
-    print(f'Comment ID: {first[\"id\"]}')
-    print(f'Body: {first[\"body\"][:500]}')
+    thread_id = thread['id']
+    resolved = thread['isResolved']
+    total_count = connection['totalCount']
+    print(f'=== Thread {i+1} | id={thread_id} | resolved={resolved} | comments={total_count} ===')
+    for j, comment in enumerate(comments):
+        role = 'PARENT' if j == 0 else 'REPLY'
+        created_at = comment['createdAt']
+        author = comment['author']['login']
+        comment_id = comment['id']
+        print(f'{role} | {created_at} | author={author} | comment_id={comment_id}')
+        print('Path: {} | Line: {} | Outdated: {}'.format(comment.get('path'), comment.get('line'), comment.get('outdated')))
+        print('Body: {}'.format(comment['body']))
+    page = connection['pageInfo']
+    if page['hasNextPage']:
+        print('INCOMPLETE: fetch remaining comments for thread {} after cursor {}'.format(thread_id, page['endCursor']))
     print()
+thread_page = data['data']['repository']['pullRequest']['reviewThreads']['pageInfo']
+if thread_page['hasNextPage']:
+    print('INCOMPLETE: fetch remaining review threads after cursor {}'.format(thread_page['endCursor']))
 "
 ```
 
 Replace `OWNER`, `REPO`, and `PR_NUMBER` with values from the PR context.
+
+For an incomplete thread, continue its `comments` connection by querying the thread node with `comments(first: 100, after: "<endCursor>")` and the same comment fields plus `pageInfo`. Repeat until `hasNextPage` is false. If the review-thread inventory itself is incomplete, continue its `reviewThreads` connection with `first: 100`, `after: "<endCursor>"`, and `pageInfo`. Preserve comment order by `createdAt` when assessing the sequence, and keep the stable thread ID with the comments so replies and resolution target the correct parent.
 
 Passive review work must also fetch top-level PR Conversation comments because they are separate from inline review threads:
 
@@ -234,7 +264,7 @@ Use when the user asks to squash a multi-commit feature branch into a single cle
 **Scope:** squash only commits ahead of the chosen base (`<base>..HEAD`). On the current branch, require `git merge-base --is-ancestor <base> HEAD` before `git reset --soft <base>`, then one commit. Do not rewrite the entire repository history with `git checkout --orphan` unless the user explicitly asks for a full history squash.
 
 ### Steps
-1. Resolve `<base>` (trunk or immediate parent feature branch). Fetch remotes, then prefer the **local** tip when a just-restacked parent has not been pushed yet; otherwise use `origin/<base>`. Confirm `git merge-base --is-ancestor <base> HEAD` before soft-reset.
+1. Resolve `<base>` (trunk or immediate parent feature branch). For a personal or pet project, use only the checked-out local `<base>` and stop if it is unavailable; leave remote refresh to the operator. For other project scopes, fetch remotes, then prefer the **local** tip when a just-restacked parent has not been pushed yet; otherwise use `origin/<base>`. Confirm `git merge-base --is-ancestor <base> HEAD` before soft-reset.
    - **Stacked PRs:** soft-reset parent must be the **immediate parent feature branch** (the branch the story PR will target), not trunk alone when the PR targets a parent. Before committing, verify scope: `git diff --stat <base>..HEAD` matches the current story only (file count/order-of-magnitude lines), not sibling work from another stacked branch.
    - If `git reset --hard` is blocked by workspace policy, reparent with `git commit-tree <tree> -p <base>` instead.
 2. Detect format-only files; exclude them from the commit to avoid cluttering the PR:
@@ -293,6 +323,7 @@ For PRs against repos with PR-metadata-driven CI (notably `config-repo-prod`), t
 - When drafting a PR description, omit verification sections unless the user explicitly asks for verification details or the repository template requires them.
 - When a user asks for PR stats, prefer concise branch-vs-base counts (for example commits plus doc/non-doc file counts) over full file-change or insertion/deletion totals unless the user explicitly asks for churn metrics.
 - Never reference gitignored files (e.g. `AGENTS.md`, `CLAUDE.md`, `docs/`) in PR descriptions, commit messages, or review replies; they do not appear in the diff and cause spurious review comments. Only mention files that are tracked and visible in the PR.
+- Commit messages follow coding_guidelines.md section 40: the subject leads with a compressed why after any required prefix; when the subject cannot carry the reason, the body opens with the short why.
 - **Title stays in sync with scope:** when you push commits or edit the body of an open PR and the change set is no longer what the current title claims (added regions, modules, or deliverables; narrowed scope; retitled ticket), run `gh pr edit <n> --title "..."` in the same turn as the body/files update. Readers judge the PR from the title first; a stale title after a body refresh looks unfinished.
 
 ## PR Chunk Splitting
@@ -343,4 +374,7 @@ When the user asks to actually create the PR branches (not just plan them):
 Owns refreshing an open stacked chain when trunk advances. During that restack it owns PR base retarget (`gh pr edit --base`). This skill keeps post-squash-merge `rebase --onto`, one-off `-squashed` branch creation, and other PR admin. See `../update-stacked-branches/SKILL.md`.
 
 ### With `receiving-review`
-Consumer of the shared GitHub PR operations for passive review feedback: thread inventory, `verify_thread_attachment`, reply/resolution mechanics, and the deletion rules this skill owns. This skill references `receiving-review`'s "Misplaced reply correction" protocol as the only sanctioned delete-and-repost path for the agent's own misplaced inline-thread reply. See `../receiving-review/SKILL.md`.
+Consumer of the shared GitHub PR operations for passive review feedback: complete thread and reply inventory, `verify_thread_attachment`, reply/resolution mechanics, and the deletion rules this skill owns. This skill references `receiving-review`'s "Misplaced reply correction" protocol as the only sanctioned delete-and-repost path for the agent's own misplaced inline-thread reply. See `../receiving-review/SKILL.md`.
+
+### With `doing-code-review`
+Consumer of the shared GitHub PR operations for active review: its review flow inherits the Project-scope and remote-operation gate.

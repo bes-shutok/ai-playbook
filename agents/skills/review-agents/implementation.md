@@ -25,6 +25,17 @@ When new config fields, parameters, or data schema fields are added:
 - Is a default value defined? Is it safe?
 - Are migration steps included if the change is not backward-compatible?
 
+## Configuration source-of-truth duplication
+
+When a static code or YAML list appears to mirror values already supplied by runtime configuration:
+
+1. Trace how each list is used and identify the documented source of truth.
+2. Determine whether the static list represents an independent policy restriction or merely duplicates the configured value set.
+3. When it only duplicates the source and outputs can be derived at runtime, prefer deriving them from the source instead of maintaining two synchronized lists.
+4. Retain a separate allowlist only when the product requires an independently meaningful restriction; name and document it as policy, and verify its intended membership.
+
+Do not infer duplication from similar names alone. Pattern: `implementation#config-inventory-sot`.
+
 ## Same-change-set inventory (schema and config shape)
 
 When the diff adds or renames DB tables/indexes, or documents a constrained config shape:

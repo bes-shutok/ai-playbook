@@ -94,7 +94,7 @@ Record in `AGENTS.md` repo constraints (if not already present):
 - **Facts / guidelines:** `repo_facts_rel` → `.ai-playbook/facts.md` (gitignored repo agent runtime); `project_guidelines_rel` → `docs/maintenance/project-guidelines.md`.
 - **Shared knowledge:** `docs/architecture/`, `docs/maintenance/` (Layer 2) — update in the same PR/session when behavior, contracts, integrations, or ops change; see `docs/maintenance/project-guidelines.md` Documentation Hierarchy section.
 - **Historical context:** `docs/history/` (Layer 3) — reference only; active plans under `docs/history/plans/`, archives under `docs/history/plans/completed/`.
-- **LLM-only:** `docs/tmp/` at root; gitignored `docs/history/reviews/` — not canonical human Layer 2.
+- **LLM-only:** `docs/tmp/` at root; gitignored `.ai-playbook/reviews/` and `.ai-playbook/metrics/`, not canonical human Layer 2.
 - **Wire catalogs (Layer 2):** `docs/maintenance/api-reference.md` when the service exposes HTTP APIs; other wire contracts under `docs/maintenance/` (BFF, sync, admin FE shapes). Do not recreate a separate examples tree or per-endpoint files under `maintenance/`; use `maintenance/api-reference.md` for caller samples.
 - **Doc path resolution:** Other skills resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, `{proposals_dir}`, `{rfcs_dir}`, `{caller_catalog}` from `.ai-playbook/facts.md` TOML (via `using-skills` Step 0) and project guidelines — not from hardcoded skill defaults.
 - Use `doc-hierarchy-migrate` to relocate flat or module-split docs; use `doc-hierarchy-upkeep` for Layer 1/2 after migration; merge durable knowledge into topic-based `architecture/`, not `docs/<module>/` trees.

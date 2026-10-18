@@ -1,8 +1,8 @@
 # Consistency Lens
 
-Review abstract artifacts (plans, RFCs, design documents) for internal contradictions, stale cross-references, source-of-truth drift, and invalid validation claims. Loaded by `contract-docs` in plan and RFC reviews per `review-panel-selection.md`.
+Review abstract artifacts (plans, RFCs, design documents) for internal contradictions, stale cross-references, source-of-truth drift, and invalid validation claims. Loaded by `contract-docs` in plan and RFC reviews, and when contract-impact closure triggers per `review-panel-selection.md`.
 
-**Scope:** document-level contradictions only. This lens compares statements in the artifact against each other and against the artifact's own declared sources of truth. It does not judge runtime code.
+**Scope:** document-level contradictions only. This lens compares statements in the artifact against each other and against the artifact's own declared sources of truth. It does not judge runtime code; directly dependent documents pulled in by the contract-impact closure trigger (`documentation.md` phase 1) join the compared statements.
 
 **Boundary (single ownership):**
 - Runtime bugs, wrong algorithms, edge cases in existing code: `quality` (lead worker `correctness-completeness`).
@@ -35,6 +35,12 @@ Pattern tags: `consistency#<kebab-slug>`.
 3. Measured counts or inventories asserted in prose that the artifact's own referenced source disagrees with; require a re-measurement, not a re-assertion.
 4. Ticket-as-gate drift: a living artifact gates behavior on an issue key (for example `PROJ-1234`) whose churn is unrelated to the capability it names; stage one SOT-drift finding proposing the durable capability name, not per-surface staleness findings; canonical gates in `documentation.md` Living-doc gates. <!-- portability: abstract --> issue-key shape is an abstract illustration owned by the orchestrator layer
 5. Wire-contract duplication: a caller catalog restates OpenAPI schemas, enums, or status maps; stage one fan-out finding that thin-indexes the catalog to the OpenAPI definition, not one finding per restated row; canonical gates in `documentation.md` Living-doc gates.
+
+### Cross-artifact contract drift
+
+When a changed public contract invariant supersedes a normative statement in a directly dependent artifact (a schema paragraph naming an older migration as the executable definition, a table sketch the new schema rejects), the drift between the changed contract and the dependent statement is a finding here: name both statements and their locations, quote the conflicting text, and state which is authoritative (the changed contract) and what reconciliation the dependent document needs.
+
+The dependent artifact enters the consistency read-set only via the contract-impact closure trigger (`documentation.md` phase 1); unrelated documents and broad freshness sweeps stay out of scope. Findings use pattern `consistency#stale-schema-source-reference` and route through the contract-impact exception (`doing-code-review` section 4.9.2).
 
 ## Invalid validation claims
 

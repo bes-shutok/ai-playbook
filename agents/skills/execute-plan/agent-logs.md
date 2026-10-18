@@ -10,13 +10,16 @@ Read `{tmp_dir}` from the opening TOML block in `.ai-playbook/facts.md` at Phase
 | Intermediate task review task N (Step 1.2b, parent-owned) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/task-<N>-review.log.md` |
 | Phase 3 review round R (parent default, or recovery orchestrator) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-doing-code-review.log.md` |
 | Address review round R | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review.log.md` |
-| Address fan-out worker W in round R (one log per fan-out worker, append-only) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/review-r<R>-receiving-review-w<W>.log.md` |
 | Session manifest (orchestrator) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/manifest.md` |
+| Run briefing (orchestrator-maintained, refreshed per SKILL.md Step 0.4) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/briefing.md` |
+| Mechanism design review (Step 1.4b, parent-owned) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/design-review-<anchor-task>.log.md` |
 | Review diff snapshots (optional) | `{tmp_dir}/execute-plan/<PLAN_SLUG>/diff-r<R>.patch`, `src-diff-r<R>.patch` |
 
-In a fanned address round (Step 3.3 fan-out contract), the base `review-r<R>-receiving-review.log.md` stays parent-owned: the parent heartbeats it before the fan-out and appends the merge pass after the workers return. Each fan-out worker owns only its per-worker log `review-r<R>-receiving-review-w<W>.log.md` (one log per fan-out worker, append-only, same create-versus-append rules as every other log path) and never writes the base log.
+A `done_fast_path:` manifest row is the parent's record that the task's done boundary completed (Step 1.4 is parent-executed for every task per the closeout-gate demotion program change 9 - the per-task done sub-agent spawn is removed), naming the scripted verification conditions' results and the commit sha; the per-task log handoff contract is unchanged and the implement log remains the learn input.
 
-The Step 1.2b intermediate review log `task-<N>-review.log.md` lives next to `task-<N>-implement.log.md` in the session dir: the execute-plan parent appends one pass record per pass (the record Step 1.2b defines), and a focused re-review appends another pass record to the same file. The parent passes the path into the per-task `done` prompt as `<TASK_REVIEW_LOG_PATH>`, required only when Step 1.2b ran for the task.
+The run briefing is not a log: the orchestrator owns and rewrites it (workers read it and never edit it), it carries run-level context (digest, decisions and folds, conventions, base tip) for worker prompts, and citing it to any worker, `done` included, never widens the preceding-step-only log handoff defined below. The create-versus-append discipline of this file does not apply to the briefing.
+
+The Step 1.2b intermediate review log `task-<N>-review.log.md` lives next to `task-<N>-implement.log.md` in the session dir: the execute-plan parent appends one pass record per pass (the record Step 1.2b defines), and a focused re-review appends another pass record to the same file. The parent-executed Step 1.4 done boundary reads the path itself (formerly passed into the per-task `done` prompt as `<TASK_REVIEW_LOG_PATH>`), required only when Step 1.2b ran for the task.
 
 Create the directory before the first sub-agent launch. `<PLAN_SLUG>` is a short kebab-case slug from the plan filename (e.g. `PROJ-1234-feature-name` from `PROJ-1234-feature-name.md`).
 
@@ -46,7 +49,7 @@ The orchestrator sets `<LOG_PASS_NUM>`: `1` on first launch for that path; incre
 
 This matters most for **address review** (`review-r<R>-receiving-review.log.md`): Step 3.3 may be relaunched within round R; a retry must append Pass 2+, not clobber Pass 1.
 
-Apply the same create/append rules to implement logs, the per-task intermediate review log (`task-<N>-review.log.md`), address-review logs, per-worker address fan-out logs, and the Phase 3 review log (`review-r<R>-doing-code-review.log.md`). The same holds per fan-out worker: a worker-subset retry appends to that worker's `review-r<R>-receiving-review-w<W>.log.md`. Lens workers do not own a log path.
+Apply the same create/append rules to implement logs, the per-task intermediate review log (`task-<N>-review.log.md`), address-review logs, and the Phase 3 review log (`review-r<R>-doing-code-review.log.md`). Lens workers do not own a log path.
 
 ## Heartbeat (Phase 3 review log)
 
@@ -84,11 +87,11 @@ Panel launched; waiting on lens workers.
 (pending)
 ```
 
-When the staging doc is written, append a final Pass (or update via append block) with `Status: success | blocked` and the full return payload. A review round that runs for many minutes with **no** log file on disk is a skill violation (resume and timeout gates need the heartbeat).
+When the owning step ends (workers returned, staging doc synthesized) and before the Step 3.1 verification gate evaluates item 2, the owner appends the terminal pass to the same log (or update via append block) with `Status: success | blocked` and the full return payload, so the log is closed by a terminal pass (Status `success` or `blocked`) and a round never ends with `in_progress` as the file's last Pass status; an `in_progress` heartbeat that is still the last pass at done-launch time is the defect shape the Step 3.4 launch validation refuses. A review round that runs for many minutes with **no** log file on disk is a skill violation (resume and timeout gates need the heartbeat).
 
 ## Log file format (required)
 
-**Ownership:** implement and receiving-review workers update their assigned log before returning. In a fanned address round a receiving-review worker updates only its per-worker log; the base address log stays parent-owned (heartbeat plus merge pass). Phase 3 lens workers have no log path and return findings only. Step 1.2b intermediate review workers likewise have no log path and return findings only; the parent appends their pass to `task-<N>-review.log.md`. The Phase 3 review log (`review-r<R>-doing-code-review.log.md`) is owned by the execute-plan **parent** on the default path, or by the nested recovery orchestrator when Step 3.1 uses recovery. Do not tell lens workers to write that review log.
+**Ownership:** implement and receiving-review workers update their assigned log before returning. Phase 3 lens workers have no log path and return findings only. Step 1.2b intermediate review workers likewise have no log path and return findings only; the parent appends their pass to `task-<N>-review.log.md`. The Phase 3 review log (`review-r<R>-doing-code-review.log.md`) is owned by the execute-plan **parent** on the default path, or by the nested recovery orchestrator when Step 3.1 uses recovery. Do not tell lens workers to write that review log.
 
 Workers that own a log path **update it before returning** (create or append per table above). Minimum sections per pass:
 
@@ -124,51 +127,7 @@ Workers that own a log path **update it before returning** (create or append per
 
 Include enough detail for `learn` to extract friction and corrections; not just a one-line status.
 
-A worker pass that reports `success` records the machine-verifiable evidence envelope in its `Commands run` and `Full return payload` sections: the identity of each validating command, the working directory it ran in, its exit status, the output identity of the captured output, the selected test identities, the changed paths measured against the launch baseline, and the plan-criterion coverage those changes satisfy; the coverage must be complete across the task's acceptance criteria the implement step owns (an implement-owned criterion without a coverage mapping routes the return to blocked, never a silent omission). The parent accepts success only from that envelope (per the machine-verifiable evidence obligation in `agents/skills/execute-plan/runtime-contract.md`); a log path or a narrative claim alone never advances a task.
-
-## Machine state and receipt ownership
-
-The structured machine manifest at
-`{tmp_dir}/execute-plan/<PLAN_SLUG>/runtime_state.json` is the sole source of
-truth for task selection, claims, checkpoints, reload, resume, normalized
-outcomes, and terminal state. The machine manifest `runtime_state.json` and its
-`runtime_state.json.lock` are intentionally untracked live run state wherever
-they live (the canonical home is `{tmp_dir}/execute-plan/<PLAN_SLUG>/` inside
-the gitignored `docs/tmp/`; a manifest at the repository root is live state
-too), and implement workers, reviewers, and done runs must never delete these
-files as dirt or hygiene violations. The runtime driver owns its schema, atomic
-locking, generation fencing, reload validation, and transitions. The parent
-must call the driver after every checkpoint and must resume from the first
-incomplete step.
-
-`manifest.md` is an orchestrator-maintained human audit receipt for the session.
-The orchestrator synchronizes it from driver reads and counters; the runtime
-driver does not write it, and it cannot authorize a transition. `agent-logs.md` is
-append-only telemetry and evidence for the immediately following `done` step;
-workers append a new pass rather than replacing an existing file. The parent
-records synchronization evidence after driver reloads, including the machine
-manifest generation and current workflow state.
-
-Before a worker action, the driver persists `started` and the claim token. When
-the commit-before-checkpoint window is possible, it persists
-`commit-pending` and reconciles the task identity, telemetry, and exact
-repository commit on reload. A proven commit records a completed checkpoint
-without relaunch. An ambiguous or live claim remains blocked and fenced.
-
-Every worker lifecycle event (completion, timeout, parent shutdown, and
-session restart) lands a durable lifecycle receipt through the selected
-adapter profile's lifecycle hooks (see the adapter profile contract in
-`agents/skills/execute-plan/runtime-contract.md`); terminal, timeout, and
-shutdown receipts release worker capacity idempotently. Before launching
-another worker, the parent reconciles capacity and claim state against the
-receipt-fed capacity witness and the live claim records (never against a
-remembered worker count or a stale inventory entry), and after a session
-restart it continues only through interruption reconciliation.
-
-Terminal state belongs to the driver. A final-response mechanism may be
-degraded, but an active machine manifest always suppresses terminal finalization.
-The parent must not send a terminal response until the driver reports terminal
-state and the orchestrator receipt records the Phase 5 checklist.
+A worker pass that reports `success` records the machine-verifiable evidence envelope in its `Commands run` and `Full return payload` sections: the identity of each validating command, the working directory it ran in, its exit status, the output identity of the captured output, the selected test identities, the changed paths measured against the launch baseline, and the plan-criterion coverage those changes satisfy; for the implement pass, the coverage must be complete across the task's acceptance criteria the implement step owns AND across every scope-intersecting plan validation command for the implement pass (a `## Validation Commands` entry whose subject paths intersect the task's declared file scope; every intersecting boundary accounts for the command per the Bound task rule, which decides only the green-run versus witnessed-deferral arm), with each such command's identity and exit status recorded in `Commands run`; an implement-owned criterion without a coverage mapping routes the return to blocked exactly as today, a scope-intersecting command with no recorded run routes the same way, and a scope-intersecting command recorded with a non-zero exit routes the same way unless a later re-run of the same command inside the task is recorded in `Commands run` with exit zero; a non-zero exit at a boundary whose later task's Files list intersects the command's subject paths is recorded as deferred with the owning task named in `Commands run` (the earliest such later task owns the green run), and the witnessed deferral is not a blocked route; review-iteration passes are unchanged by this clause. The parent accepts success only from that envelope (per the machine-verifiable evidence obligation in `agents/skills/execute-plan/runtime-contract.md`); a log path or a narrative claim alone never advances a task.
 
 ## Manifest (orchestrator maintains)
 
@@ -192,20 +151,20 @@ updated: <ISO8601 timestamp>
 | source_digest | (none) | `<sha256>` |
 ```
 
-The orchestrator passes the manifest path plus only the preceding-step log paths into each `done` prompt. Update the review counters and digest after each Step 3.4. Refresh the `updated:` timestamp on EVERY manifest update (Step 1.4 / Step 3.4 verification-gate updates and Step 3.5 counter refreshes alike); it is the freshness witness the `done` Step 1.5 staleness rule reads. On resume of an existing run, the orchestrator's first action is a manifest update refreshing `updated:` (and confirming `workflow_state: active`) before relaunching any sub-agent.
+The orchestrator passes the manifest path plus only the preceding-step log paths into the Step 3.4 `done` prompt (the parent-executed Step 1.4 boundary reads its log set itself per demotion program change 9). Update the review counters and digest after each Step 3.4. Refresh the `updated:` timestamp on EVERY manifest update (Step 1.4 / Step 3.4 verification-gate updates and Step 3.5 counter refreshes alike); it is the freshness witness the `done` Step 1.5 staleness rule reads. On resume of an existing run, the orchestrator's first action is a manifest update refreshing `updated:` (and confirming `workflow_state: active`) before relaunching any sub-agent.
 
-## Done sub-agent: required reads before learn
+## Done boundary: required reads before learn
 
-Read logs from the worker step(s) that **directly preceded this `done` invocation**; not earlier tasks or review rounds.
+Read logs from the worker step(s) that **directly preceded this done boundary** (the parent-executed Step 1.4 boundary or the Step 3.4 `done` sub-agent); not earlier tasks or review rounds.
 
 | `done` invocation | Preceding step(s) | Log(s) to read |
 |-------------------|-------------------|----------------|
 | Per task (Step 1.4) | Step 1.2 implement; Step 1.2b intermediate review when it ran | `task-<N>-implement.log.md` for that task only; plus `task-<N>-review.log.md`, required only when Step 1.2b ran for the task |
-| Per review iteration (Step 3.4) | Step 3.1 review; Step 3.3 address if it ran | `review-r<R>-doing-code-review.log.md`; plus `review-r<R>-receiving-review.log.md` only when Step 3.3 ran; when the round fanned, read that base log plus every per-worker address log for the round (`review-r<R>-receiving-review-w<W>.log.md`), or the single address log (no fan-out) otherwise |
+| Per review iteration (Step 3.4) | Step 3.1 review; Step 3.3 address if it ran | `review-r<R>-doing-code-review.log.md`; plus `review-r<R>-receiving-review.log.md` only when Step 3.3 ran; read the single parent-owned address log when Step 3.3 ran |
 
 Do **not** pass implement logs into review-iteration `done`, or prior rounds' review/address logs into a later iteration.
 
-If a required preceding-step log is missing, `done` must not commit; report to orchestrator to relaunch the worker sub-agent.
+If a required preceding-step log is missing, the done boundary must not commit; the parent finalizes the log from durable records where possible (the launch-validation rule) or re-runs the owning worker step.
 
 ## Cleanup after successful completion (Phase 5)
 

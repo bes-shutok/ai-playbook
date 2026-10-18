@@ -6,11 +6,10 @@ user-invocable: false
 
 # Skill Usage Guide
 
-This skill is automatically triggered by the SessionStart hook, dynamically scanning all available skills under the `~/.agents/skills/` directory.
+This guide catalogs the skills available to sessions; hosts surface them through their skill listings, and a session applies this guide by opening it (see the skill-load completeness principle for truncated loads).
 
-## Dynamic Scanning Mechanism
+## Skill Discovery
 
-- Hook location: `~/.agents/hooks/session-start.sh`
 - Scan directory: `~/.agents/skills/*/SKILL.md`
 - Extracted information: name, description, user-invocable
 
@@ -32,13 +31,13 @@ This skill is automatically triggered by the SessionStart hook, dynamically scan
 Before path-dependent skill work in a target repository:
 
 1. **Read** `.ai-playbook/facts.md` when it exists; parse only the **opening** fenced TOML block for path keys (`plans_dir`, `reviews_dir`, `tmp_dir`, `backlog_dir`, `backlog_completed_dir`, `facts_path`, `bootstrap_version`, and optional keys).
-2. **Check Terms triggers** from the `bootstrap-ai-playbook` skill: missing file, invalid TOML, incomplete required keys, `.ai-playbook/` or `.ai-playbook/facts.md` not gitignored, or cached path keys pointing at directories that no longer exist on disk.
-3. **Invoke `bootstrap-ai-playbook` only when at least one trigger fires**; at most **once per session**, except a **recovery rerun** when post-write validation fails or a required path key cannot be resolved after a bootstrap run in the same session (see `bootstrap-ai-playbook`). When the file is fresh (valid TOML, required keys present, paths exist, gitignore passes), bootstrap is a **no-op**; use cached TOML values.
+2. **Check Terms triggers** from the `bootstrap-ai-playbook` skill: missing file, invalid TOML, incomplete required keys, `.ai-playbook/` or `.ai-playbook/facts.md` not gitignored, cached path keys pointing at directories that no longer exist on disk, or a missing profile surface (worktree placement, `project_type` with pet-only `artifact_visibility`, `base_branch`, or the priority profile; the missing-profile-surface trigger routes into the bootstrap project-profile interview).
+3. **Invoke `bootstrap-ai-playbook` only when at least one trigger fires**; at most **once per session**, except a **recovery rerun** when post-write validation fails or a required path key cannot be resolved after a bootstrap run in the same session (see `bootstrap-ai-playbook`). When the file is fresh (valid TOML, required keys present, paths exist, gitignore passes), bootstrap is a **no-op**; use cached TOML values; a missing profile surface routes into the interview instead of the no-op stop.
 4. Other skills **read** TOML keys from `.ai-playbook/facts.md`; they do **not** invoke bootstrap each task.
 
 ## Proactive Usage Principles
 
-The SessionStart hook injects the following principles into every session:
+Sessions apply the following principles by reading this guide:
 
 1. **Don't wait for user requests** - Proactively invoke relevant skills when the context matches
 2. **Check guidelines before writing code** - Read `coding_guidelines.md` and stack-specific files (`jvm_guidelines.md`, `java_guidelines.md`, `kotlin_guidelines.md`, or `python_guidelines.md` as applicable) from `shared_docs_dir` in `~/.ai-playbook/facts.md`.
@@ -49,5 +48,6 @@ The SessionStart hook injects the following principles into every session:
 7. **Documentation paths** - Skills that read/write repo docs resolve `{plans_dir}`, `{reviews_dir}`, `{tmp_dir}`, etc. from the opening TOML block in `.ai-playbook/facts.md` (Step 0). Do not add `agents/skills/_shared/` modules for path resolution; `bootstrap-ai-playbook` owns repo path keys. **`doc-hierarchy-migrate`** applies the three-layer schema when explicitly migrating a repo; **`doc-hierarchy-upkeep`** updates Layer 1/2 after migration; **`doc-hierarchy`** is schema reference only.
 8. **Harness design** - When the user asks to build, audit, or improve an agentic harness (loops, tools, permissions, evals, MCP connectors), invoke **`agents-best-practices`**. When authoring a new skill for this registry, invoke **`how-to-write-skills`**.
 9. **Design RFCs** - When the user asks to create, draft, edit, or review a Design RFC or feature design in Markdown, invoke **`rfc-design`**. Confluence-hosted RFC/TDD page reviews use **`review-confluence-doc`**; publishing/syncing a document to Confluence uses **`confluence-page-sync`**; Technical Design Documents use **`tdd-design`**.
-10. **Review loop** - When the user asks to repeat review until clean, invoke `review-loop`. Exit after one fresh review of the current digest has zero unresolved blocking findings, the soften watchlist is closed, and design-simplicity covered the tip (see `review-loop` exit criteria).
+10. **Review loop** - When the user asks to repeat review until clean, invoke `review-loop`. Exit after one fresh review of the current digest has zero unresolved blocking findings, the soften watchlist is closed, and design-simplicity covered the tip, with the comment-only corrections re-bind as the one round-free exception (see `review-loop` exit criteria, the graded exit).
 11. **Plan authoring binding** - Any plan-shaped deliverable invokes the `plans` skill regardless of phrasing: author a plan for X, turn a backlog item into a plan, or a how-should-we-do-X question whose expected artifact is a plan. The literal word "plan" is not required in the ask. Environment-specific answers resolve from the repo facts file per Step 0 before answering from memory.
+12. **Skill-load completeness** - A skill load that reports truncation is incomplete by construction: before executing any workflow step of that skill, read the full SKILL.md from the skill's base directory. A skill whose contract cannot survive a partial load either fits the load window or states which sections are load-bearing.
