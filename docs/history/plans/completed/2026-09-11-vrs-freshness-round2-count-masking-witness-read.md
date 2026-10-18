@@ -77,7 +77,7 @@ Two deferred Lows from one execution, one coherent pass over one file: Task 1 ma
 - `scripts/plan_readiness.py`; reason: frozen caller, verified compatible (no pre-read, no witness opt-in, return ignored); behavior preservation is pinned by characterization canaries and its own selftest, not by edits
 - `docs/plans/completed/2026-09-09-vrs-freshness-prose-dedup.md`; reason: the archived record is immutable; its Validation Commands are executed as a contract, never edited, and the witness-call count intentionally stays 2 so no record update is needed
 - `docs/history/backlog/**`; reason: promoted backlog items stay in place until plan completion per the plans lifecycle
-- `docs/reviews/**`; reason: historical review records are immutable context
+- `../../reviews/reviews`; reason: historical review records are immutable context
 - `agents/skills/**`; reason: no skill prose changes in this plan; the validator-adjacent consumer wording lives in review-staging and was already aligned by the freshness plan
 
 ## Design Invariants (CR Guard)

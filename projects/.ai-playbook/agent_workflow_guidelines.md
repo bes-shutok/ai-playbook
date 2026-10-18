@@ -601,14 +601,14 @@ When generating any text artifact (PR descriptions, READMEs, skill docs, commit 
 | --- | --- | --- |
 | Compose | §39.3 self-check + skill scan steps | Before save/send |
 | Pre-commit | `check-no-em-dash.sh` (`staged` or `touched`) | Before `git commit` |
-| Session end | `done` skill pre-commit sweep gate run (em-dash-scan gate) | Before staging prose files |
+| Session end | done landing sweep (the `done_sweep_gates.sh landing` run's em-dash-scan gate) | Before staging prose files |
 | CI / guardrail | Repo test or lint on agreed doc roots | On `mvn test` / PR |
 
 Portable script (default path): `~/.ai-playbook/scripts/check-no-em-dash.sh` (override via `CHECK_NO_EM_DASH_SCRIPT` in facts when keyed). Scans `*.md`, `*.mdc`, and instruction entrypoint filenames unless `CHECK_NO_EM_DASH_ALL=1`.
 
 39.5. **Optional agent-runtime hooks.** User-installed hooks (for example Cursor `preToolUse` on Slack/Atlassian MCP and prose file edits) add a second line of defense. They are **not** canonical policy storage and are not required for other agents to comply.
 
-39.6. **Product repos vs agent tooling.** Em-dash policy and enforcement belong in the **agent layer** (this section, the `done` skill's pre-commit sweep gate run's em-dash-scan gate, `check-no-em-dash.sh` under the user playbook scripts). Do **not** add to a product/service repository: one-off fix scripts, guardrail tests, or numbered project-guidelines rules whose sole purpose is agent prose style. Cleaning em dashes in committed docs is fine; mechanical gates stay outside the product codebase unless the team explicitly adopts a human style guide for that repo.
+39.6. **Product repos vs agent tooling.** Em-dash policy and enforcement belong in the **agent layer** (this section, the done landing sweep's em-dash-scan gate, `check-no-em-dash.sh` under the user playbook scripts). Do **not** add to a product/service repository: one-off fix scripts, guardrail tests, or numbered project-guidelines rules whose sole purpose is agent prose style. Cleaning em dashes in committed docs is fine; mechanical gates stay outside the product codebase unless the team explicitly adopts a human style guide for that repo.
 
 ## 40. Named Tools and Skills Must Be Visually Listed, Not Only Inline
 
@@ -728,6 +728,8 @@ Decision table by audience and artifact. The two worked pairs below anchor the f
 
 Jargon threshold: widely shared technical vocabulary (API, JSON, HTTP) stays when the audience needs it; team-local abbreviations and unexplained metaphors are replaced or defined.
 
+45.11. **Chat answers and status reports.** When explaining a decision in chat, do not use an internal rule number, section, or skill name as the explanation. State the rule's relevant meaning and how it applies. Replace unfamiliar shorthand with common words on first use; for example, explain "application branching" as "code checks the value and chooses different behavior." Include the reference only when it helps the reader find the source, and pair it with the explanation.
+
 Final-pass checklist: remove duplicated context, generic introductions, stale drafting history, unnecessary headings, unexplained abbreviations, and sentences that do not change the reader's next action.
 
 Invariants:
@@ -823,7 +825,7 @@ When an implement sub-agent reports that work for the current task "was already 
 
 50.1. **Facts hold environment, not workflow policy.** `user_facts_path`, ownership facts, and repo `repo_facts_rel` store machine paths, accounts, domains, repo path keys, and local-only hygiene artifacts. They do **not** store portable numeric thresholds, loop limits, or skill completion criteria.
 
-50.2. **Skills own portable policy.** Byte budgets, retry counts, gate mode names, placement ladders, and "when to run" rules belong in the owning skill's `SKILL.md` (for example instruction size budget in `learn` Step 6.5 and the `done` pre-commit sweep gate run's instruction-size gate).
+50.2. **Skills own portable policy.** Byte budgets, retry counts, gate mode names, placement ladders, and "when to run" rules belong in the owning skill's `SKILL.md` (for example instruction size budget in `learn` Step 6.5 and the done landing sweep's instruction-size gate).
 
 50.3. **Scripts follow the same split.** Default behavior and constants live in the skill and in shared scripts tracked under repo-root `scripts/` (canonical source), synced to `~/.ai-playbook/scripts/` at runtime. Facts may point at a runtime script path when it varies by machine; facts must not restate the script's policy constants. Only secrets-bearing or machine-specific scripts (e.g. `sync-mcp-credentials.sh`, `public_hygiene_patterns_file`) remain gitignored under `~/.ai-playbook/scripts/`.
 
@@ -853,7 +855,7 @@ When an implement sub-agent reports that work for the current task "was already 
 
 ## 51. Instruction Context Loading: Always-On vs On Demand
 
-51.1. **Always-on entrypoints:** user-level `AGENTS.md`, repo `AGENTS.md`, applicable `facts.md`, and the triggered skill body for the current workflow. These fit a fixed byte budget (see `learn` Step 6.5 / the `done` pre-commit sweep gate run's instruction-size gate).
+51.1. **Always-on entrypoints:** user-level `AGENTS.md`, repo `AGENTS.md`, applicable `facts.md`, and the triggered skill body for the current workflow. These fit a fixed byte budget (see `learn` Step 6.5 / the done landing sweep's instruction-size gate).
 
 51.2. **On demand:** canonical guideline tiers (`project_guidelines_rel`, `company_guidelines_master`, files under `shared_docs_dir`, Layer 2 repo docs). Open only the **section or numbered rule** the task touches, not whole files every turn.
 
@@ -1090,6 +1092,10 @@ Personal and single-operator tooling (including the execute-plan runtime and its
 Review findings premised on a malicious same-user adversary are dispositioned as `deferred (threat-model)` in plan-review rounds, not blocking. Concurrency-correctness concerns (two *honest* sessions racing on one manifest), fail-closed handling of genuine errors, and accidental-damage guardrails stay in scope: those protect correctness, not against malice.
 
 **Driving principles for design and review until revised: efficiency, token usage, simplicity, and code quality, ranked in that order.** When two designs are otherwise comparable, choose the one with less mechanism, fewer moving artifacts, and fewer prescribed witnesses; a review suggestion that adds machinery to close a defense-in-depth gap is a deferred-backlog candidate, not a fold. Code quality ranks fourth but is never priced at zero: a deferral whose cost is real code quality (review-coverage symmetry across language overlays, validator correctness, validator robustness) must record that quality cost in the deferral line and be revived deliberately once the cost compounds. (Amended 2026-09-12: code quality added as the fourth principle per user decision; the 2026-09-11 efficiency triage had priced it at zero and wrongly parked the language-coverage and VRS-correctness items.)
+
+**Prove-first metric for new guards (added 2026-10-05, operator directive after the done guard-stack investigate, commit cb01b7e4):** no new guard, fence, validator, or gate is designed, planned, or implemented before its harm class is measured: the proposal records the observed case count and the actual time lost to that harm class, drawn from witnessed runs, as rows in the guard liveness ledger (`scripts/gate_liveness_ledger.py`, store `scripts/gate_liveness_ledger.json`). A proposal whose harm class shows no recorded cases is a deferred-backlog candidate by default, and a review suggestion that adds machinery without a ledger basis is dispositioned deferred, not folded. Existing guards keep the same accounting: every live firing is appended to the ledger (kind `catch` when it stopped real harm, kind `incident` when it blocked or misdirected valid work, with the time lost when known), so retirement and narrowing decisions read measured ratios instead of anecdotes.
+
+**Fail-loud default for guard posture (same origin):** a firing guard reports its finding loudly, records it in the ledger, and lets the work continue. The refusal-at-the-moment posture is reserved for the landing-fence class whose refusal IS the protection (CAS old-value existence checks, containment and parentage gates, reverse-squash staging refusals); those refusals are themselves loud, never silent, so nothing fails closed in the silent sense. A guard that blocks a run's commit boundary over a zero-catch hygiene finding is a defect against this principle, not a safety win, and its posture is narrowed or flipped with the ledger as the evidence base.
 
 ## 65. Finder AppleScript: Inline References and Per-Step Invocations
 

@@ -1,7 +1,7 @@
 # Plan: 2f prescribed-paragraph prose Lows (code-review r3, six findings)
 
 Backlog origin: `docs/history/backlog/2026-09-03-2f-paragraph-prose-lows.md`
-Source review: `docs/reviews/2026-09-02-r5-residuals-fixes-code-review-r3.md`
+Source review: `../../reviews/reviews`
 
 ## Assumptions
 

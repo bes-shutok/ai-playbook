@@ -76,7 +76,7 @@ After (this plan): the tail reads "so a full validation run may report it more t
 **Out of scope; reject unless plan-related:**
 - `scripts/plan_readiness.py`; reason: peer-modified in the working tree by another session, untouched by this plan.
 - `~/.ai-playbook/scripts/` deployed runtime copies; reason: separate pending redeploy, not this repository's tree.
-- `docs/reviews/` history artifacts; reason: immutable review history.
+- `../../reviews/reviews` history artifacts; reason: immutable review history.
 - `README.md`; reason: no catalog or usage change.
 
 ## Validation Commands

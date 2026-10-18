@@ -15,7 +15,7 @@ Make the review-plan skill's inline sidecar schema trustworthy again, so a produ
 ## Terms
 
 - sidecar: the `.stats.json` companion record of a review staging document, validated by `scripts/validate_review_staging.py`.
-- staging document: the per-round review Markdown under `docs/reviews/` that the readiness gate discovers by glob.
+- staging document: the per-round review Markdown under `../../reviews/reviews` that the readiness gate discovers by glob.
 - cap closure: the operator-authorized terminal review-loop shape recorded in a sidecar's `extensions.cap_closure` and the reviewed plan's `## Residual findings (cap closure)` section.
 - readiness gate: `scripts/plan_readiness.py`, the mechanical done-boundary check over plan bytes plus the latest review round pair.
 

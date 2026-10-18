@@ -74,3 +74,7 @@ Git history is currently minimal (`init`, `Readme added`), so use short, clear s
 - PRs should include changed skill files and rationale.
 - PRs should call out behavior changes in skill gates/output.
 - PRs should update `README.md` when skill names, paths, or usage changes.
+
+## Workflow verb routing
+
+An operator verb that names a workflow (investigate, author, execute, review, triage, release) resolves to its owning skill under `agents/skills/` before any improvised pass: consult the skill's own `SKILL.md` for the verb, and run its stages, gates, and artifact contract as written; a verb with no single owning skill proceeds by ordinary context gathering; the resolution check is one file read.

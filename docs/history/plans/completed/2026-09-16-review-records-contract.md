@@ -110,7 +110,7 @@ Tasks 2 and 5 carry no separate witness row: they are producer-wiring and valida
 - `agents/skills/plans/SKILL.md`, `docs/maintenance/document-registry.md`, `docs/plans/2026-09-15-execute-plan-review-fix-pipeline-efficiency.md`, `docs/plans/2026-09-17-backlog-long-tail-prose-predicates-small-mechanics.md`; reason: peer-session files, not this plan's deliverables.
 - `agents/skills/done/SKILL.md`; reason: the redesigned capture check adds no done-workflow arm.
 - `agents/skills/review-agents/documentation.md`; reason: SOT consolidation behavior moved back to its standalone origin.
-- The historical record corpus under `docs/reviews/`; reason: never rewritten by this plan.
+- The historical record corpus under `../../reviews/reviews`; reason: never rewritten by this plan.
 - `README.md`; reason: no skill or catalog name changes.
 
 ## Validation Commands

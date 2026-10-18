@@ -5,9 +5,9 @@ Backlog origins (scope of record):
 (r5 findings F-r5-1 through F-r5-9 plus one recorded out-of-lens observation) and
 `docs/history/backlog/2026-09-11-ambient-noise-pattern-trim-yagni.md` (r2
 F-r2-12). Review lineage:
-`docs/reviews/2026-09-10-execute-plan-runtime-residuals-code-review-r5.md`
+`../../reviews/reviews`
 (origin of the nine residuals) and
-`docs/reviews/2026-09-10-execute-plan-runtime-residuals-code-review-r2.md`
+`../../reviews/reviews`
 (origin of the trim item). Project guidelines:
 `projects/.ai-playbook/agent_workflow_guidelines.md`; runtime language notes:
 `scripts/test_execute_plan_runtime.py` is stdlib `unittest` with hermetic

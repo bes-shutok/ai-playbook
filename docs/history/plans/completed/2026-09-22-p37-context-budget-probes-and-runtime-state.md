@@ -7,7 +7,7 @@ Backlog origins (scope of record, under `docs/history/backlog/`):
 `2026-09-20-waiting-capacity-reclaim-fence-exhausted-window-evidence.md`,
 `2026-09-20-merge-lock-guard-wiring-residuals.md`,
 `2026-09-20-merge-session-content-fixture.md`.
-Review artifacts: `docs/reviews/2026-09-22-plan-review-p37-context-budget-probes-and-runtime-state-r<N>.md` (prefix reference, all rounds).
+Review artifacts: `../../reviews/reviews` (prefix reference, all rounds).
 
 ## Terms
 

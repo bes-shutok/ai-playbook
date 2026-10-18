@@ -1,6 +1,6 @@
 # Plan: company-master scoping loop residuals
 
-Backlog origin: `docs/history/backlog/2026-09-12-company-master-scoping-loop-residuals.md` (4 items; scope of record). Origin reviews: `docs/reviews/2026-09-12-branch-review-2026-09-11-execute-plan-runtime-residuals-r3.md` (items 1 and 2) and `docs/reviews/2026-09-12-branch-review-2026-09-11-execute-plan-runtime-residuals-r5.md` (items 3 and 4).
+Backlog origin: `docs/history/backlog/2026-09-12-company-master-scoping-loop-residuals.md` (4 items; scope of record). Origin reviews: `../../reviews/reviews` (items 1 and 2) and `../../reviews/reviews` (items 3 and 4).
 
 ## Terms
 
@@ -75,7 +75,7 @@ Edge cases that shaped the design: the blocking-question citations ("route throu
 **Out of scope; reject unless plan-related:**
 - `agents/skills/generalize/SKILL.md`; its placement-receipt citation stays 5c by design (preservation gate)
 - `scripts/done-lock.sh`; its selftest failure message ("takeover reused lock generation") is runtime test code outside the backlog item's anchors
-- `docs/reviews/**` and `docs/history/backlog/**`; review history is immutable context and the backlog item moves only at plan completion
+- `../../reviews/reviews` and `docs/history/backlog/**`; review history is immutable context and the backlog item moves only at plan completion
 - `README.md`; no skill name, path, or usage change
 
 ## Validation Commands

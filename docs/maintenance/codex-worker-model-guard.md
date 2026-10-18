@@ -12,10 +12,12 @@ or mismatched policy refuses before invocation.
 
 The versioned hook at `agents/hooks/codex-model-guard/require-luna.py` and the
 installed file selected by `~/.codex/hooks.json` are program copies. Their
-bytes must match. Execute-plan's read-only policy check verifies the active
-registration, installed target, source-byte equality, and selected config
-value before Codex claim or handoff mutations. This is Codex-specific; other
-runtime identities retain their existing behavior.
+bytes must match. On each worker launch, the hook checks the requested model
+against the selected config value before invoking the worker. The standalone
+read-only probe checks registration, installed target, source-byte equality,
+and the selected config value; execute-plan does not run this probe or gate a
+claim or handoff on its result. This is Codex-specific; other runtime
+identities retain their existing behavior.
 
 ## Operator recovery
 
@@ -42,10 +44,9 @@ files, follow the active-run precautions in the execute-plan runtime contract.
 Rerun the probe before the next run. No automatic host-file write or
 synchronization is performed.
 
-If policy drift blocks a claim or handoff operation, restore aligned policy
-outside the blocked session and follow the receipt-bound recovery contract in
-`agents/skills/execute-plan/runtime-contract.md`. Do not edit the manifest or
-create a new recovery transition.
+If the launch hook refuses a worker, restore aligned policy outside the
+blocked session and rerun the probe before the next launch. Do not edit the
+manifest or weaken the guard to bypass policy.
 
 ## Verification
 

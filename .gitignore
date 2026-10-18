@@ -10,7 +10,6 @@ __pycache__/
 # Legacy committed repo facts paths (deny accidental re-commit after migration)
 /docs/facts.md
 /docs/maintenance/facts.md
-/docs/reviews
 
 # Ephemeral session scratch (see docs/AGENTS.md)
 /docs/tmp/
@@ -21,4 +20,5 @@ __pycache__/
 
 # Host-app skill-sync drop zone (externally managed, re-synced on demand; never vendor per Vendored Asset Sync Rules)
 /agents/skills/synced/
-/docs/history/reviews/
+
+# Review records, certification seals, and metrics live under the wholesale-ignored /.ai-playbook/ audit home (selection record: docs/history/plans/2026-10-13-skill-audit-artifact-ignore-default.md; retention copy on the docs branch)

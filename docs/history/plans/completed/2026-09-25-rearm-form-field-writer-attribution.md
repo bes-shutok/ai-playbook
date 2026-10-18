@@ -58,7 +58,7 @@ TLDR: the `parent_automation_form` support text is tightened so its writer attri
 **Documentation:**
 - the backlog origin (reference during amendment; routed done in Task 3)
 - the accepted residual that the child re-arm writes no form: the completed rearm-emission plan's Assumptions (`docs/plans/completed/2026-09-25-maintenance-rearm-emission-loop-prevention.md`)
-- the r6 findings that staged this origin: `docs/reviews/2026-09-25-plan-review-maintenance-rearm-emission-loop-prevention-r6.md`
+- the r6 findings that staged this origin: `../../reviews/reviews`
 
 ## Design Invariants
 

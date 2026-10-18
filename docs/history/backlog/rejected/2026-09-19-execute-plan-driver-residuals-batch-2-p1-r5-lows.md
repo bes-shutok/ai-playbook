@@ -34,5 +34,5 @@ round the digest change requires.
 ## Severity and source
 
 Low; staging doc
-`docs/reviews/2026-09-19-plan-review-execute-plan-driver-residuals-batch-2-phase-1-state-machine-r5.md`,
+`../../reviews/reviews`,
 findings F1-F3.

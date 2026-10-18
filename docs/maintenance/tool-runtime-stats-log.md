@@ -10,3 +10,37 @@ Durable aggregates-only log for the weekly measurement rider (maintenance Step 7
 - no-action: below threshold; top row Agent measured at 1,717,199 s across the 31-day window (about 55,394 s/day, 5.4 percent error rate, single-joined-row ratio 0.00), so no replacement backlog item is filed from this run.
 - Trend: baseline run for the report home; no comparable prior report exists (the two immediately preceding same-day runs were implementation calibration runs minutes earlier, not weekly measurements).
 - Retention: the report home keeps the newest 8 run-stamped artifact pairs per the miner's retention line.
+
+## 2026-10-04 run 20261004T183348 (weekly-measurement-rider, scheduler turn 2026-10-04)
+
+- Window: 31 days (2026-09-04 through 2026-10-04); report at docs/tmp/tool-runtime-stats/tool-runtime-stats-20261004T183348.md (retention keeps the newest 8 pairs).
+- Time ranking (total seconds per active day): Agent 3,228,937 s (6,306 calls, 104,159 s/day, 8.1 percent error rate, judgment required); TaskOutput 114,854 s; unattributed Bash/other 81,653 s (53,157 calls); test_execute_plan_runtime.py 13,093 s; test_release_skill_selftest.py 1,042 s.
+- Token ranking: Bash/other 4.23B, Read 2.65B, Edit 1.80B, Bash/SKILL.md 1.08B, Agent 1.06B (estimated no-judgment share per day summaries).
+- Error ranking (calls >= 50): CronUpdate 19.7 percent (12/61), CronCreate 10.7 percent (45/419), Agent 8.1 percent (513/6306), Edit 6.3 percent (1110/17495), Skill 2.6 percent.
+- Scriptable candidates: none cleared the filing threshold (total >= 300 s/day, or mean >= 10 s at >= 50 calls/day).
+- no-action: below threshold; top row Agent measured at 3,228,937 s across the 31-day window (about 104,159 s/day, 8.1 percent error rate, judgment required), so no replacement backlog item is filed from this run.
+- Review-metrics pass: FAILED this run (scripts/summarize_review_stats.py raised TypeError: 'int' object is not iterable over a sidecar findings field); fail-open, no metrics-log section appended; the rider state record carries last_result and the consult's one-day failure advance.
+
+### Throughput
+
+- Retention bound: the scheduler state file keeps the last 20 children[] entries; per-kind counts below are a lower bound over that window, not a true period total.
+- Entries by recorded kind over the window: author/authoring-family entries 12 (of which 10 record a completed landing with worktree+branch+claim cleanup, 1 is the in-session authoring run of this turn recorded pending at survey time and completed at closeout, 1 survey-only); execute-family entries 0 in the window (the window's execution completions predate it); legacy free-text kind/outcome forms 18 entries carried verbatim from before the enum convention; formally-enumerated kinds 2.
+- Authoring completions in the window (evidenced by the certification oracle over the landed plan bytes): 6 (landing receipts 160e85a5, b32dfc64, 083d0db3, 9f6981e4, 9de75c8b, 2c94d008). Execution completions in the window (evidenced by target plan archived): 0 in-window (mrbf/docs-branch/cnxe landing receipts d06cb8f1/a58f98ef/3032e750 sit outside the 20-entry window and are cited from the git log, not counted).
+- Failure and park entries: entries whose outcome records failed 0; entries whose outcome_reason records a park 0; standing state at report time: turn_error null, pending_dispatch SET (registry task friction-audit parked: a live peer authoring session held the authoring lane for audit purposes at decision time), pending_rearm null, alert null, consecutive_failures 0.
+- Queue depth at report time: ready prompt-log entries 10, plan-uncovered open backlog items 20, open top-level plans 1 (live counts, no retention bound).
+
+## 2026-10-12T132741 run (weekly rider, sess_9f5841ba)
+
+- Window: 31 active day(s) through 2026-10-12; report docs/tmp/tool-runtime-stats/tool-runtime-stats-20261012T132741.md
+- Time ranking top row: Agent total=3,694,997 s (6,147 calls, 198.3 calls/day, error rate 10.2 percent; judgment required, not scriptable)
+- No-action verdict: no candidate cleared the filing threshold (total >= 300 s/day, or mean >= 10 s at >= 50 calls/day); the top measured row (Agent, above) requires judgment, so no replacement shape is filed this week.
+- Review-metrics pass: report review-metrics-20261012T132741.md under ~/.ai-playbook/review-telemetry/reports/; 1,977 loops, 2,519 legacy-bucket sidecars, 57 malformed-finding skips; ready rate r1 0.16, r2 0.26, r3 0.24, decaying to 0.00 by r16.
+
+### Throughput
+
+Lower bound over the scheduler state file's last-20 children[] retention window:
+
+- By kind: authoring-kind 9 (authoring 5, author 3, authoring-landing-drain 1), execute 6, untyped legacy entries 5; audit/retriage 0 in window.
+- Evidenced outcomes: complete (including complete-authoring-pending-landing and executed-landed-in-session) 10; progress 2; stood-down (evidenced stop) 1; pending 1 (this turn's in-session authoring entry).
+- Failure/park proxy: 0 failed entries in the window; standing state at report time: turn_error=interrupted-manifest-census-growth (drain alarm, 5 dispositions executed this turn), pending_dispatch=memory-index-audit (retained per D-5), pending_rearm null. Proxy decision: the state file keeps no per-turn error ledger, so the retention-window failure and park entries stand in for the manual-interventions measure.
+- Queue depth: ready prompt-log entries 15 (12 PLAN-PROMPTS + 3 EXEC-PROMPTS), plan-uncovered open backlog items 163, open top-level plans 1 (live reads, no retention bound).

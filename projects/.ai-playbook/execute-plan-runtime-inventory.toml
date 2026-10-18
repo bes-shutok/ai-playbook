@@ -7,27 +7,17 @@ contract_version = "1.0"
 capability_owner = "registry"
 registry_path = "projects/.ai-playbook/execute-plan-runtime-inventory.toml"
 canonical_ids = ["claude", "codex", "cursor", "zcode", "opencode", "copilot", "gemini", "antigravity"]
-deferred_ids = ["claude", "cursor", "zcode", "opencode", "copilot", "gemini", "antigravity", "pi"]
+deferred_ids = ["codex", "claude", "cursor", "zcode", "opencode", "copilot", "gemini", "antigravity", "pi"]
 
-[runtimes.codex]
+[runtimes]
+
+[deferrals.codex]
 id = "codex"
 display_name = "Codex"
 aliases = ["codex"]
 source_catalogs = ["runtime-layout", "agterm", "hooks-probe"]
-eligibility = "eligible"
-adapter_entrypoint = "execute_plan_runtime_codex:CodexAdapter"
-launch_operation = "launch-worker"
-wait_operation = "wait-for-result"
-resume_operation = "resume-session"
-fallback = "Return a durable receipt when the host cannot enforce terminal finalization."
-adapter_version = "1.0"
-approval_policy = "adapter-enforced-default-deny"
-retry_budget = 2
-
-[runtimes.codex.capabilities]
-parent_continuation = "full"
-final_response = "degraded"
-resume = "full"
+eligibility = "deferred"
+reason = "execute-plan uses host-native sequential delegation without a runtime adapter"
 
 [deferrals.claude]
 id = "claude"
@@ -172,41 +162,6 @@ expected = "UNSUPPORTED"
 runtime_id = "codex"
 adapter = "~/.codex/hooks/plan-readiness.sh"
 event = "final-response"
-
-[[execute_plan_hooks]]
-event = "PreToolUse"
-capability = "deny-mismatched-worker-model"
-fallback = "block worker launch when selected policy cannot be verified"
-
-[[execute_plan_hooks]]
-event = "SubagentStart"
-capability = "record-bound-worker-identity"
-fallback = "refuse missing or ambiguous launch binding"
-
-[[execute_plan_hooks]]
-event = "SubagentStop"
-capability = "bounded-worker-continuation"
-fallback = "preserve hard blocks and exhausted budget"
-
-[[execute_plan_hooks]]
-event = "Stop"
-capability = "bounded-parent-continuation"
-fallback = "preserve hard blocks and exhausted budget"
-
-[[execute_plan_hooks]]
-event = "Interrupt"
-capability = "best-effort-interruption-snapshot"
-fallback = "recover through SessionStart reconciliation"
-
-[[execute_plan_hooks]]
-event = "SessionStart"
-capability = "reconcile-before-resume"
-fallback = "suppress continuation when reconciliation fails"
-
-[[execute_plan_hooks]]
-event = "PreCompact"
-capability = "persist-interruption-snapshot"
-fallback = "recover through SessionStart reconciliation"
 
 [[hook_profiles]]
 agent = "agy"

@@ -5,7 +5,7 @@ Workflow: backlog
 
 ## Problem statement
 
-The `rejected` archive subdirectory is derived independently in five consumers — `check_plan_origins_closed.py` (`REJECTED_DIR_NAME`), `docs_branch_backlog_dedupe.py` (`ARCHIVE_DIRS`), `docs_branch_plan_guard.py` (`ARCHIVED_PLAN_DIR_NAMES`), `done_sweep_gates_lib.py` (plans dir + `"rejected"`), and `plan_readiness.py` (positional part check) — while the completed dirs come from `facts.md` configuration. A repo with a customized plans layout gets rejected recognition only at the conventional location (`docs/plans/rejected/`, `docs/history/backlog/rejected/`); a sixth spelling could drift from the first five. The doc-registry validator's write gate (post-r1-F1 fix) adds two more hard-coded spellings of the same convention.
+The `rejected` archive subdirectory is derived independently in five consumers ,  `check_plan_origins_closed.py` (`REJECTED_DIR_NAME`), `docs_branch_backlog_dedupe.py` (`ARCHIVE_DIRS`), `docs_branch_plan_guard.py` (`ARCHIVED_PLAN_DIR_NAMES`), `done_sweep_gates_lib.py` (plans dir + `"rejected"`), and `plan_readiness.py` (positional part check) ,  while the completed dirs come from `facts.md` configuration. A repo with a customized plans layout gets rejected recognition only at the conventional location (`docs/plans/rejected/`, `docs/history/backlog/rejected/`); a sixth spelling could drift from the first five. The doc-registry validator's write gate (post-r1-F1 fix) adds two more hard-coded spellings of the same convention.
 
 Evidence: grep each named constant/consumer; the READMEs in both archive dirs document the location as a convention, not a configured path.
 
@@ -23,7 +23,7 @@ Leave as-is today (yagni-consistent: the plans skill already calls the location 
 
 ## Severity and source reference
 
-Low. Source: code review round r1 finding F5 (design-simplicity worker), `docs/reviews/2026-09-23-code-review-ai-harness-friction-audit-r1.md`. Capture hygiene: scan-public-hygiene --files pass.
+Low. Source: code review round r1 finding F5 (design-simplicity worker), `../../reviews/reviews`. Capture hygiene: scan-public-hygiene --files pass.
 
 ## Why not fixed now
 

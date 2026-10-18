@@ -2,7 +2,7 @@
 
 Motivating incident (historical, do not edit): a completed feature plan that put staging deploy, cross-ticket rollout, and live shared-environment probes on the implementation checklist. Root failure was **authoring**, not checkbox marking.
 
-Plan review: `docs/reviews/2026-08-03-plan-review-plan-executable-task-gates-r5.md` (r5, ready=yes)
+Plan review: `../../reviews/reviews` (r5, ready=yes)
 
 ## Terms
 

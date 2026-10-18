@@ -1,6 +1,6 @@
 # Plan: backlog-gate follow-ups (Windows portability + r5 doc drift)
 
-Backlog origin: `docs/history/backlog/2026-09-07-backlog-gate-windows-portability.md` (primary, behavior surface) and `docs/history/backlog/2026-09-07-backlog-gate-r5-doc-drift.md` (documentation annotations). Source review: `docs/reviews/2026-09-06-backlog-gate-hardening-code-review-r5.md` (findings F1-F4, all Low, deferred at the round cap).
+Backlog origin: `docs/history/backlog/2026-09-07-backlog-gate-windows-portability.md` (primary, behavior surface) and `docs/history/backlog/2026-09-07-backlog-gate-r5-doc-drift.md` (documentation annotations). Source review: `../../reviews/reviews` (findings F1-F4, all Low, deferred at the round cap).
 
 ## Terms
 

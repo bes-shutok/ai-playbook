@@ -1,7 +1,7 @@
 # Plan: plan_readiness trailer gate r5 deferrals
 
 Backlog origin: `docs/history/backlog/2026-09-07-plan-readiness-trailer-gate-r5-deferrals.md`
-Source review: `docs/reviews/2026-09-07-plans-facts-do-not-resolve-design-ambiguity-code-review-r5.md` (round 5 fresh full panel, zero blocking; all findings below deferred non-blocking)
+Source review: `../../reviews/reviews` (round 5 fresh full panel, zero blocking; all findings below deferred non-blocking)
 
 ## Terms
 

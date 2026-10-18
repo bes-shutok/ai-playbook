@@ -1,6 +1,6 @@
 # Plan: Review skills: explicit comparison basis + large-diff confirmation
 
-Plan review: `docs/reviews/2026-08-01-plan-review-review-skills-explicit-basis-r2.md` (latest, ready) · `docs/reviews/2026-08-01-plan-review-review-skills-explicit-basis-r1.md` (r1)
+Plan review: `../../reviews/reviews` (latest, ready) · `../../reviews/reviews` (r1)
 
 ## Terms
 

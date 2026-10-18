@@ -1,7 +1,7 @@
 # Plan: check_lesson_scope closeout (residual hardening + runtime deployment)
 
 Backlog: `docs/history/backlog/2026-09-12-check-lesson-scope-residual-hardening.md` (8 findings from the r5 exit round, scope of record) plus `docs/history/backlog/2026-09-12-check-lesson-scope-runtime-deployment.md` (runtime symlink deployment, same validator surface; folded scope of record). No RFC/ticket.
-Origin review: `docs/reviews/2026-09-12-2026-09-09-learn-company-scope-placement-code-review-r5.md` (pattern ids referenced in the backlog item).
+Origin review: `../../reviews/reviews` (pattern ids referenced in the backlog item).
 Follow `projects/.ai-playbook/python_guidelines.md` for the validator script and its tests.
 
 ## Terms
@@ -85,7 +85,7 @@ Docs edits close the prose gaps: the README Scripts row gains "or unclosed code 
 **Out of scope; reject unless plan-related:**
 - `scripts/validate_review_staging.py`; its `#{1,3}` is an unrelated Markdown section-split regex with different semantics, not a block-boundary pin.
 - `docs/plans/completed/2026-09-09-learn-company-scope-placement.md`; archived plan, body immutable; the amendment note lives in the validator docstring instead.
-- `docs/reviews/2026-09-12-2026-09-09-learn-company-scope-placement-code-review-r5.md`; review history, read-only origin of the findings.
+- `../../reviews/reviews`; review history, read-only origin of the findings.
 - `~/.ai-playbook/scripts/` runtime directory contents other than the one symlink Task 5 creates; machine-local deployment target, not repo content.
 
 ## Validation Commands

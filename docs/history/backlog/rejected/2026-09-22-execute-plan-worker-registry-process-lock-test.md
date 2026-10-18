@@ -23,7 +23,7 @@ Add a deterministic subprocess test with two independent registry clients conten
 
 Severity: low
 
-Source: `docs/reviews/2026-09-22-codex-execute-plan-runtime-reconciliation-r3.md`; one plan review round.
+Source: `../../reviews/reviews`; one plan review round.
 
 ## Why not fixed now
 

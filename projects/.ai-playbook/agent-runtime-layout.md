@@ -75,6 +75,7 @@ available; no deferred runtime is silently treated as an eligible profile.
 
 ### Repo agent bootstrap (`agents/skills/bootstrap-ai-playbook/`)
 - `bootstrap-ai-playbook`: bootstraps the gitignored `.ai-playbook/` runtime dir on a target project (gitignore gate, on-disk path discovery, `.ai-playbook/facts.md` creation or refresh). Runs once per project when triggers fire (missing file, invalid TOML, incomplete keys, not gitignored, stale paths); not every session. Consumer skills read TOML keys from `.ai-playbook/facts.md` via `using-skills` Step 0.
+- Audit subdirs: `.ai-playbook/reviews/`, `.ai-playbook/review-certs/`, and `.ai-playbook/metrics/` are the type-specific audit homes under the wholesale-ignored runtime dir (review records, certification seals, efficiency metrics; selection record: `docs/history/plans/2026-10-13-skill-audit-artifact-ignore-default.md`).
 
 ### Doc-hierarchy skill family (`agents/skills/doc-hierarchy*/`)
 - `doc-hierarchy`: schema reference (Layer 1/2/3 layout, migration-complete signal).
@@ -116,7 +117,7 @@ available; no deferred runtime is silently treated as an eligible profile.
 ### Review staging and panel (`agents/skills/review-staging/`, `review-agents/`, consumers)
 - `review-staging`: gold source for grouped severity output, worker/lens launch accounting, descendant declarations, blocking-aware findings, overflow, and compatible sidecars.
 - `review-agents`: shared lens catalogs bundled into the recommended five workers. `review-panel-selection.md` owns full/focused panels, escalation, conditional risk lenses, and tiered ownership; `severity-calibration.md` owns tangible consequence tiers and finding budgets.
-- Consumers: `doing-code-review`, `review-plan`, `review-loop`, `receiving-code-review`, `rfc-design`, `review-confluence-doc`, `execute-plan` Phase 3, `done` (the pre-docs sweep gate run's review-staging gate). Staging docs are gitignored on consumer repos; sync to orphan `docs` branch via `docs-branch`.
+- Consumers: `doing-code-review`, `review-plan`, `review-loop`, `receiving-code-review`, `rfc-design`, `review-confluence-doc`, `execute-plan` Phase 3, `done` (the landing sweep's review-staging gate). Staging docs are gitignored on consumer repos; sync to orphan `docs` branch via `docs-branch`.
 
 ### Claude Code
 - Runtime source: `~/.claude/skills` (symlink → `~/.agents/skills`)
@@ -139,7 +140,7 @@ available; no deferred runtime is silently treated as an eligible profile.
 
 ### Copilot
 - Runtime source (global instructions): `~/.copilot/copilot-instructions.md` (symlink → `~/.codex/AGENTS.md` → `docs/AGENTS.md` in `instructions_repo`; see `~/.ai-playbook/facts.md`)
-- Runtime source (skills): `~/.copilot/skills/<skill>/` — a real directory of plain copies (no shared symlink); deploy per skill (observed: `graphify`, `agterm`).
+- Runtime source (skills): `~/.copilot/skills/<skill>/`: a real directory of plain copies (no shared symlink); deploy per skill (observed: `graphify`, `agterm`).
 - Observed local folder: `~/.copilot/`
 - Notes: config, logs, and session state live here; reusable global instructions use the symlink chain above, not a separate prose copy.
 

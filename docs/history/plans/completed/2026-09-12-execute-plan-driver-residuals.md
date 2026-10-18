@@ -4,7 +4,7 @@ Backlog origins (scope of record; they move to `docs/history/backlog/completed/`
 - `docs/history/backlog/2026-09-11-execute-plan-runtime-residuals-recert-nonconvergence.md`
 - `docs/history/backlog/2026-09-11-vrs-quotePath-pin-vs-worktree-entries-reuse.md`
 
-Disposition authority for origin 1: `docs/reviews/2026-09-11-review-reconciliation-execute-plan-runtime-residuals.md` (r14 findings folded, dissolved, or superseded under the 2026-09-11 threat-model decision; the rider execution r15-r18 landed the folded ones).
+Disposition authority for origin 1: `../../reviews/reviews` (r14 findings folded, dissolved, or superseded under the 2026-09-11 threat-model decision; the rider execution r15-r18 landed the folded ones).
 
 ## Terms
 
@@ -16,13 +16,13 @@ Disposition authority for origin 1: `docs/reviews/2026-09-11-review-reconciliati
 
 ## Assumptions
 
-- assume origin 1's r14 blocking findings F1-F5 and its non-blocking pendings are already dispositioned and landed (folded via the rider execution r15-r18, dissolved with the deferred mechanism, or superseded); this plan verifies those dispositions and does not re-implement them; basis: `docs/reviews/2026-09-11-review-reconciliation-execute-plan-runtime-residuals.md` plus direct probes of the tree on 2026-09-12.
+- assume origin 1's r14 blocking findings F1-F5 and its non-blocking pendings are already dispositioned and landed (folded via the rider execution r15-r18, dissolved with the deferred mechanism, or superseded); this plan verifies those dispositions and does not re-implement them; basis: `../../reviews/reviews` plus direct probes of the tree on 2026-09-12.
 - assume the quotePath count is 5 on the execution-time tree before Task 2 and drops to exactly 4 after the dedupe; basis: probe executed 2026-09-12 (count 5 on both the committed HEAD and the working tree) and origin 2's arithmetic.
 - assume the count-5 pin in `docs/plans/2026-09-10-execute-plan-runtime-residuals.md` is that plan's history and is never edited (archived and completed plan bodies are immutable); this plan's Validation block carries the only live pin; basis: a repo-wide grep on 2026-09-12 found no live enforcement of the count-5 assertion outside that plan's Validation block (remaining matches are inert history copies in the origin backlog item, review staging, and execution task logs), and the plans lifecycle freezes archived bodies.
 - assume `_git_changed_paths` preserves its documented contract "Returns `None` when either git witness fails" by catching the `RuntimeError` the delegated `_git_worktree_entries` raises when the status witness fails; basis: the method's docstring and its only caller's handling (the scope check maps `None` to `unavailable`).
 - assume tests follow the repo's unittest discovery conventions; basis: the existing suites and the active runtime plan's Validation block.
 
-Decision points requiring a grill: threat-model boundary: narrowed by user decision 2026-09-11, source `docs/history/backlog/deferred/2026-09-11-deferred-malicious-worker-hardening.md`, affects Design Invariants and Task 1 probes, recorded 2026-09-12; execution sequencing: this plan executes only after the runtime-residuals and guardrails executions have landed and archived, source the origin notes and `docs/tmp/future-plan-prompts-2026-09-12.md` Prompt 1, affects the Task 1 sequencing gate, recorded 2026-09-12; r14 pendings routing: folded pendings are verified as landed and mechanism-served pendings are dropped, source `docs/reviews/2026-09-11-review-reconciliation-execute-plan-runtime-residuals.md`, affects the Task 1 ledger, recorded 2026-09-12.
+Decision points requiring a grill: threat-model boundary: narrowed by user decision 2026-09-11, source `docs/history/backlog/deferred/2026-09-11-deferred-malicious-worker-hardening.md`, affects Design Invariants and Task 1 probes, recorded 2026-09-12; execution sequencing: this plan executes only after the runtime-residuals and guardrails executions have landed and archived, source the origin notes and `docs/tmp/future-plan-prompts-2026-09-12.md` Prompt 1, affects the Task 1 sequencing gate, recorded 2026-09-12; r14 pendings routing: folded pendings are verified as landed and mechanism-served pendings are dropped, source `../../reviews/reviews`, affects the Task 1 ledger, recorded 2026-09-12.
 
 ## Gist & Examples
 

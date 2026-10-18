@@ -25,7 +25,7 @@ For Task 5's interruption reconciliation, keep receipt/worktree classification a
 
 Severity: low
 
-Source: `docs/reviews/2026-09-22-codex-execute-plan-runtime-reconciliation-r3.md`; one plan review round.
+Source: `../../reviews/reviews`; one plan review round.
 
 ## Why not fixed now
 

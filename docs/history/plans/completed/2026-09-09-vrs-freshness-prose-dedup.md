@@ -8,7 +8,7 @@ Backlog origin (scope of record, one item family, six files):
 `docs/history/backlog/2026-09-08-producer-template-freshness-contract.md`,
 `docs/history/backlog/2026-09-08-skill-prose-dedup-pointers.md`
 
-Source findings: `docs/reviews/2026-09-08-execute-plan-fresh-review-coverage-gaps-code-review-r1.md` (F14, F15), `-r2.md` (O1, O2), `-r4.md` (F8, F9), and the round-5 residual families recorded in `-r5.md`. Reviews for THIS plan live under the prefix `docs/reviews/2026-09-09-plan-review-vrs-freshness-prose-dedup-r1.md`, `-r2.md`, and so on for each later round.
+Source findings: `../../reviews/reviews` (F14, F15), `-r2.md` (O1, O2), `-r4.md` (F8, F9), and the round-5 residual families recorded in `-r5.md`. Reviews for THIS plan live under the prefix `../../reviews/reviews`, `-r2.md`, and so on for each later round.
 
 ## Terms
 
@@ -91,7 +91,7 @@ Six deferred Low findings from one execution, one coherent pass: two validator t
 **Out of scope; reject unless plan-related:**
 - `scripts/plan_readiness.py`; reason: verified compatible caller, must not change (its `validate_stats_sidecar` call ignores the return value)
 - `docs/history/backlog/**`; reason: backlog items stay in place until plan completion per the plans lifecycle
-- `docs/reviews/**` (2026-09-08 coverage-gaps artifacts); reason: historical review records are immutable context
+- `../../reviews/reviews` (2026-09-08 coverage-gaps artifacts); reason: historical review records are immutable context
 - `README.md` and `docs/maintenance/**`; reason: no catalog or guideline change in this plan
 
 ## Design Invariants (CR Guard)

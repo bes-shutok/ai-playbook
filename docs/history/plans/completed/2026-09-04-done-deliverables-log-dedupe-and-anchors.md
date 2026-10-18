@@ -7,7 +7,7 @@ Backlog origin:
 
 ## Terms
 
-- `{plans_dir}`, `{plans_completed_dir}`, `{tmp_dir}`, `{reviews_dir}`: resolved from the TOML block in `.ai-playbook/facts.md` (using-skills Step 0). In this repo: `docs/plans/`, `docs/plans/completed/`, `docs/tmp/`, `docs/reviews/`.
+- `{plans_dir}`, `{plans_completed_dir}`, `{tmp_dir}`, `{reviews_dir}`: resolved from the TOML block in `.ai-playbook/facts.md` (using-skills Step 0). In this repo: `docs/plans/`, `docs/plans/completed/`, `docs/tmp/`, `../../reviews/reviews`.
 - **Deliverables log**: `{tmp_dir}/done-session/plan-deliverables.txt`; one repo-relative plan path per line; blank lines and `#` comments ignored.
 - **Ignored arm**: `git status --porcelain --ignored=matching -- <plans_dir>`; a path listed there with the ignored marker is an `!!` plan.
 - **Session window**: the interval from the anchor to gate time; it decides which `!!` plans count as this session's deliverables.

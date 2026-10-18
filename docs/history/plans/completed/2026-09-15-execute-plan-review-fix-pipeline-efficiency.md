@@ -4,7 +4,7 @@ Backlog origins (scope of record): `docs/history/backlog/2026-09-14-execute-plan
 
 Guidelines: Python driver changes follow `python_guidelines.md` under `shared_docs_dir` (resolve from `~/.ai-playbook/facts.md`).
 
-Plan review: `docs/reviews/2026-09-15-plan-review-execute-plan-review-fix-pipeline-efficiency-r*.md` (prefix reference; the latest round certifies the current bytes)
+Plan review: `../../reviews/reviews` (prefix reference; the latest round certifies the current bytes)
 
 ## Terms
 

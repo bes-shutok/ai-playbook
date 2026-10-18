@@ -16,7 +16,7 @@ Cadence pointer consulted per the dispatch: `docs/plans/2026-09-21-maintenance-t
 
 Sibling plans: `2026-09-21-scheduler-maintenance-loop-quality-gates.md` and `2026-09-21-scheduler-maintenance-loop-quality-hygiene.md` (certified, pending execution; they own three of the eight origins), `2026-09-21-scheduler-maintenance-state-durability.md` (executed, squash on main 8719edff), `2026-09-21-maintenance-turn-self-scheduling-cadence.md` (authored, pending execution; owns the cadence constants this plan must not re-key), and completed `2026-09-19-scheduler-ops-lanes-durability.md` (delivered the landed halves this ledger verifies against, including its Task 7 origin dispositions). This plan touches the maintenance SKILL.md Step 1/Step 3 quota-record surfaces and the overlay's re-arm regions, which the pending cadence plan rewrites adjacent-but-distinct sections of; landing order resolves by the PRE-STEP re-certification and union-merge precedent the sibling pair records.
 
-Plan review: `docs/reviews/2026-09-22-plan-review-p36-scheduler-durability-audit-r*.md` (latest ready round)
+Plan review: `../../reviews/reviews` (latest ready round)
 
 ## Terms
 

@@ -4,7 +4,7 @@ Status: rejected (2026-09-26; superseded: the closure records all five branches 
 Priority: deferred (formal-hardening triage 2026-09-22 full sweep per the project-priority-profiles directive: on this personal/pet repo formal fixes defer, no witnessed failure; test-gap-only coverage (behavior correct and happy path pinned). Revive on a witnessed regression through the uncovered branch, or a project-priority-profile change.)
 
 Workflow: backlog
-Source: code review r1 of plan `docs/plans/2026-09-16-learn-done-workflow-updates.md` (finding F3, 2026-09-18); staging doc `docs/reviews/2026-09-16-learn-done-workflow-updates-code-review-r1.md`.
+Source: code review r1 of plan `docs/plans/2026-09-16-learn-done-workflow-updates.md` (finding F3, 2026-09-18); staging doc `../../reviews/reviews`.
 Severity: Low (test-gap-only; the behavior itself is correct and its happy path plus wrong-prefix refusal are pinned)
 
 ## The gap, precisely

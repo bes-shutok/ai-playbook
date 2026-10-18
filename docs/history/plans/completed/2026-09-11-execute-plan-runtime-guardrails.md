@@ -6,7 +6,7 @@ Backlog origins (scope of record; moved to `docs/history/backlog/completed/` at 
 - `docs/history/backlog/2026-09-10-runtime-budget-guard-hooks.md`
 - `docs/history/backlog/2026-09-10-flexible-predecessor-lineage-precondition.md` (absorbed here as a third origin per user decision 2026-09-11: its predecessor-check clauses live on the same execute-plan precondition surface this plan already owns, so a standalone plan would double-author the same files)
 
-Plan review: `docs/reviews/*plan-review-execute-plan-runtime-guardrails*.md` (latest staged round by round number; findings folded before the next review).
+Plan review: `../../reviews/reviews` (latest staged round by round number; findings folded before the next review).
 
 Guidance: `projects/.ai-playbook/agent_workflow_guidelines.md` (plan quality sections).
 

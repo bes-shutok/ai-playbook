@@ -9,7 +9,7 @@ Backlog origin (scope of record; items stay in place until completion):
 - `docs/history/backlog/2026-09-09-trailer-gate-meta-guard-witness.md`
 - `docs/history/backlog/2026-09-09-trailer-gate-tilde-side-arm-coverage.md`
 
-Reviews: `docs/reviews/2026-09-09-plan-review-plan-readiness-trailer-tail-r*.md`
+Reviews: `../../reviews/reviews`
 
 ## Terms
 
@@ -95,7 +95,7 @@ an annotation inside the backtick span attaches to the extracted path
 (probed reason: `task Files path scripts\service.py is omitted from the
 Review Scope inventory`). **After:** only path-shaped tokens are
 collected, any empty-payload `Files:` opener opens collection (a later real
-block RE-OPENS — r1 review F1 correction: the originally prescribed
+block RE-OPENS ,  r1 review F1 correction: the originally prescribed
 first-block latch suppressed second real blocks and silently bypassed
 inventory check (c); the r4-F2 path-shape filter already neutralizes the
 r3-F3 echo harvest the latch guarded),
@@ -213,11 +213,11 @@ reason.
   path-shape predicate (contains `/` or a known doc/implementation suffix)
   drops slash-less, suffix-less real paths (e.g. `Makefile`, `README`,
   `.gitignore`, `site.yaml`) from task-Files collection, where main
-  false-rejected them — a narrow fail-open window, backlog candidate for
+  false-rejected them ,  a narrow fail-open window, backlog candidate for
   suffix extension; the leading-span rule narrows category-side check (a)/(b)
   signal for mid-prose backticked spans and regresses bold-wrapped backticked
   paths in both directions (new phantom false-reject naming ``**`src/a.py`**``;
-  new check-(a) escape) — off-convention markup, backlog candidate for
+  new check-(a) escape) ,  off-convention markup, backlog candidate for
   surrounding-markup stripping; and the
   r3-F1 polarity direction where a SLASHED scope entry covers a BARE
   task-Files token (scope `docs/` covering task `docs`) loses its
@@ -339,7 +339,7 @@ Files:
 - `scripts/plan_readiness.py`
 
 - [x] Add fail-arm `trailer_inside_tilde_short_close_fails` beside the backtick twin `trailer_inside_short_close_fails`: plan_text `"# P\n\n## Assumptions\n\nNone needed.\n\n~~~~\nquoted template\n~~~\n" + trailer + "none remain.\n~~~~\n"`; a 3-tilde line inside a 4-tilde fence is legal content, not a closer, so the real trailer after it stays swallowed
-- [x] Add fail-arm `trailer_after_indent_4_tilde_closer_stays_fenced` beside the backtick twin `trailer_after_indent_4_closer_stays_fenced`: plan_text `"# P\n\n## Assumptions\n\nNone needed.\n\n~~~~\nquoted template\n    ~~~~\n" + trailer + "none remain.\n~~~~\n"`; a 4-space-indented tilde line is content (indent > 3 can never close), so the trailer stays swallowed (execution correction: pseudo-closer run is full-length `~~~~`, not `~~~` — under a 4-tilde opener a 3-tilde line is ALREADY rejected by the run-length rule alone, so the shorter fixture could not flip under the indent-gate probe and witnessed nothing)
+- [x] Add fail-arm `trailer_after_indent_4_tilde_closer_stays_fenced` beside the backtick twin `trailer_after_indent_4_closer_stays_fenced`: plan_text `"# P\n\n## Assumptions\n\nNone needed.\n\n~~~~\nquoted template\n    ~~~~\n" + trailer + "none remain.\n~~~~\n"`; a 4-space-indented tilde line is content (indent > 3 can never close), so the trailer stays swallowed (execution correction: pseudo-closer run is full-length `~~~~`, not `~~~` ,  under a 4-tilde opener a 3-tilde line is ALREADY rejected by the run-length rule alone, so the shorter fixture could not flip under the indent-gate probe and witnessed nothing)
 - [x] Add fail-arm `trailer_inside_tilde_fence_with_backtick_info_fails` beside the r5-F8 backtick arm: plan_text `"# P\n\n## Assumptions\n\nNone needed.\n\n~~~x ``` styled\nquoted template\n" + trailer + "none remain.\n~~~\n"`; a tilde opener keeps accepting any info string (the r5-F8 backtick-info rejection must NOT apply to tilde openers), so the fence opens and swallows the trailer
 - [x] Run → expect GREEN: `ALL PASS`, exit 0 (three new arms green, all pre-existing arms green)
 - [x] Mutation probe 1: relax the closer run-length rule (`len(m.group(1)) >= fence[1]` to `len(m.group(1)) >= 3`), run the plain selftest, record the failing set and that it includes `trailer_inside_tilde_short_close_fails`, restore
@@ -456,7 +456,7 @@ Files:
 Files:
 - none (validation and scratch cleanup only)
 
-- [x] Run the full Validation Commands block, segments [A] through [E], from the repository root → expect exit 0: both selftest modes `ALL PASS`, both preservation checks clean with exactly the declared additions (7 decision_marker, 12 review_scope), SKILL.md pointer pinned and stale date gone, archived-plan chain pinned, and every commit this plan created touching only the declared files (the executing plan file itself is admitted for per-task checkbox bookkeeping — execute-plan's Step 1.3 checkbox edits land in each task's commit by design (this run's Tasks 1 and 3 carried theirs in adjacent docs commits; execution correction 2026-09-13)
+- [x] Run the full Validation Commands block, segments [A] through [E], from the repository root → expect exit 0: both selftest modes `ALL PASS`, both preservation checks clean with exactly the declared additions (7 decision_marker, 12 review_scope), SKILL.md pointer pinned and stale date gone, archived-plan chain pinned, and every commit this plan created touching only the declared files (the executing plan file itself is admitted for per-task checkbox bookkeeping ,  execute-plan's Step 1.3 checkbox edits land in each task's commit by design (this run's Tasks 1 and 3 carried theirs in adjacent docs commits; execution correction 2026-09-13)
 - [x] Confirm the mutation-probe records exist in the task log for every probe of Tasks 2 and 3 (each probe's failing set includes the named arm)
 - [x] Delete the scratch files `docs/tmp/plan-readiness-tail-base-sha.txt`, `docs/tmp/decision-marker-names.before`, `docs/tmp/decision-marker-names.after`, `docs/tmp/review-scope-names.before`, `docs/tmp/review-scope-names.after`, and the requirements buffer `docs/tmp/plan-requirements-plan-readiness-trailer-tail.md`
 

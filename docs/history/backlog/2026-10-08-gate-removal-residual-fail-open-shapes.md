@@ -1,0 +1,21 @@
+# gate-removal residual fail-open and wording shapes
+
+Driving force: correctness
+Date filed: 2026-10-08
+Origin: Phase 3 round 3 verification (worktree-removal-migration-gate run), non-blocking residuals
+
+## Finding
+
+Two low residual shapes in the gate-removal subcommand, both verified live:
+
+1. A worktree created INSIDE an external (absolute-facts) reviews home still passes the gate when the plan header cites worktree-subtree paths: the r2 home-inside-worktree guard compares the resolved home against --worktree, and here the worktree is inside the home, not the reverse. Requires three simultaneous misconfigurations (absolute external facts home + worktree inside the home + worktree-subtree citation), none witnessed.
+2. Doc surfaces say the extraction region ends at "the first markdown heading"; the code bounds at any #-prefixed line. Error direction is region-narrowing (fail-closed).
+
+## Suggested direction
+
+Extend the operand/home guard to the worktree-inside-home direction when facts resolve absolutely (or refuse an in-home worktree outright); align the doc wording to "#-prefixed line".
+
+## Evidence
+
+- Phase 3 round 3 verification, 2026-10-08, wt-wrmg-exec (live probes both shapes)
+- **Cluster:** docs/history/backlog/2026-10-07-gate-removal-unremediable-refuse-deadlock.md; docs/history/backlog/2026-10-08-gate-removal-usage-doubled-token.md; docs/history/backlog/2026-10-16-review-series-token-citation-gate-gap.md

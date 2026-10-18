@@ -4,10 +4,10 @@ Created with the **plans** skill. Phase 0 branch: `2026-07-04-agent-hooks-workfl
 
 Follow-up to `docs/plans/2026-07-01-lessons-recall-hook.md` (r20 READY, all tasks complete).
 
-Plan review: `docs/reviews/2026-07-04-plan-review-agent-hooks-workflow-v2-r4.md` (r4: READY - 0 Blocker / 0 Medium / 2 Low / 2 Monitor)
-Plan review: `docs/reviews/2026-07-04-plan-review-agent-hooks-workflow-v2-r3.md` (r3: Not ready - 0 Blocker / 1 Medium; r2 closed)
-Plan review: `docs/reviews/2026-07-04-plan-review-agent-hooks-workflow-v2-r2.md` (r2: Not ready - 0 Blocker / 2 Medium; r1 closed)
-Plan review: `docs/reviews/2026-07-04-plan-review-agent-hooks-workflow-v2-r1.md` (r1: Not ready - 1 Blocker / 5 Medium)
+Plan review: `../../reviews/reviews` (r4: READY - 0 Blocker / 0 Medium / 2 Low / 2 Monitor)
+Plan review: `../../reviews/reviews` (r3: Not ready - 0 Blocker / 1 Medium; r2 closed)
+Plan review: `../../reviews/reviews` (r2: Not ready - 0 Blocker / 2 Medium; r1 closed)
+Plan review: `../../reviews/reviews` (r1: Not ready - 1 Blocker / 5 Medium)
 
 ## Terms
 

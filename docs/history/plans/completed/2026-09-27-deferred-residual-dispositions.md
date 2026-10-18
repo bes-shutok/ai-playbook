@@ -108,7 +108,7 @@ Concretely today: `bash scripts/check-no-em-dash.sh added-lines --base HEAD does
 - `scripts/rearm_on_touch.py`; reason: mirrors classification semantics this plan does not change (see Assumptions).
 - `docs/history/**` completed plans and `docs/history/backlog/rejected/**`; reason: immutable history context; dispositions that would edit them are recorded in Origin dispositions instead.
 - The live-vs-archive plan-twin repair (`docs/history/plans/2026-09-26-release-skill.md` also archived under `completed/`); reason: pre-existing baseline defect outside this plan's scope model, tracked by `docs/history/backlog/2026-09-27-release-skill-plan-live-twin.md`.
-- `docs/reviews/**` staging artifacts; reason: review records, not deliverables.
+- `../../reviews/reviews` staging artifacts; reason: review records, not deliverables.
 
 ## Validation Commands
 

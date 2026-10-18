@@ -66,7 +66,7 @@ Examples:
 - `docs/history/backlog/2026-09-03-anything.md` and
   `docs/history/backlog/completed/2026-08-28-fence-scanner-family.md` →
   allowed (inside the backlog home).
-- `docs/reviews/2026-09-01-plan-review-x-r2.md` → allowed (no token).
+- `../../reviews/reviews` → allowed (no token).
 
 facts resolution reads `backlog_dir` / `backlog_completed_dir` from
 `.ai-playbook/facts.md`; missing keys fall back to the defaults above with a
@@ -209,7 +209,7 @@ Files:
   `docs/maintenance/sub/`, both tokens outside backlog home under
   `docs/plans/`) and allowed fixtures (backlog home item, completed home item,
   token-free hot-dir file, token filename outside any hot dir and without the
-  second token, e.g. `docs/reviews/x-deferred.md` → allowed by rule 2 since
+  second token, e.g. `../../reviews/reviews` → allowed by rule 2 since
   `backlog` is absent; record this asymmetry in a selftest comment) plus a
   facts-less variant exercising the fallback backlog home; plus an UNTRACKED
   gitignored violation fixture inside a hot dir (synthetic git repo: one

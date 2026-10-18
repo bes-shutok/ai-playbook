@@ -1,14 +1,14 @@
 # Plan: 2d cap-row cell session-note definition hoist
 
 Backlog origin: `docs/history/backlog/2026-09-03-2d-cell-session-note-duplication.md`
-Source review: `docs/reviews/2026-09-02-r5-residuals-fixes-code-review-r1.md` (finding DS-3, Low, design-simplicity)
+Source review: `../../reviews/reviews` (finding DS-3, Low, design-simplicity)
 
 ## Assumptions
 
 - assume the target file is the ARCHIVED copy `docs/plans/completed/2026-09-02-phase3-residue-pass.md`; basis: the residue-pass plan was executed and archived after the backlog item was written, so the backlog's `docs/plans/2026-09-02-phase3-residue-pass.md` path no longer exists on disk (verified by listing); editing the archived copy is the established rider pattern (the 2f prose-lows plan makes the same assumption and edits the same archived file).
 - assume scope is the archived residue-pass plan plus the r5-residuals plan's Validation Commands pin only; the live `agents/skills/execute-plan/SKILL.md` cap row already carries the de-duplicated form (`otherwise write the same short session note`, line ~648) and is out of scope; basis: on-disk content.
 - assume this plan is sequencing-independent of the 2f paragraph-prose-lows plan: both ride on the same archived file but in disjoint regions (the 2d cap-row cell vs the prescribed 2f paragraph), and this plan's Validation Commands do not pin any 2f span; basis: on-disk region locations.
-- assume the session-note definition is hoisted to the FRONT of the cell (before the reconciliation branch), per the backlog's suggested fix; the resulting `otherwise write the same short session note` back-reference uses the same wording as the live `execute-plan` skill's otherwise-branch (the live row keeps its definition inside the reconciliation branch, so the two surfaces remain structured differently — only the back-reference wording mirrors; r1-F2).
+- assume the session-note definition is hoisted to the FRONT of the cell (before the reconciliation branch), per the backlog's suggested fix; the resulting `otherwise write the same short session note` back-reference uses the same wording as the live `execute-plan` skill's otherwise-branch (the live row keeps its definition inside the reconciliation branch, so the two surfaces remain structured differently ,  only the back-reference wording mirrors; r1-F2).
 
 ## Terms
 
@@ -18,7 +18,7 @@ Source review: `docs/reviews/2026-09-02-r5-residuals-fixes-code-review-r1.md` (f
 
 ## Gist & Examples
 
-The prescribed 2d cap-row cell states the session-note definition twice — once in the reconciliation branch and once in the otherwise-branch (finding DS-3: verbatim duplication in a cell of the regenerating-wording family that churned every review round). This plan hoists the definition to the front of the cell (one occurrence, attached to the leading `write a short session note under ...` clause) and turns both branches into short back-references, then syncs the r5 2d pin, which counts exactly the reconciliation-branch copy and would fire (count 0) against the hoisted cell if left as-is.
+The prescribed 2d cap-row cell states the session-note definition twice ,  once in the reconciliation branch and once in the otherwise-branch (finding DS-3: verbatim duplication in a cell of the regenerating-wording family that churned every review round). This plan hoists the definition to the front of the cell (one occurrence, attached to the leading `write a short session note under ...` clause) and turns both branches into short back-references, then syncs the r5 2d pin, which counts exactly the reconciliation-branch copy and would fire (count 0) against the hoisted cell if left as-is.
 
 Before (cell shape, after the leading `Stop; `):
 
@@ -82,7 +82,7 @@ if grep -qF 'then a short session note under `{tmp_dir}/`' "$RP"; then echo "rec
 test "$(grep -cF "$NEWPIN" "$RP")" -eq 1 || { echo "hoisted pin count != 1"; exit 1; }
 
 # 4. r5 2d counting pin synced (fixed-string greps; regex line-anchors are not
-#    portable across grep implementations — r2-F1. The `expect_once "$RP" '`
+#    portable across grep implementations ,  r2-F1. The `expect_once "$RP" '`
 #    prefix occurs only on pin lines in the r5 file, so the historical [x]
 #    checklist quote of the old span in r5 Task 3 cannot satisfy or fail the check)
 #    (RED-today proof 2026-09-04: count 0)

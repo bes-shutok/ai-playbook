@@ -1,7 +1,7 @@
 # Plan: Returned-for-ask semantics completion
 
 Backlog origin: `docs/history/backlog/2026-08-28-returned-for-ask-semantics.md` (promoted backlog item)
-Source review: `docs/reviews/2026-08-28-fix-risk-triage-skills-code-review-r8.md` (Medium x2, Low x1)
+Source review: `../../reviews/reviews` (Medium x2, Low x1)
 
 ## Terms
 

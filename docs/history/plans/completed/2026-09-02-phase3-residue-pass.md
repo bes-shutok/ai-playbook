@@ -2,7 +2,7 @@
 
 Backlog origins: `docs/history/backlog/2026-09-02-phase3-churn-control-r1-review-residuals.md`, `docs/history/backlog/2026-09-02-phase3-churn-control-certification-residuals.md` (kept in place while this plan is open; they move to `{backlog_completed_dir}` at execution).
 
-Plan review: `docs/reviews/2026-09-02-plan-review-phase3-residue-pass-r5.md` (latest, ready: yes; zero blocking, 5/5 workers) · r1-r4 staged (blocking 4, 1, 1, 0; all findings folded or dispositioned) · r5 non-blocking residuals: `docs/history/backlog/2026-09-02-phase3-residue-pass-r5-residuals.md`.
+Plan review: `../../reviews/reviews` (latest, ready: yes; zero blocking, 5/5 workers) · r1-r4 staged (blocking 4, 1, 1, 0; all findings folded or dispositioned) · r5 non-blocking residuals: `docs/history/backlog/2026-09-02-phase3-residue-pass-r5-residuals.md`.
 
 ## Terms
 

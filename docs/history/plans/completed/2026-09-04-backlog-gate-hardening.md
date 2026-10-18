@@ -106,7 +106,7 @@ Edge cases motivating design decisions: unresolved temp paths on symlinked macOS
 - `agents/skills/done/SKILL.md`; reason: Step 2.645 CLI invocation unchanged
 - `agents/skills/bootstrap-ai-playbook/SKILL.md`; reason: key is optional with defaults; the generated facts template is unchanged
 - `scripts/skill_gate.py`; reason: its `classify_path` is an unrelated same-named function
-- `docs/reviews/` staging artifacts; reason: review-loop scratch, not a plan deliverable
+- `../../reviews/reviews` staging artifacts; reason: review-loop scratch, not a plan deliverable
 
 ## Validation Commands
 

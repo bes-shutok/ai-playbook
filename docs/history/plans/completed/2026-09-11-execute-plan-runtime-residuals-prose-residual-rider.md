@@ -4,9 +4,9 @@ Backlog origin (scope of record; moved to `docs/history/backlog/completed/` at t
 
 Fold target: `docs/plans/2026-09-10-execute-plan-runtime-residuals.md` (certified r8, digest `9e11e4f89a93ed661ea76a57a41785c84ccc56d134b116240191819596131470`, ready=yes zero blocking, not yet executing).
 
-Finding source: `docs/reviews/2026-09-10-plan-review-execute-plan-runtime-residuals-r8.md` (findings F1-F5 plus one overflow row; all non-blocking, dispositioned to backlog per the backlog-capture rule because r8 was the single allowed fresh certification round).
+Finding source: `../../reviews/reviews` (findings F1-F5 plus one overflow row; all non-blocking, dispositioned to backlog per the backlog-capture rule because r8 was the single allowed fresh certification round).
 
-Plan review: `docs/reviews/2026-09-11-plan-review-execute-plan-runtime-residuals-prose-residual-rider-r*.md` (latest staged round; findings folded before the next review).
+Plan review: `../../reviews/reviews` (latest staged round; findings folded before the next review).
 
 Guidance: `projects/.ai-playbook/agent_workflow_guidelines.md` (plan quality sections).
 
@@ -31,7 +31,7 @@ Decision points requiring a grill: F1 anchor keying = add a manifest-path-digest
 ## Design Invariants (CR Guard)
 
 - Containment: the six prescribed edits are the only semantic changes to the fold target; every edit pins its exact current span; any other diff hunk in the fold target is a defect.
-- Immutability: `docs/reviews/**` rounds r1 through r8 and `docs/plans/completed/**` stay byte-untouched; the only review write is this plan's own re-cert round artifact and sidecar.
+- Immutability: `../../reviews/reviews` rounds r1 through r8 and `docs/plans/completed/**` stay byte-untouched; the only review write is this plan's own re-cert round artifact and sidecar.
 - Gate integrity: the fold target's Validation block stays `bash -n` clean; its RED-today probes still fire on the pre-fold tree; the UL#264 pin-versus-prescription audit runs after the folds and before the re-cert round.
 - Certification monotonicity: the re-cert round reviews the exact post-fold bytes; exit requires `ready=yes` with zero unresolved blocking findings on that digest and a green readiness gate on the same bytes; no exit on a pre-fold digest.
 - Sibling-count safety: the F1 fold strengthens the existing cross-talk witness bullet in place and must not change any witness count, so the fold target's Task 2 GREEN count bullet and every other count-bearing sentence stay untouched.
@@ -74,7 +74,7 @@ Worked example, one per finding. F1: today `test_anchor_scoped_per_run_no_cross_
 **Fold target and deliverables:**
 
 - `docs/plans/2026-09-10-execute-plan-runtime-residuals.md` (the six fold sites and the Validation block line)
-- `docs/reviews/` re-cert round artifact `-r9.md` *(new; Task 3)* and its `.stats.json` sidecar *(new; Task 3)*
+- `../../reviews/reviews` re-cert round artifact `-r9.md` *(new; Task 3)* and its `.stats.json` sidecar *(new; Task 3)*
 - `docs/history/backlog/2026-09-10-execute-plan-runtime-residuals-plan-prose-residuals.md` (completion move plus `Status: done`)
 - `docs/plans/2026-09-11-execute-plan-runtime-residuals-prose-residual-rider.md` (this plan; checkbox updates and archive move)
 
@@ -84,14 +84,14 @@ Worked example, one per finding. F1: today `test_anchor_scoped_per_run_no_cross_
 
 - `scripts/**` and `projects/**` production sources; this plan edits plan text only, and concerns about the behavior the fold target will implement belong to the fold target's own execution and reviews.
 - `docs/plans/completed/**`; completed-history artifacts are body-immutable (doc-hierarchy refusal rule); this plan edits none of them.
-- `docs/reviews/**` rounds r1 through r8; they are records, not edit targets.
+- `../../reviews/reviews` rounds r1 through r8; they are records, not edit targets.
 - Peer-session files and any other dirty worktree content; classify before touching, and leave peer-owned work alone.
 
 ## Cleanup scope ledger
 
 - Base ref: the execute-plan Phase 0 branch base current at execution start. All work lands as this plan's own commits.
 - Task-owned paths: the four explicit must-fix paths above.
-- Frozen areas: `docs/plans/completed/**`; `docs/reviews/**` except the Task 3 round artifact pair; peer-session files.
+- Frozen areas: `docs/plans/completed/**`; `../../reviews/reviews` except the Task 3 round artifact pair; peer-session files.
 - Deletion permissions: none (the rider item move is a `git mv` plus a status-line edit, not a deletion).
 - Mechanical check: each task's commit is name-only checked against that task's declared file list. Peers share the execution branch, so a repo-wide base-diff comparison is unsatisfiable by joint state and is deliberately not used; commit-scoped checks bind this plan's own work without pinning peer tree state.
 
@@ -178,7 +178,7 @@ Files:
 - [x] Run → expect still RED at this task point: the seven F1 probes (Task 2 has not landed), the re-cert probes, and the completion probes.
 - [x] Commit: `docs: fold r8 low residuals into execute-plan runtime residuals plan`
 
-### Task 2: Fold F1, the anchor-keying sharpening (r8 F1) — SUPERSEDED 2026-09-11: the anchor mechanism this fold sharpened was deferred by the threat-model decision (guidelines section 64); the fold work landed (51fac72) and was then removed from the fold target by the deferral shrink; its Validation probes were removed accordingly
+### Task 2: Fold F1, the anchor-keying sharpening (r8 F1) ,  SUPERSEDED 2026-09-11: the anchor mechanism this fold sharpened was deferred by the threat-model decision (guidelines section 64); the fold work landed (51fac72) and was then removed from the fold target by the deferral shrink; its Validation probes were removed accordingly
 
 Files:
 - `docs/plans/2026-09-10-execute-plan-runtime-residuals.md`
@@ -197,8 +197,8 @@ Files:
 ### Task 3: Blind re-cert round on the post-fold digest
 
 Files:
-- `docs/reviews/<execution-date>-plan-review-execute-plan-runtime-residuals-r9.md` *(new)*
-- `docs/reviews/<execution-date>-plan-review-execute-plan-runtime-residuals-r9.stats.json` *(new)*
+- `../../reviews/reviews` *(new)*
+- `../../reviews/reviews` *(new)*
 
 - [x] Compute and record the post-fold digest: `shasum -a 256 docs/plans/2026-09-10-execute-plan-runtime-residuals.md`.
 - [x] Launch one fresh blind full-panel review-plan round (the recommended five-worker panel from review-panel-selection; prior findings NOT supplied as filter; the fold target is READ-ONLY for reviewers) on the post-fold bytes; write the round artifact as the next round number after the latest existing round for this plan (r9 at authoring) and produce its `.stats.json` sidecar in the same round, declaring schema_version 1 with `source_digest` equal to the post-fold sha256; copy the r8 sidecar as the nearest compliant example and edit it. (Executed as rounds r9 through r14, 2026-09-11; each round artifact and sidecar is schema-clean per validate_review_staging --hard.)

@@ -5,7 +5,7 @@ Backlog origins (scope of record, under `docs/history/backlog/`):
 `2026-09-21-r429-maintenance-ingestion-residuals.md`,
 `2026-09-21-fireat-midnight-tail-test-hardening.md`,
 `2026-09-21-quota-probe-wait-minutes-unbounded-overrides.md`.
-Review artifacts: `docs/reviews/2026-09-22-plan-review-p37-rate-pressure-ingestion-and-quota-scheduling-r<N>.md` (prefix reference, all rounds).
+Review artifacts: `../../reviews/reviews` (prefix reference, all rounds).
 
 ## Terms
 

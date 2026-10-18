@@ -1,7 +1,7 @@
 # Plan: run-start marker records a repo-root digest instead of the raw path
 
 Backlog origin: `docs/history/backlog/2026-09-07-run-start-marker-content-docs-branch-leak.md` (Security-class standalone direct fix).
-Plan review: `docs/reviews/2026-09-08-plan-review-run-start-marker-content-hash-r*.md` (latest round is authoritative) · docs/reviews/2026-09-27-plan-review-run-start-marker-content-hash-r8.md (r8, verification-only re-cert 2026-09-27: the only delta vs the r7-certified bytes was the P65 Outcome backfill; its one PID over-claim folded same round; ready=yes over the final bytes)
+Plan review: `../../reviews/reviews` (latest round is authoritative) · docs/reviews/2026-09-27-plan-review-run-start-marker-content-hash-r8.md (r8, verification-only re-cert 2026-09-27: the only delta vs the r7-certified bytes was the P65 Outcome backfill; its one PID over-claim folded same round; ready=yes over the final bytes)
 
 ## Outcome
 

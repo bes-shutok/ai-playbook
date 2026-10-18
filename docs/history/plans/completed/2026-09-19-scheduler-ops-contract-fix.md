@@ -38,8 +38,8 @@ item by plan 2).
   error (exit 2)" first; both fail closed, taxonomy consistency is the goal.
 - assume the anchored pair grammar keeps both live record families enumerable: the
   helper-emitted shape `<date>-<slug>-r<N>` and the legacy `<date>-plan-review-<slug>-r<N>`
-  shape (the review-plan skill's output shape, confirmed live under `docs/reviews/`);
-  basis: enumeration of `docs/reviews/` 2026-09-19.
+  shape (the review-plan skill's output shape, confirmed live under `../../reviews/reviews`);
+  basis: enumeration of `../../reviews/reviews` 2026-09-19.
 - assume the toolset precheck checks the mutating primitives the ladder needs regardless of
   which primary leg is operative (clocked: `CronCreate` plus `CronDelete`; idle:
   `OffPeakCreate`), so this plan and plan 2 (which rewrites the ladder's primary leg) stay

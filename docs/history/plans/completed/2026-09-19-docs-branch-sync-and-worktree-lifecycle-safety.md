@@ -9,7 +9,7 @@ Backlog origins (scope of record, four items under `docs/history/backlog/`):
 ## Terms
 
 - **docs-branch sync**: the Step 2 script of `agents/skills/docs-branch/SKILL.md`; snapshots the shadow tree and commits it to the orphan `docs` branch through a temporary worktree.
-- **Shadow tree**: the gitignored doc paths the sync preserves (`docs/reviews/`, `docs/tmp/`, plus repo-specific candidates); tracked doc paths under `docs/` ride along in the same snapshot.
+- **Shadow tree**: the gitignored doc paths the sync preserves (`../../reviews/reviews`, `docs/tmp/`, plus repo-specific candidates); tracked doc paths under `docs/` ride along in the same snapshot.
 - **Certified plan sidecar**: the `.stats.json` review sidecar under `{reviews_dir}` whose `source_kind` is `plan` and whose `artifact_slug` equals the plan's feature slug (the basename sans `.md` with the leading `YYYY-MM-DD-` prefix stripped, mirroring `feature_slug()` in `scripts/plan_readiness.py`); its `source_digest` (SHA-256 of the exact plan bytes, sometimes stored as a 16-hex prefix) is the certification digest.
 - **Certified downgrade**: a sync write that would replace plan bytes matching the certification digest with bytes that do not; the failure class origin 1 records.
 - **Ad-hoc worktree**: a secondary `git worktree` a run executes in, whose gitignored directories start empty and die with the worktree.
@@ -19,9 +19,9 @@ Backlog origins (scope of record, four items under `docs/history/backlog/`):
 
 ## Assumptions
 
-- assume `docs/plans/` and `docs/history/backlog/` are tracked on working branches while `docs/reviews/` and `docs/tmp/` are gitignored; basis: `.gitignore` lines `/docs/reviews` and `/docs/tmp/` plus `git ls-files docs/` output, checked 2026-09-19.
-- assume a plan sidecar's `source_digest` is SHA-256 of the exact plan bytes and sidecars in the wild may carry it as a 16-hex prefix; basis: `compute_source_digest` in `scripts/validate_review_staging.py` (SHA-256, lowercase hex) and observed sidecars under `docs/reviews/`, 2026-09-19.
-- assume the latest certified round for a plan is the sidecar with `source_kind: "plan"`, `artifact_slug` equal to the plan's feature slug (the basename sans `.md` with the leading `YYYY-MM-DD-` prefix stripped, mirroring `feature_slug()` in `scripts/plan_readiness.py`), highest `round` then latest `date`; basis: `feature_slug()` in `scripts/plan_readiness.py` and observed sidecars under `docs/reviews/`, verified 2026-09-19.
+- assume `docs/plans/` and `docs/history/backlog/` are tracked on working branches while `../../reviews/reviews` and `docs/tmp/` are gitignored; basis: `.gitignore` lines `/docs/reviews` and `/docs/tmp/` plus `git ls-files docs/` output, checked 2026-09-19.
+- assume a plan sidecar's `source_digest` is SHA-256 of the exact plan bytes and sidecars in the wild may carry it as a 16-hex prefix; basis: `compute_source_digest` in `scripts/validate_review_staging.py` (SHA-256, lowercase hex) and observed sidecars under `../../reviews/reviews`, 2026-09-19.
+- assume the latest certified round for a plan is the sidecar with `source_kind: "plan"`, `artifact_slug` equal to the plan's feature slug (the basename sans `.md` with the leading `YYYY-MM-DD-` prefix stripped, mirroring `feature_slug()` in `scripts/plan_readiness.py`), highest `round` then latest `date`; basis: `feature_slug()` in `scripts/plan_readiness.py` and observed sidecars under `../../reviews/reviews`, verified 2026-09-19.
 - assume script tests run under the repo test venv `$HOME/.agents/venvs/ai-playbook-test/bin/python` (pytest 9.1.1; the bare `python3 -m pytest` form fails on this host); basis: venv probe 2026-09-19, same resolution the hygiene-sweep plan pinned.
 - assume peer sessions may hold the shared checkout dirty while execution runs; the executor re-verifies git state before staging and stages only this plan's files by explicit path; basis: repo guidelines and the peer-dirty state observed 2026-09-19.
 - assume no `done`/`execute-plan` re-vendor is needed: skill edits land in the repo's `agents/skills/` copies, which the deployed runtime reads through the `~/.agents/skills` symlink; basis: the runtime registry sync model (repo canonical, home skills path is a symlink), checked 2026-09-19.

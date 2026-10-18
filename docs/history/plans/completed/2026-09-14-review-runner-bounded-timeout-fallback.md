@@ -2,7 +2,7 @@
 
 Backlog origin: `docs/history/backlog/2026-09-14-review-runner-bounded-timeout-fallback.md` (scope of record).
 Language guidelines: `projects/.ai-playbook/python_guidelines.md` (applies to both validator tasks).
-Reviews: `docs/reviews/2026-09-14-plan-review-review-runner-bounded-timeout-fallback-r*.md` (prefix; sidecar `.stats.json` same basename).
+Reviews: `../../reviews/reviews` (prefix; sidecar `.stats.json` same basename).
 
 ## Terms
 
@@ -183,7 +183,7 @@ Non-behavior investigation task; no code change and no commit. The census comman
 
 Files: none (evidence is recorded in the session log and consumed by Task 3).
 
-- [x] Run the corpus census and record the output in the session log (`docs/tmp/execute-plan/review-runner-bounded-timeout-fallback/`): `python3 -c` with `json`, `pathlib`, `collections` iterating `docs/reviews/*.stats.json`, counting `panel[].status` values, `panel_mode` values, `verdict` values, and `escalation_reason` non-null rows; expects a parse-fail-tolerant summary with per-key counts printed
+- [x] Run the corpus census and record the output in the session log (`docs/tmp/execute-plan/review-runner-bounded-timeout-fallback/`): `python3 -c` with `json`, `pathlib`, `collections` iterating `../../reviews/reviews`, counting `panel[].status` values, `panel_mode` values, `verdict` values, and `escalation_reason` non-null rows; expects a parse-fail-tolerant summary with per-key counts printed
 - [x] From the census, record the fallback-basis numbers for Task 3: timeout visibility (count of `timed-out` statuses, expected 0 per the authoring-time run), retry/relaunch evidence (`relaunch: true` rows in sidecars), and the focused-versus-full mode split
 - [x] Record corpus limitations observed (elapsed times are not recorded anywhere in sidecars today; this gap is part of the motivation and is closed by the attempt records, not by retroactive measurement)
 

@@ -111,7 +111,7 @@ Decision points requiring a grill: reason code named watcher-receipt-invalid: re
 
 ## Validation Commands
 
-First executed at authoring time against the pre-task tree (2026-09-23, this worktree at main 206a7f7b): gates 1 through 21, 25, and 26 are RED (the prescribed spans, tests, and backlog moves do not exist yet, the contract still calls plan_slug optional, and the writer join has not landed; the first failing gate is gate 1, exit 1); gates 22 through 24 are GREEN (the frozen origins' recorded Disposition lines stand); the pins suite holds; the watcher suite passes (73 tests); the readiness gate is RED at authoring time on the missing review artifact (the certification artifact and its sidecar land under `docs/reviews/` during this plan's review loop, so the gate is a Task 5 expectation, not a pre-task one). The gates flip exactly when Tasks 1 through 4 land.
+First executed at authoring time against the pre-task tree (2026-09-23, this worktree at main 206a7f7b): gates 1 through 21, 25, and 26 are RED (the prescribed spans, tests, and backlog moves do not exist yet, the contract still calls plan_slug optional, and the writer join has not landed; the first failing gate is gate 1, exit 1); gates 22 through 24 are GREEN (the frozen origins' recorded Disposition lines stand); the pins suite holds; the watcher suite passes (73 tests); the readiness gate is RED at authoring time on the missing review artifact (the certification artifact and its sidecar land under `../../reviews/reviews` during this plan's review loop, so the gate is a Task 5 expectation, not a pre-task one). The gates flip exactly when Tasks 1 through 4 land.
 
 ```bash
 #!/usr/bin/env bash

@@ -4,7 +4,7 @@ Status: executed 2026-09-27 (worktree session, r4 re-cert ready=yes, r1 code rev
 
 Backlog origin (scope of record): `docs/history/backlog/2026-09-09-grilling-fork-answer-state-rules.md`. Prior-phase context: `docs/plans/completed/2026-09-08-plans-grill-answer-state-machine.md` (its Task 6 recorded this backlog item; that plan introduced the fork rules this plan makes visible).
 
-Reviews for THIS plan live under the prefix `docs/reviews/2026-09-09-plan-review-grilling-fork-answer-state-rules-r1.md`, `-r2.md`, and so on for each later round.
+Reviews for THIS plan live under the prefix `../../reviews/reviews`, `-r2.md`, and so on for each later round.
 
 ## Outcome
 

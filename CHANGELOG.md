@@ -1,6 +1,22 @@
+## 2026-10-18
+
+This release makes workflow rules easier to apply and reduces repeat work on routine changes.
+
+### Planning and execution
+- Plans and implementation workflows carry clearer ownership, review evidence, and recovery paths, so work can resume with its scope intact.
+- Long skills are split into focused guidance, making the workflow easier to follow and maintain.
+
+### Reviews and maintenance
+- Review and landing checks better distinguish substantive changes from mechanical edits, reducing avoidable re-review.
+- Maintenance and closeout flows make blocked work and recovery state easier to understand.
+
+### Repository tools and records
+- Repository scripts and reference docs reflect the updated workflows and more targeted checks.
+- Backlog investigations preserve the causes and fix details needed for future work.
+
 ## 2026-10-04
 
-This release lands a month of maintenance-loop hardening: plans, reviews, and landings are now guarded by machine-checked gates from authoring to publish.
+This release lands one week of maintenance-loop hardening (2026-09-27 to 2026-10-04): plans, reviews, and landings are now guarded by machine-checked gates from authoring to publish.
 
 ### Planning and reviews
 - Plans move through a tracked lifecycle with certified review rounds, so an unexecuted plan can no longer be archived by mistake.

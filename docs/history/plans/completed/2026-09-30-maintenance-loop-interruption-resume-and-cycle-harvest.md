@@ -2,7 +2,7 @@
 
 [github: https://github.com/admitriev/ai-playbook] Backlog origin: `docs/history/backlog/2026-09-30-maintenance-loop-interruption-resume-and-cycle-harvest.md`
 Driving force: reliability
-Plan review record: the staging series `docs/reviews/2026-09-30-plan-review-maintenance-loop-interruption-resume-and-cycle-harvest-r*.md` (the highest rN is the authoritative record, including any deferred-residual list)
+Plan review record: the staging series `../../reviews/reviews` (the highest rN is the authoritative record, including any deferred-residual list)
 
 ## Gist TLDR
 

@@ -2,7 +2,7 @@
 
 Feature note (scope of record): `docs/history/feature-notes/2026-07-29-token-usage-telemetry.md`
 Phase 2 predecessor: `docs/plans/completed/2026-07-27-phase-2-review-telemetry.md`
-Reviews: `docs/reviews/2026-09-06-plan-review-token-usage-telemetry-r*.md`
+Reviews: `../../reviews/reviews`
 
 ## Terms
 

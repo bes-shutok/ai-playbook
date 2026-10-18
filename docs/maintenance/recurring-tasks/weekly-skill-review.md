@@ -22,9 +22,13 @@ Review each batched skill for the three defect classes (overcomplication, repeti
 
 Per finding, record the evidence shape: file, line-precise span, defect class, and proposed remediation.
 
+## Quarantine batch presentation
+
+Before the aggregates record is written, the run reads the open top-level backlog rows carrying a `Quarantine:` header line and records one batch presentation (the row list plus one-line value summaries) as an operator-facing quarantine section appended to `docs/maintenance/skill-review-log.md` beside the run's aggregates record. The body runs verbatim in a fresh unattended session, so the run stages proposed dispositions marked as proposals, never final: a row's quarantine disposition (cover by a named plan, reject, or keep open) is recorded in the row only by an operator-driven turn acting on the presented batch. A reject proposal acted on by the operator-driven turn prunes any held PLAN-PROMPTS.md entry whose origins are exclusively that row, under the log's write discipline (the dispatch duty's quarantine hold).
+
 ## Output discipline
 
-One aggregates-only record is appended to `docs/maintenance/skill-review-log.md` (create-if-absent); no per-skill rows beyond batch membership. One backlog origin per actionable finding, or one batched origin per cluster, each origin passing the audit lane's dedupe-and-fold exists-check (open plus completed plus deferred) before filing, shaped per receiving-review's Backlog capture required content with the `Origin class:` line set per its rule (self-serving unless consumer-witnessed). The run record and filed origins commit under the tracked-artifact commit discipline: merge landing lock with bounded wait, default-branch re-verification at commit time, check-writes and em-dash gates over the changed paths, commit-before-stamp ordering, and the timeout's pending-artifact stranding record.
+One aggregates-only record is appended to `docs/maintenance/skill-review-log.md` (create-if-absent); no per-skill rows beyond batch membership, the operator-facing quarantine section above being the one named exception (its presentation section, not per-skill rows). One backlog origin per actionable finding, or one batched origin per cluster, each origin passing the audit lane's dedupe-and-fold exists-check (open plus completed plus deferred) before filing, shaped per receiving-review's Backlog capture required content with the `Origin class:` line set per its rule (self-serving unless consumer-witnessed). The run record and filed origins commit under the tracked-artifact commit discipline: merge landing lock with bounded wait, default-branch re-verification at commit time, check-writes and em-dash gates over the changed paths, commit-before-stamp ordering, and the timeout's pending-artifact stranding record.
 
 ## Caps
 

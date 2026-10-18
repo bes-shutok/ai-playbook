@@ -23,7 +23,7 @@ In a future plan or Task 6 implementation refinement, name a specific test such 
 ## Severity and source
 
 - Severity: Low, non-blocking verification precision gap.
-- Source: `docs/reviews/2026-09-23-plan-review-codex-execute-plan-runtime-reconciliation-r15.md`, F1.
+- Source: `../../reviews/reviews`, F1.
 - Capture hygiene: `scan-public-hygiene.sh --files` pass on 2026-09-23.
 
 ## Why not fixed now

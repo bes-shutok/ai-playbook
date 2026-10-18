@@ -45,7 +45,7 @@ A wiki snapshot under `docs/history/context/confluence/` that may refresh to mat
 _Avoid_: completed history artifact (for immutability rules)
 
 **Review iteration cap**:
-The total count of review rounds in one execute-plan Phase 3 loop, counting full-panel and focused rounds alike, stated as the `max_review_rounds` budget (default 5) in the execute-plan Review end condition table. Counting, stop, and standing-instruction semantics are owned by execute-plan Step 3.5.
+The configured review-round interval at which the loop records its trajectory and assesses convergence and whether scope or complexity calls for simplification. Every interval triggers reflection; coincident total-round and full-panel intervals share one reflection. Cap alone does not trigger reconciliation. With no active mechanical-churn or recurrence trigger, a falling blocking count or zero open blockers means convergence and continuation without asking for direction. Any active trigger means non-convergence, reconciliation, and a simplify/refactor search before another review.
 _Avoid_: full-panel cap (counts only all-five-worker rounds), `max_full_panel_rounds`
 
 **Sibling-doc restatement**:
@@ -71,3 +71,26 @@ _Avoid_: historical artifact (for a living doc), frozen context (a completed his
 **Release (run)**:
 One invocation of the `release` skill: squash the unpushed `main` commits into a few feature commits, write a dated `CHANGELOG.md` entry, and publish to the remote after the safety and privacy gates. A publishing action owned by the release workflow, not a plans-domain checkpoint; the plans-domain `Release gate` term keeps its own meaning.
 _Avoid_: release gate
+
+**Project type**:
+The confirmed project profile value `pet` or `company`; it selects applicable privacy guidance, not review strictness.
+_Avoid_: project class, ownership status
+
+**Artifact visibility**:
+For a pet project, the confirmed value `public` or `private` describing whether project artifacts are publicly visible.
+_Avoid_: ownership-derived visibility, repo-wide visibility
+
+**Base branch**:
+The explicitly confirmed branch used for worktree creation and plan integration, stored in project facts.
+_Avoid_: derived default branch, project-class fallback
+
+**Direct commit**:
+A tiny, self-contained edit landed on the branch selected by the applicable project workflow without creating a task branch or worktree. It has no behavior, API, or schema change; needs no multi-step plan or review cycle; has a quick verification path; and its exact paths are separable from unrelated existing changes under path-limited landing.
+_Avoid_: primitive change, trivial change, direct-main change
+
+**Company-project root**:
+A configured user-facts path that may suggest `company` when the repository is under that root; bootstrap still asks the operator to confirm.
+_Avoid_: silent company classification, path-ownership inference
+
+**Review scope and complexity policy**:
+Defines review effort from scope and complexity signals in the plan and changed work. Affected components/contracts, interactions, behavior/state transitions, concurrency/safety boundaries, and reasoning effort are signals; plan size is one signal and does not decide effort alone. The shared panel-selection policy is the single source of truth, with one shared default absent justification for adjustment.

@@ -5,7 +5,7 @@ Priority: deferred (formal-hardening triage 2026-09-22 full sweep per the projec
 
 Workflow: backlog
 Severity: low
-Source: code review r5 of plan `docs/plans/2026-09-16-learn-done-workflow-updates.md` (2026-09-18); staging doc `docs/reviews/2026-09-16-learn-done-workflow-updates-code-review-r5.md`.
+Source: code review r5 of plan `docs/plans/2026-09-16-learn-done-workflow-updates.md` (2026-09-18); staging doc `../../reviews/reviews`.
 
 ## Finding
 

@@ -1,7 +1,7 @@
 # Plan: docs-branch sync failure-semantics abort enumeration
 
 Origin: `docs/history/backlog/2026-09-20-tasks-7-8-prose-precision.md` (restoration receipt narrows scope to its item 2)
-Plan review record: `docs/reviews/2026-10-03-plan-review-docs-branch-sync-abort-enumeration-r*.md` (+ `.stats.json` sidecars)
+Plan review record: `../../reviews/reviews` (+ `.stats.json` sidecars)
 
 ## Driving force
 

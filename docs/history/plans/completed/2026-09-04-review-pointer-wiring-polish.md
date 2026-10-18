@@ -1,7 +1,7 @@
 # Plan: Review pointer-wiring polish
 
 Backlog origin: `docs/history/backlog/2026-08-28-review-pointer-wiring-polish.md` (items 1-8; item 6 already landed, see Assumptions).
-Review artifacts: `docs/reviews/2026-09-04-plan-review-review-pointer-wiring-polish-r<N>.md` (prefix glob, one per review round).
+Review artifacts: `../../reviews/reviews` (prefix glob, one per review round).
 
 ## Terms
 
@@ -68,14 +68,14 @@ Not changed: the decision content itself. `receiving-review` **Fix-risk triage w
 **Plan-related extension**; implementation and review may change files not listed above. Treat a finding as in scope when it is **causally related to this plan**: it implements or completes a plan task, fixes a regression introduced by plan work, closes wiring or docs implied by an explicit must-fix change, or contradicts a contract the plan changed. If the link to the plan is weak or speculative, drop as out of scope with a one-line reason.
 
 **Out of scope; reject unless plan-related:**
-- `agents/skills/review-staging/SKILL.md`; contract owner of the Blocking re-evaluation mechanic — this plan deliberately does not touch it; reject any edit unless a finding shows the owner text itself is wrong.
+- `agents/skills/review-staging/SKILL.md`; contract owner of the Blocking re-evaluation mechanic ,  this plan deliberately does not touch it; reject any edit unless a finding shows the owner text itself is wrong.
 - `docs/history/backlog/2026-08-28-review-pointer-wiring-polish.md`; archived by the plan-completion pass per Plan Lifecycle, not by a plan task.
 - `scripts/plan_readiness.py`; carries an unrelated uncommitted modification from a parallel session; do not touch.
 - `README.md`; the catalog indexes skills, not their internal section titles.
 
 ## Validation Commands
 
-Run from the repository root. Sweeps are path-scoped to `agents/skills/`, which is why the block's own embedded patterns (present in this plan file under `docs/plans/`) cannot self-match — the scoping is intentional, do not widen it. `test -f` pre-checks exist so a missing file cannot masquerade as a clean zero-match sweep (a grep rc 2 would otherwise pass the forbidden-match branch).
+Run from the repository root. Sweeps are path-scoped to `agents/skills/`, which is why the block's own embedded patterns (present in this plan file under `docs/plans/`) cannot self-match ,  the scoping is intentional, do not widen it. `test -f` pre-checks exist so a missing file cannot masquerade as a clean zero-match sweep (a grep rc 2 would otherwise pass the forbidden-match branch).
 
 ```bash
 #!/usr/bin/env bash
@@ -158,10 +158,10 @@ Files:
 - `agents/skills/review-loop/SKILL.md`
 
 - [x] Hard Gate 17 (`execute-plan/SKILL.md`): replace the clause `the fix-risk stop for user direction when a must-stay-blocking finding has neither a minimal additive path nor a user in a non-interactive run (same section)` with `the fix-risk stop for user direction under the same section` (backlog item 3)
-- [x] Step 3.5 max-rounds row (`execute-plan/SKILL.md`): replace `take the Fix-risk direction per Hard Gate 23 (a stop-and-ask)` with `stop and ask per Hard Gate 23 / `receiving-review` **Fix-risk triage when fixes regenerate findings**`, keeping the surrounding parentheses content (direction taken regardless of reconciliation trigger, reconciliation still runs first, budget question folded into the single ask, short session note still written) — this restores the dropped "non-interactive" and "minimal" qualifiers by delegation (backlog item 8a)
+- [x] Step 3.5 max-rounds row (`execute-plan/SKILL.md`): replace `take the Fix-risk direction per Hard Gate 23 (a stop-and-ask)` with `stop and ask per Hard Gate 23 / `receiving-review` **Fix-risk triage when fixes regenerate findings**`, keeping the surrounding parentheses content (direction taken regardless of reconciliation trigger, reconciliation still runs first, budget question folded into the single ask, short session note still written) ,  this restores the dropped "non-interactive" and "minimal" qualifiers by delegation (backlog item 8a)
 - [x] Orchestration rule 4 stop note (`review-loop/SKILL.md`): replace `A fix-risk stop for user direction ends iterations until the user answers, like the max-rounds stop.` with `A fix-risk stop for user direction follows the stop clause of `receiving-review` **Fix-risk triage when fixes regenerate findings**.` (backlog item 8b)
-- [x] Address Review step 7 (`execute-plan/subagent-prompts.md`): delete the parenthetical `(a finding held `pending` for the fix-risk user decision per **Fix-risk triage when fixes regenerate findings** is the exception: record it as returned-for-ask per review-staging's receiving-review consumer row, not backlogged)` — span re-baselined 2026-09-08 after commit e754d33 inserted the `per review-staging's receiving-review consumer row` phrase; the sentence ends after `record its path on the finding or in the execution log`; the `receiving-review` **Backlog capture** pointer stays (backlog item 7)
-- [x] Step 3.3 verification gate item 4 (`execute-plan/SKILL.md`): replace `a finding held `pending` for the fix-risk user decision (Hard Gate 23) is recorded as returned-for-ask per review-staging's receiving-review consumer row, not backlogged.` with `a finding held `pending` for the fix-risk user decision (Hard Gate 23) follows the **Backlog capture** returned-for-ask exception (`receiving-review`).` — the last full restatement of the exception collapses to a pointer (backlog item 7 family; span re-baselined 2026-09-08 after commit e754d33)
+- [x] Address Review step 7 (`execute-plan/subagent-prompts.md`): delete the parenthetical `(a finding held `pending` for the fix-risk user decision per **Fix-risk triage when fixes regenerate findings** is the exception: record it as returned-for-ask per review-staging's receiving-review consumer row, not backlogged)` ,  span re-baselined 2026-09-08 after commit e754d33 inserted the `per review-staging's receiving-review consumer row` phrase; the sentence ends after `record its path on the finding or in the execution log`; the `receiving-review` **Backlog capture** pointer stays (backlog item 7)
+- [x] Step 3.3 verification gate item 4 (`execute-plan/SKILL.md`): replace `a finding held `pending` for the fix-risk user decision (Hard Gate 23) is recorded as returned-for-ask per review-staging's receiving-review consumer row, not backlogged.` with `a finding held `pending` for the fix-risk user decision (Hard Gate 23) follows the **Backlog capture** returned-for-ask exception (`receiving-review`).` ,  the last full restatement of the exception collapses to a pointer (backlog item 7 family; span re-baselined 2026-09-08 after commit e754d33)
 - [x] Run the Task 2 probes → expect Task 2 probes green, Task 1 probes still green, Task 3 probes still failing
 - [ ] Commit: `skills: collapse fix-risk stop paraphrases to name-only pointers`
 
@@ -170,8 +170,8 @@ Files:
 Files:
 - `agents/skills/receiving-review/SKILL.md`
 
-- [x] **Staging doc triage outcomes** step 4: replace the full mechanic `When an authorizing rule directs a Blocking re-evaluation (see **Fix-risk triage when fixes regenerate findings**), rewrite the finding's **Blocking** bullet in place, record the rationale on its Analysis section, and mirror the flip in the sidecar `findings[].blocking` per review-staging **Severity and ordering** (Triage presentation freeze).` with `When an authorizing rule directs a Blocking re-evaluation, apply the review-staging **Triage presentation freeze** (Severity and ordering) procedure.` — the full three-part mechanic stays in `review-staging` (contract owner; backlog item 4)
-- [x] **Fix-risk triage when fixes regenerate findings** closing paragraph: immediately after `until answered, the finding stays `pending` and is recorded as returned-for-ask per review-staging's receiving-review consumer row.` insert `When the answer arrives, the orchestrator applies **Staging doc triage outcomes** to the held finding before the next round.` — anchor re-baselined 2026-09-08 after commit e754d33 extended the sentence; insert after the full sentence ends, not mid-clause; the backlog-or-fix direction stays single-sourced in **Backlog capture**, so the insert must not restate it (backlog item 5)
+- [x] **Staging doc triage outcomes** step 4: replace the full mechanic `When an authorizing rule directs a Blocking re-evaluation (see **Fix-risk triage when fixes regenerate findings**), rewrite the finding's **Blocking** bullet in place, record the rationale on its Analysis section, and mirror the flip in the sidecar `findings[].blocking` per review-staging **Severity and ordering** (Triage presentation freeze).` with `When an authorizing rule directs a Blocking re-evaluation, apply the review-staging **Triage presentation freeze** (Severity and ordering) procedure.` ,  the full three-part mechanic stays in `review-staging` (contract owner; backlog item 4)
+- [x] **Fix-risk triage when fixes regenerate findings** closing paragraph: immediately after `until answered, the finding stays `pending` and is recorded as returned-for-ask per review-staging's receiving-review consumer row.` insert `When the answer arrives, the orchestrator applies **Staging doc triage outcomes** to the held finding before the next round.` ,  anchor re-baselined 2026-09-08 after commit e754d33 extended the sentence; insert after the full sentence ends, not mid-clause; the backlog-or-fix direction stays single-sourced in **Backlog capture**, so the insert must not restate it (backlog item 5)
 - [x] Run the Task 3 probes → expect Task 3 probes green
 - [ ] Commit: `skills: single-source blocking re-evaluation and post-answer triage ownership`
 

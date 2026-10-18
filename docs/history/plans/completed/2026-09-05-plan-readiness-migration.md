@@ -5,7 +5,7 @@ Backlog origins (scope of record):
 - `docs/history/backlog/2026-09-04-plan-readiness-sidecar-verdict-field.md`
 - `docs/history/backlog/2026-09-04-validator-sibling-version-check.md`
 
-Plan review: `docs/reviews/2026-09-05-plan-review-plan-readiness-migration-r6.md` (7 non-blocking findings folded; round r7 certifies the folded bytes)
+Plan review: `../../reviews/reviews` (7 non-blocking findings folded; round r7 certifies the folded bytes)
 
 ## Terms
 

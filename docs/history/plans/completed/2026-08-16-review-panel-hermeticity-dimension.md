@@ -3,7 +3,7 @@
 Promoted from backlog: `docs/history/backlog/2026-08-16-review-panel-hermeticity-dimension.md`
 (move that file to `docs/history/backlog/completed/` when this plan completes).
 
-Plan review: `docs/reviews/2026-08-16-plan-review-review-panel-hermeticity-dimension-r6.md` (latest, ready; r1–r5 superseded by folds and the em-dash sweep digest refresh)
+Plan review: `../../reviews/reviews` (latest, ready; r1, r5 superseded by folds and the em-dash sweep digest refresh)
 
 ## Terms
 
@@ -93,7 +93,7 @@ real env var names) because this repo's skills are public.
 
 - The Validation Commands block exits 0 end-to-end, including the repo↔runtime `cmp` sync checks
   and the canary-artifact checks.
-- The newest canary review artifact (`docs/reviews/*-plan-review-hermeticity-canary-r<N>.md`,
+- The newest canary review artifact (`../../reviews/reviews`,
   whichever round is latest) records a Medium+ blocking hermeticity finding naming
   `CANARY_DEMO_API_KEY`.
 - The backlog file has been moved to `docs/history/backlog/completed/`.
@@ -101,7 +101,7 @@ real env var names) because this repo's skills are public.
 **Ship when:**
 
 - A retro check against the case-study tax-reporting repo's review artifacts (its
-  `docs/history/plans/2026-08-16-test-hermeticity-guards.md` write-up plus r1–r4 review artifacts)
+  `docs/history/plans/2026-08-16-test-hermeticity-guards.md` write-up plus r1, r4 review artifacts)
   confirms the new enumeration questions would have caught the incident at plan-review time. That
   repo is external and its path is not pinned here, so this is a human-owned verification for when
   the repo is accessible; not an executable task (fail-closed classification; user-confirmed).
@@ -126,7 +126,7 @@ real env var names) because this repo's skills are public.
 **Tests (this repo has no test framework; the canary is the test analogue):**
 
 - `docs/tmp/hermeticity-canary-plan.md` *(new; ephemeral fixture, gitignored)*
-- `docs/reviews/<date>-plan-review-hermeticity-canary-r<N>.md` *(new; canary evidence, gitignored)*
+- `../../reviews/reviews` *(new; canary evidence, gitignored)*
 
 **Plan-related extension**; implementation and review may change files not listed above. Treat a
 finding as in scope when it is **causally related to this plan**: it implements or completes a
@@ -267,7 +267,7 @@ fi
 echo "ALL CHECKS PASSED"
 ```
 
-Negative-path self-check (authoring rule 10): stripping any single A–E obligation makes its grep
+Negative-path self-check (authoring rule 10): stripping any single A, E obligation makes its grep
 exit non-zero and `fail` aborts (grep exit 2 on missing files aborts too); a wrong F-listed path
 trips F0; adding a `getenv` enumeration line to any F-listed file trips F1; an unsynced runtime
 copy trips G; a canary run whose `## Findings` section never uses `testing#hermeticity-gap`
@@ -377,7 +377,7 @@ Files:
 Files:
 - `~/.agents/skills/review-agents/{testing,severity-calibration,quality,documentation,review-panel-selection,SKILL}.md` *(runtime copies)*
 - `~/.agents/skills/receiving-code-review/SKILL.md`, `~/.agents/skills/review-loop/SKILL.md`, `~/.agents/skills/review-plan/SKILL.md` *(runtime copies)*
-- `docs/reviews/<run-date>-plan-review-hermeticity-canary-r<N>.md` *(new; gitignored)*
+- `../../reviews/reviews` *(new; gitignored)*
 
 - [x] Diff repo vs runtime registry for the nine changed files (bidirectional-sync discipline:
   identify additions/updates/deletions explicitly; expect updates only, no deletions), then copy
@@ -385,7 +385,7 @@ Files:
 - [x] GREEN canary: launch a fresh `review-plan` run (full five-worker panel per its skill) on
   `docs/tmp/hermeticity-canary-plan.md`, with `CANARY_DEMO_API_KEY` unset in the launching
   environment; the run writes its artifact to
-  `docs/reviews/<run-date>-plan-review-hermeticity-canary-r<N>.md` following `review-staging`
+  `../../reviews/reviews` following `review-staging`
   (r1 expected first; Validation group H reads the newest matching artifact, so later rounds are
   covered). The fixture intentionally lives in `{tmp_dir}` rather than `{plans_dir}`: it is not a
   real plan, must not be archived on completion, and its path is passed explicitly to the run.
@@ -410,7 +410,7 @@ Files:
 - `docs/history/backlog/2026-08-16-review-panel-hermeticity-dimension.md` *(move to `docs/history/backlog/completed/`)*
 
 - [x] Run the full **Validation Commands** block as one bash invocation; require
-  `ALL CHECKS PASSED` (groups A–I; negative-path self-check per the note under the block).
+  `ALL CHECKS PASSED` (groups A, I; negative-path self-check per the note under the block).
 - [x] Doc-closure sweep: list every surface that describes the testing lens
   (`rg -i -l "testing\\.md" agents/ README.md`) and confirm each hit either already mentions
   hermeticity or is out of scope (record the one-line classification per hit; update any stale

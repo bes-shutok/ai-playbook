@@ -2,7 +2,7 @@
 
 Backlog (scope of record): `docs/history/backlog/2026-09-10-strengthen-jvm-review-coverage.md`
 Guideline SOT: `projects/.ai-playbook/java_guidelines.md` (numbered clauses; this plan appends rules #21-#25)
-Plan review: `docs/reviews/2026-09-10-plan-review-strengthen-jvm-review-coverage-r<N>.md` (prefix glob; the latest round is the verdict of record)
+Plan review: `../../reviews/reviews` (prefix glob; the latest round is the verdict of record)
 
 ## Terms
 

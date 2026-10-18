@@ -32,7 +32,7 @@ hermetic git setup only in the class that proves real ancestry.
 ## Severity and source
 
 Low; staging doc
-`docs/reviews/2026-09-18-execute-plan-phase3-process-reconciliation-trigger-and-archive-safety-code-review-r1.md`,
+`../../reviews/reviews`,
 round 1, finding D-4.
 
 ## Why not fixed now

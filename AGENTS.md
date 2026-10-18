@@ -43,8 +43,16 @@ bash ~/.ai-playbook/scripts/scan-public-hygiene.sh   # from instructions repo ro
 - When a skill is consumed by multiple other skills (cross-cutting), document the integration in both directions: the provider skill lists an "Integration Points" section describing each consumer and how it integrates; each consumer skill adds a specific step in its workflow referencing the provider. This prevents drift and keeps each skill self-contained. When an Integration Points entry describes the peer skill's behavior, verify the claim against that skill's actual steps (read its `SKILL.md`) so the entry cannot over-claim or misattribute the peer's role.
 - When a skill produces substantial structured output (multi-section feedback, tables, formatted analysis), write to a temporary Markdown file and print only a summary + file path to the console. Console is not suitable for large text blocks; the file is the primary artifact for reading.
 - Never hardcode personal paths, org-specific domains, project names, ticket prefixes, or team identifiers in skill files. Externalize environment-specific values to a user facts document (e.g., `facts.md`) and reference them by key. Skills in this repository are public; they must not contain any personal or sensitive information.
+- When a connected integration appears to lack an operation, inspect its capability-discovery surface before declaring it unavailable (see `docs/maintenance/development_lessons.md` #53).
 - When a skill needs environment-specific configuration (paths, domains, credentials), add a "Configuration (from facts document)" section listing required keys, their purpose, and fallback defaults.
 - Every new skill directory must include `LICENSE.txt` (MIT; copy from `agents/skills/plans/LICENSE.txt`). Personal email belongs only in the LICENSE copyright line, not in `SKILL.md`.
+
+## Skill text anti-growth rules
+These rules bind every session editing skill text, guidelines, or plans in this repository, and every review panel over such edits; they supersede directive D-12's meanwhile bind, docs/maintenance/operator-directives.md. No existing section absorbs them: the Skill Design Guidelines merge rule prices cross-skill duplication and its other bullets govern authoring and structuring skills, not the growth balance of existing operative text, and the Coding Style single-homing bullets fix documentation-mapping cases, not incident-dossier citation caps or per-file byte budgets, so the absence of a section whose predicate absorbs the case, named with those reasons, is the design input per the admission rule's own second sentence.
+- Land the rule, not the story: the incident dossier, with its witness narrative, rejected alternatives, and dates, lives in the backlog row, the analysis document, or a changelog file; operative skill text cites it in at most one line.
+- Name the home or the absence: a new top-level arm, section, or field names the existing section it extends and why that section's predicate cannot absorb the case; when no such section exists, that absence, named, is the design input.
+- Pay for growth: once the repo-wide byte-budget gate lands, a change that grows a skill file past its cap deletes equivalent bytes in the same change, the gate's own breach report being the record, and no separate growth-debt note surface is added; until that landing, the same discipline applies at review time only.
+- Price unbalanced growth: treat operative text that grew without a deletion as a finding class, recorded as one line in the review panels' existing finding-class documentation, never a new panel duty.
 
 ## Testing Guidelines
 - Validate skill changes by running the skill with realistic sample context.
@@ -61,6 +69,15 @@ bash ~/.ai-playbook/scripts/scan-public-hygiene.sh   # from instructions repo ro
 - Verify package availability in the selected package manager before proposing an install path.
 - If a command is interrupted or aborted, verify partial side effects first, report the current state, then continue.
 - A value quoted from conversation context is not evidence: before any precision-critical step (commit, landing, lock handling, digest verification), re-derive every digest, path, flag, or identifier from disk, and stop on a cross-check mismatch until it is resolved.
+- Run the done boundary setup as the first worktree action before editing any owned file; registry-row shape and ceremony-record digest requirements are pinned in docs/maintenance/development_lessons.md #80-#82.
+- Shell tool calls reset cwd to the primary checkout between calls: in ad-hoc-worktree phases re-enter the worktree in every command and verify toplevel before writes or commits (see docs/maintenance/development_lessons.md #43).
+
+## Machinery admission protocol
+
+- Any addition that can block a lane names the incident it prevents (with a link), expected catch frequency, false-positive cost, and sunset or review date. No incident, no blocking gate.
+- New machinery lands warning-only or read-only. Promote it only after a true catch and with a pre-registered registry-removal row naming its sunset and promotion criteria.
+- Default to fewer blockers: every machinery plan names what it removes or simplifies, and a promoted blocker retires or demotes an existing blocker in the same change. Otherwise keep it non-blocking unless the operator explicitly approves net growth after a true catch.
+- Bounded repair: when a gate blocks a lane, the allowed responses are a bounded retry, skip-with-report, or park-for-operator. Editing a gate or validator mid-lane to unblock oneself is forbidden without a plan.
 
 ## Vendored Asset Sync Rules
 - When syncing vendored agent assets (`agents/skills/`), apply full bidirectional sync: add new items, update changed items, and remove items that no longer exist in the source. Use `rsync --delete` semantics.
@@ -69,17 +86,26 @@ bash ~/.ai-playbook/scripts/scan-public-hygiene.sh   # from instructions repo ro
 - After every sync or import of external files, scan all changed files for absolute paths and sensitive information (company domains, employee names, internal service names, environment names, internal URLs, credentials). Run the hygiene scan from user facts before commit. Mask sensitive content in both the repo copy and the origin source before committing.
 - Do not vendor skills that are managed autonomously by an agent (e.g. `~/.codex/skills`). Only vendor skills from registries you manage directly (e.g. `~/.agents/skills`).
 - A runtime-side catalog edit (per review-plan Iteration Discipline rule 5) must either land the vendored copy in the same run when the file is in the plan's scope, or leave a tracked landing path (a vendored-sync backlog item naming the changed files); never strand the vendored twin as orphan dirt.
+- A run that files durable records lands them in the same run or leaves a tracked landing path; never strand them as untracked residue.
 - Do not add a parallel command-file layer that duplicates a skill in `agents/skills/`; the skill is the canonical form. Remove the duplicate command copy and update all doc references to point to the skill.
 - When removing or replacing a cross-cutting skill module (for example deleting a shared file under `agents/skills/_shared/` in favor of an on-demand skill), complete the migration in one pass: update every consumer skill reference, README and `agent-runtime-layout.md` catalog entries, migration templates, verify-script repo fingerprints, and bidirectional Integration Points before merge. Run `rg` for the deleted path after edits.
 - `agents/skills/grilling/` and `agents/skills/grill-with-docs/` carry a deliberate local fork of their upstream sources (answer-state rule family, opt-in phrase, decision receipts, question economy, cadence rewrite, integration points; see each file's Local fork notice). An upstream sync of these directories must re-apply the fork from git history of these paths or consciously drop it with the decision recorded; never overwrite the fork silently.
 
+## Workflow verb routing
+
+An operator verb that names a workflow (investigate, author, execute, review, triage, release) resolves to its owning skill under `agents/skills/` before any improvised pass: consult the skill's own `SKILL.md` for the verb, and run its stages, gates, and artifact contract as written; a verb with no single owning skill proceeds by ordinary context gathering; the resolution check is one file read.
+
 ## Scheduling asks (verb contract)
 - A "schedule at ..." ask schedules: create or patch the automation, then report the automation id and its next fire time; it never executes the payload in the same turn.
+- Satisfaction is session-owned: an ask is satisfied only by an automation record the asking session itself created, or its own record that it patched, whose id and next fire time the report carries; an automation record from another session (or any other carrier, such as a launchd job) is deconfliction context, never satisfaction.
+- Deconfliction rides the created payload (re-derive from disk; skip-if-done, and report, when a parallel carrier already did the work; when the payload's work is not re-derivable from disk, the report names the overlapping carrier and the shared fire time), never a create refusal, and a session that cannot create after exhausting the scheduling fallback its runtime overlay sanctions reports the ask as unscheduled, never satisfied by reference.
+- In a cap-refused bound session, the ask's fallback requires the delete-own-spawner leg exhausted first, per the operator-ordered schedule surface paragraph in agents/skills/maintenance/zcode.md, which owns this clause's ordering; a fallback armed without that leg's recorded deletion attempt or a proven-absent deletion primitive is an unscheduled ask, never satisfaction. (This clause supersedes, for exactly this clause, this section's standing sibling-span fence against delete-own-spawner and cap-refusal vocabulary; the fence still governs the section's other text.)
 
 ## Commit & Pull Request Guidelines
 Git history is currently minimal (`init`, `Readme added`), so use short, clear subjects and keep each commit scoped to one logical change.
 
 - Preferred commit style: `<area>: <concise summary>` (example: `skills: tighten tdd-design completeness rules`).
+- When a change completes a backlog row (a landed plan or an ad-hoc landing), delete the row from `docs/history/backlog/` in the same change rather than leaving a `Status: covered` stub; name the covering commit or completed plan as the witness in the commit message, and tidy other rows' `Cluster:` pointers at removed rows in the same commit.
 - PRs should include changed skill files and rationale.
 - PRs should call out behavior changes in skill gates/output.
 - PRs should update `README.md` when skill names, paths, or usage changes.

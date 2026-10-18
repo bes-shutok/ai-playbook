@@ -2,7 +2,7 @@
 
 Follow-up: `docs/plans/2026-07-27-phase-2-review-telemetry.md`
 
-Plan review: `docs/reviews/2026-07-27-plan-review-five-worker-review-panel-r4.md` (latest, not ready)
+Plan review: `../../reviews/reviews` (latest, not ready)
 
 ## Terms
 

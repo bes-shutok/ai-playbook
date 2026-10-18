@@ -83,7 +83,7 @@ Relationship to batch-2 phase 1: its Task 6 documented the checkpoint caller env
 - `scripts/runtime_capabilities.py`; reason: `RESUMABLE_REASONS` is unchanged by design (direction (b) rejected) and the module is frozen.
 - `agents/skills/execute-plan/subagent-prompts.md`; reason: verified its Done template already returns an explicit justified nothing to commit; recording the none receipt is the orchestrator's Step 1.4 duty.
 - `docs/history/backlog/**`; reason: origin items move to `completed/` at plan completion per the lifecycle and are never edited by tasks.
-- `docs/reviews/**`; reason: review artifacts, produced by the review loop, never edited by tasks.
+- `../../reviews/reviews`; reason: review artifacts, produced by the review loop, never edited by tasks.
 - `README.md`; reason: verified to carry no sentences consuming the changed surfaces.
 - `docs/plans/completed/2026-09-20-execute-plan-mechanics-deadlines-interruption-scanner.md`; reason: peer-owned executing plan, referenced read-only.
 

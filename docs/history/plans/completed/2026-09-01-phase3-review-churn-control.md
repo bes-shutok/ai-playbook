@@ -1,6 +1,6 @@
 # Plan: execute-plan Phase 3 review churn control (cap-5 budget, reflection stop, two-class backlog default)
 
-Backlog origins: `docs/history/backlog/2026-09-01-execute-plan-five-review-cap-vs-focused-churn.md` (primary); `docs/history/backlog/2026-09-01-single-sot-for-cross-cutting-contract-rules.md` and `docs/history/backlog/2026-09-01-review-test-false-green-completeness-checklist.md` (folded into scope by user decision 2026-09-01: the exit policy names the two residual classes, these two items define how the named classes resolve). Requirements buffer: `docs/tmp/plan-requirements-review-cap-reflection-gate.md`. Decision record: `docs/maintenance/project-decisions.md` ADR-0002. Review trail: `docs/reviews/2026-09-01-plan-review-phase3-review-churn-control-r1.md` (prefix; later rounds append `-r2`, `-r3`, ...).
+Backlog origins: `docs/history/backlog/2026-09-01-execute-plan-five-review-cap-vs-focused-churn.md` (primary); `docs/history/backlog/2026-09-01-single-sot-for-cross-cutting-contract-rules.md` and `docs/history/backlog/2026-09-01-review-test-false-green-completeness-checklist.md` (folded into scope by user decision 2026-09-01: the exit policy names the two residual classes, these two items define how the named classes resolve). Requirements buffer: `docs/tmp/plan-requirements-review-cap-reflection-gate.md`. Decision record: `docs/maintenance/project-decisions.md` ADR-0002. Review trail: `../../reviews/reviews` (prefix; later rounds append `-r2`, `-r3`, ...).
 
 ## Terms
 

@@ -2,7 +2,7 @@
 
 Depends on (external prerequisite, not produced by this plan): the Phase 1 plan `docs/plans/completed/2026-07-27-five-worker-review-panel.md` is complete with a fresh review reporting zero unresolved blocking findings. Phase 2 cannot start until Phase 1 is ready; Phase 2 does not itself run a Phase 1 review.
 
-Plan review: `docs/reviews/2026-07-27-plan-review-phase-2-review-telemetry-r6.md` (latest, **ready=yes**, 0 blocking; 1 non-blocking Low F24) · `docs/reviews/2026-07-27-plan-review-phase-2-review-telemetry-r5.md` (ready=no, 1 blocking High F22 on the artifact-size-bucket field mapping for current sidecars, now resolved) · `docs/reviews/2026-07-27-plan-review-phase-2-review-telemetry-r4.md` (ready=yes, 0 blocking; 1 non-blocking Medium F20).
+Plan review: `../../reviews/reviews` (latest, **ready=yes**, 0 blocking; 1 non-blocking Low F24) · `../../reviews/reviews` (ready=no, 1 blocking High F22 on the artifact-size-bucket field mapping for current sidecars, now resolved) · `../../reviews/reviews` (ready=yes, 0 blocking; 1 non-blocking Medium F20).
 
 ## Terms
 

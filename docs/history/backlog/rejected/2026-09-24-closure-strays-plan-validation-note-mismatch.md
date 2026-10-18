@@ -12,7 +12,7 @@ The plan's Validation Commands closing paragraph ("Authoring-time execution note
 ## Exact location
 
 - `docs/plans/2026-09-24-closure-strays-disposition-routing.md`, Validation Commands section, the "Authoring-time execution note:" paragraph after the V6 block.
-- Review record: `docs/reviews/2026-09-24-plan-review-closure-strays-disposition-routing-r2.md` finding F1 (consistency#validation-note-mismatch, Low, blocking=false, confidence verified).
+- Review record: `../../reviews/reviews` finding F1 (consistency#validation-note-mismatch, Low, blocking=false, confidence verified).
 
 ## Suggested fix
 

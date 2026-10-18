@@ -25,7 +25,7 @@ Give the review-agent lenses eight new door patterns for miss classes that exter
 - **Door pattern**: a fail-closed review rule declared exactly once as `Pattern: `<lens>#<kebab-id>`` in its owning lens file and registered in `scripts/test_review_agent_doors.py`; the `Pattern:` declaration lives in the host file that owns the section while the lens prefix records the conceptual owner; `concurrency` is a legacy-only sidecar owner, so Task 4's security-owned id is the first fully declared security-owned door hosted in concurrency.md (the file's existing security-owned ids are inline stage references, not declared doors).
 - **Boundary-contract checklist**: the review-metadata obligation from the Boundary-contract coverage floor in `agents/skills/review-agents/review-panel-selection.md`.
 - **Guideline Pack**: the shared guidelines bundle under `projects/.ai-playbook/` (`java_guidelines.md`, `jvm_guidelines.md`, `coding_guidelines.md`) that workers open on demand.
-- **Staging sidecar**: the `.stats.json` companion of a review staging record under `docs/reviews/`.
+- **Staging sidecar**: the `.stats.json` companion of a review staging record under `../../reviews/reviews`.
 
 ## Assumptions
 

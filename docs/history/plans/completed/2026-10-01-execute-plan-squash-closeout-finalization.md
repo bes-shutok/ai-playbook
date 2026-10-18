@@ -4,7 +4,7 @@ Backlog origin: `docs/history/backlog/2026-10-01-execute-plan-squash-closeout-fi
 
 Driving force: code-quality
 
-Plan review record: the staging series `docs/reviews/2026-10-01-plan-review-execute-plan-squash-closeout-finalization-r*.md` (the highest rN is the authoritative record, including any deferred-residual list)
+Plan review record: the staging series `../../reviews/reviews` (the highest rN is the authoritative record, including any deferred-residual list)
 
 ## Terminology and core concepts
 
@@ -84,7 +84,7 @@ bash scripts/check_maintenance_pins.sh || { echo "pins suite failed"; exit 1; }
 bash scripts/check-no-em-dash.sh touched || { echo "em-dash scan failed"; exit 1; }
 ```
 
-Authoring-time records (plans rules 19, 22, 29): the em-dash and hygiene scans ran over the plan bytes at authoring (touched set = this file) and passed; the rule 22 mechanical audit (pinned spans occur exactly once in their owning snippet, `bash -n` over this block) ran before round 1; RED-today evidence per task is recorded in each task's first checkbox execution. The `-k closeout` selector is RED-today by collection: no test name matches it before Task 1, so pytest exits 5 with 124 deselected and no tests ran (executed and recorded at authoring); baseline suites on the authoring tree: lib suite 124 passed, runtime-neutrality 1 passed, pins suite `all hold`. The readiness pre-round gate ran over these bytes; its first invocation failed on untagged Commit items and the tags were added, so the recorded pre-round outcome is the re-run below. After round 2 the rule 13 churn trigger routed through review-reconciliation (record: `docs/reviews/2026-10-01-plan-review-execute-plan-squash-closeout-finalization-reconciliation-r2.md`); its one comprehensive fold re-scoped discovery to the done-run manifest's owned plan claims and repaired the stale enumeration, raw-count rows, and missing unanchor witness.
+Authoring-time records (plans rules 19, 22, 29): the em-dash and hygiene scans ran over the plan bytes at authoring (touched set = this file) and passed; the rule 22 mechanical audit (pinned spans occur exactly once in their owning snippet, `bash -n` over this block) ran before round 1; RED-today evidence per task is recorded in each task's first checkbox execution. The `-k closeout` selector is RED-today by collection: no test name matches it before Task 1, so pytest exits 5 with 124 deselected and no tests ran (executed and recorded at authoring); baseline suites on the authoring tree: lib suite 124 passed, runtime-neutrality 1 passed, pins suite `all hold`. The readiness pre-round gate ran over these bytes; its first invocation failed on untagged Commit items and the tags were added, so the recorded pre-round outcome is the re-run below. After round 2 the rule 13 churn trigger routed through review-reconciliation (record: `../../reviews/reviews`); its one comprehensive fold re-scoped discovery to the done-run manifest's owned plan claims and repaired the stale enumeration, raw-count rows, and missing unanchor witness.
 
 ### Task 1: the closeout gate and its core witnesses
 

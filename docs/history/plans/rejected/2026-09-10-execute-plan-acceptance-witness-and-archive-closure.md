@@ -1,7 +1,7 @@
 # Plan: Bind plan acceptance to executable evidence and gate archive closure
 
 Backlog: `docs/history/backlog/2026-09-10-execute-plan-acceptance-witness-and-archive-closure.md` (scope of record)
-Plan review: `docs/reviews/2026-09-10-plan-review-execute-plan-acceptance-witness-and-archive-closure-r*.md` (latest ready round)
+Plan review: `../../reviews/reviews` (latest ready round)
 
 ## Terms
 

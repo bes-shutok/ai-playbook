@@ -24,7 +24,7 @@ When a concrete change demonstrates a cohesive seam, extract policy/coordinator 
 ## Severity and source
 
 - Severity: Medium, non-blocking design finding.
-- Source: `docs/reviews/2026-09-23-plan-review-codex-execute-plan-runtime-reconciliation-r13.md`, F4.
+- Source: `../../reviews/reviews`, F4.
 - Capture hygiene: pending.
 
 ## Why not fixed now

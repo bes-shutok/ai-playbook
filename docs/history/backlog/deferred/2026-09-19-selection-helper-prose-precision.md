@@ -3,7 +3,7 @@
 Status: closed (2026-10-01 triage, operator adjudication "follow row contracts"; completed by other work, completion receipts below)
 Priority: deferred (formal-hardening triage 2026-09-22 full sweep per the project-priority-profiles directive: on this personal/pet repo formal fixes defer, no witnessed failure; docstring/message/exit-taxonomy precision. Revive on a witnessed operator misdirection by one of the messages, or a project-priority-profile change.)
 Severity: Low
-Origin: r4 code-review round of the review-records-contract execution (2026-09-19), staged finding F5 and overflow items (design-simplicity, risk); staging doc `docs/reviews/2026-09-16-review-records-contract-code-review-r4.md` (gitignored); capture hygiene: scan-public-hygiene --files pass (2026-09-19)
+Origin: r4 code-review round of the review-records-contract execution (2026-09-19), staged finding F5 and overflow items (design-simplicity, risk); staging doc `../../reviews/reviews` (gitignored); capture hygiene: scan-public-hygiene --files pass (2026-09-19)
 
 ## Problem
 

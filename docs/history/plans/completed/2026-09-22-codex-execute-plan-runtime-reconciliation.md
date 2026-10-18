@@ -6,7 +6,7 @@ Related completed contract phase: `docs/plans/completed/2026-09-22-agent-aware-e
 
 Guidelines: `projects/.ai-playbook/agent_workflow_guidelines.md` §45 and §63; Python conventions in `projects/.ai-playbook/python_guidelines.md`; the Codex hook contract is documented by the [official Codex hooks reference](https://developers.openai.com/codex/hooks).
 
-Plan review: `docs/reviews/2026-09-23-plan-review-codex-execute-plan-runtime-reconciliation-r*.md` (latest, ready).
+Plan review: `../../reviews/reviews` (latest, ready).
 
 ## Terms
 
@@ -93,13 +93,13 @@ Concurrency fixture example: the legacy `runtime_state.json` remains a minimal s
 
 ## Refactoring Direction for Unfinished Tasks
 
-Apply this direction before resuming Tasks 5–8. Keep the runtime work that prevents ordinary agent mistakes and data loss: one manifest authority, per-task worker and claim identity, bounded worker liveness and cleanup, idempotent interruption recovery, verifiable task evidence, no duplicate launch while a prior worker is unresolved, approval boundaries, and preservation of unrelated or task-owned worktree data. These are correctness and recovery requirements, not defenses against co-users.
+Apply this direction before resuming Tasks 5, 8. Keep the runtime work that prevents ordinary agent mistakes and data loss: one manifest authority, per-task worker and claim identity, bounded worker liveness and cleanup, idempotent interruption recovery, verifiable task evidence, no duplicate launch while a prior worker is unresolved, approval boundaries, and preservation of unrelated or task-owned worktree data. These are correctness and recovery requirements, not defenses against co-users.
 
 Narrow the unfinished hook and configuration work to the events and checks needed to implement those behaviors. Keep exact identity matching where it prevents a stale or sibling receipt from mutating another claim, and keep `--repo-only` hermeticity. Remove the exhaustive hook-route and mismatch cross-products, positional trust remapping, and extra route inventory unless a concrete observed defect or required Codex behavior needs them. Preserve additive config writes with backup and rollback. Leave Codex trust approval to the operator; do not automate or bypass it.
 
 Resolve the worker model policy from the authoritative user-selected subagent model setting in Codex configuration. Do not make `gpt-6-luna` a plan-wide invariant or duplicate its current value across the guard, verifier, or docs. A different model should be denied only when it conflicts with the current selected policy.
 
-Keep live host activation as an operator-owned release follow-up. Do not make a custom activation receipt or machine-verified live smoke witness a repository-completion prerequisite unless a concrete consumer needs that artifact. Keep repository validation hermetic and focused on the runtime contract, selected model policy, claim and worker identity, bounded recovery, and config preservation. Revise the unchecked Task 5–8 checklists to match this scope before implementing them; preserve the completed Tasks 1–4 history.
+Keep live host activation as an operator-owned release follow-up. Do not make a custom activation receipt or machine-verified live smoke witness a repository-completion prerequisite unless a concrete consumer needs that artifact. Keep repository validation hermetic and focused on the runtime contract, selected model policy, claim and worker identity, bounded recovery, and config preservation. Revise the unchecked Task 5, 8 checklists to match this scope before implementing them; preserve the completed Tasks 1, 4 history.
 
 ## Review Scope
 
@@ -425,7 +425,7 @@ Files:
 
 ## Closeout (2026-09-25, superseded-by-absorption)
 
-A 2026-09-25 drift assessment classified all eight tasks against current main: Tasks 1-7 SATISFIED-ON-MAIN (main strictly ahead of the parked implementation branch 667875c3 on every conflicted file — the branch's worker-registry, handoff, evidence, and interruption work landed via the successor plans, and main added recovery-receipt backing and exact-identity model-guard matching the branch never had). Task 8 closed by the validation evidence below and routing the four incident origins done. `test_execute_plan_contract_coherence.py` and `execute_plan_smoke_witness.py` were never created anywhere; their coverage was absorbed by ContractContentParityTest and the plan's own refactoring direction descopes the smoke witness. The parked branch is fully superseded and deleted; no branch content warranted taking.
+A 2026-09-25 drift assessment classified all eight tasks against current main: Tasks 1-7 SATISFIED-ON-MAIN (main strictly ahead of the parked implementation branch 667875c3 on every conflicted file ,  the branch's worker-registry, handoff, evidence, and interruption work landed via the successor plans, and main added recovery-receipt backing and exact-identity model-guard matching the branch never had). Task 8 closed by the validation evidence below and routing the four incident origins done. `test_execute_plan_contract_coherence.py` and `execute_plan_smoke_witness.py` were never created anywhere; their coverage was absorbed by ContractContentParityTest and the plan's own refactoring direction descopes the smoke witness. The parked branch is fully superseded and deleted; no branch content warranted taking.
 
 Validation evidence 2026-09-25 over main: 607 tests OK across test_execute_plan_worker_registry, test_execute_plan_runtime, test_execute_plan_runtime_codex, test_runtime_capabilities, test_codex_model_guard, test_codex_execute_plan_hooks, test_codex_hook_config, test_execute_plan_resume_watcher, test_hooks_probe; hooks_probe --repo-only PASS (7 routes); both runtime_state*.json fixtures validate against validate_manifest_worker_schema; public hygiene PASS; git diff --check clean. Adjustments vs the plan's literal block: the two never-created modules are omitted (descoped above), and the em-dash gate's pinned base 73e9e44 predates repo history content now exempt from the gate, so the gate is scoped to the closeout diff instead.
 

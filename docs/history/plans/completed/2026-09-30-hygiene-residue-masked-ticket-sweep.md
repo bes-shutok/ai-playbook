@@ -17,7 +17,7 @@ Corrected facts this plan records against the origin item (whose authoring-time 
 
 - The origin's "landed plan" arm is moot: `2026-09-29-execute-plan-task-local-verifier-declarations.md` has since executed and archived; all residue-holding plan artifacts now sit under `docs/history/plans/completed/`.
 - The residue grew with later landings: three completed plans now carry nine occurrences (the origin knew of two files, six occurrences).
-- `docs/reviews/` and `docs/tmp/` copies are gitignored (not tracked) and out of the public-leak surface; the sweep covers tracked files only.
+- `../../reviews/reviews` and `docs/tmp/` copies are gitignored (not tracked) and out of the public-leak surface; the sweep covers tracked files only.
 - The open backlog item holding residue (`2026-09-29-execute-plan-post-squash-artifact-cleanup.md`) also carries peer working-tree modifications in the primary checkout; this plan's mask edits the committed bytes through the executing worktree and never touches the primary's working tree.
 
 ## Assumptions
@@ -32,7 +32,7 @@ Decision points requiring a grill: none - both dispositions follow standing oper
 ### Task 1 - Mask the four tracked artifacts
 
 - [ ] In the executing worktree, replace every ticket-id occurrence with the generic `CRM-<ID>` form and every lowercase `crm607` variant with `crm-<id>` in exactly these tracked files: `docs/history/plans/completed/2026-09-28-execute-plan-codex-worker-terminal-recovery.md`, `docs/history/plans/completed/2026-09-29-execute-plan-continuation-admission-and-capacity.md`, `docs/history/plans/completed/2026-09-29-execute-plan-task-local-verifier-declarations.md`, `docs/history/backlog/2026-09-29-execute-plan-post-squash-artifact-cleanup.md`, `scripts/test_execute_plan_runtime.py`, and the bodies of the two `2026-09-30-crm-607-reconcile-*` backlog items. This plan file's own census prose self-applies the same mask. No other byte changes; the generic form is the operator-approved shape per commit 4a60a5c4. The two crm-reconcile items' FILENAMES carry the id too; a rename breaks their identity and is recorded as an operator-directed residual, not taken here. [class: IMPLEMENTATION_REQUIRED]
-- [ ] Run the case-insensitive pattern sweep over tracked files (`git grep -icE "crm[-_]?607"` content matches) and verify zero remain (gitignored `docs/reviews/` and `docs/tmp/` copies are out of scope: untracked; the two crm-reconcile FILENAMES are outside a content sweep by construction). [class: REPOSITORY_TEST]
+- [ ] Run the case-insensitive pattern sweep over tracked files (`git grep -icE "crm[-_]?607"` content matches) and verify zero remain (gitignored `../../reviews/reviews` and `docs/tmp/` copies are out of scope: untracked; the two crm-reconcile FILENAMES are outside a content sweep by construction). [class: REPOSITORY_TEST]
 
 ### Task 2 - Done skill: the named pre-publish verification step
 
@@ -50,7 +50,7 @@ Decision points requiring a grill: none - both dispositions follow standing oper
 
 ## Review Scope
 
-Files: the seven body-masked tracked artifacts named in Task 1 (masking only; the two crm-reconcile FILENAMES untouched), `agents/skills/done/SKILL.md` (the sensitive-data-scan remediation bullet only). Contract files referenced read-only: the origin backlog item, the result-only adjudication record (2026-09-27 lineage, applied 2026-09-29 by commit 4a60a5c4), the machine-local scan script's modes (via the facts key), the gitignored `docs/reviews/` copies (out-of-surface evidence).
+Files: the seven body-masked tracked artifacts named in Task 1 (masking only; the two crm-reconcile FILENAMES untouched), `agents/skills/done/SKILL.md` (the sensitive-data-scan remediation bullet only). Contract files referenced read-only: the origin backlog item, the result-only adjudication record (2026-09-27 lineage, applied 2026-09-29 by commit 4a60a5c4), the machine-local scan script's modes (via the facts key), the gitignored `../../reviews/reviews` copies (out-of-surface evidence).
 
 ## Validation Commands
 

@@ -70,7 +70,7 @@ Edge cases that shaped the design: a Summary with no tokens (or no Summary secti
 
 **Out of scope; reject unless plan-related:**
 - `scripts/validate_review_staging.py`; reason: sibling shared-rule module, no contract change in this plan
-- `docs/history/` and the legacy artifacts under `docs/reviews/`; reason: immutable history; corpus convergence is an external prerequisite
+- `docs/history/` and the legacy artifacts under `../../reviews/reviews`; reason: immutable history; corpus convergence is an external prerequisite
 - deployed runtime copies of the validator outside the repo; reason: the repo copy is canonical; redeployment is ops, not this plan
 
 ## Validation Commands

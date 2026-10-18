@@ -75,7 +75,7 @@ A post-execution independent review found blocking defects on the same digest ex
 **Out of scope; reject unless plan-related:**
 - `scripts/plan_readiness.py`; reason: readiness gate consumes the sidecar contract but this plan only extends the produced contract; adjust here only if a sidecar change breaks its parser, which would be plan-related and escalated to must-fix.
 - `docs/history/backlog/2026-09-08-plans-grill-answer-required-readiness-gate.md` family and the plans/grilling authoring-readiness items; reason: different skill family (plan authoring, not execution review), deliberately not joined.
-- Historical review artifacts under `docs/reviews/`; reason: preserve-and-improve-future-runs rule from the backlog item.
+- Historical review artifacts under `../../reviews/reviews`; reason: preserve-and-improve-future-runs rule from the backlog item.
 
 ## Validation Commands
 

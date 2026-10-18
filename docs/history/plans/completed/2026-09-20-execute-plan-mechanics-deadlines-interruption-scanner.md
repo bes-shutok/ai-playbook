@@ -9,7 +9,7 @@ Origins (scope of record, under `docs/history/backlog/`):
 - `2026-09-17-fence-robust-checkbox-scanning.md`
 - `2026-09-16-em-dash-insertion-scope-check.md`
 
-Review artifacts: `docs/reviews/2026-09-20-plan-review-execute-plan-mechanics-deadlines-interruption-scanner-r<N>.md` (glob; one per round from r2 on; the r1 record ran under the short-slug filename before the slug fold).
+Review artifacts: `../../reviews/reviews` (glob; one per round from r2 on; the r1 record ran under the short-slug filename before the slug fold).
 
 ## Terms
 
@@ -124,7 +124,7 @@ Required-implementation rows 1 (state table), 3 (contract-owned deadlines), 4 (f
 - `projects/.ai-playbook/development_lessons.md`; reason: peer-modified lessons corpus, learn-class gated, historical mentions stay.
 - `README.md`; reason: verified to carry no sentences consuming the changed surfaces.
 - `docs/plans/2026-09-19-no-silent-gate-satisfying-prose-rewrites.md`, `docs/plans/2026-09-19-scheduler-ops-contract-fix.md`, `docs/plans/2026-09-19-scheduler-ops-lanes-durability.md`; reason: peer-session drafts, foreign files.
-- `docs/reviews/**`; reason: review artifacts, produced by the review loop, never edited by tasks.
+- `../../reviews/reviews`; reason: review artifacts, produced by the review loop, never edited by tasks.
 
 ## Validation Commands
 

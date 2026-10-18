@@ -2,12 +2,12 @@
 
 Origin backlog:
 - `docs/history/backlog/2026-09-09-doc-registry-freeze-move-licensing.md` (plan-review r8 Low, plausible-edge, hypothesis confidence, on the doc-ownership-lifecycle plan at digest 33bf86f3)
-- `docs/history/backlog/2026-09-10-doc-registry-validator-argparse-cli-rewrite.md` (rider folded into this plan 2026-09-11; source: `docs/reviews/2026-09-10-2026-09-08-doc-ownership-lifecycle-code-review-r1.md`, finding F12)
-- `docs/history/backlog/2026-09-10-doc-registry-follow-up-plan-orphaned-diff-channel.md` (rider folded into this plan 2026-09-11; source: `docs/reviews/2026-09-10-2026-09-08-doc-ownership-lifecycle-code-review-r4.md`, finding F9)
+- `docs/history/backlog/2026-09-10-doc-registry-validator-argparse-cli-rewrite.md` (rider folded into this plan 2026-09-11; source: `../../reviews/reviews`, finding F12)
+- `docs/history/backlog/2026-09-10-doc-registry-follow-up-plan-orphaned-diff-channel.md` (rider folded into this plan 2026-09-11; source: `../../reviews/reviews`, finding F9)
 
 Related plan: `docs/plans/completed/2026-09-08-doc-ownership-lifecycle.md` (executed and archived 2026-09-10; it created the validator this plan amends).
 
-Review rounds: `docs/reviews/2026-09-11-plan-review-doc-registry-freeze-move-licensing-fold-r*.md` (round numbering continues from the r2 certification of the previous revision; the latest round governs).
+Review rounds: `../../reviews/reviews` (round numbering continues from the r2 certification of the previous revision; the latest round governs).
 
 ## Terms
 

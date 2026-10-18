@@ -75,6 +75,18 @@ fun myPropertiesValidator(props: MyProperties): SmartInitializingSingleton =
     }
 ```
 
+## 26. Spring `@ConfigurationProperties`: Bind standard temporal types directly
+
+When a property represents a standard `java.time` value supported by Spring Boot's
+conversion service, declare the field with that type instead of storing a `String`
+and parsing it in application code. For example, bind `02:00` to `LocalTime` and
+an IANA zone ID such as `Europe/Lisbon` to `ZoneId`. For durations, see rule #2.
+
+Binding validates conversion, not product policy. Keep semantic constraints in a
+separate startup validator, such as an allowed local-time window or a requirement
+for a region-based zone ID. Test configured strings through Spring Boot's `Binder`
+and test policy constraints separately.
+
 ## 3. Spring Cloud Config — Do Not Bundle `spring.application.name`
 
 In any Spring Boot service that uses Spring Cloud Config, do not set
@@ -559,3 +571,139 @@ When admission, pause, or saturation logic fail-closes on Micrometer gauges such
 - If MBean registry enablement still yields `-1`, plan an alternate saturation signal or a Boot-compatible binder rather than assuming the meter names alone are enough.
 
 **Verify:** Prometheus or MeterRegistry shows finite positive max and busy (busy in `[0, max]`); with pause on, a quiet process still claims when below threshold; with meters missing or `-1`, the distinct unavailable warning fires and skip is expected until fixed.
+
+## 27. A repeated finite string vocabulary gets one owning enum
+
+A small closed set of string values carrying shared semantic meaning is a vocabulary,
+not a pile of interchangeable literals. Supplied as `String` at multiple call sites or
+across an API boundary, the valid set is not discoverable from the type, and
+independent spellings of the same value drift apart.
+
+Admission runs through the **candidate test**: a closed semantic set with one natural
+owning module, values recurring at repeated call sites or across an API boundary, and
+explicit mapping wherever an external string representation must be preserved. When a
+vocabulary passes, give it one owning enum in the natural owning module. Check
+existing types before adding a new enum: an enum that already covers the vocabulary
+makes the finding "use the existing enum", never "add another". Require explicit
+mapping at any boundary that must keep its external spelling (metric tags,
+serialization), so the enum remains the internal type while the mapped string stays a
+frozen external contract owned by the mapping.
+
+**Conforming as strings.** Each class below is a conforming string, not a finding,
+unless its owning contract authorizes a type change:
+
+- free-form text: no closed set and no single natural owner;
+- one-off labels: a single call site, no boundary to preserve;
+- compatibility-bound strings: a persistence schema, wire format, configuration key,
+  or SQL literal fixes the external representation.
+
+**Example (Java):**
+
+```java
+// Conforming vocabulary: closed set, one owning module, recurring call sites;
+// the metrics boundary maps explicitly so the external tag spelling is stable.
+public enum IngestVerdict {
+    INGESTED,
+    DUPLICATE,
+    REFUSED
+}
+
+static String metricTag(IngestVerdict verdict) {
+    return switch (verdict) {
+        case INGESTED -> "accepted";
+        case DUPLICATE -> "deduplicated";
+        case REFUSED -> "vetoed";
+    };
+}
+
+// Conforming compatibility-bound literal: the persistence schema owns 'ARCHIVED',
+// so it stays a string until the schema owner authorizes a type change.
+@Query("select count(j) from BatchJob j where j.status = 'ARCHIVED'")
+long countArchived();
+```
+
+## 28. Extract Cognitively Complex Callbacks and Keep Methods Readable
+
+Section #27 owns the placement of recurring finite-vocabulary enums. It does not
+cover callback extraction or method-length review.
+
+Extract a callback or nested block into an explicitly named function or method
+when it has substantial cognitive load or any observable side effect. Invoke the
+helper at the original callback point. Preserve the callback and registration
+lifecycle, captured-state ownership, transaction boundary, and lock order where
+applicable. Keep simple pure one-line transformations and guards inline. For
+example, `value -> value.trim()` and `value?.trim()` are clear inline mappings;
+a callback that records metrics or coordinates multiple phases should make those
+phases visible through names.
+
+Declare every method-local class, enum, and record at the enclosing class scope,
+and pass the values it needs explicitly. For example, move the
+`ProfileMergeChanges` record declaration beside its owning service's methods.
+Keep the data it needs explicit in the record components and constructor
+arguments.
+
+Consider method length alongside the project's existing complexity checks. The
+existing cognitive-complexity criterion remains responsible for deep-nesting
+signals; do not add a separate nesting threshold. A witnessed profile-merge
+method had complexity 7, 65 counted lines, and a method-local record: its
+length and local type are readability signals despite the modest complexity
+score. A one-line pure mapping is the negative case and should not prompt
+extraction or a review signal.
+
+For review signaling, use 80% of the method-length limit configured by the
+active project guideline pack, counting lines by that pack's existing
+convention. If the active pack does not provide both a method-length limit and
+its counting convention, do not infer either or emit a method-length signal.
+The quality check and focused-panel advisory use this same signal.
+
+When comparing maximum-selection code, compare concise selection with explicit
+comparisons for readability. Preserve the nullable result and the exact
+one-microsecond increment when required by the source expression. Fewer lines
+alone do not establish clearer code. These equivalent examples show the tradeoff
+for four candidate timestamps, one of which may be null; they do not prescribe
+a universal stream preference.
+
+**Java, concise selection:**
+
+```java
+Instant latest = Stream.of(factTime, eventTime, importedAt, priorWatermark)
+    .filter(Objects::nonNull)
+    .max(Comparator.naturalOrder())
+    .orElse(null);
+return latest == null ? null : latest.plus(1, ChronoUnit.MICROS);
+```
+
+**Java, explicit comparisons:**
+
+```java
+Instant latest = factTime;
+if (eventTime != null && (latest == null || eventTime.isAfter(latest))) latest = eventTime;
+if (importedAt != null && (latest == null || importedAt.isAfter(latest))) latest = importedAt;
+if (priorWatermark != null && (latest == null || priorWatermark.isAfter(latest))) latest = priorWatermark;
+return latest == null ? null : latest.plus(1, ChronoUnit.MICROS);
+```
+
+**Kotlin, concise selection:**
+
+```kotlin
+val latest = listOfNotNull(factTime, eventTime, importedAt, priorWatermark).maxOrNull()
+return latest?.plus(1, ChronoUnit.MICROS)
+```
+
+**Kotlin, explicit comparisons:**
+
+```kotlin
+var latest = factTime
+for (candidate in listOf(eventTime, importedAt, priorWatermark)) {
+    if (candidate != null && (latest == null || candidate.isAfter(latest))) latest = candidate
+}
+return latest?.plus(1, ChronoUnit.MICROS)
+```
+
+For Spring transaction synchronization examples, the official Spring Framework
+6.1.21 [`TransactionSynchronization` API](https://docs.spring.io/spring-framework/docs/6.1.x/javadoc-api/org/springframework/transaction/support/TransactionSynchronization.html)
+documents `afterCompletion(int)` after transaction completion, and the
+[`TransactionSynchronizationManager` API](https://docs.spring.io/spring-framework/docs/6.1.x/javadoc-api/org/springframework/transaction/support/TransactionSynchronizationManager.html)
+documents thread-bound synchronization management and registration. These
+references support the callback lifecycle example; they do not assert which
+Spring version a consumer project uses.

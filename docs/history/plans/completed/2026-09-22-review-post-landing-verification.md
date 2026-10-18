@@ -4,7 +4,7 @@ Origin: `docs/history/backlog/2026-09-22-active-review-post-verification.md` (P4
 
 ## Terms
 
-- **Staging record**: the review deliverable under `docs/reviews/` (Markdown plus `.stats.json` sidecar); its Metadata carries a `- Status:` header.
+- **Staging record**: the review deliverable under `../../reviews/reviews` (Markdown plus `.stats.json` sidecar); its Metadata carries a `- Status:` header.
 - **STAGED / POSTED / INCOMPLETE**: values of the staging record's `- Status:` header. `STAGED (not yet posted)`: findings written, nothing posted. `POSTED`: every intended finding is verified live on the pull request. `INCOMPLETE`: posting was attempted and findings remain unlanded after the recovery pass.
 - **Inline comment**: a GitHub pull-request review comment anchored to a file path and line (REST collection `repos/{owner}/{repo}/pulls/{pr}/comments`).
 - **Batch review submission**: one `POST repos/{owner}/{repo}/pulls/{pr}/reviews` call carrying a top-level body plus a `comments` array; the `github-pr-workflow` "Post active review comments" primitive.

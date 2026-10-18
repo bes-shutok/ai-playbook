@@ -38,7 +38,7 @@ byte-identical manifest, following the subTest pattern of
 ## Severity and source
 
 Low; staging doc
-`docs/reviews/2026-09-18-execute-plan-phase3-process-reconciliation-trigger-and-archive-safety-code-review-r1.md`,
+`../../reviews/reviews`,
 round 1, finding T-3.
 
 ## Why not fixed now
@@ -59,4 +59,4 @@ per arm, asserting the blocked `done-pending` status, the arm-naming
 evidence fragment, and the byte-identical manifest.
 
 Source: round 3 finding T3-1,
-`docs/reviews/2026-09-18-execute-plan-phase3-process-reconciliation-trigger-and-archive-safety-code-review-r3.md`.
+`../../reviews/reviews`.

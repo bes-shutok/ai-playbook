@@ -201,7 +201,7 @@ Files:
 
 ## Residual findings (cap closure)
 
-The review loop closed at the configured 5-round cap through the cap-closure terminal shape. This section records every staged finding of the cap round (r5, `docs/reviews/2026-09-28-plan-review-execute-plan-codex-worker-terminal-recovery-r5.md`) with its disposition. The two blocking findings and the material non-blocking findings are folded into the plan above; the two remainder entries carry the accepted disposition with their rationale.
+The review loop closed at the configured 5-round cap through the cap-closure terminal shape. This section records every staged finding of the cap round (r5, `../../reviews/reviews`) with its disposition. The two blocking findings and the material non-blocking findings are folded into the plan above; the two remainder entries carry the accepted disposition with their rationale.
 
 - `consistency#unconditional-edit-vs-conditional-commit` (r5 F1, Medium, blocking): Task 4's unconditional debt line contradicted its conditional Files annotation and the commit no-drift skip branch. Disposition: folded. The codex.md Files annotation now names the unconditional debt line, and the commit item is unconditional.
 - `consistency#residual-branch-stall-row` (r5 F2, Medium, blocking): the residual-branch row scope omitted the join-conditional stall row, making the residual branch's suite-green Done-when unreachable. Disposition: folded. The Task 2 residual clause now replaces every join-conditional row.

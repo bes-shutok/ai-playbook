@@ -5,6 +5,9 @@ Instruction files reference numbered clauses here rather than restating full tex
 
 Shared JVM rules (Spring, Reactor, SLF4J) live in `~/Projects/.ai-playbook/jvm_guidelines.md`.
 Language-agnostic rules live in `~/Projects/.ai-playbook/coding_guidelines.md`.
+
+Callback extraction, method-local types, and method-shape readability: see
+`jvm_guidelines.md` #28.
 Language-agnostic agent workflow lessons live in `~/Projects/.ai-playbook/agent_workflow_guidelines.md`.
 
 ## 1. Test Method Body Style

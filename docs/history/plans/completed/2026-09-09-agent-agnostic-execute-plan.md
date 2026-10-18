@@ -2,7 +2,7 @@
 
 Improve the shared execute-plan workflow so it works across the documented agent runtimes, with the smallest runtime change required for normal Codex execution.
 
-Plan review: `docs/reviews/2026-09-09-plan-review-agent-agnostic-execute-plan-r*.md` (latest staged round; findings folded before the next review).
+Plan review: `../../reviews/reviews` (latest staged round; findings folded before the next review).
 
 ## Terms
 

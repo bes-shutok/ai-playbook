@@ -2,7 +2,7 @@
 
 Backlog origin: `docs/history/backlog/2026-08-29-fence-scanner-followups.md` (items 1-4; archived by Task 5).
 Prior phase: `docs/plans/completed/2026-08-28-fence-scanner-consolidation.md` (Task 3 contracts deliberately superseded by this plan; see Design Invariants).
-Review artifacts for this plan: `docs/reviews/2026-08-31-plan-review-fence-close-rules-r<N>.md` (prefix reference; rounds not enumerated here).
+Review artifacts for this plan: `../../reviews/reviews` (prefix reference; rounds not enumerated here).
 
 ## Terms
 

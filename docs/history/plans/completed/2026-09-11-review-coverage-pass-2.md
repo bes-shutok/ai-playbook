@@ -3,7 +3,7 @@
 Backlog (scope of record): `docs/history/backlog/2026-09-10-jvm-review-coverage-plan-residual-probe-friction.md`, `docs/history/backlog/2026-09-10-jvm-review-coverage-r1-residuals.md`, `docs/history/backlog/2026-09-10-widen-guideline-review-coverage-beyond-jvm.md` (revived 2026-09-12 with this plan when code quality became the fourth driving principle; the items and the plan were parked by the 2026-09-11 efficiency triage)
 Guideline SOT: `projects/.ai-playbook/java_guidelines.md` (rules #16-#25 landed by the certified JVM plan, squash 7b26dfe; normative bodies stay frozen), `projects/.ai-playbook/kotlin_guidelines.md` (rules #1-#22), `projects/.ai-playbook/python_guidelines.md` (rules #1-#25)
 Predecessor plan (completed): `docs/plans/completed/2026-09-10-strengthen-jvm-review-coverage.md`
-Plan review: `docs/reviews/2026-09-11-plan-review-review-coverage-pass-2-r<N>.md` (prefix glob; the latest round is the verdict of record)
+Plan review: `../../reviews/reviews` (prefix glob; the latest round is the verdict of record)
 
 ## Terms
 
@@ -24,7 +24,7 @@ Plan review: `docs/reviews/2026-09-11-plan-review-review-coverage-pass-2-r<N>.md
 - assume the java-spring trigger section folds into the Review-wide Java checks bullets and the section is deleted; basis: r1 item 3 offers folding or a one-line pointer, and folding removes the fifth trigger-list restatement site outright.
 - assume doc/skill-only plan conventions apply (the testing worker uses Validation Commands as primary evidence; no runtime scripts are introduced); basis: `doing-code-review` Doc/skill-only diffs boundary, `execute-plan` Step 3.1 item 5, and the certified predecessor plan's identical assumption.
 - assume trigger tables cite only rule numbers resolvable from each corpus's own numbered index, with an explicit not-applicable note where a signal has no numbered rule; basis: widen item acceptance bullet 2.
-- assume reviews land at `docs/reviews/2026-09-11-plan-review-review-coverage-pass-2-r<N>.md`; basis: plans skill review-artifact naming.
+- assume reviews land at `../../reviews/reviews`; basis: plans skill review-artifact naming.
 
 Decision points requiring a grill: none remain.
 

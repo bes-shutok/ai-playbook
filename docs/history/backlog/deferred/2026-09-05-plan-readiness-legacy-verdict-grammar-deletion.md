@@ -12,7 +12,7 @@ Scope: scripts/plan_readiness.py
 The certified plan does not cover these marginal cases; each needs a plan edit
 at revival and must survive the revival drift check and fresh review round:
 
-1. Primary-checkout-bound execution. The live corpus `docs/reviews/` (551
+1. Primary-checkout-bound execution. The live corpus `../../reviews/reviews` (551
    plan-review artifacts measured 2026-09-18) and `.ai-playbook/facts.md` are
    gitignored and exist only in the main checkout. In a temp worktree every
    Task 1 and Task 5 command fails wiring: no facts file -> "cannot resolve

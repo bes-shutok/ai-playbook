@@ -3,11 +3,11 @@
 Feature note (scope of record): `docs/history/feature-notes/2026-07-29-token-usage-telemetry.md`
 Deferring plan: `docs/history/plans/completed/2026-09-06-token-usage-telemetry.md` (names durable review lineage its deferred follow-up)
 Origin: `docs/history/backlog/2026-10-02-round-scoped-review-token-metrics.md`
-Plan review record: `docs/reviews/2026-10-03-plan-review-review-token-round-attribution-r*.md` (+ `.stats.json` sidecars)
+Plan review record: `../../reviews/reviews` (+ `.stats.json` sidecars)
 
 ## Driving force
 
-The token-usage telemetry plan shipped the 6-hour window join as deliberately best-effort and named durable review lineage its deferred follow-up. The corpus probe re-derived 2026-10-03 over `docs/reviews`: 1,897 sidecars, 314 usage-bearing, 312 of those marked `provenance.ambiguous: true` - observed-token totals and usage coverage are not decision-grade today. Live witness: `docs/reviews/2026-10-02-plan-review-machinery-inventory-upkeep-r3.stats.json` carries a union of SIX root sessions and 123,237,402 input tokens in one round record, because six peer sessions shared the repo directory inside one 6-hour window.
+The token-usage telemetry plan shipped the 6-hour window join as deliberately best-effort and named durable review lineage its deferred follow-up. The corpus probe re-derived 2026-10-03 over `../../reviews/reviews`: 1,897 sidecars, 314 usage-bearing, 312 of those marked `provenance.ambiguous: true` - observed-token totals and usage coverage are not decision-grade today. Live witness: `../../reviews/reviews` carries a union of SIX root sessions and 123,237,402 input tokens in one round record, because six peer sessions shared the repo directory inside one 6-hour window.
 
 A fresh runtime-store probe (2026-10-03, read-only, `~/.zcode/cli/db/db.sqlite`) materially changes the design space since the 2026-09-06 probe the telemetry plan recorded:
 
@@ -160,7 +160,7 @@ Files:
 
 - [ ] Run every Validation Command in order -> expect each GREEN, including the mint-step grep that was RED before Task 2 and the negated never-estimate sweep [class: REPOSITORY_TEST]
 - [ ] Confirm zero sidecars were modified anywhere in the working tree (`git status --short` shows no `.stats.json` paths); historical sidecars are immutable inputs [class: REPOSITORY_TEST]
-- [ ] Confirm the fresh-probe evidence recorded in Driving force: re-run BOTH read-only store counts (the `turn_usage` and `model_usage` completed-row totals) AND the three corpus counts over `docs/reviews` (sidecar total, usage-bearing, ambiguous); a material drift in any of them is a plan-relevant finding, not a silent proceed [class: REPOSITORY_TEST]
+- [ ] Confirm the fresh-probe evidence recorded in Driving force: re-run BOTH read-only store counts (the `turn_usage` and `model_usage` completed-row totals) AND the three corpus counts over `../../reviews/reviews` (sidecar total, usage-bearing, ambiguous); a material drift in any of them is a plan-relevant finding, not a silent proceed [class: REPOSITORY_TEST]
 - [ ] Run one live identity-invocation capture against the real store (mint, then `--json` with the minted identity) and confirm a record prints; record its `attribution` and `source_grain` values as completion evidence [class: REPOSITORY_TEST]
 - [ ] Probe the live store's parent linkage read-only (the fraction of recent anchor sessions with non-null `parent_id`, and the root count of the most recent review round's sessions) and record it as completion evidence; on NULL linkage the completion record states the honest fallback (only single-root rounds are attributable) [class: REPOSITORY_TEST]
 - [ ] Check the round's own fresh sidecars (post-landing review rounds) carry `review_run_id` in usage provenance, or the completion report names the skipped-mint gap explicitly [class: REPOSITORY_TEST]

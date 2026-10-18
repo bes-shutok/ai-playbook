@@ -2,7 +2,7 @@
 
 Backlog origins (scope of record): `docs/history/backlog/2026-10-01-done-origin-fold-delete-enforcement.md`
 
-Plan review record: the staging series `docs/reviews/2026-10-01-plan-review-done-origin-fold-delete-enforcement-r*.md` (the highest rN is the authoritative record, including any deferred-residual list)
+Plan review record: the staging series `../../reviews/reviews` (the highest rN is the authoritative record, including any deferred-residual list)
 
 Driving force: automation + efficiency
 

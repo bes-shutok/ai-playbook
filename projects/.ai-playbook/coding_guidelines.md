@@ -649,3 +649,39 @@ When a binary layout is measured in whole bytes (envelope tag, nonce, fixed-widt
 **Rule:** Bash cannot nest single quotes, so an embedded `'` in a single-quoted trap string terminates it and silently corrupts the body (a `printf '%s\n'` degrades to `printf %sn`, appending a literal `n` to the output). Put the trap body in a handler function and register the bare name: `cleanup() { ...; }` then `trap cleanup EXIT`. The function also keeps `$?` capture and late evaluation of variables readable.
 
 **Example:** An EXIT trap relaying lock-export lines was written inline single-quoted; the corrupted format appended a stray character to the relayed token, so the calling shell's eval captured a value that could not release the lock, on exactly the fault paths the trap existed to protect. A test that only counted `export ` lines passed vacuously; the catch came from asserting the relayed values equal the acquire-log values. See also #37 (sibling-script state passing) from the same incident.
+
+## 39. No Temporal Commentary in Code or Config Comments
+
+**Shape trigger:** A comment in code, a config file, or any file a program reads at runtime narrates when something happened or what changed: dates, release or version numbers, "added", "removed", "changed", "previously", "no longer", "temporary", "for now", "until X migrates", or a dated TODO.
+
+**Rule:** Comments explain why the code exists and what invariants it keeps. Git history owns when things changed and what the diff was; a comment that retells it rots the first time someone edits the code and cannot fail CI. Do not write temporal commentary. When a comment seems to need deeper context than a few lines can give, do not narrate the history: point at the owning record instead: a tracker ticket key or a document path, so one canonical source carries the story.
+
+Allowed: a comment that states why the code is the way it is; a bare ticket key or document reference left where a future reader would otherwise reverse-engineer the reason; a revisit trigger stated as a condition (per Minimal Solution Ladder), not as a date.
+
+Not commentary (out of scope of this rule): license and copyright headers; changelog-type documents whose only purpose is history; time values that are data (a schedule expression, a TTL, a timeout); a condition-based revisit note.
+
+**Example:** Bad: `// Removed the retry loop in v2.3 (2026-01-15) after INC-4012; reinstate if the queue grows.` Good: `// Retries are unnecessary: the broker redelivers on its own (see INC-4012).` The bad comment forces every future reader to reconcile two histories; the good one states the invariant and names the record that carries the evidence.
+
+## 40. Commit Messages Lead With the Why
+
+**Shape trigger:** Any commit message: a one-line subject, or a subject plus body.
+
+**Rule:** The reason for the change is the main content of a commit message. The subject leads with a compressed why, after any prefix the repository requires (a story key, a change type); the body opens with the short why explanation when the subject cannot carry it. Strictly required formats stay: story-key prefixes, change-type prefixes, structural-versus-behavioral statements, and review-marker trailers are all kept; they wrap the why, they do not replace it. A message that says only what changed is a defect: git already shows what changed; only the author knows why it was worth changing.
+
+**Example:** Weak: `PROJ-1234: add retries to invoice sync`. Strong: `PROJ-1234: retry invoice sync because the billing API drops about 1% of requests under load`. With a body: the body opens with the why in one to three sentences, then the notes.
+
+## 41. Expand the Variable After a Base Prefix in Bash Arithmetic
+
+**Shape trigger:** Bash arithmetic over zero-padded numeric fields (calendar dates, timestamps, fixed-width counters), especially `10#`-forced operands inside `$(( ))`.
+
+**Rule:** A base prefix does not expand a bare variable name after it: `$((10#mm))` parses `mm` as literal digits and errors; write `$((10#$mm))`. Keep the forced base on every zero-padded field: plain arithmetic reads a leading zero as octal, so `08` and `09` fail without it. Each field needs both halves: the `10#` prefix plus its own `$`.
+
+**Example:** An iso8601-to-epoch helper wrote its month and day terms as `10#mm`-style tokens and failed on the first real timestamp; expanding every field (`10#$mm`, `10#$d`, `10#$HH`) fixed it. A fixture using month `07` passes both wrong forms, so the test fixture must include an `08` or `09` field to pin the rule.
+
+## 42. Gate a Cleanup Trap on Ownership and Disarm at the Irreversible Step
+
+**Shape trigger:** A script creates an external artifact mid-flight (a claim, lock, or temp directory) and an exit or signal trap removes it on failure.
+
+**Rule:** The trap deletes only while every gate holds: this process created the artifact (a flag set only at the creation site) and the operation has not passed its irreversible success step (a flag set immediately after it). Refusal arms that delete the artifact themselves do so under the same gates, so cleanup never double-deletes and never touches an artifact this process did not create. Disarm at the irreversible step, not at exit: a failure after that step must leave the artifact and its resource paired, not delete one and strand the other.
+
+**Example:** A take-style operation created its claim file, then the resource-creation step failed on an uncreatable parent directory: the run exited with the fresh claim stranded, and a signal mid-creation had no handler at all. The fix armed the trap at claim creation, set the done flag right after the resource was secured, and had the explicit refusal arms clean their own state. Four independent reviewers converged on the same hole in one round; treat that convergence as the shape's recurrence signal. See also #37 (sibling-script state passing) and #38 (trap string quoting).

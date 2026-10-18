@@ -1,7 +1,7 @@
 # Plan: Review-doc digest scope fix (F6: Confluence scratch-file child-page scope)
 
 Backlog origin: `docs/history/backlog/2026-08-28-review-doc-wording-fixes.md` (F6; F11 already fixed 2026-08-29 by `docs/plans/2026-08-28-fence-scanner-consolidation.md`).
-Source review: `docs/reviews/2026-08-28-review-artifact-contracts-code-review-r6.md`, finding F6 (`consistency#producer-contract-scope-gap`, Medium).
+Source review: `../../reviews/reviews`, finding F6 (`consistency#producer-contract-scope-gap`, Medium).
 
 ## Outcome
 

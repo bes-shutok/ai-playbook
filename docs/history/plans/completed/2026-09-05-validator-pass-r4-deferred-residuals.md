@@ -6,7 +6,7 @@ References (scope of record, full text in `docs/history/backlog/`):
 - `docs/history/backlog/2026-09-04-validator-pass-r4-deferred-severity-seed-symmetry.md` (Task 3)
 - `docs/history/backlog/2026-09-04-validator-pass-r4-deferred-guidelines-typo.md` (Task 4)
 - `docs/history/backlog/2026-09-05-vrs-exclusivity-message-oxford-and.md` (Task 5)
-Source review: `docs/reviews/2026-09-02-validator-pass-code-review-r4.md` (F1, F2, F3, F5) and summarizer-hardening r2 execute-plan r6 F1.
+Source review: `../../reviews/reviews` (F1, F2, F3, F5) and summarizer-hardening r2 execute-plan r6 F1.
 
 ## Terms
 
